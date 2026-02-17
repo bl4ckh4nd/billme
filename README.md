@@ -2,8 +2,10 @@
 
 <img src="logos/FullLogo3.svg" alt="Billme logo" width="320" />
 
-Monorepo for a local-first invoicing desktop app (Electron + React + SQLite) and a public offer portal service.
-Built with love in Germany
+A local-first invoicing desktop app (Electron + React + SQLite) and a public offer portal service.
+Built with love in Germany.
+
+PLEASE NOTE: This is still a Beta-Version. Expect some minor issues and please report them so they can be fixed!
 
 <img src="assets/screenshot_billme.png" alt="Billme screenshot" width="900" />
 

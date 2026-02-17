@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <title>Billme</title>
+    <style>
+      body {
+        background-color: #f3f4f6;
+      }
+      /* Print Styles to ensure A4 output */
+      @media print {
+        @page {
+          size: A4;
+          margin: 0;
+        }
+        body {
+          background-color: white;
+        }
+        .no-print {
+          display: none !important;
+        }
+        .print-area {
+          box-shadow: none !important;
+          margin: 0 !important;
+          width: 100% !important;
+          height: 100% !important;
+          position: absolute !important;
+          top: 0 !important;
+          left: 0 !important;
+        }
+      }
+      .a4-canvas {
+        width: 210mm;
+        height: 297mm;
+      }
+
+      /* --- Premium Animations & Scrollbar --- */
+      
+      /* Hide scrollbar for cleaner look */
+      .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+      }
+      .scrollbar-hide {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+      }
+
+      /* Smooth Ease */
+      .ease-premium { transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
+
+      /* Keyframes */
+      @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px) scale(0.98); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
+      
+      @keyframes fadeInScale {
+        from { opacity: 0; transform: scale(0.95); }
+        to { opacity: 1; transform: scale(1); }
+      }
+
+      /* Animation Classes */
+      .animate-enter {
+        opacity: 0; /* Start invisible */
+        animation: fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+      
+      .animate-scale-in {
+        opacity: 0;
+        animation: fadeInScale 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+
+      /* Delays */
+      .delay-75 { animation-delay: 75ms; }
+      .delay-100 { animation-delay: 100ms; }
+      .delay-150 { animation-delay: 150ms; }
+      .delay-200 { animation-delay: 200ms; }
+      .delay-300 { animation-delay: 300ms; }
+      
+      /* Hover Effects */
+      .premium-hover {
+        transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .premium-hover:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 20px 40px -15px rgba(0,0,0,0.1);
+      }
+    </style>
+
+  </head>
+  <body>
+    <div id="root">Loading…</div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

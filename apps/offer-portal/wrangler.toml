@@ -1,0 +1,21 @@
+name = "billme-offer-portal"
+main = "src/worker.ts"
+compatibility_date = "2026-01-19"
+
+# Configure bindings (optional):
+# - D1: provides persistent SQLite storage.
+# - R2: stores uploaded PDFs.
+#
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "billme-offer-portal"
+# database_id = "..."
+#
+# [[r2_buckets]]
+# binding = "PDF_BUCKET"
+# bucket_name = "billme-offer-pdfs"
+
+[vars]
+# PUBLIC_BASE_URL = "https://offers.example.com"
+# PUBLISH_API_KEY = "..."
+

@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+@theme {
+  /* Brand Colors */
+  --color-accent: #d9f944;
+  --color-accent-hover: #cbe83e;
+  --color-accent-foreground: #000000;
+
+  /* Dark UI (Editor) */
+  --color-dark-base: #000000;
+  --color-dark-1: #111111;
+  --color-dark-2: #1a1a1a;
+  --color-dark-3: #1c1c1c;
+  --color-dark-border: #222222;
+  --color-dark-border-subtle: #333333;
+
+  /* Light UI */
+  --color-background: #ffffff;
+  --color-foreground: #0b0b0b;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f9fafb;
+  --color-muted: #6b7280;
+  --color-border: #e5e7eb;
+  --color-border-subtle: #f3f4f6;
+
+  /* Semantic Colors */
+  --color-success: #22c55e;
+  --color-success-bg: #f0fdf4;
+  --color-success-border: #bbf7d0;
+
+  --color-warning: #f59e0b;
+  --color-warning-bg: #fef3c7;
+  --color-warning-border: #fde68a;
+
+  --color-error: #dc2626;
+  --color-error-bg: #fef2f2;
+  --color-error-border: #fecaca;
+
+  --color-info: #3b82f6;
+  --color-info-bg: #eff6ff;
+  --color-info-border: #bfdbfe;
+
+  /* Invoice Status Colors */
+  --color-status-paid: #d9f944;
+  --color-status-paid-text: #000000;
+
+  --color-status-open: #ffffff;
+  --color-status-open-text: #000000;
+  --color-status-open-border: #e5e7eb;
+
+  --color-status-overdue: #fef2f2;
+  --color-status-overdue-text: #dc2626;
+
+  --color-status-draft: #f3f4f6;
+  --color-status-draft-text: #6b7280;
+
+  /* Border Radius */
+  --radius-sm: 0.5rem;
+  --radius-md: 1rem;
+  --radius-lg: 1.5rem;
+  --radius-xl: 2rem;
+  --radius-2xl: 2.5rem;
+  --radius-3xl: 3rem;
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  }
+}
+

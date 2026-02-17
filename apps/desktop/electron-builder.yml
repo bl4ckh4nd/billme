@@ -1,0 +1,41 @@
+appId: com.billme.desktop
+productName: Billme
+
+directories:
+  output: release
+
+icon: build/icons/icon.png
+
+files:
+  - dist/**
+  - package.json
+
+asar: true
+asarUnpack:
+  - node_modules/**/*.node
+  - node_modules/better-sqlite3/**
+  - node_modules/keytar/**
+
+win:
+  icon: build/icons/icon.ico
+  target:
+    - nsis
+
+mac:
+  icon: build/icons/icon.png
+  target:
+    - dmg
+    - zip
+
+linux:
+  icon: build/icons
+  category: Utility
+  maintainer: Billme Team <opensource@billme.app>
+  target:
+    - AppImage
+    - deb
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

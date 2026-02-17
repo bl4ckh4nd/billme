@@ -1,0 +1,22 @@
+{
+  "name": "billme-workspace",
+  "private": true,
+  "license": "MIT",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "dev": "pnpm -C apps/desktop dev",
+    "dev:renderer": "pnpm -C apps/desktop dev:renderer",
+    "build": "pnpm -C apps/desktop build",
+    "preview": "pnpm -C apps/desktop preview",
+    "db:generate": "pnpm -C apps/desktop db:generate",
+    "db:studio": "pnpm -C apps/desktop db:studio",
+    "dist": "pnpm -C apps/desktop dist"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "better-sqlite3",
+      "keytar"
+    ]
+  }
+}

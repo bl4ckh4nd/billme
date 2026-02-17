@@ -1,0 +1,95 @@
+name: E-Invoice Validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/desktop/services/einvoice/**'
+      - 'apps/desktop/scripts/generate-einvoice-fixtures.mjs'
+      - '.github/workflows/einvoice-validation.yml'
+
+jobs:
+  validate-einvoice:
+    name: Validate ZUGFeRD + PDF/A
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Ghostscript
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ghostscript
+
+      - name: Generate deterministic fixtures
+        run: node apps/desktop/scripts/generate-einvoice-fixtures.mjs
+
+      - name: Build PDF/A fixture with Ghostscript
+        run: |
+          mkdir -p apps/desktop/.artifacts/einvoice
+          gs \
+            -dPDFA=1 \
+            -dBATCH \
+            -dNOPAUSE \
+            -sDEVICE=pdfwrite \
+            -sProcessColorModel=DeviceRGB \
+            -sColorConversionStrategy=RGB \
+            -dPDFACompatibilityPolicy=1 \
+            -sOutputFile=apps/desktop/.artifacts/einvoice/invoice.pdf \
+            apps/desktop/.artifacts/einvoice/fixture.ps
+
+      - name: Download Mustang validator
+        run: |
+          mkdir -p tools/validator
+          curl -fL -o tools/validator/Mustang-CLI.jar https://repo1.maven.org/maven2/org/mustangproject/Mustang-CLI/2.22.0/Mustang-CLI-2.22.0.jar \
+            || curl -fL -o tools/validator/Mustang-CLI.jar https://www.mustangproject.org/deploy/Mustang-CLI-2.22.0.jar
+
+      - name: Combine PDF + XML to ZUGFeRD (Mustang)
+        run: |
+          java -Xmx1G -Dfile.encoding=UTF-8 -jar tools/validator/Mustang-CLI.jar \
+            -i \
+            --action combine \
+            --source apps/desktop/.artifacts/einvoice/invoice.pdf \
+            --source-xml apps/desktop/.artifacts/einvoice/invoice.xml \
+            --out apps/desktop/.artifacts/einvoice/invoice.zugferd.pdf \
+            --format zf \
+            --version 2 \
+            --profile E \
+            --attachments "" \
+            --no-additional-attachments
+          test -f apps/desktop/.artifacts/einvoice/invoice.zugferd.pdf
+          ls -lah apps/desktop/.artifacts/einvoice
+
+      - name: Validate EN16931 XML (Mustang)
+        run: |
+          java -Xmx1G -Dfile.encoding=UTF-8 -jar tools/validator/Mustang-CLI.jar \
+            --action validate \
+            --source apps/desktop/.artifacts/einvoice/invoice.xml
+
+      - name: Validate ZUGFeRD PDF (Mustang)
+        run: |
+          java -Xmx1G -Dfile.encoding=UTF-8 -jar tools/validator/Mustang-CLI.jar \
+            --action validate \
+            --source apps/desktop/.artifacts/einvoice/invoice.zugferd.pdf
+
+      - name: Validate PDF/A (veraPDF)
+        run: |
+          docker run --rm \
+            -v "$PWD:/data" \
+            verapdf/cli \
+            /data/apps/desktop/.artifacts/einvoice/invoice.zugferd.pdf

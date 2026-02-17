@@ -1,0 +1,100 @@
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (for example v1.2.3)
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Desktop Release (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install native app dependencies for Electron
+        run: pnpm -C apps/desktop exec electron-builder install-app-deps
+
+      - name: Build distributables
+        run: pnpm -C apps/desktop dist
+
+      - name: Verify packaged native modules
+        run: node apps/desktop/scripts/verify-native-packaging.mjs
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release-${{ matrix.os }}-${{ env.RELEASE_TAG }}
+          path: |
+            apps/desktop/release/**/*.AppImage
+            apps/desktop/release/**/*.dmg
+            apps/desktop/release/**/* Setup *.exe
+            apps/desktop/release/**/*.deb
+            apps/desktop/release/**/*.rpm
+            apps/desktop/release/**/*.zip
+            apps/desktop/release/**/*.blockmap
+            apps/desktop/release/**/latest*.yml
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-release-*-${{ env.RELEASE_TAG }}
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub release with notes and assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          generate_release_notes: true
+          files: |
+            release-assets/**/*.AppImage
+            release-assets/**/*.dmg
+            release-assets/**/* Setup *.exe
+            release-assets/**/*.deb
+            release-assets/**/*.rpm
+            release-assets/**/*.zip
+            release-assets/**/*.blockmap
+            release-assets/**/latest*.yml

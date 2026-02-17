@@ -1,0 +1,27 @@
+{
+  "name": "billme-offer-portal",
+  "private": true,
+  "version": "0.0.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/node.ts",
+    "start": "node dist/node.js",
+    "build": "tsc -p tsconfig.json",
+    "deploy:cf": "wrangler deploy"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.0",
+    "better-sqlite3": "^12.4.1",
+    "hono": "^4.9.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260118.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.19.7",
+    "tsx": "^4.20.5",
+    "typescript": "~5.8.3",
+    "wrangler": "^4.13.2"
+  }
+}

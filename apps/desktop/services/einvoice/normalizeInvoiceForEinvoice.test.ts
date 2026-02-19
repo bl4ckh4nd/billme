@@ -63,6 +63,13 @@ const makeSettings = (smallBusinessRule = false): AppSettings => ({
     recurringEnabled: false,
     recurringRunTime: '03:00',
   },
+  dashboard: {
+    monthlyRevenueGoal: 30000,
+    dueSoonDays: 7,
+    topCategoriesLimit: 5,
+    recentPaymentsLimit: 5,
+    topClientsLimit: 5,
+  },
 });
 
 const makeInvoice = (): Invoice => ({

@@ -185,6 +185,43 @@ CREATE TABLE IF NOT EXISTS transactions (
   import_batch_id TEXT
 );
 
+CREATE TABLE IF NOT EXISTS eur_lines (
+  id TEXT PRIMARY KEY,
+  tax_year INTEGER NOT NULL,
+  kennziffer TEXT,
+  label TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('income', 'expense', 'computed')),
+  exportable INTEGER NOT NULL DEFAULT 1 CHECK (exportable IN (0, 1)),
+  sort_order INTEGER NOT NULL,
+  computed_from_json TEXT,
+  source_version TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_eur_lines_year_sort ON eur_lines(tax_year, sort_order);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_kennziffer
+  ON eur_lines(tax_year, kennziffer)
+  WHERE kennziffer IS NOT NULL AND TRIM(kennziffer) <> '';
+
+CREATE TABLE IF NOT EXISTS eur_classifications (
+  id TEXT PRIMARY KEY,
+  source_type TEXT NOT NULL CHECK (source_type IN ('transaction', 'invoice')),
+  source_id TEXT NOT NULL,
+  tax_year INTEGER NOT NULL,
+  eur_line_id TEXT REFERENCES eur_lines(id) ON DELETE SET NULL,
+  excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0, 1)),
+  vat_mode TEXT NOT NULL DEFAULT 'none' CHECK (vat_mode IN ('none', 'default')),
+  note TEXT,
+  updated_at TEXT NOT NULL,
+  CHECK (NOT (excluded = 1 AND eur_line_id IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_classifications_source_year
+  ON eur_classifications(source_type, source_id, tax_year);
+CREATE INDEX IF NOT EXISTS idx_eur_classifications_year
+  ON eur_classifications(tax_year);
+
 CREATE TABLE IF NOT EXISTS import_batches (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

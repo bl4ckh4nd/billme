@@ -217,6 +217,49 @@ export const transactions = sqliteTable('transactions', {
   deletedAt: text('deleted_at'),
 });
 
+export const eurLines = sqliteTable(
+  'eur_lines',
+  {
+    id: text('id').primaryKey(),
+    taxYear: integer('tax_year').notNull(),
+    kennziffer: text('kennziffer'),
+    label: text('label').notNull(),
+    kind: text('kind').notNull(),
+    exportable: integer('exportable').notNull().default(1),
+    sortOrder: integer('sort_order').notNull(),
+    computedFromJson: text('computed_from_json'),
+    sourceVersion: text('source_version').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    byYearSort: index('idx_eur_lines_year_sort').on(t.taxYear, t.sortOrder),
+  }),
+);
+
+export const eurClassifications = sqliteTable(
+  'eur_classifications',
+  {
+    id: text('id').primaryKey(),
+    sourceType: text('source_type').notNull(),
+    sourceId: text('source_id').notNull(),
+    taxYear: integer('tax_year').notNull(),
+    eurLineId: text('eur_line_id').references(() => eurLines.id, { onDelete: 'set null' }),
+    excluded: integer('excluded').notNull().default(0),
+    vatMode: text('vat_mode').notNull().default('none'),
+    note: text('note'),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqueSourceYear: uniqueIndex('idx_eur_classifications_source_year').on(
+      t.sourceType,
+      t.sourceId,
+      t.taxYear,
+    ),
+    byYear: index('idx_eur_classifications_year').on(t.taxYear),
+  }),
+);
+
 export const importBatches = sqliteTable('import_batches', {
   id: text('id').primaryKey(),
   accountId: text('account_id')

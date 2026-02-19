@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('billmeApi', createBillmeApi(invoke));
 
 const WINDOW_MAXIMIZE_CHANGED_CHANNEL = 'window:maximize-changed';
 
+const UPDATE_STATUS_CHANGED_CHANNEL = 'updater:status-changed';
+
 contextBridge.exposeInMainWorld('billmeWindow', {
   onMaximizeChanged: (callback: (state: { isMaximized: boolean }) => void) => {
     const listener = (_event: unknown, payload: { isMaximized: boolean }) => {
@@ -27,5 +29,24 @@ contextBridge.exposeInMainWorld('billmeWindow', {
   },
   offMaximizeChanged: () => {
     ipcRenderer.removeAllListeners(WINDOW_MAXIMIZE_CHANGED_CHANNEL);
+  },
+  onUpdateStatusChanged: (
+    callback: (payload: {
+      status: string;
+      version?: string;
+      error?: string;
+      progress?: number;
+    }) => void,
+  ) => {
+    const listener = (
+      _event: unknown,
+      payload: { status: string; version?: string; error?: string; progress?: number },
+    ) => {
+      callback(payload);
+    };
+    ipcRenderer.on(UPDATE_STATUS_CHANGED_CHANNEL, listener);
+  },
+  offUpdateStatusChanged: () => {
+    ipcRenderer.removeAllListeners(UPDATE_STATUS_CHANGED_CHANNEL);
   },
 });

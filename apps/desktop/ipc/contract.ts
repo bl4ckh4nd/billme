@@ -23,11 +23,26 @@ import {
   accountSchema,
   recurringProfileSchema,
   appSettingsSchema,
+  eurGetReportArgsSchema,
+  eurReportResultSchema,
+  eurListItemsArgsSchema,
+  eurListItemSchema,
+  eurUpsertClassificationArgsSchema,
+  eurClassificationSchema,
+  eurExportCsvArgsSchema,
+  eurExportPdfArgsSchema,
+  eurExportPdfResultSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
 const windowMaximizedStateSchema = z.object({
   isMaximized: z.boolean(),
+});
+const updateStatusSchema = z.object({
+  status: z.enum(['idle', 'checking', 'available', 'downloading', 'downloaded', 'error']),
+  version: z.string().optional(),
+  error: z.string().optional(),
+  progress: z.number().optional(),
 });
 
 const deleteWithReasonSchema = z.object({
@@ -684,6 +699,32 @@ export const ipcRoutes = {
     result: rollbackImportBatchResultSchema,
   },
 
+  'eur:getReport': {
+    channel: 'eur:getReport',
+    args: eurGetReportArgsSchema,
+    result: eurReportResultSchema,
+  },
+  'eur:listItems': {
+    channel: 'eur:listItems',
+    args: eurListItemsArgsSchema,
+    result: z.array(eurListItemSchema),
+  },
+  'eur:upsertClassification': {
+    channel: 'eur:upsertClassification',
+    args: eurUpsertClassificationArgsSchema,
+    result: eurClassificationSchema,
+  },
+  'eur:exportCsv': {
+    channel: 'eur:exportCsv',
+    args: eurExportCsvArgsSchema,
+    result: z.string(),
+  },
+  'eur:exportPdf': {
+    channel: 'eur:exportPdf',
+    args: eurExportPdfArgsSchema,
+    result: eurExportPdfResultSchema,
+  },
+
   'portal:health': {
     channel: 'portal:health',
     args: portalHealthArgsSchema,
@@ -789,6 +830,22 @@ export const ipcRoutes = {
     channel: 'recurring:manualRun',
     args: z.undefined(),
     result: recurringManualRunResultSchema,
+  },
+
+  'updater:getStatus': {
+    channel: 'updater:get-status',
+    args: z.undefined(),
+    result: updateStatusSchema,
+  },
+  'updater:downloadUpdate': {
+    channel: 'updater:download-update',
+    args: z.undefined(),
+    result: okSchema,
+  },
+  'updater:quitAndInstall': {
+    channel: 'updater:quit-and-install',
+    args: z.undefined(),
+    result: okSchema,
   },
 } as const satisfies Record<string, RouteDef<z.ZodTypeAny, z.ZodTypeAny>>;
 

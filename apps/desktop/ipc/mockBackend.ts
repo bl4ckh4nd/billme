@@ -72,6 +72,63 @@ let activeTemplateIds: { invoice: string | null; offer: string | null } = {
   offer: 'default-offer',
 };
 let mockIsMaximized = false;
+const mockEurClassifications = new Map<string, any>();
+const mockEurLines: Array<{
+  id: string;
+  taxYear: number;
+  kennziffer?: string;
+  label: string;
+  kind: 'income' | 'expense' | 'computed';
+  exportable: boolean;
+  sortOrder: number;
+  computedFromIds: string[];
+  sourceVersion: string;
+}> = [
+  {
+    id: 'E2025_KZ111',
+    taxYear: 2025,
+    kennziffer: '111',
+    label: 'Betriebseinnahmen als umsatzsteuerlicher Kleinunternehmer (nach § 19 Abs. 1 UStG)',
+    kind: 'income',
+    exportable: true,
+    sortOrder: 0,
+    computedFromIds: [],
+    sourceVersion: 'BMF-2025-2025-08-29',
+  },
+  {
+    id: 'E2025_KZ112',
+    taxYear: 2025,
+    kennziffer: '112',
+    label: 'Umsatzsteuerpflichtige Betriebseinnahmen',
+    kind: 'income',
+    exportable: true,
+    sortOrder: 1,
+    computedFromIds: [],
+    sourceVersion: 'BMF-2025-2025-08-29',
+  },
+  {
+    id: 'E2025_KZ183',
+    taxYear: 2025,
+    kennziffer: '183',
+    label: 'Betriebsausgaben',
+    kind: 'expense',
+    exportable: true,
+    sortOrder: 2,
+    computedFromIds: [],
+    sourceVersion: 'BMF-2025-2025-08-29',
+  },
+  {
+    id: 'E2025_KZ159',
+    taxYear: 2025,
+    kennziffer: '159',
+    label: 'Summe Betriebseinnahmen',
+    kind: 'computed',
+    exportable: true,
+    sortOrder: 3,
+    computedFromIds: ['E2025_KZ111', 'E2025_KZ112'],
+    sourceVersion: 'BMF-2025-2025-08-29',
+  },
+];
 
 type NumberReservation = {
   id: string;
@@ -205,6 +262,240 @@ const offers: Invoice[] = [
     history: [],
   },
 ];
+
+const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const toNet = (amountGross: number, classification: any): number => {
+  if (settings.legal.smallBusinessRule) return round2(amountGross);
+  if ((classification?.vatMode ?? 'none') !== 'default') return round2(amountGross);
+  const rate = Number(settings.legal.defaultVatRate) || 0;
+  if (rate <= 0) return round2(amountGross);
+  return round2(amountGross / (1 + rate / 100));
+};
+
+const getEurDateRange = (taxYear: number, from?: string, to?: string): { from: string; to: string } => ({
+  from: from ?? `${taxYear}-01-01`,
+  to: to ?? `${taxYear}-12-31`,
+});
+
+const getRawEurItems = (from: string, to: string) => {
+  const items: Array<{
+    sourceType: 'transaction' | 'invoice';
+    sourceId: string;
+    date: string;
+    amountGross: number;
+    flowType: 'income' | 'expense';
+    accountId?: string;
+    linkedViaInvoice?: boolean;
+    counterparty: string;
+    purpose: string;
+  }> = [];
+
+  for (const inv of invoices) {
+    for (const payment of inv.payments ?? []) {
+      if (!payment?.date) continue;
+      if (payment.date < from || payment.date > to) continue;
+      items.push({
+        sourceType: 'invoice',
+        sourceId: inv.id,
+        date: payment.date,
+        amountGross: Math.abs(Number(payment.amount) || 0),
+        flowType: 'income',
+        linkedViaInvoice: false,
+        counterparty: inv.client,
+        purpose: `Rechnung ${inv.number}`,
+      });
+    }
+  }
+
+  for (const account of accounts) {
+    for (const tx of account.transactions ?? []) {
+      if (!tx?.date || tx.date < from || tx.date > to) continue;
+      if (tx.status !== 'booked') continue;
+
+      const linkedInvoiceId = (tx as any).linkedInvoiceId as string | undefined;
+      if (tx.type === 'income' && linkedInvoiceId) continue;
+      if (tx.type !== 'income' && tx.type !== 'expense') continue;
+
+      items.push({
+        sourceType: 'transaction',
+        sourceId: tx.id,
+        date: tx.date,
+        amountGross: Math.abs(Number(tx.amount) || 0),
+        flowType: tx.type,
+        accountId: account.id,
+        linkedViaInvoice: Boolean(linkedInvoiceId),
+        counterparty: tx.counterparty,
+        purpose: tx.purpose,
+      });
+    }
+  }
+
+  items.sort((a, b) => {
+    if (a.date === b.date) return a.sourceId.localeCompare(b.sourceId);
+    return a.date > b.date ? -1 : 1;
+  });
+
+  return items;
+};
+
+const listMockEurItems = (params: IpcArgs<'eur:listItems'>) => {
+  const { taxYear, from, to } = params;
+  const range = getEurDateRange(taxYear, from, to);
+  const lines = mockEurLines.filter((line) => line.taxYear === taxYear);
+  const linesById = new Map(lines.map((line) => [line.id, line]));
+  const defaultIncomeLineId = lines.find((line) => line.kind === 'income')?.id;
+  const defaultExpenseLineId = lines.find((line) => line.kind === 'expense')?.id;
+
+  let items = getRawEurItems(range.from, range.to).map((item) => {
+    const key = `${item.sourceType}:${item.sourceId}:${taxYear}`;
+    const classification = mockEurClassifications.get(key);
+    const line = classification?.eurLineId ? linesById.get(classification.eurLineId) : undefined;
+    const suggestedLineId = item.flowType === 'income' ? defaultIncomeLineId : defaultExpenseLineId;
+    return {
+      ...item,
+      amountNet: toNet(item.amountGross, classification),
+      suggestedLineId,
+      suggestionReason: suggestedLineId ? 'Mock-Vorschlag nach Buchungstyp' : undefined,
+      classification,
+      line,
+    };
+  });
+
+  if (params.sourceType) {
+    items = items.filter((item) => item.sourceType === params.sourceType);
+  }
+
+  if (params.flowType) {
+    items = items.filter((item) => item.flowType === params.flowType);
+  }
+
+  if (params.accountId) {
+    items = items.filter((item) => item.accountId === params.accountId);
+  }
+
+  const effectiveStatus = params.onlyUnclassified ? 'unclassified' : params.status;
+  if (effectiveStatus && effectiveStatus !== 'all') {
+    items = items.filter((item) => {
+      if (effectiveStatus === 'unclassified') return !item.classification?.eurLineId && !item.classification?.excluded;
+      if (effectiveStatus === 'classified') return Boolean(item.classification?.eurLineId) && !item.classification?.excluded;
+      return Boolean(item.classification?.excluded);
+    });
+  }
+
+  if (params.search && params.search.trim().length > 0) {
+    const needle = params.search.trim().toLowerCase();
+    items = items.filter((item) =>
+      item.counterparty.toLowerCase().includes(needle)
+      || item.purpose.toLowerCase().includes(needle)
+      || item.date.includes(needle)
+      || String(item.amountGross).includes(needle),
+    );
+  }
+
+  const offset = Math.max(0, params.offset ?? 0);
+  if (params.limit && params.limit > 0) {
+    items = items.slice(offset, offset + params.limit);
+  } else if (offset > 0) {
+    items = items.slice(offset);
+  }
+
+  return items;
+};
+
+const getMockEurReport = (params: IpcArgs<'eur:getReport'>) => {
+  const { taxYear, from, to } = params;
+  const range = getEurDateRange(taxYear, from, to);
+  const lines = mockEurLines.filter((line) => line.taxYear === taxYear);
+  const linesById = new Map(lines.map((line) => [line.id, line]));
+  const totals = new Map<string, number>();
+  const warnings: string[] = [];
+  let unclassifiedCount = 0;
+
+  for (const line of lines) totals.set(line.id, 0);
+
+  const items = listMockEurItems({ taxYear, from: range.from, to: range.to });
+  for (const item of items) {
+    const cls = item.classification;
+    if (cls?.excluded) continue;
+    if (!cls?.eurLineId) {
+      unclassifiedCount += 1;
+      continue;
+    }
+
+    const line = linesById.get(cls.eurLineId);
+    if (!line) {
+      warnings.push(`Unknown EÜR line for ${item.sourceType}:${item.sourceId}: ${cls.eurLineId}`);
+      unclassifiedCount += 1;
+      continue;
+    }
+    if (line.kind === 'computed') {
+      warnings.push(`Computed line cannot be used for classification: ${line.id}`);
+      unclassifiedCount += 1;
+      continue;
+    }
+    if (line.kind !== item.flowType) {
+      warnings.push(`Flow mismatch for ${item.sourceType}:${item.sourceId}: line ${line.id} is ${line.kind}`);
+      unclassifiedCount += 1;
+      continue;
+    }
+
+    totals.set(line.id, round2((totals.get(line.id) ?? 0) + item.amountNet));
+  }
+
+  const computedMemo = new Map<string, number>();
+  const resolveTotal = (lineId: string): number => {
+    if (computedMemo.has(lineId)) return computedMemo.get(lineId)!;
+    const line = linesById.get(lineId);
+    if (!line) return 0;
+    if (line.kind !== 'computed') {
+      const direct = totals.get(lineId) ?? 0;
+      computedMemo.set(lineId, direct);
+      return direct;
+    }
+    const value = round2((line.computedFromIds ?? []).reduce((sum, childId) => sum + resolveTotal(childId), 0));
+    computedMemo.set(lineId, value);
+    totals.set(lineId, value);
+    return value;
+  };
+
+  for (const line of lines) resolveTotal(line.id);
+
+  const rows = lines.map((line) => ({
+    lineId: line.id,
+    kennziffer: line.kennziffer,
+    label: line.label,
+    kind: line.kind,
+    exportable: line.exportable,
+    total: round2(totals.get(line.id) ?? 0),
+    sortOrder: line.sortOrder,
+  }));
+
+  const incomeTotal = round2(rows.filter((row) => row.kind === 'income').reduce((sum, row) => sum + row.total, 0));
+  const expenseTotal = round2(rows.filter((row) => row.kind === 'expense').reduce((sum, row) => sum + row.total, 0));
+
+  return {
+    taxYear,
+    from: range.from,
+    to: range.to,
+    rows,
+    summary: {
+      incomeTotal,
+      expenseTotal,
+      surplus: round2(incomeTotal - expenseTotal),
+    },
+    unclassifiedCount,
+    warnings,
+  };
+};
+
+const buildMockEurCsv = (report: ReturnType<typeof getMockEurReport>): string => {
+  const header = ['Kennziffer', 'Bezeichnung', 'Betrag'].join(';');
+  const rows = report.rows
+    .filter((row) => row.exportable)
+    .map((row) => [row.kennziffer ?? '', row.label, row.total.toFixed(2).replace('.', ',')].join(';'));
+  return `\uFEFF${[header, ...rows].join('\n')}`;
+};
 
 const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<IpcResult<K>> => {
   switch (key) {
@@ -508,6 +799,43 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       } as IpcResult<K>;
     }
 
+    case 'eur:getReport': {
+      const payload = args as IpcArgs<'eur:getReport'>;
+      return getMockEurReport(payload) as IpcResult<K>;
+    }
+
+    case 'eur:listItems': {
+      const payload = args as IpcArgs<'eur:listItems'>;
+      return listMockEurItems(payload) as IpcResult<K>;
+    }
+
+    case 'eur:upsertClassification': {
+      const payload = args as IpcArgs<'eur:upsertClassification'>;
+      const key = `${payload.sourceType}:${payload.sourceId}:${payload.taxYear}`;
+      const value = {
+        id: mockEurClassifications.get(key)?.id ?? Math.random().toString(36).slice(2),
+        sourceType: payload.sourceType,
+        sourceId: payload.sourceId,
+        taxYear: payload.taxYear,
+        eurLineId: payload.excluded ? undefined : payload.eurLineId,
+        excluded: payload.excluded ?? false,
+        vatMode: payload.vatMode ?? 'none',
+        note: payload.note,
+        updatedAt: new Date().toISOString(),
+      };
+      mockEurClassifications.set(key, value);
+      return value as IpcResult<K>;
+    }
+
+    case 'eur:exportCsv': {
+      const payload = args as IpcArgs<'eur:exportCsv'>;
+      const report = getMockEurReport(payload);
+      return buildMockEurCsv(report) as IpcResult<K>;
+    }
+
+    case 'eur:exportPdf':
+      throw new Error('eur:exportPdf only available in Electron runtime');
+
     case 'secrets:get':
       return null as IpcResult<K>;
     case 'secrets:set':
@@ -534,6 +862,13 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       return { ok: true } as IpcResult<K>;
     case 'window:isMaximized':
       return { isMaximized: mockIsMaximized } as IpcResult<K>;
+
+    case 'updater:getStatus':
+      return { status: 'idle' as const } as IpcResult<K>;
+    case 'updater:downloadUpdate':
+      return { ok: true } as IpcResult<K>;
+    case 'updater:quitAndInstall':
+      return { ok: true } as IpcResult<K>;
 
     default:
       throw new Error(`Unsupported IPC route in mock backend: ${String(key)}`);

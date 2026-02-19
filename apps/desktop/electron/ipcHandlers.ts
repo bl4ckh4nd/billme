@@ -42,7 +42,7 @@ import { formatAddressMultiline } from '../utils/formatters';
 import { ipcRoutes, type IpcArgs, type IpcResult, type IpcRouteKey } from '../ipc/contract';
 import { portalClient } from '../services/portalClient';
 import crypto from 'crypto';
-import { exportPdf } from './pdfExport';
+import { exportPdf, exportEurPdf } from './pdfExport';
 import { commitCsv, previewCsv } from '../services/csvImport';
 import {
   createImportBatch,
@@ -66,7 +66,9 @@ import {
 } from '../db/transactionsRepo';
 import { manualDunningRun } from './dunningScheduler';
 import { manualRecurringRun } from './recurringScheduler';
+import { getCurrentUpdateStatus, downloadUpdate, quitAndInstall } from './updater';
 import { getInvoiceDunningStatus } from '../services/dunningService';
+import { buildEurCsv, getEurReport, listEurItems, upsertEurItemClassification } from '../services/eurReport';
 
 const computeGrossFromItems = (doc: Invoice, settings: AppSettings): number => {
   const net = (doc.items ?? []).reduce((acc, it) => acc + (Number(it.total) || 0), 0);
@@ -1010,5 +1012,89 @@ export const registerIpcHandlers = (
   register(ipcMain, 'finance:rollbackImportBatch', ({ batchId, reason }) => {
     const db = requireDb();
     return rollbackImportBatch(db, batchId, reason);
+  });
+
+  register(ipcMain, 'updater:getStatus', () => {
+    return getCurrentUpdateStatus();
+  });
+
+  register(ipcMain, 'updater:downloadUpdate', async () => {
+    await downloadUpdate();
+    return { ok: true };
+  });
+
+  register(ipcMain, 'updater:quitAndInstall', () => {
+    quitAndInstall();
+    return { ok: true };
+  });
+
+  register(ipcMain, 'eur:getReport', ({ taxYear, from, to }) => {
+    const db = requireDb();
+    const settings = requireSettings(db);
+    return getEurReport(db, { taxYear, from, to, settings });
+  });
+
+  register(ipcMain, 'eur:listItems', ({
+    taxYear,
+    from,
+    to,
+    onlyUnclassified,
+    sourceType,
+    flowType,
+    status,
+    search,
+    accountId,
+    limit,
+    offset,
+  }) => {
+    const db = requireDb();
+    const settings = requireSettings(db);
+    return listEurItems(db, {
+      taxYear,
+      from,
+      to,
+      settings,
+      onlyUnclassified,
+      sourceType,
+      flowType,
+      status,
+      search,
+      accountId,
+      limit,
+      offset,
+    });
+  });
+
+  register(ipcMain, 'eur:upsertClassification', ({
+    sourceType,
+    sourceId,
+    taxYear,
+    eurLineId,
+    excluded,
+    vatMode,
+    note,
+  }) => {
+    const db = requireDb();
+    return upsertEurItemClassification(db, {
+      sourceType,
+      sourceId,
+      taxYear,
+      eurLineId,
+      excluded,
+      vatMode,
+      note,
+    });
+  });
+
+  register(ipcMain, 'eur:exportCsv', ({ taxYear, from, to }) => {
+    const db = requireDb();
+    const settings = requireSettings(db);
+    const report = getEurReport(db, { taxYear, from, to, settings });
+    return buildEurCsv(report);
+  });
+
+  register(ipcMain, 'eur:exportPdf', async ({ taxYear, from, to }) => {
+    const userDataPath = getUserDataPath();
+    return exportEurPdf({ taxYear, from, to, userDataPath });
   });
 };

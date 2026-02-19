@@ -153,6 +153,117 @@ export const transactionSchema = z.object({
   importBatchId: z.string().optional(),
 });
 
+export const eurLineSchema = z.object({
+  id: z.string(),
+  taxYear: z.number().int(),
+  kennziffer: z.string().optional(),
+  label: z.string(),
+  kind: z.enum(['income', 'expense', 'computed']),
+  exportable: z.boolean(),
+  sortOrder: z.number().int(),
+  computedFromIds: z.array(z.string()),
+  sourceVersion: z.string(),
+});
+
+export const eurClassificationSchema = z.object({
+  id: z.string(),
+  sourceType: z.enum(['transaction', 'invoice']),
+  sourceId: z.string(),
+  taxYear: z.number().int(),
+  eurLineId: z.string().optional(),
+  excluded: z.boolean(),
+  vatMode: z.enum(['none', 'default']),
+  note: z.string().optional(),
+  updatedAt: z.string(),
+});
+
+export const eurReportRowSchema = z.object({
+  lineId: z.string(),
+  kennziffer: z.string().optional(),
+  label: z.string(),
+  kind: z.enum(['income', 'expense', 'computed']),
+  exportable: z.boolean(),
+  total: z.number(),
+  sortOrder: z.number().int(),
+});
+
+export const eurReportResultSchema = z.object({
+  taxYear: z.number().int(),
+  from: z.string(),
+  to: z.string(),
+  rows: z.array(eurReportRowSchema),
+  summary: z.object({
+    incomeTotal: z.number(),
+    expenseTotal: z.number(),
+    surplus: z.number(),
+  }),
+  unclassifiedCount: z.number().int(),
+  warnings: z.array(z.string()),
+});
+
+export const eurListItemsArgsSchema = z.object({
+  taxYear: z.number().int().min(2025),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  onlyUnclassified: z.boolean().optional(),
+  sourceType: z.enum(['transaction', 'invoice']).optional(),
+  flowType: z.enum(['income', 'expense']).optional(),
+  status: z.enum(['all', 'unclassified', 'classified', 'excluded']).optional(),
+  search: z.string().optional(),
+  accountId: z.string().optional(),
+  limit: z.number().int().positive().max(1000).optional(),
+  offset: z.number().int().min(0).optional(),
+});
+
+export const eurListItemSchema = z.object({
+  sourceType: z.enum(['transaction', 'invoice']),
+  sourceId: z.string(),
+  date: z.string(),
+  amountGross: z.number(),
+  amountNet: z.number(),
+  flowType: z.enum(['income', 'expense']),
+  accountId: z.string().optional(),
+  linkedViaInvoice: z.boolean().optional(),
+  counterparty: z.string(),
+  purpose: z.string(),
+  suggestedLineId: z.string().optional(),
+  suggestionReason: z.string().optional(),
+  classification: eurClassificationSchema.optional(),
+  line: eurLineSchema.optional(),
+});
+
+export const eurGetReportArgsSchema = z.object({
+  taxYear: z.number().int().min(2025),
+  from: z.string().optional(),
+  to: z.string().optional(),
+});
+
+export const eurUpsertClassificationArgsSchema = z.object({
+  sourceType: z.enum(['transaction', 'invoice']),
+  sourceId: z.string().min(1),
+  taxYear: z.number().int().min(2025),
+  eurLineId: z.string().optional(),
+  excluded: z.boolean().optional(),
+  vatMode: z.enum(['none', 'default']).optional(),
+  note: z.string().optional(),
+});
+
+export const eurExportCsvArgsSchema = z.object({
+  taxYear: z.number().int().min(2025),
+  from: z.string().optional(),
+  to: z.string().optional(),
+});
+
+export const eurExportPdfArgsSchema = z.object({
+  taxYear: z.number().int().min(2025),
+  from: z.string().optional(),
+  to: z.string().optional(),
+});
+
+export const eurExportPdfResultSchema = z.object({
+  path: z.string().min(1),
+});
+
 export const accountSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -287,6 +398,21 @@ export const appSettingsSchema = z.object({
       dunningRunTime: '09:00',
       recurringEnabled: false,
       recurringRunTime: '03:00',
+    }),
+  dashboard: z
+    .object({
+      monthlyRevenueGoal: z.number().default(30000),
+      dueSoonDays: z.number().int().min(1).default(7),
+      topCategoriesLimit: z.number().int().min(1).max(20).default(5),
+      recentPaymentsLimit: z.number().int().min(1).max(20).default(5),
+      topClientsLimit: z.number().int().min(1).max(20).default(5),
+    })
+    .default({
+      monthlyRevenueGoal: 30000,
+      dueSoonDays: 7,
+      topCategoriesLimit: 5,
+      recentPaymentsLimit: 5,
+      topClientsLimit: 5,
     }),
 });
 

@@ -16,6 +16,15 @@ import {
   csvMappingSchema,
   financeImportPreviewSchema,
   financeImportCommitSchema,
+  eurGetReportArgsSchema,
+  eurReportResultSchema,
+  eurListItemsArgsSchema,
+  eurListItemSchema,
+  eurUpsertClassificationArgsSchema,
+  eurClassificationSchema,
+  eurExportCsvArgsSchema,
+  eurExportPdfArgsSchema,
+  eurExportPdfResultSchema,
   templateSchema,
   templateKindSchema,
 } from './schemas';
@@ -856,5 +865,110 @@ describe('Schema Error Messages', () => {
     } catch (error: any) {
       expect(error.message).toContain('amount');
     }
+  });
+});
+
+describe('EÜR Schemas', () => {
+  it('should validate eur:getReport args', () => {
+    expect(() => eurGetReportArgsSchema.parse({ taxYear: 2025 })).not.toThrow();
+  });
+
+  it('should validate eur report result', () => {
+    expect(() =>
+      eurReportResultSchema.parse({
+        taxYear: 2025,
+        from: '2025-01-01',
+        to: '2025-12-31',
+        rows: [
+          {
+            lineId: 'E2025_KZ111',
+            kennziffer: '111',
+            label: 'Test',
+            kind: 'income',
+            exportable: true,
+            total: 100,
+            sortOrder: 1,
+          },
+        ],
+        summary: {
+          incomeTotal: 100,
+          expenseTotal: 0,
+          surplus: 100,
+        },
+        unclassifiedCount: 0,
+        warnings: [],
+      }),
+    ).not.toThrow();
+  });
+
+  it('should validate eur:listItems args and item', () => {
+    expect(() =>
+      eurListItemsArgsSchema.parse({
+        taxYear: 2025,
+        sourceType: 'transaction',
+        flowType: 'expense',
+        status: 'unclassified',
+        search: 'hosting',
+        accountId: 'acc-1',
+        limit: 100,
+        offset: 0,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      eurListItemSchema.parse({
+        sourceType: 'transaction',
+        sourceId: 'tx-1',
+        date: '2025-05-01',
+        amountGross: 119,
+        amountNet: 100,
+        flowType: 'expense',
+        accountId: 'acc-1',
+        linkedViaInvoice: false,
+        counterparty: 'Vendor',
+        purpose: 'Hosting',
+        suggestedLineId: 'E2025_KZ280',
+        suggestionReason: 'Telekommunikation erkannt',
+      }),
+    ).not.toThrow();
+  });
+
+  it('should validate eur:upsertClassification args and result', () => {
+    expect(() =>
+      eurUpsertClassificationArgsSchema.parse({
+        sourceType: 'invoice',
+        sourceId: 'inv-1',
+        taxYear: 2025,
+        eurLineId: 'E2025_KZ111',
+        vatMode: 'default',
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      eurClassificationSchema.parse({
+        id: 'cls-1',
+        sourceType: 'invoice',
+        sourceId: 'inv-1',
+        taxYear: 2025,
+        eurLineId: 'E2025_KZ111',
+        excluded: false,
+        vatMode: 'default',
+        updatedAt: '2025-01-01T00:00:00.000Z',
+      }),
+    ).not.toThrow();
+  });
+
+  it('should validate eur:exportCsv args', () => {
+    expect(() => eurExportCsvArgsSchema.parse({ taxYear: 2025 })).not.toThrow();
+  });
+
+  it('should validate eur:exportPdf args', () => {
+    expect(() => eurExportPdfArgsSchema.parse({ taxYear: 2025 })).not.toThrow();
+    expect(() => eurExportPdfArgsSchema.parse({ taxYear: 2025, from: '2025-01-01', to: '2025-12-31' })).not.toThrow();
+    expect(() => eurExportPdfArgsSchema.parse({ taxYear: 2024 })).toThrow();
+  });
+
+  it('should validate eur:exportPdf result', () => {
+    expect(() => eurExportPdfResultSchema.parse({ path: '/some/path.pdf' })).not.toThrow();
+    expect(() => eurExportPdfResultSchema.parse({ path: '' })).toThrow();
   });
 });

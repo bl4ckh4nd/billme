@@ -221,6 +221,14 @@ const CatalogSettingsSchema = z.object({
   ).default([]),
 });
 
+const DashboardSettingsSchema = z.object({
+  monthlyRevenueGoal: z.number().default(30000),
+  dueSoonDays: z.number().int().min(1).default(7),
+  topCategoriesLimit: z.number().int().min(1).max(20).default(5),
+  recentPaymentsLimit: z.number().int().min(1).max(20).default(5),
+  topClientsLimit: z.number().int().min(1).max(20).default(5),
+});
+
 export const SettingsSchema = z.object({
   company: CompanySettingsSchema,
   finance: FinanceSettingsSchema,
@@ -250,6 +258,13 @@ export const SettingsSchema = z.object({
     recurringRunTime: '03:00',
   }),
   catalog: CatalogSettingsSchema.optional().default({ categories: [] }),
+  dashboard: DashboardSettingsSchema.optional().default({
+    monthlyRevenueGoal: 30000,
+    dueSoonDays: 7,
+    topCategoriesLimit: 5,
+    recentPaymentsLimit: 5,
+    topClientsLimit: 5,
+  }),
 });
 
 // Tags schema (for clients)

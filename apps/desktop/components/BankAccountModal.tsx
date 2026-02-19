@@ -62,7 +62,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
               <Building2 size={20} />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-gray-900">Neues Bankkonto</h2>
+              <h2 className="text-xl font-black text-gray-900">Neues Bankkonto</h2>
               <p className="text-sm text-gray-500 mt-0.5">
                 Fügen Sie ein neues Konto hinzu
               </p>

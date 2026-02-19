@@ -55,11 +55,11 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-xl shadow-2xl w-[95%] h-[85vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl w-[95%] h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">Import-Historie</h2>
+            <h2 className="text-xl font-black text-gray-900">Import-Historie</h2>
             <p className="text-sm text-gray-500 mt-1">
               Übersicht aller CSV-Importe mit Rollback-Möglichkeit
             </p>

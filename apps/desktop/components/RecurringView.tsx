@@ -153,7 +153,7 @@ export const RecurringView: React.FC = () => {
         <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm flex flex-col animate-enter relative">
             <div className="flex items-center justify-between mb-8">
                 <div>
-                    <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
+                    <h1 className="text-3xl font-black text-gray-900 flex items-center gap-3">
                         <Repeat className="text-black" />
                         Abo-Rechnungen
                     </h1>

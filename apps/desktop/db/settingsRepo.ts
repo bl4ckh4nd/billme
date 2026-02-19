@@ -83,6 +83,16 @@ const normalizeSettings = (settings: unknown): AppSettings => {
       next.automation.recurringRunTime = '03:00';
     }
   }
+  // Backward compatibility for dashboard section.
+  if (!next.dashboard) {
+    next.dashboard = {
+      monthlyRevenueGoal: 30000,
+      dueSoonDays: 7,
+      topCategoriesLimit: 5,
+      recentPaymentsLimit: 5,
+      topClientsLimit: 5,
+    };
+  }
   // Backward compatibility for dunning level enabled field.
   if (next.dunning?.levels) {
     next.dunning.levels = next.dunning.levels.map((level: any) => ({

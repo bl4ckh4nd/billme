@@ -41,7 +41,7 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-xl shadow-2xl w-[90%] max-w-3xl max-h-[85vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl w-[90%] max-w-3xl max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <div className="flex items-center gap-3">

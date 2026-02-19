@@ -74,7 +74,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
         <div className="flex flex-col gap-2 animate-enter">
           <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Inhalt</label>
           <textarea
-            className="w-full border border-gray-200 bg-gray-50 rounded-lg p-3 text-sm focus:ring-2 focus:ring-accent focus:border-transparent outline-none min-h-[100px] text-gray-800 resize-none transition-shadow font-mono"
+            className="w-full border border-gray-200 bg-gray-50 rounded-xl p-3 text-sm focus:ring-2 focus:ring-accent focus:border-transparent outline-none min-h-[100px] text-gray-800 resize-none transition-shadow font-mono"
             value={element.content}
             onChange={(e) => onUpdate(element.id, { content: e.target.value })}
             placeholder="Text eingeben..."
@@ -159,7 +159,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
                                             type="number" 
                                             value={col.width}
                                             onChange={(e) => handleUpdateColumn(idx, 'width', Number(e.target.value))}
-                                            className="w-full bg-gray-50 rounded p-1 text-xs outline-none focus:ring-1 focus:ring-accent"
+                                            className="w-full bg-gray-50 rounded-lg p-1 text-xs outline-none focus:ring-1 focus:ring-accent"
                                         />
                                         <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[9px] text-gray-400">px</span>
                                     </div>
@@ -196,7 +196,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
                    <label className="text-[10px] text-gray-400 font-medium mb-1 block">IBAN</label>
                    <input
                        type="text"
-                       className="w-full border border-gray-200 bg-gray-50 rounded-lg p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
+                       className="w-full border border-gray-200 bg-gray-50 rounded-xl p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
                        placeholder="DE12..."
                        value={element.qrData?.iban || ''}
                        onChange={(e) => onUpdate(element.id, { qrData: { ...element.qrData!, iban: e.target.value } })}
@@ -206,7 +206,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
                    <label className="text-[10px] text-gray-400 font-medium mb-1 block">BIC</label>
                    <input
                        type="text"
-                       className="w-full border border-gray-200 bg-gray-50 rounded-lg p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
+                       className="w-full border border-gray-200 bg-gray-50 rounded-xl p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
                        value={element.qrData?.bic || ''}
                        onChange={(e) => onUpdate(element.id, { qrData: { ...element.qrData!, bic: e.target.value } })}
                    />
@@ -222,7 +222,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
             <label className="text-[10px] text-gray-400 font-medium mb-1 block">X Position</label>
             <input
                 type="number"
-                className="w-full border border-gray-200 bg-gray-50 rounded-lg p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
+                className="w-full border border-gray-200 bg-gray-50 rounded-xl p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
                 value={Math.round(element.x)}
                 onChange={(e) => onUpdate(element.id, { x: Number(e.target.value) })}
             />
@@ -231,7 +231,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
             <label className="text-[10px] text-gray-400 font-medium mb-1 block">Y Position</label>
             <input
                 type="number"
-                className="w-full border border-gray-200 bg-gray-50 rounded-lg p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
+                className="w-full border border-gray-200 bg-gray-50 rounded-xl p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
                 value={Math.round(element.y)}
                 onChange={(e) => onUpdate(element.id, { y: Number(e.target.value) })}
             />
@@ -240,7 +240,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
             <label className="text-[10px] text-gray-400 font-medium mb-1 block">Breite</label>
             <input
                 type="number"
-                className="w-full border border-gray-200 bg-gray-50 rounded-lg p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
+                className="w-full border border-gray-200 bg-gray-50 rounded-xl p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
                 value={element.style.width || ''}
                 onChange={(e) => handleStyleChange('width', Number(e.target.value))}
             />
@@ -250,7 +250,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
                 <label className="text-[10px] text-gray-400 font-medium mb-1 block">Höhe</label>
                 <input
                 type="number"
-                className="w-full border border-gray-200 bg-gray-50 rounded-lg p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
+                className="w-full border border-gray-200 bg-gray-50 rounded-xl p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
                 value={element.style.height || ''}
                 onChange={(e) => handleStyleChange('height', Number(e.target.value))}
                 />
@@ -283,7 +283,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
                 type="number"
                 value={element.style.fontSize || 12}
                 onChange={(e) => handleStyleChange('fontSize', Number(e.target.value))}
-                className="w-full border border-gray-200 bg-gray-50 rounded-lg p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
+                className="w-full border border-gray-200 bg-gray-50 rounded-xl p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
                 />
             </div>
           </div>
@@ -293,7 +293,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
                <select 
                    value={element.style.fontFamily || 'Inter, sans-serif'}
                    onChange={(e) => handleStyleChange('fontFamily', e.target.value)}
-                   className="w-full border border-gray-200 bg-gray-50 rounded-lg p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
+                   className="w-full border border-gray-200 bg-gray-50 rounded-xl p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
                >
                    <option value="Inter, sans-serif">Inter (Modern)</option>
                    <option value="Times New Roman, serif">Times (Classic)</option>
@@ -352,7 +352,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
                     type="number"
                     value={element.style.height || 1}
                     onChange={(e) => handleStyleChange('height', Number(e.target.value))}
-                    className="w-full border border-gray-200 bg-gray-50 rounded-lg p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
+                    className="w-full border border-gray-200 bg-gray-50 rounded-xl p-2 text-sm focus:ring-2 focus:ring-accent outline-none"
                     />
                  </div>
              </div>

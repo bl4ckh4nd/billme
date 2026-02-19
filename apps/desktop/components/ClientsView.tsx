@@ -987,7 +987,7 @@ export const ClientsView: React.FC = () => {
              ) : (
              <>
              <div className="flex items-center justify-between mb-8">
-                 <h1 className="text-3xl font-bold text-gray-900">Kunden</h1>
+                 <h1 className="text-3xl font-black text-gray-900">Kunden</h1>
                  <div className="flex gap-3">
                     <div className="relative">
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />

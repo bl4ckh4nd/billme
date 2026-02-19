@@ -1540,7 +1540,7 @@ export const SettingsView: React.FC = () => {
 
       {/* Sidebar Navigation */}
       <div className="w-72 bg-gray-50 border-r border-gray-100 p-8 flex flex-col">
-        <h2 className="text-2xl font-bold mb-8">Einstellungen</h2>
+        <h2 className="text-2xl font-black mb-8">Einstellungen</h2>
         <nav className="space-y-2">
           {navItems.map((item) => {
             const Icon = item.icon;

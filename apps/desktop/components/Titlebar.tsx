@@ -1,10 +1,15 @@
 import React from 'react';
-import { Copy, Minus, Square, X } from 'lucide-react';
+import { ArrowDownToLine, Copy, Minus, RefreshCw, Square, X } from 'lucide-react';
 import { ipc } from '../ipc/client';
 import billmeMarkLogo from '../assets/billme-mark.svg';
 
 export const Titlebar: React.FC = () => {
   const [isMaximized, setIsMaximized] = React.useState(false);
+  const [updateStatus, setUpdateStatus] = React.useState<{
+    status: string;
+    version?: string;
+    progress?: number;
+  }>({ status: 'idle' });
 
   const syncWindowState = React.useCallback(async () => {
     try {
@@ -27,6 +32,18 @@ export const Titlebar: React.FC = () => {
     };
   }, [syncWindowState]);
 
+  React.useEffect(() => {
+    ipc.updater.getStatus().then(setUpdateStatus).catch(() => {});
+
+    window.billmeWindow?.onUpdateStatusChanged((payload) => {
+      setUpdateStatus(payload);
+    });
+
+    return () => {
+      window.billmeWindow?.offUpdateStatusChanged?.();
+    };
+  }, []);
+
   const minimize = () => {
     void ipc.window.minimize();
   };
@@ -38,6 +55,19 @@ export const Titlebar: React.FC = () => {
   const close = () => {
     void ipc.window.close();
   };
+
+  const handleUpdateClick = () => {
+    if (updateStatus.status === 'available') {
+      void ipc.updater.downloadUpdate();
+    } else if (updateStatus.status === 'downloaded') {
+      void ipc.updater.quitAndInstall();
+    }
+  };
+
+  const showUpdateButton =
+    updateStatus.status === 'available' ||
+    updateStatus.status === 'downloading' ||
+    updateStatus.status === 'downloaded';
 
   return (
     <div
@@ -55,6 +85,42 @@ export const Titlebar: React.FC = () => {
       </div>
 
       <div className="no-drag flex items-center" onDoubleClick={(e) => e.stopPropagation()}>
+        {showUpdateButton && (
+          <button
+            type="button"
+            onClick={handleUpdateClick}
+            disabled={updateStatus.status === 'downloading'}
+            className={`w-11 h-8 inline-flex items-center justify-center transition-colors ${
+              updateStatus.status === 'downloaded'
+                ? 'text-green-600 hover:bg-green-50 hover:text-green-700'
+                : updateStatus.status === 'downloading'
+                  ? 'text-blue-500 cursor-wait'
+                  : 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+            }`}
+            aria-label={
+              updateStatus.status === 'downloaded'
+                ? `Update ${updateStatus.version ?? ''} installieren`
+                : updateStatus.status === 'downloading'
+                  ? `Update wird heruntergeladen (${updateStatus.progress ?? 0}%)`
+                  : `Update ${updateStatus.version ?? ''} herunterladen`
+            }
+            title={
+              updateStatus.status === 'downloaded'
+                ? `Neu starten & Update ${updateStatus.version ?? ''} installieren`
+                : updateStatus.status === 'downloading'
+                  ? `Herunterladen... ${updateStatus.progress ?? 0}%`
+                  : `Update ${updateStatus.version ?? ''} verfügbar`
+            }
+          >
+            {updateStatus.status === 'downloaded' ? (
+              <RefreshCw size={14} />
+            ) : updateStatus.status === 'downloading' ? (
+              <ArrowDownToLine size={14} className="animate-pulse" />
+            ) : (
+              <ArrowDownToLine size={14} />
+            )}
+          </button>
+        )}
         <button
           type="button"
           onClick={minimize}

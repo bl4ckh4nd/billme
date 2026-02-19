@@ -156,6 +156,13 @@ export interface AppSettings {
     recurringRunTime: string; // HH:MM format, e.g., "03:00"
     lastRecurringRun?: string; // ISO timestamp
   };
+  dashboard: {
+    monthlyRevenueGoal: number;
+    dueSoonDays: number;
+    topCategoriesLimit: number;
+    recentPaymentsLimit: number;
+    topClientsLimit: number;
+  };
 }
 
 // --- Invoice Data Types ---

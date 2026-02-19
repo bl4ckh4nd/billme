@@ -296,7 +296,7 @@ export const ArticlesView: React.FC = () => {
             <div className="flex flex-col gap-6 mb-6 shrink-0">
                 <div className="flex items-center justify-between">
                     <div>
-                        <h1 className="text-3xl font-bold text-gray-900 mb-1">Produkte & Leistungen</h1>
+                        <h1 className="text-3xl font-black text-gray-900 mb-1">Produkte & Leistungen</h1>
                         <p className="text-sm text-gray-500 font-medium">{filteredArticles.length} Einträge</p>
                     </div>
                     

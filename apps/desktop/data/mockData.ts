@@ -103,6 +103,13 @@ export const MOCK_SETTINGS: AppSettings = {
     dunningRunTime: '09:00',
     recurringEnabled: true,
     recurringRunTime: '03:00'
+  },
+  dashboard: {
+    monthlyRevenueGoal: 30000,
+    dueSoonDays: 7,
+    topCategoriesLimit: 5,
+    recentPaymentsLimit: 5,
+    topClientsLimit: 5,
   }
 };
 

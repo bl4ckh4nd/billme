@@ -195,7 +195,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                 >
                     <ArrowLeft size={14} /> Zurück zur Übersicht
                 </button>
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 className="text-xl font-black text-gray-900">
                   {templateType === 'offer' ? 'Angebot' : 'Rechnung'} {mode === 'create' ? 'erstellen' : 'bearbeiten'}
                 </h2>
                 <p className="text-gray-500 text-sm">{formData.number}</p>
@@ -217,7 +217,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                 type="text" 
                                 value={formData.number}
                                 onChange={e => setFormData({...formData, number: e.target.value})}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                             />
                         </div>
                         <div>
@@ -226,7 +226,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                 type="date" 
                                 value={formData.date}
                                 onChange={e => setFormData({...formData, date: e.target.value})}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                             />
                         </div>
                         <div>
@@ -235,7 +235,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                 type="date" 
                                 value={formData.servicePeriod || ''}
                                 onChange={e => setFormData({...formData, servicePeriod: e.target.value})}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                             />
                         </div>
                         <div>
@@ -244,7 +244,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                 type="date" 
                                 value={formData.dueDate}
                                 onChange={e => setFormData({...formData, dueDate: e.target.value})}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                             />
                         </div>
                     </div>
@@ -261,7 +261,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                         <select
                             value={selectedClientId}
                             onChange={(e) => handleSelectClient(e.target.value)}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
                         >
                             <option value="">(Kein Kunde)</option>
                             {clients.map((c) => (
@@ -282,7 +282,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                               });
                             }}
                             disabled={!selectedClientId}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3 disabled:opacity-60"
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3 disabled:opacity-60"
                         >
                             <option value="">{selectedClientId ? '(Kein Projekt)' : '(Bitte Kunde auswählen)'}</option>
                             {projects.map((p) => (
@@ -297,14 +297,14 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                             type="text" 
                             value={formData.client}
                             onChange={e => setFormData({...formData, client: e.target.value})}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
                         />
                         <label className="block text-xs font-bold text-gray-500 mb-1">E-Mail</label>
                         <input
                             type="email"
                             value={formData.clientEmail}
                             onChange={e => setFormData({...formData, clientEmail: e.target.value})}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
                             placeholder="name@firma.de"
                         />
                         <label className="block text-xs font-bold text-gray-500 mb-1">Adresse (Optional)</label>
@@ -313,7 +313,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                             onChange={e => setFormData({...formData, clientAddress: e.target.value})}
                             rows={3}
                             placeholder="Straße, PLZ, Stadt..."
-                            className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none resize-none"
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none resize-none"
                         />
                     </div>
                 </div>
@@ -337,7 +337,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                         setArticleToAddId('');
                                     }
                                 }}
-                                className="bg-gray-50 border border-gray-200 rounded px-2 py-1 text-xs font-bold outline-none focus:ring-2 focus:ring-accent"
+                                className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-xs font-bold outline-none focus:ring-2 focus:ring-accent"
                             >
                                 <option value="">+ Artikel</option>
                                 {articles.map((a) => (
@@ -363,7 +363,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                         type="text"
                                         value={item.description}
                                         onChange={e => handleItemChange(idx, 'description', e.target.value)}
-                                        className="flex-1 bg-gray-50 border border-transparent hover:border-gray-200 focus:border-accent rounded px-2 py-1 text-sm font-bold outline-none"
+                                        className="flex-1 bg-gray-50 border border-transparent hover:border-gray-200 focus:border-accent rounded-lg px-2 py-1 text-sm font-bold outline-none"
                                         placeholder="Beschreibung"
                                     />
                                     <button 
@@ -380,7 +380,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                             type="number"
                                             value={item.quantity}
                                             onChange={e => handleItemChange(idx, 'quantity', Number(e.target.value))}
-                                            className="w-full bg-gray-50 rounded px-2 py-1 text-sm outline-none"
+                                            className="w-full bg-gray-50 rounded-lg px-2 py-1 text-sm outline-none"
                                         />
                                     </div>
                                     <div>
@@ -389,7 +389,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                             type="number"
                                             value={item.price}
                                             onChange={e => handleItemChange(idx, 'price', Number(e.target.value))}
-                                            className="w-full bg-gray-50 rounded px-2 py-1 text-sm outline-none"
+                                            className="w-full bg-gray-50 rounded-lg px-2 py-1 text-sm outline-none"
                                         />
                                     </div>
                                     <div>
@@ -397,7 +397,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                         <select
                                             value={item.category ?? ''}
                                             onChange={(e) => handleItemChange(idx, 'category', e.target.value)}
-                                            className="w-full bg-gray-50 rounded px-2 py-1 text-sm outline-none"
+                                            className="w-full bg-gray-50 rounded-lg px-2 py-1 text-sm outline-none"
                                         >
                                             <option value="">(Keine)</option>
                                             {categoryOptions.map((c) => (

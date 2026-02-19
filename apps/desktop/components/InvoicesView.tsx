@@ -381,6 +381,38 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       })();
   };
 
+  const handleFinalizeDraftInvoice = () => {
+      if (!selectedDocument || documentType !== 'invoice' || selectedDocument.status !== 'draft') return;
+
+      const historyEntry = {
+          date: new Date().toISOString().split('T')[0] ?? '',
+          action: 'Rechnung gestellt (Status: Offen)',
+      };
+
+      upsertInvoice.mutate(
+        {
+          invoice: {
+            ...selectedDocument,
+            status: 'open',
+            history: [historyEntry, ...(selectedDocument.history ?? [])],
+          },
+          reason: 'invoice_finalize',
+        },
+        {
+          onSuccess: () => {
+            setToastMessage('Rechnung als gestellt markiert');
+            setShowShareToast(true);
+            setTimeout(() => setShowShareToast(false), 3000);
+          },
+          onError: (error) => {
+            setToastMessage(`Finalisieren fehlgeschlagen: ${String(error)}`);
+            setShowShareToast(true);
+            setTimeout(() => setShowShareToast(false), 5000);
+          },
+        },
+      );
+  };
+
 
   // --- Dunning Logic ---
   const handleStartDunningRun = () => {
@@ -477,7 +509,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-scale-in">
                   <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                       <div>
-                        <h3 className="text-xl font-bold">Mahnlauf starten</h3>
+                        <h3 className="text-xl font-black">Mahnlauf starten</h3>
                         <p className="text-sm text-gray-500">{validSelectedForDunning.length} Rechnungen ausgewählt</p>
                       </div>
                       <button onClick={() => setIsDunningModalOpen(false)} className="p-2 hover:bg-gray-200 rounded-full transition-colors"><X size={20}/></button>
@@ -550,7 +582,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center backdrop-blur-sm p-4 animate-in fade-in duration-200">
              <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl flex flex-col animate-scale-in">
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-3xl">
-                    <h3 className="text-lg font-bold flex items-center gap-2"><Mail size={18}/> Per E-Mail senden</h3>
+                    <h3 className="text-lg font-black flex items-center gap-2"><Mail size={18}/> Per E-Mail senden</h3>
                     <button onClick={() => setIsEmailModalOpen(false)} className="p-2 hover:bg-gray-200 rounded-full"><X size={18}/></button>
                 </div>
                 <div className="p-6 space-y-4">
@@ -898,6 +930,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       >
                           Bearbeiten
                       </button>
+                      {documentType === 'invoice' && selectedDocument.status === 'draft' && (
+                        <button
+                          onClick={handleFinalizeDraftInvoice}
+                          className="h-10 w-10 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-full flex items-center justify-center transition-colors"
+                          title="Als gestellt markieren (Entwurf -> Offen)"
+                        >
+                          <CheckCircle size={18} />
+                        </button>
+                      )}
                       {documentType === 'offer' && (
                         <>
                           <div className="w-px h-6 bg-gray-200 mx-1"></div>
@@ -1281,7 +1322,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         <div className="bg-white rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col animate-scale-in">
           <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
             <div>
-              <h3 className="text-lg font-bold">Löschen bestätigen</h3>
+              <h3 className="text-lg font-black">Löschen bestätigen</h3>
               <p className="text-sm text-gray-500">{count} Einträge ausgewählt</p>
             </div>
             <button

@@ -10,6 +10,8 @@ import {
 import { Invoice, InvoiceStatus } from '../types';
 import { useInvoicesQuery } from '../hooks/useInvoices';
 import { useClientsQuery } from '../hooks/useClients';
+import { useSettingsQuery } from '../hooks/useSettings';
+import { MOCK_SETTINGS } from '../data/mockData';
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
@@ -22,6 +24,9 @@ export const StatisticsView: React.FC = () => {
   const [timeRange, setTimeRange] = useState<TimeRange>('year');
   const { data: invoices = [] } = useInvoicesQuery();
   const { data: clients = [] } = useClientsQuery();
+  const { data: settingsFromDb } = useSettingsQuery();
+  const settings = settingsFromDb ?? MOCK_SETTINGS;
+  const dash = settings.dashboard;
 
   // Filter Logic
   const filteredData = useMemo(() => {
@@ -67,7 +72,51 @@ export const StatisticsView: React.FC = () => {
     const avgTicket = paidCount > 0 ? revenue / paidCount : 0;
 
     return { revenue, outstanding, overdue, conversionRate, avgTicket, totalCount };
-  }, [filteredData, clients]);
+  }, [filteredData]);
+
+  const revenueTrend = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+
+    const getPrevPeriodRevenue = () => {
+      const prevInvoices = invoices.filter(i => i.status === 'paid');
+      switch (timeRange) {
+        case 'month': {
+          const prev = new Date(currentYear, currentMonth - 1, 1);
+          return prevInvoices
+            .filter(inv => {
+              const d = new Date(inv.date);
+              return d.getFullYear() === prev.getFullYear() && d.getMonth() === prev.getMonth();
+            })
+            .reduce((acc, inv) => acc + inv.amount, 0);
+        }
+        case 'quarter': {
+          const currentQ = Math.floor(currentMonth / 3);
+          const prevQ = currentQ - 1;
+          const prevYear = prevQ < 0 ? currentYear - 1 : currentYear;
+          const prevQNorm = prevQ < 0 ? 3 : prevQ;
+          return prevInvoices
+            .filter(inv => {
+              const d = new Date(inv.date);
+              return d.getFullYear() === prevYear && Math.floor(d.getMonth() / 3) === prevQNorm;
+            })
+            .reduce((acc, inv) => acc + inv.amount, 0);
+        }
+        case 'year': {
+          return prevInvoices
+            .filter(inv => new Date(inv.date).getFullYear() === currentYear - 1)
+            .reduce((acc, inv) => acc + inv.amount, 0);
+        }
+        default:
+          return 0;
+      }
+    };
+
+    const prev = getPrevPeriodRevenue();
+    if (prev <= 0) return null;
+    return Math.round(((kpis.revenue - prev) / prev) * 100 * 10) / 10;
+  }, [invoices, kpis.revenue, timeRange]);
 
   // Chart Data (Mocking monthly distribution based on filtered data)
   const chartData = useMemo(() => {
@@ -108,8 +157,8 @@ export const StatisticsView: React.FC = () => {
             };
         })
         .sort((a, b) => b.amount - a.amount)
-        .slice(0, 5); // Top 5
-  }, [filteredData]);
+        .slice(0, dash.topClientsLimit);
+  }, [filteredData, dash.topClientsLimit]);
 
   return (
     <div className="flex flex-col gap-6 h-full pb-8">
@@ -117,7 +166,7 @@ export const StatisticsView: React.FC = () => {
       {/* Header & Filter */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white rounded-[2.5rem] p-6 shadow-sm">
         <div>
-           <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
+           <h1 className="text-3xl font-black text-gray-900 flex items-center gap-3">
                <BarChart3 className="text-black" />
                Statistiken
            </h1>
@@ -157,9 +206,11 @@ export const StatisticsView: React.FC = () => {
                   <div className="p-3 bg-white/10 rounded-xl backdrop-blur-md">
                       <DollarSign size={20} className="text-accent" />
                   </div>
-                  <span className="bg-accent/20 text-accent text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1">
-                      <TrendingUp size={10} /> +12.5%
-                  </span>
+                  {revenueTrend !== null && (
+                    <span className={`${revenueTrend >= 0 ? 'bg-accent/20 text-accent' : 'bg-red-500/20 text-red-400'} text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1`}>
+                        {revenueTrend >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />} {revenueTrend >= 0 ? '+' : ''}{revenueTrend}%
+                    </span>
+                  )}
               </div>
               <div className="relative z-10 mt-6">
                   <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Umsatz (Bezahlt)</p>

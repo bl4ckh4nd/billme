@@ -24,6 +24,7 @@ import { RecurringView } from './components/RecurringView';
 import { ProjectsView } from './components/ProjectsView';
 import { ProjectDetailView } from './components/ProjectDetailView';
 import { FinanceHubView } from './components/FinanceHubView';
+import { EurView } from './components/EurView';
 import { InvoiceEditor } from './components/InvoiceEditor';
 import { InvoiceDocumentEditor } from './components/InvoiceDocumentEditor';
 import { useUiStore } from './state/uiStore';
@@ -37,7 +38,7 @@ const RootLayout: React.FC = () => {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   const activePage = (() => {
-    if (pathname.startsWith('/finance') || pathname.startsWith('/accounts') || pathname.startsWith('/statistics'))
+    if (pathname.startsWith('/finance') || pathname.startsWith('/accounts') || pathname.startsWith('/statistics') || pathname.startsWith('/eur'))
       return 'finance';
     if (pathname.startsWith('/templates') || pathname.startsWith('/recurring')) return 'documents';
     if (pathname.startsWith('/documents')) return 'documents';
@@ -84,6 +85,7 @@ const DashboardPage: React.FC = () => {
 const StatisticsPage: React.FC = () => <StatisticsView />;
 const AccountsPage: React.FC = () => <AccountsView />;
 const FinancePage: React.FC = () => <FinanceHubView />;
+const EurPage: React.FC = () => <EurView />;
 const ClientsPage: React.FC = () => <ClientsView />;
 const ProjectsPage: React.FC = () => <ProjectsView />;
 const ArticlesPage: React.FC = () => <ArticlesView />;
@@ -371,6 +373,12 @@ const financeRoute = createRoute({
   component: FinancePage,
 });
 
+const eurRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/eur',
+  component: EurPage,
+});
+
 const templatesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/templates',
@@ -440,6 +448,7 @@ const routeTree = rootRoute.addChildren([
   statisticsRoute,
   accountsRoute,
   financeRoute,
+  eurRoute,
   templatesRoute,
   templateEditorRoute,
   documentsRoute,

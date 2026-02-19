@@ -1,18 +1,19 @@
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
-    Euro, TrendingUp, Users, Clock, Plus, ArrowRight, FileText,
+    Euro, TrendingUp, TrendingDown, Users, Clock, Plus, ArrowRight, FileText,
     ArrowUpRight, CheckCircle, CreditCard, MoreHorizontal, ShieldCheck,
-    PieChart, ArrowLeft, ArrowDownLeft, Search, Link, X, LayoutTemplate
+    PieChart, ArrowLeft, ArrowDownLeft, Search, Link, X, LayoutTemplate, Settings2
 } from 'lucide-react';
 import { Button } from '@billme/ui';
-import { Account, Transaction, Invoice } from '../types';
+import { Account, Transaction, Invoice, AppSettings } from '../types';
 import { useInvoicesQuery } from '../hooks/useInvoices';
 import { useAccountsQuery, useUpsertAccountMutation } from '../hooks/useAccounts';
 import { useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../ipc/client';
 import { useArticlesQuery } from '../hooks/useArticles';
-import { useSettingsQuery } from '../hooks/useSettings';
+import { useSettingsQuery, useSetSettingsMutation } from '../hooks/useSettings';
 import { useOffersQuery } from '../hooks/useOffers';
 import { MOCK_SETTINGS } from '../data/mockData';
 import {
@@ -33,6 +34,113 @@ const formatDate = (dateString: string) => {
   return new Date(dateString).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
+// --- Dashboard Settings Popover (portal to body with fixed positioning) ---
+const DashboardSettingsPopover: React.FC<{
+  children: React.ReactNode;
+  onSave: (values: Record<string, number>) => void;
+  fields: Array<{ key: string; label: string; min?: number; max?: number; step?: number }>;
+  values: Record<string, number>;
+  dark?: boolean;
+}> = ({ children, onSave, fields, values, dark }) => {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(values);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ top: 0, right: 0 });
+
+  // Sync draft when opening
+  useEffect(() => {
+    if (open) setDraft(values);
+  }, [open, values]);
+
+  // Compute position from button rect (runs every render while open)
+  useEffect(() => {
+    if (!open || !buttonRef.current) return;
+    const update = () => {
+      if (!buttonRef.current) return;
+      const rect = buttonRef.current.getBoundingClientRect();
+      setPos({
+        top: rect.bottom + 8,
+        right: window.innerWidth - rect.right,
+      });
+    };
+    update();
+    // Reposition on scroll/resize so it stays anchored
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [open]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (buttonRef.current?.contains(target) || dropdownRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        className={`p-1.5 rounded-lg transition-colors ${dark ? 'hover:bg-white/10 text-white/40 hover:text-white/80' : 'hover:bg-gray-100 text-gray-300 hover:text-gray-600'}`}
+        title="Einstellungen"
+      >
+        <Settings2 size={14} />
+      </button>
+      {open && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{ position: 'fixed', top: pos.top, right: pos.right, zIndex: 9999 }}
+          className="bg-white text-black rounded-2xl shadow-2xl border border-gray-200 p-4 min-w-[260px] animate-scale-in"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="space-y-3">
+            {fields.map((f) => (
+              <div key={f.key}>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">{f.label}</label>
+                <input
+                  type="number"
+                  min={f.min ?? 1}
+                  max={f.max}
+                  step={f.step ?? 1}
+                  value={draft[f.key] ?? 0}
+                  onChange={(e) => setDraft({ ...draft, [f.key]: Number(e.target.value) })}
+                  className="w-full bg-gray-100 border border-gray-300 rounded-xl px-3 py-2 text-sm font-mono font-bold text-gray-900 outline-none focus:ring-2 focus:ring-accent focus:border-accent"
+                />
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={() => { onSave(draft); setOpen(false); }}
+            className="mt-3 w-full py-2 bg-black text-white rounded-xl text-xs font-bold hover:bg-gray-800 transition-colors"
+          >
+            Speichern
+          </button>
+        </div>,
+        document.body,
+      )}
+      {children}
+    </>
+  );
+};
+
 interface ViewProps {
   onNavigate: (page: string) => void;
 }
@@ -43,6 +151,12 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
   const { data: articles = [] } = useArticlesQuery();
   const { data: settingsFromDb } = useSettingsQuery();
   const settings = settingsFromDb ?? MOCK_SETTINGS;
+  const setSettingsMutation = useSetSettingsMutation();
+  const dash = settings.dashboard;
+
+  const saveDashboardSettings = useCallback((patch: Partial<AppSettings['dashboard']>) => {
+    setSettingsMutation.mutate({ ...settings, dashboard: { ...dash, ...patch } });
+  }, [settings, dash, setSettingsMutation]);
 
   const vatRate = settings.legal.smallBusinessRule ? 0 : Number(settings.legal.defaultVatRate) || 0;
   const taxMethod = settings.legal.taxAccountingMethod ?? 'soll';
@@ -67,7 +181,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
       const due = new Date(inv.dueDate);
       if (Number.isNaN(due.getTime())) return false;
       const days = (due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
-      return days >= 0 && days <= 7;
+      return days >= 0 && days <= dash.dueSoonDays;
     });
     const dueSoonTotal = dueSoon.reduce((acc, inv) => acc + amountFor(inv), 0);
 
@@ -93,7 +207,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
       monthRevenueNet,
       monthIssuedCount: monthIssued.length,
     };
-  }, [invoices, vatRate]);
+  }, [invoices, vatRate, dash.dueSoonDays]);
 
   const topCategories = useMemo(() => {
     const now = new Date();
@@ -135,8 +249,8 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
     }));
 
     list.sort((a, b) => b.amount - a.amount);
-    return list.slice(0, 5);
-  }, [invoices, articles, settings]);
+    return list.slice(0, dash.topCategoriesLimit);
+  }, [invoices, articles, settings, dash.topCategoriesLimit]);
 
   const payments = useMemo(() => {
     const rows: Array<{
@@ -179,6 +293,25 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
     () => paymentsThisMonth.reduce((acc, p) => acc + (Number(p.amount) || 0), 0),
     [paymentsThisMonth],
   );
+
+  const paymentsLastMonthGross = useMemo(() => {
+    const now = new Date();
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const y = lastMonth.getFullYear();
+    const m = lastMonth.getMonth();
+    return payments
+      .filter((p) => {
+        const d = new Date(p.date);
+        return d.getFullYear() === y && d.getMonth() === m;
+      })
+      .reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+  }, [payments]);
+
+  const paymentTrend = useMemo(() => {
+    if (paymentsLastMonthGross <= 0) return null;
+    const change = ((paymentsThisMonthGross - paymentsLastMonthGross) / paymentsLastMonthGross) * 100;
+    return Math.round(change);
+  }, [paymentsThisMonthGross, paymentsLastMonthGross]);
 
   const offerPipeline = useMemo(() => {
     const published = offers.filter((o) => Boolean(o.sharePublishedAt || o.shareToken));
@@ -271,7 +404,13 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
                  <div className="p-3 bg-white/10 rounded-2xl backdrop-blur-md border border-white/10">
                     <TrendingUp size={24} className="text-accent" />
                  </div>
-                 <div className="flex gap-2">
+                 <div className="flex gap-2 items-center">
+                     <DashboardSettingsPopover
+                       dark
+                       fields={[{ key: 'dueSoonDays', label: 'Fällig in X Tagen', min: 1, max: 90 }]}
+                       values={{ dueSoonDays: dash.dueSoonDays }}
+                       onSave={(v) => saveDashboardSettings({ dueSoonDays: v.dueSoonDays })}
+                     ><span /></DashboardSettingsPopover>
                      <button onClick={() => onNavigate('documents')} className="px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2 hover:bg-white/10 transition-colors text-xs font-bold">
                          Alle ansehen <ArrowUpRight size={14} />
                      </button>
@@ -293,7 +432,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
                      <div className="flex items-center justify-between bg-white/5 p-3 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
                         <div className="flex items-center gap-3">
                             <div className="w-2 h-2 rounded-full bg-accent shadow-[0_0_10px_rgba(217,249,68,0.5)]"></div>
-                            <span className="text-sm font-bold text-gray-200">Fällig in 7 Tagen ({kpis.dueSoonCount})</span>
+                            <span className="text-sm font-bold text-gray-200">Fällig in {dash.dueSoonDays} Tagen ({kpis.dueSoonCount})</span>
                         </div>
                         <span className="font-mono font-bold text-accent">{formatCurrency(kpis.dueSoonTotal)}</span>
                      </div>
@@ -305,10 +444,17 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
              <div className="flex justify-between items-end">
                 <div>
                      <p className="text-gray-500 text-xs font-medium">Liquiditätsprognose</p>
-                     <p className="text-white text-sm font-bold flex items-center gap-2 mt-1">
-                        <span className="bg-success/20 text-success px-1.5 py-1 rounded text-[10px]">+12%</span>
-                        zum Vormonat
-                     </p>
+                     {paymentTrend !== null ? (
+                       <p className="text-white text-sm font-bold flex items-center gap-2 mt-1">
+                          <span className={`${paymentTrend >= 0 ? 'bg-success/20 text-success' : 'bg-error/20 text-error'} px-1.5 py-1 rounded text-[10px] flex items-center gap-0.5`}>
+                            {paymentTrend >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+                            {paymentTrend >= 0 ? '+' : ''}{paymentTrend}%
+                          </span>
+                          zum Vormonat
+                       </p>
+                     ) : (
+                       <p className="text-gray-500 text-xs mt-1">Keine Vormonatsdaten</p>
+                     )}
                 </div>
                 <button
                     onClick={() => onNavigate('documents?kind=invoice')}
@@ -324,11 +470,21 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
       <div className="bg-white rounded-[2.5rem] p-8 text-black relative overflow-hidden min-h-[420px] flex flex-col shadow-sm animate-enter delay-100 premium-hover">
           <div className="flex justify-between items-start mb-8">
              <div>
-                <h3 className="text-2xl font-bold mb-1">Umsatz (aktueller Monat)</h3>
+                <h3 className="text-2xl font-black mb-1">Umsatz (aktueller Monat)</h3>
                 <p className="text-gray-400 text-xs font-bold uppercase">Laufendes Geschäftsjahr</p>
              </div>
-             <div className="p-3 bg-gray-50 rounded-2xl">
-                 <Euro size={24} className="text-black" />
+             <div className="flex items-center gap-2">
+                 <DashboardSettingsPopover
+                   fields={[
+                     { key: 'monthlyRevenueGoal', label: 'Monatsziel (€)', min: 0, step: 1000 },
+                     { key: 'topCategoriesLimit', label: 'Top Kategorien (Anzahl)', min: 1, max: 20 },
+                   ]}
+                   values={{ monthlyRevenueGoal: dash.monthlyRevenueGoal, topCategoriesLimit: dash.topCategoriesLimit }}
+                   onSave={(v) => saveDashboardSettings({ monthlyRevenueGoal: v.monthlyRevenueGoal, topCategoriesLimit: v.topCategoriesLimit })}
+                 ><span /></DashboardSettingsPopover>
+                 <div className="p-3 bg-gray-50 rounded-2xl">
+                     <Euro size={24} className="text-black" />
+                 </div>
              </div>
           </div>
 
@@ -340,14 +496,14 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
               <div className="w-full bg-gray-100 h-3 rounded-full overflow-hidden mt-4">
                   <div
                     className="bg-black h-full rounded-full relative"
-                    style={{ width: `${Math.min(100, (kpis.monthRevenueNet / 30000) * 100)}%` }}
+                    style={{ width: `${Math.min(100, (kpis.monthRevenueNet / dash.monthlyRevenueGoal) * 100)}%` }}
                   >
                       <div className="absolute right-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-white/50 rounded-full"></div>
                   </div>
               </div>
               <div className="flex justify-between mt-2 text-xs font-bold text-gray-400">
                   <span>0 €</span>
-                  <span>Ziel: 30.000 €</span>
+                  <span>Ziel: {formatCurrency(dash.monthlyRevenueGoal)}</span>
               </div>
           </div>
 
@@ -413,13 +569,20 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
           <div className="absolute top-0 right-0 w-48 h-48 bg-white opacity-20 rounded-full blur-[60px] transform translate-x-10 -translate-y-10 group-hover:scale-110 transition-transform duration-700"></div>
           
           <div className="flex justify-between items-center mb-6 relative z-10">
-              <h3 className="text-xl font-bold flex items-center gap-2">
+              <h3 className="text-xl font-black flex items-center gap-2">
                  <CheckCircle size={20} className="text-black/80" />
                  Zahlungseingänge
               </h3>
-              <button onClick={() => onNavigate('finance')} className="w-10 h-10 rounded-full bg-black/5 flex items-center justify-center hover:bg-black/10 transition-colors">
-                  <ArrowUpRight size={18} />
-              </button>
+              <div className="flex items-center gap-2">
+                  <DashboardSettingsPopover
+                    fields={[{ key: 'recentPaymentsLimit', label: 'Angezeigte Zahlungen', min: 1, max: 20 }]}
+                    values={{ recentPaymentsLimit: dash.recentPaymentsLimit }}
+                    onSave={(v) => saveDashboardSettings({ recentPaymentsLimit: v.recentPaymentsLimit })}
+                  ><span /></DashboardSettingsPopover>
+                  <button onClick={() => onNavigate('finance')} className="w-10 h-10 rounded-full bg-black/5 flex items-center justify-center hover:bg-black/10 transition-colors">
+                      <ArrowUpRight size={18} />
+                  </button>
+              </div>
           </div>
 
           <div className="space-y-2 relative z-10">
@@ -428,7 +591,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
                   Noch keine Zahlungen erfasst.
                 </div>
               ) : (
-                payments.slice(0, 5).map((item) => (
+                payments.slice(0, dash.recentPaymentsLimit).map((item) => (
                   <div
                     key={`${item.invoiceId}:${item.date}:${item.amount}`}
                     className="flex items-center justify-between p-3 bg-white/40 backdrop-blur-sm rounded-2xl border border-white/20 hover:bg-white/60 transition-colors cursor-pointer hover:scale-[1.02]"
@@ -465,7 +628,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
       {/* 4. Info Card - Taxes (Umsatzsteuer) */}
       <div className="bg-info rounded-[2.5rem] p-6 text-black min-h-[350px] flex flex-col shadow-sm relative overflow-hidden animate-enter delay-300 premium-hover">
            <div className="flex justify-between items-center mb-8">
-              <h3 className="text-xl font-bold flex items-center gap-2">
+              <h3 className="text-xl font-black flex items-center gap-2">
                  <PieChart size={20} />
                  Steuerschätzung
               </h3>

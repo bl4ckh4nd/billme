@@ -9,11 +9,13 @@ import { ipc } from '../ipc/client';
 import { useAccountsQuery, useDeleteAccountMutation } from '../hooks/useAccounts';
 
 type ViewMode = 'accounts' | 'matching';
+type MatchingEntryTab = 'matching' | 'eur';
 
 export function AccountsView(): ReactElement {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [viewMode, setViewMode] = useState<ViewMode>('accounts');
+  const [matchingEntryTab, setMatchingEntryTab] = useState<MatchingEntryTab>('matching');
   const [showImportHistory, setShowImportHistory] = useState(false);
   const [isBankAccountModalOpen, setIsBankAccountModalOpen] = useState(false);
   const [csvImportError, setCsvImportError] = useState<string | null>(null);
@@ -32,7 +34,19 @@ export function AccountsView(): ReactElement {
     },
   });
 
+  const { data: unclassifiedEurTransactions = [] } = useQuery({
+    queryKey: ['eur', 'accounts-unclassified-transactions', 2025],
+    queryFn: async () => {
+      return await ipc.eur.listItems({
+        taxYear: 2025,
+        sourceType: 'transaction',
+        status: 'unclassified',
+      });
+    },
+  });
+
   const unmatchedCount = unmatchedTransactions.length;
+  const unclassifiedEurCount = unclassifiedEurTransactions.length;
   const unmatchedPluralSuffix = unmatchedCount !== 1 ? 'en' : '';
   const unmatchedDescription = unmatchedCount > 0
     ? `${unmatchedCount} offene Transaktion${unmatchedPluralSuffix} warten auf Zuordnung`
@@ -102,7 +116,12 @@ export function AccountsView(): ReactElement {
   };
 
   if (viewMode === 'matching') {
-    return <TransactionMatchingView onBack={() => setViewMode('accounts')} />;
+    return (
+      <TransactionMatchingView
+        onBack={() => setViewMode('accounts')}
+        initialTab={matchingEntryTab}
+      />
+    );
   }
 
   return (
@@ -158,10 +177,13 @@ export function AccountsView(): ReactElement {
       </div>
 
       {/* Action Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
         {/* Transaction Matching Card */}
         <button
-          onClick={() => setViewMode('matching')}
+          onClick={() => {
+            setMatchingEntryTab('matching');
+            setViewMode('matching');
+          }}
           className="text-left p-6 rounded-3xl border-2 border-info bg-info-bg hover:bg-info-bg/80 transition-all border-info relative overflow-hidden"
         >
           {unmatchedCount > 0 && (
@@ -177,6 +199,32 @@ export function AccountsView(): ReactElement {
           <div className="text-lg font-black text-gray-900 mb-2">Transaktionen zuordnen</div>
           <div className="text-sm text-gray-600">
             {unmatchedDescription}
+          </div>
+        </button>
+
+        {/* Inline EÜR Classification Card */}
+        <button
+          onClick={() => {
+            setMatchingEntryTab('eur');
+            setViewMode('matching');
+          }}
+          className="text-left p-6 rounded-3xl border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-all relative overflow-hidden"
+        >
+          {unclassifiedEurCount > 0 && (
+            <div className="absolute top-4 right-4">
+              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-amber-500 text-white text-xs font-bold">
+                {unclassifiedEurCount}
+              </div>
+            </div>
+          )}
+          <div className="w-12 h-12 rounded-2xl bg-black text-accent flex items-center justify-center mb-4">
+            <Link2 size={22} />
+          </div>
+          <div className="text-lg font-black text-gray-900 mb-2">EÜR direkt klassifizieren</div>
+          <div className="text-sm text-gray-600">
+            {unclassifiedEurCount > 0
+              ? `${unclassifiedEurCount} Transaktionen für EÜR offen`
+              : 'Alle Transaktionen sind EÜR-klassifiziert'}
           </div>
         </button>
 

@@ -32,6 +32,10 @@ import {
   eurExportCsvArgsSchema,
   eurExportPdfArgsSchema,
   eurExportPdfResultSchema,
+  eurRuleSchema,
+  eurListRulesArgsSchema,
+  eurUpsertRuleArgsSchema,
+  eurDeleteRuleArgsSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -723,6 +727,21 @@ export const ipcRoutes = {
     channel: 'eur:exportPdf',
     args: eurExportPdfArgsSchema,
     result: eurExportPdfResultSchema,
+  },
+  'eur:listRules': {
+    channel: 'eur:listRules',
+    args: eurListRulesArgsSchema,
+    result: z.array(eurRuleSchema),
+  },
+  'eur:upsertRule': {
+    channel: 'eur:upsertRule',
+    args: eurUpsertRuleArgsSchema,
+    result: eurRuleSchema,
+  },
+  'eur:deleteRule': {
+    channel: 'eur:deleteRule',
+    args: eurDeleteRuleArgsSchema,
+    result: okSchema,
   },
 
   'portal:health': {

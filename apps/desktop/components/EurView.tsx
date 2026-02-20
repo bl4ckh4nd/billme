@@ -19,10 +19,12 @@ import {
   Layers,
   ClipboardList,
   Tags,
+  Settings2,
 } from 'lucide-react';
 import { ipc } from '../ipc/client';
 import { Spinner } from './Spinner';
 import { Toast } from './Toast';
+import { EurRulesModal } from './EurRulesModal';
 
 const DEFAULT_YEAR = 2025;
 
@@ -30,6 +32,8 @@ type SourceType = 'transaction' | 'invoice';
 type VatMode = 'none' | 'default';
 type QueueStatus = 'all' | 'unclassified' | 'classified' | 'excluded';
 type QueueSort = 'date_desc' | 'amount_desc' | 'counterparty_asc';
+
+type SuggestionLayer = 'rule' | 'counterparty' | 'bayes' | 'keyword';
 
 type EurItem = {
   sourceType: SourceType;
@@ -40,6 +44,9 @@ type EurItem = {
   flowType: 'income' | 'expense';
   counterparty: string;
   purpose: string;
+  suggestedLineId?: string;
+  suggestionReason?: string;
+  suggestionLayer?: SuggestionLayer;
   classification?: {
     eurLineId?: string;
     excluded: boolean;
@@ -52,6 +59,20 @@ type EurItem = {
     kennziffer?: string;
     label: string;
   };
+};
+
+const LAYER_LABELS: Record<SuggestionLayer, string> = {
+  rule: 'Regel',
+  counterparty: 'Gemerkt',
+  bayes: 'KI',
+  keyword: 'Stichwort',
+};
+
+const LAYER_COLORS: Record<SuggestionLayer, string> = {
+  rule: 'bg-purple-100 text-purple-700',
+  counterparty: 'bg-green-100 text-green-700',
+  bayes: 'bg-amber-100 text-amber-700',
+  keyword: 'bg-blue-100 text-blue-700',
 };
 
 type UndoChange = {
@@ -81,13 +102,6 @@ const triggerCsvDownload = (content: string, fileName: string): void => {
 const itemKey = (item: { sourceType: SourceType; sourceId: string }): string =>
   `${item.sourceType}:${item.sourceId}`;
 
-const normalize = (value: string): string => value.toLowerCase();
-
-const includesAny = (value: string, parts: string[]): boolean => {
-  const next = normalize(value);
-  return parts.some((part) => next.includes(part));
-};
-
 export const EurView: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -105,6 +119,7 @@ export const EurView: React.FC = () => {
   const [isApplying, setIsApplying] = React.useState(false);
   const [lastUndo, setLastUndo] = React.useState<{ label: string; changes: UndoChange[] } | null>(null);
 
+  const [showRulesModal, setShowRulesModal] = React.useState(false);
   const [showToast, setShowToast] = React.useState(false);
   const [toastMessage, setToastMessage] = React.useState('');
   const [toastType, setToastType] = React.useState<'success' | 'error' | 'warning' | 'info'>('success');
@@ -176,40 +191,6 @@ export const EurView: React.FC = () => {
     return lineOptions.filter((line) => line.kind === activeItem.flowType);
   }, [activeItem, lineOptions]);
 
-  const lineByKz = React.useMemo(() => {
-    const map = new Map<string, string>();
-    for (const line of lineOptions) {
-      if (line.kennziffer) map.set(line.kennziffer, line.lineId);
-    }
-    return map;
-  }, [lineOptions]);
-
-  const suggestLineId = React.useCallback(
-    (item: EurItem): string | undefined => {
-      const text = `${item.counterparty} ${item.purpose}`;
-      const byKz = (kz: string): string | undefined => lineByKz.get(kz);
-
-      if (item.flowType === 'income') {
-        if (includesAny(text, ['steuererstattung', 'erstattung umsatzsteuer'])) return byKz('141');
-        if (includesAny(text, ['umsatzsteuer', 'ust'])) return byKz('140');
-        return byKz('112') ?? lineOptions.find((line) => line.kind === 'income')?.lineId;
-      }
-
-      if (includesAny(text, ['miete', 'pacht', 'cowork'])) return byKz('150');
-      if (includesAny(text, ['telefon', 'internet', 'hosting', 'domain'])) return byKz('280');
-      if (includesAny(text, ['software', 'saas', 'lizenz', 'cloud'])) return byKz('228');
-      if (includesAny(text, ['steuerberater', 'buchhaltung', 'anwalt', 'rechtsanwalt'])) return byKz('194');
-      if (includesAny(text, ['google ads', 'facebook ads', 'werbung', 'marketing'])) return byKz('224');
-      if (includesAny(text, ['hotel', 'reise', 'bahn', 'flug'])) return byKz('221');
-      if (includesAny(text, ['kfz', 'tank', 'diesel', 'parken'])) return byKz('146');
-      if (includesAny(text, ['versicherung', 'beitrag', 'gebuehr', 'gebühr'])) return byKz('223');
-      if (includesAny(text, ['zins', 'kredit'])) return byKz('234');
-      if (includesAny(text, ['vorsteuer'])) return byKz('185');
-      return byKz('183') ?? lineOptions.find((line) => line.kind === 'expense')?.lineId;
-    },
-    [lineByKz, lineOptions],
-  );
-
   const queueItems = React.useMemo(() => {
     const base = (items as EurItem[]).filter((item) => {
       const statusMatch =
@@ -221,11 +202,12 @@ export const EurView: React.FC = () => {
               ? Boolean(item.classification?.eurLineId) && !item.classification?.excluded
               : Boolean(item.classification?.excluded);
       const flowMatch = flowFilter === 'all' || item.flowType === flowFilter;
+      const needle = query.trim().toLowerCase();
       const searchMatch =
-        query.trim().length === 0 ||
-        normalize(item.counterparty).includes(normalize(query)) ||
-        normalize(item.purpose).includes(normalize(query)) ||
-        normalize(item.date).includes(normalize(query));
+        needle.length === 0 ||
+        item.counterparty.toLowerCase().includes(needle) ||
+        item.purpose.toLowerCase().includes(needle) ||
+        item.date.includes(needle);
       return statusMatch && flowMatch && searchMatch;
     });
 
@@ -255,10 +237,10 @@ export const EurView: React.FC = () => {
 
   React.useEffect(() => {
     if (!activeItem) return;
-    setSelectedLineId(activeItem.classification?.eurLineId ?? suggestLineId(activeItem) ?? '');
+    setSelectedLineId(activeItem.classification?.eurLineId ?? activeItem.suggestedLineId ?? '');
     setVatMode(activeItem.classification?.vatMode ?? 'none');
     setExcluded(activeItem.classification?.excluded ?? false);
-  }, [activeItem, suggestLineId]);
+  }, [activeItem]);
 
   const applyBulk = async (
     label: string,
@@ -379,6 +361,10 @@ export const EurView: React.FC = () => {
           >
             <option value={2025}>2025</option>
           </select>
+          <Button variant="secondary" size="sm" onClick={() => setShowRulesModal(true)}>
+            <Settings2 size={16} />
+            Regeln
+          </Button>
           <Button variant="dark" size="sm" onClick={() => void exportCsv()}>
             <Download size={16} />
             CSV exportieren
@@ -503,7 +489,7 @@ export const EurView: React.FC = () => {
               <button
                 onClick={() =>
                   void applyBulk('Bulk: Vorschlag anwenden', (item) => ({
-                    eurLineId: suggestLineId(item),
+                    eurLineId: item.suggestedLineId,
                     excluded: false,
                     vatMode: item.classification?.vatMode ?? 'none',
                   }))
@@ -565,7 +551,6 @@ export const EurView: React.FC = () => {
             <div className="space-y-2 max-h-[460px] overflow-auto pr-1">
               {queueItems.map((item, idx) => {
                 const key = itemKey(item);
-                const suggested = suggestLineId(item);
                 const isActive = activeSource?.sourceType === item.sourceType && activeSource.sourceId === item.sourceId;
                 return (
                   <div
@@ -623,8 +608,10 @@ export const EurView: React.FC = () => {
                           ) : (
                             <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700">Ausgabe</span>
                           )}
-                          {suggested && !item.classification?.eurLineId && !item.classification?.excluded && (
-                            <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">Vorschlag</span>
+                          {item.suggestionLayer && !item.classification?.eurLineId && !item.classification?.excluded && (
+                            <span className={`px-2 py-0.5 rounded-full ${LAYER_COLORS[item.suggestionLayer]}`}>
+                              {LAYER_LABELS[item.suggestionLayer]}
+                            </span>
                           )}
                         </div>
                       </button>
@@ -674,23 +661,32 @@ export const EurView: React.FC = () => {
               </div>
 
               {/* Suggestion Button */}
-              <button
-                onClick={() => {
-                  const suggested = suggestLineId(activeItem);
-                  if (!suggested) return;
-                  setSelectedLineId(suggested);
-                  setExcluded(false);
-                }}
-                className="w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-left hover:bg-blue-100 transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <Sparkles size={16} className="text-blue-600 flex-shrink-0" />
-                  <div>
-                    <div className="text-xs text-blue-700 font-semibold">Vorschlag übernehmen</div>
-                    <div className="text-xs text-blue-600">Automatische Kategorie-Erkennung</div>
+              {activeItem.suggestedLineId && (
+                <button
+                  onClick={() => {
+                    setSelectedLineId(activeItem.suggestedLineId!);
+                    setExcluded(false);
+                  }}
+                  className="w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-left hover:bg-blue-100 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Sparkles size={16} className="text-blue-600 flex-shrink-0" />
+                    <div className="flex-1">
+                      <div className="text-xs text-blue-700 font-semibold flex items-center gap-2">
+                        Vorschlag übernehmen
+                        {activeItem.suggestionLayer && (
+                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${LAYER_COLORS[activeItem.suggestionLayer]}`}>
+                            {LAYER_LABELS[activeItem.suggestionLayer]}
+                          </span>
+                        )}
+                      </div>
+                      {activeItem.suggestionReason && (
+                        <div className="text-xs text-blue-600">{activeItem.suggestionReason}</div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </button>
+                </button>
+              )}
 
               {/* Kennziffer Select */}
               <div>
@@ -821,6 +817,14 @@ export const EurView: React.FC = () => {
           )}
         </div>
       </div>
+
+      {showRulesModal && (
+        <EurRulesModal
+          taxYear={taxYear}
+          onClose={() => setShowRulesModal(false)}
+          onRulesChanged={() => void invalidateEur()}
+        />
+      )}
 
       <Toast
         message={toastMessage}

@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { listEurClassificationsMap, type EurClassification, type EurSourceType, upsertEurClassification } from '../db/eurClassificationRepo';
 import { listEurLines, type EurLine } from '../db/eurCatalogRepo';
 import type { AppSettings } from '../types';
-import { suggestEurLine } from './eurSuggestion';
+import { buildPipelineContext, classifyItem, type SuggestionLayer } from './eurClassificationPipeline';
 
 export interface EurReportParams {
   taxYear: number;
@@ -48,6 +48,7 @@ export interface EurListItem {
   purpose: string;
   suggestedLineId?: string;
   suggestionReason?: string;
+  suggestionLayer?: SuggestionLayer;
   classification?: EurClassification;
   line?: EurLine;
 }
@@ -78,23 +79,22 @@ export const listEurItems = (db: Database.Database, params: EurListItemsParams):
   const linesById = new Map(lines.map((line) => [line.id, line]));
   const classifications = listEurClassificationsMap(db, params.taxYear);
   const rawItems = listRawEurItems(db, from, to);
+  const pipelineCtx = buildPipelineContext(db, params.taxYear, lines);
 
   let items = rawItems.map((item) => {
     const classification = classifications.get(`${item.sourceType}:${item.sourceId}`);
     const line = classification?.eurLineId ? linesById.get(classification.eurLineId) : undefined;
-    const suggestion = suggestEurLine(
-      {
-        flowType: item.flowType,
-        counterparty: item.counterparty,
-        purpose: item.purpose,
-      },
-      lines,
-    );
+    const suggestion = classifyItem(pipelineCtx, {
+      flowType: item.flowType,
+      counterparty: item.counterparty,
+      purpose: item.purpose,
+    });
     return {
       ...item,
       amountNet: toNet(item.amountGross, classification, params.settings),
       suggestedLineId: suggestion.lineId,
       suggestionReason: suggestion.reason,
+      suggestionLayer: suggestion.layer,
       classification,
       line,
     } as EurListItem;

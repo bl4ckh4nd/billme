@@ -260,6 +260,27 @@ export const eurClassifications = sqliteTable(
   }),
 );
 
+export const eurRules = sqliteTable(
+  'eur_rules',
+  {
+    id: text('id').primaryKey(),
+    taxYear: integer('tax_year').notNull(),
+    priority: integer('priority').notNull(),
+    field: text('field').notNull(),
+    operator: text('operator').notNull(),
+    value: text('value').notNull(),
+    targetEurLineId: text('target_eur_line_id')
+      .notNull()
+      .references(() => eurLines.id, { onDelete: 'cascade' }),
+    active: integer('active').notNull().default(1),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    byYearPriority: index('idx_eur_rules_year_priority').on(t.taxYear, t.priority),
+  }),
+);
+
 export const importBatches = sqliteTable('import_batches', {
   id: text('id').primaryKey(),
   accountId: text('account_id')

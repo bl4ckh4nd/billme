@@ -228,6 +228,7 @@ export const eurListItemSchema = z.object({
   purpose: z.string(),
   suggestedLineId: z.string().optional(),
   suggestionReason: z.string().optional(),
+  suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword']).optional(),
   classification: eurClassificationSchema.optional(),
   line: eurLineSchema.optional(),
 });
@@ -262,6 +263,38 @@ export const eurExportPdfArgsSchema = z.object({
 
 export const eurExportPdfResultSchema = z.object({
   path: z.string().min(1),
+});
+
+export const eurRuleSchema = z.object({
+  id: z.string(),
+  taxYear: z.number().int(),
+  priority: z.number().int(),
+  field: z.enum(['counterparty', 'purpose', 'any']),
+  operator: z.enum(['contains', 'equals', 'startsWith']),
+  value: z.string(),
+  targetEurLineId: z.string(),
+  active: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const eurListRulesArgsSchema = z.object({
+  taxYear: z.number().int().min(2025),
+});
+
+export const eurUpsertRuleArgsSchema = z.object({
+  id: z.string().optional(),
+  taxYear: z.number().int().min(2025),
+  priority: z.number().int(),
+  field: z.enum(['counterparty', 'purpose', 'any']),
+  operator: z.enum(['contains', 'equals', 'startsWith']),
+  value: z.string().min(1),
+  targetEurLineId: z.string().min(1),
+  active: z.boolean().optional(),
+});
+
+export const eurDeleteRuleArgsSchema = z.object({
+  id: z.string().min(1),
 });
 
 export const accountSchema = z.object({

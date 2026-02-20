@@ -437,6 +437,24 @@ export const runMigrations = (db: Database.Database): void => {
         ON eur_classifications(tax_year);
     `);
 
+  db.exec(`
+      CREATE TABLE IF NOT EXISTS eur_rules (
+        id TEXT PRIMARY KEY,
+        tax_year INTEGER NOT NULL,
+        priority INTEGER NOT NULL,
+        field TEXT NOT NULL CHECK (field IN ('counterparty', 'purpose', 'any')),
+        operator TEXT NOT NULL CHECK (operator IN ('contains', 'equals', 'startsWith')),
+        value TEXT NOT NULL,
+        target_eur_line_id TEXT NOT NULL REFERENCES eur_lines(id) ON DELETE CASCADE,
+        active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_eur_rules_year_priority
+        ON eur_rules(tax_year, priority);
+    `);
+
   seedEurCatalog(db, 2025);
 
   db.exec(`

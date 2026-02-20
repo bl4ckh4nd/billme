@@ -69,6 +69,7 @@ import { manualRecurringRun } from './recurringScheduler';
 import { getCurrentUpdateStatus, downloadUpdate, quitAndInstall } from './updater';
 import { getInvoiceDunningStatus } from '../services/dunningService';
 import { buildEurCsv, getEurReport, listEurItems, upsertEurItemClassification } from '../services/eurReport';
+import { listAllEurRules, upsertEurRule, deleteEurRule } from '../db/eurRulesRepo';
 
 const computeGrossFromItems = (doc: Invoice, settings: AppSettings): number => {
   const net = (doc.items ?? []).reduce((acc, it) => acc + (Number(it.total) || 0), 0);
@@ -1096,5 +1097,21 @@ export const registerIpcHandlers = (
   register(ipcMain, 'eur:exportPdf', async ({ taxYear, from, to }) => {
     const userDataPath = getUserDataPath();
     return exportEurPdf({ taxYear, from, to, userDataPath });
+  });
+
+  register(ipcMain, 'eur:listRules', ({ taxYear }) => {
+    const db = requireDb();
+    return listAllEurRules(db, taxYear);
+  });
+
+  register(ipcMain, 'eur:upsertRule', (args) => {
+    const db = requireDb();
+    return upsertEurRule(db, args);
+  });
+
+  register(ipcMain, 'eur:deleteRule', ({ id }) => {
+    const db = requireDb();
+    deleteEurRule(db, id);
+    return { ok: true };
   });
 };

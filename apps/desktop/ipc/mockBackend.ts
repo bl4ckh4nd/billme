@@ -73,6 +73,7 @@ let activeTemplateIds: { invoice: string | null; offer: string | null } = {
 };
 let mockIsMaximized = false;
 const mockEurClassifications = new Map<string, any>();
+const mockEurRules: Array<any> = [];
 const mockEurLines: Array<{
   id: string;
   taxYear: number;
@@ -835,6 +836,37 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
 
     case 'eur:exportPdf':
       throw new Error('eur:exportPdf only available in Electron runtime');
+
+    case 'eur:listRules': {
+      const { taxYear } = args as IpcArgs<'eur:listRules'>;
+      return mockEurRules.filter((r: any) => r.taxYear === taxYear) as IpcResult<K>;
+    }
+    case 'eur:upsertRule': {
+      const payload = args as IpcArgs<'eur:upsertRule'>;
+      const id = payload.id ?? Math.random().toString(36).slice(2);
+      const rule = {
+        id,
+        taxYear: payload.taxYear,
+        priority: payload.priority,
+        field: payload.field,
+        operator: payload.operator,
+        value: payload.value,
+        targetEurLineId: payload.targetEurLineId,
+        active: payload.active !== false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      const idx = mockEurRules.findIndex((r: any) => r.id === id);
+      if (idx >= 0) mockEurRules[idx] = rule;
+      else mockEurRules.push(rule);
+      return rule as IpcResult<K>;
+    }
+    case 'eur:deleteRule': {
+      const { id } = args as IpcArgs<'eur:deleteRule'>;
+      const idx = mockEurRules.findIndex((r: any) => r.id === id);
+      if (idx >= 0) mockEurRules.splice(idx, 1);
+      return { ok: true } as IpcResult<K>;
+    }
 
     case 'secrets:get':
       return null as IpcResult<K>;

@@ -28,3 +28,7 @@ AGENTS.md
 *.sln
 *.sw?
 .claude
+
+apps/desktop/release/
+.playwright-cli/
+CLAUDE.md

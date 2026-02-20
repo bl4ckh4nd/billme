@@ -31,6 +31,7 @@ import { registerIpcHandlers } from './ipcHandlers';
 import { startPortalDecisionPolling } from './portalDecisionPolling';
 import { startDunningScheduler, stopDunningScheduler } from './dunningScheduler';
 import { startRecurringScheduler, stopRecurringScheduler } from './recurringScheduler';
+import { initAutoUpdater } from './updater';
 import { logger } from '../utils/logger';
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
@@ -245,6 +246,16 @@ app.whenReady().then(async () => {
     logger.info('Startup', 'Recurring invoice scheduler started');
   } catch (e) {
     logger.warn('Startup', 'Recurring scheduler failed to start', { error: String(e) });
+  }
+
+  // Auto-updater (only in packaged builds)
+  if (!isDev) {
+    try {
+      initAutoUpdater();
+      logger.info('Startup', 'Auto-updater initialized');
+    } catch (e) {
+      logger.warn('Startup', 'Auto-updater failed to start', { error: String(e) });
+    }
   }
 
   const [win] = BrowserWindow.getAllWindows();

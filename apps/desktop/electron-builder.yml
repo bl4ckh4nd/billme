@@ -1,6 +1,11 @@
 appId: com.billme.desktop
 productName: Billme
 
+publish:
+  provider: github
+  owner: bl4ckh4nd
+  repo: billme
+
 directories:
   output: release
 

@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
           entry: path.resolve(__dirname, 'electron/main.ts'),
         },
         rollupOptions: {
-          external: ['better-sqlite3', 'keytar'],
+          external: ['better-sqlite3', 'keytar', 'electron-updater'],
           output: {
             entryFileNames: 'index.js',
           },

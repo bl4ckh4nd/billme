@@ -86,3 +86,65 @@ export const exportPdf = async (params: {
 
   return { path: destPath, bytes };
 };
+
+export const exportEurPdf = async (params: {
+  taxYear: number;
+  from?: string;
+  to?: string;
+  userDataPath: string;
+}): Promise<{ path: string }> => {
+  const exportsDir = path.join(params.userDataPath, 'exports');
+  ensureDir(exportsDir);
+
+  const fileName = `${sanitizeFilePart(`anlage-euer-${params.taxYear}`)}.pdf`;
+  const destPath = path.join(exportsDir, fileName);
+
+  const win = new BrowserWindow({
+    show: false,
+    width: 900,
+    height: 1200,
+    backgroundColor: '#ffffff',
+    webPreferences: {
+      preload: path.join(appDir, '../preload/index.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  const query: Record<string, string> = {
+    __print: '1',
+    kind: 'eur',
+    taxYear: String(params.taxYear),
+  };
+  if (params.from) query.from = params.from;
+  if (params.to) query.to = params.to;
+
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL;
+  if (devServerUrl) {
+    const url = new URL(devServerUrl);
+    for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+    await win.loadURL(url.toString());
+  } else {
+    await win.loadFile(path.join(appDir, '../renderer/index.html'), { query });
+  }
+
+  await waitForPdfReady(win, 20_000);
+
+  const buffer = await win.webContents.printToPDF({
+    pageSize: 'A4',
+    landscape: false,
+    printBackground: true,
+    marginsType: 0,
+  });
+
+  fs.writeFileSync(destPath, new Uint8Array(buffer));
+
+  try {
+    win.destroy();
+  } catch {
+    // ignore
+  }
+
+  return { path: destPath };
+};

@@ -52,7 +52,7 @@ jobs:
         run: pnpm -C apps/desktop exec electron-builder install-app-deps
 
       - name: Build distributables
-        run: pnpm -C apps/desktop exec electron-builder --config electron-builder.yml --publish never
+        run: pnpm -C apps/desktop build && pnpm -C apps/desktop exec electron-builder --config electron-builder.yml --publish never
 
       - name: Verify packaged native modules
         run: node apps/desktop/scripts/verify-native-packaging.mjs

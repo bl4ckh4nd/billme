@@ -218,8 +218,25 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ onBack, templateTy
       const hasDate = elements.some(e => e.content && e.content.toLowerCase().includes('datum'));
       if (!hasDate) issues.push('Rechnungsdatum fehlt.');
 
-      const hasTax = elements.some(e => e.content && (e.content.includes('USt') || e.content.includes('Steuer')));
-      if (!hasTax) issues.push('Steuerhinweis / USt-Ausweis fehlt.');
+      const hasTaxAmountPlaceholder = elements.some(
+        (e) =>
+          e.content &&
+          (e.content.includes('{{total.tax}}') ||
+            e.content.includes('{{total.taxRate}}') ||
+            e.content.includes('{{total.gross}}')),
+      );
+      const hasTaxReasonPlaceholder = elements.some(
+        (e) =>
+          e.content &&
+          (e.content.includes('{{invoice.taxExemptionReason}}') ||
+            e.content.includes('{{invoice.taxModeLabel}}')),
+      );
+      const hasTaxKeyword = elements.some(
+        (e) => e.content && (e.content.includes('USt') || e.content.includes('Steuer')),
+      );
+      if (!hasTaxAmountPlaceholder && !hasTaxReasonPlaceholder && !hasTaxKeyword) {
+        issues.push('Steuerblock fehlt (z.B. {{total.tax}} oder {{invoice.taxExemptionReason}}).');
+      }
 
       setValidationIssues(issues);
       setShowValidation(true);

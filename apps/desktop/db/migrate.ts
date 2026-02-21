@@ -76,10 +76,16 @@ export const runMigrations = (db: Database.Database): void => {
   // Invoices: structured address snapshots
   addColumnIfMissing(db, 'invoices', 'billing_address_json', 'TEXT');
   addColumnIfMissing(db, 'invoices', 'shipping_address_json', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'tax_mode', `TEXT NOT NULL DEFAULT 'standard_vat'`);
+  addColumnIfMissing(db, 'invoices', 'tax_meta_json', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'tax_snapshot_json', 'TEXT');
 
   // Offers: structured address snapshots
   addColumnIfMissing(db, 'offers', 'billing_address_json', 'TEXT');
   addColumnIfMissing(db, 'offers', 'shipping_address_json', 'TEXT');
+  addColumnIfMissing(db, 'offers', 'tax_mode', `TEXT NOT NULL DEFAULT 'standard_vat'`);
+  addColumnIfMissing(db, 'offers', 'tax_meta_json', 'TEXT');
+  addColumnIfMissing(db, 'offers', 'tax_snapshot_json', 'TEXT');
 
   // Offers: portal publication + decision fields
   addColumnIfMissing(db, 'offers', 'share_token', 'TEXT');
@@ -320,6 +326,28 @@ export const runMigrations = (db: Database.Database): void => {
   if (settingsJson.eInvoice.standard !== 'zugferd-en16931') settingsJson.eInvoice.standard = 'zugferd-en16931';
   if (settingsJson.eInvoice.profile !== 'EN16931') settingsJson.eInvoice.profile = 'EN16931';
   if (settingsJson.eInvoice.version !== '2.3') settingsJson.eInvoice.version = '2.3';
+  const smallBusinessRuleDefault = Boolean(settingsJson.legal?.smallBusinessRule);
+
+  db.prepare(
+    `
+      UPDATE invoices
+      SET tax_mode = @mode
+      WHERE tax_mode IS NULL OR TRIM(tax_mode) = ''
+    `,
+  ).run({
+    mode: smallBusinessRuleDefault ? 'small_business_19_ustg' : 'standard_vat',
+  });
+
+  db.prepare(
+    `
+      UPDATE offers
+      SET tax_mode = @mode
+      WHERE tax_mode IS NULL OR TRIM(tax_mode) = ''
+    `,
+  ).run({
+    mode: smallBusinessRuleDefault ? 'small_business_19_ustg' : 'standard_vat',
+  });
+
   db.prepare('UPDATE settings SET settings_json = ? WHERE id = 1').run(JSON.stringify(settingsJson));
 
   // Backfill document-side customer number snapshots.

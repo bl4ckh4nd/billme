@@ -80,6 +80,7 @@ const makeInvoice = (): Invoice => ({
   clientAddress: 'Kundenweg 5\n20095 Hamburg',
   date: '2026-02-15',
   dueDate: '2026-02-22',
+  taxMode: 'standard_vat',
   amount: 119,
   status: 'open',
   items: [{ description: 'Leistung A', quantity: 1, price: 100, total: 100 }],
@@ -97,9 +98,28 @@ describe('normalizeInvoiceForEinvoice', () => {
   });
 
   it('uses exemption for small business rule', () => {
-    const normalized = normalizeInvoiceForEinvoice(makeInvoice(), makeSettings(true));
+    const normalized = normalizeInvoiceForEinvoice(
+      {
+        ...makeInvoice(),
+        taxMode: 'small_business_19_ustg',
+      },
+      makeSettings(true),
+    );
     expect(normalized.totals.taxTotal).toBe(0);
     expect(normalized.lines[0]?.taxCategoryCode).toBe('E');
     expect(normalized.lines[0]?.taxExemptionReason).toContain('§19');
+  });
+
+  it('maps reverse charge to AE category', () => {
+    const normalized = normalizeInvoiceForEinvoice(
+      {
+        ...makeInvoice(),
+        taxMode: 'reverse_charge_13b',
+      },
+      makeSettings(false),
+    );
+    expect(normalized.totals.taxTotal).toBe(0);
+    expect(normalized.lines[0]?.taxCategoryCode).toBe('AE');
+    expect(normalized.lines[0]?.taxExemptionReason).toContain('§13b');
   });
 });

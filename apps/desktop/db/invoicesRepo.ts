@@ -1,8 +1,14 @@
 import type Database from 'better-sqlite3';
-import type { Invoice, InvoiceItem, Payment } from '../types';
+import type { Invoice, InvoiceItem, InvoiceTaxMode, Payment } from '../types';
 import { appendAuditLog } from './audit';
-import { safeJsonParse, AddressSchema, SettingsSchema } from './validation-schemas';
+import {
+  safeJsonParse,
+  AddressSchema,
+  InvoiceTaxMetaSchema,
+  InvoiceTaxSnapshotSchema,
+} from './validation-schemas';
 import { finalizeNumber, reserveNumber } from './numberingRepo';
+import { resolveInvoiceTaxMode } from '../services/taxMode';
 
 type InvoiceRow = {
   id: string;
@@ -18,6 +24,9 @@ type InvoiceRow = {
   date: string;
   due_date: string;
   service_period: string | null;
+  tax_mode: string | null;
+  tax_meta_json: string | null;
+  tax_snapshot_json: string | null;
   amount: number;
   status: string;
   dunning_level: number;
@@ -63,6 +72,7 @@ const rowToInvoice = (
   items: InvoiceItem[],
   payments: Payment[],
 ): Invoice => {
+  const taxMode = resolveInvoiceTaxMode(row.tax_mode as InvoiceTaxMode | undefined);
   return {
     id: row.id,
     clientId: row.client_id ?? undefined,
@@ -77,6 +87,23 @@ const rowToInvoice = (
     date: row.date,
     dueDate: row.due_date,
     servicePeriod: row.service_period ?? undefined,
+    taxMode,
+    taxMeta: row.tax_meta_json
+      ? safeJsonParse(row.tax_meta_json, InvoiceTaxMetaSchema, {}, `Invoice ${row.id} tax meta`)
+      : undefined,
+    taxSnapshot: row.tax_snapshot_json
+      ? safeJsonParse(
+          row.tax_snapshot_json,
+          InvoiceTaxSnapshotSchema,
+          {
+            vatRateApplied: 0,
+            vatAmount: 0,
+            netAmount: 0,
+            grossAmount: 0,
+          },
+          `Invoice ${row.id} tax snapshot`,
+        )
+      : undefined,
     amount: row.amount,
     status: row.status as 'draft' | 'open' | 'paid' | 'overdue' | 'cancelled',
     dunningLevel: row.dunning_level,
@@ -167,6 +194,9 @@ export const upsertInvoice = (
   const tx = db.transaction(() => {
     const before = getInvoice(db, invoice.id);
 
+    const taxMode = resolveInvoiceTaxMode(invoice.taxMode);
+    const taxSnapshot = invoice.taxSnapshot ?? null;
+
     const now = new Date().toISOString();
 
     const exists = db
@@ -178,11 +208,11 @@ export const upsertInvoice = (
         `
           INSERT INTO invoices (
             id, client_id, client_number, project_id, number, client, client_email, client_address, billing_address_json, shipping_address_json,
-            date, due_date, service_period, amount, status, dunning_level,
+            date, due_date, service_period, tax_mode, tax_meta_json, tax_snapshot_json, amount, status, dunning_level,
             created_at, updated_at
           ) VALUES (
             @id, @clientId, @clientNumber, @projectId, @number, @client, @clientEmail, @clientAddress, @billingAddressJson, @shippingAddressJson,
-            @date, @dueDate, @servicePeriod, @amount, @status, @dunningLevel,
+            @date, @dueDate, @servicePeriod, @taxMode, @taxMetaJson, @taxSnapshotJson, @amount, @status, @dunningLevel,
             @createdAt, @updatedAt
           )
         `,
@@ -202,6 +232,9 @@ export const upsertInvoice = (
         date: invoice.date,
         dueDate: invoice.dueDate,
         servicePeriod: invoice.servicePeriod ?? null,
+        taxMode,
+        taxMetaJson: invoice.taxMeta === undefined ? null : JSON.stringify(invoice.taxMeta),
+        taxSnapshotJson: taxSnapshot ? JSON.stringify(taxSnapshot) : null,
         amount: invoice.amount,
         status: invoice.status,
         dunningLevel: invoice.dunningLevel ?? 0,
@@ -224,6 +257,9 @@ export const upsertInvoice = (
             date=@date,
             due_date=@dueDate,
             service_period=@servicePeriod,
+            tax_mode=@taxMode,
+            tax_meta_json=@taxMetaJson,
+            tax_snapshot_json=@taxSnapshotJson,
             amount=@amount,
             status=@status,
             dunning_level=@dunningLevel,
@@ -246,6 +282,9 @@ export const upsertInvoice = (
         date: invoice.date,
         dueDate: invoice.dueDate,
         servicePeriod: invoice.servicePeriod ?? null,
+        taxMode,
+        taxMetaJson: invoice.taxMeta === undefined ? null : JSON.stringify(invoice.taxMeta),
+        taxSnapshotJson: taxSnapshot ? JSON.stringify(taxSnapshot) : null,
         amount: invoice.amount,
         status: invoice.status,
         dunningLevel: invoice.dunningLevel ?? 0,
@@ -419,12 +458,12 @@ export const createInvoiceFromOffer = (
         INSERT INTO invoices (
           id, client_id, client_number, project_id, number, client, client_email, client_address,
           billing_address_json, shipping_address_json,
-          date, due_date, service_period, amount, status, dunning_level,
+          date, due_date, service_period, tax_mode, tax_meta_json, tax_snapshot_json, amount, status, dunning_level,
           created_at, updated_at
         ) VALUES (
           @id, @clientId, @clientNumber, @projectId, @number, @client, @clientEmail, @clientAddress,
           @billingAddressJson, @shippingAddressJson,
-          @date, @dueDate, @servicePeriod, @amount, @status, @dunningLevel,
+          @date, @dueDate, @servicePeriod, @taxMode, @taxMetaJson, @taxSnapshotJson, @amount, @status, @dunningLevel,
           @createdAt, @updatedAt
         )
       `,
@@ -442,6 +481,9 @@ export const createInvoiceFromOffer = (
       date: invoiceDate,
       dueDate: dueDateStr,
       servicePeriod: null,
+      taxMode: offerRow.tax_mode ?? 'standard_vat',
+      taxMetaJson: offerRow.tax_meta_json ?? null,
+      taxSnapshotJson: offerRow.tax_snapshot_json ?? null,
       amount: offerRow.amount,
       status: 'draft',
       dunningLevel: 0,

@@ -31,7 +31,9 @@ import { useUiStore } from './state/uiStore';
 import { Invoice } from './types';
 import { useUpsertInvoiceMutation } from './hooks/useInvoices';
 import { useUpsertOfferMutation } from './hooks/useOffers';
+import { useSettingsQuery } from './hooks/useSettings';
 import { ipc } from './ipc/client';
+import { MOCK_SETTINGS } from './data/mockData';
 
 const RootLayout: React.FC = () => {
   const navigate = useNavigate();
@@ -116,6 +118,8 @@ const TemplateEditorPage: React.FC<{ templateType: 'invoice' | 'offer' }> = ({
 const DocumentsPage: React.FC = () => {
   const navigate = useNavigate();
   const setEditingInvoice = useUiStore((s) => s.setEditingInvoice);
+  const { data: settingsFromDb } = useSettingsQuery();
+  const settings = settingsFromDb ?? MOCK_SETTINGS;
   const locationSearch = window.location.search;
   const deepLink = React.useMemo(() => {
     const params = new URLSearchParams(locationSearch);
@@ -137,6 +141,7 @@ const DocumentsPage: React.FC = () => {
           clientEmail: '',
           date: new Date().toISOString().split('T')[0] ?? '',
           dueDate: '',
+          taxMode: settings.legal.smallBusinessRule ? 'small_business_19_ustg' : 'standard_vat',
           amount: 0,
           status: 'draft',
           items: [],

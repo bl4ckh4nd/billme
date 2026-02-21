@@ -1,4 +1,10 @@
 import type { AppSettings, Invoice } from '../../types';
+import {
+  getDefaultTaxRate,
+  getInvoiceTaxExemptionReason,
+  getInvoiceTaxModeDefinition,
+  resolveInvoiceTaxMode,
+} from '../taxMode';
 
 type NormalizedAddress = {
   name: string;
@@ -26,7 +32,7 @@ export type NormalizedEinvoice = {
     netUnitPrice: number;
     netLineTotal: number;
     taxRate: number;
-    taxCategoryCode: 'S' | 'E';
+    taxCategoryCode: 'S' | 'E' | 'AE' | 'O';
     taxExemptionReason?: string;
   }>;
   totals: {
@@ -130,8 +136,11 @@ export const normalizeInvoiceForEinvoice = (
 ): NormalizedEinvoice => {
   const seller = normalizeSellerAddress(settings);
   const buyer = normalizeBuyerAddress(invoice);
-  const isSmallBusiness = settings.legal.smallBusinessRule;
-  const defaultTaxRate = isSmallBusiness ? 0 : Math.max(0, toAmount(settings.legal.defaultVatRate));
+  const taxMode = resolveInvoiceTaxMode(invoice.taxMode, settings);
+  const definition = getInvoiceTaxModeDefinition(taxMode);
+  const isZeroVatMode = Boolean(definition.forceZeroVat);
+  const defaultTaxRate = isZeroVatMode ? 0 : getDefaultTaxRate(settings);
+  const taxExemptionReason = getInvoiceTaxExemptionReason(taxMode, invoice.taxMeta);
 
   assertRequired('Rechnungsnummer', invoice.number);
   assertRequired('Rechnungsdatum', invoice.date);
@@ -158,8 +167,8 @@ export const normalizeInvoiceForEinvoice = (
       netUnitPrice,
       netLineTotal,
       taxRate,
-      taxCategoryCode: isSmallBusiness ? ('E' as const) : ('S' as const),
-      taxExemptionReason: isSmallBusiness ? 'Kleinunternehmerregelung nach §19 UStG' : undefined,
+      taxCategoryCode: definition.einvoiceCategoryCode,
+      taxExemptionReason,
     };
   });
 
@@ -169,7 +178,7 @@ export const normalizeInvoiceForEinvoice = (
 
   const lineNetTotal = round2(lines.reduce((acc, line) => acc + line.netLineTotal, 0));
   const taxTotal = round2(
-    isSmallBusiness
+    isZeroVatMode
       ? 0
       : lines.reduce((acc, line) => acc + line.netLineTotal * (line.taxRate / 100), 0),
   );

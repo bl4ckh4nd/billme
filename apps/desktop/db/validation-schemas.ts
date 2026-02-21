@@ -127,6 +127,22 @@ export const InvoiceItemSchema = z.object({
 
 export const InvoiceItemsSchema = z.array(InvoiceItemSchema);
 
+export const InvoiceTaxMetaSchema = z.object({
+  legalReference: z.string().optional(),
+  exemptionReasonOverride: z.string().optional(),
+  buyerVatId: z.string().optional(),
+  sellerVatId: z.string().optional(),
+});
+
+export const InvoiceTaxSnapshotSchema = z.object({
+  vatRateApplied: z.number(),
+  vatAmount: z.number(),
+  netAmount: z.number(),
+  grossAmount: z.number(),
+  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']).optional(),
+  label: z.string().optional(),
+});
+
 // Settings schema components
 const CompanySettingsSchema = z.object({
   name: z.string(),

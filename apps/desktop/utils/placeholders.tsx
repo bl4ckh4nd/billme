@@ -1,6 +1,12 @@
 
 import React from 'react';
 import { Invoice, AppSettings } from '../types';
+import {
+    calculateInvoiceTaxSnapshot,
+    getInvoiceTaxExemptionReason,
+    getInvoiceTaxModeDefinition,
+    resolveInvoiceTaxMode,
+} from '../services/taxMode';
 
 // --- Configuration ---
 
@@ -18,6 +24,8 @@ export const VARIABLE_GROUPS = [
             { key: 'invoice.date', label: 'Datum', description: 'Rechnungsdatum' },
             { key: 'invoice.dueDate', label: 'Fälligkeit', description: 'Fälligkeitsdatum' },
             { key: 'invoice.servicePeriod', label: 'Leistungszeitraum', description: 'Datum der Leistung' },
+            { key: 'invoice.taxModeLabel', label: 'Steuermodus', description: 'Name der Steuerbehandlung' },
+            { key: 'invoice.taxExemptionReason', label: 'Steuerhinweis', description: 'Befreiungs-/Reverse-Charge-Hinweis' },
         ]
     },
     {
@@ -83,11 +91,18 @@ const formatCurrency = (amount: number) => {
 export const replacePlaceholders = (text: string, invoice: Invoice, settings: AppSettings): string => {
     if (!text) return '';
 
-    // Calculate totals on the fly
-    const net = invoice.items.reduce((acc, item) => acc + item.total, 0);
-    const taxRate = settings.legal.defaultVatRate; // Simplified
-    const tax = net * (taxRate / 100);
-    const gross = net + tax;
+    // Calculate totals with per-invoice tax mode
+    const tax = calculateInvoiceTaxSnapshot(
+        {
+            items: invoice.items,
+            taxMode: resolveInvoiceTaxMode(invoice.taxMode, settings),
+            taxMeta: invoice.taxMeta,
+        },
+        settings,
+    );
+    const resolvedTaxMode = resolveInvoiceTaxMode(invoice.taxMode, settings);
+    const taxModeDefinition = getInvoiceTaxModeDefinition(resolvedTaxMode);
+    const taxExemptionReason = getInvoiceTaxExemptionReason(resolvedTaxMode, invoice.taxMeta) ?? '';
 
     // Flatten data map
     const dataMap: Record<string, string> = {
@@ -95,6 +110,8 @@ export const replacePlaceholders = (text: string, invoice: Invoice, settings: Ap
         'invoice.date': formatDate(invoice.date),
         'invoice.dueDate': formatDate(invoice.dueDate),
         'invoice.servicePeriod': invoice.servicePeriod ? formatDate(invoice.servicePeriod) : formatDate(invoice.date),
+        'invoice.taxModeLabel': taxModeDefinition.label,
+        'invoice.taxExemptionReason': taxExemptionReason,
         
         'client.company': invoice.client,
         'client.number': invoice.clientNumber || '',
@@ -117,10 +134,10 @@ export const replacePlaceholders = (text: string, invoice: Invoice, settings: Ap
         'my.taxId': settings.finance.taxId,
         'my.vatId': settings.finance.vatId,
 
-        'total.net': formatCurrency(net),
-        'total.tax': formatCurrency(tax),
-        'total.gross': formatCurrency(gross),
-        'total.taxRate': `${taxRate}%`,
+        'total.net': formatCurrency(tax.netAmount),
+        'total.tax': formatCurrency(tax.vatAmount),
+        'total.gross': formatCurrency(tax.grossAmount),
+        'total.taxRate': `${tax.vatRateApplied}%`,
     };
 
     return text.replace(/\{\{([^}]+)\}\}/g, (match, key) => {

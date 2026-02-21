@@ -154,6 +154,22 @@ describe('Invoice Schemas', () => {
       };
       expect(() => invoiceSchema.parse(invoice)).not.toThrow();
     });
+
+    it('should default taxMode for legacy payloads', () => {
+      const invoice = invoiceSchema.parse({
+        id: 'inv-123',
+        number: 'INV-001',
+        client: 'Acme Corp',
+        clientEmail: 'contact@acme.com',
+        date: '2024-01-01',
+        dueDate: '2024-01-31',
+        amount: 100,
+        status: 'open' as const,
+        items: [] as Array<any>,
+        payments: [] as Array<any>,
+      });
+      expect(invoice.taxMode).toBe('standard_vat');
+    });
   });
 
   describe('upsertPayloadSchema', () => {

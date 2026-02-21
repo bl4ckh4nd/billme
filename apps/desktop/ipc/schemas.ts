@@ -16,6 +16,37 @@ export const paymentSchema = z.object({
   method: z.string(),
 });
 
+export const invoiceTaxModeSchema = z.enum([
+  'standard_vat',
+  'small_business_19_ustg',
+  'reverse_charge_13b',
+  'intra_eu_supply_6a',
+  'intra_eu_service_reverse_charge',
+  'export_third_country',
+  'vat_exempt_4_ustg',
+  'non_taxable_outside_scope',
+]);
+
+export const invoiceTaxMetaSchema = z
+  .object({
+    legalReference: z.string().optional(),
+    exemptionReasonOverride: z.string().optional(),
+    buyerVatId: z.string().optional(),
+    sellerVatId: z.string().optional(),
+  })
+  .optional();
+
+export const invoiceTaxSnapshotSchema = z
+  .object({
+    vatRateApplied: z.number(),
+    vatAmount: z.number(),
+    netAmount: z.number(),
+    grossAmount: z.number(),
+    einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']).optional(),
+    label: z.string().optional(),
+  })
+  .optional();
+
 export const invoiceSchema = z.object({
   id: z.string(),
   clientId: z.string().optional(),
@@ -39,6 +70,9 @@ export const invoiceSchema = z.object({
   date: z.string(),
   dueDate: z.string(),
   servicePeriod: z.string().optional(),
+  taxMode: invoiceTaxModeSchema.default('standard_vat'),
+  taxMeta: invoiceTaxMetaSchema,
+  taxSnapshot: invoiceTaxSnapshotSchema,
   amount: z.number(),
   status: z.enum(['paid', 'open', 'overdue', 'draft', 'cancelled']),
   dunningLevel: z.number().optional(),

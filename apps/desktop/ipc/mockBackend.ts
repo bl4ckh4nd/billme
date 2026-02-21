@@ -22,6 +22,7 @@ import {
 } from '../data/mockData';
 import { INITIAL_INVOICE_TEMPLATE, INITIAL_OFFER_TEMPLATE } from '../constants';
 import { formatAddressMultiline } from '../utils/formatters';
+import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '../services/taxMode';
 
 const invoices: Invoice[] = structuredClone(MOCK_INVOICES);
 const clients: Client[] = structuredClone(MOCK_CLIENTS);
@@ -241,6 +242,7 @@ const offers: Invoice[] = [
     clientEmail: 'info@muster.de',
     date: '2023-11-01',
     dueDate: '2023-11-15',
+    taxMode: 'standard_vat',
     amount: 5200.0,
     status: 'open',
     items: [{ description: 'Projektumfang Phase 1', quantity: 1, price: 5200, total: 5200 }],
@@ -256,6 +258,7 @@ const offers: Invoice[] = [
     clientEmail: 'hello@startup.io',
     date: '2023-11-03',
     dueDate: '2023-11-17',
+    taxMode: 'standard_vat',
     amount: 1850.0,
     status: 'draft',
     items: [{ description: 'Workshop Konzept', quantity: 1, price: 1850, total: 1850 }],
@@ -265,6 +268,24 @@ const offers: Invoice[] = [
 ];
 
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const normalizeInvoiceTaxData = (doc: Invoice): Invoice => {
+  const taxMode = resolveInvoiceTaxMode(doc.taxMode, settings);
+  const taxSnapshot = calculateInvoiceTaxSnapshot(
+    {
+      items: doc.items ?? [],
+      taxMode,
+      taxMeta: doc.taxMeta,
+    },
+    settings,
+  );
+  return {
+    ...doc,
+    taxMode,
+    taxSnapshot,
+    amount: taxSnapshot.grossAmount,
+  };
+};
 
 const toNet = (amountGross: number, classification: any): number => {
   if (settings.legal.smallBusinessRule) return round2(amountGross);
@@ -504,7 +525,7 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       return structuredClone(invoices) as IpcResult<K>;
     case 'invoices:upsert': {
       const { invoice } = args as IpcArgs<'invoices:upsert'>;
-      const normalized = structuredClone(invoice) as Invoice;
+      const normalized = normalizeInvoiceTaxData(structuredClone(invoice) as Invoice);
       delete normalized.numberReservationId;
       const idx = invoices.findIndex((i) => i.id === normalized.id);
       if (idx >= 0) invoices[idx] = normalized;
@@ -522,7 +543,7 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       return structuredClone(offers) as IpcResult<K>;
     case 'offers:upsert': {
       const { offer } = args as IpcArgs<'offers:upsert'>;
-      const normalized = structuredClone(offer) as Invoice;
+      const normalized = normalizeInvoiceTaxData(structuredClone(offer) as Invoice);
       delete normalized.numberReservationId;
       const idx = offers.findIndex((o) => o.id === normalized.id);
       if (idx >= 0) offers[idx] = normalized;
@@ -719,6 +740,7 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
         shippingAddressJson: shippingAddress,
         date: today,
         dueDate: kind === 'offer' ? today : '',
+        taxMode: settings.legal.smallBusinessRule ? 'small_business_19_ustg' : 'standard_vat',
         amount: 0,
         status: 'draft',
         items: [],

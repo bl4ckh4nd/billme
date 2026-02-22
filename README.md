@@ -5,6 +5,8 @@
 A local-first invoicing desktop app (Electron + React + SQLite) and a public offer portal service.
 Built with love in Germany.
 
+Check out a web-hosted demo of the app here: [Demo](https://demo.getbillme.com/)).
+
 PLEASE NOTE: This is still a Beta-Version. Expect some minor issues and please report them so they can be fixed!
 
 <img src="assets/screenshot_billme.png" alt="Billme screenshot" width="900" />

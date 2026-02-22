@@ -33,6 +33,7 @@ Important: GoBD conformity is always process- and setup-dependent (including org
 ## Workspace
 
 - `apps/desktop`: Electron desktop app
+- `apps/demo`: Cloudflare Worker-hosted browser demo (desktop UI + mock services)
 - `apps/offer-portal`: Hono TypeScript service for published offers/invoices
 - `packages/ui`: Shared UI components and utilities
 
@@ -54,11 +55,14 @@ This starts the desktop app in development mode.
 
 ```bash
 pnpm dev                 # Desktop app (Electron + renderer)
+pnpm dev:demo            # Demo app (Cloudflare Worker)
 pnpm dev:renderer        # Renderer only
 pnpm build               # Build desktop bundles
+pnpm build:demo          # Build demo frontend + typecheck worker
 pnpm dist                # Build distributable desktop packages
 pnpm -C apps/desktop test
 pnpm -C apps/desktop typecheck
+pnpm deploy:demo         # Deploy demo to Cloudflare Workers
 pnpm -C apps/offer-portal dev
 pnpm -C apps/offer-portal build
 ```

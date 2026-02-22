@@ -28,7 +28,18 @@ interface RetryConfig {
 const normalizeBaseUrl = (baseUrl: string): string => {
   const trimmed = baseUrl.trim();
   if (!trimmed) throw new Error('Portal baseUrl is required');
-  return trimmed.replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error('Portal baseUrl is invalid');
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLocalhost)) {
+    throw new Error('Portal baseUrl must use https (except localhost)');
+  }
+  return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, '');
 };
 
 const createPortalError = (error: unknown, res?: Response): PortalError => {

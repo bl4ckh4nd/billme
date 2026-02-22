@@ -1,5 +1,18 @@
 import { z } from 'zod';
 
+const isAllowedPortalBaseUrl = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  try {
+    const parsed = new URL(trimmed);
+    const hostname = parsed.hostname.toLowerCase();
+    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+    return parsed.protocol === 'https:' || (parsed.protocol === 'http:' && isLocalhost);
+  } catch {
+    return false;
+  }
+};
+
 export const invoiceItemSchema = z.object({
   description: z.string(),
   quantity: z.number(),
@@ -382,7 +395,10 @@ export const appSettingsSchema = z.object({
   }),
   portal: z
     .object({
-      baseUrl: z.string().default(''),
+      baseUrl: z.string().default('').refine(
+        isAllowedPortalBaseUrl,
+        'Portal baseUrl must use https (except localhost)',
+      ),
     })
     .default({ baseUrl: '' }),
   eInvoice: z

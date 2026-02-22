@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import { Hono } from 'hono';
-import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { OfferStore, PdfStore, PortalDocumentListItem } from './storage/types';
 import { BILLME_FULL_LOGO_DATA_URI } from './branding';
@@ -109,6 +108,7 @@ const RATE_LIMITS = {
 } as const;
 
 const rateBuckets = new Map<string, RateBucketState>();
+const MAX_RATE_BUCKETS = 5_000;
 
 const getClientIdentifier = (c: any): string => {
   const cfIp = c.req.header('cf-connecting-ip');
@@ -124,6 +124,20 @@ const checkRateLimit = (
 ): { ok: true } | { ok: false; retryAfterSec: number } => {
   const cfg = RATE_LIMITS[bucket];
   const now = Date.now();
+  for (const [k, state] of rateBuckets) {
+    if (state.resetAt <= now) rateBuckets.delete(k);
+  }
+  if (rateBuckets.size > MAX_RATE_BUCKETS) {
+    let oldestKey: string | null = null;
+    let oldestResetAt = Number.POSITIVE_INFINITY;
+    for (const [k, state] of rateBuckets) {
+      if (state.resetAt < oldestResetAt) {
+        oldestResetAt = state.resetAt;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) rateBuckets.delete(oldestKey);
+  }
   const key = `${bucket}:${getClientIdentifier(c)}`;
   const existing = rateBuckets.get(key);
 
@@ -142,10 +156,31 @@ const checkRateLimit = (
   return { ok: true };
 };
 
-const applySensitiveResponseHeaders = (c: any) => {
+const applySensitiveResponseHeaders = (
+  c: any,
+  options?: {
+    allowFrameFromSameOrigin?: boolean;
+  },
+) => {
   c.header('Cache-Control', 'no-store, max-age=0');
   c.header('Pragma', 'no-cache');
   c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', options?.allowFrameFromSameOrigin ? 'SAMEORIGIN' : 'DENY');
+  c.header('Referrer-Policy', 'no-referrer');
+};
+
+const parseCookies = (header: string | null | undefined): Record<string, string> => {
+  if (!header) return {};
+  return header.split(';').reduce<Record<string, string>>((acc, part) => {
+    const [rawKey, ...rawValue] = part.trim().split('=');
+    if (!rawKey) return acc;
+    try {
+      acc[rawKey] = decodeURIComponent(rawValue.join('=') ?? '');
+    } catch {
+      acc[rawKey] = rawValue.join('=') ?? '';
+    }
+    return acc;
+  }, {});
 };
 
 const renderPortalBranding = (subtitle: string) => `<div style="display:flex; align-items:center; gap:12px; margin-bottom: 16px;">
@@ -176,7 +211,27 @@ const checkPublishAuth = (
 
 export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: PortalConfig }) => {
   const app = new Hono();
-  app.use('*', cors({ origin: '*' }));
+  const publicOrigin = (() => {
+    const base = deps.config.publicBaseUrl?.trim();
+    if (!base) return null;
+    try {
+      return new URL(base).origin;
+    } catch {
+      return null;
+    }
+  })();
+  const isAllowedDecisionOrigin = (c: any): boolean => {
+    if (!publicOrigin) return true;
+    const origin = c.req.header('origin');
+    if (origin && origin === publicOrigin) return true;
+    const referer = c.req.header('referer');
+    if (!referer) return false;
+    try {
+      return new URL(referer).origin === publicOrigin;
+    } catch {
+      return false;
+    }
+  };
 
   app.get('/health', (c) => c.json({ ok: true, ts: nowIso() }));
 
@@ -211,7 +266,10 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
 
   app.post('/customers/access-links', async (c) => {
     const auth = checkPublishAuth(deps.config, c);
-    if (!auth.ok) return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
+    if (!auth.ok) {
+      c.header('WWW-Authenticate', 'ApiKey realm="publish"');
+      return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
+    }
     const body = customerAccessLinkSchema.parse(await c.req.json());
     const token = crypto.randomBytes(24).toString('base64url');
     const createdAt = nowIso();
@@ -235,7 +293,10 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
 
   app.post('/customers/access-links/rotate', async (c) => {
     const auth = checkPublishAuth(deps.config, c);
-    if (!auth.ok) return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
+    if (!auth.ok) {
+      c.header('WWW-Authenticate', 'ApiKey realm="publish"');
+      return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
+    }
     const body = customerAccessLinkSchema.parse(await c.req.json());
     await deps.store.revokeCustomerAccessTokens(body.customerRef);
     const token = crypto.randomBytes(24).toString('base64url');
@@ -260,7 +321,10 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
 
   app.post('/offers', async (c) => {
     const auth = checkPublishAuth(deps.config, c);
-    if (!auth.ok) return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
+    if (!auth.ok) {
+      c.header('WWW-Authenticate', 'ApiKey realm="publish"');
+      return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
+    }
     const contentType = c.req.header('content-type') ?? '';
     const publishedAt = nowIso();
     const defaultExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -269,7 +333,6 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
       const body = publishJsonSchema.parse(await c.req.json());
       const tokenHash = sha256(body.token);
       await deps.store.upsertOffer({
-        token: body.token,
         tokenHash,
         publishedAt,
         expiresAt: body.expiresAt ?? defaultExpiresAt,
@@ -302,7 +365,6 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
 
       const tokenHash = sha256(token);
       await deps.store.upsertOffer({
-        token,
         tokenHash,
         publishedAt,
         expiresAt: expiresAtFromForm || defaultExpiresAt,
@@ -320,7 +382,10 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
 
   app.post('/invoices', async (c) => {
     const auth = checkPublishAuth(deps.config, c);
-    if (!auth.ok) return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
+    if (!auth.ok) {
+      c.header('WWW-Authenticate', 'ApiKey realm="publish"');
+      return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
+    }
     const contentType = c.req.header('content-type') ?? '';
     const publishedAt = nowIso();
     const defaultExpiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
@@ -329,7 +394,6 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
       const body = publishJsonSchema.parse(await c.req.json());
       const tokenHash = sha256(body.token);
       await deps.store.upsertInvoice({
-        token: body.token,
         tokenHash,
         publishedAt,
         expiresAt: body.expiresAt ?? defaultExpiresAt,
@@ -362,7 +426,6 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
       }
 
       await deps.store.upsertInvoice({
-        token,
         tokenHash: sha256(token),
         publishedAt,
         expiresAt: expiresAtFromForm || defaultExpiresAt,
@@ -411,7 +474,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
         hasPdf: Boolean(item.pdfKey),
         publishedAt: item.publishedAt,
         expiresAt: item.expiresAt,
-        url: `/${item.kind === 'offer' ? 'offers' : 'invoices'}/${encodeURIComponent(item.token)}`,
+        url: `/d/${encodeURIComponent(item.documentId)}`,
       };
     });
     return c.json({ ok: true, items, nextCursor: result.nextCursor });
@@ -441,7 +504,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const rows = result.items
       .map((item) => {
         const snap = looksLikeDocSnapshot(item.snapshotJson) ? item.snapshotJson : null;
-        const url = `/${item.kind === 'offer' ? 'offers' : 'invoices'}/${encodeURIComponent(item.token)}`;
+        const url = `/d/${encodeURIComponent(item.documentId)}`;
         return `<tr>
 <td style="padding:10px 8px; border-bottom:1px solid #eee;">${item.kind === 'offer' ? 'Angebot' : 'Rechnung'}</td>
 <td style="padding:10px 8px; border-bottom:1px solid #eee;">${escapeHtml(snap?.number ?? '')}</td>
@@ -462,7 +525,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'" />
     <title>Dokumente</title>
   </head>
   <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f3f4f6; margin:0;">
@@ -492,6 +555,173 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     return c.html(html);
   });
 
+  app.get('/d/:documentId', async (c) => {
+    applySensitiveResponseHeaders(c);
+    const rl = checkRateLimit(c, 'tokenRead');
+    if (!rl.ok) {
+      c.header('Retry-After', String(rl.retryAfterSec));
+      return c.json({ error: 'rate_limited' }, 429);
+    }
+    const documentId = z.object({ documentId: z.string().min(8) }).parse(c.req.param()).documentId;
+    const rec = await deps.store.getDocumentById(documentId);
+    if (!rec) return c.json({ error: 'not found' }, 404);
+    const expired = Date.parse(rec.expiresAt) < Date.now();
+    const snapshot = looksLikeDocSnapshot(rec.snapshotJson) ? rec.snapshotJson : null;
+    const accept = c.req.header('accept') ?? '';
+    const wantsHtml = accept.includes('text/html') || c.req.query('view') === '1';
+    if (!wantsHtml) {
+      return c.json({
+        kind: rec.kind,
+        publishedAt: rec.publishedAt,
+        expiresAt: rec.expiresAt,
+        expired,
+        snapshot: rec.snapshotJson,
+        decision: rec.kind === 'offer' ? rec.decision ?? null : undefined,
+        hasPdf: Boolean(rec.pdfKey),
+      });
+    }
+
+    const title =
+      rec.kind === 'offer'
+        ? snapshot?.number
+          ? `Angebot ${snapshot.number}`
+          : 'Angebot'
+        : snapshot?.number
+          ? `Rechnung ${snapshot.number}`
+          : 'Rechnung';
+    const statusText =
+      rec.kind === 'offer'
+        ? expired
+          ? 'Abgelaufen'
+          : rec.decision
+            ? rec.decision.decision === 'accepted'
+              ? 'Angenommen'
+              : 'Abgelehnt'
+            : 'Offen'
+        : expired
+          ? 'Abgelaufen'
+          : String(snapshot?.status ?? 'Offen');
+    const csrfToken = crypto.randomBytes(24).toString('base64url');
+    if (rec.kind === 'offer' && !expired && !rec.decision) {
+      c.header(
+        'Set-Cookie',
+        `csrfToken=${encodeURIComponent(csrfToken)}; Path=/; HttpOnly; SameSite=Strict${publicOrigin?.startsWith('https://') ? '; Secure' : ''}`,
+      );
+    }
+    const decisionHtml =
+      rec.kind !== 'offer'
+        ? ''
+        : rec.decision
+          ? `<div style="margin-top: 14px; color:#555;">Entscheidung: <strong>${escapeHtml(rec.decision.decision)}</strong> (${escapeHtml(rec.decision.acceptedName)})</div>`
+          : expired
+            ? ''
+            : `<form method="post" action="/d/${encodeURIComponent(rec.documentId)}/decision" style="margin-top:16px; padding:14px; border:1px solid #e5e7eb; border-radius:14px;">
+  <div style="display:flex; gap:12px; flex-wrap:wrap;">
+    <input name="acceptedName" required minlength="1" placeholder="Name" style="flex:1; min-width:180px; padding:10px; border-radius:10px; border:1px solid #ddd;" />
+    <input name="acceptedEmail" required type="email" placeholder="E-Mail" style="flex:1; min-width:180px; padding:10px; border-radius:10px; border:1px solid #ddd;" />
+  </div>
+  <input type="hidden" name="decisionTextVersion" value="v1" />
+  <input type="hidden" name="csrfToken" value="${escapeHtml(csrfToken)}" />
+  <div style="display:flex; gap:12px; margin-top:12px;">
+    <button name="decision" value="accepted" style="padding:10px 12px; border-radius:10px; border:1px solid #111; background:#111; color:#fff; font-weight:700;">Annehmen</button>
+    <button name="decision" value="declined" style="padding:10px 12px; border-radius:10px; border:1px solid #ddd; background:#fff; color:#111; font-weight:700;">Ablehnen</button>
+  </div>
+</form>`;
+    const pdfUrl = rec.pdfKey ? `/d/${encodeURIComponent(rec.documentId)}/pdf` : '';
+    const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" />
+    <title>${escapeHtml(title)}</title>
+  </head>
+  <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f3f4f6; margin:0;">
+    <main style="max-width: 920px; margin: 30px auto; padding: 0 16px;">
+      ${renderPortalBranding('Kundenportal')}
+      <section style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:18px;">
+        <h1 style="margin:0 0 8px;">${escapeHtml(title)}</h1>
+        <div style="color:#666; font-size:14px;">Status: <strong>${escapeHtml(statusText)}</strong> · Gültig bis: ${escapeHtml(new Date(rec.expiresAt).toLocaleDateString('de-DE'))}</div>
+        <div style="margin-top:12px; color:#555;">Kunde: <strong>${escapeHtml(snapshot?.client ?? rec.customerLabel ?? '')}</strong></div>
+        <div style="margin-top:8px; font-size:20px; font-weight:900;">${escapeHtml(formatCurrencyEur(snapshot?.amount ?? 0))}</div>
+        ${decisionHtml}
+      </section>
+      ${
+        pdfUrl
+          ? `<section style="margin-top:16px; background:#fff; border:1px solid #e5e7eb; border-radius:18px; overflow:hidden;">
+  <div style="padding: 12px 14px; border-bottom:1px solid #eee;"><a href="${escapeHtml(pdfUrl)}" style="font-weight:700; color:#111; text-decoration:none;">PDF herunterladen</a></div>
+  <iframe title="Document PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height: 900px; border:0;"></iframe>
+</section>`
+          : ''
+      }
+    </main>
+  </body>
+</html>`;
+    return c.html(html);
+  });
+
+  app.get('/d/:documentId/pdf', async (c) => {
+    applySensitiveResponseHeaders(c, { allowFrameFromSameOrigin: true });
+    const rl = checkRateLimit(c, 'tokenRead');
+    if (!rl.ok) {
+      c.header('Retry-After', String(rl.retryAfterSec));
+      return c.json({ error: 'rate_limited' }, 429);
+    }
+    const documentId = z.object({ documentId: z.string().min(8) }).parse(c.req.param()).documentId;
+    const rec = await deps.store.getDocumentById(documentId);
+    if (!rec || !rec.pdfKey) return c.json({ error: 'not found' }, 404);
+    const bytes = await deps.pdf.getPdf(rec.pdfKey);
+    if (!bytes) return c.json({ error: 'not found' }, 404);
+    c.header('content-type', 'application/pdf');
+    return c.body(bytes);
+  });
+
+  app.post('/d/:documentId/decision', async (c) => {
+    applySensitiveResponseHeaders(c);
+    const rl = checkRateLimit(c, 'tokenDecision');
+    if (!rl.ok) {
+      c.header('Retry-After', String(rl.retryAfterSec));
+      return c.json({ error: 'rate_limited' }, 429);
+    }
+    if (!isAllowedDecisionOrigin(c)) {
+      return c.json({ error: 'origin_invalid' }, 403);
+    }
+    const documentId = z.object({ documentId: z.string().min(8) }).parse(c.req.param()).documentId;
+    const rec = await deps.store.getDocumentById(documentId);
+    if (!rec || rec.kind !== 'offer') return c.json({ error: 'not found' }, 404);
+    if (Date.parse(rec.expiresAt) < Date.now()) return c.json({ error: 'expired' }, 410);
+    const contentType = c.req.header('content-type') ?? '';
+    const isForm =
+      contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data');
+    const rawBody = isForm ? await c.req.parseBody() : await c.req.json();
+    if (isForm) {
+      const cookies = parseCookies(c.req.header('cookie'));
+      const csrfCookie = String(cookies.csrfToken ?? '').trim();
+      const csrfBody = String((rawBody as any).csrfToken ?? '').trim();
+      if (!csrfCookie || !csrfBody || csrfCookie !== csrfBody) {
+        return c.json({ error: 'csrf_invalid' }, 403);
+      }
+    }
+    const body = decisionSchema.parse({
+      decision: String((rawBody as any).decision ?? '').trim(),
+      acceptedName: String((rawBody as any).acceptedName ?? '').trim(),
+      acceptedEmail: String((rawBody as any).acceptedEmail ?? '').trim().toLowerCase(),
+      decisionTextVersion: String((rawBody as any).decisionTextVersion ?? '').trim(),
+    });
+    const decision = await deps.store.setDecisionOnceByDocumentId(documentId, {
+      decidedAt: nowIso(),
+      decision: body.decision,
+      acceptedName: body.acceptedName,
+      acceptedEmail: body.acceptedEmail,
+      decisionTextVersion: body.decisionTextVersion,
+    });
+    const accept = c.req.header('accept') ?? '';
+    if (accept.includes('text/html')) {
+      return c.redirect(`/d/${encodeURIComponent(documentId)}`);
+    }
+    return c.json({ ok: true, decision });
+  });
+
   app.get('/offers/:token', async (c) => {
     applySensitiveResponseHeaders(c);
     const rl = checkRateLimit(c, 'tokenRead');
@@ -503,6 +733,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const tokenHash = sha256(token);
     const rec = await deps.store.getOfferByTokenHash(tokenHash);
     if (!rec) return c.json({ error: 'not found' }, 404);
+    const document = await deps.store.getDocumentByTokenHash(tokenHash);
     const expired = Date.parse(rec.expiresAt) < Date.now();
 
     const accept = c.req.header('accept') ?? '';
@@ -516,6 +747,9 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
         decision: rec.decision ?? null,
         hasPdf: Boolean(rec.pdfKey),
       });
+    }
+    if (document?.documentId) {
+      return c.redirect(`/d/${encodeURIComponent(document.documentId)}`);
     }
 
     const snapshot = looksLikeDocSnapshot(rec.snapshotJson) ? rec.snapshotJson : null;
@@ -560,6 +794,13 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   <div style="color:#555; font-size:14px;">E-Mail: ${escapeHtml(decision.acceptedEmail)}</div>
 </div>`
       : '';
+    const csrfToken = crypto.randomBytes(24).toString('base64url');
+    if (!expired && !decision) {
+      c.header(
+        'Set-Cookie',
+        `csrfToken=${encodeURIComponent(csrfToken)}; Path=/; HttpOnly; SameSite=Strict${publicOrigin?.startsWith('https://') ? '; Secure' : ''}`,
+      );
+    }
 
     const actionForm =
       expired || decision
@@ -579,6 +820,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     Mit Klick wird eine Entscheidung gespeichert (einmalig). Das Angebot bleibt danach weiter einsehbar.
   </div>
   <input type="hidden" name="decisionTextVersion" value="v1" />
+  <input type="hidden" name="csrfToken" value="${escapeHtml(csrfToken)}" />
   <div style="display:flex; gap:12px; margin-top: 14px;">
     <button name="decision" value="accepted" style="cursor:pointer; padding:12px 14px; border-radius:14px; border:1px solid #111; background:#111; color:#fff; font-weight:800;">
       Angebot annehmen
@@ -594,7 +836,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; frame-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; frame-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" />
     <title>${escapeHtml(title)}</title>
   </head>
   <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f3f4f6; margin:0;">
@@ -676,6 +918,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const token = z.object({ token: z.string().min(16) }).parse(c.req.param()).token;
     const rec = await deps.store.getInvoiceByTokenHash(sha256(token));
     if (!rec) return c.json({ error: 'not found' }, 404);
+    const document = await deps.store.getDocumentByTokenHash(sha256(token));
     const expired = Date.parse(rec.expiresAt) < Date.now();
 
     const accept = c.req.header('accept') ?? '';
@@ -688,6 +931,9 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
         snapshot: rec.snapshotJson,
         hasPdf: Boolean(rec.pdfKey),
       });
+    }
+    if (document?.documentId) {
+      return c.redirect(`/d/${encodeURIComponent(document.documentId)}`);
     }
 
     const snapshot = looksLikeDocSnapshot(rec.snapshotJson) ? rec.snapshotJson : null;
@@ -715,7 +961,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; frame-src 'self'; img-src 'self' data:; base-uri 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; frame-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'" />
     <title>${escapeHtml(snapshot?.number ? `Rechnung ${snapshot.number}` : 'Rechnung')}</title>
   </head>
   <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f3f4f6; margin:0;">
@@ -767,7 +1013,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   });
 
   app.get('/offers/:token/pdf', async (c) => {
-    applySensitiveResponseHeaders(c);
+    applySensitiveResponseHeaders(c, { allowFrameFromSameOrigin: true });
     const rl = checkRateLimit(c, 'tokenRead');
     if (!rl.ok) {
       c.header('Retry-After', String(rl.retryAfterSec));
@@ -784,7 +1030,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   });
 
   app.get('/invoices/:token/pdf', async (c) => {
-    applySensitiveResponseHeaders(c);
+    applySensitiveResponseHeaders(c, { allowFrameFromSameOrigin: true });
     const rl = checkRateLimit(c, 'tokenRead');
     if (!rl.ok) {
       c.header('Retry-After', String(rl.retryAfterSec));
@@ -810,15 +1056,26 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const tokenHash = sha256(token);
     const rec = await deps.store.getOfferByTokenHash(tokenHash);
     if (!rec) return c.json({ error: 'not found' }, 404);
+    const document = await deps.store.getDocumentByTokenHash(tokenHash);
 
     const expired = Date.parse(rec.expiresAt) < Date.now();
     if (expired) return c.json({ error: 'expired' }, 410);
 
     const contentType = c.req.header('content-type') ?? '';
-    const rawBody =
-      contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')
-        ? await c.req.parseBody()
-        : await c.req.json();
+    const isForm =
+      contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data');
+    if (!isAllowedDecisionOrigin(c)) {
+      return c.json({ error: 'origin_invalid' }, 403);
+    }
+    const rawBody = isForm ? await c.req.parseBody() : await c.req.json();
+    if (isForm) {
+      const cookies = parseCookies(c.req.header('cookie'));
+      const csrfCookie = String(cookies.csrfToken ?? '').trim();
+      const csrfBody = String((rawBody as any).csrfToken ?? '').trim();
+      if (!csrfCookie || !csrfBody || csrfCookie !== csrfBody) {
+        return c.json({ error: 'csrf_invalid' }, 403);
+      }
+    }
     const body = decisionSchema.parse({
       decision: String((rawBody as any).decision ?? '').trim(),
       acceptedName: String((rawBody as any).acceptedName ?? '').trim(),
@@ -836,6 +1093,9 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const accept = c.req.header('accept') ?? '';
     const wantsHtml = accept.includes('text/html');
     if (wantsHtml) {
+      if (document?.documentId) {
+        return c.redirect(`/d/${encodeURIComponent(document.documentId)}`);
+      }
       return c.redirect(`/offers/${encodeURIComponent(token)}`);
     }
     return c.json({ ok: true, decision });

@@ -3,6 +3,9 @@ import { createBillmeApi } from '../ipc/api';
 import { ipcRoutes, type IpcArgs, type IpcResult, type IpcRouteKey } from '../ipc/contract';
 
 const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<IpcResult<K>> => {
+  if (key === 'secrets:get') {
+    throw new Error('secrets:get is not exposed to renderer');
+  }
   const route = ipcRoutes[key];
   const parsedArgs = route.args.parse(args) as IpcArgs<K>;
 

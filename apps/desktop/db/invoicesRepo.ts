@@ -6,6 +6,7 @@ import {
   AddressSchema,
   InvoiceTaxMetaSchema,
   InvoiceTaxSnapshotSchema,
+  SettingsSchema,
 } from './validation-schemas';
 import { finalizeNumber, reserveNumber } from './numberingRepo';
 import { resolveInvoiceTaxMode } from '../services/taxMode';

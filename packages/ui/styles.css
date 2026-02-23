@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@source "../../apps/desktop/**/*.{ts,tsx,html}";
 
 @theme {
   /* Brand Colors */
@@ -74,4 +75,3 @@
     font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   }
 }
-

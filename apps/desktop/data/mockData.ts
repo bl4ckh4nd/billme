@@ -369,6 +369,12 @@ export const MOCK_ACCOUNTS: Account[] = [
     type: 'bank',
     color: 'bg-white',
     transactions: [
+      { id: 't9', date: '2025-01-08', amount: 2200.00, type: 'income', counterparty: 'Musterfirma GmbH', purpose: 'Abschlagszahlung Website-Relaunch', status: 'booked' },
+      { id: 't10', date: '2025-01-12', amount: -189.00, type: 'expense', counterparty: 'Telekom Deutschland', purpose: 'Internet & Telefon Januar', status: 'booked' },
+      { id: 't11', date: '2025-01-19', amount: -460.00, type: 'expense', counterparty: 'Büro Center Berlin', purpose: 'Büromaterial Q1', status: 'booked' },
+      { id: 't12', date: '2025-02-03', amount: 1450.00, type: 'income', counterparty: 'StartUp Berlin AG', purpose: 'Teilzahlung Strategieprojekt', status: 'booked' },
+      { id: 't13', date: '2025-02-11', amount: -74.99, type: 'expense', counterparty: 'Notion Labs', purpose: 'Team-Abo Februar', status: 'booked' },
+      { id: 't14', date: '2025-02-17', amount: -990.00, type: 'expense', counterparty: 'Finanzamt Berlin', purpose: 'Umsatzsteuervorauszahlung Jan 2025', status: 'booked' },
       { id: 't1', date: '2023-10-28', amount: 1250.00, type: 'income', counterparty: 'Musterfirma GmbH', purpose: 'Rechnung RE-2023-001', linkedInvoiceId: '1', status: 'booked' },
       { id: 't2', date: '2023-10-27', amount: -49.90, type: 'expense', counterparty: 'Adobe Systems', purpose: 'Creative Cloud Abo', status: 'booked' },
       { id: 't3', date: '2023-10-25', amount: 3450.50, type: 'income', counterparty: 'StartUp Berlin AG', purpose: 'Gutschrift', status: 'booked' }, // Unlinked
@@ -395,6 +401,8 @@ export const MOCK_ACCOUNTS: Account[] = [
     type: 'paypal',
     color: 'bg-blue-50',
     transactions: [
+        { id: 't15', date: '2025-01-22', amount: 680.00, type: 'income', counterparty: 'Kunde Shop #1143', purpose: 'PayPal Checkout', status: 'booked' },
+        { id: 't16', date: '2025-02-05', amount: -145.00, type: 'expense', counterparty: 'Meta Ads', purpose: 'Kampagne Leadgen Februar', status: 'booked' },
         { id: 't7', date: '2023-10-23', amount: 850.00, type: 'income', counterparty: 'Online Shop Kunde', purpose: 'Bestellung #992', status: 'booked' },
         { id: 't8', date: '2023-10-22', amount: -120.00, type: 'expense', counterparty: 'Hosting Provider', purpose: 'Server Miete', status: 'booked' }
     ]

@@ -1,0 +1,15 @@
+{
+  "name": "@billme/desktop-renderer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "types": "./src/index.tsx",
+  "exports": {
+    ".": "./src/index.tsx"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.90.19",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  }
+}

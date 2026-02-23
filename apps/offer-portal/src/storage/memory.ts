@@ -34,10 +34,23 @@ export const createMemoryOfferStore = (): OfferStore => {
     }
     return structuredClone(decision);
   };
+  const resolveDocumentId = (tokenHash: string, explicitDocumentId?: string): string => {
+    if (explicitDocumentId) return explicitDocumentId;
+    const existing = portalDocumentsByTokenHash.get(tokenHash);
+    if (existing?.documentId) return existing.documentId;
+    return generateDocumentId();
+  };
+  const updateDocumentIndex = (tokenHash: string, nextDocumentId: string): void => {
+    const previous = portalDocumentsByTokenHash.get(tokenHash);
+    if (previous?.documentId && previous.documentId !== nextDocumentId) {
+      tokenHashByDocumentId.delete(previous.documentId);
+    }
+    tokenHashByDocumentId.set(nextDocumentId, tokenHash);
+  };
 
   return {
     upsertOffer: async (offer) => {
-      const documentId = offer.documentId || generateDocumentId();
+      const documentId = resolveDocumentId(offer.tokenHash, offer.documentId);
       offersByTokenHash.set(offer.tokenHash, structuredClone(offer));
       const customerRef = offer.customerRef ?? `anon:${offer.tokenHash.slice(0, 16)}`;
       portalDocumentsByTokenHash.set(offer.tokenHash, {
@@ -52,10 +65,10 @@ export const createMemoryOfferStore = (): OfferStore => {
         pdfKey: offer.pdfKey ?? null,
         decision: offer.decision ?? null,
       });
-      tokenHashByDocumentId.set(documentId, offer.tokenHash);
+      updateDocumentIndex(offer.tokenHash, documentId);
     },
     upsertInvoice: async (invoice) => {
-      const documentId = invoice.documentId || generateDocumentId();
+      const documentId = resolveDocumentId(invoice.tokenHash, invoice.documentId);
       invoicesByTokenHash.set(invoice.tokenHash, structuredClone(invoice));
       portalDocumentsByTokenHash.set(invoice.tokenHash, {
         documentId,
@@ -69,7 +82,7 @@ export const createMemoryOfferStore = (): OfferStore => {
         pdfKey: invoice.pdfKey ?? null,
         decision: null,
       });
-      tokenHashByDocumentId.set(documentId, invoice.tokenHash);
+      updateDocumentIndex(invoice.tokenHash, documentId);
     },
     getOfferByTokenHash: async (tokenHash) => {
       const rec = offersByTokenHash.get(tokenHash);
@@ -83,6 +96,7 @@ export const createMemoryOfferStore = (): OfferStore => {
       const tokenHash = tokenHashByDocumentId.get(documentId);
       if (!tokenHash) return null;
       const rec = portalDocumentsByTokenHash.get(tokenHash);
+      if (!rec || rec.documentId !== documentId) return null;
       return rec ? structuredClone(rec) : null;
     },
     getDocumentByTokenHash: async (tokenHash) => {

@@ -24,7 +24,14 @@ const parseCookie = (cookieHeader: string | null, key: string): string | null =>
   if (!cookieHeader) return null;
   for (const part of cookieHeader.split(';')) {
     const [k, ...v] = part.trim().split('=');
-    if (k === key) return decodeURIComponent(v.join('='));
+    if (k !== key) continue;
+    const rawValue = v.join('=');
+    try {
+      const decoded = decodeURIComponent(rawValue);
+      return decoded.length > 0 ? decoded : null;
+    } catch {
+      return rawValue.length > 0 ? rawValue : null;
+    }
   }
   return null;
 };

@@ -306,6 +306,7 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'documents:createFromClient', ({ kind, clientId }) => {
     const db = requireDb();
+    const settings = requireSettings(db);
     const normalizedKind = kind === 'offer' ? 'offer' : 'invoice';
 
     const client = getClient(db, clientId);

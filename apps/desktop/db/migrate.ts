@@ -328,25 +328,16 @@ export const runMigrations = (db: Database.Database): void => {
   if (settingsJson.eInvoice.version !== '2.3') settingsJson.eInvoice.version = '2.3';
   const smallBusinessRuleDefault = Boolean(settingsJson.legal?.smallBusinessRule);
 
-  db.prepare(
-    `
-      UPDATE invoices
-      SET tax_mode = @mode
-      WHERE tax_mode IS NULL OR TRIM(tax_mode) = ''
-    `,
-  ).run({
-    mode: smallBusinessRuleDefault ? 'small_business_19_ustg' : 'standard_vat',
-  });
+  // When smallBusinessRule is enabled we must also override rows that were written
+  // as 'standard_vat' by ALTER TABLE ADD COLUMN's DEFAULT clause, because those
+  // rows were never touched by the user – they predate per-invoice tax modes.
+  const backfillMode = smallBusinessRuleDefault ? 'small_business_19_ustg' : 'standard_vat';
+  const backfillWhere = smallBusinessRuleDefault
+    ? "tax_mode IS NULL OR TRIM(tax_mode) = '' OR tax_mode = 'standard_vat'"
+    : "tax_mode IS NULL OR TRIM(tax_mode) = ''";
 
-  db.prepare(
-    `
-      UPDATE offers
-      SET tax_mode = @mode
-      WHERE tax_mode IS NULL OR TRIM(tax_mode) = ''
-    `,
-  ).run({
-    mode: smallBusinessRuleDefault ? 'small_business_19_ustg' : 'standard_vat',
-  });
+  db.prepare(`UPDATE invoices SET tax_mode = @mode WHERE ${backfillWhere}`).run({ mode: backfillMode });
+  db.prepare(`UPDATE offers SET tax_mode = @mode WHERE ${backfillWhere}`).run({ mode: backfillMode });
 
   db.prepare('UPDATE settings SET settings_json = ? WHERE id = 1').run(JSON.stringify(settingsJson));
 

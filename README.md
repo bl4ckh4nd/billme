@@ -73,7 +73,7 @@ pnpm -C apps/offer-portal build
 
 ## License
 
-MIT, see `LICENSE`.
+FSL1.1, see `LICENSE`.
 
 ## Notes
 

@@ -25,6 +25,7 @@ import {
 import type { DocumentTemplate, InvoiceElement } from '../types';
 import { INITIAL_INVOICE_TEMPLATE, INITIAL_OFFER_TEMPLATE } from '../constants';
 import { v4 as uuidv4 } from 'uuid';
+import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '../services/taxMode';
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
@@ -158,15 +159,24 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
     setSettingsMutation.mutate({ ...settings, dashboard: { ...dash, ...patch } });
   }, [settings, dash, setSettingsMutation]);
 
-  const vatRate = settings.legal.smallBusinessRule ? 0 : Number(settings.legal.defaultVatRate) || 0;
   const taxMethod = settings.legal.taxAccountingMethod ?? 'soll';
 
   const kpis = useMemo(() => {
+    const snapshotFor = (inv: Invoice) =>
+      inv.taxSnapshot ??
+      calculateInvoiceTaxSnapshot(
+        {
+          items: inv.items ?? [],
+          taxMode: resolveInvoiceTaxMode(inv.taxMode, settings),
+          taxMeta: inv.taxMeta,
+        },
+        settings,
+      );
+
     const amountFor = (inv: Invoice) => {
       const stored = Number(inv.amount);
       if (Number.isFinite(stored)) return stored;
-      const net = (inv.items ?? []).reduce((acc, it) => acc + (Number(it.total) || 0), 0);
-      return net + net * (vatRate / 100);
+      return snapshotFor(inv).grossAmount;
     };
 
     const outstanding = invoices.filter((i) => i.status === 'open' || i.status === 'overdue');
@@ -207,7 +217,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
       monthRevenueNet,
       monthIssuedCount: monthIssued.length,
     };
-  }, [invoices, vatRate, dash.dueSoonDays]);
+  }, [invoices, settings, dash.dueSoonDays]);
 
   const topCategories = useMemo(() => {
     const now = new Date();
@@ -338,20 +348,24 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
     const y = now.getFullYear();
     const m = now.getMonth();
 
-    if (settings.legal.smallBusinessRule) {
-      return { periodLabel: now.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' }), net: 0, vat: 0, gross: 0, dueLabel: '' };
-    }
-
     const periodLabel = now.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
     const dueDate = new Date(y, m + 1, 10);
     const dueLabel = dueDate.toLocaleDateString('de-DE', { day: '2-digit', month: 'long' });
+    const snapshotFor = (inv: Invoice) =>
+      inv.taxSnapshot ??
+      calculateInvoiceTaxSnapshot(
+        {
+          items: inv.items ?? [],
+          taxMode: resolveInvoiceTaxMode(inv.taxMode, settings),
+          taxMeta: inv.taxMeta,
+        },
+        settings,
+      );
 
     if (taxMethod === 'ist') {
-      // Ist: based on payments, capped per invoice gross.
+      // Ist: based on payments, capped by invoice gross and split by invoice VAT ratio.
       const byInvoice = new Map<string, number>();
       for (const inv of invoices) {
-        const invDate = new Date(inv.date);
-        // payments can be in month even if invoice date differs
         const paidInMonth = (inv.payments ?? []).filter((p) => {
           const d = new Date(p.date);
           return d.getFullYear() === y && d.getMonth() === m;
@@ -362,15 +376,19 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
         byInvoice.set(inv.id, prev + sum);
       }
       let gross = 0;
+      let vat = 0;
       for (const inv of invoices) {
         const paid = byInvoice.get(inv.id) ?? 0;
         if (paid <= 0) continue;
-        const grossCap = (inv.items ?? []).reduce((acc, it) => acc + (Number(it.total) || 0), 0) * (1 + vatRate / 100);
+        const snap = snapshotFor(inv);
+        const grossCap = Math.max(0, Number(snap.grossAmount) || 0);
         const applied = Math.min(paid, Number.isFinite(grossCap) && grossCap > 0 ? grossCap : paid);
         gross += applied;
+        const vatRatio = grossCap > 0 ? Math.max(0, (Number(snap.vatAmount) || 0) / grossCap) : 0;
+        vat += applied * vatRatio;
       }
-      const net = gross / (1 + vatRate / 100);
-      const vat = gross - net;
+      vat = Math.max(0, vat);
+      const net = Math.max(0, gross - vat);
       return { periodLabel, net, vat, gross, dueLabel };
     }
 
@@ -382,14 +400,11 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
         return d.getFullYear() === y && d.getMonth() === m;
       });
 
-    const net = issued.reduce(
-      (acc, inv) => acc + (inv.items ?? []).reduce((s, it) => s + (Number(it.total) || 0), 0),
-      0,
-    );
-    const vat = net * (vatRate / 100);
-    const gross = net + vat;
+    const net = issued.reduce((acc, inv) => acc + (snapshotFor(inv).netAmount || 0), 0);
+    const vat = issued.reduce((acc, inv) => acc + (snapshotFor(inv).vatAmount || 0), 0);
+    const gross = issued.reduce((acc, inv) => acc + (snapshotFor(inv).grossAmount || 0), 0);
     return { periodLabel, net, vat, gross, dueLabel };
-  }, [invoices, settings, taxMethod, vatRate]);
+  }, [invoices, settings, taxMethod]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-8">
@@ -640,10 +655,10 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
           <div className="flex-1 flex flex-col justify-center">
               <div className="text-center mb-8">
                   <p className="text-xs font-bold opacity-60 uppercase tracking-widest mb-2">
-                    {settings.legal.smallBusinessRule ? 'Kleinunternehmerregelung (§19) — keine USt' : 'Voraussichtliche Umsatzsteuer'}
+                    {taxEstimate.vat <= 0 ? 'Keine voraussichtliche Umsatzsteuer' : 'Voraussichtliche Umsatzsteuer'}
                   </p>
                   <h2 className="text-5xl font-mono font-bold">{formatCurrency(taxEstimate.vat)}</h2>
-                  {!settings.legal.smallBusinessRule && (
+                  {taxEstimate.vat > 0 && (
                     <p className="text-xs font-bold mt-2 bg-black/5 inline-block px-3 py-1 rounded-full text-black/60">
                       Fällig am {taxEstimate.dueLabel}
                     </p>

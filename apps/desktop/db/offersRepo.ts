@@ -1,7 +1,13 @@
 import type Database from 'better-sqlite3';
-import type { Invoice, InvoiceItem } from '../types';
+import type { Invoice, InvoiceItem, InvoiceTaxMode } from '../types';
 import { appendAuditLog } from './audit';
-import { safeJsonParse, AddressSchema } from './validation-schemas';
+import {
+  safeJsonParse,
+  AddressSchema,
+  InvoiceTaxMetaSchema,
+  InvoiceTaxSnapshotSchema,
+} from './validation-schemas';
+import { resolveInvoiceTaxMode } from '../services/taxMode';
 
 type OfferRow = {
   id: string;
@@ -16,6 +22,9 @@ type OfferRow = {
   shipping_address_json: string | null;
   date: string;
   valid_until: string;
+  tax_mode: string | null;
+  tax_meta_json: string | null;
+  tax_snapshot_json: string | null;
   amount: number;
   status: string;
   share_token: string | null;
@@ -56,6 +65,7 @@ const auditToHistoryEntry = (row: AuditRow) => {
 };
 
 const rowToOffer = (row: OfferRow, items: InvoiceItem[]): Invoice => {
+  const taxMode = resolveInvoiceTaxMode(row.tax_mode as InvoiceTaxMode | undefined);
   return {
     id: row.id,
     clientId: row.client_id ?? undefined,
@@ -77,6 +87,23 @@ const rowToOffer = (row: OfferRow, items: InvoiceItem[]): Invoice => {
     acceptedUserAgent: row.accepted_user_agent ?? undefined,
     date: row.date,
     dueDate: row.valid_until,
+    taxMode,
+    taxMeta: row.tax_meta_json
+      ? safeJsonParse(row.tax_meta_json, InvoiceTaxMetaSchema, {}, `Offer ${row.id} tax meta`)
+      : undefined,
+    taxSnapshot: row.tax_snapshot_json
+      ? safeJsonParse(
+          row.tax_snapshot_json,
+          InvoiceTaxSnapshotSchema,
+          {
+            vatRateApplied: 0,
+            vatAmount: 0,
+            netAmount: 0,
+            grossAmount: 0,
+          },
+          `Offer ${row.id} tax snapshot`,
+        )
+      : undefined,
     amount: row.amount,
     status: row.status as any,
     items,
@@ -311,6 +338,8 @@ export const upsertOffer = (db: Database.Database, offer: Invoice, reason: strin
   const tx = db.transaction(() => {
     const before = getOffer(db, offer.id);
     const now = new Date().toISOString();
+    const taxMode = resolveInvoiceTaxMode(offer.taxMode);
+    const taxSnapshot = offer.taxSnapshot ?? null;
 
     const exists = db
       .prepare('SELECT 1 FROM offers WHERE id = ?')
@@ -321,12 +350,12 @@ export const upsertOffer = (db: Database.Database, offer: Invoice, reason: strin
         `
           INSERT INTO offers (
             id, client_id, client_number, project_id, number, client, client_email, client_address, billing_address_json, shipping_address_json,
-            date, valid_until, amount, status,
+            date, valid_until, tax_mode, tax_meta_json, tax_snapshot_json, amount, status,
             share_token, share_published_at, accepted_at, accepted_by, accepted_email, accepted_user_agent,
             created_at, updated_at
           ) VALUES (
             @id, @clientId, @clientNumber, @projectId, @number, @client, @clientEmail, @clientAddress, @billingAddressJson, @shippingAddressJson,
-            @date, @validUntil, @amount, @status,
+            @date, @validUntil, @taxMode, @taxMetaJson, @taxSnapshotJson, @amount, @status,
             NULL, NULL, NULL, NULL, NULL, NULL,
             @createdAt, @updatedAt
           )
@@ -346,6 +375,9 @@ export const upsertOffer = (db: Database.Database, offer: Invoice, reason: strin
           offer.shippingAddressJson === undefined ? null : JSON.stringify(offer.shippingAddressJson),
         date: offer.date,
         validUntil: offer.dueDate,
+        taxMode,
+        taxMetaJson: offer.taxMeta === undefined ? null : JSON.stringify(offer.taxMeta),
+        taxSnapshotJson: taxSnapshot ? JSON.stringify(taxSnapshot) : null,
         amount: offer.amount,
         status: offer.status,
         createdAt: now,
@@ -366,6 +398,9 @@ export const upsertOffer = (db: Database.Database, offer: Invoice, reason: strin
             shipping_address_json=@shippingAddressJson,
             date=@date,
             valid_until=@validUntil,
+            tax_mode=@taxMode,
+            tax_meta_json=@taxMetaJson,
+            tax_snapshot_json=@taxSnapshotJson,
             amount=@amount,
             status=@status,
             updated_at=@updatedAt
@@ -386,6 +421,9 @@ export const upsertOffer = (db: Database.Database, offer: Invoice, reason: strin
           offer.shippingAddressJson === undefined ? null : JSON.stringify(offer.shippingAddressJson),
         date: offer.date,
         validUntil: offer.dueDate,
+        taxMode,
+        taxMetaJson: offer.taxMeta === undefined ? null : JSON.stringify(offer.taxMeta),
+        taxSnapshotJson: taxSnapshot ? JSON.stringify(taxSnapshot) : null,
         amount: offer.amount,
         status: offer.status,
         updatedAt: now,

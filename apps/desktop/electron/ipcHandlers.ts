@@ -70,13 +70,18 @@ import { getCurrentUpdateStatus, downloadUpdate, quitAndInstall } from './update
 import { getInvoiceDunningStatus } from '../services/dunningService';
 import { buildEurCsv, getEurReport, listEurItems, upsertEurItemClassification } from '../services/eurReport';
 import { listAllEurRules, upsertEurRule, deleteEurRule } from '../db/eurRulesRepo';
+import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '../services/taxMode';
 
 const computeGrossFromItems = (doc: Invoice, settings: AppSettings): number => {
-  const net = (doc.items ?? []).reduce((acc, it) => acc + (Number(it.total) || 0), 0);
-  const rate = settings.legal.smallBusinessRule ? 0 : Number(settings.legal.defaultVatRate) || 0;
-  const vat = net * (rate / 100);
-  const gross = net + vat;
-  return Number.isFinite(gross) ? gross : 0;
+  const snapshot = calculateInvoiceTaxSnapshot(
+    {
+      items: doc.items ?? [],
+      taxMode: resolveInvoiceTaxMode(doc.taxMode, settings),
+      taxMeta: doc.taxMeta,
+    },
+    settings,
+  );
+  return Number.isFinite(snapshot.grossAmount) ? snapshot.grossAmount : 0;
 };
 
 const deriveCustomerRef = (doc: Invoice): string => {
@@ -133,8 +138,19 @@ export const registerIpcHandlers = (
   register(ipcMain, 'invoices:upsert', ({ invoice, reason }) => {
     const db = requireDb();
     const settings = requireSettings(db);
+    const taxMode = resolveInvoiceTaxMode(invoice.taxMode, settings);
+    const taxSnapshot = calculateInvoiceTaxSnapshot(
+      {
+        items: invoice.items ?? [],
+        taxMode,
+        taxMeta: invoice.taxMeta,
+      },
+      settings,
+    );
     const computed: Invoice = {
       ...invoice,
+      taxMode,
+      taxSnapshot,
       amount: computeGrossFromItems(invoice as Invoice, settings),
     };
     return upsertInvoice(db, computed, reason);
@@ -154,8 +170,19 @@ export const registerIpcHandlers = (
   register(ipcMain, 'offers:upsert', ({ offer, reason }) => {
     const db = requireDb();
     const settings = requireSettings(db);
+    const taxMode = resolveInvoiceTaxMode(offer.taxMode, settings);
+    const taxSnapshot = calculateInvoiceTaxSnapshot(
+      {
+        items: offer.items ?? [],
+        taxMode,
+        taxMeta: offer.taxMeta,
+      },
+      settings,
+    );
     const computed: Invoice = {
       ...offer,
+      taxMode,
+      taxSnapshot,
       amount: computeGrossFromItems(offer as Invoice, settings),
     };
     return upsertOffer(db, computed, reason);
@@ -279,6 +306,7 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'documents:createFromClient', ({ kind, clientId }) => {
     const db = requireDb();
+    const settings = requireSettings(db);
     const normalizedKind = kind === 'offer' ? 'offer' : 'invoice';
 
     const client = getClient(db, clientId);
@@ -324,6 +352,7 @@ export const registerIpcHandlers = (
       shippingAddressJson: shippingAddress ?? null,
       date: today,
       dueDate: normalizedKind === 'offer' ? today : '',
+      taxMode: settings.legal.smallBusinessRule ? 'small_business_19_ustg' : 'standard_vat',
       amount: 0,
       status: 'draft',
       items: [],

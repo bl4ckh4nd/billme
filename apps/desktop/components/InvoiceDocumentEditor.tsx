@@ -13,6 +13,13 @@ import { useClientsQuery } from '../hooks/useClients';
 import { useArticlesQuery } from '../hooks/useArticles';
 import { useProjectsQuery } from '../hooks/useProjects';
 import { formatAddressMultiline } from '../utils/formatters';
+import {
+  calculateInvoiceTaxSnapshot,
+  getInvoiceTaxExemptionReason,
+  getInvoiceTaxModeDefinition,
+  INVOICE_TAX_MODE_DEFINITIONS,
+  resolveInvoiceTaxMode,
+} from '../services/taxMode';
 
 interface InvoiceDocumentEditorProps {
   invoice: Invoice;
@@ -34,18 +41,22 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
   onSave,
   onCancel,
 }) => {
-  const currencyFormatter = useMemo(() => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }), []);
-  const formatCurrency = (amount: number) => currencyFormatter.format(amount);
-  const [formData, setFormData] = useState<Invoice>(invoice);
-  const { data: clients = [] } = useClientsQuery();
-  const { data: articles = [] } = useArticlesQuery();
   const { data: settingsFromDb } = useSettingsQuery();
   const effectiveSettings = settingsFromDb ?? MOCK_SETTINGS;
+  const currencyFormatter = useMemo(() => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }), []);
+  const formatCurrency = (amount: number) => currencyFormatter.format(amount);
+  const [formData, setFormData] = useState<Invoice>({
+    ...invoice,
+    taxMode: resolveInvoiceTaxMode(invoice.taxMode, effectiveSettings),
+  });
+  const { data: clients = [] } = useClientsQuery();
+  const { data: articles = [] } = useArticlesQuery();
   const { data: activeTemplate } = useActiveTemplateQuery(templateType);
   const effectiveTemplate: InvoiceElement[] =
     (activeTemplate?.elements as InvoiceElement[] | undefined) ?? (templateType === 'offer' ? INITIAL_OFFER_TEMPLATE : INITIAL_INVOICE_TEMPLATE);
   const [selectedClientId, setSelectedClientId] = useState<string>(invoice.clientId ?? '');
   const [articleToAddId, setArticleToAddId] = useState<string>('');
+  const [saveError, setSaveError] = useState<string | null>(null);
   const { data: projects = [] } = useProjectsQuery(
     selectedClientId ? { clientId: selectedClientId, includeArchived: false } : undefined,
   );
@@ -131,6 +142,13 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
   };
 
   useEffect(() => {
+    setFormData((prev) => ({
+      ...prev,
+      taxMode: resolveInvoiceTaxMode(prev.taxMode, effectiveSettings),
+    }));
+  }, [effectiveSettings]);
+
+  useEffect(() => {
     if (!selectedClientId) {
       setFormData((prev) => ({ ...prev, projectId: undefined }));
       return;
@@ -171,17 +189,29 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
       });
   };
 
-  const calculateTotals = () => {
-      const net = formData.items.reduce((sum, i) => sum + i.total, 0);
-      const vatRate = effectiveSettings.legal.smallBusinessRule ? 0 : (effectiveSettings.legal.defaultVatRate ?? 0) / 100;
-      return {
-          net,
-          vat: net * vatRate,
-          gross: net + net * vatRate
-      };
-  };
-
-  const totals = calculateTotals();
+  const totals = calculateInvoiceTaxSnapshot(
+    {
+      items: formData.items,
+      taxMode: formData.taxMode,
+      taxMeta: formData.taxMeta,
+    },
+    effectiveSettings,
+  );
+  const taxModeDefinition = getInvoiceTaxModeDefinition(formData.taxMode);
+  const defaultExemptionReason = getInvoiceTaxExemptionReason(formData.taxMode, formData.taxMeta);
+  const validationErrors = useMemo(() => {
+    const errors: string[] = [];
+    if (taxModeDefinition.requiresBuyerVatId && !formData.taxMeta?.buyerVatId?.trim()) {
+      errors.push('Für diesen Steuermodus ist eine USt-IdNr. des Kunden erforderlich.');
+    }
+    if (
+      taxModeDefinition.requiresExemptionReason &&
+      !(formData.taxMeta?.exemptionReasonOverride?.trim() || defaultExemptionReason?.trim())
+    ) {
+      errors.push('Für diesen Steuermodus ist ein Steuerhinweis/Befreiungsgrund erforderlich.');
+    }
+    return errors;
+  }, [taxModeDefinition, formData.taxMeta, defaultExemptionReason]);
 
   return (
     <div className="flex h-full w-full bg-[#f3f4f6] overflow-hidden">
@@ -247,6 +277,75 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                 className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                             />
                         </div>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1">Steuerbehandlung</label>
+                        <select
+                            value={formData.taxMode}
+                            onChange={e => {
+                                setSaveError(null);
+                                setFormData({...formData, taxMode: e.target.value as Invoice['taxMode']});
+                            }}
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                        >
+                            {INVOICE_TAX_MODE_DEFINITIONS.map((mode) => (
+                                <option key={mode.mode} value={mode.mode}>
+                                    {mode.label}
+                                </option>
+                            ))}
+                        </select>
+                        <p className="mt-2 text-xs text-gray-500">{taxModeDefinition.description}</p>
+                        {(taxModeDefinition.requiresBuyerVatId || taxModeDefinition.requiresExemptionReason) && (
+                            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+                                <p className="text-[11px] font-bold uppercase tracking-wide text-amber-800">Pflichtangaben</p>
+                                {taxModeDefinition.requiresBuyerVatId && (
+                                    <div>
+                                        <label className="block text-[11px] font-bold text-amber-900 mb-1">USt-IdNr. Kunde</label>
+                                        <input
+                                            type="text"
+                                            value={formData.taxMeta?.buyerVatId ?? ''}
+                                            onChange={(e) =>
+                                                setFormData({
+                                                    ...formData,
+                                                    taxMeta: {
+                                                        ...formData.taxMeta,
+                                                        buyerVatId: e.target.value,
+                                                    },
+                                                })
+                                            }
+                                            placeholder="z.B. DE123456789"
+                                            className="w-full bg-white border border-amber-200 rounded-lg p-2 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                                        />
+                                    </div>
+                                )}
+                                {taxModeDefinition.requiresExemptionReason && (
+                                    <div>
+                                        <label className="block text-[11px] font-bold text-amber-900 mb-1">Steuerhinweis / Befreiungsgrund</label>
+                                        <textarea
+                                            rows={2}
+                                            value={formData.taxMeta?.exemptionReasonOverride ?? defaultExemptionReason ?? ''}
+                                            onChange={(e) =>
+                                                setFormData({
+                                                    ...formData,
+                                                    taxMeta: {
+                                                        ...formData.taxMeta,
+                                                        exemptionReasonOverride: e.target.value,
+                                                    },
+                                                })
+                                            }
+                                            className="w-full bg-white border border-amber-200 rounded-lg p-2 text-sm font-medium focus:ring-2 focus:ring-accent outline-none resize-none"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {validationErrors.length > 0 && (
+                            <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2">
+                                {validationErrors.map((err) => (
+                                    <p key={err} className="text-xs font-semibold text-red-700">{err}</p>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -423,15 +522,15 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                     <div className="bg-gray-50 rounded-xl p-4 space-y-2 border border-gray-100 animate-enter" style={{ animationDelay: '400ms' }}>
                         <div className="flex justify-between text-sm text-gray-500">
                             <span>Netto</span>
-                            <span>{formatCurrency(totals.net)}</span>
+                            <span>{formatCurrency(totals.netAmount)}</span>
                         </div>
                         <div className="flex justify-between text-sm text-gray-500">
-                            <span>MwSt ({effectiveSettings.legal.smallBusinessRule ? '0' : effectiveSettings.legal.defaultVatRate}%)</span>
-                            <span>{formatCurrency(totals.vat)}</span>
+                            <span>USt ({totals.vatRateApplied}%)</span>
+                            <span>{formatCurrency(totals.vatAmount)}</span>
                         </div>
                         <div className="flex justify-between text-base font-bold text-gray-900 border-t border-gray-200 pt-2 mt-2">
                             <span>Gesamtbetrag</span>
-                            <span>{formatCurrency(totals.gross)}</span>
+                            <span>{formatCurrency(totals.grossAmount)}</span>
                         </div>
                     </div>
                 </div>
@@ -439,8 +538,16 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
 
             {/* Actions */}
             <div className="p-6 border-t border-gray-200 bg-white animate-enter" style={{ animationDelay: '450ms' }}>
+                {saveError && <p className="mb-3 text-xs font-bold text-red-600">{saveError}</p>}
                 <button
-                    onClick={() => onSave(formData)}
+                    onClick={() => {
+                      if (validationErrors.length > 0) {
+                        setSaveError('Bitte ergänze die Pflichtangaben zur Steuerbehandlung.');
+                        return;
+                      }
+                      setSaveError(null);
+                      onSave({ ...formData, taxSnapshot: totals, amount: totals.grossAmount });
+                    }}
                     className="w-full bg-accent text-black font-bold py-3 rounded-xl hover:bg-accent-hover transition-all flex items-center justify-center gap-2 shadow-lg shadow-accent/20 active:scale-95"
                 >
                     <Save size={18} />

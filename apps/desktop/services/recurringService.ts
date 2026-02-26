@@ -13,6 +13,7 @@ import { upsertInvoice } from '../db/invoicesRepo';
 import { ensureDefaultProjectForClient as ensureDefaultProject } from '../db/projectsRepo';
 import { finalizeNumber, releaseNumber, reserveNumber } from '../db/numberingRepo';
 import { logger } from '../utils/logger';
+import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from './taxMode';
 
 export interface RecurringResult {
   generated: number;
@@ -224,9 +225,14 @@ export const generateInvoiceFromProfile = (
     };
   });
 
-  const netTotal = items.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
-  const vatRate = settings.legal.smallBusinessRule ? 0 : Number(settings.legal.defaultVatRate) || 0;
-  const grossTotal = netTotal + netTotal * (vatRate / 100);
+  const taxMode = resolveInvoiceTaxMode(undefined, settings);
+  const taxSnapshot = calculateInvoiceTaxSnapshot(
+    {
+      items,
+      taxMode,
+    },
+    settings,
+  );
   const today = new Date().toISOString().slice(0, 10);
 
   const invoice: Invoice = {
@@ -243,8 +249,10 @@ export const generateInvoiceFromProfile = (
     date: today,
     dueDate: calculateDueDate(settings.legal.paymentTermsDays),
     servicePeriod: servicePeriod.start,
+    taxMode,
+    taxSnapshot,
     items,
-    amount: Number.isFinite(grossTotal) ? grossTotal : 0,
+    amount: Number.isFinite(taxSnapshot.grossAmount) ? taxSnapshot.grossAmount : 0,
     status: 'draft', // User decision: draft status for safety
     payments: [],
     history: [

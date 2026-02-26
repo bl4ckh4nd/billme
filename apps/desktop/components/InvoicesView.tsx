@@ -19,6 +19,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
 import { Spinner } from './Spinner';
 import { SkeletonLoader } from './SkeletonLoader';
+import {
+  calculateInvoiceTaxSnapshot,
+  getInvoiceTaxExemptionReason,
+  getInvoiceTaxModeDefinition,
+  resolveInvoiceTaxMode,
+} from '../services/taxMode';
 
 // Mock data for Offers to demonstrate the switch
 const MOCK_OFFERS: Invoice[] = [];
@@ -124,6 +130,24 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const isLoading = documentType === 'invoice' ? isLoadingInvoices : isLoadingOffers;
   
   const selectedDocument = currentData.find(i => i.id === selectedId);
+  const selectedDocumentTax =
+    selectedDocument
+      ? (selectedDocument.taxSnapshot ??
+        calculateInvoiceTaxSnapshot(
+          {
+            items: selectedDocument.items ?? [],
+            taxMode: resolveInvoiceTaxMode(selectedDocument.taxMode, settings),
+            taxMeta: selectedDocument.taxMeta,
+          },
+          settings,
+        ))
+      : null;
+  const selectedTaxDefinition = selectedDocument
+    ? getInvoiceTaxModeDefinition(resolveInvoiceTaxMode(selectedDocument.taxMode, settings))
+    : null;
+  const selectedTaxExemptionReason = selectedDocument
+    ? getInvoiceTaxExemptionReason(resolveInvoiceTaxMode(selectedDocument.taxMode, settings), selectedDocument.taxMeta)
+    : undefined;
 
   React.useEffect(() => {
     if (!initialSelectedId) return;
@@ -1119,15 +1143,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                <div className="w-full md:w-64 space-y-2">
                                    <div className="flex justify-between text-sm text-gray-500">
                                        <span>Netto</span>
-                                       <span className="font-mono">{formatCurrency(selectedDocument.amount / 1.19)}</span>
+                                       <span className="font-mono">{formatCurrency(selectedDocumentTax?.netAmount ?? 0)}</span>
                                    </div>
                                    <div className="flex justify-between text-sm text-gray-500">
-                                       <span>MwSt 19%</span>
-                                       <span className="font-mono">{formatCurrency(selectedDocument.amount - (selectedDocument.amount / 1.19))}</span>
+                                       <span>USt {(selectedDocumentTax?.vatRateApplied ?? 0)}%</span>
+                                       <span className="font-mono">{formatCurrency(selectedDocumentTax?.vatAmount ?? 0)}</span>
                                    </div>
                                    <div className="flex justify-between text-xl font-bold text-gray-900 border-t border-gray-200 pt-3 mt-1">
                                        <span>Gesamt</span>
-                                       <span className="font-mono">{formatCurrency(selectedDocument.amount)}</span>
+                                       <span className="font-mono">{formatCurrency(selectedDocumentTax?.grossAmount ?? selectedDocument.amount)}</span>
                                    </div>
                                </div>
                           </div>
@@ -1162,6 +1186,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                <div className={`w-2 h-2 rounded-full ${selectedDocument.status === 'paid' ? 'bg-success' : 'bg-gray-300'}`}></div>
                                {selectedDocument.status === 'paid' ? 'Bezahlt am 28.10.2023' : 'Noch nicht bezahlt'}
                           </div>
+                          <div className="mt-3 border-t border-gray-100 pt-3">
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Steuerbehandlung</p>
+                            <div className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-xs font-bold text-gray-700">
+                              <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />
+                              {selectedTaxDefinition?.label ?? 'Regelbesteuerung'}
+                            </div>
+                            {selectedTaxExemptionReason && (
+                              <p className="mt-2 text-xs text-gray-500 leading-relaxed">{selectedTaxExemptionReason}</p>
+                            )}
+                          </div>
                       </div>
 
                       {/* Payments (Invoices only) */}
@@ -1188,10 +1222,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                           {(() => {
                             const paid = sumPayments(selectedDocument);
-                            const remaining = Math.max(0, (Number(selectedDocument.amount) || 0) - paid);
+                            const grossAmount = Number(selectedDocumentTax?.grossAmount ?? selectedDocument.amount) || 0;
+                            const remaining = Math.max(0, grossAmount - paid);
                             const pct =
-                              (Number(selectedDocument.amount) || 0) > 0
-                                ? Math.min(1, paid / (Number(selectedDocument.amount) || 1))
+                              grossAmount > 0
+                                ? Math.min(1, paid / grossAmount)
                                 : 0;
 
                             return (

@@ -1,0 +1,35 @@
+{
+  "name": "billme-demo",
+  "private": true,
+  "version": "0.0.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "build:client": "vite build",
+    "build": "pnpm run build:client && tsc --noEmit",
+    "deploy:cf": "pnpm run build:client && wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@billme/desktop-renderer": "workspace:*",
+    "@billme/ui": "workspace:*",
+    "@tanstack/react-query": "^5.90.19",
+    "@tanstack/react-router": "^1.153.1",
+    "lucide-react": "^0.562.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "zod": "^3.25.76",
+    "zustand": "^5.0.10"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260118.0",
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/react": "^19.2.13",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.2",
+    "typescript": "~5.8.3",
+    "vite": "^6.4.1",
+    "wrangler": "^4.13.2"
+  }
+}

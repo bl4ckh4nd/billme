@@ -8,6 +8,8 @@ import type {
   PortalDocumentListItem,
 } from './types';
 
+const documentIdFromTokenHash = (tokenHash: string): string => `d${tokenHash.slice(0, 31)}`;
+
 export type WorkerEnv = {
   DB?: D1Database;
   PDF_BUCKET?: R2Bucket;
@@ -54,10 +56,12 @@ const ensureSchema = async (db: D1Database) => {
   if (ensured) return;
   ensured = true;
   await db.exec(bootstrapSql);
+  await db.prepare("UPDATE portal_documents SET token_value = 'd' || substr(token_hash, 1, 31)").run();
 };
 
 export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
   const mapPortalDocRow = (row: {
+    token_hash: string;
     kind: string;
     token_value: string;
     published_at: string;
@@ -68,8 +72,9 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
     pdf_key: string | null;
     decision_json: string | null;
   }): PortalDocumentListItem => ({
+    documentId: row.token_value,
+    tokenHash: row.token_hash,
     kind: row.kind as PortalDocumentKind,
-    token: row.token_value,
     publishedAt: row.published_at,
     expiresAt: row.expires_at,
     customerRef: row.customer_ref,
@@ -82,6 +87,7 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
   return {
     upsertOffer: async (offer) => {
       await ensureSchema(db);
+      const documentId = offer.documentId ?? documentIdFromTokenHash(offer.tokenHash);
       await db
         .prepare(
           `
@@ -104,41 +110,40 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
           offer.decision ? JSON.stringify(offer.decision) : null,
         )
         .run();
-      if (offer.token) {
-        const customerRef = offer.customerRef ?? `anon:${offer.tokenHash.slice(0, 16)}`;
-        await db
-          .prepare(
-            `
-              INSERT INTO portal_documents (
-                token_hash, token_value, kind, customer_ref, customer_label, published_at, expires_at, snapshot_json, pdf_key, decision_json
-              ) VALUES (?1, ?2, 'offer', ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-              ON CONFLICT(token_hash) DO UPDATE SET
-                token_value=excluded.token_value,
-                customer_ref=excluded.customer_ref,
-                customer_label=excluded.customer_label,
-                published_at=excluded.published_at,
-                expires_at=excluded.expires_at,
-                snapshot_json=excluded.snapshot_json,
-                pdf_key=excluded.pdf_key,
-                decision_json=excluded.decision_json
-            `,
-          )
-          .bind(
-            offer.tokenHash,
-            offer.token,
-            customerRef,
-            offer.customerLabel ?? null,
-            offer.publishedAt,
-            offer.expiresAt,
-            JSON.stringify(offer.snapshotJson ?? null),
-            offer.pdfKey ?? null,
-            offer.decision ? JSON.stringify(offer.decision) : null,
-          )
-          .run();
-      }
+      const customerRef = offer.customerRef ?? `anon:${offer.tokenHash.slice(0, 16)}`;
+      await db
+        .prepare(
+          `
+            INSERT INTO portal_documents (
+              token_hash, token_value, kind, customer_ref, customer_label, published_at, expires_at, snapshot_json, pdf_key, decision_json
+            ) VALUES (?1, ?2, 'offer', ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(token_hash) DO UPDATE SET
+              token_value=excluded.token_value,
+              customer_ref=excluded.customer_ref,
+              customer_label=excluded.customer_label,
+              published_at=excluded.published_at,
+              expires_at=excluded.expires_at,
+              snapshot_json=excluded.snapshot_json,
+              pdf_key=excluded.pdf_key,
+              decision_json=excluded.decision_json
+          `,
+        )
+        .bind(
+          offer.tokenHash,
+          documentId,
+          customerRef,
+          offer.customerLabel ?? null,
+          offer.publishedAt,
+          offer.expiresAt,
+          JSON.stringify(offer.snapshotJson ?? null),
+          offer.pdfKey ?? null,
+          offer.decision ? JSON.stringify(offer.decision) : null,
+        )
+        .run();
     },
     upsertInvoice: async (invoice) => {
       await ensureSchema(db);
+      const documentId = invoice.documentId ?? documentIdFromTokenHash(invoice.tokenHash);
       await db
         .prepare(
           `
@@ -158,7 +163,7 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
         )
         .bind(
           invoice.tokenHash,
-          invoice.token,
+          documentId,
           invoice.customerRef,
           invoice.customerLabel ?? null,
           invoice.publishedAt,
@@ -172,26 +177,34 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
       await ensureSchema(db);
       const res = await db
         .prepare(
-          `SELECT token_hash, published_at, expires_at, snapshot_json, pdf_key, decision_json
-           FROM offers WHERE token_hash = ?1`,
+          `SELECT o.token_hash, d.token_value, o.published_at, o.expires_at, o.snapshot_json, o.pdf_key, o.decision_json, d.customer_ref, d.customer_label
+           FROM offers o
+           LEFT JOIN portal_documents d ON d.token_hash = o.token_hash
+           WHERE o.token_hash = ?1`,
         )
         .bind(tokenHash)
         .first<{
           token_hash: string;
+          token_value: string | null;
           published_at: string;
           expires_at: string;
           snapshot_json: string;
           pdf_key: string | null;
           decision_json: string | null;
+          customer_ref: string | null;
+          customer_label: string | null;
         }>();
 
       if (!res) return null;
       return {
         tokenHash: res.token_hash,
+        documentId: res.token_value ?? documentIdFromTokenHash(res.token_hash),
         publishedAt: res.published_at,
         expiresAt: res.expires_at,
         snapshotJson: JSON.parse(res.snapshot_json),
         pdfKey: res.pdf_key ?? null,
+        customerRef: res.customer_ref ?? undefined,
+        customerLabel: res.customer_label ?? null,
         decision: res.decision_json ? (JSON.parse(res.decision_json) as DecisionRecord) : null,
       };
     },
@@ -215,8 +228,8 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
         }>();
       if (!res) return null;
       return {
-        token: res.token_value,
         tokenHash: res.token_hash,
+        documentId: res.token_value,
         publishedAt: res.published_at,
         expiresAt: res.expires_at,
         snapshotJson: JSON.parse(res.snapshot_json),
@@ -224,6 +237,50 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
         customerRef: res.customer_ref,
         customerLabel: res.customer_label ?? null,
       };
+    },
+    getDocumentById: async (documentId) => {
+      await ensureSchema(db);
+      const res = await db
+        .prepare(
+          `SELECT token_hash, kind, token_value, published_at, expires_at, customer_ref, customer_label, snapshot_json, pdf_key, decision_json
+           FROM portal_documents WHERE token_value = ?1`,
+        )
+        .bind(documentId)
+        .first<{
+          token_hash: string;
+          kind: string;
+          token_value: string;
+          published_at: string;
+          expires_at: string;
+          customer_ref: string;
+          customer_label: string | null;
+          snapshot_json: string;
+          pdf_key: string | null;
+          decision_json: string | null;
+        }>();
+      return res ? mapPortalDocRow(res) : null;
+    },
+    getDocumentByTokenHash: async (tokenHash) => {
+      await ensureSchema(db);
+      const res = await db
+        .prepare(
+          `SELECT token_hash, kind, token_value, published_at, expires_at, customer_ref, customer_label, snapshot_json, pdf_key, decision_json
+           FROM portal_documents WHERE token_hash = ?1`,
+        )
+        .bind(tokenHash)
+        .first<{
+          token_hash: string;
+          kind: string;
+          token_value: string;
+          published_at: string;
+          expires_at: string;
+          customer_ref: string;
+          customer_label: string | null;
+          snapshot_json: string;
+          pdf_key: string | null;
+          decision_json: string | null;
+        }>();
+      return res ? mapPortalDocRow(res) : null;
     },
     setDecisionOnce: async (tokenHash, decision) => {
       await ensureSchema(db);
@@ -243,6 +300,31 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
         .bind(JSON.stringify(decision), tokenHash)
         .run();
       return decision;
+    },
+    setDecisionOnceByDocumentId: async (documentId, decision) => {
+      await ensureSchema(db);
+      const doc = await db
+        .prepare("SELECT token_hash FROM portal_documents WHERE token_value = ?1 AND kind = 'offer'")
+        .bind(documentId)
+        .first<{ token_hash: string }>();
+      if (!doc) throw new Error('not found');
+      return await (async () => {
+        const existing = await db
+          .prepare('SELECT decision_json FROM offers WHERE token_hash = ?1')
+          .bind(doc.token_hash)
+          .first<{ decision_json: string | null }>();
+        if (!existing) throw new Error('not found');
+        if (existing.decision_json) return JSON.parse(existing.decision_json) as DecisionRecord;
+        await db
+          .prepare('UPDATE offers SET decision_json = ?1 WHERE token_hash = ?2')
+          .bind(JSON.stringify(decision), doc.token_hash)
+          .run();
+        await db
+          .prepare("UPDATE portal_documents SET decision_json = ?1 WHERE token_hash = ?2 AND kind = 'offer'")
+          .bind(JSON.stringify(decision), doc.token_hash)
+          .run();
+        return decision;
+      })();
     },
     createCustomerAccessToken: async (token) => {
       await ensureSchema(db);
@@ -302,7 +384,7 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
       const query =
         kind === 'all'
           ? `
-              SELECT kind, token_value, published_at, expires_at, customer_ref, customer_label, snapshot_json, pdf_key, decision_json
+              SELECT token_hash, kind, token_value, published_at, expires_at, customer_ref, customer_label, snapshot_json, pdf_key, decision_json
               FROM portal_documents
               WHERE customer_ref = ?1
                 AND (?2 IS NULL OR published_at < ?2)
@@ -310,7 +392,7 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
               LIMIT ?3
             `
           : `
-              SELECT kind, token_value, published_at, expires_at, customer_ref, customer_label, snapshot_json, pdf_key, decision_json
+              SELECT token_hash, kind, token_value, published_at, expires_at, customer_ref, customer_label, snapshot_json, pdf_key, decision_json
               FROM portal_documents
               WHERE customer_ref = ?1
                 AND kind = ?2
@@ -324,6 +406,7 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
           ? await stmt
               .bind(customerRef, cursor ?? null, safeLimit)
               .all<{
+                token_hash: string;
                 kind: string;
                 token_value: string;
                 published_at: string;
@@ -337,6 +420,7 @@ export const createWorkerD1OfferStore = (db: D1Database): OfferStore => {
           : await stmt
               .bind(customerRef, kind, cursor ?? null, safeLimit)
               .all<{
+                token_hash: string;
                 kind: string;
                 token_value: string;
                 published_at: string;

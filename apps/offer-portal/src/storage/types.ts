@@ -9,8 +9,8 @@ export type DecisionRecord = {
 export type PortalDocumentKind = 'offer' | 'invoice';
 
 export type OfferRecord = {
-  token?: string;
   tokenHash: string;
+  documentId?: string;
   publishedAt: string;
   expiresAt: string;
   snapshotJson: unknown;
@@ -21,8 +21,8 @@ export type OfferRecord = {
 };
 
 export type InvoiceRecord = {
-  token: string;
   tokenHash: string;
+  documentId?: string;
   publishedAt: string;
   expiresAt: string;
   snapshotJson: unknown;
@@ -41,8 +41,9 @@ export type CustomerAccessTokenRecord = {
 };
 
 export type PortalDocumentListItem = {
+  documentId: string;
   kind: PortalDocumentKind;
-  token: string;
+  tokenHash: string;
   publishedAt: string;
   expiresAt: string;
   customerRef: string;
@@ -57,7 +58,10 @@ export interface OfferStore {
   upsertInvoice: (invoice: InvoiceRecord) => Promise<void>;
   getOfferByTokenHash: (tokenHash: string) => Promise<OfferRecord | null>;
   getInvoiceByTokenHash: (tokenHash: string) => Promise<InvoiceRecord | null>;
+  getDocumentById: (documentId: string) => Promise<PortalDocumentListItem | null>;
+  getDocumentByTokenHash: (tokenHash: string) => Promise<PortalDocumentListItem | null>;
   setDecisionOnce: (tokenHash: string, decision: DecisionRecord) => Promise<DecisionRecord>;
+  setDecisionOnceByDocumentId: (documentId: string, decision: DecisionRecord) => Promise<DecisionRecord>;
   createCustomerAccessToken: (token: CustomerAccessTokenRecord) => Promise<void>;
   revokeCustomerAccessTokens: (customerRef: string) => Promise<void>;
   getCustomerAccessByTokenHash: (tokenHash: string) => Promise<CustomerAccessTokenRecord | null>;

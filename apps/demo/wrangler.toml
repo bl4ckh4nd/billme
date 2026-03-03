@@ -1,0 +1,23 @@
+name = "billme-demo"
+main = "src/worker.ts"
+compatibility_date = "2026-02-20"
+workers_dev = false
+
+[[routes]]
+pattern = "demo.getbillme.com"
+custom_domain = true
+
+[build]
+command = "pnpm run build:client"
+
+[assets]
+directory = "./dist/client"
+binding = "ASSETS"
+
+[[durable_objects.bindings]]
+name = "DEMO_SESSIONS"
+class_name = "DemoSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DemoSession"]

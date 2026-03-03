@@ -49,7 +49,7 @@ export const exportPdf = async (params: {
       preload: path.join(appDir, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
 
@@ -108,7 +108,7 @@ export const exportEurPdf = async (params: {
       preload: path.join(appDir, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
 

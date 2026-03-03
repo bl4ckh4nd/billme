@@ -31,4 +31,5 @@ AGENTS.md
 
 apps/desktop/release/
 .playwright-cli/
+apps/demo/.wrangler/
 CLAUDE.md

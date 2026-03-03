@@ -51,6 +51,7 @@ const createWindow = async () => {
       preload: path.join(appDir, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
   mainWindow = win;
@@ -70,6 +71,34 @@ const createWindow = async () => {
   });
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL;
+  const isAllowedNavigation = (targetUrl: string): boolean => {
+    try {
+      const parsed = new URL(targetUrl);
+      if (devServerUrl) {
+        const allowedOrigin = new URL(devServerUrl).origin;
+        return parsed.origin === allowedOrigin;
+      }
+      return parsed.protocol === 'file:';
+    } catch {
+      return false;
+    }
+  };
+
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedNavigation(url)) {
+      return { action: 'allow' };
+    }
+    logger.warn('Security', 'Blocked window.open navigation', { url });
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isAllowedNavigation(url)) {
+      return;
+    }
+    event.preventDefault();
+    logger.warn('Security', 'Blocked unexpected navigation', { url });
+  });
+
   if (devServerUrl) {
     console.log('Loading renderer from', devServerUrl);
     await win.loadURL(devServerUrl);

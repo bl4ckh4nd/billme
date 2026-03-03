@@ -755,6 +755,11 @@ export const registerIpcHandlers = (
     return secrets.delete(key);
   });
 
+  register(ipcMain, 'secrets:has', async ({ key }) => {
+    const value = await secrets.get(key);
+    return Boolean(value && value.length > 0);
+  });
+
   register(ipcMain, 'db:backup', async () => {
     const db = requireDb();
     const userDataPath = getUserDataPath();
@@ -769,6 +774,27 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'db:restore', ({ path: restorePath }) => {
     const userDataPath = getUserDataPath();
+    const backupsDir = path.resolve(path.join(userDataPath, 'backups'));
+    const resolved = path.resolve(restorePath);
+    const allowedExt = /\.(sqlite|db)$/i.test(resolved);
+    if (!allowedExt) throw new Error('Restore expects a .sqlite or .db backup file');
+    if (!(resolved === backupsDir || resolved.startsWith(backupsDir + path.sep))) {
+      throw new Error('Refusing to restore from outside backups directory');
+    }
+    const stat = fs.lstatSync(resolved);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error('Restore path must be a regular file');
+    }
+    const header = Buffer.alloc(16);
+    const fd = fs.openSync(resolved, 'r');
+    try {
+      fs.readSync(fd, header, 0, 16, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (header.toString('utf8') !== 'SQLite format 3\u0000') {
+      throw new Error('Restore file is not a valid SQLite database');
+    }
 
     // Close existing DB, overwrite it, reopen.
     try {
@@ -778,7 +804,7 @@ export const registerIpcHandlers = (
     }
 
     const destDbPath = path.join(userDataPath, 'billme.sqlite');
-    fs.copyFileSync(restorePath, destDbPath);
+    fs.copyFileSync(resolved, destDbPath);
     initDb(userDataPath);
     const verification = verifyAuditChain(getDb());
     return { ok: verification.ok, verification };
@@ -923,7 +949,8 @@ export const registerIpcHandlers = (
     let providerConfig: SmtpConfig | ResendConfig;
 
     if (provider === 'smtp') {
-      if (!smtpHost || !smtpPort || !smtpUser || !smtpPassword) {
+      const resolvedSmtpPassword = smtpPassword || (await secrets.get('smtp.password')) || undefined;
+      if (!smtpHost || !smtpPort || !smtpUser || !resolvedSmtpPassword) {
         return {
           success: false,
           error: 'SMTP-Konfiguration unvollständig. Bitte füllen Sie alle erforderlichen Felder aus.',
@@ -936,11 +963,12 @@ export const registerIpcHandlers = (
         secure: smtpSecure ?? true,
         auth: {
           user: smtpUser,
-          pass: smtpPassword,
+          pass: resolvedSmtpPassword,
         },
       } as SmtpConfig;
     } else {
-      if (!resendApiKey) {
+      const resolvedResendApiKey = resendApiKey || (await secrets.get('resend.apiKey')) || undefined;
+      if (!resolvedResendApiKey) {
         return {
           success: false,
           error: 'Resend API-Key fehlt. Bitte geben Sie einen gültigen API-Key ein.',
@@ -948,7 +976,7 @@ export const registerIpcHandlers = (
       }
 
       providerConfig = {
-        apiKey: resendApiKey,
+        apiKey: resolvedResendApiKey,
       } as ResendConfig;
     }
 

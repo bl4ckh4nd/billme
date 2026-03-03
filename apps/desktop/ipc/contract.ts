@@ -353,6 +353,7 @@ const secretKeySchema = z.enum(['smtp.password', 'portal.apiKey', 'resend.apiKey
 const secretGetSchema = z.object({ key: secretKeySchema });
 const secretSetSchema = z.object({ key: secretKeySchema, value: z.string().min(1) });
 const secretDeleteSchema = z.object({ key: secretKeySchema });
+const secretHasSchema = z.object({ key: secretKeySchema });
 
 const dbRestoreSchema = z.object({ path: z.string().min(1) });
 const dbBackupResultSchema = z.object({ path: z.string().min(1) });
@@ -788,6 +789,11 @@ export const ipcRoutes = {
   'secrets:delete': {
     channel: 'secrets:delete',
     args: secretDeleteSchema,
+    result: z.boolean(),
+  },
+  'secrets:has': {
+    channel: 'secrets:has',
+    args: secretHasSchema,
     result: z.boolean(),
   },
 

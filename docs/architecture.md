@@ -3,6 +3,7 @@
 This workspace contains:
 
 - `apps/desktop`: Electron + React desktop application
+- `apps/demo`: Cloudflare Worker browser demo (desktop renderer + mock IPC services)
 - `apps/offer-portal`: Hono service for public document sharing
 - `packages/ui`: shared UI components/utilities
 
@@ -46,3 +47,12 @@ This keeps channel names, request/response validation, and TS types aligned end-
   - D1 + R2 (Workers, optional bindings)
 
 See `docs/offer-portal.md` for run/deploy details.
+
+## Demo App (`apps/demo`)
+
+- Runtime target: Cloudflare Workers + Durable Objects
+- Frontend: desktop renderer UI mounted in browser from `@billme/desktop-renderer`
+- Backend: session-scoped mock IPC execution through `POST /api/ipc/:routeKey`
+- Session handling: `demo_session` cookie mapped to a Durable Object instance
+
+This enables users to try the desktop experience in browser with isolated mock data and no install.

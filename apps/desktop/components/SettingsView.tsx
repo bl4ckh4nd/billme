@@ -28,6 +28,8 @@ export const SettingsView: React.FC = () => {
   const [showSaveToast, setShowSaveToast] = useState(false);
   const [backupPath, setBackupPath] = useState('');
   const [portalApiKey, setPortalApiKey] = useState('');
+  const [portalApiKeyConfigured, setPortalApiKeyConfigured] = useState(false);
+  const [portalApiKeyTouched, setPortalApiKeyTouched] = useState(false);
   const [portalTestStatus, setPortalTestStatus] = useState<string | null>(null);
   const [showDunningResult, setShowDunningResult] = useState(false);
   const [dunningResult, setDunningResult] = useState<{
@@ -38,7 +40,11 @@ export const SettingsView: React.FC = () => {
   } | null>(null);
   const [dunningRunning, setDunningRunning] = useState(false);
   const [smtpPassword, setSmtpPassword] = useState('');
+  const [smtpPasswordConfigured, setSmtpPasswordConfigured] = useState(false);
+  const [smtpPasswordTouched, setSmtpPasswordTouched] = useState(false);
   const [resendApiKey, setResendApiKey] = useState('');
+  const [resendApiKeyConfigured, setResendApiKeyConfigured] = useState(false);
+  const [resendApiKeyTouched, setResendApiKeyTouched] = useState(false);
   const [emailTestStatus, setEmailTestStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [emailTesting, setEmailTesting] = useState(false);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
@@ -52,8 +58,8 @@ export const SettingsView: React.FC = () => {
     let cancelled = false;
     void (async () => {
       try {
-        const v = await ipc.secrets.get({ key: 'portal.apiKey' });
-        if (!cancelled) setPortalApiKey(v ?? '');
+        const configured = await ipc.secrets.has({ key: 'portal.apiKey' });
+        if (!cancelled) setPortalApiKeyConfigured(configured);
       } catch {
         // ignore
       }
@@ -138,10 +144,15 @@ export const SettingsView: React.FC = () => {
 
     const nextKey = portalApiKey.trim();
     try {
-      if (nextKey) {
-        await ipc.secrets.set({ key: 'portal.apiKey', value: nextKey });
-      } else {
-        await ipc.secrets.delete({ key: 'portal.apiKey' });
+      if (portalApiKeyTouched) {
+        if (nextKey) {
+          await ipc.secrets.set({ key: 'portal.apiKey', value: nextKey });
+          setPortalApiKeyConfigured(true);
+        } else {
+          await ipc.secrets.delete({ key: 'portal.apiKey' });
+          setPortalApiKeyConfigured(false);
+        }
+        setPortalApiKeyTouched(false);
       }
     } catch {
       // ignore secret save errors (OS keychain issues should not block settings save)
@@ -149,16 +160,26 @@ export const SettingsView: React.FC = () => {
 
     // Save email credentials to keychain
     try {
-      if (smtpPassword.trim()) {
-        await ipc.secrets.set({ key: 'smtp.password', value: smtpPassword.trim() });
-      } else {
-        await ipc.secrets.delete({ key: 'smtp.password' });
+      if (smtpPasswordTouched) {
+        if (smtpPassword.trim()) {
+          await ipc.secrets.set({ key: 'smtp.password', value: smtpPassword.trim() });
+          setSmtpPasswordConfigured(true);
+        } else {
+          await ipc.secrets.delete({ key: 'smtp.password' });
+          setSmtpPasswordConfigured(false);
+        }
+        setSmtpPasswordTouched(false);
       }
 
-      if (resendApiKey.trim()) {
-        await ipc.secrets.set({ key: 'resend.apiKey', value: resendApiKey.trim() });
-      } else {
-        await ipc.secrets.delete({ key: 'resend.apiKey' });
+      if (resendApiKeyTouched) {
+        if (resendApiKey.trim()) {
+          await ipc.secrets.set({ key: 'resend.apiKey', value: resendApiKey.trim() });
+          setResendApiKeyConfigured(true);
+        } else {
+          await ipc.secrets.delete({ key: 'resend.apiKey' });
+          setResendApiKeyConfigured(false);
+        }
+        setResendApiKeyTouched(false);
       }
     } catch {
       // ignore secret save errors (OS keychain issues should not block settings save)
@@ -267,11 +288,12 @@ export const SettingsView: React.FC = () => {
   React.useEffect(() => {
     (async () => {
       try {
-        const smtp = await ipc.secrets.get({ key: 'smtp.password' });
-        if (smtp) setSmtpPassword(smtp);
-
-        const resend = await ipc.secrets.get({ key: 'resend.apiKey' });
-        if (resend) setResendApiKey(resend);
+        const [smtpConfigured, resendConfigured] = await Promise.all([
+          ipc.secrets.has({ key: 'smtp.password' }),
+          ipc.secrets.has({ key: 'resend.apiKey' }),
+        ]);
+        setSmtpPasswordConfigured(smtpConfigured);
+        setResendApiKeyConfigured(resendConfigured);
       } catch {
         // ignore
       }
@@ -827,11 +849,14 @@ export const SettingsView: React.FC = () => {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-500 mb-2">Passwort</label>
-                  <input
-                    type="password"
-                    value={smtpPassword}
-                    onChange={(e) => setSmtpPassword(e.target.value)}
-                    placeholder="••••••••"
+                <input
+                  type="password"
+                  value={smtpPassword}
+                  onChange={(e) => {
+                    setSmtpPassword(e.target.value);
+                    setSmtpPasswordTouched(true);
+                  }}
+                  placeholder={smtpPasswordConfigured ? '•••••••• (gespeichert)' : '••••••••'}
                     className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none transition-shadow"
                   />
                   <p className="text-xs text-gray-500 mt-1">Wird sicher im System-Keychain gespeichert</p>
@@ -839,7 +864,12 @@ export const SettingsView: React.FC = () => {
                 <div>
                   <button
                     onClick={handleEmailTest}
-                    disabled={emailTesting || !settings.email.smtpHost || !settings.email.smtpUser || !smtpPassword}
+                    disabled={
+                      emailTesting ||
+                      !settings.email.smtpHost ||
+                      !settings.email.smtpUser ||
+                      (!smtpPassword && !smtpPasswordConfigured)
+                    }
                     className="px-4 py-2 bg-info text-white rounded-lg hover:bg-info/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     {emailTesting ? 'Teste Verbindung...' : 'Verbindung testen'}
@@ -864,6 +894,7 @@ export const SettingsView: React.FC = () => {
                     value={resendApiKey}
                     onChange={(e) => {
                       setResendApiKey(e.target.value);
+                      setResendApiKeyTouched(true);
                       // Real-time format validation
                       if (e.target.value && !e.target.value.startsWith('re_')) {
                         setEmailTestStatus({
@@ -874,7 +905,7 @@ export const SettingsView: React.FC = () => {
                         setEmailTestStatus(null);
                       }
                     }}
-                    placeholder="re_***"
+                    placeholder={resendApiKeyConfigured ? 're_*** (gespeichert)' : 're_***'}
                     className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none transition-shadow"
                   />
                   <p className="text-xs text-gray-500 mt-1">Wird sicher im System-Keychain gespeichert</p>
@@ -882,7 +913,7 @@ export const SettingsView: React.FC = () => {
                 <div>
                   <button
                     onClick={handleEmailTest}
-                    disabled={emailTesting || !resendApiKey}
+                    disabled={emailTesting || (!resendApiKey && !resendApiKeyConfigured)}
                     className="px-4 py-2 bg-info text-white rounded-lg hover:bg-info/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     {emailTesting ? 'Teste API-Key...' : 'API-Key testen'}
@@ -1401,8 +1432,15 @@ export const SettingsView: React.FC = () => {
                 <input
                   type="password"
                   value={portalApiKey}
-                  onChange={(e) => setPortalApiKey(e.target.value)}
-                  placeholder="(im OS Keychain gespeichert)"
+                  onChange={(e) => {
+                    setPortalApiKey(e.target.value);
+                    setPortalApiKeyTouched(true);
+                  }}
+                  placeholder={
+                    portalApiKeyConfigured
+                      ? '(gespeichert im OS Keychain, zum Ersetzen eingeben)'
+                      : '(im OS Keychain gespeichert)'
+                  }
                   className="w-full bg-gray-50 border-gray-200 rounded-xl p-4 font-bold text-gray-900 focus:ring-2 focus:ring-accent outline-none transition-shadow"
                 />
               </div>

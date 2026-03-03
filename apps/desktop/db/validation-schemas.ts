@@ -1,6 +1,19 @@
 import { z } from 'zod';
 import { logger } from '../utils/logger';
 
+const isAllowedPortalBaseUrl = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  try {
+    const parsed = new URL(trimmed);
+    const hostname = parsed.hostname.toLowerCase();
+    const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+    return parsed.protocol === 'https:' || (parsed.protocol === 'http:' && isLocalhost);
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Validation schemas for JSON.parse() operations
  * These schemas ensure that JSON data from the database is valid before use
@@ -183,7 +196,11 @@ const LegalSettingsSchema = z.object({
 });
 
 const PortalSettingsSchema = z.object({
-  baseUrl: z.string().optional().default(''),
+  baseUrl: z
+    .string()
+    .optional()
+    .default('')
+    .refine(isAllowedPortalBaseUrl, 'Portal baseUrl must use https (except localhost)'),
 });
 
 const EInvoiceSettingsSchema = z.object({

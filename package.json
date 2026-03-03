@@ -5,12 +5,18 @@
   "packageManager": "pnpm@10.0.0",
   "scripts": {
     "dev": "pnpm -C apps/desktop dev",
+    "dev:demo": "pnpm -C apps/demo dev",
+    "dev:landing": "pnpm -C apps/landing-page dev",
     "dev:renderer": "pnpm -C apps/desktop dev:renderer",
     "build": "pnpm -C apps/desktop build",
+    "build:demo": "pnpm -C apps/demo build",
+    "build:landing": "pnpm -C apps/landing-page build",
     "preview": "pnpm -C apps/desktop preview",
+    "preview:landing": "pnpm -C apps/landing-page preview",
     "db:generate": "pnpm -C apps/desktop db:generate",
     "db:studio": "pnpm -C apps/desktop db:studio",
-    "dist": "pnpm -C apps/desktop dist"
+    "dist": "pnpm -C apps/desktop dist",
+    "deploy:demo": "pnpm -C apps/demo deploy:cf"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

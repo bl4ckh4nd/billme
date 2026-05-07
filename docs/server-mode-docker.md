@@ -8,6 +8,13 @@ Billme server mode ships as a Docker Compose stack with five services:
 - `web` — Billme Lite browser shell
 - `web-pro` — Billme Pro browser shell
 
+Published images are available from GHCR as:
+
+- `ghcr.io/bl4ckh4nd/billme/server-api`
+- `ghcr.io/bl4ckh4nd/billme/server-worker`
+- `ghcr.io/bl4ckh4nd/billme/web`
+- `ghcr.io/bl4ckh4nd/billme/web-pro`
+
 ## Prerequisites
 
 - Docker Engine with the Compose plugin
@@ -30,6 +37,17 @@ Edit `.env.server-mode` before the first start:
 - optionally set `SMTP_PASSWORD` or `RESEND_API_KEY` if queued email delivery should be enabled
 
 `BILLME_PUBLIC_API_URL` is baked into the two web images at build time. Rebuild `web` and `web-pro` after changing it.
+
+## Pull the published images
+
+To use the GHCR images instead of rebuilding locally, pull them first and then start the stack without `--build`:
+
+```bash
+pnpm docker:server-mode:pull
+pnpm docker:server-mode:up:ghcr
+```
+
+If you need to point at a different registry namespace or tag, override the `BILLME_SERVER_API_IMAGE`, `BILLME_SERVER_WORKER_IMAGE`, `BILLME_WEB_IMAGE`, and `BILLME_WEB_PRO_IMAGE` values in `.env.server-mode`.
 
 ## Start the deployment
 

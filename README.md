@@ -72,6 +72,8 @@ pnpm build:server-worker # Build the background worker
 pnpm build:web           # Build the lite browser shell
 pnpm build:web-pro       # Build the pro browser shell
 pnpm docker:server-mode  # Start the Docker compose stack
+pnpm docker:server-mode:pull
+pnpm docker:server-mode:up:ghcr
 pnpm docker:server-mode:logs
 pnpm docker:server-mode:down
 pnpm test:e2e:server:install

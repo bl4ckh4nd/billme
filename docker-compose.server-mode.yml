@@ -19,6 +19,7 @@ services:
       start_period: 10s
 
   server-api:
+    image: ${BILLME_SERVER_API_IMAGE:-ghcr.io/bl4ckh4nd/billme/server-api:latest}
     build:
       context: .
       dockerfile: apps/server-api/Dockerfile
@@ -36,6 +37,7 @@ services:
       - "${BILLME_API_PORT:-3100}:3100"
 
   server-worker:
+    image: ${BILLME_SERVER_WORKER_IMAGE:-ghcr.io/bl4ckh4nd/billme/server-worker:latest}
     build:
       context: .
       dockerfile: apps/server-worker/Dockerfile
@@ -60,6 +62,7 @@ services:
         condition: service_healthy
 
   web:
+    image: ${BILLME_WEB_IMAGE:-ghcr.io/bl4ckh4nd/billme/web:latest}
     build:
       context: .
       dockerfile: apps/web/Dockerfile
@@ -73,6 +76,7 @@ services:
       - "${BILLME_WEB_PORT:-4175}:8080"
 
   web-pro:
+    image: ${BILLME_WEB_PRO_IMAGE:-ghcr.io/bl4ckh4nd/billme/web-pro:latest}
     build:
       context: .
       dockerfile: apps/web-pro/Dockerfile

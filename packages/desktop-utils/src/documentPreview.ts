@@ -1,4 +1,8 @@
-import { replacePlaceholders, type AppSettingsLike } from './placeholders';
+import {
+  calculateInvoiceItemTotal,
+  replacePlaceholders,
+  type AppSettingsLike,
+} from './placeholders';
 
 type PreviewInvoiceItem = {
   description: string;
@@ -36,11 +40,26 @@ type InvoiceElementLike = {
   type?: string;
   label?: string;
   content?: string;
+  style?: {
+    height?: number;
+    [key: string]: unknown;
+  };
   tableData?: {
     columns?: TableColumnLike[];
     rows?: TableRowLike[];
   };
   [key: string]: unknown;
+};
+
+const enrichInvoiceMetaContent = (content: string): string => {
+  let nextContent = content;
+  if (!nextContent.includes('{{invoice.servicePeriod}}')) {
+    nextContent = `${nextContent}\nLeistungsdatum: {{invoice.servicePeriod}}`;
+  }
+  if (!nextContent.includes('{{invoice.dueDate}}')) {
+    nextContent = `${nextContent}\nFälligkeit: {{invoice.dueDate}}`;
+  }
+  return nextContent;
 };
 
 const formatCurrency = (amount: number) => {
@@ -61,7 +80,7 @@ export const getPreviewElements = (
           item.description,
           `${item.quantity}`,
           formatCurrency(item.price),
-          formatCurrency(item.total),
+          formatCurrency(calculateInvoiceItemTotal(item)),
         ],
       }));
       return {
@@ -80,9 +99,17 @@ export const getPreviewElements = (
     }
 
     if (el.type === 'TEXT' && typeof el.content === 'string') {
+      const content = el.label === 'invoice_meta' ? enrichInvoiceMetaContent(el.content) : el.content;
       return {
         ...el,
-        content: replacePlaceholders(el.content, invoice, settings),
+        style:
+          el.label === 'invoice_meta'
+            ? {
+                ...el.style,
+                height: Math.max(Number(el.style?.height) || 0, 120),
+              }
+            : el.style,
+        content: replacePlaceholders(content, invoice, settings),
       };
     }
 

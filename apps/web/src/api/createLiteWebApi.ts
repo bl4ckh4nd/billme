@@ -1,7 +1,10 @@
 import { z } from 'zod';
 import { createBillmeApi, type BillmeApi } from '@billme/desktop-contracts/api';
 import { ipcRoutes, type IpcArgs, type IpcResult, type IpcRouteKey } from '@billme/desktop-contracts/contract';
-import { appSettingsSchema as desktopAppSettingsSchema } from '@billme/desktop-contracts/schemas';
+import {
+  appSettingsSchema as desktopAppSettingsSchema,
+  templateSchema as desktopTemplateSchema,
+} from '@billme/desktop-contracts/schemas';
 import {
   clientSchema as serverClientSchema,
   createSingleTenantScope,
@@ -12,7 +15,10 @@ import {
 import {
   chooseDefaultBillingAddress,
   chooseDefaultBillingEmail,
+  calculateInvoiceTaxSnapshot,
+  ensureDefaultProjectForClient,
   formatAddressMultiline,
+  resolveInvoiceTaxMode,
 } from '@billme/server-core/services';
 import {
   toDomainInvoice,
@@ -26,6 +32,7 @@ type ServerInvoicePayload = z.output<typeof serverInvoiceSchema>;
 type ServerOfferPayload = z.output<typeof serverOfferSchema>;
 type ServerRecurringProfilePayload = z.output<typeof serverRecurringProfileSchema>;
 type DesktopAppSettings = z.output<typeof desktopAppSettingsSchema>;
+type DesktopTemplate = IpcResult<'templates:list'>[number];
 
 type LiteWebApiOptions = {
   baseUrl: string;
@@ -99,41 +106,84 @@ const toDesktopRecurringProfile = (profile: ServerRecurringProfilePayload): Desk
   items: profile.items,
 });
 
+const toDesktopTemplate = (template: {
+  id: string;
+  kind: 'invoice' | 'offer';
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  elements?: unknown;
+}): DesktopTemplate =>
+  desktopTemplateSchema.parse({
+    id: template.id,
+    kind: template.kind,
+    name: template.name,
+    createdAt: template.createdAt,
+    updatedAt: template.updatedAt,
+    elements: template.elements,
+  });
+
+const buildPrintUrl = (kind: 'invoice' | 'offer' | 'eur', params: Record<string, string>): string => {
+  const url = new URL(window.location.origin + window.location.pathname);
+  url.searchParams.set('__print', '1');
+  url.searchParams.set('__autoprint', '1');
+  url.searchParams.set('kind', kind);
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  return url.toString();
+};
+
 const buildDraftFromClient = async (
   kind: 'invoice' | 'offer',
   client: ServerClientPayload,
   settings: DesktopAppSettings | null,
   reserveNumber: () => Promise<{ reservationId: string; number: string }>,
+  ensureDefaultProject: (client: ServerClientPayload) => Promise<ServerClientPayload['projects'][number]>,
 ): Promise<IpcResult<'documents:createFromClient'>> => {
   const billingAddress = chooseDefaultBillingAddress(client.addresses);
   const shippingAddress = client.addresses.find((address) => address.isDefaultShipping) ?? billingAddress ?? null;
   const billingEmail = chooseDefaultBillingEmail(client.emails);
-  const activeProject =
-    client.projects.find((project) => project.name === 'Allgemein' && project.status !== 'archived')
-    ?? client.projects.find((project) => project.status !== 'archived')
-    ?? client.projects[0];
+  const defaultProject = await ensureDefaultProject(client);
   const reservation = await reserveNumber();
   const today = toIsoDate(new Date());
+  const taxSettings = settings ? { legal: settings.legal } : { legal: {} };
+  const taxMode = resolveInvoiceTaxMode(undefined, taxSettings);
 
-  return parseResult('documents:createFromClient', {
+  const draft = parseResult('documents:createFromClient', {
     id: crypto.randomUUID(),
     clientId: client.id,
     clientNumber: client.customerNumber,
-    projectId: activeProject?.id,
+    projectId: defaultProject.id,
     number: reservation.number,
     numberReservationId: reservation.reservationId,
     client: client.company,
-    clientEmail: billingEmail?.email ?? client.email,
-    clientAddress: billingAddress ? formatAddressMultiline(billingAddress) : client.address,
+    clientEmail: billingEmail?.email ?? '',
+    clientAddress: billingAddress ? formatAddressMultiline(billingAddress) : '',
     billingAddressJson: billingAddress ?? undefined,
     shippingAddressJson: shippingAddress ?? undefined,
+    taxMode,
     date: today,
-    dueDate: kind === 'offer' ? today : addDays(today, settings?.legal.paymentTermsDays ?? 0),
+    dueDate: kind === 'offer' ? today : '',
     amount: 0,
     status: 'draft',
     items: [],
     payments: [],
     history: [],
+  });
+
+  const taxSnapshot = calculateInvoiceTaxSnapshot(
+    {
+      items: draft.items,
+      taxMode,
+      taxMeta: draft.taxMeta,
+    },
+    taxSettings,
+  );
+
+  return parseResult('documents:createFromClient', {
+    ...draft,
+    taxMode,
+    taxSnapshot,
+    amount: taxSnapshot.grossAmount,
   });
 };
 
@@ -191,8 +241,81 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
     return requestJson('GET', `${PRODUCT_PREFIX}/offers/${encodeURIComponent(id)}`, serverOfferSchema.nullable());
   };
 
+  const ensureClientDefaultProject = async (initialClient: ServerClientPayload) => {
+    let client = initialClient;
+    const { project } = await ensureDefaultProjectForClient(
+      {
+        tx: {
+          inTransaction<TResult>(work: () => TResult): TResult {
+            return work();
+          },
+        },
+        getActiveDefaultProjectForClient: (clientId) => {
+          if (client.id !== clientId) {
+            return null;
+          }
+          return client.projects.find((project) => project.name === 'Allgemein' && project.status !== 'archived') ?? null;
+        },
+        listProjectCodesByPrefix: async (prefix) => {
+          const clients = await requestJson('GET', `${PRODUCT_PREFIX}/clients`, z.array(serverClientSchema));
+          return clients.flatMap((entry) =>
+            entry.projects
+              .map((project) => project.code)
+              .filter((code): code is string => typeof code === 'string' && code.startsWith(prefix)),
+          );
+        },
+        saveProject: async (project) => {
+          client = await requestJson('POST', `${PRODUCT_PREFIX}/clients`, serverClientSchema, {
+            reason: CLIENT_MUTATION_REASON,
+            client: {
+              ...client,
+              projects: [...client.projects.filter((entry) => entry.id !== project.id), project],
+            },
+          });
+          return client.projects.find((entry) => entry.id === project.id) ?? project;
+        },
+      },
+      {
+        clientId: initialClient.id,
+        createProjectId: () => crypto.randomUUID(),
+      },
+    );
+    return project;
+  };
+
   const requestSettings = async (): Promise<DesktopAppSettings | null> => {
     return requestJson('GET', `${PRODUCT_PREFIX}/settings`, desktopAppSettingsSchema.nullable());
+  };
+
+  const requestTemplates = async (kind?: 'invoice' | 'offer'): Promise<DesktopTemplate[]> => {
+    const query = kind ? `?kind=${encodeURIComponent(kind)}` : '';
+    const templateRecordSchema = z.object({
+      id: z.string().min(1),
+      kind: z.enum(['invoice', 'offer']),
+      name: z.string().min(1),
+      createdAt: z.string().min(1),
+      updatedAt: z.string().min(1),
+      elements: z.unknown(),
+    });
+    const rows = await requestJson('GET', `${PRODUCT_PREFIX}/templates${query}`, z.array(templateRecordSchema));
+    return rows.map(toDesktopTemplate);
+  };
+
+  const requestActiveTemplate = async (kind: 'invoice' | 'offer'): Promise<DesktopTemplate | null> => {
+    const templateRecordSchema = z.object({
+      id: z.string().min(1),
+      kind: z.enum(['invoice', 'offer']),
+      name: z.string().min(1),
+      createdAt: z.string().min(1),
+      updatedAt: z.string().min(1),
+      elements: z.unknown(),
+    });
+    const row = await requestJson(
+      'GET',
+      `${PRODUCT_PREFIX}/templates/active/${encodeURIComponent(kind)}`,
+      templateRecordSchema.nullable(),
+    );
+    return row ? toDesktopTemplate(row) : null;
   };
 
   const reserveDocumentNumber = async (kind: 'invoice' | 'offer' | 'customer') => {
@@ -356,7 +479,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
           throw new Error('Client not found');
         }
         const settings = await requestSettings();
-        return buildDraftFromClient(parsed.kind, client, settings, () => reserveDocumentNumber(parsed.kind));
+        return buildDraftFromClient(parsed.kind, client, settings, () => reserveDocumentNumber(parsed.kind), ensureClientDefaultProject);
       }
       case 'documents:convertOfferToInvoice': {
         const parsed = args as IpcArgs<'documents:convertOfferToInvoice'>;
@@ -429,16 +552,22 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
         return parseResult(key, []);
       case 'accounts:list':
         return parseResult(key, []);
-      case 'templates:list':
-        return parseResult(key, []);
-      case 'templates:active':
-        return parseResult(key, null);
+      case 'templates:list': {
+        const parsed = args as IpcArgs<'templates:list'>;
+        return parseResult(key, await requestTemplates(parsed.kind));
+      }
+      case 'templates:active': {
+        const parsed = args as IpcArgs<'templates:active'>;
+        return parseResult(key, await requestActiveTemplate(parsed.kind));
+      }
       case 'audit:verify':
         return unsupported();
       case 'audit:exportCsv':
         return unsupported();
-      case 'pdf:export':
-        return unsupported('PDF export is not available in Billme Lite yet.');
+      case 'pdf:export': {
+        const parsed = args as IpcArgs<'pdf:export'>;
+        return parseResult(key, { path: buildPrintUrl(parsed.kind, { id: parsed.id }) });
+      }
       case 'window:minimize':
         return parseResult(key, { ok: true as const });
       case 'window:toggleMaximize': {
@@ -454,8 +583,13 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
         return parseResult(key, { ok: true as const });
       case 'window:isMaximized':
         return parseResult(key, { isMaximized: Boolean(document.fullscreenElement) });
-      case 'shell:openPath':
+      case 'shell:openPath': {
+        const parsed = args as IpcArgs<'shell:openPath'>;
+        if (/^(blob:|data:|https?:)/.test(parsed.path)) {
+          window.open(parsed.path, '_blank', 'noopener,noreferrer');
+        }
         return parseResult(key, { ok: true as const });
+      }
       case 'shell:openExportsDir':
         return parseResult(key, { ok: true as const });
       case 'shell:openExternal': {
@@ -560,10 +694,36 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'articles:delete':
       case 'accounts:upsert':
       case 'accounts:delete':
-      case 'templates:upsert':
+      case 'templates:upsert': {
+        const parsed = args as IpcArgs<'templates:upsert'>;
+        const templateRecordSchema = z.object({
+          id: z.string().min(1),
+          kind: z.enum(['invoice', 'offer']),
+          name: z.string().min(1),
+          createdAt: z.string().min(1),
+          updatedAt: z.string().min(1),
+          elements: z.unknown(),
+        });
+        const saved = await requestJson(
+          'POST',
+          `${PRODUCT_PREFIX}/templates`,
+          templateRecordSchema,
+          { template: parsed.template },
+        );
+        return parseResult(key, toDesktopTemplate(saved));
+      }
       case 'templates:delete':
-      case 'templates:setActive':
         return unsupported();
+      case 'templates:setActive': {
+        const parsed = args as IpcArgs<'templates:setActive'>;
+        const result = await requestJson(
+          'PUT',
+          `${PRODUCT_PREFIX}/templates/active`,
+          z.object({ ok: z.literal(true) }),
+          { kind: parsed.kind, templateId: parsed.templateId },
+        );
+        return parseResult(key, result);
+      }
       default:
         return unsupported();
     }

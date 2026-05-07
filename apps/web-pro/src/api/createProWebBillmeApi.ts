@@ -28,6 +28,7 @@ import {
 import {
   chooseDefaultBillingAddress,
   chooseDefaultBillingEmail,
+  ensureDefaultProjectForClient,
   formatAddressMultiline,
 } from '@billme/server-core/services';
 
@@ -102,6 +103,7 @@ const DEFAULT_TOMBSTONES: TombstoneState = {
   templates: [],
 };
 const UNSUPPORTED_MESSAGE = 'Not available in Billme Pro web shell yet.';
+const CLIENT_MUTATION_REASON = 'Updated client in Billme Pro web shell';
 const CLIENT_DELETE_REASON = 'Deleted in Billme Pro web shell';
 const RECURRING_MUTATION_REASON = 'Updated recurring profile in Billme Pro web shell';
 const RECURRING_DELETE_REASON = 'Deleted recurring profile in Billme Pro web shell';
@@ -479,6 +481,59 @@ export const createProWebBillmeApi = ({
     return offers.find((offer) => offer.id === offerId) ?? null;
   };
 
+  const ensureClientDefaultProject = async (initialClient: IpcResult<'clients:list'>[number]) => {
+    let client = initialClient;
+    type ProjectWithClientId = IpcResult<'clients:list'>[number]['projects'][number] & { clientId: string };
+    const { project } = await ensureDefaultProjectForClient(
+      {
+        tx: {
+          inTransaction<TResult>(work: () => TResult): TResult {
+            return work();
+          },
+        },
+        getActiveDefaultProjectForClient: (clientId) => {
+          if (client.id !== clientId) {
+            return null;
+          }
+          const project = client.projects.find((entry) => entry.name === 'Allgemein' && entry.status !== 'archived');
+          return project ? { ...project, clientId: project.clientId ?? client.id } : null;
+        },
+        listProjectCodesByPrefix: async (prefix) => {
+          const clients = await listClients();
+          return clients.flatMap((entry) =>
+            entry.projects
+              .map((project) => project.code)
+              .filter((code): code is string => typeof code === 'string' && code.startsWith(prefix)),
+          );
+        },
+        saveProject: async (project) => {
+          client = await requestJson('/api/v1/pro/clients', {
+            method: 'POST',
+            body: {
+              reason: CLIENT_MUTATION_REASON,
+              client: {
+                ...client,
+                projects: [...client.projects.filter((entry) => entry.id !== project.id), project],
+              },
+            },
+            parser: clientSchema,
+          });
+          const savedProject = client.projects.find((entry) => entry.id === project.id);
+          return savedProject ? { ...savedProject, clientId: savedProject.clientId ?? client.id } : project;
+        },
+      },
+      {
+        clientId: initialClient.id,
+        createProjectId: () => crypto.randomUUID(),
+        buildProject: (project): ProjectWithClientId => {
+          const normalized = projectSchema.parse({ ...project, clientId: project.clientId ?? initialClient.id });
+          return { ...normalized, clientId: normalized.clientId ?? initialClient.id };
+        },
+      },
+    );
+    return project;
+  };
+
   const buildDocumentDraft = async (
     kind: 'invoice' | 'offer',
     clientId: string,
@@ -487,12 +542,11 @@ export const createProWebBillmeApi = ({
     if (!client) {
       throw new Error('Client not found');
     }
-    const settings = await getSettings();
     const reservation = await reserveNumber(kind);
     const billingAddress = chooseDefaultBillingAddress(client.addresses ?? []);
     const shippingAddress = client.addresses?.find((address) => address.isDefaultShipping) ?? billingAddress ?? null;
     const billingEmail = chooseDefaultBillingEmail(client.emails ?? []);
-    const project = client.projects.find((entry) => entry.status !== 'archived') ?? client.projects[0];
+    const project = await ensureClientDefaultProject(client);
     const today = toIsoDate(new Date());
     return parseResult('documents:createFromClient', {
       id: crypto.randomUUID(),
@@ -502,12 +556,12 @@ export const createProWebBillmeApi = ({
       number: reservation.number,
       numberReservationId: reservation.reservationId,
       client: client.company,
-      clientEmail: billingEmail?.email ?? client.email,
-      clientAddress: billingAddress ? formatAddressMultiline(billingAddress) : client.address,
+      clientEmail: billingEmail?.email ?? '',
+      clientAddress: billingAddress ? formatAddressMultiline(billingAddress) : '',
       billingAddressJson: billingAddress ?? undefined,
       shippingAddressJson: shippingAddress ?? undefined,
       date: today,
-      dueDate: kind === 'offer' ? today : addDays(today, settings?.legal.paymentTermsDays ?? 0),
+      dueDate: kind === 'offer' ? today : '',
       amount: 0,
       status: 'draft',
       items: [],
@@ -788,7 +842,10 @@ export const createProWebBillmeApi = ({
           key,
           await requestJson('/api/v1/pro/clients', {
             method: 'POST',
-            body: args,
+            body: {
+              reason: CLIENT_MUTATION_REASON,
+              client: args.client,
+            },
             parser: clientSchema,
           }),
         );

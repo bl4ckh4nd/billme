@@ -1,9 +1,13 @@
 import React from 'react';
 import { z } from 'zod';
 import { createServerApiClient, authUserSchema, serverProductSchema, serverRoleSchema, supportedServerRoles } from '@billme/server-core';
-import { mountDesktopRendererApp, type DesktopRendererRuntime } from '@billme/desktop-renderer';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { createRendererQueryClient, mountDesktopRendererApp, type DesktopRendererRuntime } from '@billme/desktop-renderer';
 import { Button, Input } from '@billme/ui';
 import { createLiteWebBillmeApi } from './api/createLiteWebApi';
+import { PrintDocument } from '../../desktop/components/PrintDocument';
+import { PrintEurDocument } from '../../desktop/components/PrintEurDocument';
+import { ErrorBoundary } from '../../desktop/components/ErrorBoundary';
 
 const SESSION_STORAGE_KEY = 'billme.web.lite.session.v1';
 const DEFAULT_API_PORT = 3100;
@@ -21,6 +25,10 @@ type StoredSession = {
 };
 
 type LiteWebApi = ReturnType<typeof createLiteWebBillmeApi>;
+
+type PrintWorkspaceProps = {
+  api: LiteWebApi;
+};
 
 const normalizeApiUrl = (value: string | null | undefined): string | null => {
   const trimmed = value?.trim();
@@ -154,9 +162,73 @@ const AuthenticatedWorkspace: React.FC<{
   return <DesktopShell api={api} onLogout={onLogout} />;
 };
 
+const PrintWorkspace: React.FC<PrintWorkspaceProps> = ({ api }) => {
+  const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
+  const queryClient = React.useMemo(() => createRendererQueryClient(), []);
+  const kind = params.get('kind');
+  const docKind = kind === 'offer' ? 'offer' : 'invoice';
+  const docId = params.get('id') ?? '';
+  const taxYear = Number(params.get('taxYear') ?? '2025');
+  const from = params.get('from') ?? undefined;
+  const to = params.get('to') ?? undefined;
+  const shouldAutoPrint = params.get('__autoprint') === '1';
+
+  (globalThis as typeof globalThis & { billmeApi?: LiteWebApi }).billmeApi = api;
+
+  React.useEffect(() => {
+    const runtime = globalThis as typeof globalThis & { billmeApi?: LiteWebApi };
+    runtime.billmeApi = api;
+    return () => {
+      if (runtime.billmeApi === api) {
+        delete runtime.billmeApi;
+      }
+    };
+  }, [api]);
+
+  React.useEffect(() => {
+    if (!shouldAutoPrint) {
+      return;
+    }
+    let cancelled = false;
+    let attempts = 0;
+    const tick = () => {
+      if (cancelled) {
+        return;
+      }
+      if ((globalThis as { __PDF_READY__?: boolean }).__PDF_READY__ === true) {
+        window.print();
+        return;
+      }
+      if (attempts < 120) {
+        attempts += 1;
+        window.setTimeout(tick, 100);
+      }
+    };
+    tick();
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldAutoPrint]);
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ErrorBoundary>
+        {kind === 'eur' ? (
+          <PrintEurDocument taxYear={taxYear} from={from} to={to} />
+        ) : (
+          <PrintDocument kind={docKind} id={docId} />
+        )}
+      </ErrorBoundary>
+    </QueryClientProvider>
+  );
+};
+
 export default function App() {
   const apiUrl = React.useMemo(() => getRuntimeApiUrl() ?? getBrowserDefaultApiUrl(), []);
   const authClient = React.useMemo(() => createServerApiClient(apiUrl), [apiUrl]);
+  const searchParams = React.useMemo(() => new URLSearchParams(window.location.search), []);
+  const isPrintMode = searchParams.get('__print') === '1';
+  const storedPrintSession = React.useMemo(() => readStoredSession(), []);
   const [health, setHealth] = React.useState<string>('Checking server...');
   const [capabilities, setCapabilities] = React.useState<string[]>([]);
   const [bootstrapReady, setBootstrapReady] = React.useState(false);
@@ -221,6 +293,32 @@ export default function App() {
     setBootstrapReady(false);
     setMessage('');
   }, []);
+
+  const printApi = React.useMemo(
+    () => storedPrintSession
+      ? createLiteWebBillmeApi({
+          baseUrl: apiUrl,
+          token: storedPrintSession.token,
+          onAuthFailure: handleLogout,
+          onRequestClose: handleLogout,
+        })
+      : null,
+    [apiUrl, handleLogout, storedPrintSession],
+  );
+
+  if (isPrintMode) {
+    if (!printApi) {
+      return (
+        <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 py-10 text-slate-50">
+          <div className="w-full max-w-xl rounded-3xl border border-red-500/30 bg-slate-900/90 p-6 shadow-2xl shadow-black/30">
+            <h1 className="text-xl font-semibold">Billme Lite print mode unavailable</h1>
+            <p className="mt-3 text-sm text-slate-300">Please sign in again before printing or exporting a PDF.</p>
+          </div>
+        </main>
+      );
+    }
+    return <PrintWorkspace api={printApi} />;
+  }
 
   const handleBootstrap = async () => {
     try {

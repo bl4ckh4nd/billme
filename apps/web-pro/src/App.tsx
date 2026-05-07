@@ -188,8 +188,104 @@ const AuthenticatedWorkspace: React.FC<{
   return <ProDesktopShell api={api} />;
 };
 
+const ProPrintWorkspace: React.FC<{ api: BillmeApi }> = ({ api }) => {
+  const hostRef = React.useRef<HTMLDivElement | null>(null);
+  const [mountError, setMountError] = React.useState<string | null>(null);
+  const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
+  const shouldAutoPrint = params.get('__autoprint') === '1';
+
+  React.useEffect(() => {
+    if (!hostRef.current) {
+      return undefined;
+    }
+
+    const runtime = globalThis as typeof globalThis & { billmeApi?: BillmeApi };
+    runtime.billmeApi = api;
+    let root: Root | undefined;
+    let cancelled = false;
+
+    const loadProDesktopApp = proDesktopModules['../../pro-desktop/App.tsx'];
+    if (!loadProDesktopApp) {
+      setMountError('apps/pro-desktop/App.tsx konnte nicht geladen werden.');
+      return undefined;
+    }
+
+    void loadProDesktopApp()
+      .then((module) => {
+        if (!hostRef.current || cancelled) {
+          return;
+        }
+        const ProDesktopApp = (module as { default: React.ComponentType }).default;
+        const queryClient = createRendererQueryClient();
+        root = createRoot(hostRef.current);
+        root.render(
+          <React.StrictMode>
+            <QueryClientProvider client={queryClient}>
+              <ProDesktopApp />
+            </QueryClientProvider>
+          </React.StrictMode>,
+        );
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setMountError(error instanceof Error ? error.message : String(error));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      root?.unmount();
+      if (runtime.billmeApi === api) {
+        delete runtime.billmeApi;
+      }
+    };
+  }, [api]);
+
+  React.useEffect(() => {
+    if (!shouldAutoPrint) {
+      return;
+    }
+    let cancelled = false;
+    let attempts = 0;
+    const tick = () => {
+      if (cancelled) {
+        return;
+      }
+      if ((globalThis as { __PDF_READY__?: boolean }).__PDF_READY__ === true) {
+        window.print();
+        return;
+      }
+      if (attempts < 120) {
+        attempts += 1;
+        window.setTimeout(tick, 100);
+      }
+    };
+    tick();
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldAutoPrint]);
+
+  if (mountError) {
+    return (
+      <div className="auth-shell">
+        <section className="auth-panel">
+          <p className="section-eyebrow">Billme Pro Web</p>
+          <h1>Renderer konnte nicht gestartet werden</h1>
+          <p className="hero-copy">{mountError}</p>
+        </section>
+      </div>
+    );
+  }
+
+  return <div ref={hostRef} className="min-h-screen" />;
+};
+
 export default function App() {
+  const searchParams = React.useMemo(() => new URLSearchParams(window.location.search), []);
+  const isPrintMode = searchParams.get('__print') === '1';
   const [apiUrl, setApiUrl] = React.useState(getInitialApiUrl);
+  const storedPrintSession = React.useMemo(() => readStoredSession(), []);
   const [health, setHealth] = React.useState('Verbinde…');
   const [roles, setRoles] = React.useState<string[]>([]);
   const [bootstrapReady, setBootstrapReady] = React.useState(false);
@@ -206,6 +302,13 @@ export default function App() {
     setSession(null);
     setMessage('Abgemeldet.');
   }, []);
+
+  const printApi = React.useMemo(
+    () => storedPrintSession
+      ? createProWebBillmeApi({ baseUrl: apiUrl, token: storedPrintSession.token, onAuthFailure: handleLogout })
+      : null,
+    [apiUrl, handleLogout, storedPrintSession],
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -279,6 +382,21 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : String(error));
     }
   };
+
+  if (isPrintMode) {
+    if (!printApi) {
+      return (
+        <div className="auth-shell">
+          <section className="auth-panel">
+            <p className="section-eyebrow">Billme Pro Web</p>
+            <h1>Print mode unavailable</h1>
+            <p className="hero-copy">Please sign in again before printing or exporting a PDF.</p>
+          </section>
+        </div>
+      );
+    }
+    return <ProPrintWorkspace api={printApi} />;
+  }
 
   if (!loadingSession && session) {
     return <AuthenticatedWorkspace apiUrl={apiUrl} session={session} onLogout={handleLogout} />;

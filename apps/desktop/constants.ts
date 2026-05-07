@@ -71,8 +71,8 @@ export const INITIAL_INVOICE_TEMPLATE: InvoiceElement[] = [
     x: 125 * MM_TO_PX, // Right side block
     y: 50 * MM_TO_PX, // Aligned with address block
     zIndex: 10,
-    content: 'Rechnungs-Nr: {{invoice.number}}\nDatum: {{invoice.date}}\nLeistungsdatum: {{invoice.servicePeriod}}\nKunden-Nr: {{client.number}}',
-    style: { ...DEFAULT_TEXT_STYLE, fontSize: 11, textAlign: 'right', width: 250, height: 100, color: '#333333' },
+    content: 'Rechnungs-Nr: {{invoice.number}}\nDatum: {{invoice.date}}\nLeistungsdatum: {{invoice.servicePeriod}}\nFälligkeit: {{invoice.dueDate}}\nKunden-Nr: {{client.number}}',
+    style: { ...DEFAULT_TEXT_STYLE, fontSize: 11, textAlign: 'right', width: 250, height: 120, color: '#333333' },
     label: 'invoice_meta'
   },
 
@@ -141,7 +141,7 @@ export const INITIAL_INVOICE_TEMPLATE: InvoiceElement[] = [
     x: 20 * MM_TO_PX,
     y: 200 * MM_TO_PX,
     zIndex: 10,
-    content: 'Bitte überweisen Sie den Betrag innerhalb von 14 Tagen ohne Abzug auf das unten genannte Konto.\nEs gelten unsere AGB.',
+    content: 'Bitte überweisen Sie den Betrag bis spätestens {{invoice.dueDate}} ohne Abzug auf das unten genannte Konto.\nEs gelten unsere AGB.',
     style: { ...DEFAULT_TEXT_STYLE, fontSize: 10, width: 700, height: 50 },
     label: 'payment_terms'
   },

@@ -4,7 +4,7 @@ type InvoiceItemLike = {
   description?: string;
   quantity?: number;
   price?: number;
-  total: number;
+  total?: number;
 };
 
 export type InvoiceLike = {
@@ -137,12 +137,39 @@ const formatCurrency = (amount: number) => {
 
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
+const toFiniteNumber = (value: unknown): number | null => {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+export const calculateInvoiceItemTotal = (item: InvoiceItemLike): number => {
+  const quantity = toFiniteNumber(item.quantity);
+  const price = toFiniteNumber(item.price);
+  if (quantity !== null && price !== null) {
+    return round2(quantity * price);
+  }
+
+  const total = toFiniteNumber(item.total);
+  return total !== null ? round2(total) : 0;
+};
+
+export const getDefaultPaymentTermsText = (dueDate?: string): string => {
+  const formattedDueDate = formatDate(dueDate);
+  const paymentSentence = formattedDueDate
+    ? `Bitte überweisen Sie den Betrag bis spätestens ${formattedDueDate} ohne Abzug auf das unten angegebene Konto.`
+    : 'Bitte überweisen Sie den fälligen Betrag innerhalb von 14 Tagen auf das unten angegebene Konto.';
+  return `${paymentSentence}\nEs gelten unsere AGB.`;
+};
+
 export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings: AppSettingsLike): string => {
   if (!text) return '';
 
-  const net = round2(invoice.items.reduce((acc, item) => acc + item.total, 0));
+  const net = round2(invoice.items.reduce((acc, item) => acc + calculateInvoiceItemTotal(item), 0));
+  const hasFreshStoredTaxSnapshot =
+    invoice.taxSnapshot &&
+    Math.abs(round2(invoice.taxSnapshot.netAmount) - net) < 0.005;
   const taxSnapshot =
-    invoice.taxSnapshot ??
+    (hasFreshStoredTaxSnapshot ? invoice.taxSnapshot : undefined) ??
     (() => {
       const taxMode = settings.legal.smallBusinessRule
         ? 'small_business_19_ustg'

@@ -56,9 +56,11 @@ CREATE TABLE IF NOT EXISTS number_reservations (
   status TEXT NOT NULL,
   document_id TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (tenant_id, kind, number)
+  updated_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS number_reservations_tenant_id_kind_number_key
+  ON number_reservations (tenant_id, kind, number)
+  WHERE status <> 'released';
 CREATE INDEX IF NOT EXISTS idx_number_reservations_status_kind ON number_reservations (tenant_id, status, kind);
 
 CREATE TABLE IF NOT EXISTS clients (

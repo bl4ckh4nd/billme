@@ -945,6 +945,80 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
   });
 };
 
+const registerTemplateRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefix: string) => {
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/templates`,
+    query: listTemplatesParamsSchema,
+    response: z.array(templateRecordSchema),
+    async handler({ request, query }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      const templates = await listServerTemplates(requirePool(app), session.scope.tenantId);
+      return templates
+        .filter((record) => !query.kind || record.kind === query.kind)
+        .map(mapTemplateRecord);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/templates`,
+    body: upsertTemplatePayloadSchema,
+    response: templateRecordSchema,
+    async handler({ request, body }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      const saved = await saveServerTemplate(requirePool(app), {
+        id: body.template.id,
+        tenantId: session.scope.tenantId,
+        kind: body.template.kind,
+        name: body.template.name,
+        elementsJson: JSON.stringify(body.template.elements),
+        createdAt: body.template.createdAt,
+        updatedAt: body.template.updatedAt,
+      });
+      return mapTemplateRecord(saved);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/templates/active/:kind`,
+    params: z.object({
+      kind: templateKindSchema,
+    }),
+    response: templateRecordSchema.nullable(),
+    async handler({ request, params }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      const active = await getServerActiveTemplates(requirePool(app), session.scope.tenantId);
+      const templateId = params.kind === 'invoice' ? active?.invoiceTemplateId : active?.offerTemplateId;
+      if (!templateId) {
+        return null;
+      }
+      const templates = await listServerTemplates(requirePool(app), session.scope.tenantId);
+      const template = templates.find((entry) => entry.id === templateId);
+      return template ? mapTemplateRecord(template) : null;
+    },
+  });
+
+  typedRoute(app, {
+    method: 'PUT',
+    url: `${prefix}/templates/active`,
+    body: setActiveTemplatePayloadSchema,
+    response: okSchema,
+    async handler({ request, body }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      const existing = await getServerActiveTemplates(requirePool(app), session.scope.tenantId);
+      await saveServerActiveTemplates(requirePool(app), {
+        tenantId: session.scope.tenantId,
+        id: existing?.id ?? 1,
+        invoiceTemplateId: body.kind === 'invoice' ? body.templateId ?? undefined : existing?.invoiceTemplateId,
+        offerTemplateId: body.kind === 'offer' ? body.templateId ?? undefined : existing?.offerTemplateId,
+      });
+      return { ok: true as const };
+    },
+  });
+};
+
 const registerProRoutes = (app: FastifyInstance) => {
   const prefix = '/api/v1/pro';
 
@@ -1008,78 +1082,6 @@ const registerProRoutes = (app: FastifyInstance) => {
         color: body.account.color,
       });
       return mapAccountRecord(saved);
-    },
-  });
-
-  typedRoute(app, {
-    method: 'GET',
-    url: `${prefix}/templates`,
-    query: listTemplatesParamsSchema,
-    response: z.array(templateRecordSchema),
-    async handler({ request, query }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
-      const templates = await listServerTemplates(requirePool(app), session.scope.tenantId);
-      return templates
-        .filter((record) => !query.kind || record.kind === query.kind)
-        .map(mapTemplateRecord);
-    },
-  });
-
-  typedRoute(app, {
-    method: 'POST',
-    url: `${prefix}/templates`,
-    body: upsertTemplatePayloadSchema,
-    response: templateRecordSchema,
-    async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
-      const saved = await saveServerTemplate(requirePool(app), {
-        id: body.template.id,
-        tenantId: session.scope.tenantId,
-        kind: body.template.kind,
-        name: body.template.name,
-        elementsJson: JSON.stringify(body.template.elements),
-        createdAt: body.template.createdAt,
-        updatedAt: body.template.updatedAt,
-      });
-      return mapTemplateRecord(saved);
-    },
-  });
-
-  typedRoute(app, {
-    method: 'GET',
-    url: `${prefix}/templates/active/:kind`,
-    params: z.object({
-      kind: templateKindSchema,
-    }),
-    response: templateRecordSchema.nullable(),
-    async handler({ request, params }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
-      const active = await getServerActiveTemplates(requirePool(app), session.scope.tenantId);
-      const templateId = params.kind === 'invoice' ? active?.invoiceTemplateId : active?.offerTemplateId;
-      if (!templateId) {
-        return null;
-      }
-      const templates = await listServerTemplates(requirePool(app), session.scope.tenantId);
-      const template = templates.find((entry) => entry.id === templateId);
-      return template ? mapTemplateRecord(template) : null;
-    },
-  });
-
-  typedRoute(app, {
-    method: 'PUT',
-    url: `${prefix}/templates/active`,
-    body: setActiveTemplatePayloadSchema,
-    response: okSchema,
-    async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
-      const existing = await getServerActiveTemplates(requirePool(app), session.scope.tenantId);
-      await saveServerActiveTemplates(requirePool(app), {
-        tenantId: session.scope.tenantId,
-        id: existing?.id ?? 1,
-        invoiceTemplateId: body.kind === 'invoice' ? body.templateId ?? undefined : existing?.invoiceTemplateId,
-        offerTemplateId: body.kind === 'offer' ? body.templateId ?? undefined : existing?.offerTemplateId,
-      });
-      return { ok: true as const };
     },
   });
 
@@ -1366,6 +1368,8 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
   registerAuthRoutes(app, 'pro', '/api/v1/pro');
   registerBillingRoutes(app, 'lite', '/api/v1/lite');
   registerBillingRoutes(app, 'pro', '/api/v1/pro');
+  registerTemplateRoutes(app, 'lite', '/api/v1/lite');
+  registerTemplateRoutes(app, 'pro', '/api/v1/pro');
   registerProRoutes(app);
 
   typedRoute(app, {

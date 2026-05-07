@@ -19,6 +19,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
 import { Spinner } from './Spinner';
 import { SkeletonLoader } from './SkeletonLoader';
+import { getDefaultPaymentTermsText } from '../utils/placeholders';
 
 // Mock data for Offers to demonstrate the switch
 const MOCK_OFFERS: Invoice[] = [];
@@ -30,6 +31,18 @@ const formatCurrency = (amount: number) => {
 const formatDate = (dateString: string) => {
   if (!dateString) return '-';
   return new Date(dateString).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+
+const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const getDisplayLineTotal = (item: Pick<Invoice['items'][number], 'quantity' | 'price' | 'total'>) => {
+  const quantity = Number(item.quantity);
+  const price = Number(item.price);
+  if (Number.isFinite(quantity) && Number.isFinite(price)) {
+    return round2(quantity * price);
+  }
+  const total = Number(item.total);
+  return Number.isFinite(total) ? round2(total) : 0;
 };
 
 const getDunningBadge = (level: number | undefined) => {
@@ -141,6 +154,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const isLoading = documentType === 'invoice' ? isLoadingInvoices : isLoadingOffers;
   
   const selectedDocument = currentData.find(i => i.id === selectedId);
+  const selectedDocumentItems = selectedDocument
+    ? selectedDocument.items.map((item) => ({
+        ...item,
+        total: getDisplayLineTotal(item),
+      }))
+    : [];
+  const selectedDocumentNet = selectedDocumentItems.reduce((sum, item) => sum + item.total, 0);
+  const selectedDocumentVatRate = settings.legal.smallBusinessRule ? 0 : Number(settings.legal.defaultVatRate || 0);
+  const selectedDocumentVat = round2(selectedDocumentNet * (selectedDocumentVatRate / 100));
+  const selectedDocumentGross = round2(selectedDocumentNet + selectedDocumentVat);
+  const selectedPaymentTermsText = getDefaultPaymentTermsText(selectedDocument?.dueDate);
 
   React.useEffect(() => {
     if (!initialSelectedId) return;
@@ -1106,15 +1130,21 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                   </p>
                               </div>
                               <div className="flex gap-8">
-                                  <div>
-                                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1">
-                                          <Calendar size={12}/> Datum
-                                      </p>
-                                      <p className="font-mono font-bold text-gray-900">{formatDate(selectedDocument.date)}</p>
-                                  </div>
-                                  <div>
-                                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1">
-                                          <Clock size={12}/> {documentType === 'offer' ? 'Gültig bis' : 'Fällig'}
+                                   <div>
+                                       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                                           <Calendar size={12}/> Datum
+                                       </p>
+                                       <p className="font-mono font-bold text-gray-900">{formatDate(selectedDocument.date)}</p>
+                                   </div>
+                                   <div>
+                                       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                                           <Calendar size={12}/> Leistungsdatum
+                                       </p>
+                                       <p className="font-mono font-bold text-gray-900">{formatDate(selectedDocument.servicePeriod || selectedDocument.date)}</p>
+                                   </div>
+                                   <div>
+                                       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                                           <Clock size={12}/> {documentType === 'offer' ? 'Gültig bis' : 'Fällig'}
                                       </p>
                                       <p className={`font-mono font-bold ${selectedDocument.status === 'overdue' ? 'text-error' : 'text-gray-900'}`}>
                                           {formatDate(selectedDocument.dueDate)}
@@ -1135,7 +1165,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                       </tr>
                                   </thead>
                                   <tbody className="divide-y divide-gray-200/50">
-                                      {selectedDocument.items.map((item, i) => (
+                                      {selectedDocumentItems.map((item, i) => (
                                           <tr key={i} className="group hover:bg-white/50 transition-colors">
                                               <td className="py-4 pl-2 font-bold text-gray-900">{item.description}</td>
                                               <td className="py-4 text-right text-gray-500 font-mono text-sm">{item.quantity}</td>
@@ -1150,25 +1180,25 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           {/* Totals & Notes */}
                           <div className="flex flex-col md:flex-row justify-between items-start gap-8 border-t border-gray-200 border-dashed pt-8">
                                <div className="flex-1">
-                                   <p className="text-xs font-bold text-gray-900 mb-2">Hinweis</p>
-                                   <p className="text-xs text-gray-500 leading-relaxed max-w-sm">
-                                       Vielen Dank für Ihren Auftrag. Bitte überweisen Sie den fälligen Betrag innerhalb von 14 Tagen auf das unten angegebene Konto.
-                                   </p>
-                               </div>
-                               <div className="w-full md:w-64 space-y-2">
-                                   <div className="flex justify-between text-sm text-gray-500">
-                                       <span>Netto</span>
-                                       <span className="font-mono">{formatCurrency(selectedDocument.amount / 1.19)}</span>
-                                   </div>
-                                   <div className="flex justify-between text-sm text-gray-500">
-                                       <span>MwSt 19%</span>
-                                       <span className="font-mono">{formatCurrency(selectedDocument.amount - (selectedDocument.amount / 1.19))}</span>
-                                   </div>
-                                   <div className="flex justify-between text-xl font-bold text-gray-900 border-t border-gray-200 pt-3 mt-1">
-                                       <span>Gesamt</span>
-                                       <span className="font-mono">{formatCurrency(selectedDocument.amount)}</span>
-                                   </div>
-                               </div>
+                                    <p className="text-xs font-bold text-gray-900 mb-2">Hinweis</p>
+                                    <p className="text-xs text-gray-500 leading-relaxed max-w-sm whitespace-pre-line">
+                                        {selectedPaymentTermsText}
+                                    </p>
+                                </div>
+                                <div className="w-full md:w-64 space-y-2">
+                                    <div className="flex justify-between text-sm text-gray-500">
+                                        <span>Netto</span>
+                                        <span className="font-mono">{formatCurrency(selectedDocumentNet)}</span>
+                                    </div>
+                                    <div className="flex justify-between text-sm text-gray-500">
+                                        <span>MwSt {selectedDocumentVatRate}%</span>
+                                        <span className="font-mono">{formatCurrency(selectedDocumentVat)}</span>
+                                    </div>
+                                    <div className="flex justify-between text-xl font-bold text-gray-900 border-t border-gray-200 pt-3 mt-1">
+                                        <span>Gesamt</span>
+                                        <span className="font-mono">{formatCurrency(selectedDocumentGross || selectedDocument.amount)}</span>
+                                    </div>
+                                </div>
                           </div>
                        </div>
                   </div>

@@ -565,6 +565,9 @@ importers:
       '@billme/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@tanstack/react-query':
+        specifier: ^5.90.20
+        version: 5.90.20(react@19.2.4)
       react:
         specifier: ^19.2.3
         version: 19.2.4

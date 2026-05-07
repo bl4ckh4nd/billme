@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@billme/accounting-ui-pro": "workspace:*",
+    "@tanstack/react-query": "^5.90.20",
     "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/ui": "workspace:*",

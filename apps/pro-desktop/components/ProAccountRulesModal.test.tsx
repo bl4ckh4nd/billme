@@ -3,16 +3,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { IpcArgs, IpcResult } from '@billme/desktop-contracts-pro';
 import { ProAccountRulesModal } from './ProAccountRulesModal';
 
 const { mockIpc } = vi.hoisted(() => ({
-  mockIpc: {
-    pro: {
-      listAccountSuggestionRules: vi.fn(async () => []),
-      listLedgerAccounts: vi.fn(async () => []),
-      upsertAccountSuggestionRule: vi.fn(async (payload: any) => ({
-        id: payload.id ?? 'rule-new',
-        ...payload,
+    mockIpc: {
+      pro: {
+        listAccountSuggestionRules:
+          vi.fn<(args?: IpcArgs<'pro:listAccountSuggestionRules'>) => Promise<IpcResult<'pro:listAccountSuggestionRules'>>>(
+            async () => [],
+          ),
+        listLedgerAccounts:
+          vi.fn<(args?: IpcArgs<'pro:listLedgerAccounts'>) => Promise<IpcResult<'pro:listLedgerAccounts'>>>(
+            async () => [],
+          ),
+        upsertAccountSuggestionRule: vi.fn(async (payload: any) => ({
+          id: payload.id ?? 'rule-new',
+          ...payload,
       })),
       deleteAccountSuggestionRule: vi.fn(async () => ({ success: true })),
     },
@@ -65,7 +72,15 @@ describe('ProAccountRulesModal', () => {
 
   it('creates a new pro account suggestion rule with trimmed values', async () => {
     mockIpc.pro.listLedgerAccounts.mockResolvedValue([
-      { id: 'acc-8400', accountNumber: '8400', name: 'Erloese' },
+      {
+        id: 'acc-8400',
+        chart: 'SKR03',
+        accountNumber: '8400',
+        name: 'Erloese',
+        source: 'test',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
     ]);
     const { onRulesChanged } = renderModal();
 
@@ -96,6 +111,7 @@ describe('ProAccountRulesModal', () => {
     mockIpc.pro.listAccountSuggestionRules.mockResolvedValue([
       {
         id: 'rule-1',
+        tenantId: 'default',
         chart: 'SKR03',
         priority: 5,
         field: 'purpose',
@@ -104,11 +120,29 @@ describe('ProAccountRulesModal', () => {
         targetAccountNumber: '4930',
         flowType: 'expense',
         active: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
       },
     ]);
     mockIpc.pro.listLedgerAccounts.mockResolvedValue([
-      { id: 'acc-4930', accountNumber: '4930', name: 'Buerobedarf' },
-      { id: 'acc-4960', accountNumber: '4960', name: 'Fremdleistungen' },
+      {
+        id: 'acc-4930',
+        chart: 'SKR03',
+        accountNumber: '4930',
+        name: 'Buerobedarf',
+        source: 'test',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'acc-4960',
+        chart: 'SKR03',
+        accountNumber: '4960',
+        name: 'Fremdleistungen',
+        source: 'test',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
     ]);
 
     renderModal();

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { IpcArgs, IpcResult } from '@billme/desktop-contracts-pro';
 import { ProAccountingPage } from './ProAccountingPage';
 
 const {
@@ -22,13 +23,16 @@ const {
   mockImportSkrMutateAsync: vi.fn(async () => ({ imported: 1 })),
   mockUseImportSkrMutation: vi.fn(),
   mockOnRulesChangedTrigger: vi.fn(),
-  mockIpc: {
-    pro: {
-      listBankTransactions: vi.fn(async () => []),
-      getDraftByTransactionId: vi.fn(async () => null),
-      getSusaReport: vi.fn(async () => ({ totals: { balance: 0 } })),
-      getGuvReport: vi.fn(async () => ({ netResult: 0 })),
-      getBilanzReport: vi.fn(async () => ({ totals: { delta: 0 } })),
+    mockIpc: {
+      pro: {
+        listBankTransactions: vi.fn<() => Promise<IpcResult<'pro:listBankTransactions'>>>(async () => []),
+        getDraftByTransactionId:
+          vi.fn<(args: IpcArgs<'pro:getDraftByTransactionId'>) => Promise<IpcResult<'pro:getDraftByTransactionId'>>>(
+            async () => null,
+          ),
+        getSusaReport: vi.fn(async () => ({ totals: { balance: 0 } })),
+        getGuvReport: vi.fn(async () => ({ netResult: 0 })),
+        getBilanzReport: vi.fn(async () => ({ totals: { delta: 0 } })),
       getAccountingHealth: vi.fn(async () => ({ postedCount: 0, draftCount: 0 })),
       saveDraft: vi.fn(async () => ({ ok: true })),
       dispatchDraftAction: vi.fn(async () => ({
@@ -184,8 +188,9 @@ describe('ProAccountingPage integration', () => {
         counterparty: 'Telekom',
         purpose: 'Telefon',
         amount: 119,
+        type: 'expense',
         status: 'booked',
-        linkedInvoiceId: null,
+        accountId: '1200',
         suggestedAccountNumber: '8400',
         suggestionConfidence: 0.91,
       },
@@ -195,13 +200,15 @@ describe('ProAccountingPage integration', () => {
         counterparty: 'Bestandskunde',
         purpose: 'Ausgleich',
         amount: 250,
-        status: 'open',
+        type: 'income',
+        status: 'pending',
+        accountId: '1200',
         linkedInvoiceId: 'inv-2',
         suggestedAccountNumber: '1200',
         suggestionConfidence: 0.77,
       },
     ]);
-    mockIpc.pro.getDraftByTransactionId.mockImplementation(async ({ transactionId }: { transactionId: string }) => {
+    mockIpc.pro.getDraftByTransactionId.mockImplementation(async ({ transactionId }: IpcArgs<'pro:getDraftByTransactionId'>) => {
       if (transactionId !== 'tx-1') return null;
       return {
         id: 'draft-1',
@@ -212,6 +219,8 @@ describe('ProAccountingPage integration', () => {
         documentDate: '2026-01-10',
         bookingText: 'Telefonkosten',
         reference: 'TEL-1',
+        period: '2026-01',
+        fiscalYear: 2026,
         lines: [
           {
             id: 'line-1',

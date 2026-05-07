@@ -4,6 +4,7 @@ import type {
   TaxCaseAccountMapping,
 } from '@billme/accounting-shared';
 import { createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile } from '@billme/server-core';
+import { DEFAULT_TAX_MODE } from '@billme/server-core/services';
 import {
   createPostgresClientRepository,
   createPostgresInvoiceRepository,
@@ -386,6 +387,7 @@ const buildBillingSeed = (
       dueDate: '2026-01-29',
       servicePeriod: '2026-01',
       amount: 1250,
+      taxMode: DEFAULT_TAX_MODE,
       status: 'paid',
       dunningLevel: 0,
       items: [{ description: 'Implementierung Sprint 1', quantity: 10, price: 125, total: 1250 }],
@@ -408,6 +410,7 @@ const buildBillingSeed = (
       dueDate: '2026-02-24',
       servicePeriod: '2026-02',
       amount: 1890,
+      taxMode: DEFAULT_TAX_MODE,
       status: 'open',
       dunningLevel: 0,
       items: [{ description: 'Monatliche Betreuung', quantity: 1, price: 1890, total: 1890 }],
@@ -432,6 +435,7 @@ const buildBillingSeed = (
       date: '2026-03-01',
       validUntil: '2026-03-15',
       amount: 990,
+      taxMode: DEFAULT_TAX_MODE,
       status: 'open',
       items: [{ description: 'UX Audit', quantity: 1, price: 990, total: 990 }],
       history: [{ date: '2026-03-01', action: 'Angebot erstellt' }],

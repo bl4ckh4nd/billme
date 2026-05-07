@@ -39,6 +39,37 @@ type OnboardingVisibilitySettings = {
   onboardingCompleted?: boolean;
 };
 
+export type BusinessOnboardingSettings = {
+  company: {
+    name: string;
+    owner: string;
+    street: string;
+    zip: string;
+    city: string;
+    email: string;
+    phone: string;
+    website: string;
+  };
+  finance: {
+    bankName: string;
+    iban: string;
+    bic: string;
+    taxId: string;
+    vatId: string;
+    registerCourt: string;
+  };
+  legal: {
+    smallBusinessRule: boolean;
+    defaultVatRate: number;
+    paymentTermsDays: number;
+  };
+  numbers: {
+    invoicePrefix: string;
+    offerPrefix: string;
+  };
+  onboardingCompleted?: boolean;
+};
+
 type StepId = 'identity' | 'billing' | 'details';
 type FieldPath =
   | 'company.name'
@@ -181,6 +212,50 @@ export const shouldShowBusinessOnboarding = (
   && settings.onboardingCompleted !== true
   && !trim(settings.company.name),
 );
+
+export const buildBusinessOnboardingDraft = (
+  settings: BusinessOnboardingSettings,
+): BusinessOnboardingDraft => ({
+  company: {
+    name: settings.company.name,
+    owner: settings.company.owner,
+    street: settings.company.street,
+    zip: settings.company.zip,
+    city: settings.company.city,
+    email: settings.company.email,
+    phone: settings.company.phone,
+    website: settings.company.website,
+  },
+  finance: {
+    bankName: settings.finance.bankName,
+    iban: settings.finance.iban,
+    bic: settings.finance.bic,
+    taxId: settings.finance.taxId,
+    vatId: settings.finance.vatId,
+    registerCourt: settings.finance.registerCourt,
+  },
+  legal: {
+    smallBusinessRule: settings.legal.smallBusinessRule,
+    defaultVatRate: settings.legal.defaultVatRate,
+    paymentTermsDays: settings.legal.paymentTermsDays,
+  },
+  numbers: {
+    invoicePrefix: settings.numbers.invoicePrefix,
+    offerPrefix: settings.numbers.offerPrefix,
+  },
+});
+
+export const applyBusinessOnboardingDraft = <T extends BusinessOnboardingSettings>(
+  settings: T,
+  draft: BusinessOnboardingDraft,
+): T => ({
+  ...settings,
+  company: { ...settings.company, ...draft.company },
+  finance: { ...settings.finance, ...draft.finance },
+  legal: { ...settings.legal, ...draft.legal },
+  numbers: { ...settings.numbers, ...draft.numbers },
+  onboardingCompleted: true,
+});
 
 export interface BusinessOnboardingProps {
   initialData: BusinessOnboardingDraft;

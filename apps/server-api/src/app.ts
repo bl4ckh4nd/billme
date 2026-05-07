@@ -279,7 +279,7 @@ const createNumberingPortsForDb = (db: PostgresQueryable, scope: TenantScope) =>
     },
   },
   async getSettings() {
-    return parseStoredSettings(await getServerSettings(db, scope.tenantId));
+    return parseStoredSettings(await getServerSettings(db, scope.tenantId, { forUpdate: true }));
   },
   async saveSettings(settings: AppSettings) {
     await saveServerSettings(db, {

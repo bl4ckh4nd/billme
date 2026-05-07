@@ -1088,13 +1088,23 @@ export const createPostgresEmailOutboxRepository = (db: PostgresQueryable): Emai
   },
 });
 
-export const getServerSettings = async (db: PostgresQueryable, tenantId: string): Promise<ServerSettingsRecord | null> => {
+export const getServerSettings = async (
+  db: PostgresQueryable,
+  tenantId: string,
+  options?: { forUpdate?: boolean },
+): Promise<ServerSettingsRecord | null> => {
   const result = await db.query<{
     tenant_id: string;
     settings_json: string;
     created_at: string;
     updated_at: string;
-  }>('SELECT * FROM server_settings WHERE tenant_id = $1 LIMIT 1', [tenantId]);
+  }>(
+    `SELECT *
+     FROM server_settings
+     WHERE tenant_id = $1
+     LIMIT 1${options?.forUpdate ? ' FOR UPDATE' : ''}`,
+    [tenantId],
+  );
 
   const row = result.rows[0];
   if (!row) {

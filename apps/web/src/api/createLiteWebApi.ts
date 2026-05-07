@@ -39,11 +39,11 @@ type DesktopRecurringProfile = IpcResult<'recurring:list'>[number];
 
 const PRODUCT_PREFIX = '/api/v1/lite';
 const LITE_SCOPE = createSingleTenantScope('default', 'lite');
-const CLIENT_MUTATION_REASON = 'Updated in Billme Lite web shell';
-const CLIENT_DELETE_REASON = 'Deleted in Billme Lite web shell';
-const RECURRING_MUTATION_REASON = 'Updated recurring profile in Billme Lite web shell';
-const RECURRING_DELETE_REASON = 'Deleted recurring profile in Billme Lite web shell';
-const UNSUPPORTED_MESSAGE = 'Not available in Billme Lite web shell yet.';
+const CLIENT_MUTATION_REASON = 'Updated in Billme Lite';
+const CLIENT_DELETE_REASON = 'Deleted in Billme Lite';
+const RECURRING_MUTATION_REASON = 'Updated recurring profile in Billme Lite';
+const RECURRING_DELETE_REASON = 'Deleted recurring profile in Billme Lite';
+const UNSUPPORTED_MESSAGE = 'Not available in Billme Lite yet.';
 
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.replace(/\/+$/, '');
 const toIsoDate = (value: Date): string => value.toISOString().split('T')[0] ?? value.toISOString();
@@ -438,7 +438,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'audit:exportCsv':
         return unsupported();
       case 'pdf:export':
-        return unsupported('PDF export is not available in the Billme Lite web shell yet.');
+        return unsupported('PDF export is not available in Billme Lite yet.');
       case 'window:minimize':
         return parseResult(key, { ok: true as const });
       case 'window:toggleMaximize': {
@@ -512,9 +512,9 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'secrets:get':
         return parseResult(key, null);
       case 'secrets:set':
-        return unsupported('Secure secret storage is not available in the Billme Lite web shell.');
+        return unsupported('Secure secret storage is not available in Billme Lite.');
       case 'secrets:delete':
-        return unsupported('Secure secret storage is not available in the Billme Lite web shell.');
+        return unsupported('Secure secret storage is not available in Billme Lite.');
       case 'secrets:has':
         return parseResult(key, false);
       case 'db:backup':
@@ -524,7 +524,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'email:testConfig':
         return parseResult(key, {
           success: false,
-          error: 'Email sending is not available in the Billme Lite web shell yet.',
+          error: 'Email sending is not available in Billme Lite yet.',
         });
       case 'transactions:list':
         return parseResult(key, []);
@@ -535,7 +535,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'dunning:manualRun':
         return parseResult(key, {
           success: false,
-          error: 'Manual dunning runs are not available in the Billme Lite web shell yet.',
+          error: 'Manual dunning runs are not available in Billme Lite yet.',
         });
       case 'dunning:getInvoiceStatus':
         return parseResult(key, {
@@ -547,7 +547,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'recurring:manualRun':
         return parseResult(key, {
           success: false,
-          error: 'Manual recurring runs are not available in the Billme Lite web shell yet.',
+          error: 'Manual recurring runs are not available in Billme Lite yet.',
         });
       case 'updater:getStatus':
         return parseResult(key, { status: 'idle' });

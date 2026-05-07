@@ -5,7 +5,10 @@ export { Input, type InputProps } from './components/Input';
 export { Card, type CardProps, type CardRadius } from './components/Card';
 export {
   BusinessOnboarding,
+  applyBusinessOnboardingDraft,
+  buildBusinessOnboardingDraft,
   shouldShowBusinessOnboarding,
+  type BusinessOnboardingSettings,
   type BusinessOnboardingDraft,
   type BusinessOnboardingProps,
 } from './components/BusinessOnboarding';

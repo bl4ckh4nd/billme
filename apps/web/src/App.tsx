@@ -20,6 +20,8 @@ type StoredSession = {
   user: z.infer<typeof authUserSchema>;
 };
 
+type LiteWebApi = ReturnType<typeof createLiteWebBillmeApi>;
+
 const normalizeApiUrl = (value: string | null | undefined): string | null => {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -81,16 +83,11 @@ const fetchLiteSession = async (baseUrl: string, token: string) => {
 };
 
 const DesktopShell: React.FC<{
-  apiUrl: string;
-  token: string;
+  api: LiteWebApi;
   onLogout: () => void;
-}> = ({ apiUrl, token, onLogout }) => {
+}> = ({ api, onLogout }) => {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const [mountError, setMountError] = React.useState<string | null>(null);
-  const api = React.useMemo(
-    () => createLiteWebBillmeApi({ baseUrl: apiUrl, token, onAuthFailure: onLogout, onRequestClose: onLogout }),
-    [apiUrl, onLogout, token],
-  );
 
   React.useEffect(() => {
     if (!hostRef.current) {
@@ -98,9 +95,9 @@ const DesktopShell: React.FC<{
     }
 
     const runtime: DesktopRendererRuntime = {
-      shell: 'web',
+      shell: 'desktop',
       product: 'lite',
-      navigation: ['dashboard', 'clients', 'documents'],
+      navigation: ['dashboard', 'clients', 'projects', 'documents', 'finance', 'articles'],
       onLogout,
     };
 
@@ -131,7 +128,7 @@ const DesktopShell: React.FC<{
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 py-10 text-slate-50">
         <div className="w-full max-w-xl rounded-3xl border border-red-500/30 bg-slate-900/90 p-6 shadow-2xl shadow-black/30">
-          <h1 className="text-xl font-semibold">Billme Lite Web shell failed to start</h1>
+          <h1 className="text-xl font-semibold">Billme Lite failed to start</h1>
           <p className="mt-3 text-sm text-slate-300">{mountError}</p>
           <Button className="mt-5" onClick={onLogout}>
             Back to login
@@ -142,6 +139,19 @@ const DesktopShell: React.FC<{
   }
 
   return <div ref={hostRef} className="min-h-screen" />;
+};
+
+const AuthenticatedWorkspace: React.FC<{
+  apiUrl: string;
+  session: StoredSession;
+  onLogout: () => void;
+}> = ({ apiUrl, session, onLogout }) => {
+  const api = React.useMemo(
+    () => createLiteWebBillmeApi({ baseUrl: apiUrl, token: session.token, onAuthFailure: onLogout, onRequestClose: onLogout }),
+    [apiUrl, onLogout, session.token],
+  );
+
+  return <DesktopShell api={api} onLogout={onLogout} />;
 };
 
 export default function App() {
@@ -231,7 +241,7 @@ export default function App() {
   };
 
   if (!loadingSession && session) {
-    return <DesktopShell apiUrl={apiUrl} token={session.token} onLogout={handleLogout} />;
+    return <AuthenticatedWorkspace apiUrl={apiUrl} session={session} onLogout={handleLogout} />;
   }
 
   return (
@@ -239,9 +249,9 @@ export default function App() {
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
         <section className="rounded-3xl border border-white/10 bg-white/5 p-8 shadow-2xl shadow-black/25">
           <p className="mb-3 text-sm font-semibold uppercase tracking-[0.25em] text-emerald-300">Billme Lite Web</p>
-          <h1 className="text-4xl font-semibold">Browser shell for the lite product</h1>
+          <h1 className="text-4xl font-semibold">Sign in to Billme Lite</h1>
           <p className="mt-3 max-w-2xl text-sm text-slate-300">
-            Shared renderer, shared billing contracts, and authenticated HTTP transport backed by the new server API.
+            Use your server-backed workspace in the browser. After login, the shared desktop renderer takes over.
           </p>
         </section>
 

@@ -115,7 +115,12 @@ export const calculateInvoiceTaxSnapshot = (
   input: TaxableDocumentInput,
   settings: TaxSettingsShape,
 ): InvoiceTaxSnapshot => {
-  const netAmount = round2((input.items ?? []).reduce((sum, item) => sum + (Number(item.total) || 0), 0));
+  const netAmount = round2(
+    (input.items ?? []).reduce((sum, item) => {
+      const itemTotal = Number(item.total);
+      return sum + (Number.isFinite(itemTotal) ? itemTotal : 0);
+    }, 0),
+  );
   const resolvedTaxMode = resolveInvoiceTaxMode(input.taxMode, settings);
   const definition = getInvoiceTaxModeDefinition(resolvedTaxMode);
   const vatRateApplied = definition.forceZeroVat ? 0 : Number(settings.legal.defaultVatRate) || 0;

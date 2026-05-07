@@ -15,7 +15,10 @@ export const useUpsertOfferMutation = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (vars: { offer: Invoice; reason: string }) =>
-      ipc.offers.upsert({ offer: vars.offer, reason: vars.reason }),
+      ipc.offers.upsert({
+        offer: { ...vars.offer, taxMode: vars.offer.taxMode ?? 'standard_vat' },
+        reason: vars.reason,
+      }),
     onSuccess: (updated) => {
       queryClient.setQueryData(offersKey, (prev) => {
         const prevList = Array.isArray(prev) ? prev : [];

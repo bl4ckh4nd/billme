@@ -68,7 +68,7 @@ export const invoiceSchema = z.object({
   clientAddress: z.string().optional(),
   billingAddressJson: z.unknown().optional(),
   shippingAddressJson: z.unknown().optional(),
-  taxMode: invoiceTaxModeSchema.optional(),
+  taxMode: invoiceTaxModeSchema.default('standard_vat'),
   taxMeta: invoiceTaxMetaSchema.optional(),
   taxSnapshot: invoiceTaxSnapshotSchema.optional(),
   shareToken: z.string().nullable().optional(),

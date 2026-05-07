@@ -15,7 +15,10 @@ export const useCreateInvoiceMutation = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (vars: { invoice: Invoice; reason: string }) =>
-      ipc.invoices.upsert({ invoice: vars.invoice, reason: vars.reason }),
+      ipc.invoices.upsert({
+        invoice: { ...vars.invoice, taxMode: vars.invoice.taxMode ?? 'standard_vat' },
+        reason: vars.reason,
+      }),
     onSuccess: (created) => {
       queryClient.setQueryData(invoicesKey, (prev) => {
         const prevList = Array.isArray(prev) ? prev : [];
@@ -29,7 +32,10 @@ export const useUpsertInvoiceMutation = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (vars: { invoice: Invoice; reason: string }) =>
-      ipc.invoices.upsert({ invoice: vars.invoice, reason: vars.reason }),
+      ipc.invoices.upsert({
+        invoice: { ...vars.invoice, taxMode: vars.invoice.taxMode ?? 'standard_vat' },
+        reason: vars.reason,
+      }),
     onSuccess: (updated) => {
       queryClient.setQueryData(invoicesKey, (prev) => {
         const prevList = Array.isArray(prev) ? prev : [];

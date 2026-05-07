@@ -2,9 +2,6 @@ FROM node:22-alpine AS build
 
 WORKDIR /app
 
-ARG VITE_SERVER_API_URL=http://localhost:3100
-ENV VITE_SERVER_API_URL=$VITE_SERVER_API_URL
-
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -17,6 +14,9 @@ RUN pnpm -C apps/web-pro build
 FROM nginx:1.27-alpine
 
 COPY docker/nginx-spa.conf /etc/nginx/conf.d/default.conf
+COPY docker/runtime-config.js.template /usr/share/nginx/html/runtime-config.js.template
+COPY docker/nginx-runtime-config.sh /docker-entrypoint.d/99-runtime-config.sh
+RUN chmod +x /docker-entrypoint.d/99-runtime-config.sh
 COPY --from=build /app/apps/web-pro/dist /usr/share/nginx/html
 
 EXPOSE 8080

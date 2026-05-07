@@ -15,9 +15,9 @@ import {
 } from '@billme/accounting-ui-pro';
 import { createProWebClient, type ProWebClient } from './api';
 
-const DEFAULT_API_URL = (import.meta.env.VITE_SERVER_API_URL as string | undefined) ?? 'http://127.0.0.1:3100';
 const SESSION_STORAGE_KEY = 'billme.web-pro.session.v1';
 const API_URL_STORAGE_KEY = 'billme.web-pro.api-url.v1';
+const DEFAULT_API_PORT = 3100;
 
 type AppRoute = 'overview' | 'documents' | 'clients' | 'catalog' | 'recurring' | 'settings' | 'accounting';
 
@@ -63,6 +63,61 @@ type Notice = {
   text: string;
 } | null;
 
+const normalizeApiUrl = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+};
+
+const isLoopbackHostname = (hostname: string): boolean =>
+  hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+
+const getBrowserDefaultApiUrl = (): string => {
+  if (typeof window === 'undefined') {
+    return `http://127.0.0.1:${DEFAULT_API_PORT}`;
+  }
+  const hostname = window.location.hostname || '127.0.0.1';
+  return `http://${hostname}:${DEFAULT_API_PORT}`;
+};
+
+const getRuntimeApiUrl = (): string | null => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  return normalizeApiUrl(window.billmeRuntimeConfig?.serverApiUrl);
+};
+
+const isStaleLoopbackApiUrl = (apiUrl: string): boolean => {
+  try {
+    const parsed = new URL(apiUrl);
+    if (!isLoopbackHostname(parsed.hostname)) {
+      return false;
+    }
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    return !isLoopbackHostname(window.location.hostname || '');
+  } catch {
+    return false;
+  }
+};
+
+const resolveStoredApiUrl = (value: string | null | undefined): string | null => {
+  const normalized = normalizeApiUrl(value);
+  if (!normalized || isStaleLoopbackApiUrl(normalized)) {
+    return null;
+  }
+  return normalized;
+};
+
+const resolvePersistedApiUrl = (): string | null => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  return resolveStoredApiUrl(window.localStorage.getItem(API_URL_STORAGE_KEY));
+};
+
+const resolveInitialApiUrl = (): string => getRuntimeApiUrl() ?? resolvePersistedApiUrl() ?? getBrowserDefaultApiUrl();
+
 const ROUTES: Array<{ id: AppRoute; label: string; summary: string }> = [
   { id: 'overview', label: 'Überblick', summary: 'Gesundheit, Nutzung und Rollen' },
   { id: 'documents', label: 'Dokumente', summary: 'Rechnungen, Angebote und Exporte' },
@@ -87,13 +142,6 @@ const formatDate = (value: string | null | undefined) => {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium' }).format(parsed);
-};
-
-const getApiUrlFromStorage = () => {
-  if (typeof window === 'undefined') {
-    return DEFAULT_API_URL;
-  }
-  return window.localStorage.getItem(API_URL_STORAGE_KEY) ?? DEFAULT_API_URL;
 };
 
 const readStoredSession = (): StoredSession | null => {
@@ -538,7 +586,7 @@ const DataTable = ({ children }: { children: React.ReactNode }) => <div classNam
 
 export default function App() {
   const [session, setSession] = React.useState<StoredSession | null>(() => readStoredSession());
-  const [apiUrl, setApiUrl] = React.useState(() => readStoredSession()?.apiUrl ?? getApiUrlFromStorage());
+  const [apiUrl, setApiUrl] = React.useState(() => resolveStoredApiUrl(readStoredSession()?.apiUrl) ?? resolveInitialApiUrl());
   const [route, navigate] = useHashRoute();
   const [authMeta, setAuthMeta] = React.useState<AuthMeta>({
     health: null,

@@ -1,0 +1,3 @@
+window.billmeRuntimeConfig = {
+  serverApiUrl: "__BILLME_PUBLIC_API_URL__",
+};

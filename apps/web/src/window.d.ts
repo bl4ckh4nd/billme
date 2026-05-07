@@ -17,9 +17,14 @@ type NotificationPayload = {
   message: string;
 };
 
+type BillmeRuntimeConfig = {
+  serverApiUrl?: string;
+};
+
 declare global {
   interface Window {
     billmeApi?: BillmeApi;
+    billmeRuntimeConfig?: BillmeRuntimeConfig;
     billmeWindow?: {
       onMaximizeChanged: (callback: (state: WindowMaximizeState) => void) => void;
       offMaximizeChanged: () => void;

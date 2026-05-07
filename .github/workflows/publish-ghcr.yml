@@ -33,18 +33,12 @@ jobs:
         include:
           - service: server-api
             dockerfile: apps/server-api/Dockerfile
-            build_args: ''
           - service: server-worker
             dockerfile: apps/server-worker/Dockerfile
-            build_args: ''
           - service: web
             dockerfile: apps/web/Dockerfile
-            build_args: |
-              VITE_SERVER_API_URL=http://localhost:3100
           - service: web-pro
             dockerfile: apps/web-pro/Dockerfile
-            build_args: |
-              VITE_SERVER_API_URL=http://localhost:3100
 
     env:
       REGISTRY_IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
@@ -93,6 +87,5 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.tags.outputs.tags }}
-          build-args: ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}

@@ -66,9 +66,9 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-      args:
-        VITE_SERVER_API_URL: ${BILLME_PUBLIC_API_URL:-http://localhost:3100}
     restart: unless-stopped
+    environment:
+      BILLME_PUBLIC_API_URL: ${BILLME_PUBLIC_API_URL:-}
     depends_on:
       server-api:
         condition: service_healthy
@@ -80,9 +80,9 @@ services:
     build:
       context: .
       dockerfile: apps/web-pro/Dockerfile
-      args:
-        VITE_SERVER_API_URL: ${BILLME_PUBLIC_API_URL:-http://localhost:3100}
     restart: unless-stopped
+    environment:
+      BILLME_PUBLIC_API_URL: ${BILLME_PUBLIC_API_URL:-}
     depends_on:
       server-api:
         condition: service_healthy

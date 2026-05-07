@@ -5,8 +5,8 @@ import { mountDesktopRendererApp, type DesktopRendererRuntime } from '@billme/de
 import { Button, Input } from '@billme/ui';
 import { createLiteWebBillmeApi } from './api/createLiteWebApi';
 
-const DEFAULT_API_URL = (import.meta.env.VITE_SERVER_API_URL as string | undefined) ?? 'http://127.0.0.1:3100';
 const SESSION_STORAGE_KEY = 'billme.web.lite.session.v1';
+const DEFAULT_API_PORT = 3100;
 
 const sessionInfoSchema = z.object({
   user: authUserSchema,
@@ -18,6 +18,29 @@ const sessionInfoSchema = z.object({
 type StoredSession = {
   token: string;
   user: z.infer<typeof authUserSchema>;
+};
+
+const normalizeApiUrl = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+};
+
+const isLoopbackHostname = (hostname: string): boolean =>
+  hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+
+const getBrowserDefaultApiUrl = (): string => {
+  if (typeof window === 'undefined') {
+    return `http://127.0.0.1:${DEFAULT_API_PORT}`;
+  }
+  const hostname = window.location.hostname || '127.0.0.1';
+  return `http://${hostname}:${DEFAULT_API_PORT}`;
+};
+
+const getRuntimeApiUrl = (): string | null => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  return normalizeApiUrl(window.billmeRuntimeConfig?.serverApiUrl);
 };
 
 const readStoredSession = (): StoredSession | null => {
@@ -122,7 +145,8 @@ const DesktopShell: React.FC<{
 };
 
 export default function App() {
-  const authClient = React.useMemo(() => createServerApiClient(DEFAULT_API_URL), []);
+  const apiUrl = React.useMemo(() => getRuntimeApiUrl() ?? getBrowserDefaultApiUrl(), []);
+  const authClient = React.useMemo(() => createServerApiClient(apiUrl), [apiUrl]);
   const [health, setHealth] = React.useState<string>('Checking server...');
   const [capabilities, setCapabilities] = React.useState<string[]>([]);
   const [bootstrapReady, setBootstrapReady] = React.useState(false);
@@ -149,7 +173,7 @@ export default function App() {
           authClient.getHealth(),
           authClient.getCapabilities(),
           authClient.getBootstrapStatus(),
-          storedSession ? fetchLiteSession(DEFAULT_API_URL, storedSession.token).catch(() => null) : Promise.resolve(null),
+          storedSession ? fetchLiteSession(apiUrl, storedSession.token).catch(() => null) : Promise.resolve(null),
         ]);
 
         if (cancelled) {
@@ -179,7 +203,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authClient]);
+  }, [apiUrl, authClient]);
 
   const finishAuth = React.useCallback((nextSession: StoredSession) => {
     persistSession(nextSession);
@@ -207,7 +231,7 @@ export default function App() {
   };
 
   if (!loadingSession && session) {
-    return <DesktopShell apiUrl={DEFAULT_API_URL} token={session.token} onLogout={handleLogout} />;
+    return <DesktopShell apiUrl={apiUrl} token={session.token} onLogout={handleLogout} />;
   }
 
   return (
@@ -224,7 +248,7 @@ export default function App() {
         <section className="grid gap-6 md:grid-cols-2">
           <div className="rounded-3xl border border-white/10 bg-slate-900/80 p-6">
             <h2 className="text-lg font-semibold">Backend status</h2>
-            <p className="mt-3 text-sm text-slate-300">API URL: {DEFAULT_API_URL}</p>
+            <p className="mt-3 text-sm text-slate-300">API URL: {apiUrl}</p>
             <p className="mt-2 text-sm text-slate-200">{health}</p>
             <div className="mt-4 flex flex-wrap gap-2">
               {(capabilities.length > 0 ? capabilities : supportedServerRoles).map((role) => (

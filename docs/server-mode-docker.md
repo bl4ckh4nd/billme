@@ -31,12 +31,12 @@ Edit `.env.server-mode` before the first start:
 - optionally set `BILLME_POSTGRES_DATA_DIR` to an absolute host path if PostgreSQL should use a bind-mounted data directory instead of the default named volume
 - optionally set `BILLME_POSTGRES_RUN_AS` if PostgreSQL must run under a specific container uid:gid
 - set `BILLME_SESSION_SECRET` to a long random value
-- set `BILLME_PUBLIC_API_URL` to the API URL that browsers will call (for local Docker use `http://localhost:3100`)
+- optionally set `BILLME_PUBLIC_API_URL` to override the API URL that browsers will call; if unset, the web shells derive `http://<current-host>:3100` automatically
 - optionally adjust exposed ports and worker intervals
 - optionally set `WORKER_RUN_ONCE=1` for run-once worker debugging or future E2E scenarios
 - optionally set `SMTP_PASSWORD` or `RESEND_API_KEY` if queued email delivery should be enabled
 
-`BILLME_PUBLIC_API_URL` is baked into the two web images at build time. Rebuild `web` and `web-pro` after changing it.
+The web shells read `BILLME_PUBLIC_API_URL` at container startup through a generated `runtime-config.js` file. That means Portainer can override the API URL without rebuilding the images.
 
 ## Pull the published images
 

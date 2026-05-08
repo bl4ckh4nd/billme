@@ -66,15 +66,15 @@ jobs:
         run: |
           set -euo pipefail
           image="${REGISTRY_IMAGE_PREFIX}/${{ matrix.service }}"
-          {
-            echo "tags<<EOF"
-            echo "${image}:sha-${GITHUB_SHA}"
-            if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
-              echo "${image}:latest"
-            fi
-            if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-              echo "${image}:${GITHUB_REF_NAME}"
-              echo "${image}:latest"
+           {
+             echo "tags<<EOF"
+             echo "${image}:sha-${GITHUB_SHA}"
+             if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_REF}" == "refs/heads/main" ]]; then
+               echo "${image}:latest"
+             fi
+             if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+               echo "${image}:${GITHUB_REF_NAME}"
+               echo "${image}:latest"
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"

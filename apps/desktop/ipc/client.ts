@@ -11,6 +11,6 @@ export const ipc: BillmeApi = new Proxy({} as BillmeApi, {
   get(_target, prop) {
     const api = resolveApi();
     const value = api[prop as keyof BillmeApi];
-    return typeof value === 'function' ? value.bind(api) : value;
+    return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(api) : value;
   },
 }) as BillmeApi;

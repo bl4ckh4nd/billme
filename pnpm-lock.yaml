@@ -849,6 +849,9 @@ importers:
       better-sqlite3:
         specifier: ^12.4.1
         version: 12.6.2
+      drizzle-orm:
+        specifier: ^0.44.4
+        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
       pg:
         specifier: ^8.16.3
         version: 8.20.0
@@ -865,6 +868,9 @@ importers:
       '@types/pg':
         specifier: ^8.15.5
         version: 8.20.0
+      drizzle-kit:
+        specifier: ^0.31.4
+        version: 0.31.9
       tsx:
         specifier: ^4.20.5
         version: 4.21.0

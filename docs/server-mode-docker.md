@@ -89,6 +89,11 @@ PostgreSQL data is stored in the named Docker volume `billme-postgres-data` by d
 If `BILLME_POSTGRES_DATA_DIR` is set to an absolute host path, PostgreSQL uses that bind-mounted
 directory instead.
 
+Server-mode migrations are now applied through Drizzle. Existing deployments that still have the
+older `server_schema_migrations` history table are adopted automatically on the next startup, so a
+persisted PostgreSQL volume does not need to be wiped just because an older raw SQL checksum no
+longer matches the current image.
+
 On some rootless Podman setups, PostgreSQL cannot `chown` a bind-mounted host directory during
 startup. In that case, pre-create the directory with:
 
@@ -209,4 +214,10 @@ If only the browser API URL changes, rebuilding the two web images is sufficient
 
 ```bash
 docker compose --env-file .env.server-mode -f docker-compose.server-mode.yml build web web-pro
+```
+
+If you need to run the database upgrade step manually against an existing PostgreSQL volume, use:
+
+```bash
+DATABASE_URL=postgresql://... pnpm -C packages/server-data migrate
 ```

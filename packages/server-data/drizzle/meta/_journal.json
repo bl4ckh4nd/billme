@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1768900000000,
+      "tag": "0000_server_data",
+      "breakpoints": false
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1768900000001,
+      "tag": "0001_server_data_pro_accounting",
+      "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1768900000002,
+      "tag": "0002_server_data_released_number_reservations",
+      "breakpoints": false
+    }
+  ]
+}

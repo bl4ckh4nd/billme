@@ -157,6 +157,7 @@ type OfferRow = {
   valid_until: string;
   amount: string | number;
   status: Offer['status'];
+  items_json: string | null;
   share_json: string | null;
   history_json: string | null;
   created_at: string | null;
@@ -343,6 +344,7 @@ const rowToOffer = (row: OfferRow): Offer =>
     validUntil: row.valid_until,
     amount: toNumber(row.amount),
     status: row.status,
+    items: parseJson(row.items_json, []),
     share: parseJson(row.share_json, undefined),
     history: parseJson(row.history_json, []),
     createdAt: row.created_at ?? undefined,
@@ -745,12 +747,12 @@ export const createPostgresOfferRepository = (db: PostgresQueryable): OfferRepos
       `
         INSERT INTO offers (
           id, tenant_id, client_id, client_number, project_id, number, client, client_email, client_address,
-          billing_address_json, shipping_address_json, date, valid_until, amount, status, share_json,
+          billing_address_json, shipping_address_json, date, valid_until, amount, status, items_json, share_json,
           history_json, created_at, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19
+          $17, $18, $19, $20
         )
         ON CONFLICT (id) DO UPDATE SET
           tenant_id = EXCLUDED.tenant_id,
@@ -767,6 +769,7 @@ export const createPostgresOfferRepository = (db: PostgresQueryable): OfferRepos
           valid_until = EXCLUDED.valid_until,
           amount = EXCLUDED.amount,
           status = EXCLUDED.status,
+          items_json = EXCLUDED.items_json,
           share_json = EXCLUDED.share_json,
           history_json = EXCLUDED.history_json,
           updated_at = EXCLUDED.updated_at
@@ -787,6 +790,7 @@ export const createPostgresOfferRepository = (db: PostgresQueryable): OfferRepos
         nextOffer.validUntil,
         nextOffer.amount,
         nextOffer.status,
+        toJson(nextOffer.items ?? []),
         nextOffer.share ? toJson(nextOffer.share) : null,
         toJson(nextOffer.history ?? []),
         nextOffer.createdAt ?? null,

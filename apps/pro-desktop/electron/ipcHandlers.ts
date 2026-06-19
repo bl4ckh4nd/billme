@@ -54,9 +54,6 @@ import {
 import type { AppSettings } from '../types';
 import { sendEmail, testEmailConfig, type SmtpConfig, type ResendConfig, type EmailOptions } from '../services/emailService';
 import { logEmail } from '../db/emailRepo';
-import { normalizeInvoiceForEinvoice } from '../services/einvoice/normalizeInvoiceForEinvoice';
-import { buildZugferdXml } from '../services/einvoice/zugferdXml';
-import { embedZugferdInPdf } from '../services/einvoice/embedZugferdInPdf';
 import {
   getUnmatchedTransactions,
   findInvoiceMatches,
@@ -71,13 +68,16 @@ import { getInvoiceDunningStatus } from '../services/dunningService';
 import { buildEurCsv, getEurReport, listEurItems, upsertEurItemClassification } from '../services/eurReport';
 import { listAllEurRules, upsertEurRule, deleteEurRule } from '../db/eurRulesRepo';
 import {
-  bindProAccountingCatalogScope,
-  bindProAccountingScope,
-  bindProWorkflowScope,
-  createProAccountingCatalogService,
-  createProAccountingService,
-  createProWorkflowService,
+  bindProAccountingFacadeScope,
+  createProAccountingFacade,
 } from '@billme/accounting-engine';
+import {
+  buildZugferdXml,
+  calculateInvoiceTaxSnapshot,
+  embedZugferdInPdf,
+  normalizeInvoiceForEinvoice,
+  resolveInvoiceTaxMode,
+} from '@billme/server-core/services';
 import { PRODUCT_PROFILE } from '../productProfile';
 import { importSkrCharts } from '../services/skrImport';
 import {
@@ -90,12 +90,22 @@ import { buildTaxAuditExportPackage } from '../services/auditExportPackage';
 import { seedAccountKeywords } from '../services/accountKeywordSeed';
 import { resolveRuntimeProTenantScope } from '../tenantScope';
 
-const computeGrossFromItems = (doc: Invoice, settings: AppSettings): number => {
-  const net = (doc.items ?? []).reduce((acc, it) => acc + (Number(it.total) || 0), 0);
-  const rate = settings.legal.smallBusinessRule ? 0 : Number(settings.legal.defaultVatRate) || 0;
-  const vat = net * (rate / 100);
-  const gross = net + vat;
-  return Number.isFinite(gross) ? gross : 0;
+const normalizeInvoiceTaxData = (doc: Invoice, settings: AppSettings): Invoice => {
+  const taxMode = resolveInvoiceTaxMode(doc.taxMode, settings);
+  const taxSnapshot = calculateInvoiceTaxSnapshot(
+    {
+      items: doc.items ?? [],
+      taxMode,
+      taxMeta: doc.taxMeta,
+    },
+    settings,
+  );
+  return {
+    ...doc,
+    taxMode,
+    taxSnapshot,
+    amount: taxSnapshot.grossAmount,
+  };
 };
 
 const deriveCustomerRef = (doc: Invoice): string => {
@@ -151,18 +161,17 @@ export const registerIpcHandlers = (
   const getUserDataPath = deps.getUserDataPath;
   const getMainWindow = deps.getMainWindow;
   const getProScope = () => resolveRuntimeProTenantScope();
-  const getProAccountingService = () =>
-    bindProAccountingScope(
-      createProAccountingService(createSqliteProAccountingRepository(requireDb())),
+  const getProAccountingFacade = () => {
+    const db = requireDb();
+    return bindProAccountingFacadeScope(
+      createProAccountingFacade({
+        accounting: createSqliteProAccountingRepository(db),
+        catalog: createSqliteProAccountingCatalogRepository(db),
+        workflow: createSqliteProWorkflowRepository(db),
+      }),
       getProScope(),
     );
-  const getProAccountingCatalogService = () =>
-    bindProAccountingCatalogScope(
-      createProAccountingCatalogService(createSqliteProAccountingCatalogRepository(requireDb())),
-      getProScope(),
-    );
-  const getProWorkflowService = () =>
-    bindProWorkflowScope(createProWorkflowService(createSqliteProWorkflowRepository(requireDb())), getProScope());
+  };
 
   register(ipcMain, 'invoices:list', () => {
     const db = requireDb();
@@ -172,10 +181,7 @@ export const registerIpcHandlers = (
   register(ipcMain, 'invoices:upsert', ({ invoice, reason }) => {
     const db = requireDb();
     const settings = requireSettings(db);
-    const computed: Invoice = {
-      ...invoice,
-      amount: computeGrossFromItems(invoice as Invoice, settings),
-    };
+    const computed = normalizeInvoiceTaxData(invoice, settings);
     return upsertInvoice(db, computed, reason);
   });
 
@@ -193,10 +199,7 @@ export const registerIpcHandlers = (
   register(ipcMain, 'offers:upsert', ({ offer, reason }) => {
     const db = requireDb();
     const settings = requireSettings(db);
-    const computed: Invoice = {
-      ...offer,
-      amount: computeGrossFromItems(offer as Invoice, settings),
-    };
+    const computed = normalizeInvoiceTaxData(offer, settings);
     return upsertOffer(db, computed, reason);
   });
 
@@ -319,6 +322,7 @@ export const registerIpcHandlers = (
   register(ipcMain, 'documents:createFromClient', ({ kind, clientId }) => {
     const db = requireDb();
     const normalizedKind = kind === 'offer' ? 'offer' : 'invoice';
+    const settings = requireSettings(db);
 
     const client = getClient(db, clientId);
     if (!client) throw new Error('Client not found');
@@ -361,6 +365,7 @@ export const registerIpcHandlers = (
       clientAddress: billingAddress ? formatAddressMultiline(billingAddress) : '',
       billingAddressJson: billingAddress ?? null,
       shippingAddressJson: shippingAddress ?? null,
+      taxMode: resolveInvoiceTaxMode(undefined, settings),
       date: today,
       dueDate: normalizedKind === 'offer' ? today : '',
       amount: 0,
@@ -370,13 +375,13 @@ export const registerIpcHandlers = (
       history: [],
     };
 
-    return base;
+    return normalizeInvoiceTaxData(base, settings);
   });
 
-  register(ipcMain, 'documents:convertOfferToInvoice', ({ offerId }) => {
+  register(ipcMain, 'documents:convertOfferToInvoice', ({ offerId, invoiceDate, dueDate }) => {
     const db = requireDb();
     const newInvoiceId = crypto.randomUUID();
-    return createInvoiceFromOffer(db, offerId, newInvoiceId);
+    return createInvoiceFromOffer(db, offerId, newInvoiceId, { invoiceDate, dueDate });
   });
 
   register(ipcMain, 'templates:list', ({ kind }) => {
@@ -893,7 +898,12 @@ export const registerIpcHandlers = (
     // Generate PDF
     let pdfPath: string;
     try {
-      const res = await exportPdf({ kind: documentType, id: documentId }, db, userDataPath);
+      const res = await exportPdf({
+        kind: documentType,
+        id: documentId,
+        suggestedName: `${document.number || documentType}-${document.client || documentId}`,
+        userDataPath,
+      });
       pdfPath = res.path;
     } catch (e) {
       return {
@@ -1097,38 +1107,38 @@ export const registerIpcHandlers = (
   });
 
   register(ipcMain, 'pro:listLedgerAccounts', (args) => {
-    return getProAccountingCatalogService().listLedgerAccounts(args);
+    return getProAccountingFacade().catalog.listLedgerAccounts(args);
   });
 
   register(ipcMain, 'pro:listTaxCases', ({ activeOnly }) => {
-    return getProAccountingCatalogService().listTaxCases({ activeOnly });
+    return getProAccountingFacade().catalog.listTaxCases({ activeOnly });
   });
 
   register(ipcMain, 'pro:listTaxCaseAccountMappings', ({ chart, taxCaseKey }) => {
-    return getProAccountingCatalogService().listTaxCaseAccountMappings({ chart, taxCaseKey });
+    return getProAccountingFacade().catalog.listTaxCaseAccountMappings({ chart, taxCaseKey });
   });
 
   register(ipcMain, 'pro:upsertTaxCaseAccountMapping', (args) => {
-    return getProAccountingCatalogService().upsertTaxCaseAccountMapping(args);
+    return getProAccountingFacade().catalog.upsertTaxCaseAccountMapping(args);
   });
 
   register(ipcMain, 'pro:getLedgerStats', () => {
-    return getProAccountingCatalogService().getLedgerStats();
+    return getProAccountingFacade().catalog.getLedgerStats();
   });
 
   register(ipcMain, 'pro:listBankTransactions', () => {
-    return getProAccountingService().listBankTransactions().then((rows) =>
+    return getProAccountingFacade().accounting.listBankTransactions().then((rows) =>
       rows.map((tx) => ({
         id: tx.id,
         accountId: tx.accountId,
         date: tx.date,
         amount: tx.amount,
         type: tx.type,
-      counterparty: tx.counterparty,
-      purpose: tx.purpose,
-      linkedInvoiceId: tx.linkedInvoiceId,
-      status: tx.status,
-      suggestedAccountNumber: tx.suggestedAccountNumber,
+        counterparty: tx.counterparty,
+        purpose: tx.purpose,
+        linkedInvoiceId: tx.linkedInvoiceId,
+        status: tx.status,
+        suggestedAccountNumber: tx.suggestedAccountNumber,
         suggestionReason: tx.suggestionReason,
         suggestionLayer: tx.suggestionLayer,
         suggestionConfidence: tx.suggestionConfidence,
@@ -1137,62 +1147,63 @@ export const registerIpcHandlers = (
   });
 
   register(ipcMain, 'pro:listAccountSuggestionRules', ({ chart, activeOnly }) => {
-    return getProAccountingCatalogService().listAccountSuggestionRules({ chart, activeOnly });
+    return getProAccountingFacade().catalog.listAccountSuggestionRules({ chart, activeOnly });
   });
 
   register(ipcMain, 'pro:upsertAccountSuggestionRule', (args) => {
-    return getProAccountingCatalogService().upsertAccountSuggestionRule(args);
+    return getProAccountingFacade().catalog.upsertAccountSuggestionRule(args);
   });
 
   register(ipcMain, 'pro:deleteAccountSuggestionRule', ({ id }) => {
-    return getProAccountingCatalogService().deleteAccountSuggestionRule(id).then(() => ({ ok: true }));
+    return getProAccountingFacade().catalog.deleteAccountSuggestionRule(id).then(() => ({ ok: true }));
   });
 
   register(ipcMain, 'pro:getDraftByTransactionId', ({ transactionId }) => {
-    return getProAccountingService().getDraftByTransactionId(transactionId);
+    return getProAccountingFacade().accounting.getDraftByTransactionId(transactionId);
   });
 
   register(ipcMain, 'pro:saveDraft', ({ draft }) => {
-    return getProAccountingService().saveDraft(draft);
+    return getProAccountingFacade().accounting.saveDraft(draft);
   });
 
   register(ipcMain, 'pro:dispatchDraftAction', ({ transactionId, action, rejectReason }) => {
-    return getProAccountingService().dispatchDraftAction({ transactionId, action, rejectReason });
+    return getProAccountingFacade().accounting.dispatchDraftAction({ transactionId, action, rejectReason });
   });
 
   register(ipcMain, 'pro:postDraft', ({ draftId, postingDate, actorRole }) => {
     assertProRoleAllowed('pro:postDraft', actorRole, ['reviewer', 'accountant', 'admin']);
-    return getProAccountingService().postDraft(draftId, { postingDate });
+    return getProAccountingFacade().accounting.postDraft(draftId, { postingDate });
   });
 
   register(ipcMain, 'pro:reverseJournalEntry', ({ entryId, reason, actorRole }) => {
     assertProRoleAllowed('pro:reverseJournalEntry', actorRole, ['accountant', 'admin']);
-    return getProAccountingService().reverseJournalEntry(entryId, reason);
+    return getProAccountingFacade().accounting.reverseJournalEntry(entryId, reason);
   });
 
   register(ipcMain, 'pro:listJournalEntries', ({ from, to, limit, offset }) => {
-    return getProAccountingService().listJournalEntries({ from, to, limit, offset });
+    return getProAccountingFacade().accounting.listJournalEntries({ from, to, limit, offset });
   });
 
   register(ipcMain, 'pro:getLedgerBalances', ({ asOfDate }) => {
-    return getProAccountingService().getLedgerBalances({ asOfDate });
+    return getProAccountingFacade().accounting.getLedgerBalances({ asOfDate });
   });
 
   register(ipcMain, 'pro:getSusaReport', ({ asOfDate }) => {
-    return getProAccountingService().getSusaReport({ asOfDate });
+    return getProAccountingFacade().accounting.getSusaReport({ asOfDate });
   });
 
   register(ipcMain, 'pro:getGuvReport', ({ from, to }) => {
-    return getProAccountingService().getGuvReport({ from, to });
+    return getProAccountingFacade().accounting.getGuvReport({ from, to });
   });
 
   register(ipcMain, 'pro:getBilanzReport', ({ asOfDate }) => {
-    return getProAccountingService().getBilanzReport({ asOfDate });
+    return getProAccountingFacade().accounting.getBilanzReport({ asOfDate });
   });
 
   register(ipcMain, 'pro:exportDatevBuchungsstapel', ({ from, to, actorRole }) => {
     assertProRoleAllowed('pro:exportDatevBuchungsstapel', actorRole, ['accountant', 'admin']);
-    return getProAccountingService().buildDatevRows({ from, to }).then((rows) => {
+    const accounting = getProAccountingFacade().accounting;
+    return accounting.buildDatevRows({ from, to }).then((rows) => {
       const userDataPath = getUserDataPath();
       const exportDir = path.join(userDataPath, 'exports', 'datev');
       fs.mkdirSync(exportDir, { recursive: true });
@@ -1200,7 +1211,7 @@ export const registerIpcHandlers = (
       const exportPath = path.join(exportDir, `datev-buchungsstapel-${timestamp}.csv`);
       const csvBuffer = buildDatevBuchungsstapelCsv(rows);
       fs.writeFileSync(exportPath, csvBuffer);
-      return getProAccountingService().insertDatevExport({
+      return accounting.insertDatevExport({
         filePath: exportPath,
         recordCount: rows.length,
         fromDate: from,
@@ -1210,27 +1221,27 @@ export const registerIpcHandlers = (
   });
 
   register(ipcMain, 'pro:listDatevExports', ({ limit }) => {
-    return getProAccountingService().listDatevExports().then((rows) => (limit ? rows.slice(0, limit) : rows));
+    return getProAccountingFacade().accounting.listDatevExports().then((rows) => (limit ? rows.slice(0, limit) : rows));
   });
 
   register(ipcMain, 'pro:getAccountingHealth', () => {
-    return getProAccountingService().getAccountingHealth();
+    return getProAccountingFacade().accounting.getAccountingHealth();
   });
 
   register(ipcMain, 'pro:validateTaxCompliance', ({ draftId, transactionId }) => {
-    return getProAccountingService().validateTaxCompliance({ draftId, transactionId });
+    return getProAccountingFacade().accounting.validateTaxCompliance({ draftId, transactionId });
   });
 
   register(ipcMain, 'pro:getVatSummary', ({ from, to }) => {
-    return getProAccountingService().getVatSummary({ from, to });
+    return getProAccountingFacade().accounting.getVatSummary({ from, to });
   });
 
   register(ipcMain, 'pro:listWorkflowEntries', () => {
-    return getProWorkflowService().list();
+    return getProAccountingFacade().workflow.list();
   });
 
   register(ipcMain, 'pro:upsertWorkflowEntry', ({ transactionId, transactionJson, draftJson }) => {
-    return getProWorkflowService().upsert({ transactionId, transactionJson, draftJson });
+    return getProAccountingFacade().workflow.upsert({ transactionId, transactionJson, draftJson });
   });
 
   register(ipcMain, 'updater:getStatus', () => {

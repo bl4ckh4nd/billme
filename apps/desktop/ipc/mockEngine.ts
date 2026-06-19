@@ -654,6 +654,14 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       const idx = clients.findIndex((c) => c.id === normalized.id);
       if (idx >= 0) clients[idx] = storedClient;
       else clients.unshift(storedClient);
+      // Keep client_number in sync on existing documents.
+      const newCustomerNumber = storedClient.customerNumber ?? '';
+      for (const inv of invoices) {
+        if (inv.clientId === normalized.id) inv.clientNumber = newCustomerNumber;
+      }
+      for (const off of offers) {
+        if (off.clientId === normalized.id) off.clientNumber = newCustomerNumber;
+      }
       return structuredClone(storedClient) as IpcResult<K>;
     }
     case 'clients:delete': {
@@ -804,19 +812,28 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       return structuredClone(normalizeInvoiceTaxData(doc)) as IpcResult<K>;
     }
     case 'documents:convertOfferToInvoice': {
-      const { offerId } = args as IpcArgs<'documents:convertOfferToInvoice'>;
+      const { offerId, invoiceDate, dueDate } = args as IpcArgs<'documents:convertOfferToInvoice'>;
       const offer = offers.find((o) => o.id === offerId);
       if (!offer) throw new Error('Offer not found');
       const reservation = reserveNumber('invoice');
+      const today = toIsoDate(new Date());
+      const paymentTerms = settings.legal?.paymentTermsDays ?? 14;
+      const defaultDueDate = (() => {
+        const d = new Date();
+        d.setDate(d.getDate() + paymentTerms);
+        return toIsoDate(d);
+      })();
       const invoice: Invoice = {
         ...structuredClone(offer),
         id: Math.random().toString(36).slice(2),
         number: reservation.number,
         numberReservationId: reservation.reservationId,
+        date: invoiceDate ?? today,
+        dueDate: dueDate ?? defaultDueDate,
         status: 'open',
         history: [
           {
-            date: toIsoDate(new Date()),
+            date: today,
             action: `Erstellt aus Angebot ${offer.number}`,
           },
           ...(offer.history ?? []),

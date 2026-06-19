@@ -26,6 +26,7 @@ import {
   resolveInvoiceTaxMode,
 } from '../services/taxMode';
 import { getDefaultPaymentTermsText } from '../utils/placeholders';
+import { ConvertOfferModal } from './ConvertOfferModal';
 
 // Mock data for Offers to demonstrate the switch
 const MOCK_OFFERS: Invoice[] = [];
@@ -145,6 +146,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
   const [paymentDeleteReason, setPaymentDeleteReason] = useState('');
   const [paymentDeleteError, setPaymentDeleteError] = useState<string | null>(null);
+
+  const [showConvertModal, setShowConvertModal] = useState(false);
 
   // Choose data source based on document type
   // In a real app, this would come from a context or prop
@@ -351,27 +354,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   const handleConvertOfferToInvoice = () => {
     if (!selectedDocument || documentType !== 'offer') return;
-    void (async () => {
-      try {
-        setToastMessage('Rechnung wird erstellt...');
-        setShowShareToast(true);
-        const newInvoice = await ipc.documents.convertOfferToInvoice({ offerId: selectedDocument.id });
-        await queryClient.invalidateQueries({ queryKey: ['invoices'] });
-        setToastMessage('Rechnung erfolgreich erstellt!');
-        setTimeout(() => {
-          setShowShareToast(false);
-          // Switch to invoices view and open the new invoice
-          switchDocumentType('invoice');
-          setTimeout(() => {
-            setSelectedId(newInvoice.id);
-            setViewMode('detail');
-          }, 100);
-        }, 1500);
-      } catch (e) {
-        setToastMessage(`Fehler: ${String(e)}`);
-        setTimeout(() => setShowShareToast(false), 5000);
-      }
-    })();
+    setShowConvertModal(true);
+  };
+
+  const handleOfferConverted = (newInvoiceId: string) => {
+    setShowConvertModal(false);
+    switchDocumentType('invoice');
+    setTimeout(() => {
+      setSelectedId(newInvoiceId);
+      setViewMode('detail');
+    }, 50);
   };
 
   const switchDocumentType = (type: 'invoice' | 'offer') => {
@@ -940,11 +932,21 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   // --- Detail View ---
   if (viewMode === 'detail' && selectedDocument) {
       return (
-          <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm animate-enter relative">
+          <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm animate-enter relative">
               
               {renderEmailModal()}
               {renderPaymentModal()}
               {renderPaymentDeleteModal()}
+              {showConvertModal && documentType === 'offer' && (
+                <ConvertOfferModal
+                  offer={selectedDocument}
+                  settings={settings}
+                  ipc={ipc}
+                  queryClient={queryClient}
+                  onClose={() => setShowConvertModal(false)}
+                  onConverted={handleOfferConverted}
+                />
+              )}
 
               {/* Toast Notification */}
               {showShareToast && (
@@ -990,7 +992,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   {/* Actions Toolbar — tiered: primary → secondary → overflow */}
                   <div className="flex flex-wrap items-center gap-2">
                       {/* Convert to Invoice — prominent CTA for accepted offers */}
-                      {documentType === 'offer' && selectedDocument.shareDecision === 'accepted' && (
+                      {documentType === 'offer' && ['open', 'accepted'].includes(selectedDocument.status ?? '') && (
                         <>
                           <Button
                             onClick={handleConvertOfferToInvoice}
@@ -1140,7 +1142,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   
                   {/* Left Column: Document Preview */}
                   <div className="xl:col-span-2 space-y-6">
-                       <div className="bg-gray-50 rounded-[2rem] p-8 border border-gray-100 relative overflow-hidden">
+                       <div className="bg-gray-50 rounded-xl p-8 border border-gray-100 relative overflow-hidden">
                           {/* Visual Paper Edge Effect top */}
                           <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-b from-gray-200/50 to-transparent opacity-50"></div>
 
@@ -1548,12 +1550,22 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm flex flex-col relative animate-enter">
+    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm flex flex-col relative animate-enter">
       {renderDunningModal()}
       {renderEmailModal()}
       {renderPaymentModal()}
       {renderPaymentDeleteModal()}
       {renderBulkDeleteModal()}
+      {showConvertModal && selectedDocument && documentType === 'offer' && (
+        <ConvertOfferModal
+          offer={selectedDocument}
+          settings={settings}
+          ipc={ipc}
+          queryClient={queryClient}
+          onClose={() => setShowConvertModal(false)}
+          onConverted={handleOfferConverted}
+        />
+      )}
 
       {/* Toast Notification for List View */}
       {showShareToast && viewMode === 'list' && (

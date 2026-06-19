@@ -36,15 +36,19 @@ export const createInvoiceFromOffer = (
   db: Database.Database,
   offerId: string,
   newInvoiceId: string,
+  options?: { invoiceDate?: string; dueDate?: string },
 ): Invoice => {
   const tx = db.transaction(() => {
     const numberReservation = reserveNumber(db, 'invoice');
     try {
-      const paymentTerms = getSettings(db)?.legal?.paymentTermsDays || 14;
-      const invoiceDate = new Date().toISOString().split('T')[0] ?? '';
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + paymentTerms);
-      const dueDateStr = dueDate.toISOString().split('T')[0] ?? '';
+      const paymentTerms = getSettings(db)?.legal?.paymentTermsDays ?? 14;
+      const invoiceDate = options?.invoiceDate ?? new Date().toISOString().split('T')[0] ?? '';
+      const dueDateStr = (() => {
+        if (options?.dueDate) return options.dueDate;
+        const d = new Date();
+        d.setDate(d.getDate() + paymentTerms);
+        return d.toISOString().split('T')[0] ?? '';
+      })();
 
       const invoice = createSharedInvoiceFromOffer(db, PRODUCT, {
         offerId,

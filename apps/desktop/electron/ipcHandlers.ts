@@ -54,9 +54,6 @@ import {
 import type { AppSettings } from '../types';
 import { sendEmail, testEmailConfig, type SmtpConfig, type ResendConfig, type EmailOptions } from '../services/emailService';
 import { logEmail } from '../db/emailRepo';
-import { normalizeInvoiceForEinvoice } from '../services/einvoice/normalizeInvoiceForEinvoice';
-import { buildZugferdXml } from '../services/einvoice/zugferdXml';
-import { embedZugferdInPdf } from '../services/einvoice/embedZugferdInPdf';
 import {
   getUnmatchedTransactions,
   findInvoiceMatches,
@@ -71,7 +68,13 @@ import { getInvoiceDunningStatus } from '../services/dunningService';
 import { buildEurCsv, getEurReport, listEurItems, upsertEurItemClassification } from '../services/eurReport';
 import { listAllEurRules, upsertEurRule, deleteEurRule } from '../db/eurRulesRepo';
 import { PRODUCT_PROFILE } from '../productProfile';
-import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import {
+  buildZugferdXml,
+  calculateInvoiceTaxSnapshot,
+  embedZugferdInPdf,
+  normalizeInvoiceForEinvoice,
+  resolveInvoiceTaxMode,
+} from '@billme/server-core/services';
 
 const normalizeInvoiceTaxData = (doc: Invoice, settings: AppSettings): Invoice => {
   const taxMode = resolveInvoiceTaxMode(doc.taxMode, settings);
@@ -340,10 +343,10 @@ export const registerIpcHandlers = (
     return normalizeInvoiceTaxData(base, settings);
   });
 
-  register(ipcMain, 'documents:convertOfferToInvoice', ({ offerId }) => {
+  register(ipcMain, 'documents:convertOfferToInvoice', ({ offerId, invoiceDate, dueDate }) => {
     const db = requireDb();
     const newInvoiceId = crypto.randomUUID();
-    return createInvoiceFromOffer(db, offerId, newInvoiceId);
+    return createInvoiceFromOffer(db, offerId, newInvoiceId, { invoiceDate, dueDate });
   });
 
   register(ipcMain, 'templates:list', ({ kind }) => {
@@ -850,7 +853,12 @@ export const registerIpcHandlers = (
     // Generate PDF
     let pdfPath: string;
     try {
-      const res = await exportPdf({ kind: documentType, id: documentId }, db, userDataPath);
+      const res = await exportPdf({
+        kind: documentType,
+        id: documentId,
+        suggestedName: `${document.number || documentType}-${document.client || documentId}`,
+        userDataPath,
+      });
       pdfPath = res.path;
     } catch (e) {
       return {

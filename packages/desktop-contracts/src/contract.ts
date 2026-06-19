@@ -77,6 +77,8 @@ const numbersFinalizeArgsSchema = z.object({
 
 const convertOfferToInvoiceSchema = z.object({
   offerId: z.string().min(1),
+  invoiceDate: z.string().optional(),
+  dueDate: z.string().optional(),
 });
 
 const sendEmailSchema = z.object({
@@ -873,6 +875,8 @@ export const ipcRoutes = {
     result: okSchema,
   },
 } as const satisfies Record<string, RouteDef<z.ZodTypeAny, z.ZodTypeAny>>;
+
+export const baseIpcRoutes = ipcRoutes;
 
 export type IpcRouteKey = keyof typeof ipcRoutes;
 export type IpcArgs<K extends IpcRouteKey> = z.infer<(typeof ipcRoutes)[K]['args']>;

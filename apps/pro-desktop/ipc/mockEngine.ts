@@ -13,6 +13,7 @@ import type {
 } from '../types';
 import type { IpcArgs, IpcResult, IpcRouteKey } from './contract';
 import {
+  calculateInvoiceTaxSnapshot,
   chooseDefaultBillingAddress,
   chooseDefaultBillingEmail,
   ensureDefaultProjectForClient as ensureDefaultProjectForClientDomain,
@@ -20,6 +21,7 @@ import {
   prepareClientForUpsert,
   releaseDocumentNumber,
   reserveDocumentNumber,
+  resolveInvoiceTaxMode,
 } from '@billme/server-core/services';
 import type {
   DocumentNumberKind,
@@ -228,6 +230,7 @@ const offers: Invoice[] = [
     number: 'ANG-2023-082',
     client: 'Musterfirma GmbH',
     clientEmail: 'info@muster.de',
+    taxMode: 'standard_vat',
     date: '2023-11-01',
     dueDate: '2023-11-15',
     amount: 5200.0,
@@ -243,6 +246,7 @@ const offers: Invoice[] = [
     number: 'ANG-2023-083',
     client: 'StartUp Berlin AG',
     clientEmail: 'hello@startup.io',
+    taxMode: 'standard_vat',
     date: '2023-11-03',
     dueDate: '2023-11-17',
     amount: 1850.0,
@@ -1099,6 +1103,24 @@ const buildMockEurCsv = (report: ReturnType<typeof getMockEurReport>): string =>
   return `\uFEFF${[header, ...rows].join('\n')}`;
 };
 
+const normalizeInvoiceTaxData = (doc: Invoice): Invoice => {
+  const taxMode = resolveInvoiceTaxMode(doc.taxMode, settings);
+  const taxSnapshot = calculateInvoiceTaxSnapshot(
+    {
+      items: doc.items ?? [],
+      taxMode,
+      taxMeta: doc.taxMeta,
+    },
+    settings,
+  );
+  return {
+    ...doc,
+    taxMode,
+    taxSnapshot,
+    amount: taxSnapshot.grossAmount,
+  };
+};
+
 const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<IpcResult<K>> => {
   switch (key) {
     case 'invoices:list':
@@ -1157,6 +1179,14 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       const idx = clients.findIndex((c) => c.id === normalized.id);
       if (idx >= 0) clients[idx] = storedClient;
       else clients.unshift(storedClient);
+      // Keep client_number in sync on existing documents.
+      const newCustomerNumber = storedClient.customerNumber ?? '';
+      for (const inv of invoices) {
+        if (inv.clientId === normalized.id) inv.clientNumber = newCustomerNumber;
+      }
+      for (const off of offers) {
+        if (off.clientId === normalized.id) off.clientNumber = newCustomerNumber;
+      }
       return structuredClone(storedClient) as IpcResult<K>;
     }
     case 'clients:delete': {
@@ -1294,6 +1324,7 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
         clientAddress: billingAddress ? formatAddressMultiline(billingAddress) : client.address,
         billingAddressJson: billingAddress,
         shippingAddressJson: shippingAddress,
+        taxMode: 'standard_vat',
         date: today,
         dueDate: kind === 'offer' ? today : '',
         amount: 0,
@@ -1303,30 +1334,41 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
         history: [],
       };
 
-      return structuredClone(doc) as IpcResult<K>;
+      return structuredClone(normalizeInvoiceTaxData(doc)) as IpcResult<K>;
     }
     case 'documents:convertOfferToInvoice': {
-      const { offerId } = args as IpcArgs<'documents:convertOfferToInvoice'>;
+      const { offerId, invoiceDate, dueDate } = args as IpcArgs<'documents:convertOfferToInvoice'>;
       const offer = offers.find((o) => o.id === offerId);
       if (!offer) throw new Error('Offer not found');
       const reservation = reserveNumber('invoice');
+      const today = toIsoDate(new Date());
+      const paymentTerms = settings.legal?.paymentTermsDays ?? 14;
+      const defaultDueDate = (() => {
+        const d = new Date();
+        d.setDate(d.getDate() + paymentTerms);
+        return toIsoDate(d);
+      })();
       const invoice: Invoice = {
         ...structuredClone(offer),
         id: Math.random().toString(36).slice(2),
         number: reservation.number,
         numberReservationId: reservation.reservationId,
+        taxMode: offer.taxMode ?? 'standard_vat',
+        date: invoiceDate ?? today,
+        dueDate: dueDate ?? defaultDueDate,
         status: 'open',
         history: [
           {
-            date: toIsoDate(new Date()),
+            date: today,
             action: `Erstellt aus Angebot ${offer.number}`,
           },
           ...(offer.history ?? []),
         ],
       };
-      invoices.unshift(invoice);
-      finalizeNumber(reservation.reservationId, invoice.id);
-      return structuredClone(invoice) as IpcResult<K>;
+      const normalizedInvoice = normalizeInvoiceTaxData(invoice);
+      invoices.unshift(normalizedInvoice);
+      finalizeNumber(reservation.reservationId, normalizedInvoice.id);
+      return structuredClone(normalizedInvoice) as IpcResult<K>;
     }
 
     case 'templates:list': {

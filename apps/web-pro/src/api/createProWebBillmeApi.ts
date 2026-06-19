@@ -31,8 +31,19 @@ import {
   ensureDefaultProjectForClient,
   formatAddressMultiline,
 } from '@billme/server-core/services';
-
-type Parser<T> = { parse: (input: unknown) => T } | ((input: unknown) => T);
+import {
+  addDays,
+  buildUrl,
+  formatSemicolonCsv,
+  normalizeBaseUrl,
+  parseArray,
+  parseResponseError,
+  parseWith,
+  readJsonStorage,
+  toIsoDate,
+  writeJsonStorage,
+  type Parser,
+} from '@billme/desktop-renderer/browserRuntime';
 
 type RequestOptions<T> = {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -130,79 +141,8 @@ const EUR_LINES: EurLine[] = [
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
-const parseWith = <T>(parser: Parser<T>, input: unknown): T => {
-  if (typeof parser === 'function') {
-    return parser(input);
-  }
-  return parser.parse(input);
-};
-
-const parseArray = <T>(itemParser: Parser<T>) => (input: unknown): T[] => {
-  if (!Array.isArray(input)) {
-    throw new Error('Expected array response');
-  }
-  return input.map((item) => parseWith(itemParser, item));
-};
-
 const parseResult = <K extends IpcRouteKey>(key: K, value: unknown): IpcResult<K> => {
   return ipcRoutes[key].result.parse(value) as IpcResult<K>;
-};
-
-const normalizeBaseUrl = (baseUrl: string): string => baseUrl.replace(/\/+$/, '');
-
-const buildUrl = (
-  baseUrl: string,
-  path: string,
-  query?: Record<string, string | number | boolean | null | undefined>,
-): string => {
-  const url = new URL(path, `${normalizeBaseUrl(baseUrl)}/`);
-  Object.entries(query ?? {}).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === '') {
-      return;
-    }
-    url.searchParams.set(key, String(value));
-  });
-  return url.toString();
-};
-
-const parseResponseError = (status: number, payload: unknown): Error => {
-  if (isRecord(payload) && typeof payload.message === 'string') {
-    return new Error(payload.message);
-  }
-  return new Error(`Request failed with status ${status}`);
-};
-
-const readJsonStorage = <T>(key: string, fallback: T, parser: (input: unknown) => T): T => {
-  if (typeof window === 'undefined') {
-    return fallback;
-  }
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) {
-      return fallback;
-    }
-    return parser(JSON.parse(raw));
-  } catch {
-    return fallback;
-  }
-};
-
-const writeJsonStorage = (key: string, value: unknown) => {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  window.localStorage.setItem(key, JSON.stringify(value));
-};
-
-const toIsoDate = (value: Date): string => value.toISOString().split('T')[0] ?? value.toISOString();
-
-const addDays = (value: string, days: number): string => {
-  if (!days) {
-    return value;
-  }
-  const next = new Date(value);
-  next.setDate(next.getDate() + days);
-  return toIsoDate(next);
 };
 
 const matchesRule = (value: string, operator: 'contains' | 'equals' | 'startsWith', expected: string) => {
@@ -211,17 +151,6 @@ const matchesRule = (value: string, operator: 'contains' | 'equals' | 'startsWit
   if (operator === 'equals') return haystack === needle;
   if (operator === 'startsWith') return haystack.startsWith(needle);
   return haystack.includes(needle);
-};
-
-const formatCsv = (rows: Array<Record<string, unknown>>, headers: string[]): string => {
-  const escapeCell = (value: unknown) => {
-    const text = value == null ? '' : String(value);
-    if (/[",;\n]/.test(text)) {
-      return `"${text.replace(/"/g, '""')}"`;
-    }
-    return text;
-  };
-  return [headers.join(';'), ...rows.map((row) => headers.map((header) => escapeCell(row[header])).join(';'))].join('\n');
 };
 
 const createHiddenFileInput = (): Promise<File | null> => {
@@ -954,14 +883,16 @@ export const createProWebBillmeApi = ({
         const settings = await getSettings();
         const reservation = await reserveNumber('invoice');
         const today = toIsoDate(new Date());
+        const invoiceDate = args.invoiceDate ?? today;
+        const dueDate = args.dueDate ?? addDays(today, settings?.legal.paymentTermsDays ?? 14);
         const created = await upsertInvoice(
           {
             ...offer,
             id: crypto.randomUUID(),
             number: reservation.number,
             numberReservationId: reservation.reservationId,
-            date: today,
-            dueDate: addDays(today, settings?.legal.paymentTermsDays ?? 0),
+            date: invoiceDate,
+            dueDate: dueDate,
             status: 'draft',
             dunningLevel: 0,
             payments: [],
@@ -1074,7 +1005,7 @@ export const createProWebBillmeApi = ({
         const [clients, invoices, offers] = await Promise.all([listClients(), listInvoices(), listOffers()]);
         return parseResult(
           key,
-          formatCsv(
+          formatSemicolonCsv(
             [
               ...clients.map((client) => ({ entity: 'client', id: client.id, label: client.company, status: client.status, date: '' })),
               ...invoices.map((invoice) => ({ entity: 'invoice', id: invoice.id, label: invoice.number, status: invoice.status, date: invoice.date })),
@@ -1599,7 +1530,7 @@ export const createProWebBillmeApi = ({
         const report = await getEurReport({ taxYear: args.taxYear, from: args.from, to: args.to });
         return parseResult(
           key,
-          formatCsv(
+          formatSemicolonCsv(
             report.rows.map((row) => ({ lineId: row.lineId, label: row.label, kind: row.kind, total: row.total })),
             ['lineId', 'label', 'kind', 'total'],
           ),

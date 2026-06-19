@@ -26,6 +26,13 @@ import {
   toLegacyInvoice,
   toLegacyOffer,
 } from '@billme/desktop-data/billingDomainCompat';
+import {
+  addDays,
+  buildPrintUrl,
+  normalizeBaseUrl,
+  parseResponseError,
+  toIsoDate,
+} from '@billme/desktop-renderer/browserRuntime';
 
 type ServerClientPayload = z.output<typeof serverClientSchema>;
 type ServerInvoicePayload = z.output<typeof serverInvoiceSchema>;
@@ -52,27 +59,8 @@ const RECURRING_MUTATION_REASON = 'Updated recurring profile in Billme Lite';
 const RECURRING_DELETE_REASON = 'Deleted recurring profile in Billme Lite';
 const UNSUPPORTED_MESSAGE = 'Not available in Billme Lite yet.';
 
-const normalizeBaseUrl = (baseUrl: string): string => baseUrl.replace(/\/+$/, '');
-const toIsoDate = (value: Date): string => value.toISOString().split('T')[0] ?? value.toISOString();
-
-const addDays = (value: string, days: number): string => {
-  if (!days) {
-    return value;
-  }
-  const next = new Date(value);
-  next.setDate(next.getDate() + days);
-  return toIsoDate(next);
-};
-
 const parseResult = <K extends IpcRouteKey>(key: K, value: unknown): IpcResult<K> => {
   return ipcRoutes[key].result.parse(value) as IpcResult<K>;
-};
-
-const parseResponseError = (status: number, payload: unknown): Error => {
-  if (payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string') {
-    return new Error(payload.message);
-  }
-  return new Error(`Request failed with status ${status}`);
 };
 
 const toDesktopClient = (client: ServerClientPayload): DesktopClient => ({
@@ -122,15 +110,6 @@ const toDesktopTemplate = (template: {
     updatedAt: template.updatedAt,
     elements: template.elements,
   });
-
-const buildPrintUrl = (kind: 'invoice' | 'offer' | 'eur', params: Record<string, string>): string => {
-  const url = new URL(window.location.origin + window.location.pathname);
-  url.searchParams.set('__print', '1');
-  url.searchParams.set('__autoprint', '1');
-  url.searchParams.set('kind', kind);
-  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  return url.toString();
-};
 
 const buildDraftFromClient = async (
   kind: 'invoice' | 'offer',
@@ -489,6 +468,8 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
         }
         const settings = await requestSettings();
         const today = toIsoDate(new Date());
+        const invoiceDate = parsed.invoiceDate ?? today;
+        const dueDate = parsed.dueDate ?? addDays(today, settings?.legal.paymentTermsDays ?? 14);
         const reservation = await reserveDocumentNumber('invoice');
         try {
           const createdInvoice = await requestJson(
@@ -509,8 +490,8 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
                 clientAddress: offer.clientAddress,
                 billingAddress: offer.billingAddress,
                 shippingAddress: offer.shippingAddress,
-                date: today,
-                dueDate: addDays(today, settings?.legal.paymentTermsDays ?? 0),
+                date: invoiceDate,
+                dueDate: dueDate,
                 servicePeriod: offer.validUntil,
                 amount: offer.amount,
                 status: 'draft' as const,

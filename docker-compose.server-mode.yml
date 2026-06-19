@@ -59,7 +59,7 @@ services:
       postgres:
         condition: service_healthy
       server-api:
-        condition: service_healthy
+        condition: service_started
 
   web:
     image: ${BILLME_WEB_IMAGE:-ghcr.io/bl4ckh4nd/billme/web:latest}
@@ -71,7 +71,7 @@ services:
       BILLME_PUBLIC_API_URL: ${BILLME_PUBLIC_API_URL:-}
     depends_on:
       server-api:
-        condition: service_healthy
+        condition: service_started
     ports:
       - "${BILLME_WEB_PORT:-4175}:8080"
 
@@ -85,7 +85,7 @@ services:
       BILLME_PUBLIC_API_URL: ${BILLME_PUBLIC_API_URL:-}
     depends_on:
       server-api:
-        condition: service_healthy
+        condition: service_started
     ports:
       - "${BILLME_WEB_PRO_PORT:-4176}:8080"
 

@@ -13,7 +13,9 @@ import {
   offerSchema,
   recurringProfileSchema,
   serverApiSessionSchema,
+  serverProductRoute,
   serverProductSchema,
+  serverRoutes,
   type ServerProduct,
 } from '@billme/server-core';
 import { appSettingsSchema } from '@billme/desktop-contracts/schemas';
@@ -161,7 +163,7 @@ export const createBillmeServerClient = ({
     return response.text();
   };
 
-  const withProductPrefix = (path: string, nextProduct = product): string => `/api/v1/${nextProduct}${path}`;
+  const withProductPrefix = (path: string, nextProduct = product): string => serverProductRoute(nextProduct, path);
 
   const requireToken = (override?: string | null): string => {
     const resolved = override ?? token;
@@ -271,20 +273,20 @@ export const createBillmeServerClient = ({
 
   return {
     getHealth() {
-      return requestJson('/health', healthResponseSchema);
+      return requestJson(serverRoutes.health, healthResponseSchema);
     },
     getCapabilities() {
-      return requestJson('/api/v1/meta/capabilities', capabilitiesResponseSchema);
+      return requestJson(serverRoutes.meta.capabilities, capabilitiesResponseSchema);
     },
     getBootstrapStatus(nextProduct = product) {
-      return requestJson('/api/v1/auth/bootstrap/status', bootstrapStatusSchema, {
+      return requestJson(serverRoutes.auth.bootstrapStatus, bootstrapStatusSchema, {
         query: {
           product: nextProduct,
         },
       });
     },
     bootstrap(input: z.input<typeof bootstrapRequestSchema>, nextProduct = product) {
-      return requestJson('/api/v1/auth/bootstrap', authResponseSchema, {
+      return requestJson(serverRoutes.auth.bootstrap, authResponseSchema, {
         method: 'POST',
         query: {
           product: nextProduct,
@@ -293,7 +295,7 @@ export const createBillmeServerClient = ({
       });
     },
     login(input: z.input<typeof loginRequestSchema>, nextProduct = product) {
-      return requestJson('/api/v1/auth/login', authResponseSchema, {
+      return requestJson(serverRoutes.auth.login, authResponseSchema, {
         method: 'POST',
         query: {
           product: nextProduct,
@@ -306,7 +308,7 @@ export const createBillmeServerClient = ({
       token?: string | null;
     }) {
       const nextProduct = options?.product ?? product;
-      return requestJson('/api/v1/auth/me', authSessionInfoSchema, {
+      return requestJson(serverRoutes.auth.me, authSessionInfoSchema, {
         query: {
           product: nextProduct,
         },
@@ -625,7 +627,7 @@ export const createBillmeServerClient = ({
       });
     },
     listArticles(options?: { token?: string | null }) {
-      return requestJson('/api/v1/pro/articles', z.array(articleSchema), {
+      return requestJson(serverRoutes.pro.articles, z.array(articleSchema), {
         token: requireToken(options?.token),
       });
     },
@@ -633,7 +635,7 @@ export const createBillmeServerClient = ({
       article: z.input<typeof articleSchema>;
       token?: string | null;
     }) {
-      return requestJson('/api/v1/pro/articles', articleSchema, {
+      return requestJson(serverRoutes.pro.articles, articleSchema, {
         method: 'POST',
         token: requireToken(args.token),
         body: {
@@ -642,7 +644,7 @@ export const createBillmeServerClient = ({
       });
     },
     listAccounts(options?: { token?: string | null }) {
-      return requestJson('/api/v1/pro/accounts', z.array(accountSchema), {
+      return requestJson(serverRoutes.pro.accounts, z.array(accountSchema), {
         token: requireToken(options?.token),
       });
     },
@@ -650,7 +652,7 @@ export const createBillmeServerClient = ({
       account: z.input<typeof accountSchema>;
       token?: string | null;
     }) {
-      return requestJson('/api/v1/pro/accounts', accountSchema, {
+      return requestJson(serverRoutes.pro.accounts, accountSchema, {
         method: 'POST',
         token: requireToken(args.token),
         body: {
@@ -659,7 +661,7 @@ export const createBillmeServerClient = ({
       });
     },
     listTemplates(args?: { kind?: 'invoice' | 'offer'; token?: string | null }) {
-      return requestJson('/api/v1/pro/templates', z.array(templateSchema), {
+      return requestJson(serverRoutes.pro.templates.list, z.array(templateSchema), {
         token: requireToken(args?.token),
         query: args?.kind
           ? {
@@ -672,7 +674,7 @@ export const createBillmeServerClient = ({
       template: z.input<typeof templateSchema>;
       token?: string | null;
     }) {
-      return requestJson('/api/v1/pro/templates', templateSchema, {
+      return requestJson(serverRoutes.pro.templates.list, templateSchema, {
         method: 'POST',
         token: requireToken(args.token),
         body: {
@@ -685,7 +687,7 @@ export const createBillmeServerClient = ({
       token?: string | null;
     }) {
       return requestJson(
-        `/api/v1/pro/templates/active/${templateKindSchema.parse(args.kind)}`,
+        serverRoutes.pro.templates.activeByKind(templateKindSchema.parse(args.kind)),
         templateSchema.nullable(),
         {
           token: requireToken(args.token),
@@ -697,7 +699,7 @@ export const createBillmeServerClient = ({
       templateId?: string | null;
       token?: string | null;
     }) {
-      return requestJson('/api/v1/pro/templates/active', okSchema, {
+      return requestJson(serverRoutes.pro.templates.active, okSchema, {
         method: 'PUT',
         token: requireToken(args.token),
         body: setActiveTemplatePayloadSchema.parse({

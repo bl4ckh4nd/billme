@@ -878,6 +878,6 @@ export const ipcRoutes = {
 
 export const baseIpcRoutes = ipcRoutes;
 
-export type IpcRouteKey = keyof typeof ipcRoutes;
+export type IpcRouteKey = Extract<keyof typeof ipcRoutes, string>;
 export type IpcArgs<K extends IpcRouteKey> = z.infer<(typeof ipcRoutes)[K]['args']>;
 export type IpcResult<K extends IpcRouteKey> = z.infer<(typeof ipcRoutes)[K]['result']>;

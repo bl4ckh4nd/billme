@@ -1,390 +1,113 @@
 import React from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   createServerApiClient,
   authUserSchema,
   type AuthUser,
 } from '@billme/server-core';
+import {
+  BrowserRendererHost,
+  useBrowserDocumentShell,
+  usePdfAutoPrint,
+  type BrowserDocumentShellConfig,
+  type DesktopRendererRuntime,
+} from '@billme/desktop-renderer';
+import ProDesktopApp from '../../pro-desktop/App';
 import { Button, Input } from '@billme/ui';
 import type { BillmeApi } from '@billme/desktop-contracts-pro/api';
 import { createProWebBillmeApi } from './api/createProWebBillmeApi';
 
 const SESSION_STORAGE_KEY = 'billme.web-pro.session.v1';
 const API_URL_STORAGE_KEY = 'billme.web-pro.api-url.v1';
-const DEFAULT_API_PORT = 3100;
+const PRO_NAVIGATION = ['dashboard', 'clients', 'projects', 'documents', 'finance', 'articles', 'pro'];
 
-type StoredSession = {
-  token: string;
-  user: AuthUser;
-};
-
-const normalizeApiUrl = (value: string | null | undefined): string | null => {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-};
-
-const getBrowserDefaultApiUrl = (): string => {
-  if (typeof window === 'undefined') {
-    return `http://127.0.0.1:${DEFAULT_API_PORT}`;
-  }
-  const hostname = window.location.hostname || '127.0.0.1';
-  return `http://${hostname}:${DEFAULT_API_PORT}`;
-};
-
-const getRuntimeApiUrl = (): string | null => {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  return normalizeApiUrl(window.billmeRuntimeConfig?.serverApiUrl);
-};
-
-const getInitialApiUrl = (): string => {
-  if (typeof window === 'undefined') {
-    return getBrowserDefaultApiUrl();
-  }
-  return (
-    getRuntimeApiUrl()
-    ?? normalizeApiUrl(window.localStorage.getItem(API_URL_STORAGE_KEY))
-    ?? getBrowserDefaultApiUrl()
-  );
-};
-
-const readStoredSession = (): StoredSession | null => {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  try {
-    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw) as { token?: unknown; user?: unknown };
-    if (typeof parsed.token !== 'string') {
-      return null;
-    }
-    return {
-      token: parsed.token,
-      user: authUserSchema.parse(parsed.user),
-    };
-  } catch {
-    return null;
-  }
-};
-
-const persistSession = (session: StoredSession | null) => {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  if (!session) {
-    window.localStorage.removeItem(SESSION_STORAGE_KEY);
-    return;
-  }
-  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-};
-
-const persistApiUrl = (apiUrl: string) => {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  window.localStorage.setItem(API_URL_STORAGE_KEY, apiUrl);
-};
-
-const createRendererQueryClient = () =>
-  new QueryClient({
-    defaultOptions: {
-      queries: {
-        staleTime: 10_000,
-        gcTime: 5 * 60_000,
-        retry: 1,
-        refetchOnWindowFocus: false,
-      },
+const createProAuthAdapter = (apiUrl: string) => {
+  const authClient = createServerApiClient(apiUrl);
+  return {
+    getHealthLabel: async () => {
+      const health = await authClient.getHealth();
+      return `${health.service} · ${health.backend}`;
     },
-  });
-
-const proDesktopModules = import.meta.glob('../../pro-desktop/App.tsx');
-
-const ProDesktopShell: React.FC<{
-  api: BillmeApi;
-}> = ({ api }) => {
-  const hostRef = React.useRef<HTMLDivElement | null>(null);
-  const [mountError, setMountError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    if (!hostRef.current) {
-      return undefined;
-    }
-
-    const runtime = globalThis as typeof globalThis & {
-      billmeApi?: BillmeApi;
-    };
-
-    runtime.billmeApi = api;
-    let root: Root | undefined;
-    let cancelled = false;
-
-    const loadProDesktopApp = proDesktopModules['../../pro-desktop/App.tsx'];
-    if (!loadProDesktopApp) {
-      setMountError('apps/pro-desktop/App.tsx konnte nicht geladen werden.');
-      return undefined;
-    }
-
-    void loadProDesktopApp()
-      .then((module) => {
-        if (!hostRef.current || cancelled) {
-          return;
-        }
-        const ProDesktopApp = (module as { default: React.ComponentType }).default;
-        const queryClient = createRendererQueryClient();
-        root = createRoot(hostRef.current);
-        root.render(
-          <React.StrictMode>
-            <QueryClientProvider client={queryClient}>
-              <ProDesktopApp />
-            </QueryClientProvider>
-          </React.StrictMode>,
-        );
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setMountError(error instanceof Error ? error.message : String(error));
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      root?.unmount();
-      if (runtime.billmeApi === api) {
-        delete runtime.billmeApi;
-      }
-    };
-  }, [api]);
-
-  if (mountError) {
-    return (
-      <div className="auth-shell">
-        <section className="auth-panel">
-          <p className="section-eyebrow">Billme Pro Web</p>
-          <h1>Renderer konnte nicht gestartet werden</h1>
-          <p className="hero-copy">{mountError}</p>
-        </section>
-      </div>
-    );
-  }
-
-  return <div ref={hostRef} className="min-h-screen" />;
+    getRoles: async () => {
+      const capabilities = await authClient.getCapabilities();
+      return capabilities.auth.roles;
+    },
+    getBootstrapReady: async () => {
+      const status = await authClient.getBootstrapStatusFor('pro');
+      return !status.bootstrapped;
+    },
+    validateSession: async (token: string) => {
+      const session = await authClient.getSessionInfo({ token, product: 'pro' });
+      return session.user;
+    },
+    login: async ({ email, password }: { email: string; password: string }) => {
+      const response = await authClient.loginFor('pro', { email, password });
+      return { token: response.token, user: response.user };
+    },
+    bootstrap: async ({ email, password, fullName }: { email: string; password: string; fullName: string }) => {
+      const response = await authClient.bootstrapFor('pro', { email, password, fullName });
+      return { token: response.token, user: response.user };
+    },
+  };
 };
 
-const AuthenticatedWorkspace: React.FC<{
-  apiUrl: string;
-  session: StoredSession;
-  onLogout: () => void;
-}> = ({ apiUrl, session, onLogout }) => {
-  const api = React.useMemo(
-    () => createProWebBillmeApi({ baseUrl: apiUrl, token: session.token, onAuthFailure: onLogout }),
-    [apiUrl, onLogout, session.token],
+const ProRendererWorkspace: React.FC<{
+  api: BillmeApi;
+  onLogout?: () => void;
+  autoPrint?: boolean;
+}> = ({ api, onLogout, autoPrint = false }) => {
+  usePdfAutoPrint(autoPrint);
+  const runtime = React.useMemo<DesktopRendererRuntime>(
+    () => ({
+      shell: 'web',
+      product: 'pro',
+      navigation: PRO_NAVIGATION,
+      onLogout,
+    }),
+    [onLogout],
   );
 
-  return <ProDesktopShell api={api} />;
-};
-
-const ProPrintWorkspace: React.FC<{ api: BillmeApi }> = ({ api }) => {
-  const hostRef = React.useRef<HTMLDivElement | null>(null);
-  const [mountError, setMountError] = React.useState<string | null>(null);
-  const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
-  const shouldAutoPrint = params.get('__autoprint') === '1';
-
-  React.useEffect(() => {
-    if (!hostRef.current) {
-      return undefined;
-    }
-
-    const runtime = globalThis as typeof globalThis & { billmeApi?: BillmeApi };
-    runtime.billmeApi = api;
-    let root: Root | undefined;
-    let cancelled = false;
-
-    const loadProDesktopApp = proDesktopModules['../../pro-desktop/App.tsx'];
-    if (!loadProDesktopApp) {
-      setMountError('apps/pro-desktop/App.tsx konnte nicht geladen werden.');
-      return undefined;
-    }
-
-    void loadProDesktopApp()
-      .then((module) => {
-        if (!hostRef.current || cancelled) {
-          return;
-        }
-        const ProDesktopApp = (module as { default: React.ComponentType }).default;
-        const queryClient = createRendererQueryClient();
-        root = createRoot(hostRef.current);
-        root.render(
-          <React.StrictMode>
-            <QueryClientProvider client={queryClient}>
-              <ProDesktopApp />
-            </QueryClientProvider>
-          </React.StrictMode>,
-        );
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setMountError(error instanceof Error ? error.message : String(error));
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      root?.unmount();
-      if (runtime.billmeApi === api) {
-        delete runtime.billmeApi;
-      }
-    };
-  }, [api]);
-
-  React.useEffect(() => {
-    if (!shouldAutoPrint) {
-      return;
-    }
-    let cancelled = false;
-    let attempts = 0;
-    const tick = () => {
-      if (cancelled) {
-        return;
-      }
-      if ((globalThis as { __PDF_READY__?: boolean }).__PDF_READY__ === true) {
-        window.print();
-        return;
-      }
-      if (attempts < 120) {
-        attempts += 1;
-        window.setTimeout(tick, 100);
-      }
-    };
-    tick();
-    return () => {
-      cancelled = true;
-    };
-  }, [shouldAutoPrint]);
-
-  if (mountError) {
-    return (
-      <div className="auth-shell">
-        <section className="auth-panel">
-          <p className="section-eyebrow">Billme Pro Web</p>
-          <h1>Renderer konnte nicht gestartet werden</h1>
-          <p className="hero-copy">{mountError}</p>
-        </section>
-      </div>
-    );
-  }
-
-  return <div ref={hostRef} className="min-h-screen" />;
+  return (
+    <BrowserRendererHost api={api} runtime={runtime} AppComponent={ProDesktopApp}>
+      {(mountError) => (
+        <div className="auth-shell">
+          <section className="auth-panel">
+            <p className="section-eyebrow">Billme Pro Web</p>
+            <h1>Renderer konnte nicht gestartet werden</h1>
+            <p className="hero-copy">{mountError}</p>
+          </section>
+        </div>
+      )}
+    </BrowserRendererHost>
+  );
 };
 
 export default function App() {
-  const searchParams = React.useMemo(() => new URLSearchParams(window.location.search), []);
-  const isPrintMode = searchParams.get('__print') === '1';
-  const [apiUrl, setApiUrl] = React.useState(getInitialApiUrl);
-  const storedPrintSession = React.useMemo(() => readStoredSession(), []);
-  const [health, setHealth] = React.useState('Verbinde…');
-  const [roles, setRoles] = React.useState<string[]>([]);
-  const [bootstrapReady, setBootstrapReady] = React.useState(false);
-  const [loadingSession, setLoadingSession] = React.useState(true);
+  const shellConfig = React.useMemo<BrowserDocumentShellConfig<BillmeApi, AuthUser>>(
+    () => ({
+      product: 'pro',
+      sessionStorageKey: SESSION_STORAGE_KEY,
+      apiUrlStorageKey: API_URL_STORAGE_KEY,
+      initialHealth: 'Verbinde...',
+      signedOutMessage: 'Abgemeldet.',
+      persistApiUrlOnAuth: true,
+      createAuthAdapter: createProAuthAdapter,
+      createApi: ({ baseUrl, token, onAuthFailure }) =>
+        createProWebBillmeApi({ baseUrl, token, onAuthFailure }),
+      parseStoredUser: (value) => authUserSchema.parse(value),
+    }),
+    [],
+  );
+  const shell = useBrowserDocumentShell(shellConfig);
   const [email, setEmail] = React.useState('owner@example.com');
   const [password, setPassword] = React.useState('billme-server-123');
   const [fullName, setFullName] = React.useState('Billme Pro Owner');
-  const [message, setMessage] = React.useState('');
-  const [session, setSession] = React.useState<StoredSession | null>(null);
-  const authClient = React.useMemo(() => createServerApiClient(apiUrl), [apiUrl]);
-
-  const handleLogout = React.useCallback(() => {
-    persistSession(null);
-    setSession(null);
-    setMessage('Abgemeldet.');
-  }, []);
-
-  const printApi = React.useMemo(
-    () => storedPrintSession
-      ? createProWebBillmeApi({ baseUrl: apiUrl, token: storedPrintSession.token, onAuthFailure: handleLogout })
-      : null,
-    [apiUrl, handleLogout, storedPrintSession],
+  const shouldAutoPrint = React.useMemo(
+    () => new URLSearchParams(window.location.search).get('__autoprint') === '1',
+    [],
   );
 
-  React.useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const storedSession = readStoredSession();
-        const [healthResponse, capabilitiesResponse, bootstrapStatus, validatedSession] = await Promise.all([
-          authClient.getHealth(),
-          authClient.getCapabilities(),
-          authClient.getBootstrapStatusFor('pro'),
-          storedSession
-            ? authClient.getSessionInfo({ token: storedSession.token, product: 'pro' }).catch(() => null)
-            : Promise.resolve(null),
-        ]);
-
-        if (cancelled) {
-          return;
-        }
-
-        setHealth(`${healthResponse.service} · ${healthResponse.backend}`);
-        setRoles(capabilitiesResponse.auth.roles);
-        setBootstrapReady(!bootstrapStatus.bootstrapped);
-
-        if (storedSession && validatedSession) {
-          setSession({ token: storedSession.token, user: validatedSession.user });
-        } else if (storedSession) {
-          persistSession(null);
-        }
-      } catch (error: unknown) {
-        if (!cancelled) {
-          setHealth(error instanceof Error ? error.message : String(error));
-        }
-      } finally {
-        if (!cancelled) {
-          setLoadingSession(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authClient]);
-
-  const finishAuth = React.useCallback(
-    (nextSession: StoredSession) => {
-      persistApiUrl(apiUrl);
-      persistSession(nextSession);
-      setSession(nextSession);
-      setBootstrapReady(false);
-      setMessage('');
-    },
-    [apiUrl],
-  );
-
-  const handleBootstrap = async () => {
-    try {
-      const response = await authClient.bootstrapFor('pro', { email, password, fullName });
-      finishAuth({ token: response.token, user: response.user });
-    } catch (error: unknown) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const handleLogin = async () => {
-    try {
-      const response = await authClient.loginFor('pro', { email, password });
-      finishAuth({ token: response.token, user: response.user });
-    } catch (error: unknown) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  if (isPrintMode) {
-    if (!printApi) {
+  if (shell.isPrintMode) {
+    if (!shell.printApi) {
       return (
         <div className="auth-shell">
           <section className="auth-panel">
@@ -395,12 +118,17 @@ export default function App() {
         </div>
       );
     }
-    return <ProPrintWorkspace api={printApi} />;
+    return <ProRendererWorkspace api={shell.printApi} autoPrint={shouldAutoPrint} />;
   }
 
-  if (!loadingSession && session) {
-    return <AuthenticatedWorkspace apiUrl={apiUrl} session={session} onLogout={handleLogout} />;
+  if (!shell.loadingSession && shell.session) {
+    return <ProRendererWorkspace api={shell.createWorkspaceApi(shell.session)} onLogout={shell.logout} />;
   }
+
+  const handleSubmit = () => {
+    const credentials = { email, password, fullName };
+    return shell.bootstrapReady ? shell.bootstrap(credentials) : shell.login(credentials);
+  };
 
   return (
     <main className="auth-shell">
@@ -413,27 +141,27 @@ export default function App() {
         <div className="hero-metrics">
           <div className="stat-card">
             <span className="stat-label">Server</span>
-            <strong className="stat-value">{health}</strong>
+            <strong className="stat-value">{shell.health}</strong>
             <span className="stat-hint">Aktiver API-Endpunkt</span>
           </div>
           <div className="stat-card">
             <span className="stat-label">Rollen</span>
-            <strong className="stat-value">{roles.length}</strong>
-            <span className="stat-hint">{roles.join(', ') || 'Wird geladen'}</span>
+            <strong className="stat-value">{shell.roles.length}</strong>
+            <span className="stat-hint">{shell.roles.join(', ') || 'Wird geladen'}</span>
           </div>
         </div>
       </section>
 
       <section className="auth-panel">
-        <p className="section-eyebrow">{bootstrapReady ? 'Erststart' : 'Anmelden'}</p>
-        <h2 className="text-2xl font-bold m-0">{bootstrapReady ? 'Pro-Mandant initialisieren' : 'Mit Billme Pro verbinden'}</h2>
+        <p className="section-eyebrow">{shell.bootstrapReady ? 'Erststart' : 'Anmelden'}</p>
+        <h2 className="text-2xl font-bold m-0">{shell.bootstrapReady ? 'Pro-Mandant initialisieren' : 'Mit Billme Pro verbinden'}</h2>
         <p className="helper-copy">
           Desktop-nahe Funktionen laufen im Browser mit Web-Fallbacks, während Dokumente und Stammdaten über die bestehenden Server-Endpunkte geladen werden.
         </p>
 
-        {message ? (
-          <div className={`notice-banner ${message.toLowerCase().includes('fehler') ? 'notice-danger' : 'notice-neutral'}`}>
-            {message}
+        {shell.message ? (
+          <div className={`notice-banner ${shell.message.toLowerCase().includes('fehler') ? 'notice-danger' : 'notice-neutral'}`}>
+            {shell.message}
           </div>
         ) : null}
 
@@ -441,9 +169,9 @@ export default function App() {
           <div className="grid gap-4">
             <label className="grid gap-2">
               <span className="text-sm font-semibold">API-URL</span>
-              <Input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} />
+              <Input value={shell.apiUrl} onChange={(event) => shell.setApiUrl(event.target.value)} />
             </label>
-            {bootstrapReady ? (
+            {shell.bootstrapReady ? (
               <label className="grid gap-2">
                 <span className="text-sm font-semibold">Vollständiger Name</span>
                 <Input value={fullName} onChange={(event) => setFullName(event.target.value)} />
@@ -459,10 +187,10 @@ export default function App() {
             </label>
           </div>
           <div className="action-row mt-5">
-            {bootstrapReady ? (
-              <Button onClick={handleBootstrap}>Initialisieren & anmelden</Button>
+            {shell.bootstrapReady ? (
+              <Button onClick={handleSubmit}>Initialisieren & anmelden</Button>
             ) : (
-              <Button onClick={handleLogin}>Anmelden</Button>
+              <Button onClick={handleSubmit}>Anmelden</Button>
             )}
           </div>
         </div>

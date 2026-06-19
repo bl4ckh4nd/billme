@@ -50,10 +50,71 @@ export const runProSmokeScenario = async (page) => {
 
   await page.goto(state.urls.webPro, { waitUntil: 'networkidle' });
 
-  await expect(page.getByText('Billme Pro · Browser Shell')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Pro-Owner anlegen|In Pro anmelden/ })).toBeVisible();
+  await expect(page.getByText('Billme Pro Web').first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Pro-Mandant initialisieren|Mit Billme Pro verbinden/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Initialisieren & anmelden|Anmelden/ })).toBeVisible();
   await expect(page.getByText('billme-server-api')).toBeVisible();
-  await expect(page.getByText(/Noch kein Owner vorhanden|Bereits \d+ Nutzer im Pro-Scope\./)).toBeVisible();
+};
+
+export const runProOfferPersistenceScenario = async () => {
+  const state = await readServerHarnessState();
+  const session = await ensureHarnessSession(state, {
+    product: 'pro',
+    ...proOwner,
+  });
+  const namespace = `offer-persistence-${Date.now()}`;
+  await seedHarnessProTenant(state, {
+    tenantId: session.tenantId,
+    namespace,
+  });
+
+  const clients = await requestJson(state, session, '/api/v1/pro/clients');
+  const client = clients[0];
+  expect(client).toBeTruthy();
+
+  const offerId = `e2e-offer-items-${Date.now()}`;
+  const offer = {
+    kind: 'offer',
+    id: offerId,
+    tenantId: session.tenantId,
+    clientId: client.id,
+    ...(client.customerNumber != null ? { clientNumber: client.customerNumber } : {}),
+    number: `E2E-ANG-${Date.now()}`,
+    client: client.company,
+    clientEmail: client.email,
+    clientAddress: client.address,
+    date: '2026-06-19',
+    validUntil: '2026-07-19',
+    amount: 579,
+    status: 'open',
+    items: [
+      { description: 'Server E2E offer line alpha', quantity: 2, price: 123, total: 246 },
+      { description: 'Server E2E offer line beta', quantity: 3, price: 111, total: 333 },
+    ],
+    history: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const saved = await requestJson(state, session, '/api/v1/pro/offers', {
+    method: 'POST',
+    body: {
+      offer,
+      reason: 'server e2e offer item persistence',
+    },
+  });
+  expect(saved.items).toHaveLength(2);
+  expect(saved.items.map((item) => item.description)).toEqual([
+    'Server E2E offer line alpha',
+    'Server E2E offer line beta',
+  ]);
+
+  const refetched = await requestJson(state, session, `/api/v1/pro/offers/${encodeURIComponent(offerId)}`);
+  expect(refetched?.items).toHaveLength(2);
+  expect(refetched.items.map((item) => item.description)).toEqual([
+    'Server E2E offer line alpha',
+    'Server E2E offer line beta',
+  ]);
 };
 
 export const runProAuthRestoreScenario = async (page) => {

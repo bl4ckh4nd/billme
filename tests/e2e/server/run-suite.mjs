@@ -16,6 +16,7 @@ import {
   runProAccountingScenario,
   runProAuthRestoreScenario,
   runProCatalogScenario,
+  runProOfferPersistenceScenario,
   runProRouteGuardScenario,
   runProSmokeScenario,
 } from './pro/scenarios.mjs';
@@ -51,6 +52,7 @@ const buildScenarioList = () => {
 
   if (includePro) {
     scenarios.push({ name: 'pro-smoke', kind: 'browser', run: runProSmokeScenario });
+    scenarios.push({ name: 'pro-offer-persistence', kind: 'plain', run: runProOfferPersistenceScenario });
     if (level === 'full') {
       scenarios.push({ name: 'pro-auth-restore', kind: 'browser', run: runProAuthRestoreScenario });
       scenarios.push({ name: 'pro-catalog', kind: 'browser', run: runProCatalogScenario });

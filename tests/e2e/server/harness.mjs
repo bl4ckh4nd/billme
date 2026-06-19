@@ -482,6 +482,11 @@ const waitForPodmanContainerHealth = async (containerName, description, state = 
   throw new Error(`Timed out waiting for ${description} to become healthy. Last status: ${lastStatus}.`);
 };
 
+const writeRuntimeConfig = async (distDir, apiUrl) => {
+  const content = `window.billmeRuntimeConfig = {\n  serverApiUrl: ${JSON.stringify(apiUrl)},\n};\n`;
+  await fs.writeFile(path.join(repoRoot, distDir, 'dist', 'runtime-config.js'), content, 'utf8');
+};
+
 const buildProcessModeApps = async (state) => {
   await runCommand('pnpm', ['-C', 'apps/web', 'build'], {
     timeoutMs: bootTimeoutMs,
@@ -490,6 +495,8 @@ const buildProcessModeApps = async (state) => {
       VITE_SERVER_API_URL: state.urls.api,
     },
   });
+  await writeRuntimeConfig('apps/web', state.urls.api);
+
   await runCommand('pnpm', ['-C', 'apps/web-pro', 'build'], {
     timeoutMs: bootTimeoutMs,
     env: {
@@ -497,6 +504,7 @@ const buildProcessModeApps = async (state) => {
       VITE_SERVER_API_URL: state.urls.api,
     },
   });
+  await writeRuntimeConfig('apps/web-pro', state.urls.api);
 };
 
 const createProcessDatabaseUrl = (state, env) =>

@@ -116,8 +116,9 @@ export const openProShell = async (page, state, { route = 'overview', session = 
   await page.goto(getProAppUrl(state, route), { waitUntil: 'networkidle' });
 };
 
-export const requestJson = async (state, session, requestPath, query = undefined) => {
+export const requestJson = async (state, session, requestPath, options = undefined) => {
   const url = new URL(requestPath, `${state.urls.api}/`);
+  const query = options?.query ?? options;
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value === undefined || value === null || value === '') {
       continue;
@@ -126,10 +127,13 @@ export const requestJson = async (state, session, requestPath, query = undefined
   }
 
   const response = await fetch(url, {
+    method: options?.method ?? 'GET',
     headers: {
       accept: 'application/json',
       authorization: `Bearer ${session.token}`,
+      ...(options?.body === undefined ? {} : { 'content-type': 'application/json' }),
     },
+    body: options?.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {

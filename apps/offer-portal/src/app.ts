@@ -1,11 +1,29 @@
-import crypto from 'crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { OfferStore, PdfStore, PortalDocumentListItem } from './storage/types';
+import type { OfferStore, PdfStore } from './storage/types';
 import { BILLME_FULL_LOGO_DATA_URI } from './branding';
-
-const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
-const nowIso = () => new Date().toISOString();
+import {
+  buildCustomerAccessTokenRecord,
+  buildPublishedInvoiceRecord,
+  buildPublishedOfferRecord,
+  checkPublishAuth,
+  customerAccessLinkSchema,
+  decisionSchema,
+  expiresInDaysFromNow,
+  historyQuerySchema,
+  isAllowedOrigin,
+  isExpired,
+  looksLikeDocSnapshot,
+  normalizeDocStatus,
+  nowIso,
+  parseCookies,
+  publishJsonSchema,
+  randomPortalToken,
+  resolvePublicOrigin,
+  sha256,
+  tokenHashPrefix,
+  type PortalConfig,
+} from './documentPolicy';
 
 const escapeHtml = (s: string) =>
   String(s)
@@ -21,81 +39,6 @@ const formatCurrencyEur = (amount: unknown) => {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(safe);
 };
 
-const looksLikeDocSnapshot = (
-  snap: unknown,
-): snap is {
-  number?: string;
-  client?: string;
-  clientId?: string;
-  clientEmail?: string;
-  date?: string;
-  dueDate?: string;
-  amount?: number;
-  status?: string;
-  items?: Array<{ description?: string; quantity?: number; total?: number }>;
-} => typeof snap === 'object' && snap !== null;
-
-export const publishJsonSchema = z.object({
-  token: z.string().min(16),
-  snapshot: z.unknown(),
-  expiresAt: z.string().optional(),
-  customerRef: z.string().min(1).optional(),
-  customerLabel: z.string().optional(),
-});
-
-const customerAccessLinkSchema = z.object({
-  customerRef: z.string().min(1),
-  customerLabel: z.string().optional(),
-  expiresInDays: z.coerce.number().int().positive().max(365).optional(),
-});
-
-const historyQuerySchema = z.object({
-  kind: z.enum(['offer', 'invoice', 'all']).default('all'),
-  limit: z.coerce.number().int().positive().max(200).default(50),
-  cursor: z.string().optional(),
-});
-
-export const decisionSchema = z.object({
-  decision: z.enum(['accepted', 'declined']),
-  acceptedName: z.string().min(1),
-  acceptedEmail: z.string().min(1),
-  decisionTextVersion: z.string().min(1),
-});
-
-export type PortalConfig = {
-  publishApiKey?: string;
-  publicBaseUrl?: string;
-  requirePublishApiKey?: boolean;
-};
-
-const inferCustomerRef = (snapshot: unknown, fallbackToken: string): string => {
-  if (typeof snapshot !== 'object' || snapshot === null) return `anon:${sha256(fallbackToken).slice(0, 16)}`;
-  const maybeClientId = (snapshot as Record<string, unknown>).clientId;
-  if (typeof maybeClientId === 'string' && maybeClientId.trim()) return `client:${maybeClientId.trim()}`;
-  const maybeEmail = (snapshot as Record<string, unknown>).clientEmail;
-  if (typeof maybeEmail === 'string' && maybeEmail.trim()) {
-    return `email:${sha256(maybeEmail.trim().toLowerCase())}`;
-  }
-  return `anon:${sha256(fallbackToken).slice(0, 16)}`;
-};
-
-const inferCustomerLabel = (snapshot: unknown): string | null => {
-  if (typeof snapshot !== 'object' || snapshot === null) return null;
-  const value = (snapshot as Record<string, unknown>).client;
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-};
-
-const normalizeDocStatus = (item: PortalDocumentListItem) => {
-  const expired = Date.parse(item.expiresAt) < Date.now();
-  if (item.kind === 'offer') {
-    if (expired) return 'Abgelaufen';
-    if (item.decision?.decision === 'accepted') return 'Angenommen';
-    if (item.decision?.decision === 'declined') return 'Abgelehnt';
-    return 'Offen';
-  }
-  const snap = looksLikeDocSnapshot(item.snapshotJson) ? item.snapshotJson : null;
-  return snap?.status ? String(snap.status) : expired ? 'Abgelaufen' : 'Offen';
-};
 
 type RateBucketState = {
   count: number;
@@ -169,68 +112,16 @@ const applySensitiveResponseHeaders = (
   c.header('Referrer-Policy', 'no-referrer');
 };
 
-const parseCookies = (header: string | null | undefined): Record<string, string> => {
-  if (!header) return {};
-  return header.split(';').reduce<Record<string, string>>((acc, part) => {
-    const [rawKey, ...rawValue] = part.trim().split('=');
-    if (!rawKey) return acc;
-    try {
-      acc[rawKey] = decodeURIComponent(rawValue.join('=') ?? '');
-    } catch {
-      acc[rawKey] = rawValue.join('=') ?? '';
-    }
-    return acc;
-  }, {});
-};
-
 const renderPortalBranding = (subtitle: string) => `<div style="display:flex; align-items:center; gap:12px; margin-bottom: 16px;">
   <img src="${BILLME_FULL_LOGO_DATA_URI}" alt="Billme" style="height: 28px; width: auto;" />
   <div style="font-size:12px; font-weight:800; letter-spacing:.08em; color:#666; text-transform:uppercase;">${subtitle}</div>
 </div>`;
 
-const checkPublishAuth = (
-  config: PortalConfig,
-  c: any,
-): { ok: boolean; status?: 401 | 503; error?: 'unauthorized' | 'publish_api_key_required' } => {
-  const publishApiKey = config.publishApiKey?.trim();
-  if (config.requirePublishApiKey && !publishApiKey) {
-    return {
-      ok: false,
-      status: 503,
-      error: 'publish_api_key_required',
-    };
-  }
-
-  if (!publishApiKey) return { ok: true };
-
-  const header = c.req.header('x-api-key');
-  if (header && header === publishApiKey) return { ok: true };
-
-  return { ok: false, status: 401, error: 'unauthorized' };
-};
-
 export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: PortalConfig }) => {
   const app = new Hono();
-  const publicOrigin = (() => {
-    const base = deps.config.publicBaseUrl?.trim();
-    if (!base) return null;
-    try {
-      return new URL(base).origin;
-    } catch {
-      return null;
-    }
-  })();
+  const publicOrigin = resolvePublicOrigin(deps.config);
   const isAllowedDecisionOrigin = (c: any): boolean => {
-    if (!publicOrigin) return true;
-    const origin = c.req.header('origin');
-    if (origin && origin === publicOrigin) return true;
-    const referer = c.req.header('referer');
-    if (!referer) return false;
-    try {
-      return new URL(referer).origin === publicOrigin;
-    } catch {
-      return false;
-    }
+    return isAllowedOrigin(publicOrigin, c.req.header('origin'), c.req.header('referer'));
   };
 
   app.get('/health', (c) => c.json({ ok: true, ts: nowIso() }));
@@ -265,23 +156,24 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   });
 
   app.post('/customers/access-links', async (c) => {
-    const auth = checkPublishAuth(deps.config, c);
+    const auth = checkPublishAuth(deps.config, c.req.header('x-api-key'));
     if (!auth.ok) {
       c.header('WWW-Authenticate', 'ApiKey realm="publish"');
       return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
     }
     const body = customerAccessLinkSchema.parse(await c.req.json());
-    const token = crypto.randomBytes(24).toString('base64url');
+    const token = randomPortalToken();
     const createdAt = nowIso();
-    const expiresAt = new Date(Date.now() + (body.expiresInDays ?? 90) * 24 * 60 * 60 * 1000).toISOString();
-    await deps.store.createCustomerAccessToken({
-      tokenHash: sha256(token),
-      customerRef: body.customerRef,
-      customerLabel: body.customerLabel ?? null,
-      createdAt,
-      expiresAt,
-      revokedAt: null,
-    });
+    const expiresAt = expiresInDaysFromNow(body.expiresInDays ?? 90);
+    await deps.store.createCustomerAccessToken(
+      buildCustomerAccessTokenRecord({
+        token,
+        customerRef: body.customerRef,
+        customerLabel: body.customerLabel,
+        createdAt,
+        expiresAt,
+      }),
+    );
     const base = deps.config.publicBaseUrl?.replace(/\/+$/, '');
     return c.json({
       ok: true,
@@ -292,24 +184,25 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   });
 
   app.post('/customers/access-links/rotate', async (c) => {
-    const auth = checkPublishAuth(deps.config, c);
+    const auth = checkPublishAuth(deps.config, c.req.header('x-api-key'));
     if (!auth.ok) {
       c.header('WWW-Authenticate', 'ApiKey realm="publish"');
       return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
     }
     const body = customerAccessLinkSchema.parse(await c.req.json());
     await deps.store.revokeCustomerAccessTokens(body.customerRef);
-    const token = crypto.randomBytes(24).toString('base64url');
+    const token = randomPortalToken();
     const createdAt = nowIso();
-    const expiresAt = new Date(Date.now() + (body.expiresInDays ?? 90) * 24 * 60 * 60 * 1000).toISOString();
-    await deps.store.createCustomerAccessToken({
-      tokenHash: sha256(token),
-      customerRef: body.customerRef,
-      customerLabel: body.customerLabel ?? null,
-      createdAt,
-      expiresAt,
-      revokedAt: null,
-    });
+    const expiresAt = expiresInDaysFromNow(body.expiresInDays ?? 90);
+    await deps.store.createCustomerAccessToken(
+      buildCustomerAccessTokenRecord({
+        token,
+        customerRef: body.customerRef,
+        customerLabel: body.customerLabel,
+        createdAt,
+        expiresAt,
+      }),
+    );
     const base = deps.config.publicBaseUrl?.replace(/\/+$/, '');
     return c.json({
       ok: true,
@@ -320,28 +213,28 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   });
 
   app.post('/offers', async (c) => {
-    const auth = checkPublishAuth(deps.config, c);
+    const auth = checkPublishAuth(deps.config, c.req.header('x-api-key'));
     if (!auth.ok) {
       c.header('WWW-Authenticate', 'ApiKey realm="publish"');
       return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
     }
     const contentType = c.req.header('content-type') ?? '';
     const publishedAt = nowIso();
-    const defaultExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const defaultExpiresAt = expiresInDaysFromNow(30);
 
     if (contentType.includes('application/json')) {
       const body = publishJsonSchema.parse(await c.req.json());
-      const tokenHash = sha256(body.token);
-      await deps.store.upsertOffer({
-        tokenHash,
-        publishedAt,
-        expiresAt: body.expiresAt ?? defaultExpiresAt,
-        snapshotJson: body.snapshot,
-        customerRef: body.customerRef ?? inferCustomerRef(body.snapshot, body.token),
-        customerLabel: body.customerLabel ?? inferCustomerLabel(body.snapshot),
-        pdfKey: null,
-        decision: null,
-      });
+      await deps.store.upsertOffer(
+        buildPublishedOfferRecord({
+          token: body.token,
+          publishedAt,
+          expiresAt: body.expiresAt ?? defaultExpiresAt,
+          snapshot: body.snapshot,
+          customerRef: body.customerRef,
+          customerLabel: body.customerLabel,
+          pdfKey: null,
+        }),
+      );
       return c.json({ ok: true });
     }
 
@@ -363,17 +256,17 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
         await deps.pdf.putPdf(pdfKey, buf);
       }
 
-      const tokenHash = sha256(token);
-      await deps.store.upsertOffer({
-        tokenHash,
-        publishedAt,
-        expiresAt: expiresAtFromForm || defaultExpiresAt,
-        snapshotJson: snapshot,
-        customerRef: customerRefRaw || inferCustomerRef(snapshot, token),
-        customerLabel: customerLabelRaw || inferCustomerLabel(snapshot),
-        pdfKey,
-        decision: null,
-      });
+      await deps.store.upsertOffer(
+        buildPublishedOfferRecord({
+          token,
+          publishedAt,
+          expiresAt: expiresAtFromForm || defaultExpiresAt,
+          snapshot,
+          customerRef: customerRefRaw || undefined,
+          customerLabel: customerLabelRaw || null,
+          pdfKey,
+        }),
+      );
       return c.json({ ok: true });
     }
 
@@ -381,27 +274,28 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   });
 
   app.post('/invoices', async (c) => {
-    const auth = checkPublishAuth(deps.config, c);
+    const auth = checkPublishAuth(deps.config, c.req.header('x-api-key'));
     if (!auth.ok) {
       c.header('WWW-Authenticate', 'ApiKey realm="publish"');
       return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
     }
     const contentType = c.req.header('content-type') ?? '';
     const publishedAt = nowIso();
-    const defaultExpiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    const defaultExpiresAt = expiresInDaysFromNow(365);
 
     if (contentType.includes('application/json')) {
       const body = publishJsonSchema.parse(await c.req.json());
-      const tokenHash = sha256(body.token);
-      await deps.store.upsertInvoice({
-        tokenHash,
-        publishedAt,
-        expiresAt: body.expiresAt ?? defaultExpiresAt,
-        snapshotJson: body.snapshot,
-        customerRef: body.customerRef ?? inferCustomerRef(body.snapshot, body.token),
-        customerLabel: body.customerLabel ?? inferCustomerLabel(body.snapshot),
-        pdfKey: null,
-      });
+      await deps.store.upsertInvoice(
+        buildPublishedInvoiceRecord({
+          token: body.token,
+          publishedAt,
+          expiresAt: body.expiresAt ?? defaultExpiresAt,
+          snapshot: body.snapshot,
+          customerRef: body.customerRef,
+          customerLabel: body.customerLabel,
+          pdfKey: null,
+        }),
+      );
       return c.json({ ok: true });
     }
 
@@ -415,9 +309,6 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
       const customerLabelRaw = String(form.get('customerLabel') ?? '').trim();
 
       if (!token || token.length < 16) return c.json({ error: 'token required' }, 400);
-      const customerRef = customerRefRaw || inferCustomerRef(snapshot, token);
-      if (!customerRef) return c.json({ error: 'customerRef required' }, 400);
-
       const pdfFile = form.get('pdf');
       const pdfKey = pdfFile && typeof pdfFile !== 'string' ? `invoice-${Date.now()}-${tokenHashPrefix(token)}.pdf` : null;
       if (pdfKey && pdfFile && typeof pdfFile !== 'string') {
@@ -425,15 +316,17 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
         await deps.pdf.putPdf(pdfKey, buf);
       }
 
-      await deps.store.upsertInvoice({
-        tokenHash: sha256(token),
-        publishedAt,
-        expiresAt: expiresAtFromForm || defaultExpiresAt,
-        snapshotJson: snapshot,
-        customerRef,
-        customerLabel: customerLabelRaw || inferCustomerLabel(snapshot),
-        pdfKey,
-      });
+      await deps.store.upsertInvoice(
+        buildPublishedInvoiceRecord({
+          token,
+          publishedAt,
+          expiresAt: expiresAtFromForm || defaultExpiresAt,
+          snapshot,
+          customerRef: customerRefRaw || undefined,
+          customerLabel: customerLabelRaw || null,
+          pdfKey,
+        }),
+      );
       return c.json({ ok: true });
     }
 
@@ -451,7 +344,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const access = await deps.store.getCustomerAccessByTokenHash(sha256(token));
     if (!access) return c.json({ error: 'not found' }, 404);
     if (access.revokedAt) return c.json({ error: 'revoked' }, 403);
-    if (Date.parse(access.expiresAt) < Date.now()) return c.json({ error: 'expired' }, 410);
+    if (isExpired(access.expiresAt)) return c.json({ error: 'expired' }, 410);
 
     const query = historyQuerySchema.parse(c.req.query());
     const result = await deps.store.listDocumentsByCustomerRef({
@@ -491,7 +384,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const access = await deps.store.getCustomerAccessByTokenHash(sha256(token));
     if (!access) return c.json({ error: 'not found' }, 404);
     if (access.revokedAt) return c.text('Link ist nicht mehr gueltig.', 403);
-    if (Date.parse(access.expiresAt) < Date.now()) return c.text('Link ist abgelaufen.', 410);
+    if (isExpired(access.expiresAt)) return c.text('Link ist abgelaufen.', 410);
 
     const query = historyQuerySchema.parse(c.req.query());
     const result = await deps.store.listDocumentsByCustomerRef({
@@ -565,7 +458,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const documentId = z.object({ documentId: z.string().min(8) }).parse(c.req.param()).documentId;
     const rec = await deps.store.getDocumentById(documentId);
     if (!rec) return c.json({ error: 'not found' }, 404);
-    const expired = Date.parse(rec.expiresAt) < Date.now();
+    const expired = isExpired(rec.expiresAt);
     const snapshot = looksLikeDocSnapshot(rec.snapshotJson) ? rec.snapshotJson : null;
     const accept = c.req.header('accept') ?? '';
     const wantsHtml = accept.includes('text/html') || c.req.query('view') === '1';
@@ -601,7 +494,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
         : expired
           ? 'Abgelaufen'
           : String(snapshot?.status ?? 'Offen');
-    const csrfToken = crypto.randomBytes(24).toString('base64url');
+    const csrfToken = randomPortalToken();
     if (rec.kind === 'offer' && !expired && !rec.decision) {
       c.header(
         'Set-Cookie',
@@ -689,7 +582,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const documentId = z.object({ documentId: z.string().min(8) }).parse(c.req.param()).documentId;
     const rec = await deps.store.getDocumentById(documentId);
     if (!rec || rec.kind !== 'offer') return c.json({ error: 'not found' }, 404);
-    if (Date.parse(rec.expiresAt) < Date.now()) return c.json({ error: 'expired' }, 410);
+    if (isExpired(rec.expiresAt)) return c.json({ error: 'expired' }, 410);
     const contentType = c.req.header('content-type') ?? '';
     const isForm =
       contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data');
@@ -734,7 +627,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const rec = await deps.store.getOfferByTokenHash(tokenHash);
     if (!rec) return c.json({ error: 'not found' }, 404);
     const document = await deps.store.getDocumentByTokenHash(tokenHash);
-    const expired = Date.parse(rec.expiresAt) < Date.now();
+    const expired = isExpired(rec.expiresAt);
 
     const accept = c.req.header('accept') ?? '';
     const wantsHtml = accept.includes('text/html') || c.req.query('view') === '1';
@@ -794,7 +687,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   <div style="color:#555; font-size:14px;">E-Mail: ${escapeHtml(decision.acceptedEmail)}</div>
 </div>`
       : '';
-    const csrfToken = crypto.randomBytes(24).toString('base64url');
+    const csrfToken = randomPortalToken();
     if (!expired && !decision) {
       c.header(
         'Set-Cookie',
@@ -919,7 +812,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const rec = await deps.store.getInvoiceByTokenHash(sha256(token));
     if (!rec) return c.json({ error: 'not found' }, 404);
     const document = await deps.store.getDocumentByTokenHash(sha256(token));
-    const expired = Date.parse(rec.expiresAt) < Date.now();
+    const expired = isExpired(rec.expiresAt);
 
     const accept = c.req.header('accept') ?? '';
     const wantsHtml = accept.includes('text/html') || c.req.query('view') === '1';
@@ -1058,7 +951,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     if (!rec) return c.json({ error: 'not found' }, 404);
     const document = await deps.store.getDocumentByTokenHash(tokenHash);
 
-    const expired = Date.parse(rec.expiresAt) < Date.now();
+    const expired = isExpired(rec.expiresAt);
     if (expired) return c.json({ error: 'expired' }, 410);
 
     const contentType = c.req.header('content-type') ?? '';
@@ -1117,5 +1010,3 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
 
   return app;
 };
-
-const tokenHashPrefix = (token: string) => sha256(token).slice(0, 10);

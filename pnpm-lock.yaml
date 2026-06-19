@@ -644,6 +644,9 @@ importers:
 
   packages/desktop-contracts-pro:
     dependencies:
+      '@billme/desktop-contracts':
+        specifier: workspace:*
+        version: link:../desktop-contracts
       zod:
         specifier: ^3.25.76
         version: 3.25.76

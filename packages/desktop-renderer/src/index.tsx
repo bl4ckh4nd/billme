@@ -1,8 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { BillmeApi } from '@billme/desktop-contracts/api';
-import '../../../apps/desktop/index.css';
+import type { BillmeApi as LiteBillmeApi } from '@billme/desktop-contracts/api';
+import type { BillmeApi as ProBillmeApi } from '@billme/desktop-contracts-pro/api';
+
+export type DesktopRendererApi = LiteBillmeApi | ProBillmeApi;
 
 export type DesktopRendererRuntime = {
   shell?: 'desktop' | 'web';
@@ -38,7 +40,7 @@ type BillmeWindowShim = {
 };
 
 type RendererGlobals = typeof globalThis & {
-  billmeApi?: BillmeApi;
+  billmeApi?: DesktopRendererApi;
   billmeRuntime?: DesktopRendererRuntime;
   billmeWindow?: BillmeWindowShim;
 };
@@ -123,13 +125,57 @@ export const createRendererQueryClient = (): QueryClient =>
     },
   });
 
+type DesktopAppModule = {
+  default: React.ComponentType;
+};
+
+type ViteImportMeta = ImportMeta & {
+  glob: (pattern: string) => Record<string, () => Promise<unknown>>;
+};
+
+// import.meta.glob is only resolved by Vite when this file is within the consuming
+// app's root. When bundled into apps/web (whose root is apps/web/), the glob
+// transform does not apply and import.meta.glob is undefined at runtime. Guard
+// against this so the module initialises safely; callers can pass AppComponent
+// directly to BrowserRendererHost instead.
+const _viteGlob = (import.meta as ViteImportMeta).glob;
+const safeGlob = typeof _viteGlob === 'function'
+  ? (pattern: string) => _viteGlob(pattern)
+  : (_pattern: string) => ({} as Record<string, () => Promise<unknown>>);
+
+const productAppModules = safeGlob('../../../apps/{desktop,pro-desktop}/App.tsx');
+const productStyleModules = safeGlob('../../../apps/{desktop,pro-desktop}/index.css');
+
+const productAppPath = (product: 'lite' | 'pro') =>
+  product === 'pro'
+    ? '../../../apps/pro-desktop/App.tsx'
+    : '../../../apps/desktop/App.tsx';
+
+const productStylePath = (product: 'lite' | 'pro') =>
+  product === 'pro'
+    ? '../../../apps/pro-desktop/index.css'
+    : '../../../apps/desktop/index.css';
+
+const loadProductStyles = async (product: 'lite' | 'pro'): Promise<void> => {
+  await productStyleModules[productStylePath(product)]?.();
+};
+
+const loadProductApp = async (product: 'lite' | 'pro'): Promise<DesktopAppModule> => {
+  const load = productAppModules[productAppPath(product)];
+  if (!load) {
+    throw new Error(`Billme ${product} renderer app could not be loaded.`);
+  }
+  return load() as Promise<DesktopAppModule>;
+};
+
 export const mountDesktopRendererApp = async (
   rootElement: HTMLElement,
-  options?: { api?: BillmeApi; runtime?: DesktopRendererRuntime },
+  options?: { api?: DesktopRendererApi; runtime?: DesktopRendererRuntime; AppComponent?: React.ComponentType },
 ): Promise<() => void> => {
   const runtime = globalThis as RendererGlobals;
   const resolvedRuntime = resolveRuntime(options?.runtime);
   const cleanupShims = installBrowserPlatformShims(resolvedRuntime);
+  const product = resolvedRuntime?.product ?? 'lite';
 
   if (options?.api) {
     runtime.billmeApi = options.api;
@@ -138,7 +184,14 @@ export const mountDesktopRendererApp = async (
     runtime.billmeRuntime = resolvedRuntime;
   }
 
-  const { default: App } = await import('../../../apps/desktop/App');
+  let App: React.ComponentType;
+  if (options?.AppComponent) {
+    App = options.AppComponent;
+  } else {
+    await loadProductStyles(product);
+    const module = await loadProductApp(product);
+    App = module.default;
+  }
   const queryClient = createRendererQueryClient();
   const root = ReactDOM.createRoot(rootElement);
   root.render(
@@ -160,3 +213,56 @@ export const mountDesktopRendererApp = async (
     cleanupShims?.();
   };
 };
+
+export const BrowserRendererHost = <TApi extends DesktopRendererApi>({
+  api,
+  runtime,
+  AppComponent,
+  className = 'min-h-screen',
+  children,
+}: {
+  api: TApi;
+  runtime: DesktopRendererRuntime;
+  AppComponent?: React.ComponentType;
+  className?: string;
+  children?: (mountError: string) => React.ReactNode;
+}): React.ReactElement => {
+  const hostRef = React.useRef<HTMLDivElement | null>(null);
+  const [mountError, setMountError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!hostRef.current) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    let dispose: undefined | (() => void);
+
+    void mountDesktopRendererApp(hostRef.current, { api, runtime, AppComponent })
+      .then((cleanup) => {
+        if (cancelled) {
+          cleanup();
+          return;
+        }
+        dispose = cleanup;
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setMountError(error instanceof Error ? error.message : String(error));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, [api, runtime]);
+
+  if (mountError) {
+    return <>{children ? children(mountError) : mountError}</>;
+  }
+
+  return <div ref={hostRef} className={className} />;
+};
+
+export * from './browserShell.js';

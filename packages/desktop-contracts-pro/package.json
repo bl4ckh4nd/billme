@@ -5,6 +5,7 @@
   "type": "module",
   "types": "./src/index.ts",
   "dependencies": {
+    "@billme/desktop-contracts": "workspace:*",
     "zod": "^3.25.76"
   },
   "exports": {

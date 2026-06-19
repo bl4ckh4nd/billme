@@ -45,6 +45,20 @@ import {
   type Parser,
 } from '@billme/desktop-renderer/browserRuntime';
 
+const generateId = (): string => {
+  const browserCrypto = globalThis.crypto;
+  if (typeof browserCrypto.randomUUID === 'function') {
+    return browserCrypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  browserCrypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  return [...bytes].map((b, i) =>
+    [3, 5, 7, 9].includes(i) ? `-${b.toString(16).padStart(2, '0')}` : b.toString(16).padStart(2, '0')
+  ).join('');
+};
+
 type RequestOptions<T> = {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
@@ -276,7 +290,7 @@ export const createProWebBillmeApi = ({
   let importBatches = readJsonStorage(BROWSER_IMPORT_BATCH_STORAGE_KEY, [] as ImportBatchStore, (input) => {
     return Array.isArray(input)
       ? input.filter(isRecord).map((batch) => ({
-          id: typeof batch.id === 'string' ? batch.id : crypto.randomUUID(),
+          id: typeof batch.id === 'string' ? batch.id : generateId(),
           accountId: typeof batch.accountId === 'string' ? batch.accountId : '',
           profile: typeof batch.profile === 'string' ? batch.profile : 'generic',
           fileName: typeof batch.fileName === 'string' ? batch.fileName : 'import.csv',
@@ -453,7 +467,7 @@ export const createProWebBillmeApi = ({
       },
       {
         clientId: initialClient.id,
-        createProjectId: () => crypto.randomUUID(),
+        createProjectId: () => generateId(),
         buildProject: (project): ProjectWithClientId => {
           const normalized = projectSchema.parse({ ...project, clientId: project.clientId ?? initialClient.id });
           return { ...normalized, clientId: normalized.clientId ?? initialClient.id };
@@ -478,7 +492,7 @@ export const createProWebBillmeApi = ({
     const project = await ensureClientDefaultProject(client);
     const today = toIsoDate(new Date());
     return parseResult('documents:createFromClient', {
-      id: crypto.randomUUID(),
+      id: generateId(),
       clientId: client.id,
       clientNumber: client.customerNumber,
       projectId: project?.id,
@@ -888,7 +902,7 @@ export const createProWebBillmeApi = ({
         const created = await upsertInvoice(
           {
             ...offer,
-            id: crypto.randomUUID(),
+            id: generateId(),
             number: reservation.number,
             numberReservationId: reservation.reservationId,
             date: invoiceDate,
@@ -1044,7 +1058,7 @@ export const createProWebBillmeApi = ({
         if (!file) {
           return parseResult(key, { path: null });
         }
-        const path = `browser-file://${crypto.randomUUID()}/${encodeURIComponent(file.name)}`;
+        const path = `browser-file://${generateId()}/${encodeURIComponent(file.name)}`;
         browserFileRegistry.set(path, file);
         return parseResult(key, { path });
       }
@@ -1100,7 +1114,7 @@ export const createProWebBillmeApi = ({
         }
         const parsed = await parseCsvFile(file, args.delimiter);
         const createdAt = new Date().toISOString();
-        const batchId = crypto.randomUUID();
+        const batchId = generateId();
         const rows = parsed.rows.map((row) => {
           const amount = parseNumber(row[args.mapping.amountColumn]);
           const date = parseDateValue(row[args.mapping.dateColumn]);
@@ -1129,7 +1143,7 @@ export const createProWebBillmeApi = ({
           }
           transactions = [
             {
-              id: crypto.randomUUID(),
+              id: generateId(),
               accountId: args.accountId,
               date: row.date,
               amount: Math.abs(row.amount),
@@ -1310,7 +1324,7 @@ export const createProWebBillmeApi = ({
         }
         const postingDate = args.postingDate ?? draft.postingDate ?? toIsoDate(new Date());
         const entry = journalEntryEntitySchema.parse({
-          id: crypto.randomUUID(),
+          id: generateId(),
           tenantId: draft.tenantId,
           entryNumber: journalEntries.length + 1,
           postingDate,
@@ -1348,7 +1362,7 @@ export const createProWebBillmeApi = ({
         }
         const reversalEntry = journalEntryEntitySchema.parse({
           ...source,
-          id: crypto.randomUUID(),
+          id: generateId(),
           entryNumber: journalEntries.length + 1,
           status: 'posted',
           reversedEntryId: source.id,
@@ -1486,7 +1500,7 @@ export const createProWebBillmeApi = ({
         const now = new Date().toISOString();
         const existing = args.id ? eurRules.find((rule) => rule.id === args.id) : undefined;
         const rule = eurRuleSchema.parse({
-          id: args.id ?? crypto.randomUUID(),
+          id: args.id ?? generateId(),
           taxYear: args.taxYear,
           priority: args.priority,
           field: args.field,
@@ -1558,7 +1572,7 @@ export const createProWebBillmeApi = ({
         }
         const settings = await getSettings();
         const base = settings?.portal.baseUrl?.trim() || window.location.origin;
-        const tokenValue = offer.shareToken ?? crypto.randomUUID().replace(/-/g, '');
+        const tokenValue = offer.shareToken ?? generateId().replace(/-/g, '');
         const saved = await upsertOffer(
           {
             ...offer,

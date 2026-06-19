@@ -34,6 +34,21 @@ import {
   toIsoDate,
 } from '@billme/desktop-renderer/browserRuntime';
 
+const generateId = (): string => {
+  const browserCrypto = globalThis.crypto;
+  if (typeof browserCrypto.randomUUID === 'function') {
+    return browserCrypto.randomUUID();
+  }
+  // Fallback for non-secure HTTP contexts: UUID v4 via getRandomValues
+  const bytes = new Uint8Array(16);
+  browserCrypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  return [...bytes].map((b, i) =>
+    [3, 5, 7, 9].includes(i) ? `-${b.toString(16).padStart(2, '0')}` : b.toString(16).padStart(2, '0')
+  ).join('');
+};
+
 type ServerClientPayload = z.output<typeof serverClientSchema>;
 type ServerInvoicePayload = z.output<typeof serverInvoiceSchema>;
 type ServerOfferPayload = z.output<typeof serverOfferSchema>;
@@ -128,7 +143,7 @@ const buildDraftFromClient = async (
   const taxMode = resolveInvoiceTaxMode(undefined, taxSettings);
 
   const draft = parseResult('documents:createFromClient', {
-    id: crypto.randomUUID(),
+    id: generateId(),
     clientId: client.id,
     clientNumber: client.customerNumber,
     projectId: defaultProject.id,
@@ -256,7 +271,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       },
       {
         clientId: initialClient.id,
-        createProjectId: () => crypto.randomUUID(),
+        createProjectId: () => generateId(),
       },
     );
     return project;
@@ -480,7 +495,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
               reason: `Converted from offer ${offer.number}`,
               invoice: {
                 kind: 'invoice' as const,
-                id: crypto.randomUUID(),
+                id: generateId(),
                 clientId: offer.clientId,
                 clientNumber: offer.clientNumber,
                 projectId: offer.projectId,

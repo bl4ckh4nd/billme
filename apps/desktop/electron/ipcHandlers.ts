@@ -41,7 +41,7 @@ import { secrets } from './secrets';
 import { formatAddressMultiline } from '../utils/formatters';
 import { ipcRoutes, type IpcArgs, type IpcResult, type IpcRouteKey } from '../ipc/contract';
 import { portalClient } from '../services/portalClient';
-import crypto from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { exportPdf, exportEurPdf } from './pdfExport';
 import { commitCsv, previewCsv } from '../services/csvImport';
 import {
@@ -97,9 +97,9 @@ const normalizeInvoiceTaxData = (doc: Invoice, settings: AppSettings): Invoice =
 const deriveCustomerRef = (doc: Invoice): string => {
   if (doc.clientId && doc.clientId.trim()) return `client:${doc.clientId.trim()}`;
   if (doc.clientEmail && doc.clientEmail.trim()) {
-    return `email:${crypto.createHash('sha256').update(doc.clientEmail.trim().toLowerCase()).digest('hex')}`;
+    return `email:${createHash('sha256').update(doc.clientEmail.trim().toLowerCase()).digest('hex')}`;
   }
-  return `anon:${crypto.createHash('sha256').update(doc.id).digest('hex').slice(0, 16)}`;
+  return `anon:${createHash('sha256').update(doc.id).digest('hex').slice(0, 16)}`;
 };
 
 const requireSettings = (db: Database.Database): AppSettings => {
@@ -319,7 +319,7 @@ export const registerIpcHandlers = (
 
     const today = new Date().toISOString().split('T')[0];
     const base: Invoice = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       clientId: client.id,
       clientNumber: client.customerNumber,
       projectId: defaultProject.id,
@@ -345,7 +345,7 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'documents:convertOfferToInvoice', ({ offerId, invoiceDate, dueDate }) => {
     const db = requireDb();
-    const newInvoiceId = crypto.randomUUID();
+    const newInvoiceId = randomUUID();
     return createInvoiceFromOffer(db, offerId, newInvoiceId, { invoiceDate, dueDate });
   });
 
@@ -567,7 +567,7 @@ export const registerIpcHandlers = (
         continue;
       }
       toInsert.push({
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         accountId: args.accountId,
         date,
         amount,
@@ -655,7 +655,7 @@ export const registerIpcHandlers = (
       portalGateway: {
         publishOffer: async ({ expiresAt: publishExpiresAt }) => {
           const apiKey = await secrets.get('portal.apiKey');
-          const token = crypto.randomBytes(24).toString('base64url');
+          const token = randomBytes(24).toString('base64url');
           const pdf = await exportPdf({
             kind: 'offer',
             id: offerId,
@@ -708,7 +708,7 @@ export const registerIpcHandlers = (
     if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
 
     const apiKey = await secrets.get('portal.apiKey');
-    const token = crypto.randomBytes(24).toString('base64url');
+    const token = randomBytes(24).toString('base64url');
 
     const pdf = await exportPdf({
       kind: 'invoice',
@@ -928,7 +928,7 @@ export const registerIpcHandlers = (
     // Log to database
     const now = new Date().toISOString();
     logEmail(db, {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       documentType,
       documentId,
       documentNumber: document.number,

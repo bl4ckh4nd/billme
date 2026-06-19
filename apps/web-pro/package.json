@@ -14,6 +14,7 @@
     "@billme/accounting-ui-pro": "workspace:*",
     "@tanstack/react-query": "^5.90.20",
     "@billme/desktop-contracts-pro": "workspace:*",
+    "@billme/desktop-renderer": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/ui": "workspace:*",
     "react": "^19.2.3",

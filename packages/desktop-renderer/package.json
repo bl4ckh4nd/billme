@@ -5,10 +5,12 @@
   "type": "module",
   "types": "./src/index.tsx",
   "exports": {
-    ".": "./src/index.tsx"
+    ".": "./src/index.tsx",
+    "./browserRuntime": "./src/browserRuntime.ts"
   },
   "dependencies": {
     "@billme/desktop-contracts": "workspace:*",
+    "@billme/desktop-contracts-pro": "workspace:*",
     "@tanstack/react-query": "^5.90.19",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"

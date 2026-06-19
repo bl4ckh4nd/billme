@@ -1,5 +1,6 @@
 // Components
 export { Button, type ButtonProps, type ButtonVariant, type ButtonSize } from './components/Button';
+export { DatePicker, type DatePickerProps } from './components/DatePicker';
 export { Badge, type BadgeProps } from './components/Badge';
 export { Input, type InputProps } from './components/Input';
 export { Card, type CardProps, type CardRadius } from './components/Card';

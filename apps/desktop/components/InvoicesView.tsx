@@ -476,6 +476,38 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       );
   };
 
+  const handleFinalizeDraftOffer = () => {
+    if (!selectedDocument || documentType !== 'offer' || selectedDocument.status !== 'draft') return;
+
+    const historyEntry = {
+      date: new Date().toISOString().split('T')[0] ?? '',
+      action: 'Angebot gestellt (Status: Offen)',
+    };
+
+    upsertOffer.mutate(
+      {
+        offer: {
+          ...selectedDocument,
+          status: 'open',
+          history: [historyEntry, ...(selectedDocument.history ?? [])],
+        },
+        reason: 'offer_finalize',
+      },
+      {
+        onSuccess: () => {
+          setToastMessage('Angebot als gestellt markiert');
+          setShowShareToast(true);
+          setTimeout(() => setShowShareToast(false), 3000);
+        },
+        onError: (error) => {
+          setToastMessage(`Finalisieren fehlgeschlagen: ${String(error)}`);
+          setShowShareToast(true);
+          setTimeout(() => setShowShareToast(false), 5000);
+        },
+      },
+    );
+  };
+
 
   // --- Dunning Logic ---
   const handleStartDunningRun = () => {
@@ -1030,6 +1062,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       {documentType === 'invoice' && selectedDocument.status === 'draft' && (
                         <button
                           onClick={handleFinalizeDraftInvoice}
+                          className="h-10 w-10 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-full flex items-center justify-center transition-colors"
+                          title="Als gestellt markieren (Entwurf → Offen)"
+                        >
+                          <CheckCircle size={18} />
+                        </button>
+                      )}
+
+                      {documentType === 'offer' && selectedDocument.status === 'draft' && (
+                        <button
+                          onClick={handleFinalizeDraftOffer}
                           className="h-10 w-10 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-full flex items-center justify-center transition-colors"
                           title="Als gestellt markieren (Entwurf → Offen)"
                         >

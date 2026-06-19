@@ -5,3 +5,4 @@ export * from './recurring.js';
 export * from './maintenance.js';
 export * from './email-outbox.js';
 export * from './taxMode.js';
+export * from './einvoice.js';

@@ -51,4 +51,25 @@ describe('buildZugferdXml', () => {
     expect(xml).toContain('<ram:Name>Billme GmbH</ram:Name>');
     expect(xml).toContain('<ram:Name>Kunde GmbH</ram:Name>');
   });
+
+  it('escapes XML-sensitive values', () => {
+    const xml = buildZugferdXml({
+      ...fixture,
+      invoiceNumber: 'RE-&-001',
+      buyer: {
+        ...fixture.buyer,
+        name: 'Kunde & Partner <Nord>',
+      },
+      lines: [
+        {
+          ...fixture.lines[0]!,
+          name: 'Beratung "A" & Entwicklung',
+        },
+      ],
+    });
+
+    expect(xml).toContain('<ram:ID>RE-&amp;-001</ram:ID>');
+    expect(xml).toContain('<ram:Name>Kunde &amp; Partner &lt;Nord&gt;</ram:Name>');
+    expect(xml).toContain('<ram:Name>Beratung &quot;A&quot; &amp; Entwicklung</ram:Name>');
+  });
 });

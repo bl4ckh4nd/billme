@@ -30,6 +30,10 @@
     "./services": {
       "types": "./src/services/index.ts",
       "default": "./src/services/index.ts"
+    },
+    "./routes": {
+      "types": "./src/shared/server-routes.ts",
+      "default": "./src/shared/server-routes.ts"
     }
   },
   "types": "./src/index.ts"

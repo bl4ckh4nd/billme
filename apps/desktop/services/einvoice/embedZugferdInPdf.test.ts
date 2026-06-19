@@ -13,6 +13,7 @@ describe('embedZugferdInPdf', () => {
 
     const asText = Buffer.from(output).toString('latin1');
     expect(output.length).toBeGreaterThan(input.length);
+    expect(output.slice(0, input.length)).toEqual(input);
     expect(asText).toContain('zugferd-invoice.xml');
     expect(asText).toContain('BILLME_ZUGFERD_PAYLOAD_BEGIN');
   });

@@ -122,4 +122,41 @@ describe('normalizeInvoiceForEinvoice', () => {
     expect(normalized.lines[0]?.taxCategoryCode).toBe('AE');
     expect(normalized.lines[0]?.taxExemptionReason).toContain('§13b');
   });
+
+  it('maps non taxable outside scope to O category', () => {
+    const normalized = normalizeInvoiceForEinvoice(
+      {
+        ...makeInvoice(),
+        taxMode: 'non_taxable_outside_scope',
+      },
+      makeSettings(false),
+    );
+    expect(normalized.totals.taxTotal).toBe(0);
+    expect(normalized.lines[0]?.taxCategoryCode).toBe('O');
+    expect(normalized.lines[0]?.taxExemptionReason).toContain('Nicht steuerbarer Umsatz');
+  });
+
+  it('fails clearly when required invoice fields are missing', () => {
+    expect(() =>
+      normalizeInvoiceForEinvoice(
+        {
+          ...makeInvoice(),
+          dueDate: '',
+        },
+        makeSettings(false),
+      ),
+    ).toThrow('Fälligkeitsdatum');
+  });
+
+  it('fails clearly when invoice has no line items', () => {
+    expect(() =>
+      normalizeInvoiceForEinvoice(
+        {
+          ...makeInvoice(),
+          items: [],
+        },
+        makeSettings(false),
+      ),
+    ).toThrow('Rechnung enthält keine Positionen');
+  });
 });

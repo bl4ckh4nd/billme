@@ -6,6 +6,8 @@ import {
   supportedServerProducts,
   supportedServerRoles,
 } from './shared/runtime-profile.js';
+import { serverRoutes } from './shared/server-routes.js';
+export * from './shared/server-routes.js';
 
 export {
   deploymentModeSchema,
@@ -156,20 +158,20 @@ export const createServerApiClient = (baseUrl: string): ServerApiClient => {
       return parseJsonResponse(response, healthResponseSchema);
     },
     async getCapabilities() {
-      const response = await fetch(`${normalizedBaseUrl}/api/v1/meta/capabilities`);
+      const response = await fetch(`${normalizedBaseUrl}${serverRoutes.meta.capabilities}`);
       return parseJsonResponse(response, capabilitiesResponseSchema);
     },
     async getBootstrapStatus() {
       return this.getBootstrapStatusFor('lite');
     },
     async getBootstrapStatusFor(product) {
-      return requestJson(buildAuthUrl('/api/v1/auth/bootstrap/status', product), bootstrapStatusSchema);
+      return requestJson(buildAuthUrl(serverRoutes.auth.bootstrapStatus, product), bootstrapStatusSchema);
     },
     async bootstrap(input) {
       return this.bootstrapFor('lite', input);
     },
     async bootstrapFor(product, input) {
-      return requestJson(buildAuthUrl('/api/v1/auth/bootstrap', product), authResponseSchema, {
+      return requestJson(buildAuthUrl(serverRoutes.auth.bootstrap, product), authResponseSchema, {
         method: 'POST',
         body: bootstrapRequestSchema.parse(input),
       });
@@ -178,7 +180,7 @@ export const createServerApiClient = (baseUrl: string): ServerApiClient => {
       return this.loginFor('lite', input);
     },
     async loginFor(product, input) {
-      return requestJson(buildAuthUrl('/api/v1/auth/login', product), authResponseSchema, {
+      return requestJson(buildAuthUrl(serverRoutes.auth.login, product), authResponseSchema, {
         method: 'POST',
         body: loginRequestSchema.parse(input),
       });
@@ -190,7 +192,7 @@ export const createServerApiClient = (baseUrl: string): ServerApiClient => {
           product: serverProductSchema.default('lite'),
         })
         .parse(args);
-      return requestJson(buildAuthUrl('/api/v1/auth/me', parsed.product), authSessionInfoSchema, {
+      return requestJson(buildAuthUrl(serverRoutes.auth.me, parsed.product), authSessionInfoSchema, {
         token: parsed.token,
       });
     },

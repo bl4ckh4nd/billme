@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 const mockLines = [
   {
@@ -60,15 +60,6 @@ const mockLines = [
 
 let mockClassificationMap = new Map<string, any>();
 
-vi.mock('../db/eurCatalogRepo', () => ({
-  listEurLines: vi.fn(() => mockLines),
-}));
-
-vi.mock('../db/eurClassificationRepo', () => ({
-  listEurClassificationsMap: vi.fn(() => mockClassificationMap),
-  upsertEurClassification: vi.fn(),
-}));
-
 import { getEurReport, listEurItems } from './eurReport';
 
 const makeSettings = () => ({
@@ -109,6 +100,17 @@ const makeSettings = () => ({
 });
 
 const buildFakeDb = () => {
+  const lineRows = mockLines.map((line) => ({
+    id: line.id,
+    tax_year: line.taxYear,
+    kennziffer: line.kennziffer,
+    label: line.label,
+    kind: line.kind,
+    exportable: line.exportable ? 1 : 0,
+    sort_order: line.sortOrder,
+    computed_from_json: JSON.stringify(line.computedFromIds),
+    source_version: line.sourceVersion,
+  }));
   const invoiceRows = [
     { invoice_id: 'inv-1', date: '2025-01-02', amount: 119, client: 'Acme', number: 'RE-1' },
   ];
@@ -138,6 +140,21 @@ const buildFakeDb = () => {
   return {
     prepare: (sql: string) => ({
       all: () => {
+        if (sql.includes('FROM eur_lines')) return lineRows;
+        if (sql.includes('FROM eur_classifications') && !sql.includes('INNER JOIN')) {
+          return [...mockClassificationMap.values()].map((classification) => ({
+            id: classification.id,
+            source_type: classification.sourceType,
+            source_id: classification.sourceId,
+            tax_year: classification.taxYear,
+            eur_line_id: classification.eurLineId ?? null,
+            excluded: classification.excluded ? 1 : 0,
+            vat_mode: classification.vatMode,
+            note: classification.note ?? null,
+            updated_at: classification.updatedAt,
+          }));
+        }
+        if (sql.includes('FROM eur_classifications')) return [];
         if (sql.includes('FROM invoice_payments')) return invoiceRows;
         if (sql.includes('FROM transactions')) return txRows;
         return [];

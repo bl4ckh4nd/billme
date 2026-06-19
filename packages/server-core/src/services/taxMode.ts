@@ -21,6 +21,11 @@ export type TaxableDocumentInput = {
 
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
+const toNumber = (value: unknown): number => {
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) ? num : 0;
+};
+
 export const DEFAULT_TAX_MODE: InvoiceTaxMode = 'standard_vat';
 
 export const INVOICE_TAX_MODE_DEFINITIONS: InvoiceTaxModeDefinition[] = [
@@ -104,11 +109,39 @@ export const getInvoiceTaxModeDefinition = (mode: InvoiceTaxMode): InvoiceTaxMod
 
 export const resolveInvoiceTaxMode = (
   taxMode: InvoiceTaxMode | undefined,
-  settings: TaxSettingsShape,
+  settings?: TaxSettingsShape,
 ): InvoiceTaxMode => {
   if (taxMode && TAX_MODE_MAP.has(taxMode)) return taxMode;
-  if (settings.legal.smallBusinessRule) return 'small_business_19_ustg';
+  if (settings?.legal.smallBusinessRule) return 'small_business_19_ustg';
   return DEFAULT_TAX_MODE;
+};
+
+export const getDefaultTaxRate = (settings: TaxSettingsShape): number =>
+  Math.max(0, toNumber(settings.legal.defaultVatRate));
+
+export const getInvoiceTaxExemptionReason = (
+  mode: InvoiceTaxMode,
+  taxMeta?: InvoiceTaxMeta,
+): string | undefined => {
+  if (taxMeta?.exemptionReasonOverride?.trim()) return taxMeta.exemptionReasonOverride.trim();
+  switch (mode) {
+    case 'small_business_19_ustg':
+      return 'Kleinunternehmerregelung nach §19 UStG';
+    case 'reverse_charge_13b':
+      return 'Steuerschuldnerschaft des Leistungsempfängers (§13b UStG)';
+    case 'intra_eu_supply_6a':
+      return 'Steuerfreie innergemeinschaftliche Lieferung (§6a UStG)';
+    case 'intra_eu_service_reverse_charge':
+      return 'Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)';
+    case 'export_third_country':
+      return 'Steuerfreie Ausfuhrlieferung';
+    case 'vat_exempt_4_ustg':
+      return 'Steuerfreie Leistung nach §4 UStG';
+    case 'non_taxable_outside_scope':
+      return 'Nicht steuerbarer Umsatz';
+    default:
+      return undefined;
+  }
 };
 
 export const calculateInvoiceTaxSnapshot = (
@@ -123,7 +156,7 @@ export const calculateInvoiceTaxSnapshot = (
   );
   const resolvedTaxMode = resolveInvoiceTaxMode(input.taxMode, settings);
   const definition = getInvoiceTaxModeDefinition(resolvedTaxMode);
-  const vatRateApplied = definition.forceZeroVat ? 0 : Number(settings.legal.defaultVatRate) || 0;
+  const vatRateApplied = definition.forceZeroVat ? 0 : getDefaultTaxRate(settings);
   const vatAmount = round2(netAmount * (vatRateApplied / 100));
 
   return {

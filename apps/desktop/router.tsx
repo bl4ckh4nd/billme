@@ -220,7 +220,7 @@ const DocumentEditorPage: React.FC = () => {
 
   if (!invoice) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
         <h2 className="text-xl font-bold text-gray-900 mb-2">Kein Dokument ausgewählt</h2>
         <p className="text-sm text-gray-500 mb-6">
           Bitte wähle zuerst ein Dokument aus der Liste aus.

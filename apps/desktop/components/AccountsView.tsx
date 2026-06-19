@@ -125,7 +125,7 @@ export function AccountsView(): ReactElement {
   }
 
   return (
-    <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">

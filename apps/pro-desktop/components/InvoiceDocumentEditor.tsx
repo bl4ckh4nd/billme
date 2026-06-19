@@ -14,6 +14,7 @@ import { useArticlesQuery } from '../hooks/useArticles';
 import { useProjectsQuery } from '../hooks/useProjects';
 import { formatAddressMultiline } from '../utils/formatters';
 import { useUiStore } from '../state/uiStore';
+import { DatePicker } from '@billme/ui';
 
 interface InvoiceDocumentEditorProps {
   invoice: Invoice;
@@ -54,6 +55,17 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
     selectedClientId ? { clientId: selectedClientId, includeArchived: false } : undefined,
   );
   const projectTouchedRef = React.useRef(false);
+
+  // Auto-fill dueDate when opening in create mode once settings load.
+  useEffect(() => {
+    if (mode !== 'create' || formData.dueDate) return;
+    const today = new Date();
+    const days = effectiveSettings.legal?.paymentTermsDays ?? 14;
+    const due = new Date(today);
+    due.setDate(today.getDate() + (templateType === 'invoice' ? days : 0));
+    const iso = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`;
+    setFormData(prev => prev.dueDate ? prev : { ...prev, dueDate: iso });
+  }, [effectiveSettings, mode, templateType]);
 
   const previewElements = useMemo(() => {
       return getPreviewElements(formData, effectiveTemplate, effectiveSettings);
@@ -188,7 +200,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
   const totals = calculateTotals();
 
   return (
-    <div className="flex h-full w-full bg-[#f3f4f6] overflow-hidden">
+    <div className="flex h-full w-full bg-canvas overflow-hidden">
         {/* Left Sidebar: Form Editor */}
         <div
           className={`flex flex-col bg-white border-r border-gray-200 h-full shadow-xl z-10 transition-all duration-300 ${sidebarCollapsed ? 'w-0 overflow-hidden border-r-0' : 'w-[450px]'}`}
@@ -253,29 +265,24 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                         </div>
                         <div>
                             <label className="block text-xs font-bold text-gray-500 mb-1">Datum</label>
-                            <input 
-                                type="date" 
+                            <DatePicker
                                 value={formData.date}
-                                onChange={e => setFormData({...formData, date: e.target.value})}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                                onChange={date => setFormData({...formData, date})}
                             />
                         </div>
                         <div>
                             <label className="block text-xs font-bold text-gray-500 mb-1">Leistungsdatum</label>
-                            <input 
-                                type="date" 
+                            <DatePicker
                                 value={formData.servicePeriod || ''}
-                                onChange={e => setFormData({...formData, servicePeriod: e.target.value})}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                                onChange={servicePeriod => setFormData({...formData, servicePeriod})}
+                                placeholder="Optional"
                             />
                         </div>
                         <div>
                             <label className="block text-xs font-bold text-gray-500 mb-1">Fälligkeit</label>
-                            <input 
-                                type="date" 
+                            <DatePicker
                                 value={formData.dueDate}
-                                onChange={e => setFormData({...formData, dueDate: e.target.value})}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                                onChange={dueDate => setFormData({...formData, dueDate})}
                             />
                         </div>
                     </div>
@@ -490,7 +497,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
         </div>
 
         {/* Right Area: Live Preview */}
-        <div className="flex-1 bg-[#555] overflow-auto flex justify-center p-8 relative">
+        <div className="flex-1 bg-editor-viewport overflow-auto flex justify-center p-8 relative">
             {/* Sidebar toggle */}
             <button
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}

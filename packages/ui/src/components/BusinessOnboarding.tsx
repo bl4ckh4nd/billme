@@ -341,9 +341,9 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#f4f4ef] px-4 py-4 sm:px-6 sm:py-6">
-      <div className="mx-auto grid min-h-full w-full max-w-6xl overflow-hidden rounded-[2rem] border border-black/5 bg-surface shadow-[0_28px_90px_rgba(15,23,42,0.14)] lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <aside className="relative overflow-hidden bg-[#121212] px-6 py-7 text-white sm:px-8 lg:px-7">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-onboarding-canvas px-4 py-4 sm:px-6 sm:py-6">
+      <div className="mx-auto grid min-h-full w-full max-w-6xl overflow-hidden rounded-xl border border-black/5 bg-surface shadow-[0_28px_90px_rgba(15,23,42,0.14)] lg:grid-cols-[18rem_minmax(0,1fr)]">
+        <aside className="relative overflow-hidden bg-onboarding-panel px-6 py-7 text-white sm:px-8 lg:px-7">
           <div className="absolute inset-x-0 top-0 h-1 bg-white/10">
             <div
               className="h-full bg-[var(--color-accent)] transition-all duration-300"
@@ -364,7 +364,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
               </p>
             </div>
 
-            <div className="mt-8 rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
+            <div className="mt-8 rounded-lg border border-white/10 bg-white/5 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/50">
                 Pflichtfelder
               </p>
@@ -415,7 +415,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
               })}
             </ol>
 
-            <div className="mt-auto hidden rounded-[1.5rem] border border-white/10 bg-black/20 p-4 lg:block">
+            <div className="mt-auto hidden rounded-lg border border-white/10 bg-black/20 p-4 lg:block">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/50">
                 Danach bist du bereit fuer
               </p>
@@ -428,7 +428,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
           </div>
         </aside>
 
-        <main className="flex min-h-full flex-col bg-[#fbfbf8]">
+        <main className="flex min-h-full flex-col bg-onboarding-surface">
           <div className="border-b border-black/6 px-6 py-5 sm:px-8">
             <p className="text-[0.72rem] font-semibold uppercase tracking-[0.2em] text-muted">
               {currentStep.eyebrow}
@@ -505,7 +505,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   </div>
                 </section>
 
-                <div className="rounded-[1.5rem] border border-border bg-surface p-5">
+                <div className="rounded-lg border border-border bg-surface p-5">
                   <p className="text-sm font-semibold text-foreground">Warum wir das jetzt abfragen</p>
                   <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
                     Diese Angaben bilden deinen Firmenkopf. Ohne sie sehen Dokumente schnell unfertig aus oder muessen spaeter nachbearbeitet werden.

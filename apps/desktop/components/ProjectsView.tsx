@@ -123,7 +123,7 @@ export const ProjectsView: React.FC = () => {
   };
 
   return (
-    <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
           <h2 className="text-2xl font-black text-gray-900">Projekte</h2>

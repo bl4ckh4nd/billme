@@ -393,7 +393,7 @@ export const ProAccountingPage: React.FC = () => {
 
   if (txQuery.isLoading || draftQuery.isLoading) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm text-sm text-gray-600">
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-gray-600">
         Lade Pro-Buchhaltungsdaten…
       </div>
     );
@@ -401,7 +401,7 @@ export const ProAccountingPage: React.FC = () => {
 
   if (txQuery.isError || draftQuery.isError) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm text-sm text-red-700">
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-red-700">
         Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error)}
       </div>
     );
@@ -409,7 +409,7 @@ export const ProAccountingPage: React.FC = () => {
 
   if ((ledgerStats?.total ?? 0) === 0) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
         <h2 className="text-xl font-black text-gray-900">Pro Kontenrahmen fehlt</h2>
         <p className="mt-2 text-sm text-gray-600">
           Bitte laden Sie zuerst den SKR03/04 Kontenrahmen für die Pro-Buchhaltung.
@@ -426,7 +426,7 @@ export const ProAccountingPage: React.FC = () => {
   }
 
   return (
-    <div className="bg-white rounded-[2.5rem] px-6 pt-5 pb-0 h-full flex flex-col shadow-sm">
+    <div className="bg-white rounded-2xl px-6 pt-5 pb-0 h-full flex flex-col shadow-sm">
       <div className="mb-3 flex items-center justify-between shrink-0">
         <div>
           <h2 className="text-xl font-black text-gray-900 leading-tight">Pro Buchhaltung</h2>

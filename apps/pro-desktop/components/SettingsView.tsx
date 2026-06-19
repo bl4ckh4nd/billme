@@ -1506,8 +1506,12 @@ export const SettingsView: React.FC = () => {
               <div className="flex gap-3">
                 <button
                   onClick={async () => {
-                    const result = await ipc.audit.verify();
-                    alert(JSON.stringify(result, null, 2));
+                    try {
+                      const result = await ipc.audit.verify();
+                      alert(JSON.stringify(result, null, 2));
+                    } catch (e) {
+                      alert(`Audit-Prüfung fehlgeschlagen: ${String(e)}`);
+                    }
                   }}
                   className="px-5 py-3 rounded-xl font-bold bg-white border border-gray-200 hover:bg-gray-100 transition-colors"
                 >
@@ -1515,16 +1519,20 @@ export const SettingsView: React.FC = () => {
                 </button>
                 <button
                   onClick={async () => {
-                    const csv = await ipc.audit.exportCsv();
-                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    URL.revokeObjectURL(url);
+                    try {
+                      const csv = await ipc.audit.exportCsv();
+                      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      URL.revokeObjectURL(url);
+                    } catch (e) {
+                      alert(`CSV-Export fehlgeschlagen: ${String(e)}`);
+                    }
                   }}
                   className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
                 >
@@ -1587,7 +1595,7 @@ export const SettingsView: React.FC = () => {
   };
 
   return (
-    <div className="bg-white rounded-[2.5rem] shadow-sm min-h-full flex overflow-hidden relative animate-enter">
+    <div className="bg-white rounded-2xl shadow-sm min-h-full flex overflow-hidden relative animate-enter">
       
       {/* Toast */}
       {showSaveToast && (

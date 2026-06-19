@@ -290,7 +290,7 @@ export const ArticlesView: React.FC = () => {
   return (
     <div className="flex gap-6 h-full animate-enter">
         {/* Main Content */}
-        <div className="flex-1 bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm flex flex-col overflow-hidden relative">
+        <div className="flex-1 bg-white rounded-2xl p-8 min-h-full shadow-sm flex flex-col overflow-hidden relative">
             
             {/* Header Area */}
             <div className="flex flex-col gap-6 mb-6 shrink-0">
@@ -406,7 +406,7 @@ export const ArticlesView: React.FC = () => {
                     {filteredArticles.map((article, idx) => (
                         <div
                             key={article.id}
-                            className="group bg-gray-50 rounded-[2rem] p-6 border border-gray-100 hover:border-border hover:bg-white hover:-translate-y-1 transition-all relative flex flex-col animate-scale-in"
+                            className="group bg-gray-50 rounded-xl p-6 border border-gray-100 hover:border-border hover:bg-white hover:-translate-y-1 transition-all relative flex flex-col animate-scale-in"
                             style={{ animationDelay: `${idx * 50}ms` }}
                         >
                             <div className="flex justify-between items-start mb-4">
@@ -530,7 +530,7 @@ export const ArticlesView: React.FC = () => {
 
         {/* Slide-over Form */}
         {isFormOpen && (
-            <div className="w-[450px] bg-white rounded-[2.5rem] shadow-2xl border-l border-gray-100 flex flex-col animate-in slide-in-from-right duration-300 relative z-20">
+            <div className="w-[450px] bg-white rounded-2xl shadow-2xl border-l border-gray-100 flex flex-col animate-in slide-in-from-right duration-300 relative z-20">
                 <div className="p-8 border-b border-gray-100 flex items-center justify-between">
                     <div>
                         <h2 className="text-xl font-bold">{editingArticle ? 'Artikel bearbeiten' : 'Neuer Artikel'}</h2>

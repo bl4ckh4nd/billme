@@ -251,8 +251,8 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ onBack, templateTy
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#1c1c1c] font-sans text-slate-800">
-        <div className="flex flex-col h-full bg-[#111111] border-r border-[#222] no-print w-72 z-20">
+    <div className="flex h-screen w-screen overflow-hidden bg-dark-3 font-sans text-slate-800">
+        <div className="flex flex-col h-full bg-dark-1 border-r border-dark-border no-print w-72 z-20">
             <button 
                 onClick={onBack}
                 className="flex items-center gap-2 p-6 text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
@@ -272,21 +272,21 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ onBack, templateTy
               <input
                 value={templateName}
                 onChange={(e) => setTemplateName(e.target.value)}
-                className="w-full bg-black border border-[#333] text-white text-sm rounded-lg p-3 focus:border-accent outline-none placeholder-gray-700 transition-colors"
+                className="w-full bg-black border border-dark-border-subtle text-white text-sm rounded-lg p-3 focus:border-accent outline-none placeholder-gray-700 transition-colors"
                 placeholder={templateType === 'offer' ? 'Angebotsvorlage' : 'Rechnungsvorlage'}
               />
               <div className="flex gap-2 mt-3">
                 <button
                   onClick={() => void handleSaveTemplate('overwrite')}
                   disabled={upsertTemplate.isPending || setActiveTemplate.isPending}
-                  className="flex-1 bg-accent hover:bg-[#c2e035] text-black text-xs py-2 rounded-lg font-bold transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 bg-accent hover:bg-accent-hover text-black text-xs py-2 rounded-lg font-bold transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Speichern
                 </button>
                 <button
                   onClick={() => void handleSaveTemplate('copy')}
                   disabled={upsertTemplate.isPending || setActiveTemplate.isPending}
-                  className="flex-1 bg-[#1a1a1a] hover:bg-[#222] text-white text-xs py-2 rounded-lg font-bold border border-[#333] transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 bg-dark-2 hover:bg-dark-border text-white text-xs py-2 rounded-lg font-bold border border-dark-border-subtle transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Als Kopie
                 </button>
@@ -302,16 +302,16 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ onBack, templateTy
 
       {/* Canvas Area */}
       <div
-        className="flex-1 overflow-hidden relative flex justify-center bg-[#1c1c1c] cursor-crosshair"
+        className="flex-1 overflow-hidden relative flex justify-center bg-dark-3 cursor-crosshair"
         onMouseDown={handleCanvasMouseDown}
         onMouseMove={handleCanvasMouseMove}
         onMouseUp={handleCanvasMouseUp}
         onMouseLeave={handleCanvasMouseUp}
       >
          {/* Top Ruler Simulation */}
-         <div className="absolute top-0 left-0 right-0 h-6 bg-[#2a2a2a] border-b border-[#333] flex items-end px-12 z-10 pointer-events-none">
+         <div className="absolute top-0 left-0 right-0 h-6 bg-dark-4 border-b border-dark-border-subtle flex items-end px-12 z-10 pointer-events-none">
              {Array.from({ length: 40 }).map((_, i) => (
-                 <div key={i} className="flex-1 border-r border-[#444] h-2 text-[8px] text-[#666] flex justify-end pr-1">
+                 <div key={i} className="flex-1 border-r border-dark-5 h-2 text-[8px] text-dark-muted flex justify-end pr-1">
                      {i * 10}
                  </div>
              ))}
@@ -375,7 +375,7 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ onBack, templateTy
         </div>
         
         {/* Zoom Controls Overlay */}
-        <div className="absolute bottom-8 left-8 flex items-center gap-2 bg-[#111] p-2 rounded-lg border border-[#333] shadow-xl z-20">
+        <div className="absolute bottom-8 left-8 flex items-center gap-2 bg-dark-1 p-2 rounded-lg border border-dark-border-subtle shadow-xl z-20">
             <button onClick={() => setZoom(z => Math.max(0.2, z - 0.1))} className="p-2 text-gray-400 hover:text-white"><ZoomOut size={16}/></button>
             <span className="text-xs text-white font-mono w-12 text-center">{Math.round(zoom * 100)}%</span>
             <button onClick={() => setZoom(z => Math.min(3, z + 0.1))} className="p-2 text-gray-400 hover:text-white"><ZoomIn size={16}/></button>
@@ -399,18 +399,18 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({ onBack, templateTy
       </div>
 
       {/* Right Sidebar */}
-      <div className="flex flex-col no-print bg-[#111111] border-l border-[#222] w-80 z-20">
-          <div className="flex border-b border-[#222]">
+      <div className="flex flex-col no-print bg-dark-1 border-l border-dark-border w-80 z-20">
+          <div className="flex border-b border-dark-border">
              <button 
                 onClick={() => setActiveTab('properties')}
-                className={`flex-1 py-4 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${activeTab === 'properties' ? 'text-accent bg-[#1a1a1a]' : 'text-gray-500 hover:text-white'}`}
+                className={`flex-1 py-4 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${activeTab === 'properties' ? 'text-accent bg-dark-2' : 'text-gray-500 hover:text-white'}`}
              >
                  <SlidersHorizontal size={14} />
                  Eigenschaften
              </button>
              <button 
                 onClick={() => setActiveTab('layers')}
-                className={`flex-1 py-4 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${activeTab === 'layers' ? 'text-accent bg-[#1a1a1a]' : 'text-gray-500 hover:text-white'}`}
+                className={`flex-1 py-4 text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${activeTab === 'layers' ? 'text-accent bg-dark-2' : 'text-gray-500 hover:text-white'}`}
              >
                  <Layers size={14} />
                  Ebenen

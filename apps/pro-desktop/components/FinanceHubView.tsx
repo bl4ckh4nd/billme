@@ -23,7 +23,7 @@ export const FinanceHubView: React.FC = () => {
   };
 
   return (
-    <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
       <div className="mb-8">
         <h2 className="text-2xl font-black text-gray-900">Finanzen</h2>
         <p className="text-sm text-gray-500 mt-1">

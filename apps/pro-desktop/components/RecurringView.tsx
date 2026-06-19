@@ -150,7 +150,7 @@ export const RecurringView: React.FC = () => {
     };
 
     return (
-        <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm flex flex-col animate-enter relative">
+        <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm flex flex-col animate-enter relative">
             <div className="flex items-center justify-between mb-8">
                 <div>
                     <h1 className="text-3xl font-black text-gray-900 flex items-center gap-3">
@@ -173,7 +173,7 @@ export const RecurringView: React.FC = () => {
                 {profiles.map((profile, idx) => (
                     <div 
                         key={profile.id}
-                        className={`p-6 rounded-[2rem] border transition-all relative overflow-hidden group animate-scale-in ${profile.active ? 'bg-white border-gray-200 hover:border-black hover:shadow-xl' : 'bg-gray-50 border-gray-100 opacity-70'}`}
+                        className={`p-6 rounded-xl border transition-all relative overflow-hidden group animate-scale-in ${profile.active ? 'bg-white border-gray-200 hover:border-black hover:shadow-xl' : 'bg-gray-50 border-gray-100 opacity-70'}`}
                         style={{ animationDelay: `${idx * 50}ms` }}
                     >
                         <div className="flex justify-between items-start mb-6">

@@ -164,7 +164,7 @@ export const StatisticsView: React.FC = () => {
     <div className="flex flex-col gap-6 h-full pb-8">
       
       {/* Header & Filter */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white rounded-[2.5rem] p-6 shadow-sm">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white rounded-2xl p-6 shadow-sm">
         <div>
            <h1 className="text-3xl font-black text-gray-900 flex items-center gap-3">
                <BarChart3 className="text-black" />
@@ -200,7 +200,7 @@ export const StatisticsView: React.FC = () => {
       {/* KPI Cards Row 1 */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {/* Revenue */}
-          <div className="bg-[#1c1c1c] rounded-[2rem] p-6 text-white flex flex-col justify-between relative overflow-hidden group">
+          <div className="bg-dark-3 rounded-xl p-6 text-white flex flex-col justify-between relative overflow-hidden group">
               <div className="absolute top-0 right-0 w-32 h-32 bg-accent rounded-full blur-[60px] opacity-10 group-hover:opacity-20 transition-opacity"></div>
               <div className="relative z-10 flex justify-between items-start">
                   <div className="p-3 bg-white/10 rounded-xl backdrop-blur-md">
@@ -219,7 +219,7 @@ export const StatisticsView: React.FC = () => {
           </div>
 
           {/* Outstanding */}
-          <div className="bg-white rounded-[2rem] p-6 border border-gray-100 flex flex-col justify-between">
+          <div className="bg-white rounded-xl p-6 border border-gray-100 flex flex-col justify-between">
               <div className="flex justify-between items-start">
                   <div className="p-3 bg-error-bg rounded-xl">
                       <FileText size={20} className="text-error" />
@@ -239,7 +239,7 @@ export const StatisticsView: React.FC = () => {
           </div>
 
           {/* Avg Ticket */}
-          <div className="bg-accent rounded-[2rem] p-6 text-black flex flex-col justify-between shadow-sm group">
+          <div className="bg-accent rounded-xl p-6 text-black flex flex-col justify-between shadow-sm group">
               <div className="flex justify-between items-start">
                   <div className="p-3 bg-black/10 rounded-xl">
                       <PieChart size={20} className="text-black" />
@@ -252,7 +252,7 @@ export const StatisticsView: React.FC = () => {
           </div>
 
            {/* Efficiency */}
-           <div className="bg-white rounded-[2rem] p-6 border border-gray-100 flex flex-col justify-between">
+           <div className="bg-white rounded-xl p-6 border border-gray-100 flex flex-col justify-between">
               <div className="flex justify-between items-start">
                   <div className="p-3 bg-gray-100 rounded-xl">
                       <TrendingUp size={20} className="text-gray-600" />
@@ -282,7 +282,7 @@ export const StatisticsView: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-[400px]">
           
           {/* Main Chart */}
-          <div className="lg:col-span-2 bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm flex flex-col">
+          <div className="lg:col-span-2 bg-white rounded-2xl p-8 border border-gray-100 shadow-sm flex flex-col">
               <div className="mb-8 flex justify-between items-center">
                   <h3 className="font-bold text-xl">Umsatzentwicklung</h3>
                   <div className="flex items-center gap-2 text-xs font-bold text-gray-500">
@@ -312,7 +312,7 @@ export const StatisticsView: React.FC = () => {
           </div>
 
           {/* Top Customers List */}
-          <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm flex flex-col">
+          <div className="bg-white rounded-2xl p-8 border border-gray-100 shadow-sm flex flex-col">
               <h3 className="font-bold text-xl mb-6">Top Kunden</h3>
               <div className="flex-1 overflow-y-auto pr-2 space-y-4">
                   {topClients.map((client, idx) => (

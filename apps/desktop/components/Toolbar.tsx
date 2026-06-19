@@ -34,7 +34,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({ onAddElement, onLegalCheck }) 
               <button
                 key={item.type}
                 onClick={() => onAddElement(item.type)}
-                className="flex flex-col items-center justify-center p-4 bg-[#1a1a1a] rounded-xl hover:bg-accent transition-all duration-200 group border border-[#333] hover:border-accent hover:scale-[1.02] animate-enter"
+                className="flex flex-col items-center justify-center p-4 bg-dark-2 rounded-xl hover:bg-accent transition-all duration-200 group border border-dark-border-subtle hover:border-accent hover:scale-[1.02] animate-enter"
                 style={{ animationDelay: `${idx * 40}ms` }}
               >
                 <item.icon className="text-gray-400 group-hover:text-black mb-2 transition-colors" size={24} strokeWidth={1.5} />
@@ -45,8 +45,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({ onAddElement, onLegalCheck }) 
         </div>
 
 
-         <div className="border-t border-[#222] pt-6 animate-enter" style={{ animationDelay: '240ms' }}>
-            <button onClick={onLegalCheck} className="w-full flex items-center gap-3 p-3 rounded-xl bg-[#1a1a1a] hover:bg-[#222] transition-colors text-left border border-[#333]">
+         <div className="border-t border-dark-border pt-6 animate-enter" style={{ animationDelay: '240ms' }}>
+            <button onClick={onLegalCheck} className="w-full flex items-center gap-3 p-3 rounded-xl bg-dark-2 hover:bg-dark-border transition-colors text-left border border-dark-border-subtle">
                 <div className="p-2 bg-success/10 text-success rounded-lg">
                     <ShieldCheck size={18} />
                 </div>
@@ -58,7 +58,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({ onAddElement, onLegalCheck }) 
          </div>
       </div>
 
-      <div className="p-6 border-t border-[#222] bg-[#111111] mt-auto">
+      <div className="p-6 border-t border-dark-border bg-dark-1 mt-auto">
         <button
            onClick={() => window.print()}
            className="w-full bg-white text-black py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors flex items-center justify-center gap-2 shadow-lg"

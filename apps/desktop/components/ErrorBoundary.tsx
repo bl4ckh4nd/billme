@@ -29,7 +29,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    const isDev = process.env.NODE_ENV === 'development';
+    const isDev = import.meta.env.DEV;
 
     // Log to console in development
     if (isDev) {
@@ -79,7 +79,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       }
 
       // Default error UI
-      const isDev = process.env.NODE_ENV === 'development';
+      const isDev = import.meta.env.DEV;
 
       return (
         <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-error-bg to-error-bg/50 p-4">

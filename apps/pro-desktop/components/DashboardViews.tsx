@@ -395,7 +395,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-8">
       
       {/* 1. Dark Card - Open Invoices / Liquidity */}
-      <div className="bg-[#1c1c1c] rounded-[2.5rem] p-8 text-white relative overflow-hidden min-h-[420px] flex flex-col justify-between group shadow-xl animate-enter premium-hover">
+      <div className="bg-dark-3 rounded-2xl p-8 text-white relative overflow-hidden min-h-[420px] flex flex-col justify-between group shadow-xl animate-enter premium-hover">
          {/* Decorative elements */}
          <div className="absolute top-0 right-0 w-64 h-64 bg-accent rounded-full blur-[100px] opacity-10 group-hover:opacity-20 transition-opacity duration-700"></div>
 
@@ -467,7 +467,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* 2. White Card - Revenue / Bestsellers */}
-      <div className="bg-white rounded-[2.5rem] p-8 text-black relative overflow-hidden min-h-[420px] flex flex-col shadow-sm animate-enter delay-100 premium-hover">
+      <div className="bg-white rounded-2xl p-8 text-black relative overflow-hidden min-h-[420px] flex flex-col shadow-sm animate-enter delay-100 premium-hover">
           <div className="flex justify-between items-start mb-8">
              <div>
                 <h3 className="text-2xl font-black mb-1">Umsatz (aktueller Monat)</h3>
@@ -565,7 +565,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* 3. Lime Card - Recent Payments */}
-      <div className="bg-accent rounded-[2.5rem] p-8 text-black min-h-[350px] flex flex-col shadow-sm relative overflow-hidden group animate-enter delay-200 premium-hover">
+      <div className="bg-accent rounded-2xl p-8 text-black min-h-[350px] flex flex-col shadow-sm relative overflow-hidden group animate-enter delay-200 premium-hover">
           <div className="absolute top-0 right-0 w-48 h-48 bg-white opacity-20 rounded-full blur-[60px] transform translate-x-10 -translate-y-10 group-hover:scale-110 transition-transform duration-700"></div>
           
           <div className="flex justify-between items-center mb-6 relative z-10">
@@ -626,7 +626,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* 4. Info Card - Taxes (Umsatzsteuer) */}
-      <div className="bg-info rounded-[2.5rem] p-6 text-black min-h-[350px] flex flex-col shadow-sm relative overflow-hidden animate-enter delay-300 premium-hover">
+      <div className="bg-info rounded-2xl p-6 text-black min-h-[350px] flex flex-col shadow-sm relative overflow-hidden animate-enter delay-300 premium-hover">
            <div className="flex justify-between items-center mb-8">
               <h3 className="text-xl font-black flex items-center gap-2">
                  <PieChart size={20} />
@@ -823,11 +823,11 @@ export const AccountsView: React.FC = () => {
     // --- Detail View ---
     if (selectedAccount) {
         return (
-            <div className="bg-white dark:bg-gray-900 rounded-[2.5rem] shadow-sm overflow-hidden p-8 min-h-full flex flex-col relative animate-enter">
+            <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-sm overflow-hidden p-8 min-h-full flex flex-col relative animate-enter">
                 
                 {/* CSV Import Modal */}
                 {isImportOpen && (
-                  <div className="absolute inset-0 z-50 bg-black/20 backdrop-blur-sm flex items-center justify-center p-4 rounded-[2.5rem] animate-fade-in">
+                  <div className="absolute inset-0 z-50 bg-black/20 backdrop-blur-sm flex items-center justify-center p-4 rounded-2xl animate-fade-in">
                     <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[85vh] animate-scale-in">
                       <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                         <div>
@@ -1082,7 +1082,7 @@ export const AccountsView: React.FC = () => {
                 
                 {/* Linking Modal */}
                 {isLinkModalOpen && (
-                    <div className="absolute inset-0 z-50 bg-black/20 backdrop-blur-sm flex items-center justify-center p-4 rounded-[2.5rem] animate-fade-in">
+                    <div className="absolute inset-0 z-50 bg-black/20 backdrop-blur-sm flex items-center justify-center p-4 rounded-2xl animate-fade-in">
                         <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[600px] animate-scale-in">
                             <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                                 <h3 className="font-bold text-lg flex items-center gap-2">
@@ -1231,7 +1231,7 @@ export const AccountsView: React.FC = () => {
 
     // --- Overview View ---
     return (
-        <div className="bg-white dark:bg-gray-900 rounded-[2.5rem] shadow-sm overflow-hidden p-8 h-full animate-enter">
+        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-sm overflow-hidden p-8 h-full animate-enter">
             <div className="flex items-center justify-between mb-8">
                 <div>
                     <h3 className="font-bold text-2xl text-gray-900">Geschäftskonten</h3>
@@ -1411,7 +1411,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
     };
 
     return (
-        <div className="bg-white dark:bg-gray-900 rounded-[2.5rem] shadow-sm p-8 min-h-[80vh] animate-enter">
+        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-sm p-8 min-h-[80vh] animate-enter">
             <div className="flex items-center justify-between mb-8">
                 <div>
                     <h3 className="font-bold text-2xl text-gray-900 dark:text-gray-100 mb-1">Vorlagen</h3>
@@ -1437,7 +1437,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
                 {/* Create New Card */}
                 <div 
                     onClick={() => void handleCreateNewTemplate()}
-                    className="aspect-[3/4] bg-gray-50 dark:bg-gray-800 rounded-[2rem] border-2 border-dashed border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center gap-4 cursor-pointer hover:border-black dark:hover:border-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all group animate-scale-in"
+                    className="aspect-[3/4] bg-gray-50 dark:bg-gray-800 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center gap-4 cursor-pointer hover:border-black dark:hover:border-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all group animate-scale-in"
                 >
                     <div className="w-16 h-16 bg-white dark:bg-gray-700 rounded-full flex items-center justify-center shadow-sm group-hover:scale-110 transition-transform">
                         <Plus size={24} className="text-gray-400 group-hover:text-black" />
@@ -1451,7 +1451,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
                 {templates.map((t, idx) => (
                 <div
                     key={t.id}
-                    className="aspect-[3/4] bg-surface rounded-[2rem] border border-border p-4 flex flex-col hover:border-border hover:-translate-y-2 transition-all cursor-pointer group relative overflow-hidden animate-scale-in"
+                    className="aspect-[3/4] bg-surface rounded-xl border border-border p-4 flex flex-col hover:border-border hover:-translate-y-2 transition-all cursor-pointer group relative overflow-hidden animate-scale-in"
                     style={{ animationDelay: `${100 + idx * 50}ms` }}
                     onClick={() => onOpenEditor(activeTab)}
                 >

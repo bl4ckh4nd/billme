@@ -58,7 +58,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({ elements, selectedId, 
             style={{ animationDelay: `${idx * 30}ms` }}
           >
             <div className="flex items-center gap-3 overflow-hidden">
-                <div className={`p-2 rounded-lg ${selectedId === el.id ? 'bg-[#333] text-accent' : 'bg-gray-50 text-gray-500'}`}>
+                <div className={`p-2 rounded-lg ${selectedId === el.id ? 'bg-dark-border-subtle text-accent' : 'bg-gray-50 text-gray-500'}`}>
                     {getIcon(el.type)}
                 </div>
                 <div className="flex flex-col min-w-0">

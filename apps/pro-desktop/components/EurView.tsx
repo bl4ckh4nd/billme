@@ -335,7 +335,7 @@ export const EurView: React.FC = () => {
   };
 
   return (
-    <div className="bg-white rounded-[2.5rem] p-6 min-h-full shadow-sm">
+    <div className="bg-white rounded-2xl p-6 min-h-full shadow-sm">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
         <div className="flex items-center gap-3">

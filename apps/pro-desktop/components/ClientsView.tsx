@@ -17,6 +17,7 @@ import { useUiStore } from '../state/uiStore';
 import { v4 as uuidv4 } from 'uuid';
 import { Spinner } from './Spinner';
 import { SkeletonLoader } from './SkeletonLoader';
+import { ipc } from '../ipc/client';
 
 export const ClientsView: React.FC = () => {
     const { data: clients = [], isLoading } = useClientsQuery();
@@ -32,6 +33,7 @@ export const ClientsView: React.FC = () => {
     const [isEditorOpen, setIsEditorOpen] = useState(false);
     const [draft, setDraft] = useState<Client | null>(null);
     const [editorErrors, setEditorErrors] = useState<string[]>([]);
+    const [customerReservationId, setCustomerReservationId] = useState<string | null>(null);
     const locationSearch = window.location.search;
     
     const selectedClient = clients.find(c => c.id === selectedClientId);
@@ -64,12 +66,25 @@ export const ClientsView: React.FC = () => {
         return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
     };
 
-    const openEditor = (client?: Client) => {
+    const openEditor = async (client?: Client) => {
+        let reservedNumber = '';
+        let reservationId: string | null = null;
+
+        if (!client) {
+            try {
+                const reservation = await ipc.numbers.reserve({ kind: 'customer' });
+                reservedNumber = reservation.number;
+                reservationId = reservation.reservationId;
+            } catch {
+                // Non-fatal: user can still type the number manually.
+            }
+        }
+
         const base: Client =
             client ??
             ({
                 id: uuidv4(),
-                customerNumber: '',
+                customerNumber: reservedNumber,
                 company: '',
                 contactPerson: '',
                 email: '',
@@ -113,12 +128,17 @@ export const ClientsView: React.FC = () => {
             emails: (base.emails ?? []).map((e) => ({ ...e, clientId: base.id })),
         };
 
+        setCustomerReservationId(reservationId);
         setEditorErrors([]);
         setDraft(fixed);
         setIsEditorOpen(true);
     };
 
     const closeEditor = () => {
+        if (customerReservationId) {
+            ipc.numbers.release({ reservationId: customerReservationId }).catch(() => {});
+            setCustomerReservationId(null);
+        }
         setIsEditorOpen(false);
         setDraft(null);
         setEditorErrors([]);
@@ -239,6 +259,7 @@ export const ClientsView: React.FC = () => {
 
         try {
             const saved = await upsertClient.mutateAsync(payload);
+            setCustomerReservationId(null);
             setSelectedClientId(saved.id);
             closeEditor();
         } catch (e) {
@@ -288,12 +309,16 @@ export const ClientsView: React.FC = () => {
                     <div className="flex gap-2">
                         <button
                           onClick={async () => {
-                             const res = await createFromClient.mutateAsync({
-                               kind: 'invoice',
-                               clientId: selectedClient.id,
-                             });
-                             setEditingInvoice(res, 'invoice', 'create');
-                             navigate({ to: '/documents/edit' });
+                             try {
+                               const res = await createFromClient.mutateAsync({
+                                 kind: 'invoice',
+                                 clientId: selectedClient.id,
+                               });
+                               setEditingInvoice(res, 'invoice', 'create');
+                               navigate({ to: '/documents/edit' });
+                             } catch (error) {
+                               alert(`Rechnung konnte nicht erstellt werden: ${String(error)}`);
+                             }
                            }}
                           className="px-3 py-1.5 bg-black text-white rounded-lg text-xs font-bold hover:bg-gray-800 transition-colors flex items-center gap-2"
                         >
@@ -301,19 +326,23 @@ export const ClientsView: React.FC = () => {
                         </button>
                         <button
                           onClick={async () => {
-                             const res = await createFromClient.mutateAsync({
-                               kind: 'offer',
-                               clientId: selectedClient.id,
-                             });
-                             setEditingInvoice(res, 'offer', 'create');
-                             navigate({ to: '/documents/edit' });
+                             try {
+                               const res = await createFromClient.mutateAsync({
+                                 kind: 'offer',
+                                 clientId: selectedClient.id,
+                               });
+                               setEditingInvoice(res, 'offer', 'create');
+                               navigate({ to: '/documents/edit' });
+                             } catch (error) {
+                               alert(`Angebot konnte nicht erstellt werden: ${String(error)}`);
+                             }
                            }}
                           className="px-4 py-2 bg-white border border-gray-200 text-black rounded-full text-xs font-bold hover:bg-gray-50 transition-colors flex items-center gap-2"
                         >
                             <Plus size={14} /> Neues Angebot
                         </button>
                         <button
-                          onClick={() => openEditor(selectedClient)}
+                          onClick={() => void openEditor(selectedClient)}
                           className="w-10 h-10 border border-gray-200 rounded-full flex items-center justify-center hover:bg-gray-50 transition-colors"
                         >
                             <Edit3 size={16} />
@@ -338,7 +367,7 @@ export const ClientsView: React.FC = () => {
                 {/* Top Section: Identity & KPIs */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Identity Card */}
-                    <div className="bg-accent rounded-[2rem] p-6 text-black relative overflow-hidden border border-black/10 flex flex-col justify-between min-h-[240px] animate-scale-in">
+                    <div className="bg-accent rounded-xl p-6 text-black relative overflow-hidden border border-black/10 flex flex-col justify-between min-h-[240px] animate-scale-in">
                         <div>
                              <div className="flex items-center gap-4 mb-6">
                                 <div className="w-16 h-16 bg-black text-white text-2xl font-bold rounded-2xl flex items-center justify-center shadow-lg">
@@ -374,7 +403,7 @@ export const ClientsView: React.FC = () => {
                     {/* KPI Cards */}
                     <div className="lg:col-span-2 grid grid-cols-2 gap-4">
                         {/* Revenue KPI */}
-                        <div className="bg-[#1c1c1c] text-white rounded-[2rem] p-6 flex flex-col justify-between relative overflow-hidden group animate-scale-in delay-75">
+                        <div className="bg-dark-3 text-white rounded-xl p-6 flex flex-col justify-between relative overflow-hidden group animate-scale-in delay-75">
                             <div className="relative z-10">
                                 <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Gesamtumsatz (LTV)</p>
                                 <h3 className="text-3xl font-mono font-bold text-accent">{formatCurrency(totalRevenue)}</h3>
@@ -386,7 +415,7 @@ export const ClientsView: React.FC = () => {
                         </div>
 
                         {/* Outstanding KPI */}
-                        <div className="bg-surface border border-border rounded-[2rem] p-6 flex flex-col justify-between relative overflow-hidden animate-scale-in delay-100">
+                        <div className="bg-surface border border-border rounded-xl p-6 flex flex-col justify-between relative overflow-hidden animate-scale-in delay-100">
                              <div>
                                 <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Offene Forderungen</p>
                                 <h3 className={`text-3xl font-mono font-bold ${outstandingAmount > 0 ? 'text-error' : 'text-gray-900'}`}>{formatCurrency(outstandingAmount)}</h3>
@@ -405,7 +434,7 @@ export const ClientsView: React.FC = () => {
                         </div>
 
                         {/* Projects KPI */}
-                        <div className="bg-surface border border-border rounded-[2rem] p-6 flex flex-col justify-between animate-scale-in delay-150">
+                        <div className="bg-surface border border-border rounded-xl p-6 flex flex-col justify-between animate-scale-in delay-150">
                             <div>
                                 <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Aktive Projekte</p>
                                 <h3 className="text-3xl font-mono font-bold">{selectedClient.projects.filter(p => p.status === 'active').length}</h3>
@@ -416,7 +445,7 @@ export const ClientsView: React.FC = () => {
                         </div>
 
                          {/* Last Activity KPI */}
-                         <div className="bg-surface-muted border border-border rounded-[2rem] p-6 flex flex-col justify-between animate-scale-in delay-200">
+                         <div className="bg-surface-muted border border-border rounded-xl p-6 flex flex-col justify-between animate-scale-in delay-200">
                             <div>
                                 <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">Letzte Aktivität</p>
                                 <h3 className="text-xl font-bold truncate">
@@ -437,7 +466,7 @@ export const ClientsView: React.FC = () => {
                 {/* Bottom Section: Invoices & History */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Left: Invoice List (2 cols wide) */}
-                    <div className="lg:col-span-2 bg-surface rounded-[2.5rem] p-6 border border-border min-h-[400px] animate-enter delay-200">
+                    <div className="lg:col-span-2 bg-surface rounded-2xl p-6 border border-border min-h-[400px] animate-enter delay-200">
                         <div className="flex items-center justify-between mb-6">
                             <h3 className="text-xl font-bold flex items-center gap-2">
                                 <FileText size={20} /> Rechnungsverlauf
@@ -491,7 +520,7 @@ export const ClientsView: React.FC = () => {
                     {/* Right: Notes & Projects (1 col wide) */}
                     <div className="flex flex-col gap-6">
                         {/* Addresses & Emails */}
-                        <div className="bg-surface rounded-[2.5rem] p-6 border border-border animate-enter delay-300">
+                        <div className="bg-surface rounded-2xl p-6 border border-border animate-enter delay-300">
                             <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                                 <MapPin size={18} /> Adressen & E-Mails
                             </h3>
@@ -523,7 +552,7 @@ export const ClientsView: React.FC = () => {
                         </div>
 
                         {/* Projects Mini List */}
-                        <div className="bg-surface rounded-[2.5rem] p-6 border border-border flex-1 animate-enter delay-300">
+                        <div className="bg-surface rounded-2xl p-6 border border-border flex-1 animate-enter delay-300">
                              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                                 <Briefcase size={18} /> Projekte
                             </h3>
@@ -552,7 +581,7 @@ export const ClientsView: React.FC = () => {
                         </div>
                         
                         {/* Notes / Activities */}
-                        <div className="bg-surface rounded-[2.5rem] p-6 border border-border flex-1 animate-enter delay-300">
+                        <div className="bg-surface rounded-2xl p-6 border border-border flex-1 animate-enter delay-300">
                             <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                                 <Tag size={18} /> Notizen
                             </h3>
@@ -567,7 +596,7 @@ export const ClientsView: React.FC = () => {
     };
 
     return (
-         <div className="bg-surface rounded-[2.5rem] p-6 min-h-full border border-border flex flex-col animate-enter overflow-hidden">
+         <div className="bg-surface rounded-2xl p-6 min-h-full border border-border flex flex-col animate-enter overflow-hidden">
               {isEditorOpen && draft ? (
                   <div className="flex flex-col flex-1 min-h-0">
                       <div className="flex flex-col flex-1 min-h-0">
@@ -1018,7 +1047,7 @@ export const ClientsView: React.FC = () => {
                    </div>
 
                    <button
-                     onClick={() => openEditor()}
+                     onClick={() => void openEditor()}
                      className="w-12 h-12 bg-black text-white rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-lg"
                    >
                      <Plus size={24} />
@@ -1034,7 +1063,7 @@ export const ClientsView: React.FC = () => {
                          <div 
                             key={client.id} 
                             onClick={() => setSelectedClientId(client.id)}
-                            className="group bg-gray-50 rounded-[2rem] p-6 hover:bg-accent transition-all cursor-pointer relative overflow-hidden min-h-[220px] animate-scale-in"
+                            className="group bg-gray-50 rounded-xl p-6 hover:bg-accent transition-all cursor-pointer relative overflow-hidden min-h-[220px] animate-scale-in"
                             style={{ animationDelay: `${idx * 75}ms` }}
                          >
                              <div className="flex justify-between items-start mb-8 relative z-10">

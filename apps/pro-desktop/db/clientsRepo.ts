@@ -367,6 +367,10 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
       finalizeNumber(db, customerReservationId, client.id);
     }
 
+    // Keep client_number in sync on all existing documents for this client.
+    db.prepare('UPDATE invoices SET client_number = ? WHERE client_id = ?').run(customerNumber, client.id);
+    db.prepare('UPDATE offers SET client_number = ? WHERE client_id = ?').run(customerNumber, client.id);
+
       return {
         ...prepared,
         customerNumber,

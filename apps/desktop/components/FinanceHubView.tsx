@@ -18,7 +18,7 @@ export const FinanceHubView: React.FC = () => {
   return (
     <div className="flex flex-col gap-6 h-full">
       {/* Sub-nav */}
-      <div className="bg-white rounded-[2.5rem] p-4 shadow-sm flex items-center gap-2">
+      <div className="bg-white rounded-2xl p-4 shadow-sm flex items-center gap-2">
         {tabs.map((tab) => (
           <button
             key={tab.id}

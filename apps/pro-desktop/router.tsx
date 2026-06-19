@@ -35,6 +35,8 @@ import { ShortcutsModal } from './components/ShortcutsModal';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { ProAccountingPage } from './components/ProAccountingPage';
 import { FinanceHubView } from './components/FinanceHubView';
+import { StatisticsView } from './components/StatisticsView';
+import { EurView } from './components/EurView';
 import { shouldShowBusinessOnboarding } from '@billme/ui';
 
 const RootLayout: React.FC = () => {
@@ -50,6 +52,8 @@ const RootLayout: React.FC = () => {
       pathname.startsWith('/finance')
       || pathname.startsWith('/accounts')
       || pathname.startsWith('/accounting')
+      || pathname.startsWith('/statistics')
+      || pathname.startsWith('/eur')
     )
       return 'finance';
     if (pathname.startsWith('/templates') || pathname.startsWith('/recurring')) return 'documents';
@@ -116,6 +120,8 @@ const DashboardPage: React.FC = () => {
 
 const AccountsPage: React.FC = () => <AccountsView />;
 const FinancePage: React.FC = () => <FinanceHubView />;
+const StatisticsPage: React.FC = () => <StatisticsView />;
+const EurPage: React.FC = () => <EurView />;
 const ClientsPage: React.FC = () => <ClientsView />;
 const ProjectsPage: React.FC = () => <ProjectsView />;
 const ArticlesPage: React.FC = () => <ArticlesView />;
@@ -165,6 +171,7 @@ const DocumentsPage: React.FC = () => {
           numberReservationId: reservation.reservationId,
           client: '',
           clientEmail: '',
+          taxMode: 'standard_vat',
           date: new Date().toISOString().split('T')[0] ?? '',
           dueDate: '',
           amount: 0,
@@ -211,7 +218,7 @@ const DocumentEditorPage: React.FC = () => {
 
   if (!invoice) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
         <h2 className="text-xl font-bold text-gray-900 mb-2">Kein Dokument ausgewählt</h2>
         <p className="text-sm text-gray-500 mb-6">
           Bitte wähle zuerst ein Dokument aus der Liste aus.
@@ -397,6 +404,18 @@ const financeRoute = createRoute({
   component: FinancePage,
 });
 
+const statisticsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/statistics',
+  component: StatisticsPage,
+});
+
+const eurRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/eur',
+  component: EurPage,
+});
+
 const accountingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/accounting',
@@ -471,6 +490,8 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   accountsRoute,
   financeRoute,
+  statisticsRoute,
+  eurRoute,
   accountingRoute,
   templatesRoute,
   templateEditorRoute,

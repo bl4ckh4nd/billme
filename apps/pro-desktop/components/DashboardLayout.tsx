@@ -209,11 +209,11 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
   ];
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#f3f4f6] font-sans text-slate-800 overflow-hidden">
+    <div className="flex flex-col h-screen w-screen bg-canvas font-sans text-slate-800 overflow-hidden">
       <Titlebar />
 
       {isEditorActive ? (
-        <div className="flex-1 w-full bg-[#f3f4f6] overflow-auto">{children}</div>
+        <div className="flex-1 w-full bg-canvas overflow-auto">{children}</div>
       ) : (
         <>
           {/* Top Navigation Bar */}

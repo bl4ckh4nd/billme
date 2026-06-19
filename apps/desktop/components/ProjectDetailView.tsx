@@ -60,7 +60,7 @@ export const ProjectDetailView: React.FC = () => {
 
   if (!project) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
         <button
           onClick={() => navigate({ to: '/projects' })}
           className="flex items-center gap-2 text-gray-400 hover:text-black transition-colors mb-6 text-xs font-bold uppercase tracking-wider"
@@ -77,7 +77,7 @@ export const ProjectDetailView: React.FC = () => {
   const overBudget = remainingBudget < 0;
 
   return (
-    <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
       <button
         onClick={() => navigate({ to: '/projects' })}
         className="flex items-center gap-2 text-gray-400 hover:text-black transition-colors mb-6 text-xs font-bold uppercase tracking-wider"

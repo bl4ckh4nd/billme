@@ -11,22 +11,37 @@
   --color-accent-hover: #cbe83e;
   --color-accent-foreground: #000000;
 
+  /* Accounting module accent (distinct from brand accent) */
+  --color-accent-lime: #ccff00;
+
   /* Dark UI (Editor) */
   --color-dark-base: #000000;
   --color-dark-1: #111111;
   --color-dark-2: #1a1a1a;
   --color-dark-3: #1c1c1c;
+  --color-dark-4: #2a2a2a;
+  --color-dark-5: #444444;
+  --color-dark-muted: #666666;
   --color-dark-border: #222222;
   --color-dark-border-subtle: #333333;
+
+  /* Editor canvas backdrop */
+  --color-editor-viewport: #555555;
 
   /* Light UI */
   --color-background: #ffffff;
   --color-foreground: #0b0b0b;
   --color-surface: #ffffff;
   --color-surface-muted: #f9fafb;
+  --color-canvas: #f3f4f6;
   --color-muted: #6b7280;
   --color-border: #e5e7eb;
   --color-border-subtle: #f3f4f6;
+
+  /* Onboarding surfaces */
+  --color-onboarding-canvas: #f4f4ef;
+  --color-onboarding-panel: #121212;
+  --color-onboarding-surface: #fbfbf8;
 
   /* Semantic Colors */
   --color-success: #22c55e;

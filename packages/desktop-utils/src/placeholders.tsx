@@ -1,5 +1,3 @@
-import React from 'react';
-
 type InvoiceItemLike = {
   description?: string;
   quantity?: number;

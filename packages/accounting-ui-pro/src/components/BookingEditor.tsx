@@ -221,7 +221,7 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
           >
             <ArrowLeft size={15} />
           </button>
-          <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-[#ccff00] shrink-0">
+          <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-accent-lime shrink-0">
             <FileText size={15} />
           </div>
           <div className="min-w-0">
@@ -641,7 +641,7 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
                 </div>
                 <div className="text-right">
                   <div className="text-xs uppercase tracking-wider text-gray-400 font-bold">Differenz</div>
-                  <div className={`text-2xl font-bold ${difference < 0.01 ? 'text-[#ccff00]' : 'text-red-400'}`}>
+                  <div className={`text-2xl font-bold ${difference < 0.01 ? 'text-accent-lime' : 'text-red-400'}`}>
                     {formatCurrency(difference, transaction.currency)}
                   </div>
                 </div>

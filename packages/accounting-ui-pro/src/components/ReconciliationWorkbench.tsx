@@ -165,7 +165,7 @@ export default function ReconciliationWorkbench({
       <div className="w-[28rem] shrink-0 border-r border-gray-100 flex flex-col">
         <div className="px-4 py-3 border-b border-gray-100">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-black text-[#ccff00] flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-black text-accent-lime flex items-center justify-center shrink-0">
               <ArrowRightLeft size={15} />
             </div>
             <div className="min-w-0">

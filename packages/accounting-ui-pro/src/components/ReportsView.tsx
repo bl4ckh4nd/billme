@@ -154,7 +154,7 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
       <div className="px-6 py-3 border-b border-gray-100 shrink-0">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gray-400 shrink-0">
-            <span className="w-6 h-6 rounded-md bg-[#ccff00] text-black flex items-center justify-center">
+            <span className="w-6 h-6 rounded-md bg-accent-lime text-black flex items-center justify-center">
               <FileBarChart2 size={13} />
             </span>
             Auswertungen

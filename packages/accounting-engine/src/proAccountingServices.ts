@@ -177,6 +177,18 @@ export interface BoundProAccountingCatalogService {
   deleteAccountSuggestionRule(id: string): Promise<void>;
 }
 
+export interface ProAccountingFacade {
+  accounting: ProAccountingService;
+  catalog: ProAccountingCatalogService;
+  workflow: ProWorkflowService;
+}
+
+export interface BoundProAccountingFacade {
+  accounting: BoundProAccountingService;
+  catalog: BoundProAccountingCatalogService;
+  workflow: BoundProWorkflowService;
+}
+
 export const createProAccountingService = (repository: ProAccountingRepository): ProAccountingService => ({
   listBankTransactions: (scope) => repository.listBankTransactions(scope),
   getDraftByTransactionId: (scope, transactionId) => repository.getDraftByTransactionId(scope, transactionId),
@@ -257,4 +269,23 @@ export const bindProAccountingCatalogScope = (
   listAccountSuggestionRules: (args) => service.listAccountSuggestionRules(scope, args),
   upsertAccountSuggestionRule: (input) => service.upsertAccountSuggestionRule(scope, input),
   deleteAccountSuggestionRule: (id) => service.deleteAccountSuggestionRule(scope, id),
+});
+
+export const createProAccountingFacade = (repositories: {
+  accounting: ProAccountingRepository;
+  catalog: ProAccountingCatalogRepository;
+  workflow: ProWorkflowRepository;
+}): ProAccountingFacade => ({
+  accounting: createProAccountingService(repositories.accounting),
+  catalog: createProAccountingCatalogService(repositories.catalog),
+  workflow: createProWorkflowService(repositories.workflow),
+});
+
+export const bindProAccountingFacadeScope = (
+  facade: ProAccountingFacade,
+  scope: TenantScope,
+): BoundProAccountingFacade => ({
+  accounting: bindProAccountingScope(facade.accounting, scope),
+  catalog: bindProAccountingCatalogScope(facade.catalog, scope),
+  workflow: bindProWorkflowScope(facade.workflow, scope),
 });

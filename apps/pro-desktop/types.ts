@@ -186,6 +186,43 @@ export interface Payment {
   method: string;
 }
 
+export type InvoiceTaxMode =
+  | 'standard_vat'
+  | 'small_business_19_ustg'
+  | 'reverse_charge_13b'
+  | 'intra_eu_supply_6a'
+  | 'intra_eu_service_reverse_charge'
+  | 'export_third_country'
+  | 'vat_exempt_4_ustg'
+  | 'non_taxable_outside_scope';
+
+export interface InvoiceTaxMeta {
+  legalReference?: string;
+  exemptionReasonOverride?: string;
+  buyerVatId?: string;
+  sellerVatId?: string;
+}
+
+export interface InvoiceTaxSnapshot {
+  vatRateApplied: number;
+  vatAmount: number;
+  netAmount: number;
+  grossAmount: number;
+  einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O';
+  label?: string;
+}
+
+export interface InvoiceTaxModeDefinition {
+  mode: InvoiceTaxMode;
+  label: string;
+  description: string;
+  legalReference?: string;
+  einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O';
+  requiresBuyerVatId?: boolean;
+  requiresExemptionReason?: boolean;
+  forceZeroVat?: boolean;
+}
+
 export interface Invoice {
   id: string;
   clientId?: string; // Link to Client
@@ -198,6 +235,9 @@ export interface Invoice {
   clientAddress?: string;
   billingAddressJson?: unknown;
   shippingAddressJson?: unknown;
+  taxMode: InvoiceTaxMode;
+  taxMeta?: InvoiceTaxMeta;
+  taxSnapshot?: InvoiceTaxSnapshot;
   shareToken?: string | null;
   sharePublishedAt?: string | null;
   shareDecision?: 'accepted' | 'declined' | null;

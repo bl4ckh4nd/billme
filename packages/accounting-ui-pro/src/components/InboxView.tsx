@@ -270,7 +270,7 @@ export default function InboxView({
         <div className="px-6 pt-3 pb-0 border-b border-gray-100 shrink-0">
           {/* Row 1: icon + title + Filter + Bankabgleich */}
           <div className="flex items-center gap-3 pb-3">
-            <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-[#ccff00] shrink-0">
+            <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-accent-lime shrink-0">
               <Inbox size={15} />
             </div>
             <div className="flex-1 min-w-0">

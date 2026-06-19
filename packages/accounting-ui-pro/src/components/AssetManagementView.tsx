@@ -167,7 +167,7 @@ export default function AssetManagementView() {
       <div className="flex min-h-0 flex-col border-b border-gray-100 xl:basis-[34rem] xl:min-w-[24rem] xl:max-w-[34rem] xl:border-b-0 xl:border-r">
         <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-black text-[#ccff00] flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-black text-accent-lime flex items-center justify-center shrink-0">
               <Building2 size={15} />
             </div>
             <div className="flex-1 min-w-0">

@@ -2,13 +2,10 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 
-const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const electronBinary = path.join(path.dirname(require.resolve('electron')), 'dist', 'electron');
 const APP_PATHS = {
   desktop: {
     cwd: path.join(repoRoot, 'apps', 'desktop'),
@@ -420,7 +417,6 @@ export async function launchDesktopApp(options = {}) {
   await fs.promises.mkdir(cacheDir, { recursive: true });
 
   const launchedApp = await electron.launch({
-    executablePath: electronBinary,
     cwd,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', `--user-data-dir=${userDataDir}`, '.'],
     env: {

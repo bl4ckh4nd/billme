@@ -41,7 +41,11 @@ const createRenderSession = async (job: DocumentDeliveryJob, env: DocumentRender
   return { token: payload.token, user: payload.user };
 };
 
-const renderDocument = async (job: DocumentDeliveryJob, env: DocumentRenderEnvironment): Promise<string> => {
+const renderDocument = async (
+  job: DocumentDeliveryJob,
+  env: DocumentRenderEnvironment,
+  log: (message: string, details?: Record<string, unknown>) => void,
+): Promise<string> => {
   const session = await createRenderSession(job, env);
   const browser = await chromium.launch({
     headless: true,
@@ -50,6 +54,17 @@ const renderDocument = async (job: DocumentDeliveryJob, env: DocumentRenderEnvir
   });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    page.on('console', (message) => {
+      if (message.type() === 'error' || message.type() === 'warning') {
+        log('Document render browser console', { level: message.type(), text: message.text() });
+      }
+    });
+    page.on('pageerror', (error) => log('Document render browser error', { error: error.message }));
+    page.on('requestfailed', (request) => log('Document render request failed', {
+      method: request.method(),
+      url: request.url(),
+      error: request.failure()?.errorText,
+    }));
     const sessionKey = job.product === 'pro' ? 'billme.web-pro.session.v1' : 'billme.web.lite.session.v1';
     await page.addInitScript(({ key, storedSession, apiUrl }) => {
       const browserGlobal = globalThis as unknown as {
@@ -91,7 +106,7 @@ export const processDocumentRenderBatch = async (
   let failed = 0;
   for (const job of jobs) {
     try {
-      const storageKey = await renderDocument(job, env);
+      const storageKey = await renderDocument(job, env, log);
       await attachRenderedDocument(pool, job, storageKey);
       rendered += 1;
       log('Document render completed', { deliveryId: job.id, documentId: job.documentId, tenantId: job.tenantId });

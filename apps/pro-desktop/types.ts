@@ -1,73 +1,19 @@
 
 
-export enum ElementType {
-  TEXT = 'TEXT',
-  IMAGE = 'IMAGE',
-  BOX = 'BOX',
-  TABLE = 'TABLE',
-  LINE = 'LINE',
-  QRCODE = 'QRCODE'
-}
-
-export interface ElementStyle {
-  fontSize?: number;
-  fontWeight?: 'normal' | 'bold';
-  textAlign?: 'left' | 'center' | 'right';
-  color?: string;
-  backgroundColor?: string;
-  borderWidth?: number;
-  borderColor?: string;
-  width?: number; // in px
-  height?: number; // in px
-  borderRadius?: number;
-  padding?: number;
-  fontFamily?: string;
-  textDecoration?: 'none' | 'underline' | 'line-through';
-}
-
-export interface TableColumn {
-  id: string;
-  label: string;
-  width: number; // px
-  visible: boolean;
-  align: 'left' | 'center' | 'right';
-}
-
-export interface TableRow {
-  id: string;
-  cells: string[];
-}
-
-export interface InvoiceElement {
-  id: string;
-  type: ElementType | 'TEXT' | 'IMAGE' | 'BOX' | 'TABLE' | 'LINE' | 'QRCODE';
-  x: number;
-  y: number;
-  zIndex: number; // Added for layer management
-  content?: string; // For text
-  src?: string; // For images
-  tableData?: {
-    columns: TableColumn[];
-    rows: TableRow[];
-  }; // For tables
-  qrData?: {
-    iban: string;
-    bic: string;
-    amount: number; // 0 for dynamic
-    reference: string;
-  }; // For QR Code
-  style: ElementStyle;
-  label?: string; // Internal label for finding elements (e.g., "address_field")
-}
+// Designer element model — canonical definitions live in @billme/desktop-designer.
+export { ElementType } from '@billme/desktop-designer/types';
+export type {
+  ElementStyle,
+  TableColumn,
+  TableRow,
+  InvoiceElement,
+  SnapGuide,
+  DocumentTemplate,
+  DocumentTemplateKind,
+} from '@billme/desktop-designer/types';
 
 export interface GenerationRequest {
   industry: string;
-}
-
-export interface SnapGuide {
-  orientation: 'vertical' | 'horizontal';
-  position: number;
-  label?: string; // e.g., "DIN Address"
 }
 
 // --- Settings Types ---
@@ -387,15 +333,4 @@ export interface Account {
   color: string; // Tailwind class mostly or hex
 }
 
-// --- Template Types ---
-
-export type DocumentTemplateKind = 'invoice' | 'offer';
-
-export interface DocumentTemplate {
-  id: string;
-  kind: DocumentTemplateKind;
-  name: string;
-  elements: InvoiceElement[];
-  createdAt: string;
-  updatedAt: string;
-}
+// --- Template Types (DocumentTemplate re-exported from @billme/desktop-designer above) ---

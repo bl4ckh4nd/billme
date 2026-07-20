@@ -39,7 +39,7 @@ export default function WorkflowActionBar({
             type="button"
             onClick={() => onAction(action)}
             disabled={isBusy}
-            className="px-4 py-2 rounded-full border border-gray-200 bg-white text-gray-700 text-sm font-bold hover:bg-gray-50 disabled:opacity-50"
+            className="px-4 py-2 rounded-full border border-border bg-surface text-muted text-sm font-bold hover:bg-surface-muted disabled:opacity-50"
           >
             {actionLabels[action]}
           </button>
@@ -48,7 +48,7 @@ export default function WorkflowActionBar({
         type="button"
         onClick={() => onAction(primary)}
         disabled={isBusy}
-        className="px-5 py-2 rounded-full bg-black text-white text-sm font-bold hover:bg-gray-900 disabled:opacity-50"
+        className="px-5 py-2 rounded-full bg-foreground text-white text-sm font-bold hover:bg-foreground disabled:opacity-50"
       >
         {isBusy ? 'Speichert...' : actionLabels[primary]}
       </button>

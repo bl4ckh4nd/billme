@@ -220,7 +220,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
 
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-canvas font-sans text-slate-800 overflow-hidden">
+    <div className="flex flex-col h-screen w-screen bg-canvas font-sans text-foreground overflow-hidden">
       <Titlebar />
 
       {isEditorActive ? (
@@ -228,7 +228,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
       ) : (
         <>
           {/* Top Navigation Bar */}
-          <header className="h-[88px] bg-white border-b border-gray-100 px-8 flex items-center justify-between shrink-0 z-40 no-print">
+          <header className="h-[88px] bg-surface border-b border-border-subtle px-8 flex items-center justify-between shrink-0 z-40 no-print">
             {/* Left: Logo */}
             <div className="flex items-center gap-3 w-64">
               <img
@@ -240,15 +240,15 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
             </div>
 
             {/* Center: Navigation Pills */}
-            <nav className="hidden md:flex items-center gap-1 bg-gray-100/80 p-1.5 rounded-full border border-gray-200">
+            <nav className="hidden md:flex items-center gap-1 bg-canvas/80 p-1.5 rounded-full border border-border">
               {visibleMenuItems.map((item) => (
                 <button
                   key={item.id}
                   onClick={() => onNavigate(item.id)}
-                  className={`px-6 py-2.5 rounded-full text-sm font-bold transition-all duration-300 ${
+                  className={`px-6 py-2.5 rounded-full text-sm font-bold transition-[background-color,border-color,color,box-shadow,opacity,transform,width] duration-200 ease-out ${
                     activePage === item.id
-                      ? 'bg-black text-white shadow-md'
-                      : 'text-gray-500 hover:bg-white hover:text-black hover:shadow-sm'
+                      ? 'bg-foreground text-white shadow-md'
+                      : 'text-muted hover:bg-surface hover:text-foreground hover:shadow-sm'
                   }`}
                 >
                   {item.label}
@@ -259,8 +259,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
             {/* Right: Actions */}
             <div className="flex items-center gap-2 w-64 justify-end">
                 <div ref={searchContainerRef} className="relative hidden lg:block">
-                    <div className="flex items-center h-11 px-3 bg-gradient-to-b from-white to-gray-50 border border-gray-200 rounded-2xl shadow-sm transition-all focus-within:shadow-md focus-within:border-gray-300 gap-2">
-                        <Search size={16} className="text-gray-400 shrink-0" />
+                    <div className="flex items-center h-11 px-3 bg-gradient-to-b from-surface to-surface-muted border border-border rounded-xl shadow-sm transition-[background-color,border-color,color,box-shadow,opacity,transform,width] focus-within:shadow-md focus-within:border-border gap-2">
+                        <Search size={16} className="text-muted shrink-0" />
                         <input
                             ref={searchInputRef}
                             type="text"
@@ -297,29 +297,29 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
                             }}
                             placeholder="Suchen..."
                             aria-label="Globale Suche"
-                            className="bg-transparent border-none outline-none text-sm font-medium w-44 focus:w-56 transition-all placeholder-gray-400 flex-1"
+                            className="bg-transparent border-none outline-none text-sm font-medium w-44 focus:w-56 transition-[background-color,border-color,color,box-shadow,opacity,transform,width] placeholder-muted flex-1"
                         />
                         {!searchTerm && (
-                          <kbd className="hidden lg:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-gray-300 bg-gray-100 border border-gray-200 shrink-0">⌘K</kbd>
+                          <kbd className="hidden lg:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-muted bg-canvas border border-border shrink-0">⌘K</kbd>
                         )}
                     </div>
 
                     {searchOpen && (
-                      <div className="absolute top-full right-0 mt-2 w-[26rem] max-h-[24rem] overflow-auto rounded-2xl border border-gray-200 bg-white shadow-xl p-2 z-50">
+                      <div className="absolute top-full right-0 mt-2 w-[26rem] max-h-[24rem] overflow-auto rounded-xl border border-border bg-surface shadow-xl p-2 z-50">
                         {normalizedSearch.length < 2 && (
-                          <div className="px-3 py-4 text-xs font-medium text-gray-500">
+                          <div className="px-3 py-4 text-xs font-medium text-muted">
                             Mindestens 2 Zeichen eingeben.
                           </div>
                         )}
 
                         {normalizedSearch.length >= 2 && searchLoading && (
-                          <div className="px-3 py-4 text-xs font-medium text-gray-500">
+                          <div className="px-3 py-4 text-xs font-medium text-muted">
                             Suche läuft...
                           </div>
                         )}
 
                         {normalizedSearch.length >= 2 && !searchLoading && searchResults.length === 0 && (
-                          <div className="px-3 py-4 text-xs font-medium text-gray-500">
+                          <div className="px-3 py-4 text-xs font-medium text-muted">
                             Keine Treffer gefunden.
                           </div>
                         )}
@@ -343,20 +343,20 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
                                   type="button"
                                   onClick={() => openSearchResult(result)}
                                   onMouseEnter={() => setSearchHighlightIndex(idx)}
-                                  className={`w-full text-left rounded-xl border px-3 py-2 transition-colors ${isHighlighted ? 'border-gray-200 bg-gray-50' : 'border-transparent hover:border-gray-200 hover:bg-gray-50'}`}
+                                  className={`w-full text-left rounded-xl border px-3 py-2 transition-colors ${isHighlighted ? 'border-border bg-surface-muted' : 'border-transparent hover:border-border hover:bg-surface-muted'}`}
                                 >
                                   <div className="flex items-start gap-3">
-                                    <span className="mt-0.5 w-6 h-6 rounded-md bg-gray-100 text-gray-600 flex items-center justify-center">
+                                    <span className="mt-0.5 w-6 h-6 rounded-md bg-canvas text-muted flex items-center justify-center">
                                       <Icon size={13} />
                                     </span>
                                     <div className="min-w-0 flex-1">
                                       <div className="flex items-center gap-2">
-                                        <p className="text-sm font-bold text-gray-900 truncate">{result.title}</p>
-                                        <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px] font-bold uppercase tracking-wide">
+                                        <p className="text-sm font-bold text-foreground truncate">{result.title}</p>
+                                        <span className="px-1.5 py-0.5 rounded bg-canvas text-muted text-[10px] font-bold uppercase tracking-wide">
                                           {result.badge}
                                         </span>
                                       </div>
-                                      <p className="text-xs text-gray-500 truncate mt-0.5">{result.subtitle}</p>
+                                      <p className="text-xs text-muted truncate mt-0.5">{result.subtitle}</p>
                                     </div>
                                   </div>
                                 </button>
@@ -368,14 +368,14 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
                     )}
                 </div>
 
-                <div className="flex items-center gap-1 p-1 bg-gray-100/90 border border-gray-200 rounded-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+                <div className="flex items-center gap-1 p-1 bg-canvas/90 border border-border rounded-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
                     <button
                         onClick={() => onNavigate('settings')}
-                        className="group w-9 h-9 bg-white border border-gray-200 hover:border-gray-300 rounded-xl flex items-center justify-center text-gray-500 hover:text-black transition-all duration-200 shadow-sm hover:-translate-y-0.5 hover:shadow-md"
+                        className="group w-9 h-9 bg-surface border border-border hover:border-border rounded-xl flex items-center justify-center text-muted hover:text-foreground transition-[background-color,border-color,color,box-shadow,opacity,transform,width] duration-200 ease-out shadow-sm hover:-translate-y-0.5 hover:shadow-md"
                         title="Einstellungen"
                         aria-label="Einstellungen"
                     >
-                        <Settings size={16} className="transition-transform duration-300 group-hover:rotate-45" />
+                        <Settings size={16} className="transition-transform duration-200 ease-out group-hover:rotate-45" />
                     </button>
 
                     <div ref={notifPanelRef} className="relative">
@@ -384,35 +384,35 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
                           setNotifPanelOpen((v) => !v);
                           if (!notifPanelOpen && unreadCount > 0) markAllRead();
                         }}
-                        className="group relative w-9 h-9 bg-white border border-gray-200 hover:border-gray-300 rounded-xl flex items-center justify-center text-gray-500 hover:text-black transition-all duration-200 shadow-sm hover:-translate-y-0.5 hover:shadow-md"
+                        className="group relative w-9 h-9 bg-surface border border-border hover:border-border rounded-xl flex items-center justify-center text-muted hover:text-foreground transition-[background-color,border-color,color,box-shadow,opacity,transform,width] duration-200 ease-out shadow-sm hover:-translate-y-0.5 hover:shadow-md"
                         title="Benachrichtigungen"
                         aria-label="Benachrichtigungen"
                       >
                         <Bell size={16} />
                         {unreadCount > 0 && (
-                          <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center leading-none">
+                          <span className="absolute -top-1 -right-1 w-4 h-4 bg-error text-white text-[9px] font-black rounded-full flex items-center justify-center leading-none">
                             {unreadCount > 9 ? '9+' : unreadCount}
                           </span>
                         )}
                       </button>
 
                       {notifPanelOpen && (
-                        <div className="absolute right-0 top-full mt-2 w-80 max-h-96 overflow-auto rounded-2xl border border-gray-200 bg-white shadow-xl z-50">
-                          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                            <span className="text-sm font-bold text-gray-900">Benachrichtigungen</span>
+                        <div className="absolute right-0 top-full mt-2 w-80 max-h-96 overflow-auto rounded-xl border border-border bg-surface shadow-xl z-50">
+                          <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
+                            <span className="text-sm font-bold text-foreground">Benachrichtigungen</span>
                             <div className="flex items-center gap-2">
                               {notifications.length > 0 && (
                                 <>
                                   <button
                                     onClick={markAllRead}
-                                    className="text-[10px] font-bold text-gray-400 hover:text-gray-700 flex items-center gap-1 transition-colors"
+                                    className="text-[10px] font-bold text-muted hover:text-foreground flex items-center gap-1 transition-colors"
                                     title="Alle als gelesen markieren"
                                   >
                                     <CheckCheck size={12} /> Alle gelesen
                                   </button>
                                   <button
                                     onClick={clearAll}
-                                    className="text-[10px] font-bold text-gray-400 hover:text-gray-700 transition-colors"
+                                    className="text-[10px] font-bold text-muted hover:text-foreground transition-colors"
                                     title="Alle löschen"
                                   >
                                     <X size={12} />
@@ -422,22 +422,22 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
                             </div>
                           </div>
                           {notifications.length === 0 ? (
-                            <div className="px-4 py-8 text-center text-sm text-gray-400">
+                            <div className="px-4 py-8 text-center text-sm text-muted">
                               Keine Benachrichtigungen
                             </div>
                           ) : (
-                            <div className="divide-y divide-gray-50">
+                            <div className="divide-y divide-border-subtle">
                               {notifications.map((n) => (
                                 <div
                                   key={n.id}
-                                  className={`px-4 py-3 ${n.read ? 'opacity-60' : 'bg-blue-50/30'}`}
+                                  className={`px-4 py-3 ${n.read ? 'opacity-60' : 'bg-info-bg/30'}`}
                                 >
                                   <div className="flex items-start gap-2">
-                                    {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0" />}
+                                    {!n.read && <span className="w-1.5 h-1.5 rounded-full bg-info mt-1.5 shrink-0" />}
                                     <div className="min-w-0 flex-1" style={n.read ? { marginLeft: '14px' } : {}}>
-                                      <p className="text-xs font-bold text-gray-900">{n.title}</p>
-                                      <p className="text-xs text-gray-500 mt-0.5">{n.message}</p>
-                                      <p className="text-[10px] text-gray-400 mt-1">
+                                      <p className="text-xs font-bold text-foreground">{n.title}</p>
+                                      <p className="text-xs text-muted mt-0.5">{n.message}</p>
+                                      <p className="text-[10px] text-muted mt-1">
                                         {new Date(n.timestamp).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                                       </p>
                                     </div>

@@ -60,15 +60,15 @@ export const ProjectDetailView: React.FC = () => {
 
   if (!project) {
     return (
-      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
+      <div className="bg-surface rounded-xl p-8 min-h-full shadow-sm">
         <button
           onClick={() => navigate({ to: '/projects' })}
-          className="flex items-center gap-2 text-gray-400 hover:text-black transition-colors mb-6 text-xs font-bold uppercase tracking-wider"
+          className="flex items-center gap-2 text-muted hover:text-foreground transition-colors duration-150 ease-out mb-6 text-xs font-bold uppercase tracking-wider"
         >
           <ArrowLeft size={14} /> Zurück
         </button>
-        <h2 className="text-xl font-black text-gray-900 mb-2">Projekt nicht gefunden</h2>
-        <p className="text-sm text-gray-500">Bitte über die Projektliste erneut öffnen.</p>
+        <h2 className="text-xl font-black text-foreground mb-2">Projekt nicht gefunden</h2>
+        <p className="text-sm text-muted">Bitte über die Projektliste erneut öffnen.</p>
       </div>
     );
   }
@@ -77,23 +77,23 @@ export const ProjectDetailView: React.FC = () => {
   const overBudget = remainingBudget < 0;
 
   return (
-    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
+    <div className="bg-surface rounded-xl p-8 min-h-full shadow-sm">
       <button
         onClick={() => navigate({ to: '/projects' })}
-        className="flex items-center gap-2 text-gray-400 hover:text-black transition-colors mb-6 text-xs font-bold uppercase tracking-wider"
+        className="flex items-center gap-2 text-muted hover:text-foreground transition-colors duration-150 ease-out mb-6 text-xs font-bold uppercase tracking-wider"
       >
         <ArrowLeft size={14} /> Zurück zu Projekten
       </button>
 
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider">{project.code ?? ''}</div>
-          <h2 className="text-2xl font-black text-gray-900">{project.name}</h2>
-          <div className="text-sm text-gray-500 mt-1">{client ? client.company : 'Unbekannter Kunde'}</div>
+          <div className="text-xs font-bold text-muted uppercase tracking-wider">{project.code ?? ''}</div>
+          <h2 className="text-2xl font-black text-foreground">{project.name}</h2>
+          <div className="text-sm text-muted mt-1">{client ? client.company : 'Unbekannter Kunde'}</div>
         </div>
         <button
           onClick={() => navigate({ to: '/documents' })}
-          className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
+          className="px-5 py-3 rounded-xl font-bold bg-foreground text-white hover:bg-dark-1 transition-colors duration-150 ease-out"
           title="Dokumente öffnen"
         >
           Zu Dokumenten
@@ -101,96 +101,96 @@ export const ProjectDetailView: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-3 gap-4 mb-8">
-        <div className="rounded-2xl border border-gray-200 p-5 bg-gray-50 animate-scale-in" style={{ animationDelay: '0ms' }}>
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider">Rechnungen</div>
-          <div className="text-3xl font-black text-gray-900 mt-2">{projectInvoices.length}</div>
+        <div className="rounded-xl border border-border p-5 bg-surface-muted animate-scale-in" style={{ animationDelay: '0ms' }}>
+          <div className="text-xs font-bold text-muted uppercase tracking-wider">Rechnungen</div>
+          <div className="text-3xl font-black text-foreground mt-2">{projectInvoices.length}</div>
         </div>
-        <div className="rounded-2xl border border-gray-200 p-5 bg-gray-50 animate-scale-in" style={{ animationDelay: '50ms' }}>
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider">Angebote</div>
-          <div className="text-3xl font-black text-gray-900 mt-2">{projectOffers.length}</div>
+        <div className="rounded-xl border border-border p-5 bg-surface-muted animate-scale-in" style={{ animationDelay: '50ms' }}>
+          <div className="text-xs font-bold text-muted uppercase tracking-wider">Angebote</div>
+          <div className="text-3xl font-black text-foreground mt-2">{projectOffers.length}</div>
         </div>
-        <div className="rounded-2xl border border-gray-200 p-5 bg-gray-50 animate-scale-in" style={{ animationDelay: '100ms' }}>
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider">Status</div>
-          <div className="text-xl font-black text-gray-900 mt-3">{project.status}</div>
+        <div className="rounded-xl border border-border p-5 bg-surface-muted animate-scale-in" style={{ animationDelay: '100ms' }}>
+          <div className="text-xs font-bold text-muted uppercase tracking-wider">Status</div>
+          <div className="text-xl font-black text-foreground mt-3">{project.status}</div>
         </div>
       </div>
 
-      <div className="rounded-3xl border border-gray-200 bg-gray-50 p-6 mb-8">
+      <div className="rounded-xl border border-border bg-surface-muted p-6 mb-8">
         <div className="flex items-center justify-between gap-4 mb-5">
-          <h3 className="text-sm font-black text-gray-900 flex items-center gap-2 uppercase tracking-wide">
-            <Euro size={16} className="text-gray-500" /> Abrechnung
+          <h3 className="text-sm font-black text-foreground flex items-center gap-2 uppercase tracking-wide">
+            <Euro size={16} className="text-muted" /> Abrechnung
           </h3>
           {project.budget > 0 && (
-            <div className="text-xs font-bold text-gray-500">
-              Budget: <span className="font-mono text-gray-900">{formatCurrency(project.budget)}</span>
+            <div className="text-xs font-bold text-muted">
+              Budget: <span className="tabular-nums text-foreground">{formatCurrency(project.budget)}</span>
             </div>
           )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          <div className="rounded-2xl bg-white border border-gray-200 p-5 animate-scale-in" style={{ animationDelay: '0ms' }}>
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Rechnungen gestellt</div>
-            <div className="text-3xl font-black text-gray-900 mt-2">{issuedInvoices.length}</div>
-            <div className="text-xs text-gray-500 mt-2">
-              Offen: <span className="font-bold text-gray-900">{openInvoices.length}</span> •
-              Überfällig: <span className="font-bold text-gray-900">{overdueInvoices.length}</span> •
-              Bezahlt: <span className="font-bold text-gray-900">{paidInvoices.length}</span>
+          <div className="rounded-lg bg-surface border border-border p-5 animate-scale-in" style={{ animationDelay: '0ms' }}>
+            <div className="text-[10px] font-bold text-muted uppercase tracking-wider">Rechnungen gestellt</div>
+            <div className="text-3xl font-black text-foreground mt-2">{issuedInvoices.length}</div>
+            <div className="text-xs text-muted mt-2">
+              Offen: <span className="font-bold text-foreground">{openInvoices.length}</span> •
+              Überfällig: <span className="font-bold text-foreground">{overdueInvoices.length}</span> •
+              Bezahlt: <span className="font-bold text-foreground">{paidInvoices.length}</span>
             </div>
           </div>
 
-          <div className="rounded-2xl bg-white border border-gray-200 p-5 animate-scale-in" style={{ animationDelay: '50ms' }}>
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Offen</div>
-            <div className="text-2xl font-black text-gray-900 mt-2 font-mono">{formatCurrency(sums.openRemaining)}</div>
-            <div className="text-xs text-gray-500 mt-2">Restbetrag aus offenen Rechnungen</div>
+          <div className="rounded-lg bg-surface border border-border p-5 animate-scale-in" style={{ animationDelay: '50ms' }}>
+            <div className="text-[10px] font-bold text-muted uppercase tracking-wider">Offen</div>
+            <div className="text-2xl font-black text-foreground mt-2 tabular-nums">{formatCurrency(sums.openRemaining)}</div>
+            <div className="text-xs text-muted mt-2">Restbetrag aus offenen Rechnungen</div>
           </div>
 
-          <div className="rounded-2xl bg-white border border-gray-200 p-5 animate-scale-in" style={{ animationDelay: '100ms' }}>
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Überfällig</div>
-            <div className="text-2xl font-black text-gray-900 mt-2 font-mono">{formatCurrency(sums.overdueRemaining)}</div>
-            <div className="text-xs text-gray-500 mt-2">Restbetrag aus überfälligen Rechnungen</div>
+          <div className="rounded-lg bg-surface border border-border p-5 animate-scale-in" style={{ animationDelay: '100ms' }}>
+            <div className="text-[10px] font-bold text-muted uppercase tracking-wider">Überfällig</div>
+            <div className="text-2xl font-black text-foreground mt-2 tabular-nums">{formatCurrency(sums.overdueRemaining)}</div>
+            <div className="text-xs text-muted mt-2">Restbetrag aus überfälligen Rechnungen</div>
           </div>
 
-          <div className="rounded-2xl bg-white border border-gray-200 p-5 animate-scale-in" style={{ animationDelay: '150ms' }}>
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Bezahlt</div>
-            <div className="text-2xl font-black text-gray-900 mt-2 font-mono">{formatCurrency(sums.paidApplied)}</div>
-            <div className="text-xs text-gray-500 mt-2">Summe erfasster Zahlungen (gedeckelt)</div>
+          <div className="rounded-lg bg-surface border border-border p-5 animate-scale-in" style={{ animationDelay: '150ms' }}>
+            <div className="text-[10px] font-bold text-muted uppercase tracking-wider">Bezahlt</div>
+            <div className="text-2xl font-black text-foreground mt-2 tabular-nums">{formatCurrency(sums.paidApplied)}</div>
+            <div className="text-xs text-muted mt-2">Summe erfasster Zahlungen (gedeckelt)</div>
           </div>
         </div>
 
         <div className="mt-5">
-          <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+          <div className="flex items-center justify-between text-xs text-muted mb-2">
             <span>Abrechnungsstatus (nur Rechnungen, ohne Entwürfe)</span>
-            <span className="font-mono font-bold text-gray-900">{formatCurrency(pipelineTotal)}</span>
+            <span className="tabular-nums font-bold text-foreground">{formatCurrency(pipelineTotal)}</span>
           </div>
-          <div className="w-full h-3 rounded-full bg-white border border-gray-200 overflow-hidden flex">
-            <div className="h-full bg-gray-200" style={{ width: `${Math.round(pctOpen * 100)}%` }} title="Offen" />
+          <div className="w-full h-3 rounded-full bg-surface border border-border overflow-hidden flex">
+            <div className="h-full bg-canvas" style={{ width: `${Math.round(pctOpen * 100)}%` }} title="Offen" />
             <div className="h-full bg-error/30" style={{ width: `${Math.round(pctOverdue * 100)}%` }} title="Überfällig" />
-            <div className="h-full bg-black" style={{ width: `${Math.round(pctPaid * 100)}%` }} title="Bezahlt" />
+            <div className="h-full bg-foreground" style={{ width: `${Math.round(pctPaid * 100)}%` }} title="Bezahlt" />
           </div>
-          <div className="mt-2 flex flex-wrap gap-3 text-xs font-bold text-gray-600">
-            <span>Offen: <span className="font-mono text-gray-900">{formatCurrency(sums.openRemaining)}</span></span>
-            <span>Überfällig: <span className="font-mono text-gray-900">{formatCurrency(sums.overdueRemaining)}</span></span>
-            <span>Bezahlt: <span className="font-mono text-gray-900">{formatCurrency(sums.paidApplied)}</span></span>
+          <div className="mt-2 flex flex-wrap gap-3 text-xs font-bold text-muted">
+            <span>Offen: <span className="tabular-nums text-foreground">{formatCurrency(sums.openRemaining)}</span></span>
+            <span>Überfällig: <span className="tabular-nums text-foreground">{formatCurrency(sums.overdueRemaining)}</span></span>
+            <span>Bezahlt: <span className="tabular-nums text-foreground">{formatCurrency(sums.paidApplied)}</span></span>
           </div>
         </div>
 
         {project.budget > 0 && (
           <div className="mt-5">
-            <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+            <div className="flex items-center justify-between text-xs text-muted mb-2">
               <span>Budget-Fortschritt (bezahlt)</span>
-              <span className="font-mono font-bold text-gray-900">
+              <span className="tabular-nums font-bold text-foreground">
                 {formatCurrency(sums.paidApplied)} / {formatCurrency(project.budget)}
               </span>
             </div>
-            <div className="w-full h-3 rounded-full bg-white border border-gray-200 overflow-hidden">
+            <div className="w-full h-3 rounded-full bg-surface border border-border overflow-hidden">
               <div
-                className="h-full bg-black"
+                className="h-full bg-foreground"
                 style={{ width: `${Math.min(100, Math.round((sums.paidApplied / project.budget) * 100))}%` }}
               />
             </div>
-            <div className="mt-2 text-xs text-gray-500">
+            <div className="mt-2 text-xs text-muted">
               {overBudget ? 'Über Budget:' : 'Restbudget:'}{' '}
-              <span className={`font-mono font-bold ${overBudget ? 'text-error' : 'text-gray-900'}`}>
+              <span className={`tabular-nums font-bold ${overBudget ? 'text-error' : 'text-foreground'}`}>
                 {formatCurrency(Math.abs(remainingBudget))}
               </span>
             </div>
@@ -199,23 +199,23 @@ export const ProjectDetailView: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-2 gap-6">
-        <div className="rounded-2xl border border-gray-200 overflow-hidden">
-          <div className="bg-gray-50 px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">
+        <div className="rounded-xl border border-border overflow-hidden">
+          <div className="bg-surface-muted px-4 py-3 text-xs font-bold text-muted uppercase tracking-wider">
             Rechnungen
           </div>
           {projectInvoices.length === 0 ? (
-            <div className="p-6 text-sm text-gray-500">Keine Rechnungen im Projekt.</div>
+            <div className="p-6 text-sm text-muted">Keine Rechnungen im Projekt.</div>
           ) : (
-            <div className="divide-y divide-gray-100">
+            <div className="divide-y divide-border-subtle">
               {projectInvoices.map((d, idx) => (
                 <div key={d.id} className="px-4 py-3 flex items-center justify-between animate-enter" style={{ animationDelay: `${idx * 50}ms` }}>
                   <div>
-                    <div className="font-bold text-gray-900">{d.number}</div>
-                    <div className="text-xs text-gray-500">{d.date}</div>
+                    <div className="font-bold text-foreground">{d.number}</div>
+                    <div className="text-xs text-muted">{d.date}</div>
                   </div>
                   <button
                     onClick={() => navigate({ to: '/documents' })}
-                    className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-900 font-bold text-sm"
+                    className="px-3 py-2 rounded-lg bg-canvas hover:bg-surface-muted text-foreground font-bold text-sm transition-colors duration-150 ease-out"
                   >
                     Öffnen
                   </button>
@@ -225,23 +225,23 @@ export const ProjectDetailView: React.FC = () => {
           )}
         </div>
 
-        <div className="rounded-2xl border border-gray-200 overflow-hidden">
-          <div className="bg-gray-50 px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">
+        <div className="rounded-xl border border-border overflow-hidden">
+          <div className="bg-surface-muted px-4 py-3 text-xs font-bold text-muted uppercase tracking-wider">
             Angebote
           </div>
           {projectOffers.length === 0 ? (
-            <div className="p-6 text-sm text-gray-500">Keine Angebote im Projekt.</div>
+            <div className="p-6 text-sm text-muted">Keine Angebote im Projekt.</div>
           ) : (
-            <div className="divide-y divide-gray-100">
+            <div className="divide-y divide-border-subtle">
               {projectOffers.map((d, idx) => (
                 <div key={d.id} className="px-4 py-3 flex items-center justify-between animate-enter" style={{ animationDelay: `${idx * 50}ms` }}>
                   <div>
-                    <div className="font-bold text-gray-900">{d.number}</div>
-                    <div className="text-xs text-gray-500">{d.date}</div>
+                    <div className="font-bold text-foreground">{d.number}</div>
+                    <div className="text-xs text-muted">{d.date}</div>
                   </div>
                   <button
                     onClick={() => navigate({ to: '/documents' })}
-                    className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-900 font-bold text-sm transition-colors"
+                    className="px-3 py-2 rounded-lg bg-canvas hover:bg-surface-muted text-foreground font-bold text-sm transition-colors duration-150 ease-out"
                   >
                     Öffnen
                   </button>

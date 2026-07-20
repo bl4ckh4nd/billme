@@ -20,23 +20,23 @@ function SideColumn({
   onSelectLine: (line: BalanceSheetPreviewLine) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100 text-sm font-bold text-gray-900">{title}</div>
-      <div className="divide-y divide-gray-100">
+    <div className="rounded-xl border border-border bg-surface overflow-hidden">
+      <div className="px-4 py-3 border-b border-border-subtle text-sm font-bold text-foreground">{title}</div>
+      <div className="divide-y divide-border-subtle">
         {lines.map((line) => (
           <button
             key={line.id}
             onClick={() => onSelectLine(line)}
-            className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${line.isSubtotal ? 'bg-gray-50/70' : ''}`}
+            className={`w-full text-left px-4 py-3 hover:bg-surface-muted transition-colors duration-150 ease-out ${line.isSubtotal ? 'bg-surface-muted/70' : ''}`}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0" style={{ paddingLeft: `${line.level * 14}px` }}>
-                <div className="text-xs font-bold uppercase tracking-wide text-gray-400">{line.code}</div>
-                <div className={`text-sm ${line.isSubtotal ? 'font-bold text-gray-900' : 'font-medium text-gray-700'}`}>
+                <div className="text-xs font-bold uppercase tracking-wide text-muted">{line.code}</div>
+                <div className={`text-sm ${line.isSubtotal ? 'font-bold text-foreground' : 'font-medium text-muted'}`}>
                   {line.label}
                 </div>
               </div>
-              <div className={`shrink-0 text-sm font-bold ${line.amount < 0 ? 'text-red-700' : 'text-gray-900'}`}>
+              <div className={`shrink-0 text-sm font-bold tabular-nums ${line.amount < 0 ? 'text-error' : 'text-foreground'}`}>
                 {euro(line.amount)}
               </div>
             </div>
@@ -70,28 +70,28 @@ export default function BalanceSheetPreviewView({ report, onSelectLine }: Balanc
         ]}
       />
 
-      <div className="rounded-2xl border border-gray-200 bg-white p-4 space-y-2">
+      <div className="rounded-xl border border-border bg-surface p-4 space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-bold text-gray-900">Bilanz (HGB Preview, Mock)</div>
-            <div className="text-xs text-gray-500">Stand: {new Date(report.quality.generatedAt).toLocaleString('de-DE')}</div>
+            <div className="text-sm font-bold text-foreground">Bilanz (HGB Preview, Mock)</div>
+            <div className="text-xs text-muted">Stand: {new Date(report.quality.generatedAt).toLocaleString('de-DE')}</div>
           </div>
           <span
             className={`px-2.5 py-1 rounded-full text-xs font-bold ${
               report.quality.status === 'ok'
-                ? 'bg-emerald-100 text-emerald-700'
+                ? 'bg-success-bg text-success'
                 : report.quality.status === 'warning'
-                  ? 'bg-amber-100 text-amber-700'
-                  : 'bg-red-100 text-red-700'
+                  ? 'bg-warning-bg text-warning'
+                  : 'bg-error-bg text-error'
             }`}
           >
             {report.quality.status === 'ok' ? 'OK' : report.quality.status === 'warning' ? 'Preview prüfen' : 'Fehler'}
           </span>
         </div>
-        <ul className="space-y-1 text-sm text-gray-600">
+        <ul className="space-y-1 text-sm text-muted">
           {report.quality.notes.map((note) => (
             <li key={note} className="flex items-start gap-2">
-              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-gray-400" />
+              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-border" />
               <span>{note}</span>
             </li>
           ))}
@@ -103,19 +103,19 @@ export default function BalanceSheetPreviewView({ report, onSelectLine }: Balanc
         <SideColumn title="Passiva" lines={report.passiva} onSelectLine={onSelectLine} />
       </div>
 
-      <div className="rounded-2xl border border-gray-200 bg-white p-4">
+      <div className="rounded-xl border border-border bg-surface p-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-          <div className="rounded-xl border border-gray-100 p-3">
-            <div className="text-xs font-bold text-gray-400 uppercase tracking-wide">Aktiva gesamt</div>
-            <div className="mt-1 text-lg font-bold text-gray-900">{euro(report.totals.aktiva)}</div>
+          <div className="rounded-xl border border-border-subtle p-3">
+            <div className="text-xs font-bold text-muted uppercase tracking-wide">Aktiva gesamt</div>
+            <div className="mt-1 text-lg font-bold tabular-nums text-foreground">{euro(report.totals.aktiva)}</div>
           </div>
-          <div className="rounded-xl border border-gray-100 p-3">
-            <div className="text-xs font-bold text-gray-400 uppercase tracking-wide">Passiva gesamt</div>
-            <div className="mt-1 text-lg font-bold text-gray-900">{euro(report.totals.passiva)}</div>
+          <div className="rounded-xl border border-border-subtle p-3">
+            <div className="text-xs font-bold text-muted uppercase tracking-wide">Passiva gesamt</div>
+            <div className="mt-1 text-lg font-bold tabular-nums text-foreground">{euro(report.totals.passiva)}</div>
           </div>
-          <div className="rounded-xl border border-gray-100 p-3">
-            <div className="text-xs font-bold text-gray-400 uppercase tracking-wide">Differenz</div>
-            <div className={`mt-1 text-lg font-bold ${report.totals.difference === 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+          <div className="rounded-xl border border-border-subtle p-3">
+            <div className="text-xs font-bold text-muted uppercase tracking-wide">Differenz</div>
+            <div className={`mt-1 text-lg font-bold tabular-nums ${report.totals.difference === 0 ? 'text-success' : 'text-error'}`}>
               {euro(report.totals.difference)}
             </div>
           </div>

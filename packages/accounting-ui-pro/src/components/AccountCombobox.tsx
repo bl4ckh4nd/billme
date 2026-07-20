@@ -74,7 +74,7 @@ export default function AccountCombobox({
   return (
     <div className="relative">
       <div className="relative">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" size={14} />
         <input
           id={inputId}
           type="text"
@@ -120,7 +120,7 @@ export default function AccountCombobox({
               setQuery(displayValue(valueAccountId, valueAccountName));
             }
           }}
-          className="w-full border border-gray-200 rounded-xl pl-8 pr-2 py-2 text-sm disabled:bg-gray-50"
+          className="w-full border border-border rounded-lg pl-8 pr-2 py-2 text-sm disabled:bg-surface-muted"
         />
       </div>
 
@@ -128,10 +128,10 @@ export default function AccountCombobox({
         <div
           id={listboxId}
           role="listbox"
-          className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 max-h-56 overflow-auto"
+          className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded-xl shadow-lg z-20 max-h-56 overflow-auto"
         >
           {filtered.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-gray-500">Kein Konto gefunden</div>
+            <div className="px-3 py-2 text-sm text-muted">Kein Konto gefunden</div>
           ) : (
             filtered.map((account, index) => {
               const selected = account.number === valueAccountId;
@@ -142,8 +142,8 @@ export default function AccountCombobox({
                   id={`${inputId}-opt-${account.id}`}
                   role="option"
                   aria-selected={selected}
-                  className={`px-3 py-2 cursor-pointer border-b border-gray-50 last:border-0 ${
-                    active ? 'bg-gray-100' : 'hover:bg-gray-50'
+                  className={`px-3 py-2 cursor-pointer border-b border-border-subtle last:border-0 ${
+                    active ? 'bg-canvas' : 'hover:bg-surface-muted'
                   }`}
                   onMouseDown={(e) => {
                     e.preventDefault();
@@ -151,11 +151,11 @@ export default function AccountCombobox({
                   }}
                   onMouseEnter={() => setActiveIndex(index)}
                 >
-                  <div className="text-sm font-bold text-gray-900">
+                  <div className="text-sm font-bold text-foreground">
                     {account.number} - {account.name}
                   </div>
                   {!!account.keywords?.length && (
-                    <div className="text-xs text-gray-500 mt-0.5">
+                    <div className="text-xs text-muted mt-0.5">
                       {account.keywords.slice(0, 3).join(', ')}
                     </div>
                   )}
@@ -168,4 +168,3 @@ export default function AccountCombobox({
     </div>
   );
 }
-

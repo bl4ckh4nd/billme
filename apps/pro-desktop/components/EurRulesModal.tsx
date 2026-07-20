@@ -119,15 +119,15 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-3xl shadow-2xl w-[700px] max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50">
+      <div className="bg-surface rounded-xl shadow-2xl w-[700px] max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+        <div className="flex items-center justify-between p-6 border-b border-border">
           <div>
-            <h3 className="text-lg font-bold text-gray-900">Klassifizierungsregeln</h3>
-            <p className="text-xs text-gray-500">Automatische Zuordnung nach Stichworten für {taxYear}</p>
+            <h3 className="text-lg font-bold text-foreground">Klassifizierungsregeln</h3>
+            <p className="text-xs text-muted">Automatische Zuordnung nach Stichworten für {taxYear}</p>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+          <button onClick={onClose} className="p-2 hover:bg-canvas rounded-lg transition-colors duration-150 ease-out">
             <X size={20} />
           </button>
         </div>
@@ -136,17 +136,17 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
         <div className="flex-1 overflow-auto p-6">
           {/* Add/Edit Form */}
           {isAdding ? (
-            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 mb-4">
-              <h4 className="text-sm font-bold text-gray-900 mb-3">
+            <div className="rounded-xl border border-border bg-surface-muted p-4 mb-4">
+              <h4 className="text-sm font-bold text-foreground mb-3">
                 {editId ? 'Regel bearbeiten' : 'Neue Regel'}
               </h4>
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Feld</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Feld</label>
                   <select
                     value={field}
                     onChange={(e) => setField(e.target.value as RuleField)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                   >
                     {(Object.entries(FIELD_LABELS) as [RuleField, string][]).map(([k, v]) => (
                       <option key={k} value={k}>{v}</option>
@@ -154,11 +154,11 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Bedingung</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Bedingung</label>
                   <select
                     value={operator}
                     onChange={(e) => setOperator(e.target.value as RuleOperator)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                   >
                     {(Object.entries(OPERATOR_LABELS) as [RuleOperator, string][]).map(([k, v]) => (
                       <option key={k} value={k}>{v}</option>
@@ -167,21 +167,21 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
                 </div>
               </div>
               <div className="mb-3">
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Wert</label>
+                <label className="block text-xs font-semibold text-muted mb-1">Wert</label>
                 <input
                   value={value}
                   onChange={(e) => setValue(e.target.value)}
                   placeholder="z.B. Telekom, Miete, Hosting..."
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                 />
               </div>
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Ziel-Kennziffer</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Ziel-Kennziffer</label>
                   <select
                     value={targetLineId}
                     onChange={(e) => setTargetLineId(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                   >
                     <option value="">Bitte wählen...</option>
                     {lineOptions.map((line) => (
@@ -192,15 +192,15 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Priorität</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Priorität</label>
                   <input
                     type="number"
                     value={priority}
                     onChange={(e) => setPriority(Number(e.target.value))}
                     min={0}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                   />
-                  <p className="text-[10px] text-gray-400 mt-1">Niedrigere Zahl = höhere Priorität</p>
+                  <p className="text-[10px] text-muted mt-1">Niedrigere Zahl = höhere Priorität</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -221,9 +221,9 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
 
           {/* Rules Table */}
           {isLoading ? (
-            <p className="text-sm text-gray-500 text-center py-8">Lade Regeln...</p>
+            <p className="text-sm text-muted text-center py-8">Lade Regeln...</p>
           ) : rules.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-muted">
               <Settings2 size={40} className="mx-auto mb-3 opacity-40" />
               <p className="text-sm font-medium">Keine Regeln vorhanden</p>
               <p className="text-xs mt-1">Erstellen Sie Regeln, um Buchungen automatisch zuzuordnen.</p>
@@ -233,25 +233,25 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
               {rules.map((rule) => (
                 <div
                   key={rule.id}
-                  className={`rounded-xl border p-3 transition-colors ${
-                    rule.active ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+                  className={`rounded-xl border p-3 transition-colors duration-150 ease-out ${
+                    rule.active ? 'border-border bg-surface' : 'border-border-subtle bg-surface-muted opacity-60'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 text-sm">
-                        <span className="font-mono text-xs text-gray-400">#{rule.priority}</span>
-                        <span className="font-semibold text-gray-900">
+                        <span className="font-mono text-xs text-muted">#{rule.priority}</span>
+                        <span className="font-semibold text-foreground">
                           {FIELD_LABELS[rule.field as RuleField]}
                         </span>
-                        <span className="text-gray-500">
+                        <span className="text-muted">
                           {OPERATOR_LABELS[rule.operator as RuleOperator]}
                         </span>
-                        <span className="font-mono text-purple-700 bg-purple-50 px-2 py-0.5 rounded text-xs">
+                        <span className="font-mono text-accent-foreground bg-accent/20 px-2 py-0.5 rounded text-xs">
                           „{rule.value}"
                         </span>
                       </div>
-                      <div className="text-xs text-gray-500 mt-1">
+                      <div className="text-xs text-muted mt-1">
                         → {getLineLabel(rule.targetEurLineId)}
                       </div>
                     </div>
@@ -267,23 +267,23 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
                           value: rule.value,
                           targetEurLineId: rule.targetEurLineId,
                         })}
-                        className={`px-2 py-1 rounded-lg text-xs font-medium transition-colors ${
+                        className={`px-2 py-1 rounded-lg text-xs font-medium transition-colors duration-150 ease-out ${
                           rule.active
-                            ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                            : 'bg-gray-200 text-gray-500 hover:bg-gray-300'
+                            ? 'bg-success-bg text-success hover:bg-success-bg/80'
+                            : 'bg-canvas text-muted hover:bg-border'
                         }`}
                       >
                         {rule.active ? 'Aktiv' : 'Inaktiv'}
                       </button>
                       <button
                         onClick={() => startEdit(rule)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors text-xs"
+                        className="p-1.5 rounded-lg text-muted hover:text-muted hover:bg-canvas transition-colors duration-150 ease-out text-xs"
                       >
                         Bearbeiten
                       </button>
                       <button
                         onClick={() => deleteRule.mutate(rule.id)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                        className="p-1.5 rounded-lg text-muted hover:text-error hover:bg-error-bg transition-colors duration-150 ease-out"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -296,7 +296,7 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200">
+        <div className="flex items-center justify-end gap-3 p-6 border-t border-border">
           <Button variant="secondary" size="sm" onClick={onClose}>
             Schließen
           </Button>

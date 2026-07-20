@@ -1,6 +1,7 @@
 import React from 'react';
 import { A4_HEIGHT_PX, A4_WIDTH_PX, INITIAL_INVOICE_TEMPLATE, INITIAL_OFFER_TEMPLATE } from '../constants';
-import { CanvasElement } from './CanvasElement';
+import { ElementRenderer } from '@billme/desktop-designer/ElementRenderer';
+import { renderTextWithPlaceholders } from '../utils/placeholders';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { useActiveTemplateQuery } from '../hooks/useTemplates';
 import { MOCK_SETTINGS } from '../data/mockData';
@@ -61,14 +62,7 @@ export const PrintDocument: React.FC<{ kind: 'invoice' | 'offer'; id: string }> 
       >
         {doc ? (
           previewElements.map((el) => (
-            <CanvasElement
-              key={el.id}
-              element={el}
-              elements={previewElements}
-              isSelected={false}
-              scale={1}
-              readOnly
-            />
+            <ElementRenderer key={el.id} element={el} renderText={renderTextWithPlaceholders} readOnly />
           ))
         ) : (
           <div style={{ padding: 24, fontFamily: 'system-ui' }}>

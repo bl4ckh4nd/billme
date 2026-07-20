@@ -130,29 +130,29 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-[760px] max-h-[92vh] rounded-3xl bg-white shadow-2xl flex flex-col">
-        <div className="flex items-center justify-between border-b border-gray-200 p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50">
+      <div className="w-[760px] max-h-[92vh] rounded-xl bg-surface shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between border-b border-border p-6">
           <div>
-            <h3 className="text-lg font-bold text-gray-900">Kontierungsvorschlag-Regeln</h3>
-            <p className="text-xs text-gray-500">Regeln fuer {chartFramework}</p>
+            <h3 className="text-lg font-bold text-foreground">Kontierungsvorschlag-Regeln</h3>
+            <p className="text-xs text-muted">Regeln fuer {chartFramework}</p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 transition-colors">
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-canvas transition-colors duration-150 ease-out">
             <X size={20} />
           </button>
         </div>
 
         <div className="flex-1 overflow-auto p-6">
           {isAdding ? (
-            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 mb-4">
-              <h4 className="mb-3 text-sm font-bold text-gray-900">{editId ? 'Regel bearbeiten' : 'Neue Regel'}</h4>
+            <div className="rounded-xl border border-border bg-surface-muted p-4 mb-4">
+              <h4 className="mb-3 text-sm font-bold text-foreground">{editId ? 'Regel bearbeiten' : 'Neue Regel'}</h4>
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Feld</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Feld</label>
                   <select
                     value={field}
                     onChange={(e) => setField(e.target.value as RuleField)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                   >
                     {(Object.entries(FIELD_LABELS) as [RuleField, string][]).map(([k, v]) => (
                       <option key={k} value={k}>{v}</option>
@@ -160,11 +160,11 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Bedingung</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Bedingung</label>
                   <select
                     value={operator}
                     onChange={(e) => setOperator(e.target.value as RuleOperator)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                   >
                     {(Object.entries(OPERATOR_LABELS) as [RuleOperator, string][]).map(([k, v]) => (
                       <option key={k} value={k}>{v}</option>
@@ -174,22 +174,22 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
               </div>
 
               <div className="mb-3">
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Wert</label>
+                <label className="block text-xs font-semibold text-muted mb-1">Wert</label>
                 <input
                   value={value}
                   onChange={(e) => setValue(e.target.value)}
                   placeholder="z.B. telefon, telekom, aws"
-                  className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                 />
               </div>
 
               <div className="grid grid-cols-3 gap-3 mb-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Zielkonto</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Zielkonto</label>
                   <select
                     value={targetAccountNumber}
                     onChange={(e) => setTargetAccountNumber(e.target.value)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                   >
                     <option value="">Bitte waehlen...</option>
                     {accounts.map((acc) => (
@@ -200,11 +200,11 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Flow</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Flow</label>
                   <select
                     value={flowType}
                     onChange={(e) => setFlowType(e.target.value as RuleFlow)}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                   >
                     {(Object.entries(FLOW_LABELS) as [RuleFlow, string][]).map(([k, v]) => (
                       <option key={k} value={k}>{v}</option>
@@ -212,13 +212,13 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Prioritaet</label>
+                  <label className="block text-xs font-semibold text-muted mb-1">Prioritaet</label>
                   <input
                     type="number"
                     min={0}
                     value={priority}
                     onChange={(e) => setPriority(Number(e.target.value))}
-                    className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-border px-3 py-2 text-sm"
                   />
                 </div>
               </div>
@@ -240,9 +240,9 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
           )}
 
           {rulesLoading ? (
-            <p className="text-sm text-gray-500 text-center py-8">Lade Regeln...</p>
+            <p className="text-sm text-muted text-center py-8">Lade Regeln...</p>
           ) : rules.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-muted">
               <Settings2 size={40} className="mx-auto mb-3 opacity-40" />
               <p className="text-sm font-medium">Keine Regeln vorhanden</p>
               <p className="text-xs mt-1">Erstellen Sie Regeln fuer automatische Konto-Vorschlaege.</p>
@@ -250,34 +250,34 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
           ) : (
             <div className="space-y-2">
               {rules.map((rule) => (
-                <div key={rule.id} className={`rounded-xl border p-3 ${rule.active ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'}`}>
+                <div key={rule.id} className={`rounded-xl border p-3 ${rule.active ? 'border-border bg-surface' : 'border-border-subtle bg-surface-muted opacity-60'}`}>
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 text-sm">
-                        <span className="font-mono text-xs text-gray-400">#{rule.priority}</span>
-                        <span className="font-semibold text-gray-900">{FIELD_LABELS[rule.field as RuleField]}</span>
-                        <span className="text-gray-500">{OPERATOR_LABELS[rule.operator as RuleOperator]}</span>
-                        <span className="font-mono text-blue-700 bg-blue-50 px-2 py-0.5 rounded text-xs">"{rule.value}"</span>
-                        <span className="text-xs text-gray-500">[{FLOW_LABELS[rule.flowType as RuleFlow]}]</span>
+                        <span className="font-mono text-xs text-muted">#{rule.priority}</span>
+                        <span className="font-semibold text-foreground">{FIELD_LABELS[rule.field as RuleField]}</span>
+                        <span className="text-muted">{OPERATOR_LABELS[rule.operator as RuleOperator]}</span>
+                        <span className="font-mono text-info bg-info-bg px-2 py-0.5 rounded text-xs">"{rule.value}"</span>
+                        <span className="text-xs text-muted">[{FLOW_LABELS[rule.flowType as RuleFlow]}]</span>
                       </div>
-                      <div className="text-xs text-gray-500 mt-1">-&gt; Konto {rule.targetAccountNumber}</div>
+                      <div className="text-xs text-muted mt-1">-&gt; Konto {rule.targetAccountNumber}</div>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => toggleActive(rule)}
-                        className={`px-2 py-1 rounded-lg text-xs font-medium ${rule.active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'}`}
+                        className={`px-2 py-1 rounded-lg text-xs font-medium ${rule.active ? 'bg-success-bg text-success' : 'bg-canvas text-muted'}`}
                       >
                         {rule.active ? 'Aktiv' : 'Inaktiv'}
                       </button>
                       <button
                         onClick={() => startEdit(rule)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors text-xs"
+                        className="p-1.5 rounded-lg text-muted hover:text-muted hover:bg-canvas transition-colors duration-150 ease-out text-xs"
                       >
                         Bearbeiten
                       </button>
                       <button
                         onClick={() => deleteRule.mutate(rule.id)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                        className="p-1.5 rounded-lg text-muted hover:text-error hover:bg-error-bg transition-colors duration-150 ease-out"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -289,7 +289,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
           )}
         </div>
 
-        <div className="border-t border-gray-200 p-6 flex justify-end">
+        <div className="border-t border-border p-6 flex justify-end">
           <Button size="sm" variant="secondary" onClick={onClose}>
             Schliessen
           </Button>

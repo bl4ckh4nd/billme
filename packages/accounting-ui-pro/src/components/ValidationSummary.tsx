@@ -7,7 +7,7 @@ interface ValidationSummaryProps {
 export default function ValidationSummary({ issues }: ValidationSummaryProps) {
   if (issues.length === 0) {
     return (
-      <div className="mb-4 border border-emerald-100 bg-emerald-50 rounded-xl p-4 text-sm font-medium text-emerald-800">
+      <div className="mb-4 border border-success-border bg-success-bg rounded-xl p-4 text-sm font-medium text-success">
         Keine Validierungsprobleme. Buchung ist prüfbar.
       </div>
     );
@@ -20,8 +20,8 @@ export default function ValidationSummary({ issues }: ValidationSummaryProps) {
   };
 
   return (
-    <div aria-live="polite" className="mb-4 border border-gray-200 rounded-xl overflow-hidden">
-      <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 text-sm font-bold text-gray-800">
+    <div aria-live="polite" className="mb-4 border border-border rounded-xl overflow-hidden">
+      <div className="px-4 py-3 bg-surface-muted border-b border-border text-sm font-bold text-foreground">
         Validierung ({issues.length})
       </div>
       <div className="p-4 space-y-3">
@@ -29,19 +29,19 @@ export default function ValidationSummary({ issues }: ValidationSummaryProps) {
           if (groups[severity].length === 0) return null;
           return (
             <div key={severity}>
-              <div className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-1">
+              <div className="text-xs font-bold uppercase tracking-wide text-muted mb-1">
                 {severity === 'error' ? 'Fehler' : severity === 'warning' ? 'Warnungen' : 'Hinweise'}
               </div>
               <ul className="space-y-1">
                 {groups[severity].map((issue) => (
-                  <li key={issue.id} className="text-sm text-gray-700 flex items-start gap-2">
+                  <li key={issue.id} className="text-sm text-muted flex items-start gap-2">
                     <span
                       className={`mt-1 h-2 w-2 rounded-full ${
                         severity === 'error'
-                          ? 'bg-red-500'
+                          ? 'bg-error-bg'
                           : severity === 'warning'
-                            ? 'bg-amber-500'
-                            : 'bg-gray-400'
+                            ? 'bg-warning-bg0'
+                            : 'bg-border'
                       }`}
                     />
                     <span>{issue.message}</span>
@@ -55,4 +55,3 @@ export default function ValidationSummary({ issues }: ValidationSummaryProps) {
     </div>
   );
 }
-

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
-import { ArrowLeft, Plus, Download, Link2, AlertCircle, History } from 'lucide-react';
+import { ArrowLeft, Plus, Download, Link2, AlertCircle, History, Wallet } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
 import { TransactionMatchingView } from './TransactionMatchingView';
 import { ImportHistoryModal } from './ImportHistoryModal';
@@ -135,19 +135,19 @@ export function AccountsView(): ReactElement {
   }
 
   return (
-    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
+    <div className="bg-surface rounded-xl p-8 min-h-full shadow-sm">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">
           <button
             onClick={() => navigate({ to: '/finance' })}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-2 hover:bg-canvas rounded-lg transition-colors duration-150 ease-out"
           >
             <ArrowLeft size={20} />
           </button>
           <div>
-            <h2 className="text-2xl font-black text-gray-900">Konten & Transaktionen</h2>
-            <p className="text-sm text-gray-500 mt-1">
+            <h2 className="text-2xl font-black text-foreground">Konten & Transaktionen</h2>
+            <p className="text-sm text-muted mt-1">
               Verwalten Sie Ihre Konten und ordnen Sie Transaktionen zu.
             </p>
           </div>
@@ -155,7 +155,7 @@ export function AccountsView(): ReactElement {
 
         <button
           onClick={() => setIsBankAccountModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-black text-accent hover:bg-gray-900 rounded-full font-bold text-sm transition-colors"
+          className="flex items-center gap-2 px-4 py-2 bg-foreground text-accent hover:bg-dark-1 rounded-full font-bold text-sm transition-colors duration-200 ease-out"
         >
           <Plus size={18} />
           Neues Konto
@@ -163,13 +163,13 @@ export function AccountsView(): ReactElement {
       </div>
 
       {/* Action Cards */}
-      <div className="mb-6 rounded-2xl border border-gray-200 bg-gray-50 p-4">
-        <label className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Import-Konto</label>
+      <div className="mb-6 rounded-xl border border-border bg-surface-muted p-4">
+        <label className="text-[11px] font-bold uppercase tracking-wide text-muted">Import-Konto</label>
         <div className="mt-2 flex items-center gap-3">
           <select
             value={selectedImportAccountId}
             onChange={(e) => setSelectedImportAccountId(e.target.value)}
-            className="flex-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium"
+            className="flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium"
           >
             <option value="">Konto auswählen</option>
             {accounts.map((account) => (
@@ -180,10 +180,10 @@ export function AccountsView(): ReactElement {
           </select>
           {selectedImportAccount && (
             <>
-              <div className="rounded-xl bg-white px-3 py-2 text-xs font-mono text-gray-600 border border-gray-200">
+              <div className="rounded-lg bg-surface px-3 py-2 text-xs tabular-nums text-muted border border-border">
                 Saldo: {new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(selectedImportAccount.balance)}
               </div>
-              <div className="rounded-xl bg-white px-3 py-2 text-xs font-mono text-gray-600 border border-gray-200">
+              <div className="rounded-lg bg-surface px-3 py-2 text-xs font-mono text-muted border border-border">
                 Standard SKR: {selectedImportAccount.defaultSkrAccountNumber || '-'}
               </div>
             </>
@@ -199,7 +199,7 @@ export function AccountsView(): ReactElement {
             setMatchingEntryTab('matching');
             setViewMode('matching');
           }}
-          className="text-left p-6 rounded-3xl border-2 border-info bg-info-bg hover:bg-info-bg/80 transition-all border-info relative overflow-hidden"
+          className="text-left p-6 rounded-xl border-2 border-info bg-info-bg hover:bg-info-bg/80 transition-colors duration-200 ease-out relative overflow-hidden"
         >
           {unmatchedCount > 0 && (
             <div className="absolute top-4 right-4">
@@ -208,11 +208,11 @@ export function AccountsView(): ReactElement {
               </div>
             </div>
           )}
-          <div className="w-12 h-12 rounded-2xl bg-info text-white flex items-center justify-center mb-4">
+          <div className="w-12 h-12 rounded-lg bg-info text-white flex items-center justify-center mb-4">
             <Link2 size={22} />
           </div>
-          <div className="text-lg font-black text-gray-900 mb-2">Transaktionen zuordnen</div>
-          <div className="text-sm text-gray-600">
+          <div className="text-lg font-black text-foreground mb-2">Transaktionen zuordnen</div>
+          <div className="text-sm text-muted">
             {unmatchedDescription}
           </div>
         </button>
@@ -223,20 +223,20 @@ export function AccountsView(): ReactElement {
             setMatchingEntryTab('eur');
             setViewMode('matching');
           }}
-          className="text-left p-6 rounded-3xl border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-all relative overflow-hidden"
+          className="text-left p-6 rounded-xl border border-border bg-surface-muted hover:bg-canvas transition-colors duration-200 ease-out relative overflow-hidden"
         >
           {unclassifiedEurCount > 0 && (
             <div className="absolute top-4 right-4">
-              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-amber-500 text-white text-xs font-bold">
+              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-warning text-white text-xs font-bold">
                 {unclassifiedEurCount}
               </div>
             </div>
           )}
-          <div className="w-12 h-12 rounded-2xl bg-black text-accent flex items-center justify-center mb-4">
+          <div className="w-12 h-12 rounded-lg bg-foreground text-accent flex items-center justify-center mb-4">
             <Link2 size={22} />
           </div>
-          <div className="text-lg font-black text-gray-900 mb-2">EÜR direkt klassifizieren</div>
-          <div className="text-sm text-gray-600">
+          <div className="text-lg font-black text-foreground mb-2">EÜR direkt klassifizieren</div>
+          <div className="text-sm text-muted">
             {unclassifiedEurCount > 0
               ? `${unclassifiedEurCount} Transaktionen für EÜR offen`
               : 'Alle Transaktionen sind EÜR-klassifiziert'}
@@ -246,13 +246,13 @@ export function AccountsView(): ReactElement {
         {/* CSV Import Card */}
         <button
           onClick={handleCsvImport}
-          className="text-left p-6 rounded-3xl border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-all"
+          className="text-left p-6 rounded-xl border border-border bg-surface-muted hover:bg-canvas transition-colors duration-200 ease-out"
         >
-          <div className="w-12 h-12 rounded-2xl bg-gray-700 text-white flex items-center justify-center mb-4">
+          <div className="w-12 h-12 rounded-lg bg-dark-3 text-white flex items-center justify-center mb-4">
             <Download size={22} />
           </div>
-          <div className="text-lg font-black text-gray-900 mb-2">CSV importieren</div>
-          <div className="text-sm text-gray-600">
+          <div className="text-lg font-black text-foreground mb-2">CSV importieren</div>
+          <div className="text-sm text-muted">
             Importieren Sie Transaktionen aus Ihrer Bank
           </div>
         </button>
@@ -260,13 +260,13 @@ export function AccountsView(): ReactElement {
         {/* Import History Card */}
         <button
           onClick={() => setShowImportHistory(true)}
-          className="text-left p-6 rounded-3xl border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-all"
+          className="text-left p-6 rounded-xl border border-border bg-surface-muted hover:bg-canvas transition-colors duration-200 ease-out"
         >
-          <div className="w-12 h-12 rounded-2xl bg-dark-1 text-white flex items-center justify-center mb-4">
+          <div className="w-12 h-12 rounded-lg bg-dark-1 text-white flex items-center justify-center mb-4">
             <History size={22} />
           </div>
-          <div className="text-lg font-black text-gray-900 mb-2">Import-Historie</div>
-          <div className="text-sm text-gray-600">
+          <div className="text-lg font-black text-foreground mb-2">Import-Historie</div>
+          <div className="text-sm text-muted">
             Vergangene Importe einsehen und rückgängig machen
           </div>
         </button>
@@ -274,19 +274,19 @@ export function AccountsView(): ReactElement {
         {/* Accounts Overview Card */}
         <button
           onClick={() => navigate({ to: '/finance' })}
-          className="text-left p-6 rounded-3xl border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-all"
+          className="text-left p-6 rounded-xl border border-border bg-surface-muted hover:bg-canvas transition-colors duration-200 ease-out"
         >
-          <div className="w-12 h-12 rounded-2xl bg-gray-700 text-white flex items-center justify-center mb-4">
+          <div className="w-12 h-12 rounded-lg bg-dark-3 text-white flex items-center justify-center mb-4">
             <Plus size={22} />
           </div>
-          <div className="text-lg font-black text-gray-900 mb-2">Konten verwalten</div>
-          <div className="text-sm text-gray-600">Erstellen und bearbeiten Sie Ihre Konten</div>
+          <div className="text-lg font-black text-foreground mb-2">Konten verwalten</div>
+          <div className="text-sm text-muted">Erstellen und bearbeiten Sie Ihre Konten</div>
         </button>
       </div>
 
       {/* CSV Import Error Banner */}
       {csvImportError && (
-        <div className="bg-error-bg border border-error/30 rounded-2xl p-4 flex items-start gap-3 mb-8">
+        <div className="bg-error-bg border border-error/30 rounded-xl p-4 flex items-start gap-3 mb-8">
           <AlertCircle size={20} className="text-error flex-shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-medium text-error">{csvImportError}</p>
@@ -296,13 +296,13 @@ export function AccountsView(): ReactElement {
 
       {/* Info Banner */}
       {unmatchedCount > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
-          <AlertCircle size={20} className="text-amber-600 flex-shrink-0 mt-0.5" />
+        <div className="bg-warning-bg border border-warning-border rounded-xl p-4 flex items-start gap-3">
+          <AlertCircle size={20} className="text-warning flex-shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-medium text-amber-900">
+            <p className="text-sm font-medium text-foreground">
               {unmatchedWarningText}
             </p>
-            <p className="text-sm text-amber-700 mt-1">
+            <p className="text-sm text-muted mt-1">
               Ordnen Sie Transaktionen Ihren Rechnungen zu, um den Zahlungsstatus automatisch zu aktualisieren.
             </p>
           </div>
@@ -311,19 +311,31 @@ export function AccountsView(): ReactElement {
 
       {/* Accounts List Placeholder */}
       <div className="mt-8">
-        <h3 className="text-lg font-bold text-gray-900 mb-4">Ihre Konten</h3>
+        <h3 className="text-lg font-bold text-foreground mb-4">Ihre Konten</h3>
         {accounts.length === 0 ? (
-          <div className="text-center py-12 text-gray-500">
-            <p className="text-sm">Noch keine Konten vorhanden. Legen Sie ein neues Konto an.</p>
+          <div className="text-center py-12 px-4 rounded-xl border border-dashed border-border bg-surface-muted text-muted">
+            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-surface text-foreground border border-border">
+              <Wallet size={20} />
+            </div>
+            <p className="text-sm font-bold text-foreground">Noch keine Konten vorhanden.</p>
+            <p className="mt-1 text-sm">Legen Sie ein neues Konto an, um CSV-Importe und Zahlungsabgleich zu nutzen.</p>
+            <button
+              type="button"
+              onClick={() => setIsBankAccountModalOpen(true)}
+              className="mt-4 inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-bold text-accent transition-colors duration-200 ease-out hover:bg-dark-1"
+            >
+              <Plus size={16} />
+              Neues Konto
+            </button>
           </div>
         ) : (
           <div className="space-y-3">
             {accounts.map((account) => (
-              <div key={account.id} className="rounded-2xl border border-gray-200 bg-gray-50 p-4 flex items-center justify-between">
+              <div key={account.id} className="rounded-xl border border-border bg-surface-muted p-4 flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-bold text-gray-900">{account.name}</p>
-                  <p className="text-xs font-mono text-gray-500">{account.iban || 'Keine IBAN'}</p>
-                  <p className="text-xs text-gray-600 mt-1">
+                  <p className="text-sm font-bold text-foreground">{account.name}</p>
+                  <p className="text-xs font-mono text-muted">{account.iban || 'Keine IBAN'}</p>
+                  <p className="text-xs text-muted mt-1">
                     Standard SKR ({activeChart}): {account.defaultSkrAccountNumber}
                   </p>
                 </div>
@@ -347,7 +359,7 @@ export function AccountsView(): ReactElement {
                         setMappingSaveAccountId(null);
                       }
                     }}
-                    className="px-3 py-1.5 rounded-lg text-xs font-mono bg-white border border-gray-200 disabled:opacity-50"
+                    className="px-3 py-1.5 rounded-lg text-xs font-mono bg-surface border border-border disabled:opacity-50"
                   >
                     {ledgerAccounts.length === 0 ? (
                       <option value={account.defaultSkrAccountNumber}>
@@ -360,11 +372,11 @@ export function AccountsView(): ReactElement {
                       </option>
                     ))}
                   </select>
-                  <p className="text-sm font-mono font-bold text-gray-800">
+                  <p className="text-sm tabular-nums font-bold text-foreground">
                     {new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(account.balance)}
                   </p>
                   <button
-                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white border border-gray-200 hover:bg-gray-100"
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-surface border border-border hover:bg-canvas transition-colors duration-150 ease-out"
                     onClick={() => {
                       setSelectedImportAccountId(account.id);
                     }}
@@ -372,7 +384,7 @@ export function AccountsView(): ReactElement {
                     Für Import
                   </button>
                   <button
-                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-error-bg text-error border border-error/30 hover:bg-error hover:text-white"
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-error-bg text-error border border-error/30 hover:bg-error hover:text-white transition-colors duration-150 ease-out"
                     onClick={async () => {
                       if (!confirm(`Konto "${account.name}" wirklich löschen?`)) return;
                       try {

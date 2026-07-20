@@ -1,4 +1,6 @@
 import { mountDesktopRendererApp } from '@billme/desktop-renderer';
+import App from './App';
+import './index.css';
 
 const ensureDebugOverlay = () => {
   const id = '__app_debug_overlay';
@@ -58,4 +60,4 @@ console.log('[renderer] boot', {
   userAgent: navigator.userAgent,
 });
 
-void mountDesktopRendererApp(rootElement);
+void mountDesktopRendererApp(rootElement, { AppComponent: App });

@@ -151,25 +151,25 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-6 py-3 border-b border-gray-100 shrink-0">
+      <div className="px-6 py-3 border-b border-border-subtle shrink-0">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gray-400 shrink-0">
-            <span className="w-6 h-6 rounded-md bg-accent-lime text-black flex items-center justify-center">
+          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted shrink-0">
+            <span className="w-6 h-6 rounded-md bg-accent-lime text-foreground flex items-center justify-center">
               <FileBarChart2 size={13} />
             </span>
             Auswertungen
           </div>
           <div className="flex-1 min-w-0">
-            <h1 className="text-sm font-black tracking-tight text-gray-900">SuSa, GuV und Bilanz-Preview</h1>
-            <p className="text-xs text-gray-400">
+            <h1 className="text-sm font-black tracking-tight text-foreground">SuSa, GuV und Bilanz-Preview</h1>
+            <p className="text-xs text-muted">
               Prototypische Reporting-UI mit Drilldown-Struktur, vorbereitet für spätere SQLite-/Ledger-Anbindung.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button className="px-3 h-8 rounded-full border border-gray-200 bg-white text-xs font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1.5 transition-colors">
+            <button className="px-3 h-8 rounded-full border border-border bg-surface text-xs font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1.5 transition-colors duration-150 ease-out">
               <Download size={13} /> Export (Mock)
             </button>
-            <button className="px-3 h-8 rounded-full border border-gray-200 bg-white text-xs font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1.5 transition-colors">
+            <button className="px-3 h-8 rounded-full border border-border bg-surface text-xs font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1.5 transition-colors duration-150 ease-out">
               <RefreshCw size={13} /> Snapshot (Mock)
             </button>
           </div>
@@ -180,17 +180,17 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
         <ReportToolbar filters={filters} onChange={setFilters} />
         <div className="flex items-center justify-between gap-3">
           <ReportTabSwitch activeTab={activeTab} onChange={setActiveTab} />
-          <div className="text-xs text-gray-500 hidden md:block">Aktive Ansicht: {activeReportLabel}</div>
+          <div className="text-xs text-muted hidden md:block">Aktive Ansicht: {activeReportLabel}</div>
         </div>
 
         <div className="flex flex-col xl:flex-row gap-4">
             <div className="flex-1 min-w-0 pr-1">
               {reportsLoading ? (
-                <div className="rounded-2xl border border-gray-200 bg-white p-8 text-sm text-gray-500">
+                <div className="rounded-xl border border-border bg-surface p-8 text-sm text-muted">
                   Lade Auswertungen…
                 </div>
               ) : reportsError ? (
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-8 text-sm text-red-700">
+                <div className="rounded-xl border border-error-border bg-error-bg p-8 text-sm text-error">
                   {reportsError}
                 </div>
               ) : activeTab === 'susa' ? (
@@ -202,7 +202,7 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
               )}
             </div>
 
-            <div className={`transition-all duration-200 ${drilldownSelection ? 'xl:w-[25rem] w-full' : 'xl:w-0 w-full'}`}>
+            <div className={`transition-colors duration-200 ${drilldownSelection ? 'xl:w-[25rem] w-full' : 'xl:w-0 w-full'}`}>
               {drilldownSelection ? (
                 <ReportDrilldownPanel
                   selection={drilldownSelection}
@@ -213,7 +213,7 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
                   onOpenReceipt={onOpenReceipt}
                 />
               ) : (
-                <div className="hidden xl:flex h-full items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-white/70 text-sm text-gray-400 px-6 text-center">
+                <div className="hidden xl:flex h-full items-center justify-center rounded-xl border border-dashed border-border bg-surface/70 text-sm text-muted px-6 text-center">
                   Konto- oder Reportzeile anklicken, um Drilldown zu sehen.
                 </div>
               )}

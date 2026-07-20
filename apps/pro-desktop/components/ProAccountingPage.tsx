@@ -393,7 +393,7 @@ export const ProAccountingPage: React.FC = () => {
 
   if (txQuery.isLoading || draftQuery.isLoading) {
     return (
-      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-gray-600">
+      <div className="bg-surface rounded-xl p-8 min-h-full shadow-sm text-sm text-muted">
         Lade Pro-Buchhaltungsdaten…
       </div>
     );
@@ -401,7 +401,7 @@ export const ProAccountingPage: React.FC = () => {
 
   if (txQuery.isError || draftQuery.isError) {
     return (
-      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-red-700">
+      <div className="bg-error-bg rounded-xl border border-error-border p-8 min-h-full shadow-sm text-sm text-error">
         Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error)}
       </div>
     );
@@ -409,15 +409,15 @@ export const ProAccountingPage: React.FC = () => {
 
   if ((ledgerStats?.total ?? 0) === 0) {
     return (
-      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
-        <h2 className="text-xl font-black text-gray-900">Pro Kontenrahmen fehlt</h2>
-        <p className="mt-2 text-sm text-gray-600">
+      <div className="bg-surface rounded-xl p-8 min-h-full shadow-sm">
+        <h2 className="text-xl font-black text-foreground">Pro Kontenrahmen fehlt</h2>
+        <p className="mt-2 text-sm text-muted">
           Bitte laden Sie zuerst den SKR03/04 Kontenrahmen für die Pro-Buchhaltung.
         </p>
         <button
           onClick={() => void importSkr.mutateAsync({ preferredSource: 'auto' })}
           disabled={importSkr.isPending}
-          className="mt-5 px-5 py-2.5 rounded-xl bg-black text-white text-sm font-semibold disabled:opacity-60"
+          className="mt-5 px-5 py-2.5 rounded-lg bg-foreground text-white hover:bg-dark-1 text-sm font-semibold transition-colors duration-200 ease-out disabled:opacity-60"
         >
           {importSkr.isPending ? 'Import läuft…' : 'SKR03/04 importieren'}
         </button>
@@ -426,11 +426,11 @@ export const ProAccountingPage: React.FC = () => {
   }
 
   return (
-    <div className="bg-white rounded-2xl px-6 pt-5 pb-0 h-full flex flex-col shadow-sm">
+    <div className="bg-surface rounded-xl px-6 pt-5 pb-0 h-full flex flex-col shadow-sm">
       <div className="mb-3 flex items-center justify-between shrink-0">
         <div>
-          <h2 className="text-xl font-black text-gray-900 leading-tight">Pro Buchhaltung</h2>
-          <p className="text-xs text-gray-500 mt-0.5">Doppelte Buchführung, Kontenrahmen und Berichte.</p>
+          <h2 className="text-xl font-black text-foreground leading-tight">Pro Buchhaltung</h2>
+          <p className="text-xs text-muted mt-0.5">Doppelte Buchführung, Kontenrahmen und Berichte.</p>
         </div>
         <Button size="sm" variant="secondary" onClick={() => setShowRulesModal(true)}>
           <Settings2 size={14} />
@@ -440,7 +440,7 @@ export const ProAccountingPage: React.FC = () => {
 
 
 
-      <div className="flex-1 min-h-0 rounded-t-2xl border border-b-0 border-gray-200 overflow-hidden">
+      <div className="flex-1 min-h-0 rounded-t-xl border border-b-0 border-border overflow-hidden">
         <ProAccountingWorkspace
           seed={seed}
           dataAdapter={dataAdapter}

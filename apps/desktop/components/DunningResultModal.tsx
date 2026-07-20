@@ -27,7 +27,7 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
 
   if (noInvoices) {
     IconComponent = AlertTriangle;
-    iconColor = 'text-gray-500';
+    iconColor = 'text-muted';
     statusMessage = 'Keine überfälligen Rechnungen';
   } else if (hasErrors && !hasSuccesses) {
     IconComponent = XCircle;
@@ -35,29 +35,29 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
     statusMessage = 'Mahnlauf fehlgeschlagen';
   } else if (hasErrors && hasSuccesses) {
     IconComponent = AlertTriangle;
-    iconColor = 'text-orange-500';
+    iconColor = 'text-warning';
     statusMessage = 'Mahnlauf teilweise erfolgreich';
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-2xl shadow-2xl w-[90%] max-w-3xl max-h-[85vh] flex flex-col">
+      <div className="bg-surface rounded-2xl shadow-2xl w-[90%] max-w-3xl max-h-[85vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+        <div className="flex items-center justify-between p-6 border-b border-border">
           <div className="flex items-center gap-3">
             <IconComponent size={28} className={iconColor} />
             <div>
-              <h2 className="text-xl font-semibold text-gray-900">{statusMessage}</h2>
-              <p className="text-sm text-gray-500 mt-1">
+              <h2 className="text-xl font-semibold text-foreground">{statusMessage}</h2>
+              <p className="text-sm text-muted mt-1">
                 Ergebnis des manuellen Mahnlaufs
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-2 hover:bg-canvas rounded-lg transition-colors ease-out"
           >
-            <X size={20} className="text-gray-500" />
+            <X size={20} className="text-muted" />
           </button>
         </div>
 
@@ -66,12 +66,12 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
           {/* Summary Cards */}
           <div className="grid grid-cols-3 gap-4">
             {/* Processed Invoices */}
-            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+            <div className="bg-surface-muted rounded-lg p-4 border border-border">
               <div className="flex items-center gap-2 mb-2">
-                <FileText size={20} className="text-gray-600" />
-                <span className="text-sm font-medium text-gray-600">Geprüfte Rechnungen</span>
+                <FileText size={20} className="text-muted" />
+                <span className="text-sm font-medium text-muted">Geprüfte Rechnungen</span>
               </div>
-              <p className="text-3xl font-bold text-gray-900">{result.processedInvoices}</p>
+              <p className="text-3xl tabular-nums font-bold text-foreground">{result.processedInvoices}</p>
             </div>
 
             {/* Emails Sent */}
@@ -80,7 +80,7 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
                 <Mail size={20} className="text-success" />
                 <span className="text-sm font-medium text-success">E-Mails versendet</span>
               </div>
-              <p className="text-3xl font-bold text-success">{result.emailsSent}</p>
+              <p className="text-3xl tabular-nums font-bold text-success">{result.emailsSent}</p>
             </div>
 
             {/* Fees Applied */}
@@ -89,7 +89,7 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
                 <Euro size={20} className="text-info" />
                 <span className="text-sm font-medium text-info">Mahngebühren</span>
               </div>
-              <p className="text-3xl font-bold text-info">{result.feesApplied}</p>
+              <p className="text-3xl tabular-nums font-bold text-info">{result.feesApplied}</p>
             </div>
           </div>
 
@@ -118,14 +118,14 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
 
           {/* No Invoices Message */}
           {noInvoices && (
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+            <div className="bg-surface-muted border border-border rounded-lg p-4">
               <div className="flex items-start gap-3">
-                <AlertTriangle size={20} className="text-gray-600 mt-0.5 flex-shrink-0" />
+                <AlertTriangle size={20} className="text-muted mt-0.5 flex-shrink-0" />
                 <div className="flex-1">
-                  <p className="text-sm font-medium text-gray-900">
+                  <p className="text-sm font-medium text-foreground">
                     Keine überfälligen Rechnungen gefunden.
                   </p>
-                  <p className="text-sm text-gray-600 mt-1">
+                  <p className="text-sm text-muted mt-1">
                     Es gibt aktuell keine Rechnungen, für die eine Mahnung fällig wäre.
                   </p>
                 </div>
@@ -146,7 +146,7 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
                   </p>
                   <div className="space-y-2 max-h-48 overflow-y-auto">
                     {result.errors.slice(0, 50).map((err, idx) => (
-                      <div key={idx} className="bg-white rounded border border-error/30 p-3">
+                      <div key={idx} className="bg-surface rounded border border-error/30 p-3">
                         <p className="text-sm font-medium text-error">
                           Rechnung: {err.invoiceNumber}
                         </p>
@@ -181,10 +181,10 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200">
+        <div className="flex items-center justify-end gap-3 p-6 border-t border-border">
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors"
+            className="px-4 py-2 bg-foreground text-background rounded-lg hover:bg-dark-1 transition-colors ease-out"
           >
             Schließen
           </button>

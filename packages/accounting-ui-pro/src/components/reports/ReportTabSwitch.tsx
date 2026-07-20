@@ -17,7 +17,7 @@ export default function ReportTabSwitch({ activeTab, onChange }: ReportTabSwitch
           key={tab.id}
           onClick={() => onChange(tab.id)}
           className={`h-7 px-3 rounded-full text-xs font-bold border ${
-            activeTab === tab.id ? 'bg-black text-white border-black' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+            activeTab === tab.id ? 'bg-foreground text-white border-foreground' : 'bg-surface text-muted border-border hover:bg-surface-muted'
           }`}
         >
           {tab.label}

@@ -33,18 +33,18 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ onClose }) => {
       className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden">
+      <div className="w-full max-w-md bg-surface rounded-3xl shadow-2xl overflow-hidden">
         <div className="p-6">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-gray-100 rounded-xl flex items-center justify-center">
-                <Keyboard size={16} className="text-gray-700" />
+              <div className="w-9 h-9 bg-canvas rounded-lg flex items-center justify-center">
+                <Keyboard size={16} className="text-foreground" />
               </div>
-              <h2 className="text-lg font-black text-gray-900">Tastenkürzel</h2>
+              <h2 className="text-lg font-black text-foreground">Tastenkürzel</h2>
             </div>
             <button
               onClick={onClose}
-              className="w-8 h-8 rounded-xl bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 transition-colors"
+              className="w-8 h-8 rounded-lg bg-canvas hover:bg-border flex items-center justify-center text-muted transition-colors ease-out"
             >
               <X size={14} />
             </button>
@@ -53,14 +53,14 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ onClose }) => {
             {shortcuts.map(({ keys, description }) => (
               <div
                 key={keys.join('+')}
-                className="flex items-center justify-between py-2.5 px-3 rounded-xl hover:bg-gray-50 transition-colors"
+                className="flex items-center justify-between py-2.5 px-3 rounded-xl hover:bg-surface-muted transition-colors ease-out"
               >
-                <span className="text-sm text-gray-700">{description}</span>
+                <span className="text-sm text-foreground">{description}</span>
                 <div className="flex items-center gap-1 shrink-0 ml-4">
                   {keys.map((k, i) => (
                     <React.Fragment key={k}>
-                      {i > 0 && <span className="text-gray-300 text-xs">+</span>}
-                      <kbd className="inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-bold text-gray-600 bg-gray-100 border border-gray-200 min-w-[28px] justify-center">
+                      {i > 0 && <span className="text-border text-xs">+</span>}
+                      <kbd className="inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-bold text-muted bg-canvas border border-border min-w-[28px] justify-center">
                         {k}
                       </kbd>
                     </React.Fragment>

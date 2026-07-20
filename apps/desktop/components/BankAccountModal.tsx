@@ -54,38 +54,38 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-3xl shadow-2xl w-[500px] max-h-[90vh] flex flex-col">
+      <div className="bg-surface rounded-3xl shadow-2xl w-[500px] max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+        <div className="flex items-center justify-between p-6 border-b border-border">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gray-900 text-accent flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-foreground text-accent flex items-center justify-center">
               <Building2 size={20} />
             </div>
             <div>
-              <h2 className="text-xl font-black text-gray-900">Neues Bankkonto</h2>
-              <p className="text-sm text-gray-500 mt-0.5">
+              <h2 className="text-xl font-black text-foreground">Neues Bankkonto</h2>
+              <p className="text-sm text-muted mt-0.5">
                 Fügen Sie ein neues Konto hinzu
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-2 hover:bg-canvas rounded-lg transition-colors ease-out"
           >
-            <X size={20} className="text-gray-500" />
+            <X size={20} className="text-muted" />
           </button>
         </div>
 
         {/* Form */}
         <div className="p-6 space-y-4 overflow-y-auto">
           {error && (
-            <div className="bg-error-bg border border-error/30 rounded-xl p-3 text-sm text-error">
+            <div className="bg-error-bg border border-error/30 rounded-lg p-3 text-sm text-error">
               {error}
             </div>
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-foreground mb-2">
               Kontoname *
             </label>
             <input
@@ -96,12 +96,12 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
                 setError(null);
               }}
               placeholder="z.B. Geschäftskonto"
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+              className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-foreground mb-2">
               IBAN (optional)
             </label>
             <input
@@ -109,12 +109,12 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
               value={formData.iban}
               onChange={(e) => setFormData({ ...formData, iban: e.target.value })}
               placeholder="DE89 3704 0044 0532 0130 00"
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-mono focus:ring-2 focus:ring-accent outline-none"
+              className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-mono focus:ring-2 focus:ring-accent outline-none"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-foreground mb-2">
               Anfangssaldo
             </label>
             <input
@@ -122,23 +122,23 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
               step="0.01"
               value={formData.balance}
               onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+              className="w-full tabular-nums bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
             />
           </div>
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-gray-200 flex justify-end gap-3">
+        <div className="p-6 border-t border-border flex justify-end gap-3">
           <button
             onClick={onClose}
-            className="px-5 py-2.5 rounded-xl font-bold text-gray-600 hover:bg-gray-100 transition-colors"
+            className="px-5 py-2.5 rounded-xl font-bold text-muted hover:bg-canvas transition-colors ease-out"
           >
             Abbrechen
           </button>
           <button
             onClick={handleSave}
             disabled={!formData.name.trim() || isSaving}
-            className="px-5 py-2.5 rounded-xl font-bold bg-accent text-accent-foreground hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="px-5 py-2.5 rounded-xl font-bold bg-accent text-accent-foreground hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors ease-out"
           >
             {isSaving ? 'Speichern...' : 'Speichern'}
           </button>

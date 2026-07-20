@@ -18,15 +18,15 @@ export const FinanceHubView: React.FC = () => {
   return (
     <div className="flex flex-col gap-6 h-full">
       {/* Sub-nav */}
-      <div className="bg-white rounded-2xl p-4 shadow-sm flex items-center gap-2">
+      <div className="bg-surface rounded-xl p-4 shadow-sm flex items-center gap-2">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition-colors ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition-colors duration-150 ease-out ${
               activeTab === tab.id
-                ? 'bg-black text-white'
-                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                ? 'bg-foreground text-white'
+                : 'bg-canvas text-muted hover:bg-surface-muted'
             }`}
           >
             {tab.icon}

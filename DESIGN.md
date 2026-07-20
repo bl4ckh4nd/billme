@@ -12,24 +12,24 @@ colors:
   accent-hover: "#cbe83e"
   accent-foreground: "#000000"
   accent-lime: "#ccff00"
-  dark-base: "#000000"
-  dark-1: "#111111"
-  dark-2: "#1a1a1a"
-  dark-3: "#1c1c1c"
-  dark-4: "#2a2a2a"
-  dark-5: "#444444"
-  dark-muted: "#666666"
-  dark-border: "#222222"
-  dark-border-subtle: "#333333"
-  editor-viewport: "#555555"
+  dark-base: "#0b0d10"
+  dark-1: "#121417"
+  dark-2: "#181b1f"
+  dark-3: "#1f2329"
+  dark-4: "#272c33"
+  dark-5: "#333a42"
+  dark-muted: "#8a929c"
+  dark-border: "#23282e"
+  dark-border-subtle: "#2e343b"
+  editor-viewport: "#16191d"
   background: "#ffffff"
   foreground: "#0b0b0b"
   surface: "#ffffff"
-  surface-muted: "#f9fafb"
+  surface-muted: "#f1f3f5"
   canvas: "#f3f4f6"
   muted: "#6b7280"
-  border: "#e5e7eb"
-  border-subtle: "#f3f4f6"
+  border: "#e4e7ec"
+  border-subtle: "#f1f3f5"
   success: "#22c55e"
   success-bg: "#f0fdf4"
   success-border: "#bbf7d0"
@@ -46,7 +46,7 @@ colors:
   status-paid-text: "#000000"
   status-open: "#ffffff"
   status-open-text: "#000000"
-  status-open-border: "#e5e7eb"
+  status-open-border: "#e4e7ec"
   status-overdue: "#fef2f2"
   status-overdue-text: "#dc2626"
   status-draft: "#f3f4f6"
@@ -124,16 +124,23 @@ not raw hex.
 
 ### Dark UI (editor)
 
-`dark-base` `#000000` · `dark-1` `#111111` · `dark-2` `#1a1a1a` ·
-`dark-3` `#1c1c1c` · `dark-4` `#2a2a2a` · `dark-5` `#444444` ·
-`dark-muted` `#666666` (secondary text) · `dark-border` `#222222` ·
-`dark-border-subtle` `#333333` · `editor-viewport` `#555555` (canvas backdrop).
+An evenly-stepped, slightly cool ramp — surfaces get **lighter as they elevate**
+(~5–6% delta per step); depth comes from surface color, **not shadow**.
+
+`dark-base` `#0b0d10` · `dark-1` `#121417` · `dark-2` `#181b1f` ·
+`dark-3` `#1f2329` · `dark-4` `#272c33` · `dark-5` `#333a42` ·
+`dark-muted` `#8a929c` (cool secondary text) · `dark-border` `#23282e` ·
+`dark-border-subtle` `#2e343b` · `editor-viewport` `#16191d` (dark, cool canvas
+backdrop so the white A4 page reads as the hero).
 
 ### Light UI
 
+Light `canvas` with **white lifted cards**; `surface-muted` is kept visibly
+distinct from `surface` so inset tiles / input fills read on white.
+
 `background` `#ffffff` · `foreground` `#0b0b0b` · `surface` `#ffffff` ·
-`surface-muted` `#f9fafb` · `canvas` `#f3f4f6` (app/editor page background) ·
-`muted` `#6b7280` · `border` `#e5e7eb` · `border-subtle` `#f3f4f6`.
+`surface-muted` `#f1f3f5` · `canvas` `#f3f4f6` (app/editor page background) ·
+`muted` `#6b7280` · `border` `#e4e7ec` · `border-subtle` `#f1f3f5`.
 
 ### Semantic
 
@@ -160,13 +167,22 @@ is Tailwind's `text-xs` → `text-base` (0.75–1rem); emphasis is carried by we
 rather than large headings. Body copy is `text-sm`/`text-foreground`; secondary
 copy is `text-muted`.
 
+**Numbers:** all monetary amounts, quantities, totals, and KPI figures use
+`tabular-nums` (Tailwind's built-in `font-variant-numeric`) so digits align by
+place value and don't jitter as values update. The `Input` primitive applies it
+automatically to `type="number"`/numeric inputs; apply `tabular-nums` directly on
+amount cells, totals, and metric values.
+
 ## Layout
 
 Content sits on rounded "cards" over the `canvas` (`#f3f4f6`) background. The
-dominant container shape is a `rounded-2xl` (2.5rem) card with `p-6`/`p-8`
-padding and `shadow-sm`. Inner tiles use `rounded-xl` (2rem). The editor uses a
-three-pane shell (left tools, center viewport, right properties) on dark
-surfaces with `no-print` chrome.
+dominant **dense data card** is `rounded-xl` (2rem) with `p-6`/`p-8` padding and
+`shadow-sm`; inset tiles step down to `rounded-lg`/`rounded-md`. Reserve the
+largest radii (`rounded-2xl`/`rounded-3xl`) for **hero / onboarding / modal**
+panels, not everyday data cards — large radii on dense surfaces read bubbly and
+break concentric nesting. When nesting rounded boxes, inner radius ≈ outer −
+padding. The editor uses a three-pane shell (left tools, center viewport, right
+properties) on dark surfaces with `no-print` chrome.
 
 ## Elevation & Depth
 
@@ -198,11 +214,29 @@ re-implementing chrome.
 - **Button** (`Button.tsx`) — variants `primary` (accent), `secondary`
   (surface + border), `danger` (error), `ghost`, `dark` (near-black); sizes
   `sm`/`md`/`lg` mapping to `rounded-lg`/`rounded-xl`/`rounded-2xl`. Always
-  `font-bold` with a 200ms transition.
-- **Card** (`Card.tsx`) — `radius` (`md`→`3xl`), `withBorder`, `withShadow`.
-- **Input** (`Input.tsx`) — `bg-surface-muted`, `border-border`, `rounded-xl`,
-  `focus:ring-accent`; error state flips to `error` tokens.
+  `font-bold` with a 200ms ease-out transition. States: hover, `active:` press
+  (slight darken + `scale-[0.97]`), `disabled`, and `loading` (spinner +
+  `aria-busy`, blocks interaction). Focus-visible accent ring.
+- **Card** (`Card.tsx`) — `radius` (literal 1:1 `md`→`3xl`, default `xl`),
+  `withBorder`, `withShadow`.
+- **Input** (`Input.tsx`) — `bg-surface-muted`, `border-border`, `rounded-lg`,
+  label above the field, `focus:ring-accent`; numeric inputs get `tabular-nums`;
+  error state flips to `error` tokens (`aria-invalid`); disabled dims.
 - **Badge** (`Badge.tsx`) — invoice status pill driven by the `status-*` tokens.
+
+## Mobile extension
+
+The native app reuses the semantic Billme vocabulary while adapting density and
+interaction to touch. Its shell uses `mobileMint` (`#D5EBD2`), cards use
+`mobileSurface` (`#FDFDFD`), decisive actions use `mobileInk` (`#141413`), and
+at most one focal surface per screen uses `mobileAccent` (`#FCFE81`). These
+tokens are mirrored in `packages/ui/styles.css` and
+`packages/ui/src/utils/colors.ts`; React Native consumes the exported constants.
+
+Mobile surfaces use 20–24 px page padding, 16–28 px nested radii, 44 px minimum
+targets, tabular money, and 120/200/320 ms motion. Do not reproduce desktop
+tables at phone width: use an action cockpit, progressive document creation,
+review cards, and explicit confirmation for permanent accounting actions.
 
 ## Do's and Don'ts
 

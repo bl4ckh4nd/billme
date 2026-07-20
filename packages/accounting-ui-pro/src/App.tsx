@@ -86,8 +86,8 @@ export default function App({ seed, dataAdapter, onPersistEntry }: ProAccounting
   };
 
   return (
-    <div className="flex flex-col h-full w-full text-gray-900">
-      <div className="flex items-center gap-1 px-6 pt-2 shrink-0 border-b border-gray-100">
+    <div className="flex flex-col h-full w-full text-foreground">
+      <div className="flex items-center gap-1 px-6 pt-2 shrink-0 border-b border-border-subtle">
         <nav className="flex items-center gap-0.5">
           {(
             [
@@ -101,10 +101,10 @@ export default function App({ seed, dataAdapter, onPersistEntry }: ProAccounting
             <button
               key={view}
               onClick={() => setCurrentView(view)}
-              className={`px-4 py-2 text-sm font-bold transition-colors rounded-t-lg relative ${
+              className={`px-4 py-2 text-sm font-bold transition-colors duration-150 ease-out rounded-t-lg relative ${
                 currentView === view
-                  ? 'text-gray-900 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-black'
-                  : 'text-gray-500 hover:text-gray-800'
+                  ? 'text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-foreground'
+                  : 'text-muted hover:text-foreground'
               }`}
             >
               {label}
@@ -116,7 +116,7 @@ export default function App({ seed, dataAdapter, onPersistEntry }: ProAccounting
             aria-label="Demo Rolle"
             value={role}
             onChange={(e) => setRole(e.target.value as UserRole)}
-            className="px-3 py-1.5 rounded-xl bg-white border border-gray-200 text-sm font-medium text-gray-700"
+            className="px-3 py-1.5 rounded-lg bg-surface border border-border text-sm font-medium text-muted"
           >
             <option value="bookkeeper">Bookkeeper</option>
             <option value="reviewer">Reviewer</option>

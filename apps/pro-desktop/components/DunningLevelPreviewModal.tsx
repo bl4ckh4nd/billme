@@ -31,78 +31,78 @@ export const DunningLevelPreviewModal = ({
     .replace(/%C/g, 'Mustermann GmbH');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-[95%] max-w-4xl max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/60 backdrop-blur-sm">
+      <div className="bg-surface rounded-xl shadow-2xl w-[95%] max-w-4xl max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-gray-50">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface-muted">
           <div>
-            <h2 className="text-lg font-bold text-gray-900">
+            <h2 className="text-lg font-bold text-foreground">
               E-Mail Vorschau – Mahnstufe {levelNumber}
             </h2>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-muted mt-0.5">
               Beispielhafte Darstellung im E-Mail-Client
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+            className="p-2 hover:bg-canvas rounded-lg transition-colors duration-150 ease-out"
           >
-            <X size={20} className="text-gray-600" />
+            <X size={20} className="text-muted" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-8 bg-gray-100">
+        <div className="flex-1 overflow-y-auto p-8 bg-canvas">
           {/* Email Client Window */}
-          <div className="bg-white rounded-lg shadow-xl border border-gray-300 overflow-hidden max-w-3xl mx-auto">
+          <div className="bg-surface rounded-lg shadow-xl border border-border overflow-hidden max-w-3xl mx-auto">
             {/* Email Client Header Bar */}
-            <div className="bg-gradient-to-b from-gray-50 to-white border-b border-gray-200 px-6 py-3">
+            <div className="bg-gradient-to-b from-surface-muted to-surface border-b border-border px-6 py-3">
               <div className="flex items-center gap-2 mb-3">
                 <div className="w-3 h-3 rounded-full bg-error"></div>
                 <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
                 <div className="w-3 h-3 rounded-full bg-success"></div>
               </div>
-              <div className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-1">Betreff</div>
-              <div className="text-base font-semibold text-gray-900">{previewSubject || '(Kein Betreff)'}</div>
+              <div className="text-xs text-muted uppercase tracking-wider font-semibold mb-1">Betreff</div>
+              <div className="text-base font-semibold text-foreground">{previewSubject || '(Kein Betreff)'}</div>
             </div>
 
             {/* Email Metadata */}
-            <div className="px-6 py-4 bg-white border-b border-gray-100">
+            <div className="px-6 py-4 bg-surface border-b border-border-subtle">
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-bold text-sm">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-info to-info/80 flex items-center justify-center text-white font-bold text-sm">
                     IF
                   </div>
                   <div>
-                    <div className="font-semibold text-gray-900 text-sm">Ihre Firma</div>
-                    <div className="text-xs text-gray-500">info@example.com</div>
+                    <div className="font-semibold text-foreground text-sm">Ihre Firma</div>
+                    <div className="text-xs text-muted">info@example.com</div>
                   </div>
                 </div>
-                <div className="text-xs text-gray-400">
+                <div className="text-xs text-muted">
                   {new Date().toLocaleDateString('de-DE', { day: '2-digit', month: 'short', year: 'numeric' })}
                 </div>
               </div>
-              <div className="text-xs text-gray-600">
-                <span className="font-medium text-gray-500">An: </span>
+              <div className="text-xs text-muted">
+                <span className="font-medium text-muted">An: </span>
                 Mustermann GmbH &lt;kunde@mustermann.de&gt;
               </div>
             </div>
 
             {/* Email Body */}
-            <div className="px-6 py-8 bg-white" style={{ fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
+            <div className="px-6 py-8 bg-surface" style={{ fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
               <div className="space-y-4">
                 {previewText.split('\n').map((paragraph, idx) => (
-                  <p key={idx} className="text-gray-800 text-[15px] leading-relaxed">
+                  <p key={idx} className="text-foreground text-[15px] leading-relaxed">
                     {paragraph || '\u00A0'}
                   </p>
                 ))}
               </div>
 
               {/* Signature */}
-              <div className="mt-8 pt-6 border-t border-gray-200">
-                <p className="text-gray-700 text-sm">Mit freundlichen Grüßen</p>
-                <p className="text-gray-900 font-semibold text-sm mt-2">Ihre Firma</p>
-                <div className="mt-3 text-xs text-gray-500 space-y-0.5">
+              <div className="mt-8 pt-6 border-t border-border">
+                <p className="text-muted text-sm">Mit freundlichen Grüßen</p>
+                <p className="text-foreground font-semibold text-sm mt-2">Ihre Firma</p>
+                <div className="mt-3 text-xs text-muted space-y-0.5">
                   <p>Musterstraße 123</p>
                   <p>12345 Musterstadt</p>
                   <p className="mt-2">
@@ -113,8 +113,8 @@ export const DunningLevelPreviewModal = ({
             </div>
 
             {/* Email Footer */}
-            <div className="px-6 py-3 bg-gray-50 border-t border-gray-200">
-              <p className="text-[10px] text-gray-400 leading-tight">
+            <div className="px-6 py-3 bg-surface-muted border-t border-border">
+              <p className="text-[10px] text-muted leading-tight">
                 Diese E-Mail wurde automatisch generiert. Bitte antworten Sie nicht auf diese Nachricht.
               </p>
             </div>
@@ -145,10 +145,10 @@ export const DunningLevelPreviewModal = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50">
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border bg-surface-muted">
           <button
             onClick={onClose}
-            className="px-6 py-2.5 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors font-semibold text-sm shadow-sm"
+            className="px-6 py-2.5 bg-foreground text-white rounded-lg hover:bg-dark-1 transition-colors duration-150 ease-out font-semibold text-sm shadow-sm"
           >
             Schließen
           </button>

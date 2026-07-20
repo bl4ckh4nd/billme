@@ -22,11 +22,15 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         <input
           id={inputId}
           ref={ref}
+          aria-invalid={error ? true : undefined}
           className={cn(
-            'bg-surface-muted border border-border rounded-xl px-4 py-3 text-sm',
+            'bg-surface-muted border border-border rounded-lg px-4 py-3 text-sm',
             'outline-none transition-all',
             'focus:ring-2 focus:ring-accent focus:border-accent',
+            // Numeric inputs align by place value and don't jitter while typing.
+            (props.type === 'number' || props.inputMode === 'numeric' || props.inputMode === 'decimal') && 'tabular-nums',
             error && 'border-error focus:ring-error',
+            'disabled:opacity-50 disabled:cursor-not-allowed',
             fullWidth && 'w-full',
             className
           )}

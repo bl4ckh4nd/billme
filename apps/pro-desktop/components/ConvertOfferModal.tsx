@@ -57,18 +57,18 @@ export const ConvertOfferModal: React.FC<ConvertOfferModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
-      <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl flex flex-col">
+    <div className="fixed inset-0 bg-foreground/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+      <div className="bg-surface rounded-xl max-w-lg w-full shadow-2xl flex flex-col">
         {/* Header */}
-        <div className="p-6 border-b border-gray-100 bg-gray-50 rounded-t-3xl flex items-start justify-between gap-4">
+        <div className="p-6 border-b border-border-subtle bg-surface-muted rounded-t-3xl flex items-start justify-between gap-4">
           <div>
             <h3 className="text-xl font-black">Angebot in Rechnung umwandeln</h3>
-            <p className="text-sm text-gray-500 mt-0.5">{offer.number} · {offer.client}</p>
+            <p className="text-sm text-muted mt-0.5">{offer.number} · {offer.client}</p>
           </div>
           <button
             onClick={onClose}
             disabled={isConverting}
-            className="text-gray-400 hover:text-gray-600 transition-colors mt-0.5 flex-shrink-0"
+            className="text-muted hover:text-muted transition-colors duration-150 ease-out mt-0.5 flex-shrink-0"
             aria-label="Schließen"
           >
             <X size={20} />
@@ -78,36 +78,36 @@ export const ConvertOfferModal: React.FC<ConvertOfferModalProps> = ({
         {/* Body */}
         <div className="p-6 space-y-5">
           {/* Summary card */}
-          <div className="bg-gray-50 rounded-2xl p-4 grid grid-cols-2 gap-2 text-sm">
-            <span className="text-gray-500">Betrag</span>
-            <span className="font-bold font-mono text-right">{formatCurrency(offer.amount)}</span>
-            <span className="text-gray-500">Positionen</span>
+          <div className="bg-surface-muted rounded-xl p-4 grid grid-cols-2 gap-2 text-sm">
+            <span className="text-muted">Betrag</span>
+            <span className="font-bold tabular-nums text-right">{formatCurrency(offer.amount)}</span>
+            <span className="text-muted">Positionen</span>
             <span className="font-bold text-right">{offer.items?.length ?? 0} Artikel</span>
           </div>
 
           {/* Invoice date */}
           <div className="space-y-1.5">
-            <label className="block text-sm font-semibold text-gray-700">Rechnungsdatum</label>
+            <label className="block text-sm font-semibold text-muted">Rechnungsdatum</label>
             <DatePicker value={invoiceDate} onChange={(v) => setInvoiceDate(v || today)} />
           </div>
 
           {/* Due date */}
           <div className="space-y-1.5">
-            <label className="block text-sm font-semibold text-gray-700">Fälligkeitsdatum</label>
+            <label className="block text-sm font-semibold text-muted">Fälligkeitsdatum</label>
             <DatePicker value={dueDate} onChange={(v) => setDueDate(v || defaultDueDate)} />
           </div>
 
           {error && (
-            <p className="text-sm text-red-600 bg-red-50 rounded-xl p-3">{error}</p>
+            <p className="text-sm text-error bg-error-bg rounded-xl p-3">{error}</p>
           )}
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-gray-100 bg-gray-50 rounded-b-3xl flex justify-end gap-3">
+        <div className="p-6 border-t border-border-subtle bg-surface-muted rounded-b-3xl flex justify-end gap-3">
           <button
             onClick={onClose}
             disabled={isConverting}
-            className="px-4 py-2 text-sm font-semibold text-gray-600 hover:text-gray-900 transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm font-semibold text-muted hover:text-foreground transition-colors duration-150 ease-out disabled:opacity-50"
           >
             Abbrechen
           </button>

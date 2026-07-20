@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @source "./src/**/*.{ts,tsx}";
+@source "../desktop-designer/src/**/*.{ts,tsx}";
 @source "../../apps/desktop/**/*.{ts,tsx,html}";
 @source "../../apps/pro-desktop/**/*.{ts,tsx,html}";
 @source "../../apps/web/**/*.{ts,tsx,html}";
@@ -14,29 +15,39 @@
   /* Accounting module accent (distinct from brand accent) */
   --color-accent-lime: #ccff00;
 
-  /* Dark UI (Editor) */
-  --color-dark-base: #000000;
-  --color-dark-1: #111111;
-  --color-dark-2: #1a1a1a;
-  --color-dark-3: #1c1c1c;
-  --color-dark-4: #2a2a2a;
-  --color-dark-5: #444444;
-  --color-dark-muted: #666666;
-  --color-dark-border: #222222;
-  --color-dark-border-subtle: #333333;
+  /* Dark UI (Editor) — evenly-stepped, slightly cool ramp; surfaces get
+     lighter as they elevate (~5-6% delta per step), depth via color not shadow. */
+  --color-dark-base: #0b0d10;
+  --color-dark-1: #121417;
+  --color-dark-2: #181b1f;
+  --color-dark-3: #1f2329;
+  --color-dark-4: #272c33;
+  --color-dark-5: #333a42;
+  --color-dark-muted: #8a929c;
+  --color-dark-border: #23282e;
+  --color-dark-border-subtle: #2e343b;
 
-  /* Editor canvas backdrop */
-  --color-editor-viewport: #555555;
+  /* Editor canvas backdrop — dark & cool so the white A4 page reads as the hero */
+  --color-editor-viewport: #16191d;
 
-  /* Light UI */
+  /* Light UI — light canvas + white lifted cards; layers kept distinct */
   --color-background: #ffffff;
   --color-foreground: #0b0b0b;
   --color-surface: #ffffff;
-  --color-surface-muted: #f9fafb;
+  --color-surface-muted: #f1f3f5;
   --color-canvas: #f3f4f6;
+  --color-mobile-mint: #d5ebd2;
+  --color-mobile-mint-cool: #daebe2;
+  --color-mobile-canvas: #90c3b6;
+  --color-mobile-ink-secondary: #393932;
+  --color-mobile-positive: #3f813d;
+  --color-mobile-positive-bg: #eef7ec;
+  --color-mobile-negative: #975050;
+  --color-mobile-negative-bg: #faeeee;
+  --color-mobile-shadow: #234e43;
   --color-muted: #6b7280;
-  --color-border: #e5e7eb;
-  --color-border-subtle: #f3f4f6;
+  --color-border: #e4e7ec;
+  --color-border-subtle: #f1f3f5;
 
   /* Onboarding surfaces */
   --color-onboarding-canvas: #f4f4ef;
@@ -66,7 +77,7 @@
 
   --color-status-open: #ffffff;
   --color-status-open-text: #000000;
-  --color-status-open-border: #e5e7eb;
+  --color-status-open-border: #e4e7ec;
 
   --color-status-overdue: #fef2f2;
   --color-status-overdue-text: #dc2626;
@@ -92,5 +103,12 @@
     background: var(--color-background);
     color: var(--color-foreground);
     font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  }
+
+  /* Accounting app: align figures by place value in all data tables.
+     tabular-nums only equalizes digit advance widths, so non-numeric
+     columns are unaffected. Per-spot amounts (KPIs, cards) add `tabular-nums`. */
+  table {
+    font-variant-numeric: tabular-nums;
   }
 }

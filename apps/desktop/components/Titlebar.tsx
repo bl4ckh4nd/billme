@@ -125,7 +125,7 @@ export const Titlebar: React.FC = () => {
           <button
             type="button"
             onClick={minimize}
-            className="w-11 h-8 inline-flex items-center justify-center text-gray-600 hover:bg-gray-100 hover:text-black transition-colors"
+            className="w-11 h-8 inline-flex items-center justify-center text-muted hover:bg-canvas hover:text-foreground transition-colors ease-out duration-150"
             aria-label="Fenster minimieren"
             title="Minimieren"
           >
@@ -134,7 +134,7 @@ export const Titlebar: React.FC = () => {
           <button
             type="button"
             onClick={toggleMaximize}
-            className="w-11 h-8 inline-flex items-center justify-center text-gray-600 hover:bg-gray-100 hover:text-black transition-colors"
+            className="w-11 h-8 inline-flex items-center justify-center text-muted hover:bg-canvas hover:text-foreground transition-colors ease-out duration-150"
             aria-label={isMaximized ? 'Fenster wiederherstellen' : 'Fenster maximieren'}
             title={isMaximized ? 'Wiederherstellen' : 'Maximieren'}
           >
@@ -143,7 +143,7 @@ export const Titlebar: React.FC = () => {
           <button
             type="button"
             onClick={close}
-            className="w-11 h-8 inline-flex items-center justify-center text-gray-700 hover:bg-red-600 hover:text-white transition-colors"
+            className="w-11 h-8 inline-flex items-center justify-center text-muted hover:bg-error hover:text-white transition-colors ease-out duration-150"
             aria-label="Fenster schließen"
             title="Schließen"
           >

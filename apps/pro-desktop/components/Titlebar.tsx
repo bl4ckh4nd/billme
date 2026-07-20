@@ -71,7 +71,7 @@ export const Titlebar: React.FC = () => {
 
   return (
     <div
-      className="drag-region h-10 shrink-0 border-b border-black/10 bg-white/95 backdrop-blur-sm flex items-center justify-between pl-3 pr-1 select-none no-print"
+      className="drag-region h-10 shrink-0 border-b border-foreground/10 bg-surface/95 backdrop-blur-sm flex items-center justify-between pl-3 pr-1 select-none no-print"
       onDoubleClick={toggleMaximize}
     >
       <div className="flex items-center gap-2 min-w-0">
@@ -81,7 +81,7 @@ export const Titlebar: React.FC = () => {
           className="w-5 h-5 object-contain"
           draggable={false}
         />
-        <span className="text-xs font-bold tracking-wide text-black/80 truncate">Billme</span>
+        <span className="text-xs font-bold tracking-wide text-foreground/80 truncate">Billme</span>
       </div>
 
       <div className="no-drag flex items-center" onDoubleClick={(e) => e.stopPropagation()}>
@@ -90,12 +90,12 @@ export const Titlebar: React.FC = () => {
             type="button"
             onClick={handleUpdateClick}
             disabled={updateStatus.status === 'downloading'}
-            className={`w-11 h-8 inline-flex items-center justify-center transition-colors ${
+            className={`w-11 h-8 inline-flex items-center justify-center transition-colors duration-150 ease-out ${
               updateStatus.status === 'downloaded'
-                ? 'text-green-600 hover:bg-green-50 hover:text-green-700'
+                ? 'text-success hover:bg-success-bg hover:text-success'
                 : updateStatus.status === 'downloading'
-                  ? 'text-blue-500 cursor-wait'
-                  : 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                  ? 'text-info cursor-wait'
+                  : 'text-info hover:bg-info-bg hover:text-info'
             }`}
             aria-label={
               updateStatus.status === 'downloaded'
@@ -124,7 +124,7 @@ export const Titlebar: React.FC = () => {
         <button
           type="button"
           onClick={minimize}
-          className="w-11 h-8 inline-flex items-center justify-center text-gray-600 hover:bg-gray-100 hover:text-black transition-colors"
+          className="w-11 h-8 inline-flex items-center justify-center text-muted hover:bg-canvas hover:text-foreground transition-colors duration-150 ease-out"
           aria-label="Fenster minimieren"
           title="Minimieren"
         >
@@ -133,7 +133,7 @@ export const Titlebar: React.FC = () => {
         <button
           type="button"
           onClick={toggleMaximize}
-          className="w-11 h-8 inline-flex items-center justify-center text-gray-600 hover:bg-gray-100 hover:text-black transition-colors"
+          className="w-11 h-8 inline-flex items-center justify-center text-muted hover:bg-canvas hover:text-foreground transition-colors duration-150 ease-out"
           aria-label={isMaximized ? 'Fenster wiederherstellen' : 'Fenster maximieren'}
           title={isMaximized ? 'Wiederherstellen' : 'Maximieren'}
         >
@@ -142,7 +142,7 @@ export const Titlebar: React.FC = () => {
         <button
           type="button"
           onClick={close}
-          className="w-11 h-8 inline-flex items-center justify-center text-gray-700 hover:bg-red-600 hover:text-white transition-colors"
+          className="w-11 h-8 inline-flex items-center justify-center text-muted hover:bg-error hover:text-white transition-colors duration-150 ease-out"
           aria-label="Fenster schließen"
           title="Schließen"
         >

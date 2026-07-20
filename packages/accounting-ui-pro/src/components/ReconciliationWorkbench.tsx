@@ -162,15 +162,15 @@ export default function ReconciliationWorkbench({
 
   return (
     <div className="flex">
-      <div className="w-[28rem] shrink-0 border-r border-gray-100 flex flex-col">
-        <div className="px-4 py-3 border-b border-gray-100">
+      <div className="w-[28rem] shrink-0 border-r border-border-subtle flex flex-col">
+        <div className="px-4 py-3 border-b border-border-subtle">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-black text-accent-lime flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-foreground text-accent-lime flex items-center justify-center shrink-0">
               <ArrowRightLeft size={15} />
             </div>
             <div className="min-w-0">
-              <h1 className="text-sm font-black tracking-tight text-gray-900 leading-tight">Bankabgleich Workbench</h1>
-              <p className="text-xs text-gray-400 font-medium leading-tight">
+              <h1 className="text-sm font-black tracking-tight text-foreground leading-tight">Bankabgleich Workbench</h1>
+              <p className="text-xs text-muted font-medium leading-tight">
                 Vorschläge prüfen, matchen und in den Buchungsworkflow überführen.
               </p>
             </div>
@@ -183,16 +183,16 @@ export default function ReconciliationWorkbench({
               <button
                 key={tx.id}
                 onClick={() => setSelectedId(tx.id)}
-                className={`w-full text-left border rounded-xl p-3 transition-colors ${
+                className={`w-full text-left border rounded-xl p-3 transition-colors duration-150 ease-out ${
                   selectedTx?.id === tx.id
-                    ? 'border-black bg-gray-50'
-                    : 'border-gray-200 bg-white hover:bg-gray-50'
+                    ? 'border-foreground bg-surface-muted'
+                    : 'border-border bg-surface hover:bg-surface-muted'
                 }`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="font-bold text-sm text-gray-900 leading-tight">{tx.payee}</div>
-                    <div className="text-[11px] text-gray-500 mt-0.5 line-clamp-2">
+                    <div className="font-bold text-sm text-foreground leading-tight">{tx.payee}</div>
+                    <div className="text-[11px] text-muted mt-0.5 line-clamp-2">
                       {new Date(tx.date).toLocaleDateString('de-DE')} • {tx.description}
                     </div>
                   </div>
@@ -200,7 +200,7 @@ export default function ReconciliationWorkbench({
                     {status.label}
                   </span>
                 </div>
-                <div className={`text-xs font-bold mt-1.5 ${tx.amount < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                <div className={`text-xs font-bold tabular-nums mt-1.5 ${tx.amount < 0 ? 'text-error' : 'text-success'}`}>
                   {formatCurrency(tx.amount, tx.currency)}
                 </div>
                 <div className="mt-1.5">
@@ -210,7 +210,7 @@ export default function ReconciliationWorkbench({
             );
           })}
           {queue.length === 0 && (
-            <div className="border border-gray-200 rounded-xl p-6 text-sm text-gray-500 bg-white">
+            <div className="border border-border rounded-xl p-6 text-sm text-muted bg-surface">
               Keine offenen Transaktionen im Abgleich.
             </div>
           )}
@@ -219,26 +219,26 @@ export default function ReconciliationWorkbench({
 
       <div className="flex-1 min-w-0 p-6 overflow-y-auto max-h-[56vh]">
         {!selectedTx || !draft ? (
-          <div className="text-gray-500">Keine Position ausgewählt.</div>
+          <div className="text-muted">Keine Position ausgewählt.</div>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-6">
             <section className="space-y-4">
-              <div className="border border-gray-200 rounded-2xl bg-white p-5">
-                <div className="text-xs uppercase tracking-wider text-gray-400 font-bold">Bankbewegung</div>
+              <div className="border border-border rounded-xl bg-surface p-5">
+                <div className="text-xs uppercase tracking-wider text-muted font-bold">Bankbewegung</div>
                 <div className="mt-2 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-3 items-start">
                   <div className="min-w-0">
-                    <div className="font-bold text-base text-gray-900">{selectedTx.payee}</div>
-                    <div className="text-sm text-gray-500 line-clamp-2">{selectedTx.description}</div>
-                    <div className="text-xs text-gray-400 mt-1">
+                    <div className="font-bold text-base text-foreground">{selectedTx.payee}</div>
+                    <div className="text-sm text-muted line-clamp-2">{selectedTx.description}</div>
+                    <div className="text-xs text-muted mt-1">
                       {new Date(selectedTx.date).toLocaleDateString('de-DE')} • {selectedTx.id}
                     </div>
                   </div>
-                  <div className={`text-xl font-bold whitespace-nowrap ${selectedTx.amount < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                  <div className={`text-xl font-bold tabular-nums whitespace-nowrap ${selectedTx.amount < 0 ? 'text-error' : 'text-success'}`}>
                     {formatCurrency(selectedTx.amount, selectedTx.currency)}
                   </div>
                 </div>
                 <div className="mt-4">
-                  <div className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-1">Gegenkonto (Quick)</div>
+                  <div className="text-xs font-bold uppercase tracking-wide text-muted mb-1">Gegenkonto (Quick)</div>
                   <AccountCombobox
                     accounts={mockAccounts}
                     valueAccountId={draft.lines.find((line) => line.accountId !== '1200')?.accountId ?? ''}
@@ -263,43 +263,43 @@ export default function ReconciliationWorkbench({
                 </div>
               </div>
 
-              <div className="border border-gray-200 rounded-2xl bg-white p-5">
+              <div className="border border-border rounded-xl bg-surface p-5">
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-bold text-gray-900">Matching-Kandidaten (Mock)</div>
-                  <span className="text-xs text-gray-500 font-medium">
+                  <div className="text-sm font-bold text-foreground">Matching-Kandidaten (Mock)</div>
+                  <span className="text-xs text-muted font-medium">
                     Confidence {Math.round((selectedTx.suggestionConfidence ?? 0.5) * 100)}%
                   </span>
                 </div>
                 <div className="mt-4 space-y-3">
-                  <div className="border border-gray-200 rounded-xl p-4 bg-gray-50/50">
+                  <div className="border border-border rounded-xl p-4 bg-surface-muted/50">
                     <div className="flex items-center justify-between">
-                      <div className="font-bold text-gray-900">
+                      <div className="font-bold text-foreground">
                         {selectedTx.suggestion ?? 'Kein Vorschlag'}
                       </div>
-                      <span className="text-xs font-bold px-2 py-1 rounded-full bg-blue-100 text-blue-700">
+                      <span className="text-xs font-bold px-2 py-1 rounded-full bg-info-bg text-info">
                         Regel / Historie
                       </span>
                     </div>
-                    <div className="text-sm text-gray-600 mt-2">
+                    <div className="text-sm text-muted mt-2">
                       Entwurf enthält {draft.lines.length} Buchungszeilen und {draft.validationIssues.length} Validierungshinweise.
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         onClick={runPrimaryAction}
                         disabled={!primary || !splitIsValid}
-                        className="px-4 py-2 rounded-full bg-black text-white text-sm font-bold hover:bg-gray-900 disabled:opacity-40 inline-flex items-center gap-1"
+                        className="px-4 py-2 rounded-full bg-foreground text-white text-sm font-bold hover:bg-foreground disabled:opacity-40 inline-flex items-center gap-1"
                       >
                         <CheckCircle2 size={14} />
                         {primary ? 'Match & nächste Aktion' : 'Kein Schritt möglich'}
                       </button>
                       <button
                         onClick={() => onOpenTransaction(selectedTx.id)}
-                        className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50"
+                        className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-muted hover:bg-surface-muted"
                       >
                         Im Editor öffnen
                       </button>
                       <button
-                        className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1"
+                        className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1"
                         onClick={addSplitLine}
                       >
                         <GitBranch size={14} />
@@ -308,13 +308,13 @@ export default function ReconciliationWorkbench({
                     </div>
                   </div>
                   {!splitIsValid && (
-                    <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    <div className="mt-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error">
                       <div className="font-bold">Abgleich-Validierung fehlgeschlagen</div>
                       <ul className="mt-1 space-y-1">
                         {splitDifference >= 0.01 && (
                           <li>
                             Split-Summe stimmt nicht mit der Bankbewegung überein. Differenz:{' '}
-                            <span className="font-bold">{formatCurrency(splitDifference, selectedTx.currency)}</span>
+                            <span className="font-bold tabular-nums">{formatCurrency(splitDifference, selectedTx.currency)}</span>
                           </li>
                         )}
                         {directionErrors.map((msg) => (
@@ -328,12 +328,12 @@ export default function ReconciliationWorkbench({
             </section>
 
             <section className="space-y-4">
-              <div className="border border-gray-200 rounded-2xl bg-white p-5">
+              <div className="border border-border rounded-xl bg-surface p-5">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-bold text-gray-900">Entwurf / Split-Bearbeitung inline</div>
+                  <div className="text-sm font-bold text-foreground">Entwurf / Split-Bearbeitung inline</div>
                   <button
                     onClick={saveInlineSplit}
-                    className="px-3 py-1.5 rounded-full bg-black text-white text-xs font-bold hover:bg-gray-900"
+                    className="px-3 py-1.5 rounded-full bg-foreground text-white text-xs font-bold hover:bg-foreground"
                   >
                     Split speichern
                   </button>
@@ -342,14 +342,14 @@ export default function ReconciliationWorkbench({
                   {draft.lines.map((line) => (
                     <div
                       key={line.id}
-                      className="grid grid-cols-12 gap-2 items-center text-sm border border-gray-100 rounded-lg p-2"
+                      className="grid grid-cols-12 gap-2 items-center text-sm border border-border-subtle rounded-lg p-2"
                     >
                       <select
                         value={line.type}
                         onChange={(e) =>
                           updateLine(line.id, (cur) => ({ ...cur, type: e.target.value as 'Soll' | 'Haben' }))
                         }
-                        className="col-span-2 border border-gray-200 rounded-xl px-2 py-2 text-sm"
+                        className="col-span-2 border border-border rounded-lg px-2 py-2 text-sm"
                         aria-label="Soll/Haben"
                       >
                         <option value="Soll">Soll</option>
@@ -381,12 +381,12 @@ export default function ReconciliationWorkbench({
                         min="0"
                         value={line.amount}
                         onChange={(e) => updateLine(line.id, (cur) => ({ ...cur, amount: e.target.value }))}
-                        className="col-span-3 border border-gray-200 rounded-xl px-2 py-2 text-sm text-right"
+                        className="col-span-3 border border-border rounded-lg px-2 py-2 text-sm text-right tabular-nums"
                         aria-label="Betrag"
                       />
                       <button
                         onClick={() => removeLine(line.id)}
-                        className="col-span-1 text-xs font-bold text-gray-500 hover:text-red-600"
+                        className="col-span-1 text-xs font-bold text-muted hover:text-error"
                         aria-label="Zeile entfernen"
                         disabled={draft.lines.length <= 2}
                       >
@@ -395,7 +395,7 @@ export default function ReconciliationWorkbench({
                     </div>
                   ))}
                 </div>
-                <div className="mt-3 flex items-center justify-between text-xs text-gray-500">
+                <div className="mt-3 flex items-center justify-between text-xs text-muted">
                   <span>{draft.lines.length} Zeilen</span>
                   <span>
                     Split-Summe: {formatCurrency(splitTotal, selectedTx.currency)}
@@ -406,14 +406,14 @@ export default function ReconciliationWorkbench({
                   <span>
                     Richtung: {selectedTx.amount >= 0 ? 'Eingang (Bank Soll)' : 'Ausgang (Bank Haben)'}
                   </span>
-                  <span className={splitIsValid ? 'text-emerald-700 font-bold' : 'text-red-700 font-bold'}>
+                  <span className={splitIsValid ? 'text-success font-bold' : 'text-error font-bold'}>
                     {splitIsValid ? 'OK' : `Diff ${formatCurrency(splitDifference, selectedTx.currency)}`}
                   </span>
                 </div>
               </div>
 
-              <div className="border border-gray-200 rounded-2xl bg-white p-5">
-                <div className="text-sm font-bold text-gray-900 mb-2">Workflow Schnellaktionen</div>
+              <div className="border border-border rounded-xl bg-surface p-5">
+                <div className="text-sm font-bold text-foreground mb-2">Workflow Schnellaktionen</div>
                 <div className="flex flex-wrap gap-2">
                   {allowed.map((action) => (
                     <button
@@ -429,7 +429,7 @@ export default function ReconciliationWorkbench({
                           onOpenTransaction(selectedTx.id);
                         }
                       }}
-                      className="px-3 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1"
+                      className="px-3 py-2 rounded-full border border-border bg-surface text-sm font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1"
                       disabled={!splitIsValid && (action === 'submit_for_review' || action === 'approve' || action === 'post')}
                     >
                       {action === 'post' ? <Play size={13} /> : <Wand2 size={13} />}

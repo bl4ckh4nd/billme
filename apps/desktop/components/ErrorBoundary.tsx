@@ -89,10 +89,10 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
               <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-error-bg mb-4">
                 <AlertTriangle size={32} className="text-error" />
               </div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">
+              <h1 className="text-3xl font-bold text-foreground mb-2">
                 Fehler aufgetreten
               </h1>
-              <p className="text-gray-600">
+              <p className="text-muted">
                 Die Anwendung ist auf einen Fehler gestoßen.
               </p>
             </div>
@@ -100,7 +100,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
             {/* Error Details */}
             <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
               <div className="mb-4">
-                <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">
+                <h2 className="text-sm font-bold text-muted uppercase tracking-wide mb-2">
                   Fehlerdetails
                 </h2>
                 <div className="bg-error-bg border border-error/30 rounded-lg p-4 max-h-48 overflow-y-auto">
@@ -112,11 +112,11 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 
               {isDev && this.state.errorInfo && (
                 <div>
-                  <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">
+                  <h2 className="text-sm font-bold text-muted uppercase tracking-wide mb-2">
                     Stack Trace
                   </h2>
-                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 max-h-48 overflow-y-auto">
-                    <p className="text-xs font-mono text-gray-700 whitespace-pre-wrap break-words">
+                  <div className="bg-surface-muted border border-border rounded-lg p-4 max-h-48 overflow-y-auto">
+                    <p className="text-xs font-mono text-foreground whitespace-pre-wrap break-words">
                       {this.state.errorInfo.componentStack}
                     </p>
                   </div>
@@ -124,8 +124,8 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
               )}
 
               {this.state.errorCount > 2 && (
-                <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <p className="text-xs text-yellow-800 font-medium">
+                <div className="mt-4 p-3 bg-warning-bg border border-warning-border rounded-lg">
+                  <p className="text-xs text-warning font-medium">
                     ⚠️ Mehrere Fehler erkannt ({this.state.errorCount}).
                     Ein Neustart wird empfohlen.
                   </p>
@@ -146,7 +146,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                   </button>
                   <button
                     onClick={this.handleReload}
-                    className="w-full flex items-center justify-center gap-2 bg-gray-200 hover:bg-gray-300 text-gray-900 font-bold py-3 px-4 rounded-xl transition-colors"
+                    className="w-full flex items-center justify-center gap-2 bg-canvas hover:bg-border text-foreground font-bold py-3 px-4 rounded-xl transition-colors ease-out duration-150"
                   >
                     <Home size={18} />
                     Anwendung neu laden

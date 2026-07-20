@@ -1,6 +1,6 @@
 import { Button } from '@billme/ui';
 import React from 'react';
-import { Archive, Edit3, Plus, Search, X } from 'lucide-react';
+import { Archive, Edit3, FolderKanban, Plus, Search, X } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
 import { v4 as uuidv4 } from 'uuid';
 import type { Project } from '../types';
@@ -123,25 +123,25 @@ export const ProjectsView: React.FC = () => {
   };
 
   return (
-    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
+    <div className="bg-surface rounded-xl p-8 min-h-full shadow-sm">
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
-          <h2 className="text-2xl font-black text-gray-900">Projekte</h2>
-          <p className="text-sm text-gray-500 mt-1">
+          <h2 className="text-2xl font-black text-foreground">Projekte</h2>
+          <p className="text-sm text-muted mt-1">
             Projekte strukturieren alle Dokumente (Rechnungen/Angebote) pro Kunde.
           </p>
         </div>
         <button
           onClick={openCreate}
-          className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors inline-flex items-center gap-2"
+          className="px-5 py-3 rounded-xl font-bold bg-foreground text-white hover:bg-dark-1 transition-colors duration-150 ease-out inline-flex items-center gap-2"
         >
           <Plus size={18} /> Neues Projekt
         </button>
       </div>
 
       <div className="flex items-center justify-between gap-4 mb-6">
-        <div className="flex items-center gap-3 w-full max-w-xl bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
-          <Search size={18} className="text-gray-400" />
+        <div className="flex items-center gap-3 w-full max-w-xl bg-surface-muted border border-border rounded-xl px-4 py-3">
+          <Search size={18} className="text-muted" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -150,19 +150,19 @@ export const ProjectsView: React.FC = () => {
           />
         </div>
 
-        <label className="flex items-center gap-2 text-sm font-bold text-gray-700 select-none">
+        <label className="flex items-center gap-2 text-sm font-bold text-muted select-none">
           <input
             type="checkbox"
             checked={includeArchived}
             onChange={(e) => setIncludeArchived(e.target.checked)}
-            className="h-4 w-4 rounded border-gray-300 text-black focus:ring-black"
+            className="h-4 w-4 rounded border-border text-foreground focus:ring-foreground"
           />
           Archiviert anzeigen
         </label>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-gray-200">
-        <div className="grid grid-cols-12 bg-gray-50 px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">
+      <div className="overflow-hidden rounded-xl border border-border">
+        <div className="grid grid-cols-12 bg-surface-muted px-4 py-3 text-xs font-bold text-muted uppercase tracking-wider">
           <div className="col-span-3">Projekt</div>
           <div className="col-span-3">Kunde</div>
           <div className="col-span-2">Status</div>
@@ -173,31 +173,64 @@ export const ProjectsView: React.FC = () => {
         {isLoading ? (
           <SkeletonLoader variant="table" count={5} />
         ) : filtered.length === 0 ? (
-          <div className="p-10 text-center text-sm text-gray-500">Keine Projekte gefunden.</div>
+          <div className="p-10 text-center text-sm text-muted">
+            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-surface text-foreground border border-border">
+              <FolderKanban size={20} />
+            </div>
+            <p className="font-bold text-foreground">
+              {search.trim() ? 'Keine Treffer' : 'Noch keine Projekte vorhanden.'}
+            </p>
+            <p className="mt-1">
+              {search.trim()
+                ? 'Passen Sie Suche oder Archivfilter an.'
+                : 'Legen Sie ein Projekt an, um Dokumente pro Kunde zu bündeln.'}
+            </p>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              {search.trim() && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="rounded-full border border-border bg-surface px-4 py-2 text-sm font-bold text-foreground hover:bg-canvas transition-colors duration-150 ease-out"
+                >
+                  Suche leeren
+                </button>
+              )}
+              {!search.trim() && (
+                <button
+                  type="button"
+                  onClick={openCreate}
+                  className="inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-bold text-white hover:bg-dark-1 transition-colors duration-150 ease-out"
+                >
+                  <Plus size={16} />
+                  Neues Projekt
+                </button>
+              )}
+            </div>
+          </div>
         ) : (
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-border-subtle">
             {filtered.map((p) => {
               const clientName = clients.find((c) => c.id === p.clientId)?.company ?? 'Unbekannt';
               return (
                 <div
                   key={p.id}
-                  className="grid grid-cols-12 px-4 py-4 items-center hover:bg-gray-50 transition-colors"
+                  className="grid grid-cols-12 px-4 py-4 items-center hover:bg-surface-muted transition-colors duration-150 ease-out"
                 >
                   <button
                     className="col-span-3 text-left"
                     onClick={() => navigate({ to: `/projects/${p.id}` })}
                     title="Projekt öffnen"
                   >
-                    <div className="font-black text-gray-900">{p.name}</div>
-                    <div className="text-xs text-gray-500">{p.code ?? ''}</div>
+                    <div className="font-black text-foreground">{p.name}</div>
+                    <div className="text-xs text-muted">{p.code ?? ''}</div>
                   </button>
-                  <div className="col-span-3 text-sm font-bold text-gray-800">{clientName}</div>
-                  <div className="col-span-2 text-sm font-bold text-gray-800">{statusLabel[p.status]}</div>
-                  <div className="col-span-2 text-sm text-gray-600">{p.startDate}</div>
+                  <div className="col-span-3 text-sm font-bold text-foreground">{clientName}</div>
+                  <div className="col-span-2 text-sm font-bold text-foreground">{statusLabel[p.status]}</div>
+                  <div className="col-span-2 text-sm text-muted">{p.startDate}</div>
                   <div className="col-span-2 flex items-center justify-end gap-2">
                     <button
                       onClick={() => openEdit(p)}
-                      className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-900 font-bold text-sm inline-flex items-center gap-2"
+                      className="px-3 py-2 rounded-xl bg-canvas hover:bg-canvas text-foreground font-bold text-sm inline-flex items-center gap-2"
                     >
                       <Edit3 size={16} /> Bearbeiten
                     </button>
@@ -207,7 +240,7 @@ export const ProjectsView: React.FC = () => {
                         setArchiveReason('');
                         setArchiveError(null);
                       }}
-                      className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-900 font-bold text-sm inline-flex items-center gap-2"
+                      className="px-3 py-2 rounded-xl bg-canvas hover:bg-canvas text-foreground font-bold text-sm inline-flex items-center gap-2"
                       disabled={Boolean(p.archivedAt)}
                       title={p.archivedAt ? 'Bereits archiviert' : 'Archivieren'}
                     >
@@ -222,18 +255,18 @@ export const ProjectsView: React.FC = () => {
       </div>
 
       {isEditorOpen && draft && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-white shadow-xl overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 p-4">
+          <div className="w-full max-w-2xl rounded-xl bg-surface shadow-xl overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-5 border-b border-border-subtle">
               <div>
-                <h3 className="text-lg font-black text-gray-900">
+                <h3 className="text-lg font-black text-foreground">
                   {editorMode === 'create' ? 'Neues Projekt' : 'Projekt bearbeiten'}
                 </h3>
-                <p className="text-sm text-gray-500 mt-1">Änderungen werden im Audit-Log gespeichert.</p>
+                <p className="text-sm text-muted mt-1">Änderungen werden im Audit-Log gespeichert.</p>
               </div>
               <button
                 onClick={closeEditor}
-                className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center"
+                className="w-10 h-10 rounded-full bg-canvas hover:bg-canvas flex items-center justify-center"
                 title="Schließen"
               >
                 <X size={18} />
@@ -242,12 +275,12 @@ export const ProjectsView: React.FC = () => {
 
             <div className="p-6 grid grid-cols-2 gap-4">
               <div className="col-span-2">
-                <label className="block text-xs font-bold text-gray-500 mb-1">Kunde (Pflicht)</label>
+                <label className="block text-xs font-bold text-muted mb-1">Kunde (Pflicht)</label>
                 <select
                   value={draft.clientId ?? ''}
                   onChange={(e) => setDraft({ ...draft, clientId: e.target.value })}
                   disabled={editorMode === 'edit'}
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none disabled:opacity-60"
+            className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none disabled:opacity-60"
                 >
                   <option value="">(Bitte auswählen)</option>
                   {clients.map((c) => (
@@ -257,28 +290,28 @@ export const ProjectsView: React.FC = () => {
                   ))}
                 </select>
                 {editorMode === 'edit' && (
-                  <div className="mt-1 text-xs text-gray-500">
+                  <div className="mt-1 text-xs text-muted">
                     Kunden-Zuordnung ist nachträglich nicht änderbar.
                   </div>
                 )}
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-1">Projektcode</label>
+                <label className="block text-xs font-bold text-muted mb-1">Projektcode</label>
                 <input
                   value={draft.code ?? ''}
                   onChange={(e) => setDraft({ ...draft, code: e.target.value })}
                   placeholder="Leer lassen für automatische Vergabe (z.B. PRJ-2026-001)"
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                  className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-1">Status</label>
+                <label className="block text-xs font-bold text-muted mb-1">Status</label>
                 <select
                   value={draft.status}
                   onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                  className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                 >
                   <option value="active">Aktiv</option>
                   <option value="planned">Geplant</option>
@@ -288,62 +321,62 @@ export const ProjectsView: React.FC = () => {
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs font-bold text-gray-500 mb-1">Projektname (Pflicht)</label>
+                <label className="block text-xs font-bold text-muted mb-1">Projektname (Pflicht)</label>
                 <input
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                  className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-1">Start</label>
+                <label className="block text-xs font-bold text-muted mb-1">Start</label>
                 <input
                   type="date"
                   value={draft.startDate}
                   onChange={(e) => setDraft({ ...draft, startDate: e.target.value })}
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                  className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-1">Ende (optional)</label>
+                <label className="block text-xs font-bold text-muted mb-1">Ende (optional)</label>
                 <input
                   type="date"
                   value={draft.endDate ?? ''}
                   onChange={(e) => setDraft({ ...draft, endDate: e.target.value || undefined })}
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                  className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-1">Budget</label>
+                <label className="block text-xs font-bold text-muted mb-1">Budget</label>
                 <input
                   type="number"
                   value={draft.budget ?? 0}
                   onChange={(e) => setDraft({ ...draft, budget: Number(e.target.value) })}
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
+                  className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-1">Archiviert</label>
-                <div className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium text-gray-700">
+                <label className="block text-xs font-bold text-muted mb-1">Archiviert</label>
+                <div className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium text-muted">
                   {draft.archivedAt ? draft.archivedAt : 'Nein'}
                 </div>
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs font-bold text-gray-500 mb-1">Beschreibung (optional)</label>
+                <label className="block text-xs font-bold text-muted mb-1">Beschreibung (optional)</label>
                 <textarea
                   value={draft.description ?? ''}
                   onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                   rows={3}
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none resize-none"
+                  className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none resize-none"
                 />
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs font-bold text-gray-500 mb-1">Grund (Pflicht)</label>
+                <label className="block text-xs font-bold text-muted mb-1">Grund (Pflicht)</label>
                 <textarea
                   value={reason}
                   onChange={(e) => {
@@ -352,22 +385,22 @@ export const ProjectsView: React.FC = () => {
                   }}
                   rows={3}
                   placeholder="z.B. Projektstart verschoben, Code angepasst, ..."
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none resize-none"
+                  className="w-full bg-surface-muted border border-border rounded-lg p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none resize-none"
                 />
                 {reasonError && <div className="mt-2 text-sm font-bold text-error">{reasonError}</div>}
               </div>
             </div>
 
-            <div className="px-6 py-5 border-t border-gray-100 flex items-center justify-end gap-3">
+            <div className="px-6 py-5 border-t border-border-subtle flex items-center justify-end gap-3">
               <button
                 onClick={closeEditor}
-                className="px-5 py-2.5 rounded-xl font-bold bg-gray-100 text-gray-900 hover:bg-gray-200 transition-colors"
+                className="px-5 py-2.5 rounded-xl font-bold bg-canvas text-foreground hover:bg-canvas transition-colors duration-150 ease-out"
               >
                 Abbrechen
               </button>
               <button
                 onClick={submit}
-                className="px-5 py-2.5 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
+                className="px-5 py-2.5 rounded-xl font-bold bg-foreground text-white hover:bg-dark-1 transition-colors duration-150 ease-out"
               >
                 Speichern
               </button>
@@ -377,13 +410,13 @@ export const ProjectsView: React.FC = () => {
       )}
 
       {archiveTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-lg rounded-3xl bg-white shadow-xl p-6">
-            <h3 className="text-lg font-black text-gray-900 mb-1">Projekt archivieren</h3>
-            <p className="text-sm text-gray-500 mb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/50 p-4">
+          <div className="w-full max-w-lg rounded-xl bg-surface shadow-xl p-6">
+            <h3 className="text-lg font-black text-foreground mb-1">Projekt archivieren</h3>
+            <p className="text-sm text-muted mb-4">
               {archiveTarget.name} wird archiviert (nicht gelöscht). Bitte Grund angeben.
             </p>
-            <label className="text-xs font-bold text-gray-700">Grund (Pflicht)</label>
+            <label className="text-xs font-bold text-muted">Grund (Pflicht)</label>
             <textarea
               value={archiveReason}
               onChange={(e) => {
@@ -391,13 +424,13 @@ export const ProjectsView: React.FC = () => {
                 if (archiveError) setArchiveError(null);
               }}
               rows={3}
-              className="mt-2 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none focus:border-black"
+              className="mt-2 w-full rounded-lg border border-border bg-surface-muted px-4 py-3 text-sm outline-none focus:border-foreground"
               placeholder="z.B. Projekt abgeschlossen, Kunde gekündigt, ..."
             />
             {archiveError && <div className="mt-2 text-sm font-bold text-error">{archiveError}</div>}
             <div className="mt-6 flex items-center justify-end gap-3">
               <button
-                className="px-5 py-2.5 rounded-xl font-bold bg-gray-100 text-gray-900 hover:bg-gray-200 transition-colors"
+                className="px-5 py-2.5 rounded-xl font-bold bg-canvas text-foreground hover:bg-canvas transition-colors duration-150 ease-out"
                 onClick={() => {
                   setArchiveTarget(null);
                   setArchiveReason('');
@@ -407,7 +440,7 @@ export const ProjectsView: React.FC = () => {
                 Abbrechen
               </button>
               <button
-                className="px-5 py-2.5 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
+                className="px-5 py-2.5 rounded-xl font-bold bg-foreground text-white hover:bg-dark-1 transition-colors duration-150 ease-out"
                 onClick={submitArchive}
               >
                 Archivieren
@@ -419,4 +452,3 @@ export const ProjectsView: React.FC = () => {
     </div>
   );
 };
-

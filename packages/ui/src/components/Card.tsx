@@ -11,17 +11,19 @@ export interface CardProps {
   className?: string;
 }
 
+// Literal 1:1 mapping. Dense data cards default to `xl` (32px); reserve
+// `2xl`/`3xl` for hero / onboarding / modal panels.
 const radiusStyles: Record<CardRadius, string> = {
-  md: 'rounded-lg',
-  lg: 'rounded-xl',
-  xl: 'rounded-2xl',
+  md: 'rounded-md',
+  lg: 'rounded-lg',
+  xl: 'rounded-xl',
   '2xl': 'rounded-2xl',
   '3xl': 'rounded-3xl',
 };
 
 export const Card: React.FC<CardProps> = ({
   children,
-  radius = '2xl',
+  radius = 'xl',
   withBorder = true,
   withShadow = false,
   className

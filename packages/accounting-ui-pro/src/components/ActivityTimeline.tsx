@@ -6,19 +6,19 @@ interface ActivityTimelineProps {
 
 export default function ActivityTimeline({ events }: ActivityTimelineProps) {
   return (
-    <div className="border border-gray-200 rounded-xl overflow-hidden">
-      <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 text-sm font-bold text-gray-800">
+    <div className="border border-border rounded-xl overflow-hidden">
+      <div className="px-4 py-3 bg-surface-muted border-b border-border text-sm font-bold text-foreground">
         Aktivität
       </div>
-      <div className="max-h-64 overflow-auto divide-y divide-gray-100">
+      <div className="max-h-64 overflow-auto divide-y divide-border-subtle">
         {events.length === 0 ? (
-          <div className="px-4 py-6 text-sm text-gray-500">Noch keine Aktivität.</div>
+          <div className="px-4 py-6 text-sm text-muted">Noch keine Aktivität.</div>
         ) : (
           events.map((event) => (
             <div key={event.id} className="px-4 py-3">
-              <div className="text-sm font-bold text-gray-800">{event.label}</div>
-              {event.details && <div className="text-xs text-gray-600 mt-0.5">{event.details}</div>}
-              <div className="text-xs text-gray-400 mt-1">
+              <div className="text-sm font-bold text-foreground">{event.label}</div>
+              {event.details && <div className="text-xs text-muted mt-0.5">{event.details}</div>}
+              <div className="text-xs text-muted mt-1">
                 {new Date(event.at).toLocaleString('de-DE')} • {event.actorName}
               </div>
             </div>

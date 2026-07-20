@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import type { AppSettings, Article, Client, Invoice, InvoiceElement, InvoiceItem } from '../types';
-import { CanvasElement } from './CanvasElement';
+import { ElementRenderer } from '@billme/desktop-designer/ElementRenderer';
+import { renderTextWithPlaceholders } from '../utils/placeholders';
 import { INITIAL_INVOICE_TEMPLATE, INITIAL_OFFER_TEMPLATE, A4_WIDTH_PX, A4_HEIGHT_PX } from '../constants';
 import { ArrowLeft, Save, Plus, Trash2, Calendar, User, FileText, Calculator, Euro, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { MOCK_SETTINGS } from '../data/mockData';
@@ -203,34 +204,34 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
     <div className="flex h-full w-full bg-canvas overflow-hidden">
         {/* Left Sidebar: Form Editor */}
         <div
-          className={`flex flex-col bg-white border-r border-gray-200 h-full shadow-xl z-10 transition-all duration-300 ${sidebarCollapsed ? 'w-0 overflow-hidden border-r-0' : 'w-[450px]'}`}
+          className={`flex flex-col bg-surface border-r border-border h-full shadow-xl z-10 transition-colors duration-300 ${sidebarCollapsed ? 'w-0 overflow-hidden border-r-0' : 'w-[450px]'}`}
         >
             {/* Header */}
-            <div className="p-6 border-b border-gray-100 bg-white">
+            <div className="p-6 border-b border-border-subtle bg-surface">
                 <button 
                     onClick={onCancel}
-                    className="flex items-center gap-2 text-gray-400 hover:text-black transition-colors mb-4 text-xs font-bold uppercase tracking-wider"
+                    className="flex items-center gap-2 text-muted hover:text-foreground transition-colors duration-150 ease-out mb-4 text-xs font-bold uppercase tracking-wider"
                 >
                     <ArrowLeft size={14} /> Zurück zur Übersicht
                 </button>
-                <h2 className="text-xl font-black text-gray-900">
+                <h2 className="text-xl font-black text-foreground">
                   {templateType === 'offer' ? 'Angebot' : 'Rechnung'} {mode === 'create' ? 'erstellen' : 'bearbeiten'}
                 </h2>
-                <p className="text-gray-500 text-sm">{formData.number}</p>
+                <p className="text-muted text-sm">{formData.number}</p>
             </div>
 
             {/* Scrollable Form Content */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin scrollbar-thumb-gray-200">
+            <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin scrollbar-thumb-border">
                 
                 {/* General Info */}
                 <div className="space-y-4 animate-enter" style={{ animationDelay: '0ms' }}>
-                    <h3 className="flex items-center gap-2 text-sm font-bold text-gray-900 uppercase tracking-wide">
+                    <h3 className="flex items-center gap-2 text-sm font-bold text-foreground uppercase tracking-wide">
                         <FileText size={16} className="text-accent fill-black" />
                         Basisdaten
                     </h3>
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 mb-1">
+                            <label className="block text-xs font-bold text-muted mb-1">
                                 {templateType === 'offer' ? 'Angebots-Nr.' : 'Rechnungs-Nr.'}
                             </label>
                             <div className="relative">
@@ -239,7 +240,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                     value={formData.number}
                                     readOnly={isNumberLocked}
                                     onChange={e => setFormData({...formData, number: e.target.value})}
-                                    className={`w-full bg-gray-50 border rounded-xl p-2.5 text-sm font-medium outline-none transition-colors ${isNumberLocked ? 'border-gray-200 text-gray-400 cursor-not-allowed pr-10' : 'border-warning focus:ring-2 focus:ring-warning'}`}
+                                    className={`w-full bg-surface-muted border rounded-lg p-2.5 text-sm font-medium outline-none transition-colors duration-150 ease-out ${isNumberLocked ? 'border-border text-muted cursor-not-allowed pr-10' : 'border-warning focus:ring-2 focus:ring-warning'}`}
                                 />
                                 {mode === 'edit' && (
                                     <button
@@ -254,7 +255,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                                 setIsNumberLocked(true);
                                             }
                                         }}
-                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 transition-colors"
+                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted hover:text-muted transition-colors duration-150 ease-out"
                                         title={isNumberLocked ? 'Nummer bearbeiten (GoBD-Warnung)' : 'Nummer sperren'}
                                         aria-label={isNumberLocked ? 'Nummer entsperren' : 'Nummer sperren'}
                                     >
@@ -264,14 +265,14 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                             </div>
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 mb-1">Datum</label>
+                            <label className="block text-xs font-bold text-muted mb-1">Datum</label>
                             <DatePicker
                                 value={formData.date}
                                 onChange={date => setFormData({...formData, date})}
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 mb-1">Leistungsdatum</label>
+                            <label className="block text-xs font-bold text-muted mb-1">Leistungsdatum</label>
                             <DatePicker
                                 value={formData.servicePeriod || ''}
                                 onChange={servicePeriod => setFormData({...formData, servicePeriod})}
@@ -279,7 +280,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 mb-1">Fälligkeit</label>
+                            <label className="block text-xs font-bold text-muted mb-1">Fälligkeit</label>
                             <DatePicker
                                 value={formData.dueDate}
                                 onChange={dueDate => setFormData({...formData, dueDate})}
@@ -290,16 +291,16 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
 
                 {/* Recipient */}
                 <div className="space-y-4 animate-enter" style={{ animationDelay: '100ms' }}>
-                    <h3 className="flex items-center gap-2 text-sm font-bold text-gray-900 uppercase tracking-wide">
+                    <h3 className="flex items-center gap-2 text-sm font-bold text-foreground uppercase tracking-wide">
                         <User size={16} className="text-accent fill-black" />
                         Empfänger
                     </h3>
                     <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1">Kunde auswählen</label>
+                        <label className="block text-xs font-bold text-muted mb-1">Kunde auswählen</label>
                         <select
                             value={selectedClientId}
                             onChange={(e) => handleSelectClient(e.target.value)}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
+                            className="w-full bg-surface-muted border border-border rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
                         >
                             <option value="">(Kein Kunde)</option>
                             {clients.map((c) => (
@@ -309,7 +310,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                             ))}
                         </select>
 
-                        <label className="block text-xs font-bold text-gray-500 mb-1">Projekt</label>
+                        <label className="block text-xs font-bold text-muted mb-1">Projekt</label>
                         <select
                             value={formData.projectId ?? ''}
                             onChange={(e) => {
@@ -320,7 +321,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                               });
                             }}
                             disabled={!selectedClientId}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3 disabled:opacity-60"
+                            className="w-full bg-surface-muted border border-border rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3 disabled:opacity-60"
                         >
                             <option value="">{selectedClientId ? '(Kein Projekt)' : '(Bitte Kunde auswählen)'}</option>
                             {projects.map((p) => (
@@ -330,28 +331,28 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                             ))}
                         </select>
 
-                        <label className="block text-xs font-bold text-gray-500 mb-1">Firmenname / Kunde</label>
+                        <label className="block text-xs font-bold text-muted mb-1">Firmenname / Kunde</label>
                         <input 
                             type="text" 
                             value={formData.client}
                             onChange={e => setFormData({...formData, client: e.target.value})}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
+                            className="w-full bg-surface-muted border border-border rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
                         />
-                        <label className="block text-xs font-bold text-gray-500 mb-1">E-Mail</label>
+                        <label className="block text-xs font-bold text-muted mb-1">E-Mail</label>
                         <input
                             type="email"
                             value={formData.clientEmail}
                             onChange={e => setFormData({...formData, clientEmail: e.target.value})}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
+                            className="w-full bg-surface-muted border border-border rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
                             placeholder="name@firma.de"
                         />
-                        <label className="block text-xs font-bold text-gray-500 mb-1">Adresse (Optional)</label>
+                        <label className="block text-xs font-bold text-muted mb-1">Adresse (Optional)</label>
                         <textarea 
                             value={formData.clientAddress || ''}
                             onChange={e => setFormData({...formData, clientAddress: e.target.value})}
                             rows={3}
                             placeholder="Straße, PLZ, Stadt..."
-                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none resize-none"
+                            className="w-full bg-surface-muted border border-border rounded-lg p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none resize-none"
                         />
                     </div>
                 </div>
@@ -359,7 +360,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                 {/* Items */}
                 <div className="space-y-4 animate-enter" style={{ animationDelay: '200ms' }}>
                     <div className="flex items-center justify-between">
-                        <h3 className="flex items-center gap-2 text-sm font-bold text-gray-900 uppercase tracking-wide">
+                        <h3 className="flex items-center gap-2 text-sm font-bold text-foreground uppercase tracking-wide">
                             <Calculator size={16} className="text-accent fill-black" />
                             Positionen
                         </h3>
@@ -368,7 +369,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                 <select
                                     value={articleToAddId}
                                     onChange={(e) => setArticleToAddId(e.target.value)}
-                                    className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-xs font-bold outline-none focus:ring-2 focus:ring-accent"
+                                    className="bg-surface-muted border border-border rounded-lg px-2 py-1 text-xs font-bold outline-none focus:ring-2 focus:ring-accent"
                                 >
                                     <option value="">Artikel wählen...</option>
                                     {articles.map((a) => (
@@ -387,7 +388,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                             setArticleToAddId('');
                                         }
                                     }}
-                                    className="text-xs font-bold bg-gray-100 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed text-gray-800 px-2 py-1 rounded-lg transition-colors flex items-center gap-1"
+                                    className="text-xs font-bold bg-canvas hover:bg-canvas disabled:opacity-40 disabled:cursor-not-allowed text-foreground px-2 py-1 rounded-lg transition-colors duration-150 ease-out flex items-center gap-1"
                                     title="Artikel zur Rechnung hinzufügen"
                                 >
                                     <Plus size={12} /> Hinzufügen
@@ -395,7 +396,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                             </div>
                             <button 
                                 onClick={handleAddItem}
-                                className="text-xs font-bold bg-black text-accent px-2 py-1 rounded hover:bg-gray-800 transition-colors flex items-center gap-1"
+                                className="text-xs font-bold bg-foreground text-accent px-2 py-1 rounded hover:bg-dark-1 transition-colors duration-150 ease-out flex items-center gap-1"
                             >
                                 <Plus size={12} /> Neu
                             </button>
@@ -404,47 +405,47 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                     
                     <div className="space-y-3">
                         {formData.items.map((item, idx) => (
-                            <div key={idx} className="bg-white border border-gray-200 rounded-xl p-3 shadow-sm hover:border-accent transition-colors group animate-enter" style={{ animationDelay: `${200 + idx * 50}ms` }}>
+                            <div key={idx} className="bg-surface border border-border rounded-xl p-3 shadow-sm hover:border-accent transition-colors duration-150 ease-out group animate-enter" style={{ animationDelay: `${200 + idx * 50}ms` }}>
                                 <div className="flex gap-2 mb-2">
                                     <input 
                                         type="text"
                                         value={item.description}
                                         onChange={e => handleItemChange(idx, 'description', e.target.value)}
-                                        className="flex-1 bg-gray-50 border border-transparent hover:border-gray-200 focus:border-accent rounded-lg px-2 py-1 text-sm font-bold outline-none"
+                                        className="flex-1 bg-surface-muted border border-transparent hover:border-border focus:border-accent rounded-lg px-2 py-1 text-sm font-bold outline-none"
                                         placeholder="Beschreibung"
                                     />
                                     <button 
                                         onClick={() => handleRemoveItem(idx)}
-                                        className="text-gray-300 hover:text-red-500 p-1"
+                                        className="text-muted hover:text-error p-1"
                                     >
                                         <Trash2 size={14} />
                                     </button>
                                 </div>
                                 <div className="grid grid-cols-4 gap-2">
                                     <div>
-                                        <label className="text-[10px] text-gray-400 font-medium">Menge</label>
+                                        <label className="text-[10px] text-muted font-medium">Menge</label>
                                         <input 
                                             type="number"
                                             value={item.quantity}
                                             onChange={e => handleItemChange(idx, 'quantity', Number(e.target.value))}
-                                            className="w-full bg-gray-50 rounded-lg px-2 py-1 text-sm outline-none"
+                                            className="w-full bg-surface-muted rounded-lg px-2 py-1 text-sm outline-none"
                                         />
                                     </div>
                                     <div>
-                                        <label className="text-[10px] text-gray-400 font-medium">Einzel (€)</label>
+                                        <label className="text-[10px] text-muted font-medium">Einzel (€)</label>
                                         <input 
                                             type="number"
                                             value={item.price}
                                             onChange={e => handleItemChange(idx, 'price', Number(e.target.value))}
-                                            className="w-full bg-gray-50 rounded-lg px-2 py-1 text-sm outline-none"
+                                            className="w-full bg-surface-muted rounded-lg px-2 py-1 text-sm outline-none"
                                         />
                                     </div>
                                     <div>
-                                        <label className="text-[10px] text-gray-400 font-medium">Kategorie</label>
+                                        <label className="text-[10px] text-muted font-medium">Kategorie</label>
                                         <select
                                             value={item.category ?? ''}
                                             onChange={(e) => handleItemChange(idx, 'category', e.target.value)}
-                                            className="w-full bg-gray-50 rounded-lg px-2 py-1 text-sm outline-none"
+                                            className="w-full bg-surface-muted rounded-lg px-2 py-1 text-sm outline-none"
                                         >
                                             <option value="">(Keine)</option>
                                             {categoryOptions.map((c) => (
@@ -456,8 +457,8 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                         </select>
                                     </div>
                                     <div>
-                                        <label className="text-[10px] text-gray-400 font-medium">Gesamt</label>
-                                        <div className="text-right text-sm font-bold pt-1">
+                                        <label className="text-[10px] text-muted font-medium">Gesamt</label>
+                                        <div className="text-right text-sm font-bold tabular-nums pt-1">
                                             {formatCurrency(item.total)}
                                         </div>
                                     </div>
@@ -467,28 +468,28 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                     </div>
 
                     {/* Totals Summary in Form */}
-                    <div className="bg-gray-50 rounded-xl p-4 space-y-2 border border-gray-100 animate-enter" style={{ animationDelay: '400ms' }}>
-                        <div className="flex justify-between text-sm text-gray-500">
+                    <div className="bg-surface-muted rounded-xl p-4 space-y-2 border border-border-subtle animate-enter" style={{ animationDelay: '400ms' }}>
+                        <div className="flex justify-between text-sm text-muted">
                             <span>Netto</span>
-                            <span>{formatCurrency(totals.net)}</span>
+                            <span className="tabular-nums">{formatCurrency(totals.net)}</span>
                         </div>
-                        <div className="flex justify-between text-sm text-gray-500">
+                        <div className="flex justify-between text-sm text-muted">
                             <span>MwSt ({effectiveSettings.legal.smallBusinessRule ? '0' : effectiveSettings.legal.defaultVatRate}%)</span>
-                            <span>{formatCurrency(totals.vat)}</span>
+                            <span className="tabular-nums">{formatCurrency(totals.vat)}</span>
                         </div>
-                        <div className="flex justify-between text-base font-bold text-gray-900 border-t border-gray-200 pt-2 mt-2">
+                        <div className="flex justify-between text-base font-bold text-foreground border-t border-border pt-2 mt-2">
                             <span>Gesamtbetrag</span>
-                            <span>{formatCurrency(totals.gross)}</span>
+                            <span className="tabular-nums">{formatCurrency(totals.gross)}</span>
                         </div>
                     </div>
                 </div>
             </div>
 
             {/* Actions */}
-            <div className="p-6 border-t border-gray-200 bg-white animate-enter" style={{ animationDelay: '450ms' }}>
+            <div className="p-6 border-t border-border bg-surface animate-enter" style={{ animationDelay: '450ms' }}>
                 <button
                     onClick={() => onSave(formData)}
-                    className="w-full bg-accent text-black font-bold py-3 rounded-xl hover:bg-accent-hover transition-all flex items-center justify-center gap-2 shadow-lg shadow-accent/20 active:scale-95"
+                    className="w-full bg-accent text-foreground font-bold py-3 rounded-xl hover:bg-accent-hover transition-colors duration-150 ease-out flex items-center justify-center gap-2 shadow-lg shadow-accent/20 active:scale-95"
                 >
                     <Save size={18} />
                     Änderungen speichern
@@ -501,7 +502,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
             {/* Sidebar toggle */}
             <button
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="absolute top-4 left-4 z-10 w-9 h-9 bg-white/15 hover:bg-white/25 rounded-xl flex items-center justify-center text-white/70 hover:text-white transition-all"
+              className="absolute top-4 left-4 z-10 w-9 h-9 bg-surface/15 hover:bg-surface/25 rounded-xl flex items-center justify-center text-white/70 hover:text-white transition-colors duration-150 ease-out"
               title={sidebarCollapsed ? 'Seitenleiste einblenden' : 'Seitenleiste ausblenden'}
             >
               {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
@@ -513,7 +514,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                 
                 {/* A4 Preview - Read Only */}
                 <div
-                    className="bg-white shadow-2xl relative transition-transform origin-top"
+                    className="bg-surface shadow-2xl relative transition-transform origin-top"
                     style={{
                         width: `${A4_WIDTH_PX}px`,
                         height: `${A4_HEIGHT_PX}px`,
@@ -523,13 +524,11 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                     }}
                 >
                     {previewElements.map((el) => (
-                        <CanvasElement
+                        <ElementRenderer
                             key={el.id}
                             element={el}
-                            elements={previewElements}
-                            isSelected={false}
-                            scale={1}
-                            readOnly={true} // Crucial: disables dragging/editing in preview
+                            renderText={renderTextWithPlaceholders}
+                            readOnly
                         />
                     ))}
                 </div>

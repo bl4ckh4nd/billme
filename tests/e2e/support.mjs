@@ -433,7 +433,15 @@ export async function launchDesktopApp(options = {}) {
     },
   });
 
-  const page = await launchedApp.firstWindow();
+  const child = launchedApp.process();
+  child.stdout?.on('data', (chunk) => process.stdout.write(`[electron:${app}:stdout] ${chunk}`));
+  child.stderr?.on('data', (chunk) => process.stderr.write(`[electron:${app}:stderr] ${chunk}`));
+  const page = await Promise.race([
+    launchedApp.firstWindow(),
+    new Promise((_, reject) => child.once('exit', (code, signal) => {
+      reject(new Error(`Electron ${app} exited before opening a window (code=${String(code)}, signal=${String(signal)})`));
+    })),
+  ]);
   await page.waitForLoadState('domcontentloaded');
   await page.waitForFunction(() => Boolean(window.billmeApi));
 

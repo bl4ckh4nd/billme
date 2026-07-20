@@ -2,6 +2,12 @@
 
 All notable changes to Billme are documented in this file.
 
+## [0.3.5] - 2026-07-20
+
+### Fixed
+
+- Let Electron Builder rebuild native modules directly from each isolated production stage, removing a redundant pre-packaging rebuild that could not resolve the staged project context on hosted runners.
+
 ## [0.3.4] - 2026-07-20
 
 ### Fixed
@@ -84,6 +90,7 @@ All notable changes to Billme are documented in this file.
 - Restored legacy invoice defaults and tax-mode defaults during migration and merge reconciliation.
 - Included previously missing source files and native runtime dependencies in builds and release packaging.
 
+[0.3.5]: https://github.com/bl4ckh4nd/billme/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/bl4ckh4nd/billme/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/bl4ckh4nd/billme/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/bl4ckh4nd/billme/compare/v0.3.1...v0.3.2

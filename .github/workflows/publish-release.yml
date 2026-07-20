@@ -99,9 +99,6 @@ jobs:
       - name: Prepare isolated Electron package
         run: node scripts/prepare-electron-release-stage.mjs ${{ matrix.app.dir }} .release-stage/${{ matrix.app.dir }}
 
-      - name: Install native app dependencies for Electron
-        run: pnpm -C ${{ matrix.app.dir }} exec electron-builder install-app-deps --projectDir ${{ github.workspace }}/.release-stage/${{ matrix.app.dir }}
-
       - name: Build distributables
         run: pnpm -C ${{ matrix.app.dir }} exec electron-builder --projectDir ${{ github.workspace }}/.release-stage/${{ matrix.app.dir }} --config electron-builder.yml --publish never
 

@@ -50,6 +50,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Rebuild Electron native dependencies sequentially
+        run: pnpm -C apps/desktop exec electron-builder install-app-deps
+
       - name: Desktop typecheck
         run: pnpm -C apps/desktop typecheck
 

@@ -2,6 +2,14 @@
 
 All notable changes to Billme are documented in this file.
 
+## [0.3.2] - 2026-07-20
+
+### Fixed
+
+- Rebuild shared Electron native dependencies sequentially before Linux smoke tests.
+- Allow slower CI workers enough time to finish asynchronous PDF rendering.
+- Raise the release packager heap for large pnpm workspace dependency graphs.
+
 ## [0.3.1] - 2026-07-20
 
 ### Fixed

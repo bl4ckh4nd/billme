@@ -1,7 +1,7 @@
 {
   "name": "billme-pro",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Billme Pro desktop accounting application",
   "license": "MIT",
   "homepage": "https://billme.app",

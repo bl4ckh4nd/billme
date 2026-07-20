@@ -42,6 +42,7 @@ const appDir = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL);
 
 app.setName(PRODUCT_PROFILE.appName);
+if (process.env.BILLME_E2E) app.disableHardwareAcceleration();
 
 let userDataPath: string | null = null;
 let portalSyncStop: (() => void) | null = null;

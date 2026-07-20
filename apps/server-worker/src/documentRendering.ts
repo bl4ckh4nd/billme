@@ -72,9 +72,11 @@ const renderDocument = async (
         billmeRuntimeConfig?: { serverApiUrl?: string };
       };
       browserGlobal.localStorage.setItem(key, JSON.stringify(storedSession));
-      browserGlobal.billmeRuntimeConfig = {
-        serverApiUrl: apiUrl,
-      };
+      Object.defineProperty(browserGlobal, 'billmeRuntimeConfig', {
+        configurable: false,
+        get: () => ({ serverApiUrl: apiUrl }),
+        set: () => undefined,
+      });
     }, { key: sessionKey, storedSession: session, apiUrl: env.apiUrl });
     const base = job.product === 'pro' ? env.webProUrl : env.webUrl;
     const url = new URL(base);

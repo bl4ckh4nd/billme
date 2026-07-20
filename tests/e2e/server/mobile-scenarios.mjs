@@ -117,7 +117,7 @@ export const runMobileApiScenario = async () => {
   assert.equal(replayed.body.replayed, true);
   assert.equal(replayed.body.document.id, finalized.body.document.id);
   let pdf = null;
-  for (let attempt = 0; attempt < 180; attempt += 1) {
+  for (let attempt = 0; attempt < 90; attempt += 1) {
     const response = await fetch(`${state.urls.api}/api/v1/lite/documents/invoice/${finalized.body.document.id}/pdf`, {
       headers: { authorization: `Bearer ${rotated.body.accessToken}` },
     });

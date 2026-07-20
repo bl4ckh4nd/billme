@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import {
+  agentScopeSchema,
   bootstrapRequestSchema,
   loginRequestSchema,
   serverProductSchema,
@@ -29,7 +30,9 @@ import {
   recurringWriteSchema,
   type BillmeServerClientError,
 } from './client.js';
+import { createAgentClient } from './agent.js';
 import { readBillmeCliConfig, updateBillmeCliProfile } from './config.js';
+import { agentTargetSchema } from '@billme/agent-control';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:3100';
 
@@ -51,6 +54,7 @@ const helpText = `billme <group> <command> [options]
 
 Groups:
   auth        login, bootstrap, me
+              agent-token create, list, revoke
   meta        health, capabilities
   clients     list, get, upsert, delete
   invoices    list, get, create, upsert, delete
@@ -60,12 +64,18 @@ Groups:
   numbers     reserve, release, finalize
   documents   export-json, export-csv
   pro         articles, accounts, templates
+  actions     list available business actions
+  action      run <route-key>
 
 Global options:
   --base-url <url>   API base URL
   --product <lite|pro>
   --token <token>
   --profile <name>
+  --target <server|desktop>
+  --endpoint <path>   local desktop endpoint file
+  --reason <text>     mutation audit reason
+  --confirm           confirm destructive actions
   --input <path|->
   --out <path>
   --help
@@ -203,6 +213,7 @@ const buildSharedContext = async (
   const product = options?.forceProduct
     ?? serverProductSchema.parse(getStringFlag(args, 'product') ?? io.env.BILLME_PRODUCT ?? profile?.product ?? 'lite');
   const token = getStringFlag(args, 'token') ?? io.env.BILLME_TOKEN ?? profile?.token ?? null;
+  const endpoint = getStringFlag(args, 'endpoint') ?? io.env.BILLME_DESKTOP_ENDPOINT ?? profile?.endpoint;
 
   if (options?.requireToken !== false && !token) {
     throw new UsageError('Missing bearer token. Use --token or authenticate into a saved profile first.');
@@ -212,6 +223,7 @@ const buildSharedContext = async (
     baseUrl,
     product,
     token,
+    endpoint,
     profileName,
   };
 };
@@ -298,6 +310,34 @@ const withDefaults = async (args: ParsedArgs, io: CliIo) => {
     return 0;
   }
 
+  if (group === 'auth' && command === 'agent-token') {
+    const action = args.positionals[2];
+    const context = await buildSharedContext(args, io);
+    const client = createBillmeServerClient(context);
+    if (action === 'list') {
+      writeJson(io, await client.listAgentTokens());
+      return 0;
+    }
+    if (action === 'create') {
+      const scopes = requireStringFlag(args, 'scopes')
+        .split(',')
+        .map((scope) => agentScopeSchema.parse(scope.trim()));
+      writeJson(io, await client.createAgentToken({
+        label: requireStringFlag(args, 'label'),
+        scopes,
+      }));
+      return 0;
+    }
+    if (action === 'revoke') {
+      if (!getBooleanFlag(args, 'confirm')) {
+        throw new UsageError('Revoking an agent token requires --confirm.');
+      }
+      writeJson(io, await client.revokeAgentToken({ id: requireStringFlag(args, 'id') }));
+      return 0;
+    }
+    throw new UsageError('Use auth agent-token create, list, or revoke.');
+  }
+
   if (group === 'meta' && command === 'health') {
     const context = await buildSharedContext(args, io, { requireToken: false });
     const client = createBillmeServerClient(context);
@@ -309,6 +349,45 @@ const withDefaults = async (args: ParsedArgs, io: CliIo) => {
     const context = await buildSharedContext(args, io, { requireToken: false });
     const client = createBillmeServerClient(context);
     writeJson(io, await client.getCapabilities());
+    return 0;
+  }
+
+  if (group === 'actions' && command === 'list') {
+    const target = agentTargetSchema.parse(getStringFlag(args, 'target') ?? 'server');
+    const context = await buildSharedContext(args, io, { requireToken: false });
+    const client = createAgentClient({
+      product: context.product,
+      target,
+      server: target === 'server' ? { baseUrl: context.baseUrl, token: context.token } : undefined,
+    });
+    writeJson(io, client.listActions());
+    return 0;
+  }
+
+  if (group === 'action' && command === 'run') {
+    const action = args.positionals[2];
+    if (!action) {
+      throw new UsageError('Missing action route key. Use: billme action run <route-key>.');
+    }
+    const target = agentTargetSchema.parse(getStringFlag(args, 'target') ?? 'server');
+    const context = await buildSharedContext(args, io, { requireToken: target === 'server' });
+    const inputPath = getStringFlag(args, 'input');
+    const actionArgs = inputPath || !io.stdin.isTTY
+      ? await readJsonInput(args, io, z.unknown())
+      : undefined;
+    const client = createAgentClient({
+      product: context.product,
+      target,
+      server: target === 'server' ? { baseUrl: context.baseUrl, token: context.token } : undefined,
+    });
+    writeJson(io, await client.invoke({
+      action,
+      args: actionArgs,
+      target,
+      endpointPath: context.endpoint,
+      reason: getStringFlag(args, 'reason'),
+      confirm: getBooleanFlag(args, 'confirm'),
+    }));
     return 0;
   }
 

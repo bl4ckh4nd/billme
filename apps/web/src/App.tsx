@@ -9,13 +9,14 @@ import {
 } from '@billme/server-core';
 import {
   BrowserRendererHost,
+  MobilePairingControl,
   useBrowserDocumentShell,
   usePdfAutoPrint,
   type BrowserDocumentShellConfig,
   type DesktopRendererRuntime,
 } from '@billme/desktop-renderer';
 import DesktopApp from '../../desktop/App';
-import { Button, Input } from '@billme/ui';
+import { AuthScreen, Button, Input } from '@billme/ui';
 import { createLiteWebBillmeApi } from './api/createLiteWebApi';
 
 const SESSION_STORAGE_KEY = 'billme.web.lite.session.v1';
@@ -78,7 +79,8 @@ const RendererWorkspace: React.FC<{
   api: LiteWebApi;
   onLogout?: () => void;
   autoPrint?: boolean;
-}> = ({ api, onLogout, autoPrint = false }) => {
+  pairing?: { apiUrl: string; token: string };
+}> = ({ api, onLogout, autoPrint = false, pairing }) => {
   usePdfAutoPrint(autoPrint);
   const runtime = React.useMemo<DesktopRendererRuntime>(
     () => ({
@@ -90,13 +92,14 @@ const RendererWorkspace: React.FC<{
     [onLogout],
   );
 
-  return (
+  return (<>
+    {pairing ? <MobilePairingControl {...pairing} product="lite" /> : null}
     <BrowserRendererHost api={api} runtime={runtime} AppComponent={DesktopApp}>
       {(mountError) => (
-        <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 py-10 text-slate-50">
-          <div className="w-full max-w-xl rounded-3xl border border-red-500/30 bg-slate-900/90 p-6 shadow-2xl shadow-black/30">
-            <h1 className="text-xl font-semibold">Billme Lite failed to start</h1>
-            <p className="mt-3 text-sm text-slate-300">{mountError}</p>
+        <main className="flex min-h-screen items-center justify-center bg-canvas px-6 py-10">
+          <div className="w-full max-w-xl rounded-3xl border border-error-border bg-surface p-6 shadow-xl">
+            <h1 className="text-xl font-semibold text-foreground">Billme Lite failed to start</h1>
+            <p className="mt-3 text-sm text-muted">{mountError}</p>
             {onLogout ? (
               <Button className="mt-5" onClick={onLogout}>
                 Back to login
@@ -106,7 +109,7 @@ const RendererWorkspace: React.FC<{
         </main>
       )}
     </BrowserRendererHost>
-  );
+  </>);
 };
 
 export default function App() {
@@ -135,10 +138,10 @@ export default function App() {
   if (shell.isPrintMode) {
     if (!shell.printApi) {
       return (
-        <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 py-10 text-slate-50">
-          <div className="w-full max-w-xl rounded-3xl border border-red-500/30 bg-slate-900/90 p-6 shadow-2xl shadow-black/30">
-            <h1 className="text-xl font-semibold">Billme Lite print mode unavailable</h1>
-            <p className="mt-3 text-sm text-slate-300">Please sign in again before printing or exporting a PDF.</p>
+        <main className="flex min-h-screen items-center justify-center bg-canvas px-6 py-10">
+          <div className="w-full max-w-xl rounded-3xl border border-error-border bg-surface p-6 shadow-xl">
+            <h1 className="text-xl font-semibold text-foreground">Billme Lite print mode unavailable</h1>
+            <p className="mt-3 text-sm text-muted">Please sign in again before printing or exporting a PDF.</p>
           </div>
         </main>
       );
@@ -147,7 +150,7 @@ export default function App() {
   }
 
   if (!shell.loadingSession && shell.session) {
-    return <RendererWorkspace api={shell.createWorkspaceApi(shell.session)} onLogout={shell.logout} />;
+    return <RendererWorkspace api={shell.createWorkspaceApi(shell.session)} onLogout={shell.logout} pairing={{ apiUrl: shell.apiUrl, token: shell.session.token }} />;
   }
 
   const handleSubmit = () => {
@@ -155,52 +158,54 @@ export default function App() {
     return shell.bootstrapReady ? shell.bootstrap(credentials) : shell.login(credentials);
   };
 
+  const activeRoles = shell.roles.length > 0 ? shell.roles : supportedServerRoles;
+
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-10 text-slate-50">
-      <div className="mx-auto flex max-w-5xl flex-col gap-6">
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-8 shadow-2xl shadow-black/25">
-          <p className="mb-3 text-sm font-semibold uppercase tracking-[0.25em] text-emerald-300">Billme Lite Web</p>
-          <h1 className="text-4xl font-semibold">Sign in to Billme Lite</h1>
-          <p className="mt-3 max-w-2xl text-sm text-slate-300">
-            Use your server-backed workspace in the browser. After login, the shared desktop renderer takes over.
-          </p>
-        </section>
-
-        <section className="grid gap-6 md:grid-cols-2">
-          <div className="rounded-3xl border border-white/10 bg-slate-900/80 p-6">
-            <h2 className="text-lg font-semibold">Backend status</h2>
-            <p className="mt-3 text-sm text-slate-300">API URL: {shell.apiUrl}</p>
-            <p className="mt-2 text-sm text-slate-200">{shell.health}</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {(shell.roles.length > 0 ? shell.roles : supportedServerRoles).map((role) => (
-                <span key={role} className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs text-emerald-300">
-                  {role}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-white/10 bg-slate-900/80 p-6">
-            <h2 className="text-lg font-semibold">{shell.bootstrapReady ? 'Bootstrap lite owner' : 'Login'}</h2>
-            <div className="mt-4 grid gap-3">
-              {shell.bootstrapReady ? (
-                <Input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Full name" />
-              ) : null}
-              <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" />
-              <Input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Password"
-              />
-              <Button onClick={handleSubmit}>
-                {shell.bootstrapReady ? 'Create owner account' : 'Open lite workspace'}
-              </Button>
-              {shell.message ? <p className="text-sm text-slate-300">{shell.message}</p> : null}
-            </div>
-          </div>
-        </section>
-      </div>
-    </main>
+    <AuthScreen
+      productLabel="Billme Lite Web"
+      title="Sign in to Billme Lite"
+      description="Use your server-backed workspace in the browser. After login, the shared desktop renderer takes over."
+      stats={[
+        { label: 'Backend', value: shell.health },
+        { label: 'API URL', value: shell.apiUrl },
+      ]}
+      roles={activeRoles}
+      formEyebrow={shell.bootstrapReady ? 'First run' : 'Welcome back'}
+      formTitle={shell.bootstrapReady ? 'Bootstrap lite owner' : 'Login'}
+      formDescription={
+        shell.bootstrapReady
+          ? 'Create the first owner account for this workspace.'
+          : 'Enter your credentials to open your lite workspace.'
+      }
+      message={shell.message || null}
+      messageTone={shell.message?.toLowerCase().includes('fail') ? 'danger' : 'neutral'}
+      onSubmit={handleSubmit}
+      submitLabel={shell.bootstrapReady ? 'Create owner account' : 'Open lite workspace'}
+    >
+      {shell.bootstrapReady ? (
+        <Input
+          label="Full name"
+          fullWidth
+          value={fullName}
+          onChange={(event) => setFullName(event.target.value)}
+          placeholder="Full name"
+        />
+      ) : null}
+      <Input
+        label="Email"
+        fullWidth
+        value={email}
+        onChange={(event) => setEmail(event.target.value)}
+        placeholder="Email"
+      />
+      <Input
+        label="Password"
+        fullWidth
+        type="password"
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+        placeholder="Password"
+      />
+    </AuthScreen>
   );
 }

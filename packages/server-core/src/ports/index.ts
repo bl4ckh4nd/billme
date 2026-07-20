@@ -116,6 +116,7 @@ export interface AuditLogPort {
 export interface TenantRepository {
   getById(id: string): MaybePromise<Tenant | null>;
   getPrimary(): MaybePromise<Tenant | null>;
+  listActive(): MaybePromise<Tenant[]>;
   save(tenant: Tenant): MaybePromise<Tenant>;
 }
 

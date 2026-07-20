@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const serverProductValues = ['lite', 'pro'] as const;
 export const serverRoleValues = ['owner', 'admin', 'accountant', 'sales', 'viewer'] as const;
-export const deploymentModeValues = ['single-tenant'] as const;
+export const deploymentModeValues = ['single-tenant', 'multi-tenant'] as const;
 
 export const serverProductSchema = z.enum(serverProductValues);
 export type ServerProduct = z.infer<typeof serverProductSchema>;

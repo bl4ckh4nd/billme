@@ -44,6 +44,18 @@ export const createSingleTenantScope = (tenantId: string, product: ServerProduct
   });
 };
 
+export const createTenantScope = (
+  tenantId: string,
+  product: ServerProduct,
+  deploymentMode: TenantScope['deploymentMode'] = 'multi-tenant',
+): TenantScope => {
+  return tenantScopeSchema.parse({
+    tenantId,
+    product,
+    deploymentMode,
+  });
+};
+
 export const tenantStatusSchema = z.enum(['provisioning', 'active', 'suspended', 'archived']);
 export type TenantStatus = z.infer<typeof tenantStatusSchema>;
 

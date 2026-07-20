@@ -178,3 +178,54 @@ test('typed validation rejects invalid bootstrap payloads', async () => {
     assert.match(response.body, /Invalid email|String must contain at least/i);
   });
 });
+
+test('login attempts are throttled', async () => {
+  await withServerApi(async (app) => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/lite/auth/login',
+        payload: { email: 'missing@example.com', password: 'incorrect-password' },
+      });
+      assert.equal(response.statusCode, 401);
+    }
+
+    const limited = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/auth/login',
+      payload: { email: 'missing@example.com', password: 'incorrect-password' },
+    });
+    assert.equal(limited.statusCode, 429);
+  });
+});
+
+test('write routes reject viewer tokens before touching the database', async () => {
+  await withServerApi(async (app) => {
+    const viewerToken = app.tokenService.sign({
+      user: { id: 'viewer-1', email: 'viewer@example.com', fullName: 'Viewer', role: 'viewer' },
+      scope: { tenantId: 'tenant-1', product: 'lite', deploymentMode: 'multi-tenant' },
+      role: 'viewer',
+    });
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/numbers/reserve',
+      headers: { authorization: `Bearer ${viewerToken}` },
+      payload: { kind: 'invoice' },
+    });
+    assert.equal(denied.statusCode, 403);
+
+    const ownerToken = app.tokenService.sign({
+      user: { id: 'owner-1', email: 'owner@example.com', fullName: 'Owner', role: 'owner' },
+      scope: { tenantId: 'tenant-1', product: 'lite', deploymentMode: 'multi-tenant' },
+      role: 'owner',
+    });
+    const allowed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/numbers/reserve',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { kind: 'invoice' },
+    });
+    assert.equal(allowed.statusCode, 503);
+  });
+});

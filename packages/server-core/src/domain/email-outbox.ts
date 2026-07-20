@@ -19,6 +19,8 @@ export const queueEmailDeliveryInputSchema = z.object({
   recipientName: z.string().min(1),
   subject: z.string().min(1),
   bodyText: z.string().min(1),
+  attachmentStorageKey: z.string().min(1).optional(),
+  deliveryId: entityIdSchema.optional(),
   maxAttempts: z.number().int().positive().max(20).optional(),
   nextAttemptAt: isoDateTimeSchema.optional(),
 });
@@ -35,6 +37,8 @@ export const emailOutboxEntrySchema = z.object({
   recipientName: z.string().min(1),
   subject: z.string().min(1),
   bodyText: z.string().min(1),
+  attachmentStorageKey: z.string().min(1).optional(),
+  deliveryId: entityIdSchema.optional(),
   status: emailOutboxStatusSchema,
   attemptCount: z.number().int().nonnegative(),
   maxAttempts: z.number().int().positive(),

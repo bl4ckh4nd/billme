@@ -82,6 +82,101 @@ export const authSessionInfoSchema = z.object({
 });
 export type AuthSessionInfo = z.infer<typeof authSessionInfoSchema>;
 
+export const agentScopeValues = [
+  'read',
+  'clients:write',
+  'documents:invoice:write',
+  'documents:offer:write',
+  'recurring:write',
+  'numbers:write',
+  'settings:write',
+  'templates:write',
+  'articles:write',
+  'accounts:write',
+  'accounting:write',
+  'delete',
+] as const;
+export const agentScopeSchema = z.enum(agentScopeValues);
+export type AgentScope = z.infer<typeof agentScopeSchema>;
+
+export const createAgentTokenRequestSchema = z.object({
+  label: z.string().trim().min(1).max(120),
+  scopes: z.array(agentScopeSchema).min(1).max(agentScopeValues.length),
+});
+export type CreateAgentTokenRequest = z.infer<typeof createAgentTokenRequestSchema>;
+
+export const agentTokenSummarySchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  product: serverProductSchema,
+  scopes: z.array(agentScopeSchema),
+  createdAt: z.string().min(1),
+  revokedAt: z.string().optional(),
+});
+export type AgentTokenSummary = z.infer<typeof agentTokenSummarySchema>;
+
+export const agentTokenCreateResponseSchema = z.object({
+  token: z.string().min(1),
+  agent: agentTokenSummarySchema,
+});
+export type AgentTokenCreateResponse = z.infer<typeof agentTokenCreateResponseSchema>;
+
+export const platformAdminLoginRequestSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+});
+export type PlatformAdminLoginRequest = z.infer<typeof platformAdminLoginRequestSchema>;
+
+export const platformAdminSessionSchema = z.object({
+  adminId: z.string().min(1),
+  email: z.string().email(),
+});
+export type PlatformAdminSession = z.infer<typeof platformAdminSessionSchema>;
+
+export const platformAdminAuthResponseSchema = z.object({
+  token: z.string().min(1),
+  admin: platformAdminSessionSchema,
+});
+export type PlatformAdminAuthResponse = z.infer<typeof platformAdminAuthResponseSchema>;
+
+export const createWorkspaceRequestSchema = z.object({
+  slug: z.string().min(1),
+  displayName: z.string().min(1),
+  product: serverProductSchema,
+  ownerEmail: z.string().email(),
+  ownerFullName: z.string().min(1),
+  ownerPassword: z.string().min(12),
+});
+export type CreateWorkspaceRequest = z.infer<typeof createWorkspaceRequestSchema>;
+
+export const platformTenantSummarySchema = z.object({
+  id: z.string().min(1),
+  slug: z.string().min(1),
+  displayName: z.string().min(1),
+  product: serverProductSchema,
+  status: z.enum(['provisioning', 'active', 'suspended', 'archived']),
+  memberCount: z.number().int().nonnegative(),
+  createdAt: z.string().min(1),
+});
+export type PlatformTenantSummary = z.infer<typeof platformTenantSummarySchema>;
+
+export const addTenantUserRequestSchema = z.object({
+  email: z.string().email(),
+  fullName: z.string().min(1),
+  password: z.string().min(12),
+  role: serverRoleSchema,
+});
+export type AddTenantUserRequest = z.infer<typeof addTenantUserRequestSchema>;
+
+export const platformTenantUserSummarySchema = z.object({
+  id: z.string().min(1),
+  email: z.string().email(),
+  fullName: z.string().min(1),
+  role: serverRoleSchema,
+  createdAt: z.string().min(1),
+});
+export type PlatformTenantUserSummary = z.infer<typeof platformTenantUserSummarySchema>;
+
 export const bootstrapStatusSchema = z.object({
   bootstrapped: z.boolean(),
   userCount: z.number().int().nonnegative(),

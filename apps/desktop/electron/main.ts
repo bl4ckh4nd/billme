@@ -35,6 +35,8 @@ import { initAutoUpdater } from './updater';
 import { initNotificationPush } from './notifications';
 import { logger } from '../utils/logger';
 import { PRODUCT_PROFILE } from '../productProfile';
+import { startLocalAgentBridge, type LocalAgentBridge } from '@billme/agent-control/bridge';
+import type { IpcRouteKey } from '../ipc/contract';
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL);
@@ -44,6 +46,7 @@ app.setName(PRODUCT_PROFILE.appName);
 let userDataPath: string | null = null;
 let portalSyncStop: (() => void) | null = null;
 let mainWindow: BrowserWindow | null = null;
+let localAgentBridge: LocalAgentBridge | null = null;
 
 initNotificationPush(() => mainWindow);
 
@@ -129,7 +132,7 @@ const requireDb = () => {
   return initDb(userDataPath, { dbFileName: PRODUCT_PROFILE.dbFileName });
 };
 
-registerIpcHandlers(ipcMain, {
+const ipcHandlers = registerIpcHandlers(ipcMain, {
   requireDb,
   getUserDataPath: () => {
     if (!userDataPath) throw new Error('userDataPath not initialized');
@@ -172,6 +175,12 @@ app.whenReady().then(async () => {
 
   userDataPath = app.getPath('userData');
   const db = initDb(userDataPath, { dbFileName: PRODUCT_PROFILE.dbFileName });
+  localAgentBridge = await startLocalAgentBridge({
+    userDataPath,
+    product: 'lite',
+    invoke: ({ action, args }) => ipcHandlers.invoke(action as IpcRouteKey, args as never),
+  });
+  logger.info('Startup', 'Local agent bridge started', { endpointPath: localAgentBridge.endpointPath });
 
   if (isDev) {
     // Dev convenience: seed initial data if DB is empty.
@@ -331,6 +340,9 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  void localAgentBridge?.stop().catch((error) => {
+    logger.warn('Shutdown', 'Failed to stop local agent bridge', { error: String(error) });
+  });
   try {
     portalSyncStop?.();
   } catch (error) {

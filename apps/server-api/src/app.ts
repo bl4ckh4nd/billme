@@ -1,25 +1,56 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { extname, join } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { z } from 'zod';
 import {
+  addTenantUserRequestSchema,
+  agentTokenCreateResponseSchema,
+  agentTokenSummarySchema,
   authUserSchema,
   bootstrapRequestSchema,
   capabilitiesResponseSchema,
   clientSchema,
+  createAgentTokenRequestSchema,
   createSingleTenantScope,
+  createWorkspaceRequestSchema,
+  calculateInvoiceTaxSnapshot,
   finalizeDocumentNumber,
   healthResponseSchema,
   invoiceSchema,
+  isPortalUrlAllowed,
   loginRequestSchema,
+  mobileDeviceLoginRequestSchema,
+  mobileDeviceSchema,
+  mobileDocumentFinalizeRequestSchema,
+  mobileDocumentFinalizeResponseSchema,
+  mobileHomeSchema,
+  mobilePairingCodeSchema,
+  mobilePairingExchangeRequestSchema,
+  mobilePushRegistrationSchema,
+  mobileSessionRefreshRequestSchema,
+  mobileSessionSchema,
   offerSchema,
+  platformAdminAuthResponseSchema,
+  platformAdminLoginRequestSchema,
+  platformTenantSummarySchema,
+  platformTenantUserSummarySchema,
   recurringProfileSchema,
+  receiptConfirmRequestSchema,
+  receiptSchema,
+  receiptUploadMetadataSchema,
+  parsePortalAllowedOrigins,
   releaseDocumentNumber,
+  resolveInvoiceTaxMode,
   reserveDocumentNumber,
   serverProductSchema,
+  serverRoleSchema,
   supportedServerProducts,
   supportedServerRoles,
   type AuditEntryDraft,
+  type MobileDocumentFinalizeResponse,
   type TenantScope,
 } from '@billme/server-core';
 import {
@@ -28,6 +59,13 @@ import {
   createPostgresPool,
   createPostgresProAccountingCatalogRepository,
   createPostgresProWorkflowRepository,
+  enqueueMobilePush,
+  createPostgresAgentToken,
+  consumeMobilePairingCode,
+  createMobilePairingCode,
+  createMobileRefreshToken,
+  getMobileDocumentMutation,
+  getPostgresReceipt,
   getServerActiveTemplates,
   getServerSettings,
   listServerArticles,
@@ -42,8 +80,23 @@ import {
   saveServerNumberReservation,
   saveServerSettings,
   saveServerTemplate,
+  listPostgresAgentTokens,
+  listMobileDeviceSessions,
+  listPostgresReceipts,
+  insertDocumentDelivery,
+  insertMobileDeviceSession,
+  insertMobileDocumentMutation,
+  insertMobilePairingCode,
+  insertPostgresReceipt,
+  registerMobilePushToken,
+  revokeMobileDeviceSession,
+  rotateMobileDeviceSession,
+  updatePostgresReceipt,
+  revokePostgresAgentToken,
+  verifyPostgresAgentToken,
   withPostgresTransaction,
   type PostgresQueryable,
+  type MobilePrincipal,
 } from '@billme/server-data';
 import {
   accountSchema,
@@ -64,8 +117,10 @@ import {
   upsertArticlePayloadSchema,
   upsertTemplatePayloadSchema,
 } from '@billme/desktop-contracts-pro/schemas';
-import { SessionTokenService, type AuthSession, type AuthSessionInfo } from './auth.js';
-import { createAuthStore, type AuthStore } from './authStore.js';
+import { PlatformTokenService, SessionTokenService, type AuthSession, type AuthSessionInfo, type PlatformSession } from './auth.js';
+import { createAuthStore, createPlatformAuthStore, type AuthStore, type PlatformAuthStore } from './authStore.js';
+import { assertTenantCapability, type TenantCapability } from './authorization.js';
+import { registerAuthRateLimit } from './auth-rate-limit.js';
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
 
 type Pool = ReturnType<typeof createPostgresPool>;
@@ -75,6 +130,34 @@ const okSchema = z.object({ ok: z.literal(true) });
 const entityIdParamsSchema = z.object({ id: z.string().min(1) });
 const deletePayloadSchema = z.object({ reason: z.string().trim().min(1) });
 const documentKindSchema = z.enum(['invoice', 'offer']);
+const mobileBookingDraftSchema = z.object({
+  id: z.string().min(1),
+  tenantId: z.string().min(1),
+  transactionId: z.string().min(1),
+  workflowStatus: z.enum([
+    'imported', 'suggested', 'incomplete', 'ready_for_review', 'pending_approval', 'approved',
+    'posted', 'reversed', 'corrected', 'period_locked', 'integration_error',
+  ]),
+  postingDate: z.string().optional(),
+  documentDate: z.string().optional(),
+  bookingText: z.string().min(1),
+  reference: z.string().optional(),
+  period: z.string().min(1),
+  fiscalYear: z.number().int(),
+  lines: z.array(z.object({
+    id: z.string().min(1), accountNumber: z.string().min(1), debitAmount: z.number(), creditAmount: z.number(),
+    taxCode: z.string().optional(), taxCaseKey: z.string().optional(), taxRate: z.number().optional(),
+    netAmount: z.number().optional(), taxAmount: z.number().optional(), grossAmount: z.number().optional(),
+    countryCode: z.string().optional(), counterpartyVatId: z.string().optional(), evidenceType: z.string().optional(),
+    evidenceReference: z.string().optional(), costCenter: z.string().optional(), memo: z.string().optional(),
+  })).min(1),
+  validationIssues: z.array(z.object({
+    id: z.string().min(1), code: z.string().min(1), severity: z.enum(['error', 'warning', 'info']),
+    message: z.string().min(1), fieldPath: z.string().optional(), blocking: z.boolean(),
+    source: z.enum(['system', 'user', 'rule']),
+  })).default([]),
+  updatedAt: z.string().min(1),
+});
 const productAuthStatusQuerySchema = z.object({
   product: serverProductSchema.default('lite'),
 });
@@ -135,7 +218,7 @@ const toSessionInfo = (session: AuthSession): AuthSessionInfo => ({
 const buildAuditEntry = (
   scope: TenantScope,
   session: AuthSession,
-  subject: 'client' | 'invoice' | 'offer' | 'recurring-profile',
+  subject: 'client' | 'invoice' | 'offer' | 'recurring-profile' | 'receipt',
   entityId: string,
   action: string,
   reason: string,
@@ -256,11 +339,93 @@ const requireSession = async (
     throw new ApiError(401, 'Missing bearer token');
   }
   const session = app.tokenService.verify(token);
+  if (session) {
+    if (session.scope.product !== product) {
+      throw new ApiError(403, `Token is not authorized for ${product}`);
+    }
+    return session;
+  }
+  if (app.serverPool) {
+    const agent = await verifyPostgresAgentToken(app.serverPool, token, product);
+    if (agent) {
+      if (!agent.scopes.includes('read')) {
+        throw new ApiError(403, 'Agent token is missing the read scope');
+      }
+      return {
+        user: {
+          id: agent.userId,
+          email: agent.email,
+          fullName: agent.fullName,
+          role: agent.role,
+        },
+        scope: {
+          tenantId: agent.tenantId,
+          product: agent.product,
+          deploymentMode: agent.deploymentMode,
+        },
+        role: agent.role,
+        agentId: agent.id,
+        agentScopes: agent.scopes,
+      };
+    }
+  }
+  throw new ApiError(401, 'Invalid or expired bearer token');
+};
+
+const requireCapability = async (
+  app: FastifyInstance,
+  product: 'lite' | 'pro',
+  authHeader: string | undefined,
+  capability: TenantCapability,
+): Promise<AuthSession> => {
+  const session = await requireSession(app, product, authHeader);
+  try {
+    assertTenantCapability(session.role, capability);
+    if (session.agentScopes && !session.agentScopes.includes(capability)) {
+      throw new ApiError(403, `Agent token is missing the ${capability} scope`);
+    }
+  } catch (error) {
+    app.log.warn({ tenantId: session.scope.tenantId, role: session.role, capability }, 'Denied tenant capability');
+    throw error;
+  }
+  return session;
+};
+
+const requireAgentManager = (session: AuthSession): AuthSession => {
+  if (session.agentId || !['owner', 'admin'].includes(session.role)) {
+    throw new ApiError(403, 'Only an owner or admin user session may manage agent tokens');
+  }
+  return session;
+};
+
+const login = async (app: FastifyInstance, product: 'lite' | 'pro', body: z.infer<typeof loginRequestSchema>) => {
+  try {
+    return await app.authStore.login(product, body);
+  } catch {
+    throw new ApiError(401, 'Invalid email or password');
+  }
+};
+
+const timingSafeStringEqual = (a: string, b: string): boolean => {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+};
+
+const requirePlatformSession = async (
+  app: FastifyInstance,
+  authHeader: string | undefined,
+): Promise<PlatformSession> => {
+  const token = app.platformTokenService.readBearerToken(authHeader);
+  if (!token) {
+    throw new ApiError(401, 'Missing bearer token');
+  }
+  const session = app.platformTokenService.verify(token);
   if (!session) {
     throw new ApiError(401, 'Invalid or expired bearer token');
-  }
-  if (session.scope.product !== product) {
-    throw new ApiError(403, `Token is not authorized for ${product}`);
   }
   return session;
 };
@@ -379,6 +544,170 @@ const finalizeNumberForScope = async (pool: Pool, scope: TenantScope, reservatio
   );
 };
 
+const mobileReceiptUploadBodySchema = z.object({
+  metadata: receiptUploadMetadataSchema,
+  dataBase64: z.string().min(4).max(21 * 1024 * 1024),
+});
+
+const mobileStorageRoot = (): string =>
+  process.env.BILLME_DOCUMENT_STORAGE_PATH?.trim() || join(tmpdir(), 'billme-documents');
+
+const receiptExtension = (mimeType: 'image/jpeg' | 'image/png' | 'application/pdf'): string =>
+  mimeType === 'image/jpeg' ? '.jpg' : mimeType === 'image/png' ? '.png' : '.pdf';
+
+const hasExpectedMagicBytes = (data: Buffer, mimeType: 'image/jpeg' | 'image/png' | 'application/pdf'): boolean => {
+  if (mimeType === 'image/jpeg') return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+  if (mimeType === 'image/png') return data.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'));
+  return data.subarray(0, 5).toString('ascii') === '%PDF-';
+};
+
+const resolveMobilePrincipal = async (
+  pool: Pool,
+  principal: { tenantId: string; product: 'lite' | 'pro'; role: z.infer<typeof serverRoleSchema>; user: z.infer<typeof authUserSchema> },
+): Promise<MobilePrincipal> => {
+  const result = await pool.query<{ deployment_mode: 'single-tenant' | 'multi-tenant' }>(
+    'SELECT deployment_mode FROM tenants WHERE id = $1 LIMIT 1',
+    [principal.tenantId],
+  );
+  return {
+    tenantId: principal.tenantId,
+    userId: principal.user.id,
+    product: principal.product,
+    role: principal.role,
+    deploymentMode: result.rows[0]?.deployment_mode ?? 'single-tenant',
+    email: principal.user.email,
+    fullName: principal.user.fullName,
+  };
+};
+
+const buildMobileSession = (
+  app: FastifyInstance,
+  principal: MobilePrincipal,
+  device: z.infer<typeof mobileDeviceSchema>,
+  refreshToken: string,
+  refreshTokenExpiresAt: string,
+) => {
+  const accessTokenExpiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+  return mobileSessionSchema.parse({
+    accessToken: app.tokenService.sign({
+      user: {
+        id: principal.userId,
+        email: principal.email,
+        fullName: principal.fullName,
+        role: principal.role,
+      },
+      scope: {
+        tenantId: principal.tenantId,
+        product: principal.product,
+        deploymentMode: principal.deploymentMode,
+      },
+      role: principal.role,
+    }, 15 * 60),
+    refreshToken,
+    accessTokenExpiresAt,
+    refreshTokenExpiresAt,
+    user: {
+      id: principal.userId,
+      email: principal.email,
+      fullName: principal.fullName,
+      role: principal.role,
+    },
+    tenantId: principal.tenantId,
+    product: principal.product,
+    role: principal.role,
+    device,
+  });
+};
+
+const createMobileSessionForPrincipal = async (
+  app: FastifyInstance,
+  principal: MobilePrincipal,
+  input: { deviceName: string; platform: 'ios' | 'android' },
+) => {
+  const refreshToken = createMobileRefreshToken();
+  const refreshTokenExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString();
+  const device = await insertMobileDeviceSession(requirePool(app), {
+    ...principal,
+    ...input,
+    refreshToken,
+    refreshExpiresAt: refreshTokenExpiresAt,
+  });
+  return buildMobileSession(app, principal, device, refreshToken, refreshTokenExpiresAt);
+};
+
+const registerPlatformRoutes = (app: FastifyInstance, prefix = '/api/v1/platform') => {
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/auth/login`,
+    body: platformAdminLoginRequestSchema,
+    response: platformAdminAuthResponseSchema,
+    async handler({ body }) {
+      const expectedEmail = (process.env.PLATFORM_ADMIN_EMAIL ?? '').trim().toLowerCase();
+      const expectedPassword = process.env.PLATFORM_ADMIN_PASSWORD ?? '';
+      const candidateEmail = body.email.trim().toLowerCase();
+
+      const emailMatches = expectedEmail.length > 0 && candidateEmail === expectedEmail;
+      const passwordMatches =
+        expectedPassword.length > 0 &&
+        body.password.length === expectedPassword.length &&
+        timingSafeStringEqual(body.password, expectedPassword);
+
+      if (!emailMatches || !passwordMatches) {
+        throw new ApiError(401, 'Invalid platform admin credentials');
+      }
+
+      return {
+        token: app.platformTokenService.sign({ admin: { email: expectedEmail } }),
+        admin: { adminId: 'platform-admin', email: expectedEmail },
+      };
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/tenants`,
+    response: z.array(platformTenantSummarySchema),
+    async handler({ request }) {
+      await requirePlatformSession(app, request.headers.authorization);
+      return app.platformAuthStore.listTenants();
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/tenants`,
+    body: createWorkspaceRequestSchema,
+    response: platformTenantSummarySchema,
+    async handler({ request, body }) {
+      await requirePlatformSession(app, request.headers.authorization);
+      return app.platformAuthStore.createTenant(body);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/tenants/:tenantId/users`,
+    params: z.object({ tenantId: z.string().min(1) }),
+    response: z.array(platformTenantUserSummarySchema),
+    async handler({ request, params }) {
+      await requirePlatformSession(app, request.headers.authorization);
+      return app.platformAuthStore.listTenantUsers(params.tenantId);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/tenants/:tenantId/users`,
+    params: z.object({ tenantId: z.string().min(1) }),
+    body: addTenantUserRequestSchema,
+    response: platformTenantUserSummarySchema,
+    async handler({ request, params, body }) {
+      await requirePlatformSession(app, request.headers.authorization);
+      return app.platformAuthStore.addTenantUser(params.tenantId, body);
+    },
+  });
+};
+
 const registerAuthRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefix: string) => {
   typedRoute(app, {
     method: 'GET',
@@ -422,7 +751,7 @@ const registerAuthRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefi
       user: authUserSchema,
     }),
     async handler({ body }) {
-      const principal = await app.authStore.login(product, body);
+      const principal = await login(app, product, body);
       return {
         token: app.tokenService.sign({
           user: principal.user,
@@ -441,6 +770,635 @@ const registerAuthRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefi
     async handler({ request }) {
       const session = await requireSession(app, product, request.headers.authorization);
       return toSessionInfo(session);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/auth/agent-tokens`,
+    response: z.array(agentTokenSummarySchema),
+    async handler({ request }) {
+      const session = requireAgentManager(await requireSession(app, product, request.headers.authorization));
+      return listPostgresAgentTokens(requirePool(app), session.scope.tenantId, product);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/auth/agent-tokens`,
+    body: createAgentTokenRequestSchema,
+    response: agentTokenCreateResponseSchema,
+    async handler({ request, body }) {
+      const session = requireAgentManager(await requireSession(app, product, request.headers.authorization));
+      if (!body.scopes.includes('read')) {
+        throw new ApiError(400, 'Agent tokens must include the read scope');
+      }
+      return createPostgresAgentToken(requirePool(app), {
+        ...body,
+        tenantId: session.scope.tenantId,
+        userId: session.user.id,
+        product,
+      });
+    },
+  });
+
+  typedRoute(app, {
+    method: 'DELETE',
+    url: `${prefix}/auth/agent-tokens/:id`,
+    params: entityIdParamsSchema,
+    response: okSchema,
+    async handler({ request, params }) {
+      const session = requireAgentManager(await requireSession(app, product, request.headers.authorization));
+      const revoked = await revokePostgresAgentToken(requirePool(app), session.scope.tenantId, product, params.id);
+      if (!revoked) {
+        throw new ApiError(404, 'Agent token not found');
+      }
+      return { ok: true as const };
+    },
+  });
+};
+
+const registerMobileAuthRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefix: string) => {
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/auth/device-sessions/login`,
+    body: mobileDeviceLoginRequestSchema,
+    response: mobileSessionSchema,
+    async handler({ body }) {
+      const authenticated = await login(app, product, body);
+      const principal = await resolveMobilePrincipal(requirePool(app), authenticated);
+      return createMobileSessionForPrincipal(app, principal, body);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/auth/device-sessions/refresh`,
+    body: mobileSessionRefreshRequestSchema,
+    response: mobileSessionSchema,
+    async handler({ body }) {
+      const nextToken = createMobileRefreshToken();
+      const nextExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString();
+      const rotated = await rotateMobileDeviceSession(requirePool(app), body.refreshToken, nextToken, nextExpiresAt);
+      if (!rotated || rotated.principal.product !== product) {
+        throw new ApiError(401, 'Invalid or expired refresh token');
+      }
+      return buildMobileSession(app, rotated.principal, rotated.device, nextToken, nextExpiresAt);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/auth/device-sessions`,
+    response: z.array(mobileDeviceSchema),
+    async handler({ request }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      if (session.agentId) throw new ApiError(403, 'Agent tokens cannot manage mobile devices');
+      return listMobileDeviceSessions(requirePool(app), session.scope.tenantId, session.user.id, product);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'DELETE',
+    url: `${prefix}/auth/device-sessions/:id`,
+    params: entityIdParamsSchema,
+    response: okSchema,
+    async handler({ request, params }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      if (session.agentId) throw new ApiError(403, 'Agent tokens cannot manage mobile devices');
+      const revoked = await revokeMobileDeviceSession(
+        requirePool(app), session.scope.tenantId, session.user.id, params.id,
+      );
+      if (!revoked) throw new ApiError(404, 'Mobile device not found');
+      return { ok: true as const };
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/auth/device-sessions/:id/push`,
+    params: entityIdParamsSchema,
+    body: mobilePushRegistrationSchema,
+    response: okSchema,
+    async handler({ request, params, body }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      if (session.agentId) throw new ApiError(403, 'Agent tokens cannot register mobile devices');
+      const registered = await registerMobilePushToken(
+        requirePool(app), session.scope.tenantId, session.user.id, params.id, body.token, body.provider,
+      );
+      if (!registered) throw new ApiError(404, 'Mobile device not found');
+      return { ok: true as const };
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/auth/pairing-codes`,
+    response: mobilePairingCodeSchema,
+    async handler({ request }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      if (session.agentId) throw new ApiError(403, 'Agent tokens cannot create pairing codes');
+      const code = createMobilePairingCode();
+      const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+      const principal: MobilePrincipal = {
+        tenantId: session.scope.tenantId,
+        userId: session.user.id,
+        product,
+        role: session.role,
+        deploymentMode: session.scope.deploymentMode,
+        email: session.user.email,
+        fullName: session.user.fullName,
+      };
+      await insertMobilePairingCode(requirePool(app), { code, principal, expiresAt });
+      const configuredBase = process.env.BILLME_PUBLIC_URL?.trim().replace(/\/+$/, '');
+      const requestBase = `${request.protocol}://${request.headers.host}`;
+      const pairingUri = new URL('billme://pair');
+      pairingUri.searchParams.set('server', configuredBase || requestBase);
+      pairingUri.searchParams.set('product', product);
+      pairingUri.searchParams.set('code', code);
+      return { code, expiresAt, pairingUri: pairingUri.toString() };
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/auth/pairing-codes/exchange`,
+    body: mobilePairingExchangeRequestSchema,
+    response: mobileSessionSchema,
+    async handler({ body }) {
+      const principal = await consumeMobilePairingCode(requirePool(app), body.code);
+      if (!principal || principal.product !== product) throw new ApiError(401, 'Invalid or expired pairing code');
+      return createMobileSessionForPrincipal(app, principal, body);
+    },
+  });
+};
+
+const registerMobileRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefix: string) => {
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/mobile/home`,
+    response: mobileHomeSchema,
+    async handler({ request }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      const pool = requirePool(app);
+      const repositories = createPostgresBillingDependencies(pool);
+      const [invoices, offers, receipts, bookingResult] = await Promise.all([
+        repositories.invoiceRepo.list(session.scope),
+        repositories.offerRepo.list(session.scope),
+        listPostgresReceipts(pool, session.scope.tenantId),
+        product === 'pro'
+          ? pool.query<{ count: string }>(
+              `SELECT COUNT(*)::text AS count FROM booking_drafts
+               WHERE tenant_id = $1 AND workflow_status NOT IN ('posted', 'reversed')`,
+              [session.scope.tenantId],
+            )
+          : Promise.resolve({ rows: [{ count: '0' }] }),
+      ]);
+      const today = new Date().toISOString().slice(0, 10);
+      const openInvoices = invoices.filter((invoice) => ['open', 'overdue'].includes(invoice.status));
+      const overdueInvoices = openInvoices.filter((invoice) => invoice.status === 'overdue' || invoice.dueDate < today);
+      const draftDocuments = invoices.filter((invoice) => invoice.status === 'draft').length
+        + offers.filter((offer) => offer.status === 'draft').length;
+      const receiptsToReview = receipts.filter((receipt) => receipt.status === 'needs_review').length;
+      const bookingReviews = Number(bookingResult.rows[0]?.count ?? 0);
+      const actions = [
+        ...overdueInvoices.map((invoice) => ({
+          id: `overdue:${invoice.id}`,
+          type: 'overdue_invoice' as const,
+          title: `${invoice.number} is overdue`,
+          detail: `${invoice.client} · due ${invoice.dueDate}`,
+          amount: invoice.amount,
+          dueAt: invoice.dueDate,
+          severity: 'urgent' as const,
+          route: `/documents/invoice/${invoice.id}`,
+        })),
+        ...receipts.filter((receipt) => receipt.status === 'needs_review').map((receipt) => ({
+          id: `receipt:${receipt.id}`,
+          type: 'receipt_review' as const,
+          title: 'Review captured receipt',
+          detail: receipt.suggestion?.merchant.value || receipt.originalName,
+          amount: receipt.suggestion?.grossAmount.value ?? undefined,
+          severity: 'attention' as const,
+          route: `/receipts/${receipt.id}`,
+        })),
+        ...invoices.filter((invoice) => invoice.status === 'draft').slice(0, 5).map((invoice) => ({
+          id: `invoice-draft:${invoice.id}`,
+          type: 'draft_document' as const,
+          title: 'Finish invoice draft',
+          detail: invoice.client,
+          amount: invoice.amount,
+          severity: 'neutral' as const,
+          route: `/documents/invoice/${invoice.id}`,
+        })),
+        ...offers.filter((offer) => offer.status === 'accepted').slice(0, 5).map((offer) => ({
+          id: `offer-decision:${offer.id}`,
+          type: 'offer_decision' as const,
+          title: `${offer.number} was accepted`,
+          detail: offer.client,
+          amount: offer.amount,
+          severity: 'attention' as const,
+          route: `/documents/offer/${offer.id}`,
+        })),
+        ...(bookingReviews > 0 ? [{
+          id: 'booking-reviews',
+          type: 'booking_review' as const,
+          title: `${bookingReviews} booking${bookingReviews === 1 ? '' : 's'} need review`,
+          detail: 'Validate and approve accounting suggestions',
+          severity: 'attention' as const,
+          route: '/accounting/review',
+        }] : []),
+      ].sort((left, right) => {
+        const rank = { urgent: 0, attention: 1, neutral: 2 } as const;
+        return rank[left.severity] - rank[right.severity];
+      }).slice(0, 20);
+      const recentActivity = [
+        ...invoices.map((invoice) => ({
+          id: `invoice:${invoice.id}`,
+          title: invoice.number,
+          detail: `${invoice.client} · ${invoice.status}`,
+          occurredAt: invoice.updatedAt ?? invoice.createdAt ?? `${invoice.date}T00:00:00.000Z`,
+          route: `/documents/invoice/${invoice.id}`,
+        })),
+        ...offers.map((offer) => ({
+          id: `offer:${offer.id}`,
+          title: offer.number,
+          detail: `${offer.client} · ${offer.status}`,
+          occurredAt: offer.updatedAt ?? offer.createdAt ?? `${offer.date}T00:00:00.000Z`,
+          route: `/documents/offer/${offer.id}`,
+        })),
+        ...receipts.map((receipt) => ({
+          id: `receipt:${receipt.id}`,
+          title: receipt.originalName,
+          detail: receipt.status.replace('_', ' '),
+          occurredAt: receipt.updatedAt,
+          route: `/receipts/${receipt.id}`,
+        })),
+      ].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)).slice(0, 20);
+      return mobileHomeSchema.parse({
+        serverTime: new Date().toISOString(),
+        summary: {
+          openReceivables: openInvoices.reduce((sum, invoice) => sum + invoice.amount, 0),
+          overdueReceivables: overdueInvoices.reduce((sum, invoice) => sum + invoice.amount, 0),
+          draftDocuments,
+          receiptsToReview,
+          bookingReviews,
+        },
+        actions,
+        recentActivity,
+      });
+    },
+  });
+
+  app.get(`${prefix}/documents/:kind/:id/pdf`, async (request, reply) => {
+    const session = await requireSession(app, product, request.headers.authorization);
+    const params = z.object({ kind: documentKindSchema, id: z.string().min(1) }).parse(request.params);
+    const pool = requirePool(app);
+    const document = params.kind === 'invoice'
+      ? await createPostgresBillingDependencies(pool).invoiceRepo.getById(session.scope, params.id)
+      : await createPostgresBillingDependencies(pool).offerRepo.getById(session.scope, params.id);
+    if (!document) throw new ApiError(404, 'Document not found');
+    const result = await pool.query<{ attachment_storage_key: string | null }>(
+      `SELECT attachment_storage_key FROM document_deliveries
+       WHERE tenant_id = $1 AND document_type = $2 AND document_id = $3
+       ORDER BY created_at DESC LIMIT 1`,
+      [session.scope.tenantId, params.kind, params.id],
+    );
+    const storageKey = result.rows[0]?.attachment_storage_key;
+    if (!storageKey) {
+      if (!result.rows[0]) {
+        await insertDocumentDelivery(pool, {
+          tenantId: session.scope.tenantId,
+          userId: session.user.id,
+          documentType: params.kind,
+          documentId: params.id,
+          recipientEmail: session.user.email,
+        });
+      }
+      return reply.code(202).send({ status: 'rendering' });
+    }
+    const data = await readFile(join(mobileStorageRoot(), storageKey));
+    return reply.type('application/pdf')
+      .header('content-disposition', `inline; filename="${document.number}.pdf"`)
+      .header('cache-control', 'private, max-age=300')
+      .send(data);
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/receipts`,
+    response: z.array(receiptSchema),
+    async handler({ request }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      return listPostgresReceipts(requirePool(app), session.scope.tenantId);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/receipts/:id`,
+    params: entityIdParamsSchema,
+    response: receiptSchema,
+    async handler({ request, params }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      const receipt = await getPostgresReceipt(requirePool(app), session.scope.tenantId, params.id);
+      if (!receipt) throw new ApiError(404, 'Receipt not found');
+      return receipt;
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/receipts`,
+    body: mobileReceiptUploadBodySchema,
+    response: receiptSchema,
+    async handler({ request, body }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      if (session.role === 'viewer') throw new ApiError(403, 'Role is not authorized to upload receipts');
+      const data = Buffer.from(body.dataBase64, 'base64');
+      if (data.byteLength === 0 || data.byteLength > 15 * 1024 * 1024) {
+        throw new ApiError(413, 'Receipt must be between 1 byte and 15 MB');
+      }
+      if (!hasExpectedMagicBytes(data, body.metadata.mimeType)) {
+        throw new ApiError(400, 'Receipt content does not match its declared type');
+      }
+      const actualHash = createHash('sha256').update(data).digest('hex');
+      if (!timingSafeStringEqual(actualHash, body.metadata.sha256)) {
+        throw new ApiError(400, 'Receipt checksum does not match');
+      }
+      const relativeStorageKey = join(
+        session.scope.tenantId,
+        'receipts',
+        `${body.metadata.id}${receiptExtension(body.metadata.mimeType)}`,
+      );
+      const absolutePath = join(mobileStorageRoot(), relativeStorageKey);
+      await mkdir(join(mobileStorageRoot(), session.scope.tenantId, 'receipts'), { recursive: true });
+      await writeFile(absolutePath, data, { flag: 'wx' }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error;
+      });
+      const now = new Date().toISOString();
+      return insertPostgresReceipt(requirePool(app), receiptSchema.parse({
+        id: body.metadata.id,
+        tenantId: session.scope.tenantId,
+        product,
+        originalName: body.metadata.originalName,
+        mimeType: body.metadata.mimeType,
+        byteSize: data.byteLength,
+        sha256: actualHash,
+        status: 'queued',
+        storageKey: relativeStorageKey,
+        createdAt: now,
+        updatedAt: now,
+      }));
+    },
+  });
+
+  app.get(`${prefix}/receipts/:id/content`, async (request, reply) => {
+    const session = await requireSession(app, product, request.headers.authorization);
+    const params = entityIdParamsSchema.parse(request.params);
+    const receipt = await getPostgresReceipt(requirePool(app), session.scope.tenantId, params.id);
+    if (!receipt) throw new ApiError(404, 'Receipt not found');
+    const data = await readFile(join(mobileStorageRoot(), receipt.storageKey));
+    const query = z.object({ format: z.enum(['binary', 'base64']).default('binary') }).parse(request.query);
+    if (query.format === 'base64') {
+      return reply.header('cache-control', 'no-store').send({
+        mimeType: receipt.mimeType,
+        dataBase64: data.toString('base64'),
+      });
+    }
+    return reply.type(receipt.mimeType).header('cache-control', 'private, max-age=300').send(data);
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/receipts/:id/retry`,
+    params: entityIdParamsSchema,
+    response: receiptSchema,
+    async handler({ request, params }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      if (session.role === 'viewer') throw new ApiError(403, 'Role is not authorized to retry receipts');
+      const receipt = await getPostgresReceipt(requirePool(app), session.scope.tenantId, params.id);
+      if (!receipt) throw new ApiError(404, 'Receipt not found');
+      if (receipt.status !== 'failed') throw new ApiError(409, 'Only failed receipts can be retried');
+      return (await updatePostgresReceipt(requirePool(app), session.scope.tenantId, params.id, { status: 'queued' }))!;
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/receipts/:id/confirm`,
+    params: entityIdParamsSchema,
+    body: receiptConfirmRequestSchema,
+    response: receiptSchema,
+    async handler({ request, params, body }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      if (session.role === 'viewer') throw new ApiError(403, 'Role is not authorized to confirm receipts');
+      const pool = requirePool(app);
+      return withPostgresTransaction(pool, async (client) => {
+        const before = await getPostgresReceipt(client, session.scope.tenantId, params.id);
+        if (!before) throw new ApiError(404, 'Receipt not found');
+        if (before.status !== 'needs_review') throw new ApiError(409, 'Receipt is not ready for review');
+        const saved = await updatePostgresReceipt(client, session.scope.tenantId, params.id, {
+          status: 'confirmed',
+          suggestion: body.suggestion,
+          confirmedAt: new Date().toISOString(),
+        });
+        if (product === 'pro') {
+          const gross = body.suggestion.grossAmount.value;
+          const expenseAccount = body.suggestion.suggestedAccountNumber?.value;
+          const bank = await client.query<{ default_skr_account_number: string }>(
+            'SELECT default_skr_account_number FROM accounts WHERE tenant_id = $1 ORDER BY name ASC LIMIT 1',
+            [session.scope.tenantId],
+          );
+          const clearingAccount = bank.rows[0]?.default_skr_account_number;
+          const documentDate = body.suggestion.date.value ?? before.createdAt.slice(0, 10);
+          const year = Number(documentDate.slice(0, 4)) || new Date().getFullYear();
+          const issues = [
+            ...(!gross || gross <= 0 ? [{ id: randomUUID(), code: 'receipt.amount_missing', severity: 'error' as const, message: 'Confirm a positive gross amount.', fieldPath: 'grossAmount', blocking: true, source: 'system' as const }] : []),
+            ...(!expenseAccount ? [{ id: randomUUID(), code: 'receipt.expense_account_missing', severity: 'error' as const, message: 'Choose an expense account.', fieldPath: 'lines.0.accountNumber', blocking: true, source: 'system' as const }] : []),
+            ...(!clearingAccount ? [{ id: randomUUID(), code: 'receipt.clearing_account_missing', severity: 'error' as const, message: 'Choose a bank or clearing account.', fieldPath: 'lines.1.accountNumber', blocking: true, source: 'system' as const }] : []),
+          ];
+          const now = new Date().toISOString();
+          const draftId = randomUUID();
+          const draft = mobileBookingDraftSchema.parse({
+            id: draftId,
+            tenantId: session.scope.tenantId,
+            transactionId: `receipt:${before.id}`,
+            workflowStatus: issues.length ? 'incomplete' : 'ready_for_review',
+            postingDate: documentDate,
+            documentDate,
+            bookingText: body.suggestion.merchant.value || before.originalName,
+            reference: body.suggestion.invoiceNumber.value || before.id,
+            period: documentDate.slice(0, 7),
+            fiscalYear: year,
+            lines: [
+              { id: randomUUID(), accountNumber: expenseAccount || 'UNASSIGNED', debitAmount: gross || 0, creditAmount: 0, grossAmount: gross ?? undefined, evidenceType: 'receipt', evidenceReference: before.id, memo: before.originalName },
+              { id: randomUUID(), accountNumber: clearingAccount || 'UNASSIGNED', debitAmount: 0, creditAmount: gross || 0, grossAmount: gross ?? undefined, evidenceType: 'receipt', evidenceReference: before.id },
+            ],
+            validationIssues: issues,
+            updatedAt: now,
+          });
+          await client.query(
+            `INSERT INTO booking_drafts (id, tenant_id, transaction_id, workflow_status, draft_json, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6)
+             ON CONFLICT (tenant_id, transaction_id) DO NOTHING`,
+            [draftId, session.scope.tenantId, draft.transactionId, draft.workflowStatus, JSON.stringify(draft), now],
+          );
+        }
+        await createPostgresBillingDependencies(client).auditLog.append(
+          session.scope,
+          buildAuditEntry(session.scope, session, 'receipt', params.id, 'receipt.confirm', body.reason, before, saved),
+        );
+        return saved!;
+      });
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/documents/:kind/finalize`,
+    params: z.object({ kind: documentKindSchema }),
+    body: mobileDocumentFinalizeRequestSchema,
+    response: mobileDocumentFinalizeResponseSchema,
+    async handler({ request, params, body }) {
+      if (params.kind !== body.draft.kind) throw new ApiError(400, 'Document kind does not match route');
+      const capability = params.kind === 'invoice' ? 'documents:invoice:write' : 'documents:offer:write';
+      const session = await requireCapability(app, product, request.headers.authorization, capability);
+      const pool = requirePool(app);
+      return withPostgresTransaction(pool, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+          `mobile-document:${session.scope.tenantId}:${body.clientMutationId}`,
+        ]);
+        const replay = await getMobileDocumentMutation(client, session.scope.tenantId, body.clientMutationId);
+        if (replay) return { ...replay, replayed: true };
+        const reservation = await reserveDocumentNumber(createNumberingPortsForDb(client, session.scope), params.kind);
+        const settings = parseStoredSettings(await getServerSettings(client, session.scope.tenantId, { forUpdate: true }));
+        const taxSettings = settings ?? { legal: { smallBusinessRule: false, defaultVatRate: 19 } };
+        const taxMode = resolveInvoiceTaxMode(body.draft.taxMode, taxSettings);
+        const taxSnapshot = calculateInvoiceTaxSnapshot({
+          items: body.draft.items,
+          taxMode,
+          taxMeta: body.draft.taxMeta,
+        }, taxSettings);
+        const repositories = createPostgresBillingDependencies(client);
+        const document = body.draft.kind === 'invoice'
+          ? await repositories.invoiceRepo.save(session.scope, invoiceSchema.parse({
+              ...body.draft,
+              tenantId: session.scope.tenantId,
+              number: reservation.number,
+              taxMode,
+              taxSnapshot,
+              amount: taxSnapshot.grossAmount,
+            }))
+          : await repositories.offerRepo.save(session.scope, offerSchema.parse({
+              ...body.draft,
+              tenantId: session.scope.tenantId,
+              number: reservation.number,
+              taxMode,
+              taxSnapshot,
+              amount: taxSnapshot.grossAmount,
+            }));
+        await finalizeDocumentNumber(createNumberingPortsForDb(client, session.scope), reservation.reservationId, document.id);
+        await repositories.auditLog.append(
+          session.scope,
+          buildAuditEntry(session.scope, session, document.kind, document.id, `${document.kind}.finalize`, body.reason, null, document),
+        );
+        let delivery;
+        if (body.delivery) {
+          delivery = await insertDocumentDelivery(client, {
+            tenantId: session.scope.tenantId,
+            userId: session.user.id,
+            documentType: document.kind,
+            documentId: document.id,
+            recipientEmail: body.delivery.recipientEmail,
+          });
+          const outbox = await repositories.emailOutboxRepo.enqueue(session.scope, {
+            dedupeKey: `mobile:${body.clientMutationId}`,
+            documentType: document.kind,
+            documentId: document.id,
+            documentNumber: document.number,
+            recipientEmail: body.delivery.recipientEmail,
+            recipientName: body.delivery.recipientName,
+            subject: body.delivery.subject,
+            bodyText: body.delivery.bodyText,
+          });
+          await client.query('UPDATE email_outbox SET delivery_id = $2 WHERE id = $1', [outbox.id, delivery.id]);
+        }
+        const response: MobileDocumentFinalizeResponse = mobileDocumentFinalizeResponseSchema.parse({
+          document,
+          delivery,
+          replayed: false,
+        });
+        await insertMobileDocumentMutation(client, {
+          tenantId: session.scope.tenantId,
+          product,
+          mutationId: body.clientMutationId,
+          response,
+        });
+        return response;
+      });
+    },
+  });
+};
+
+const registerInternalRenderRoutes = (app: FastifyInstance) => {
+  typedRoute(app, {
+    method: 'POST',
+    url: '/api/v1/internal/render-session',
+    body: z.object({
+      deliveryId: z.string().min(1),
+      tenantId: z.string().min(1),
+      userId: z.string().min(1),
+      product: serverProductSchema,
+      documentType: documentKindSchema,
+      documentId: z.string().min(1),
+    }),
+    response: z.object({ token: z.string().min(1), user: authUserSchema }),
+    async handler({ request, body }) {
+      const configuredSecret = process.env.BILLME_RENDER_SECRET?.trim();
+      const provided = typeof request.headers['x-billme-render-secret'] === 'string'
+        ? request.headers['x-billme-render-secret']
+        : '';
+      if (!configuredSecret || !provided || !timingSafeStringEqual(configuredSecret, provided)) {
+        throw new ApiError(401, 'Invalid render credentials');
+      }
+      const result = await requirePool(app).query<{
+        email: string;
+        full_name: string;
+        role: z.infer<typeof serverRoleSchema>;
+        deployment_mode: 'single-tenant' | 'multi-tenant';
+      }>(
+        `SELECT users.email, users.full_name, memberships.role, tenants.deployment_mode
+         FROM document_deliveries delivery
+         JOIN tenants ON tenants.id = delivery.tenant_id
+         JOIN user_accounts users ON users.id = delivery.created_by_user_id
+         JOIN tenant_memberships memberships
+           ON memberships.tenant_id = delivery.tenant_id AND memberships.user_id = users.id
+         WHERE delivery.id = $1 AND delivery.tenant_id = $2 AND delivery.created_by_user_id = $3
+           AND tenants.product = $4 AND delivery.document_type = $5 AND delivery.document_id = $6
+           AND delivery.status = 'rendering' AND users.status = 'active' AND tenants.status = 'active'
+         LIMIT 1`,
+        [body.deliveryId, body.tenantId, body.userId, body.product, body.documentType, body.documentId],
+      );
+      const row = result.rows[0];
+      if (!row) throw new ApiError(404, 'Render job not found');
+      const user = authUserSchema.parse({
+        id: body.userId,
+        email: row.email,
+        fullName: row.full_name,
+        role: row.role,
+      });
+      return {
+        token: app.tokenService.sign({
+          user,
+          scope: {
+            tenantId: body.tenantId,
+            product: body.product,
+            deploymentMode: row.deployment_mode,
+          },
+          role: row.role,
+        }, 5 * 60),
+        user,
+      };
     },
   });
 };
@@ -478,7 +1436,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     }),
     response: clientSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'clients:write');
       const pool = requirePool(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
@@ -513,7 +1471,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: deletePayloadSchema,
     response: okSchema,
     async handler({ request, params, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'delete');
       const pool = requirePool(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
@@ -567,7 +1525,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     }),
     response: invoiceSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'documents:invoice:write');
       const pool = requirePool(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       const saved = await unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
@@ -603,7 +1561,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: deletePayloadSchema,
     response: okSchema,
     async handler({ request, params, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'delete');
       const pool = requirePool(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
@@ -657,7 +1615,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     }),
     response: offerSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'documents:offer:write');
       const pool = requirePool(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       const saved = await unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
@@ -693,7 +1651,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: deletePayloadSchema,
     response: okSchema,
     async handler({ request, params, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'delete');
       const pool = requirePool(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
@@ -743,7 +1701,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     }),
     response: recurringProfileSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'recurring:write');
       const pool = requirePool(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
@@ -778,7 +1736,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: deletePayloadSchema,
     response: okSchema,
     async handler({ request, params, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'delete');
       const pool = requirePool(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
@@ -821,7 +1779,10 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: setSettingsPayloadSchema,
     response: okSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'settings:write');
+      if (!isPortalUrlAllowed(body.settings.portal?.baseUrl, app.portalAllowedOrigins)) {
+        throw new ApiError(400, 'Portal base URL is not permitted by server policy');
+      }
       await saveServerSettings(requirePool(app), {
         tenantId: session.scope.tenantId,
         settingsJson: JSON.stringify(appSettingsSchema.parse(body.settings)),
@@ -841,7 +1802,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
       number: z.string().min(1),
     }),
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'numbers:write');
       return reserveNumberForScope(requirePool(app), session.scope, body.kind);
     },
   });
@@ -852,7 +1813,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: numberReleaseBodySchema,
     response: okSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'numbers:write');
       return releaseNumberForScope(requirePool(app), session.scope, body.reservationId);
     },
   });
@@ -863,7 +1824,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: numberFinalizeBodySchema,
     response: okSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'numbers:write');
       return finalizeNumberForScope(requirePool(app), session.scope, body.reservationId, body.documentId);
     },
   });
@@ -966,7 +1927,7 @@ const registerTemplateRoutes = (app: FastifyInstance, product: 'lite' | 'pro', p
     body: upsertTemplatePayloadSchema,
     response: templateRecordSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'templates:write');
       const saved = await saveServerTemplate(requirePool(app), {
         id: body.template.id,
         tenantId: session.scope.tenantId,
@@ -1006,7 +1967,7 @@ const registerTemplateRoutes = (app: FastifyInstance, product: 'lite' | 'pro', p
     body: setActiveTemplatePayloadSchema,
     response: okSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireCapability(app, product, request.headers.authorization, 'templates:write');
       const existing = await getServerActiveTemplates(requirePool(app), session.scope.tenantId);
       await saveServerActiveTemplates(requirePool(app), {
         tenantId: session.scope.tenantId,
@@ -1038,7 +1999,7 @@ const registerProRoutes = (app: FastifyInstance) => {
     body: upsertArticlePayloadSchema,
     response: articleSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireCapability(app, 'pro', request.headers.authorization, 'articles:write');
       const saved = await saveServerArticle(requirePool(app), {
         id: body.article.id,
         tenantId: session.scope.tenantId,
@@ -1070,7 +2031,7 @@ const registerProRoutes = (app: FastifyInstance) => {
     body: upsertAccountPayloadSchema,
     response: accountSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireCapability(app, 'pro', request.headers.authorization, 'accounts:write');
       const saved = await saveServerBankAccount(requirePool(app), {
         id: body.account.id,
         tenantId: session.scope.tenantId,
@@ -1103,6 +2064,137 @@ const registerProRoutes = (app: FastifyInstance) => {
   });
 
   typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/accounting/review-queue`,
+    response: z.array(mobileBookingDraftSchema),
+    async handler({ request }) {
+      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const result = await requirePool(app).query<{ draft_json: string }>(
+        `SELECT draft_json FROM booking_drafts
+         WHERE tenant_id = $1 AND workflow_status NOT IN ('posted', 'reversed')
+         ORDER BY updated_at ASC`,
+        [session.scope.tenantId],
+      );
+      return result.rows.map((row) => mobileBookingDraftSchema.parse(JSON.parse(row.draft_json)));
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/accounting/booking-drafts/:id/actions`,
+    params: entityIdParamsSchema,
+    body: z.object({
+      action: z.enum(['submit_for_review', 'approve', 'reject', 'post']),
+      reason: z.string().trim().min(1).max(500),
+    }),
+    response: mobileBookingDraftSchema,
+    async handler({ request, params, body }) {
+      const session = await requireCapability(app, 'pro', request.headers.authorization, 'accounting:write');
+      const outcome = await withPostgresTransaction(requirePool(app), async (client) => {
+        const result = await client.query<{ workflow_status: string; draft_json: string }>(
+          'SELECT workflow_status, draft_json FROM booking_drafts WHERE tenant_id = $1 AND id = $2 FOR UPDATE',
+          [session.scope.tenantId, params.id],
+        );
+        const row = result.rows[0];
+        if (!row) throw new ApiError(404, 'Booking draft not found');
+        const before = mobileBookingDraftSchema.parse(JSON.parse(row.draft_json));
+        const allowed: Record<typeof body.action, string[]> = {
+          submit_for_review: ['suggested', 'incomplete', 'ready_for_review', 'integration_error'],
+          approve: ['pending_approval', 'ready_for_review'],
+          reject: ['pending_approval', 'ready_for_review', 'approved'],
+          post: ['approved'],
+        };
+        if (!allowed[body.action].includes(before.workflowStatus)) {
+          throw new ApiError(409, `Cannot ${body.action} a ${before.workflowStatus} draft`);
+        }
+        const nextStatus = body.action === 'submit_for_review' ? 'pending_approval'
+          : body.action === 'approve' ? 'approved'
+          : body.action === 'reject' ? 'incomplete'
+          : 'posted';
+        const blockPost = async (message: string) => {
+          await createPostgresBillingDependencies(client).auditLog.append(session.scope, {
+            occurredAt: new Date().toISOString(),
+            action: 'booking-draft.post-blocked',
+            reason: `${body.reason}: ${message}`,
+            actor: toAuditActor(session),
+            subject: { entityType: 'booking-draft', entityId: before.id, tenantId: session.scope.tenantId },
+            change: { before, after: before },
+          });
+          return { blocked: message } as const;
+        };
+        if (body.action === 'post') {
+          if (before.validationIssues.some((issue) => issue.blocking)) {
+            return blockPost('Resolve blocking validation issues before posting');
+          }
+          const debit = before.lines.reduce((sum, line) => sum + line.debitAmount, 0);
+          const credit = before.lines.reduce((sum, line) => sum + line.creditAmount, 0);
+          if (before.lines.length < 2 || Math.round(debit * 100) !== Math.round(credit * 100) || debit <= 0) {
+            return blockPost('Journal lines must be balanced and non-zero');
+          }
+          const period = await client.query<{ status: string }>(
+            'SELECT status FROM accounting_periods WHERE tenant_id = $1 AND period = $2 LIMIT 1',
+            [session.scope.tenantId, before.period],
+          );
+          if (period.rows[0] && period.rows[0].status !== 'open') return blockPost('Accounting period is locked');
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`journal:${session.scope.tenantId}`]);
+          const numberResult = await client.query<{ next: number }>(
+            'SELECT COALESCE(MAX(entry_number), 0) + 1 AS next FROM journal_entries WHERE tenant_id = $1',
+            [session.scope.tenantId],
+          );
+          const entryId = randomUUID();
+          const now = new Date().toISOString();
+          await client.query(
+            `INSERT INTO journal_entries (
+               id, tenant_id, entry_number, posting_date, document_date, booking_text, reference,
+               period, fiscal_year, status, source_draft_id, created_at
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'posted',$10,$11)`,
+            [entryId, session.scope.tenantId, Number(numberResult.rows[0]?.next ?? 1),
+              before.postingDate ?? now.slice(0, 10), before.documentDate ?? null, before.bookingText,
+              before.reference ?? null, before.period, before.fiscalYear, before.id, now],
+          );
+          for (const [index, line] of before.lines.entries()) {
+            await client.query(
+              `INSERT INTO journal_lines (
+                 id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount,
+                 tax_code, tax_case_key, tax_rate, net_amount, tax_amount, gross_amount,
+                 country_code, counterparty_vat_id, evidence_type, evidence_reference, cost_center, memo
+               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+              [randomUUID(), session.scope.tenantId, entryId, index + 1, line.accountNumber,
+                line.debitAmount, line.creditAmount, line.taxCode ?? null, line.taxCaseKey ?? null,
+                line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null,
+                line.countryCode ?? null, line.counterpartyVatId ?? null, line.evidenceType ?? null,
+                line.evidenceReference ?? null, line.costCenter ?? null, line.memo ?? null],
+            );
+          }
+        }
+        const after = mobileBookingDraftSchema.parse({ ...before, workflowStatus: nextStatus, updatedAt: new Date().toISOString() });
+        await client.query(
+          'UPDATE booking_drafts SET workflow_status = $3, draft_json = $4, updated_at = $5 WHERE tenant_id = $1 AND id = $2',
+          [session.scope.tenantId, params.id, nextStatus, JSON.stringify(after), after.updatedAt],
+        );
+        await createPostgresBillingDependencies(client).auditLog.append(session.scope, {
+          occurredAt: after.updatedAt,
+          action: `booking-draft.${body.action}`,
+          reason: body.reason,
+          actor: toAuditActor(session),
+          subject: { entityType: 'booking-draft', entityId: before.id, tenantId: session.scope.tenantId },
+          change: { before, after },
+        });
+        await enqueueMobilePush(client, {
+          tenantId: session.scope.tenantId,
+          product: 'pro',
+          title: body.action === 'post' ? 'Booking posted' : 'Accounting review updated',
+          body: 'Open Billme to view the accounting details.',
+          route: '/accounting/review',
+        });
+        return { draft: after } as const;
+      });
+      if ('blocked' in outcome) throw new ApiError(409, outcome.blocked);
+      return outcome.draft;
+    },
+  });
+
+  typedRoute(app, {
     method: 'POST',
     url: `${prefix}/workflow`,
     body: z.object({
@@ -1112,7 +2204,7 @@ const registerProRoutes = (app: FastifyInstance) => {
     }),
     response: okSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireCapability(app, 'pro', request.headers.authorization, 'accounting:write');
       return createPostgresProWorkflowRepository(requirePool(app)).upsert(session.scope, body);
     },
   });
@@ -1210,7 +2302,7 @@ const registerProRoutes = (app: FastifyInstance) => {
       updatedAt: z.string().min(1),
     }),
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireCapability(app, 'pro', request.headers.authorization, 'accounting:write');
       return createPostgresProAccountingCatalogRepository(requirePool(app)).upsertTaxCaseAccountMapping(session.scope, body);
     },
   });
@@ -1260,7 +2352,7 @@ const registerProRoutes = (app: FastifyInstance) => {
       updatedAt: z.string().min(1),
     }),
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireCapability(app, 'pro', request.headers.authorization, 'accounting:write');
       return createPostgresProAccountingCatalogRepository(requirePool(app)).upsertAccountSuggestionRule(session.scope, body);
     },
   });
@@ -1273,7 +2365,7 @@ const registerProRoutes = (app: FastifyInstance) => {
     }),
     response: okSchema,
     async handler({ request, params }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireCapability(app, 'pro', request.headers.authorization, 'delete');
       await createPostgresProAccountingCatalogRepository(requirePool(app)).deleteAccountSuggestionRule(session.scope, params.id);
       return { ok: true as const };
     },
@@ -1284,14 +2376,44 @@ declare module 'fastify' {
   interface FastifyInstance {
     authStore: AuthStore;
     tokenService: SessionTokenService;
+    platformTokenService: PlatformTokenService;
+    platformAuthStore: PlatformAuthStore;
+    portalAllowedOrigins: ReadonlySet<string>;
     serverPool?: Pool;
   }
 }
 
+const DEV_SESSION_SECRET_DEFAULT = 'billme-dev-session-secret';
+
+const assertPlatformSecretIsSafe = (app: FastifyInstance) => {
+  const platformAdminConfigured = Boolean(process.env.PLATFORM_ADMIN_EMAIL?.trim());
+  if (!platformAdminConfigured) {
+    return;
+  }
+  const sessionSecret = process.env.SESSION_SECRET?.trim();
+  const platformSecret = process.env.PLATFORM_SESSION_SECRET?.trim();
+  const usesUnsafeDefault =
+    (!sessionSecret || sessionSecret === DEV_SESSION_SECRET_DEFAULT) &&
+    (!platformSecret || platformSecret === DEV_SESSION_SECRET_DEFAULT);
+
+  if (!usesUnsafeDefault) {
+    return;
+  }
+
+  const message =
+    'PLATFORM_ADMIN_EMAIL is set but SESSION_SECRET/PLATFORM_SESSION_SECRET are unset or use the dev default. This is unsafe for an admin-capable deployment.';
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(message);
+  }
+  app.log.warn(message);
+};
+
 export const buildServerApi = async (): Promise<FastifyInstance> => {
   const app = Fastify({
     logger: true,
+    bodyLimit: 22 * 1024 * 1024,
   });
+  app.decorate('portalAllowedOrigins', parsePortalAllowedOrigins(process.env.BILLME_PORTAL_ALLOWED_ORIGINS));
 
   registerErrorHandler(app);
 
@@ -1300,6 +2422,7 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['authorization', 'content-type'],
   });
+  registerAuthRateLimit(app);
 
   const databaseUrl = readDatabaseUrl(process.env);
   const pool = databaseUrl ? createPostgresPool(databaseUrl) : undefined;
@@ -1313,6 +2436,10 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
 
   app.decorate('tokenService', new SessionTokenService(process.env.SESSION_SECRET));
   app.decorate('authStore', createAuthStore({ pool, env: process.env }));
+  app.decorate('platformTokenService', new PlatformTokenService());
+  app.decorate('platformAuthStore', createPlatformAuthStore({ pool, authStore: app.authStore }));
+
+  assertPlatformSecretIsSafe(app);
 
   typedRoute(app, {
     method: 'GET',
@@ -1364,8 +2491,14 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
     },
   });
 
+  registerPlatformRoutes(app);
+  registerInternalRenderRoutes(app);
   registerAuthRoutes(app, 'lite', '/api/v1/lite');
   registerAuthRoutes(app, 'pro', '/api/v1/pro');
+  registerMobileAuthRoutes(app, 'lite', '/api/v1/lite');
+  registerMobileAuthRoutes(app, 'pro', '/api/v1/pro');
+  registerMobileRoutes(app, 'lite', '/api/v1/lite');
+  registerMobileRoutes(app, 'pro', '/api/v1/pro');
   registerBillingRoutes(app, 'lite', '/api/v1/lite');
   registerBillingRoutes(app, 'pro', '/api/v1/pro');
   registerTemplateRoutes(app, 'lite', '/api/v1/lite');
@@ -1404,7 +2537,7 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
       user: authUserSchema,
     }),
     async handler({ query, body }) {
-      const principal = await app.authStore.login(query.product, body);
+      const principal = await login(app, query.product, body);
       return {
         token: app.tokenService.sign({
           user: principal.user,

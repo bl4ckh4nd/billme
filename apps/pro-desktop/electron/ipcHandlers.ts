@@ -140,14 +140,7 @@ type RouteHandler<K extends IpcRouteKey> = (
   args: IpcArgs<K>,
 ) => Promise<IpcResult<K>> | IpcResult<K>;
 
-const register = <K extends IpcRouteKey>(ipcMain: IpcMain, key: K, fn: RouteHandler<K>) => {
-  const route = ipcRoutes[key];
-  ipcMain.handle(route.channel, async (_evt, rawArgs) => {
-    const args = route.args.parse(rawArgs) as IpcArgs<K>;
-    const result = await fn(args);
-    return route.result.parse(result) as IpcResult<K>;
-  });
-};
+export type IpcAgentInvoker = <K extends IpcRouteKey>(key: K, args: IpcArgs<K>) => Promise<IpcResult<K>>;
 
 export const registerIpcHandlers = (
   ipcMain: IpcMain,
@@ -160,6 +153,17 @@ export const registerIpcHandlers = (
   const requireDb = deps.requireDb;
   const getUserDataPath = deps.getUserDataPath;
   const getMainWindow = deps.getMainWindow;
+  const invokers = new Map<IpcRouteKey, (rawArgs: unknown) => Promise<unknown>>();
+  const register = <K extends IpcRouteKey>(key: K, fn: RouteHandler<K>) => {
+    const route = ipcRoutes[key];
+    const invoke = async (rawArgs: unknown) => {
+      const args = route.args.parse(rawArgs) as IpcArgs<K>;
+      const result = await fn(args);
+      return route.result.parse(result) as IpcResult<K>;
+    };
+    invokers.set(key, invoke);
+    ipcMain.handle(route.channel, async (_evt, rawArgs) => invoke(rawArgs));
+  };
   const getProScope = () => resolveRuntimeProTenantScope();
   const getProAccountingFacade = () => {
     const db = requireDb();
@@ -173,153 +177,153 @@ export const registerIpcHandlers = (
     );
   };
 
-  register(ipcMain, 'invoices:list', () => {
+  register('invoices:list', () => {
     const db = requireDb();
     return listInvoices(db);
   });
 
-  register(ipcMain, 'invoices:upsert', ({ invoice, reason }) => {
+  register('invoices:upsert', ({ invoice, reason }) => {
     const db = requireDb();
     const settings = requireSettings(db);
     const computed = normalizeInvoiceTaxData(invoice, settings);
     return upsertInvoice(db, computed, reason);
   });
 
-  register(ipcMain, 'invoices:delete', ({ id, reason }) => {
+  register('invoices:delete', ({ id, reason }) => {
     const db = requireDb();
     deleteInvoice(db, id, reason);
     return { ok: true };
   });
 
-  register(ipcMain, 'offers:list', () => {
+  register('offers:list', () => {
     const db = requireDb();
     return listOffers(db);
   });
 
-  register(ipcMain, 'offers:upsert', ({ offer, reason }) => {
+  register('offers:upsert', ({ offer, reason }) => {
     const db = requireDb();
     const settings = requireSettings(db);
     const computed = normalizeInvoiceTaxData(offer, settings);
     return upsertOffer(db, computed, reason);
   });
 
-  register(ipcMain, 'offers:delete', ({ id, reason }) => {
+  register('offers:delete', ({ id, reason }) => {
     const db = requireDb();
     deleteOffer(db, id, reason);
     return { ok: true };
   });
 
-  register(ipcMain, 'clients:list', () => {
+  register('clients:list', () => {
     const db = requireDb();
     return listClients(db);
   });
 
-  register(ipcMain, 'clients:upsert', ({ client }) => {
+  register('clients:upsert', ({ client }) => {
     const db = requireDb();
     return upsertClient(db, client);
   });
 
-  register(ipcMain, 'clients:delete', ({ id }) => {
+  register('clients:delete', ({ id }) => {
     const db = requireDb();
     deleteClient(db, id);
     return { ok: true };
   });
 
-  register(ipcMain, 'projects:list', ({ clientId, includeArchived }) => {
+  register('projects:list', ({ clientId, includeArchived }) => {
     const db = requireDb();
     return listProjects(db, { clientId, includeArchived });
   });
 
-  register(ipcMain, 'projects:get', ({ id }) => {
+  register('projects:get', ({ id }) => {
     const db = requireDb();
     return getProject(db, id);
   });
 
-  register(ipcMain, 'projects:upsert', ({ project, reason }) => {
+  register('projects:upsert', ({ project, reason }) => {
     const db = requireDb();
     return upsertProject(db, project, reason);
   });
 
-  register(ipcMain, 'projects:archive', ({ id, reason }) => {
+  register('projects:archive', ({ id, reason }) => {
     const db = requireDb();
     return archiveProject(db, id, reason);
   });
 
-  register(ipcMain, 'articles:list', () => {
+  register('articles:list', () => {
     const db = requireDb();
     return listArticles(db);
   });
 
-  register(ipcMain, 'articles:upsert', ({ article }) => {
+  register('articles:upsert', ({ article }) => {
     const db = requireDb();
     return upsertArticle(db, article);
   });
 
-  register(ipcMain, 'articles:delete', ({ id }) => {
+  register('articles:delete', ({ id }) => {
     const db = requireDb();
     deleteArticle(db, id);
     return { ok: true };
   });
 
-  register(ipcMain, 'accounts:list', () => {
+  register('accounts:list', () => {
     const db = requireDb();
     return listAccounts(db);
   });
 
-  register(ipcMain, 'accounts:upsert', ({ account }) => {
+  register('accounts:upsert', ({ account }) => {
     const db = requireDb();
     return upsertAccount(db, account);
   });
 
-  register(ipcMain, 'accounts:delete', ({ id }) => {
+  register('accounts:delete', ({ id }) => {
     const db = requireDb();
     deleteAccount(db, id);
     return { ok: true };
   });
 
-  register(ipcMain, 'recurring:list', () => {
+  register('recurring:list', () => {
     const db = requireDb();
     return listRecurringProfiles(db);
   });
 
-  register(ipcMain, 'recurring:upsert', ({ profile }) => {
+  register('recurring:upsert', ({ profile }) => {
     const db = requireDb();
     return upsertRecurringProfile(db, profile);
   });
 
-  register(ipcMain, 'recurring:delete', ({ id }) => {
+  register('recurring:delete', ({ id }) => {
     const db = requireDb();
     deleteRecurringProfile(db, id);
     return { ok: true };
   });
 
-  register(ipcMain, 'settings:get', () => {
+  register('settings:get', () => {
     const db = requireDb();
     return getSettings(db);
   });
 
-  register(ipcMain, 'settings:set', ({ settings }) => {
+  register('settings:set', ({ settings }) => {
     const db = requireDb();
     setSettings(db, settings);
     return { ok: true };
   });
 
-  register(ipcMain, 'numbers:reserve', ({ kind }) => {
+  register('numbers:reserve', ({ kind }) => {
     const db = requireDb();
     return reserveNumber(db, kind);
   });
 
-  register(ipcMain, 'numbers:release', ({ reservationId }) => {
+  register('numbers:release', ({ reservationId }) => {
     const db = requireDb();
     return releaseNumber(db, reservationId);
   });
 
-  register(ipcMain, 'numbers:finalize', ({ reservationId, documentId }) => {
+  register('numbers:finalize', ({ reservationId, documentId }) => {
     const db = requireDb();
     return finalizeNumber(db, reservationId, documentId);
   });
 
-  register(ipcMain, 'documents:createFromClient', ({ kind, clientId }) => {
+  register('documents:createFromClient', ({ kind, clientId }) => {
     const db = requireDb();
     const normalizedKind = kind === 'offer' ? 'offer' : 'invoice';
     const settings = requireSettings(db);
@@ -378,52 +382,52 @@ export const registerIpcHandlers = (
     return normalizeInvoiceTaxData(base, settings);
   });
 
-  register(ipcMain, 'documents:convertOfferToInvoice', ({ offerId, invoiceDate, dueDate }) => {
+  register('documents:convertOfferToInvoice', ({ offerId, invoiceDate, dueDate }) => {
     const db = requireDb();
     const newInvoiceId = crypto.randomUUID();
     return createInvoiceFromOffer(db, offerId, newInvoiceId, { invoiceDate, dueDate });
   });
 
-  register(ipcMain, 'templates:list', ({ kind }) => {
+  register('templates:list', ({ kind }) => {
     const db = requireDb();
     const normalized = kind === 'offer' ? 'offer' : kind === 'invoice' ? 'invoice' : undefined;
     return listTemplates(db, normalized as DocumentTemplateKind | undefined);
   });
 
-  register(ipcMain, 'templates:active', ({ kind }) => {
+  register('templates:active', ({ kind }) => {
     const db = requireDb();
     const normalized = kind === 'offer' ? 'offer' : 'invoice';
     return getActiveTemplate(db, normalized);
   });
 
-  register(ipcMain, 'templates:upsert', ({ template }) => {
+  register('templates:upsert', ({ template }) => {
     const db = requireDb();
     return upsertTemplate(db, template);
   });
 
-  register(ipcMain, 'templates:delete', ({ id }) => {
+  register('templates:delete', ({ id }) => {
     const db = requireDb();
     deleteTemplate(db, id);
     return { ok: true };
   });
 
-  register(ipcMain, 'templates:setActive', ({ kind, templateId }) => {
+  register('templates:setActive', ({ kind, templateId }) => {
     const db = requireDb();
     setActiveTemplateId(db, kind, templateId);
     return { ok: true };
   });
 
-  register(ipcMain, 'audit:verify', () => {
+  register('audit:verify', () => {
     const db = requireDb();
     return verifyAuditChain(db);
   });
 
-  register(ipcMain, 'audit:exportCsv', () => {
+  register('audit:exportCsv', () => {
     const db = requireDb();
     return exportAuditCsv(db);
   });
 
-  register(ipcMain, 'pdf:export', async ({ kind, id }) => {
+  register('pdf:export', async ({ kind, id }) => {
     const db = requireDb();
     const userDataPath = getUserDataPath();
 
@@ -461,7 +465,7 @@ export const registerIpcHandlers = (
     return { path: res.path };
   });
 
-  register(ipcMain, 'window:minimize', () => {
+  register('window:minimize', () => {
     const mainWindow = getMainWindow();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.minimize();
@@ -469,7 +473,7 @@ export const registerIpcHandlers = (
     return { ok: true };
   });
 
-  register(ipcMain, 'window:toggleMaximize', () => {
+  register('window:toggleMaximize', () => {
     const mainWindow = getMainWindow();
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMaximized()) {
@@ -481,7 +485,7 @@ export const registerIpcHandlers = (
     return { ok: true };
   });
 
-  register(ipcMain, 'window:close', () => {
+  register('window:close', () => {
     const mainWindow = getMainWindow();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.close();
@@ -489,7 +493,7 @@ export const registerIpcHandlers = (
     return { ok: true };
   });
 
-  register(ipcMain, 'window:isMaximized', () => {
+  register('window:isMaximized', () => {
     const mainWindow = getMainWindow();
     if (!mainWindow || mainWindow.isDestroyed()) {
       return { isMaximized: false };
@@ -497,7 +501,7 @@ export const registerIpcHandlers = (
     return { isMaximized: mainWindow.isMaximized() };
   });
 
-  register(ipcMain, 'shell:openPath', async ({ path: targetPath }) => {
+  register('shell:openPath', async ({ path: targetPath }) => {
     const userDataPath = getUserDataPath();
     const resolved = path.resolve(targetPath);
     const allowedRoots = [
@@ -514,7 +518,7 @@ export const registerIpcHandlers = (
     return { ok: true };
   });
 
-  register(ipcMain, 'shell:openExportsDir', async () => {
+  register('shell:openExportsDir', async () => {
     const userDataPath = getUserDataPath();
     const exportsDir = path.resolve(path.join(userDataPath, 'exports'));
     ensureDir(exportsDir);
@@ -524,7 +528,7 @@ export const registerIpcHandlers = (
     return { ok: true };
   });
 
-  register(ipcMain, 'shell:openExternal', async ({ url }) => {
+  register('shell:openExternal', async ({ url }) => {
     let parsed: URL;
     try {
       parsed = new URL(url);
@@ -538,7 +542,7 @@ export const registerIpcHandlers = (
     return { ok: true };
   });
 
-  register(ipcMain, 'dialog:pickCsv', async ({ title }) => {
+  register('dialog:pickCsv', async ({ title }) => {
     const res = await dialog.showOpenDialog({
       title: title ?? 'CSV auswählen',
       properties: ['openFile'],
@@ -551,7 +555,7 @@ export const registerIpcHandlers = (
     return { path: res.filePaths[0] ?? null };
   });
 
-  register(ipcMain, 'finance:importPreview', async (args) => {
+  register('finance:importPreview', async (args) => {
     return previewCsv({
       filePath: args.path,
       encoding: args.encoding,
@@ -563,7 +567,7 @@ export const registerIpcHandlers = (
     });
   });
 
-  register(ipcMain, 'finance:importCommit', async (args) => {
+  register('finance:importCommit', async (args) => {
     const db = requireDb();
 
     const committed = commitCsv({
@@ -670,11 +674,11 @@ export const registerIpcHandlers = (
     };
   });
 
-  register(ipcMain, 'portal:health', async ({ baseUrl }) => {
+  register('portal:health', async ({ baseUrl }) => {
     return portalClient.health(baseUrl);
   });
 
-  register(ipcMain, 'portal:publishOffer', async ({ offerId, expiresAt }) => {
+  register('portal:publishOffer', async ({ offerId, expiresAt }) => {
     const db = requireDb();
 
     const offer = getOffer(db, offerId);
@@ -715,7 +719,7 @@ export const registerIpcHandlers = (
     return { ok: true, token: res.token, publicUrl: res.publicUrl };
   });
 
-  register(ipcMain, 'portal:syncOfferStatus', async ({ offerId }) => {
+  register('portal:syncOfferStatus', async ({ offerId }) => {
     const db = requireDb();
 
     const settings = getSettings(db);
@@ -732,7 +736,7 @@ export const registerIpcHandlers = (
     return { ok: true, decision: result.decision, updated: result.updated };
   });
 
-  register(ipcMain, 'portal:publishInvoice', async ({ invoiceId, expiresAt }) => {
+  register('portal:publishInvoice', async ({ invoiceId, expiresAt }) => {
     const db = requireDb();
 
     const invoice = getInvoice(db, invoiceId);
@@ -764,7 +768,7 @@ export const registerIpcHandlers = (
     });
   });
 
-  register(ipcMain, 'portal:createCustomerAccessLink', async ({ customerRef, customerLabel, expiresInDays }) => {
+  register('portal:createCustomerAccessLink', async ({ customerRef, customerLabel, expiresInDays }) => {
     const db = requireDb();
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
@@ -773,7 +777,7 @@ export const registerIpcHandlers = (
     return portalClient.createCustomerAccessLink({ baseUrl, apiKey, customerRef, customerLabel, expiresInDays });
   });
 
-  register(ipcMain, 'portal:rotateCustomerAccessLink', async ({ customerRef, customerLabel, expiresInDays }) => {
+  register('portal:rotateCustomerAccessLink', async ({ customerRef, customerLabel, expiresInDays }) => {
     const db = requireDb();
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
@@ -782,24 +786,24 @@ export const registerIpcHandlers = (
     return portalClient.rotateCustomerAccessLink({ baseUrl, apiKey, customerRef, customerLabel, expiresInDays });
   });
 
-  register(ipcMain, 'secrets:get', async ({ key }) => {
+  register('secrets:get', async ({ key }) => {
     return secrets.get(key);
   });
 
-  register(ipcMain, 'secrets:set', async ({ key, value }) => {
+  register('secrets:set', async ({ key, value }) => {
     await secrets.set(key, value);
   });
 
-  register(ipcMain, 'secrets:delete', async ({ key }) => {
+  register('secrets:delete', async ({ key }) => {
     return secrets.delete(key);
   });
 
-  register(ipcMain, 'secrets:has', async ({ key }) => {
+  register('secrets:has', async ({ key }) => {
     const value = await secrets.get(key);
     return Boolean(value && value.length > 0);
   });
 
-  register(ipcMain, 'db:backup', async () => {
+  register('db:backup', async () => {
     const db = requireDb();
     const userDataPath = getUserDataPath();
 
@@ -811,7 +815,7 @@ export const registerIpcHandlers = (
     return { path: dest };
   });
 
-  register(ipcMain, 'db:restore', ({ path: restorePath }) => {
+  register('db:restore', ({ path: restorePath }) => {
     const userDataPath = getUserDataPath();
     const backupsDir = path.resolve(path.join(userDataPath, 'backups'));
     const resolved = path.resolve(restorePath);
@@ -849,7 +853,7 @@ export const registerIpcHandlers = (
     return { ok: verification.ok, verification };
   });
 
-  register(ipcMain, 'tax:auditExportPackage', ({ from, to, includeDocuments, actorRole }) => {
+  register('tax:auditExportPackage', ({ from, to, includeDocuments, actorRole }) => {
     assertProRoleAllowed('tax:auditExportPackage', actorRole, ['accountant', 'admin', 'auditor']);
     const db = requireDb();
     return buildTaxAuditExportPackage(db, getUserDataPath(), {
@@ -859,7 +863,7 @@ export const registerIpcHandlers = (
     });
   });
 
-  register(ipcMain, 'email:send', async ({
+  register('email:send', async ({
     documentType,
     documentId,
     recipientEmail,
@@ -991,7 +995,7 @@ export const registerIpcHandlers = (
     return result;
   });
 
-  register(ipcMain, 'email:testConfig', async ({
+  register('email:testConfig', async ({
     provider,
     smtpHost,
     smtpPort,
@@ -1037,12 +1041,12 @@ export const registerIpcHandlers = (
     return testEmailConfig(provider, providerConfig);
   });
 
-  register(ipcMain, 'transactions:list', (filters) => {
+  register('transactions:list', (filters) => {
     const db = requireDb();
     return listTransactions(db, filters);
   });
 
-  register(ipcMain, 'transactions:findMatches', ({ transactionId }) => {
+  register('transactions:findMatches', ({ transactionId }) => {
     const db = requireDb();
     const unmatchedTransactions = getUnmatchedTransactions(db);
     const transaction = unmatchedTransactions.find((t) => t.id === transactionId);
@@ -1059,45 +1063,45 @@ export const registerIpcHandlers = (
     };
   });
 
-  register(ipcMain, 'transactions:link', ({ transactionId, invoiceId }) => {
+  register('transactions:link', ({ transactionId, invoiceId }) => {
     const db = requireDb();
     return linkTransactionToInvoice(db, transactionId, invoiceId);
   });
 
-  register(ipcMain, 'transactions:unlink', ({ transactionId }) => {
+  register('transactions:unlink', ({ transactionId }) => {
     const db = requireDb();
     return unlinkTransactionFromInvoice(db, transactionId);
   });
 
-  register(ipcMain, 'dunning:manualRun', async () => {
+  register('dunning:manualRun', async () => {
     return await manualDunningRun();
   });
 
-  register(ipcMain, 'dunning:getInvoiceStatus', ({ invoiceId }) => {
+  register('dunning:getInvoiceStatus', ({ invoiceId }) => {
     const db = requireDb();
     return getInvoiceDunningStatus(db, invoiceId);
   });
 
-  register(ipcMain, 'recurring:manualRun', async () => {
+  register('recurring:manualRun', async () => {
     return await manualRecurringRun();
   });
 
-  register(ipcMain, 'finance:listImportBatches', ({ accountId, limit }) => {
+  register('finance:listImportBatches', ({ accountId, limit }) => {
     const db = requireDb();
     return listImportBatches(db, accountId, limit);
   });
 
-  register(ipcMain, 'finance:getImportBatchDetails', ({ batchId }) => {
+  register('finance:getImportBatchDetails', ({ batchId }) => {
     const db = requireDb();
     return getImportBatchDetails(db, batchId);
   });
 
-  register(ipcMain, 'finance:rollbackImportBatch', ({ batchId, reason }) => {
+  register('finance:rollbackImportBatch', ({ batchId, reason }) => {
     const db = requireDb();
     return rollbackImportBatch(db, batchId, reason);
   });
 
-  register(ipcMain, 'pro:importSkr', (args) => {
+  register('pro:importSkr', (args) => {
     const db = requireDb();
     const result = importSkrCharts(db, args);
     if (result.total > 0) {
@@ -1106,27 +1110,27 @@ export const registerIpcHandlers = (
     return result;
   });
 
-  register(ipcMain, 'pro:listLedgerAccounts', (args) => {
+  register('pro:listLedgerAccounts', (args) => {
     return getProAccountingFacade().catalog.listLedgerAccounts(args);
   });
 
-  register(ipcMain, 'pro:listTaxCases', ({ activeOnly }) => {
+  register('pro:listTaxCases', ({ activeOnly }) => {
     return getProAccountingFacade().catalog.listTaxCases({ activeOnly });
   });
 
-  register(ipcMain, 'pro:listTaxCaseAccountMappings', ({ chart, taxCaseKey }) => {
+  register('pro:listTaxCaseAccountMappings', ({ chart, taxCaseKey }) => {
     return getProAccountingFacade().catalog.listTaxCaseAccountMappings({ chart, taxCaseKey });
   });
 
-  register(ipcMain, 'pro:upsertTaxCaseAccountMapping', (args) => {
+  register('pro:upsertTaxCaseAccountMapping', (args) => {
     return getProAccountingFacade().catalog.upsertTaxCaseAccountMapping(args);
   });
 
-  register(ipcMain, 'pro:getLedgerStats', () => {
+  register('pro:getLedgerStats', () => {
     return getProAccountingFacade().catalog.getLedgerStats();
   });
 
-  register(ipcMain, 'pro:listBankTransactions', () => {
+  register('pro:listBankTransactions', () => {
     return getProAccountingFacade().accounting.listBankTransactions().then((rows) =>
       rows.map((tx) => ({
         id: tx.id,
@@ -1146,61 +1150,61 @@ export const registerIpcHandlers = (
     );
   });
 
-  register(ipcMain, 'pro:listAccountSuggestionRules', ({ chart, activeOnly }) => {
+  register('pro:listAccountSuggestionRules', ({ chart, activeOnly }) => {
     return getProAccountingFacade().catalog.listAccountSuggestionRules({ chart, activeOnly });
   });
 
-  register(ipcMain, 'pro:upsertAccountSuggestionRule', (args) => {
+  register('pro:upsertAccountSuggestionRule', (args) => {
     return getProAccountingFacade().catalog.upsertAccountSuggestionRule(args);
   });
 
-  register(ipcMain, 'pro:deleteAccountSuggestionRule', ({ id }) => {
+  register('pro:deleteAccountSuggestionRule', ({ id }) => {
     return getProAccountingFacade().catalog.deleteAccountSuggestionRule(id).then(() => ({ ok: true }));
   });
 
-  register(ipcMain, 'pro:getDraftByTransactionId', ({ transactionId }) => {
+  register('pro:getDraftByTransactionId', ({ transactionId }) => {
     return getProAccountingFacade().accounting.getDraftByTransactionId(transactionId);
   });
 
-  register(ipcMain, 'pro:saveDraft', ({ draft }) => {
+  register('pro:saveDraft', ({ draft }) => {
     return getProAccountingFacade().accounting.saveDraft(draft);
   });
 
-  register(ipcMain, 'pro:dispatchDraftAction', ({ transactionId, action, rejectReason }) => {
+  register('pro:dispatchDraftAction', ({ transactionId, action, rejectReason }) => {
     return getProAccountingFacade().accounting.dispatchDraftAction({ transactionId, action, rejectReason });
   });
 
-  register(ipcMain, 'pro:postDraft', ({ draftId, postingDate, actorRole }) => {
+  register('pro:postDraft', ({ draftId, postingDate, actorRole }) => {
     assertProRoleAllowed('pro:postDraft', actorRole, ['reviewer', 'accountant', 'admin']);
     return getProAccountingFacade().accounting.postDraft(draftId, { postingDate });
   });
 
-  register(ipcMain, 'pro:reverseJournalEntry', ({ entryId, reason, actorRole }) => {
+  register('pro:reverseJournalEntry', ({ entryId, reason, actorRole }) => {
     assertProRoleAllowed('pro:reverseJournalEntry', actorRole, ['accountant', 'admin']);
     return getProAccountingFacade().accounting.reverseJournalEntry(entryId, reason);
   });
 
-  register(ipcMain, 'pro:listJournalEntries', ({ from, to, limit, offset }) => {
+  register('pro:listJournalEntries', ({ from, to, limit, offset }) => {
     return getProAccountingFacade().accounting.listJournalEntries({ from, to, limit, offset });
   });
 
-  register(ipcMain, 'pro:getLedgerBalances', ({ asOfDate }) => {
+  register('pro:getLedgerBalances', ({ asOfDate }) => {
     return getProAccountingFacade().accounting.getLedgerBalances({ asOfDate });
   });
 
-  register(ipcMain, 'pro:getSusaReport', ({ asOfDate }) => {
+  register('pro:getSusaReport', ({ asOfDate }) => {
     return getProAccountingFacade().accounting.getSusaReport({ asOfDate });
   });
 
-  register(ipcMain, 'pro:getGuvReport', ({ from, to }) => {
+  register('pro:getGuvReport', ({ from, to }) => {
     return getProAccountingFacade().accounting.getGuvReport({ from, to });
   });
 
-  register(ipcMain, 'pro:getBilanzReport', ({ asOfDate }) => {
+  register('pro:getBilanzReport', ({ asOfDate }) => {
     return getProAccountingFacade().accounting.getBilanzReport({ asOfDate });
   });
 
-  register(ipcMain, 'pro:exportDatevBuchungsstapel', ({ from, to, actorRole }) => {
+  register('pro:exportDatevBuchungsstapel', ({ from, to, actorRole }) => {
     assertProRoleAllowed('pro:exportDatevBuchungsstapel', actorRole, ['accountant', 'admin']);
     const accounting = getProAccountingFacade().accounting;
     return accounting.buildDatevRows({ from, to }).then((rows) => {
@@ -1220,51 +1224,51 @@ export const registerIpcHandlers = (
     });
   });
 
-  register(ipcMain, 'pro:listDatevExports', ({ limit }) => {
+  register('pro:listDatevExports', ({ limit }) => {
     return getProAccountingFacade().accounting.listDatevExports().then((rows) => (limit ? rows.slice(0, limit) : rows));
   });
 
-  register(ipcMain, 'pro:getAccountingHealth', () => {
+  register('pro:getAccountingHealth', () => {
     return getProAccountingFacade().accounting.getAccountingHealth();
   });
 
-  register(ipcMain, 'pro:validateTaxCompliance', ({ draftId, transactionId }) => {
+  register('pro:validateTaxCompliance', ({ draftId, transactionId }) => {
     return getProAccountingFacade().accounting.validateTaxCompliance({ draftId, transactionId });
   });
 
-  register(ipcMain, 'pro:getVatSummary', ({ from, to }) => {
+  register('pro:getVatSummary', ({ from, to }) => {
     return getProAccountingFacade().accounting.getVatSummary({ from, to });
   });
 
-  register(ipcMain, 'pro:listWorkflowEntries', () => {
+  register('pro:listWorkflowEntries', () => {
     return getProAccountingFacade().workflow.list();
   });
 
-  register(ipcMain, 'pro:upsertWorkflowEntry', ({ transactionId, transactionJson, draftJson }) => {
+  register('pro:upsertWorkflowEntry', ({ transactionId, transactionJson, draftJson }) => {
     return getProAccountingFacade().workflow.upsert({ transactionId, transactionJson, draftJson });
   });
 
-  register(ipcMain, 'updater:getStatus', () => {
+  register('updater:getStatus', () => {
     return getCurrentUpdateStatus();
   });
 
-  register(ipcMain, 'updater:downloadUpdate', async () => {
+  register('updater:downloadUpdate', async () => {
     await downloadUpdate();
     return { ok: true };
   });
 
-  register(ipcMain, 'updater:quitAndInstall', () => {
+  register('updater:quitAndInstall', () => {
     quitAndInstall();
     return { ok: true };
   });
 
-  register(ipcMain, 'eur:getReport', ({ taxYear, from, to }) => {
+  register('eur:getReport', ({ taxYear, from, to }) => {
     const db = requireDb();
     const settings = requireSettings(db);
     return getEurReport(db, { taxYear, from, to, settings });
   });
 
-  register(ipcMain, 'eur:listItems', ({
+  register('eur:listItems', ({
     taxYear,
     from,
     to,
@@ -1295,7 +1299,7 @@ export const registerIpcHandlers = (
     });
   });
 
-  register(ipcMain, 'eur:upsertClassification', ({
+  register('eur:upsertClassification', ({
     sourceType,
     sourceId,
     taxYear,
@@ -1316,31 +1320,41 @@ export const registerIpcHandlers = (
     });
   });
 
-  register(ipcMain, 'eur:exportCsv', ({ taxYear, from, to }) => {
+  register('eur:exportCsv', ({ taxYear, from, to }) => {
     const db = requireDb();
     const settings = requireSettings(db);
     const report = getEurReport(db, { taxYear, from, to, settings });
     return buildEurCsv(report);
   });
 
-  register(ipcMain, 'eur:exportPdf', async ({ taxYear, from, to }) => {
+  register('eur:exportPdf', async ({ taxYear, from, to }) => {
     const userDataPath = getUserDataPath();
     return exportEurPdf({ taxYear, from, to, userDataPath });
   });
 
-  register(ipcMain, 'eur:listRules', ({ taxYear }) => {
+  register('eur:listRules', ({ taxYear }) => {
     const db = requireDb();
     return listAllEurRules(db, taxYear);
   });
 
-  register(ipcMain, 'eur:upsertRule', (args) => {
+  register('eur:upsertRule', (args) => {
     const db = requireDb();
     return upsertEurRule(db, args);
   });
 
-  register(ipcMain, 'eur:deleteRule', ({ id }) => {
+  register('eur:deleteRule', ({ id }) => {
     const db = requireDb();
     deleteEurRule(db, id);
     return { ok: true };
   });
+
+  return {
+    invoke: (async (key: IpcRouteKey, args: IpcArgs<IpcRouteKey>) => {
+      const invoke = invokers.get(key);
+      if (!invoke) {
+        throw new Error(`IPC route is not registered: ${key}`);
+      }
+      return invoke(args);
+    }) as IpcAgentInvoker,
+  };
 };

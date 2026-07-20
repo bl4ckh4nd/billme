@@ -6,6 +6,7 @@ import { serverProductSchema } from '@billme/server-core';
 
 const cliProfileSchema = z.object({
   baseUrl: z.string().url().optional(),
+  endpoint: z.string().min(1).optional(),
   product: serverProductSchema.optional(),
   token: z.string().min(1).optional(),
 });

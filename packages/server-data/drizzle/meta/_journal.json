@@ -29,6 +29,20 @@
       "when": 1768900000003,
       "tag": "0003_server_data_offer_items",
       "breakpoints": false
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1768900000004,
+      "tag": "0004_server_data_agent_tokens",
+      "breakpoints": false
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783850400000,
+      "tag": "0005_server_data_mobile",
+      "breakpoints": false
     }
   ]
 }

@@ -6,3 +6,4 @@ export * from './maintenance.js';
 export * from './email-outbox.js';
 export * from './taxMode.js';
 export * from './einvoice.js';
+export * from './portal-url-policy.js';

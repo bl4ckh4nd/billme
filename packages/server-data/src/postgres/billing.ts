@@ -205,6 +205,8 @@ type EmailOutboxRow = {
   recipient_name: string;
   subject: string;
   body_text: string;
+  attachment_storage_key: string | null;
+  delivery_id: string | null;
   status: EmailOutboxEntry['status'];
   attempt_count: number;
   max_attempts: number;
@@ -394,6 +396,8 @@ const rowToEmailOutbox = (row: EmailOutboxRow): EmailOutboxEntry =>
     recipientName: row.recipient_name,
     subject: row.subject,
     bodyText: row.body_text,
+    attachmentStorageKey: row.attachment_storage_key ?? undefined,
+    deliveryId: row.delivery_id ?? undefined,
     status: row.status,
     attemptCount: row.attempt_count,
     maxAttempts: row.max_attempts,
@@ -418,6 +422,12 @@ export const createPostgresTenantRepository = (db: PostgresQueryable): TenantRep
   async getPrimary() {
     const result = await db.query<TenantRow>('SELECT * FROM tenants ORDER BY created_at ASC LIMIT 1');
     return result.rows[0] ? rowToTenant(result.rows[0]) : null;
+  },
+  async listActive() {
+    const result = await db.query<TenantRow>(
+      "SELECT * FROM tenants WHERE status = 'active' ORDER BY created_at ASC",
+    );
+    return result.rows.map(rowToTenant);
   },
   async save(tenant) {
     const nextTenant: Tenant = {
@@ -1006,6 +1016,7 @@ export const createPostgresEmailOutboxRepository = (db: PostgresQueryable): Emai
           SELECT id
           FROM email_outbox
           WHERE tenant_id = $1
+            AND (delivery_id IS NULL OR attachment_storage_key IS NOT NULL)
             AND (
               (status = 'pending' AND next_attempt_at <= $2)
               OR (status = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $2)

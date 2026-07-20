@@ -34,6 +34,9 @@ export const serverRoutes = {
       bootstrap: serverProductRoute(product, 'auth/bootstrap'),
       login: serverProductRoute(product, 'auth/login'),
       me: serverProductRoute(product, 'auth/me'),
+      agentTokens: serverProductRoute(product, 'auth/agent-tokens'),
+      deviceSessions: serverProductRoute(product, 'auth/device-sessions'),
+      pairingCodes: serverProductRoute(product, 'auth/pairing-codes'),
     },
     numbers: {
       reserve: serverProductRoute(product, 'numbers/reserve'),
@@ -46,6 +49,10 @@ export const serverRoutes = {
       offers: serverProductRoute(product, 'offers'),
       recurring: serverProductRoute(product, 'recurring'),
       settings: serverProductRoute(product, 'settings'),
+      receipts: serverProductRoute(product, 'receipts'),
+    },
+    mobile: {
+      home: serverProductRoute(product, 'mobile/home'),
     },
     templates: {
       list: serverProductRoute(product, 'templates'),
@@ -56,6 +63,12 @@ export const serverRoutes = {
   pro: {
     articles: serverProductRoute('pro', 'articles'),
     accounts: serverProductRoute('pro', 'accounts'),
+    workflow: serverProductRoute('pro', 'workflow'),
+    ledgerAccounts: serverProductRoute('pro', 'accounting/ledger/accounts'),
+    ledgerStats: serverProductRoute('pro', 'accounting/ledger/stats'),
+    taxCases: serverProductRoute('pro', 'accounting/tax-cases'),
+    taxCaseAccountMappings: serverProductRoute('pro', 'accounting/tax-case-account-mappings'),
+    accountSuggestionRules: serverProductRoute('pro', 'accounting/account-suggestion-rules'),
     templates: {
       list: serverProductRoute('pro', 'templates'),
       active: serverProductRoute('pro', 'templates/active'),

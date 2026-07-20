@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
+  agentTokenCreateResponseSchema,
+  agentTokenSummarySchema,
   authResponseSchema,
   authSessionInfoSchema,
   bootstrapRequestSchema,
@@ -16,13 +18,24 @@ import {
   serverProductRoute,
   serverProductSchema,
   serverRoutes,
+  type AgentScope,
   type ServerProduct,
 } from '@billme/server-core';
 import { appSettingsSchema } from '@billme/desktop-contracts/schemas';
 import {
+  accountSuggestionRuleSchema,
   accountSchema,
   articleSchema,
+  ledgerAccountSchema,
+  proListAccountSuggestionRulesArgsSchema,
+  proListTaxCaseAccountMappingsArgsSchema,
+  proListTaxCasesArgsSchema,
+  proUpsertAccountSuggestionRuleArgsSchema,
+  proUpsertTaxCaseAccountMappingArgsSchema,
+  proWorkflowEntrySchema,
   setActiveTemplatePayloadSchema,
+  taxCaseAccountMappingSchema,
+  taxCaseDefinitionSchema,
   templateKindSchema,
   templateSchema,
 } from '@billme/desktop-contracts-pro/schemas';
@@ -313,6 +326,35 @@ export const createBillmeServerClient = ({
           product: nextProduct,
         },
         token: requireToken(options?.token),
+      });
+    },
+    listAgentTokens(options?: { product?: ServerProduct; token?: string | null }) {
+      const nextProduct = options?.product ?? product;
+      return requestJson(serverRoutes.product(nextProduct).auth.agentTokens, z.array(agentTokenSummarySchema), {
+        token: requireToken(options?.token),
+      });
+    },
+    createAgentToken(args: {
+      label: string;
+      scopes: AgentScope[];
+      product?: ServerProduct;
+      token?: string | null;
+    }) {
+      const nextProduct = args.product ?? product;
+      return requestJson(serverRoutes.product(nextProduct).auth.agentTokens, agentTokenCreateResponseSchema, {
+        method: 'POST',
+        token: requireToken(args.token),
+        body: {
+          label: args.label,
+          scopes: args.scopes,
+        },
+      });
+    },
+    revokeAgentToken(args: { id: string; product?: ServerProduct; token?: string | null }) {
+      const nextProduct = args.product ?? product;
+      return requestJson(`${serverRoutes.product(nextProduct).auth.agentTokens}/${encodeURIComponent(args.id)}`, okSchema, {
+        method: 'DELETE',
+        token: requireToken(args.token),
       });
     },
     async ensureSession(input: z.input<typeof bootstrapRequestSchema> & { product?: ServerProduct }) {
@@ -661,7 +703,8 @@ export const createBillmeServerClient = ({
       });
     },
     listTemplates(args?: { kind?: 'invoice' | 'offer'; token?: string | null }) {
-      return requestJson(serverRoutes.pro.templates.list, z.array(templateSchema), {
+      const nextProduct = product;
+      return requestJson(serverRoutes.product(nextProduct).templates.list, z.array(templateSchema), {
         token: requireToken(args?.token),
         query: args?.kind
           ? {
@@ -687,7 +730,7 @@ export const createBillmeServerClient = ({
       token?: string | null;
     }) {
       return requestJson(
-        serverRoutes.pro.templates.activeByKind(templateKindSchema.parse(args.kind)),
+        serverRoutes.product(product).templates.activeByKind(templateKindSchema.parse(args.kind)),
         templateSchema.nullable(),
         {
           token: requireToken(args.token),
@@ -699,7 +742,7 @@ export const createBillmeServerClient = ({
       templateId?: string | null;
       token?: string | null;
     }) {
-      return requestJson(serverRoutes.pro.templates.active, okSchema, {
+      return requestJson(serverRoutes.product(product).templates.active, okSchema, {
         method: 'PUT',
         token: requireToken(args.token),
         body: setActiveTemplatePayloadSchema.parse({
@@ -707,6 +750,118 @@ export const createBillmeServerClient = ({
           templateId: args.templateId ?? undefined,
         }),
       });
+    },
+    listWorkflowEntries(options?: { token?: string | null }) {
+      return requestJson(serverRoutes.pro.workflow, z.array(proWorkflowEntrySchema), {
+        token: requireToken(options?.token),
+      });
+    },
+    upsertWorkflowEntry(args: {
+      transactionId: string;
+      transactionJson: string;
+      draftJson: string;
+      token?: string | null;
+    }) {
+      return requestJson(serverRoutes.pro.workflow, okSchema, {
+        method: 'POST',
+        token: requireToken(args.token),
+        body: proWorkflowEntrySchema.omit({ updatedAt: true }).parse({
+          transactionId: args.transactionId,
+          transactionJson: args.transactionJson,
+          draftJson: args.draftJson,
+        }),
+      });
+    },
+    listLedgerAccounts(args?: {
+      chart?: 'SKR03' | 'SKR04';
+      search?: string;
+      limit?: number;
+      offset?: number;
+      token?: string | null;
+    }) {
+      return requestJson(serverRoutes.pro.ledgerAccounts, z.array(ledgerAccountSchema), {
+        token: requireToken(args?.token),
+        query: {
+          chart: args?.chart,
+          search: args?.search,
+          limit: args?.limit,
+          offset: args?.offset,
+        },
+      });
+    },
+    getLedgerStats(options?: { token?: string | null }) {
+      return requestJson(serverRoutes.pro.ledgerStats, z.object({
+        total: z.number().int(),
+        byChart: z.object({ SKR03: z.number().int(), SKR04: z.number().int() }),
+      }), { token: requireToken(options?.token) });
+    },
+    listTaxCases(args?: { activeOnly?: boolean; token?: string | null }) {
+      return requestJson(serverRoutes.pro.taxCases, z.array(taxCaseDefinitionSchema), {
+        token: requireToken(args?.token),
+        query: { activeOnly: args?.activeOnly },
+      });
+    },
+    listTaxCaseAccountMappings(args?: {
+      chart?: 'SKR03' | 'SKR04';
+      taxCaseKey?: string;
+      token?: string | null;
+    }) {
+      return requestJson(serverRoutes.pro.taxCaseAccountMappings, z.array(taxCaseAccountMappingSchema), {
+        token: requireToken(args?.token),
+        query: { chart: args?.chart, taxCaseKey: args?.taxCaseKey },
+      });
+    },
+    upsertTaxCaseAccountMapping(args: {
+      id?: string;
+      chart: 'SKR03' | 'SKR04';
+      taxCaseKey: string;
+      role: 'output_tax' | 'input_tax' | 'datev_bu';
+      accountNumber: string;
+      datevBuKey?: string;
+      validFrom?: string;
+      validTo?: string;
+      token?: string | null;
+    }) {
+      return requestJson(serverRoutes.pro.taxCaseAccountMappings, taxCaseAccountMappingSchema, {
+        method: 'POST',
+        token: requireToken(args.token),
+        body: proUpsertTaxCaseAccountMappingArgsSchema.parse(args),
+      });
+    },
+    listAccountSuggestionRules(args?: {
+      chart?: 'SKR03' | 'SKR04';
+      activeOnly?: boolean;
+      token?: string | null;
+    }) {
+      return requestJson(serverRoutes.pro.accountSuggestionRules, z.array(accountSuggestionRuleSchema), {
+        token: requireToken(args?.token),
+        query: { chart: args?.chart, activeOnly: args?.activeOnly },
+      });
+    },
+    upsertAccountSuggestionRule(args: {
+      id?: string;
+      chart: 'SKR03' | 'SKR04';
+      priority: number;
+      field: 'counterparty' | 'purpose' | 'any';
+      operator: 'contains' | 'equals' | 'startsWith';
+      value: string;
+      targetAccountNumber: string;
+      flowType?: 'income' | 'expense' | 'any';
+      active?: boolean;
+      token?: string | null;
+    }) {
+      return requestJson(serverRoutes.pro.accountSuggestionRules, accountSuggestionRuleSchema, {
+        method: 'POST',
+        token: requireToken(args.token),
+        body: proUpsertAccountSuggestionRuleArgsSchema.parse(args),
+      });
+    },
+    deleteAccountSuggestionRule(args: { id: string; token?: string | null }) {
+      return requestJson(
+        `${serverRoutes.pro.accountSuggestionRules}/${encodeURIComponent(args.id)}`,
+        okSchema,
+        { method: 'DELETE', token: requireToken(args.token) },
+      );
     },
   };
 };

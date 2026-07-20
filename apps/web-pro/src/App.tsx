@@ -6,13 +6,14 @@ import {
 } from '@billme/server-core';
 import {
   BrowserRendererHost,
+  MobilePairingControl,
   useBrowserDocumentShell,
   usePdfAutoPrint,
   type BrowserDocumentShellConfig,
   type DesktopRendererRuntime,
 } from '@billme/desktop-renderer';
 import ProDesktopApp from '../../pro-desktop/App';
-import { Button, Input } from '@billme/ui';
+import { AuthScreen, Input } from '@billme/ui';
 import type { BillmeApi } from '@billme/desktop-contracts-pro/api';
 import { createProWebBillmeApi } from './api/createProWebBillmeApi';
 
@@ -54,7 +55,8 @@ const ProRendererWorkspace: React.FC<{
   api: BillmeApi;
   onLogout?: () => void;
   autoPrint?: boolean;
-}> = ({ api, onLogout, autoPrint = false }) => {
+  pairing?: { apiUrl: string; token: string };
+}> = ({ api, onLogout, autoPrint = false, pairing }) => {
   usePdfAutoPrint(autoPrint);
   const runtime = React.useMemo<DesktopRendererRuntime>(
     () => ({
@@ -66,19 +68,20 @@ const ProRendererWorkspace: React.FC<{
     [onLogout],
   );
 
-  return (
+  return (<>
+    {pairing ? <MobilePairingControl {...pairing} product="pro" /> : null}
     <BrowserRendererHost api={api} runtime={runtime} AppComponent={ProDesktopApp}>
       {(mountError) => (
-        <div className="auth-shell">
-          <section className="auth-panel">
-            <p className="section-eyebrow">Billme Pro Web</p>
-            <h1>Renderer konnte nicht gestartet werden</h1>
-            <p className="hero-copy">{mountError}</p>
-          </section>
-        </div>
+        <main className="flex min-h-screen items-center justify-center bg-canvas px-6 py-10">
+          <div className="w-full max-w-xl rounded-3xl border border-error-border bg-surface p-6 shadow-xl">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">Billme Pro Web</p>
+            <h1 className="mt-2 text-xl font-semibold text-foreground">Renderer konnte nicht gestartet werden</h1>
+            <p className="mt-3 text-sm text-muted">{mountError}</p>
+          </div>
+        </main>
       )}
     </BrowserRendererHost>
-  );
+  </>);
 };
 
 export default function App() {
@@ -109,20 +112,20 @@ export default function App() {
   if (shell.isPrintMode) {
     if (!shell.printApi) {
       return (
-        <div className="auth-shell">
-          <section className="auth-panel">
-            <p className="section-eyebrow">Billme Pro Web</p>
-            <h1>Print mode unavailable</h1>
-            <p className="hero-copy">Please sign in again before printing or exporting a PDF.</p>
-          </section>
-        </div>
+        <main className="flex min-h-screen items-center justify-center bg-canvas px-6 py-10">
+          <div className="w-full max-w-xl rounded-3xl border border-error-border bg-surface p-6 shadow-xl">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">Billme Pro Web</p>
+            <h1 className="mt-2 text-xl font-semibold text-foreground">Print mode unavailable</h1>
+            <p className="mt-3 text-sm text-muted">Please sign in again before printing or exporting a PDF.</p>
+          </div>
+        </main>
       );
     }
     return <ProRendererWorkspace api={shell.printApi} autoPrint={shouldAutoPrint} />;
   }
 
   if (!shell.loadingSession && shell.session) {
-    return <ProRendererWorkspace api={shell.createWorkspaceApi(shell.session)} onLogout={shell.logout} />;
+    return <ProRendererWorkspace api={shell.createWorkspaceApi(shell.session)} onLogout={shell.logout} pairing={{ apiUrl: shell.apiUrl, token: shell.session.token }} />;
   }
 
   const handleSubmit = () => {
@@ -131,70 +134,50 @@ export default function App() {
   };
 
   return (
-    <main className="auth-shell">
-      <section className="auth-hero">
-        <p className="hero-kicker">Billme Pro Web</p>
-        <h1>Echte Pro-UI, servergestützt im Browser.</h1>
-        <p className="hero-copy">
-          Diese Shell lädt die bestehende {`apps/pro-desktop`} Oberfläche und verbindet sie über einen HTTP-Adapter mit dem Server-Backend.
-        </p>
-        <div className="hero-metrics">
-          <div className="stat-card">
-            <span className="stat-label">Server</span>
-            <strong className="stat-value">{shell.health}</strong>
-            <span className="stat-hint">Aktiver API-Endpunkt</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-label">Rollen</span>
-            <strong className="stat-value">{shell.roles.length}</strong>
-            <span className="stat-hint">{shell.roles.join(', ') || 'Wird geladen'}</span>
-          </div>
-        </div>
-      </section>
-
-      <section className="auth-panel">
-        <p className="section-eyebrow">{shell.bootstrapReady ? 'Erststart' : 'Anmelden'}</p>
-        <h2 className="text-2xl font-bold m-0">{shell.bootstrapReady ? 'Pro-Mandant initialisieren' : 'Mit Billme Pro verbinden'}</h2>
-        <p className="helper-copy">
-          Desktop-nahe Funktionen laufen im Browser mit Web-Fallbacks, während Dokumente und Stammdaten über die bestehenden Server-Endpunkte geladen werden.
-        </p>
-
-        {shell.message ? (
-          <div className={`notice-banner ${shell.message.toLowerCase().includes('fehler') ? 'notice-danger' : 'notice-neutral'}`}>
-            {shell.message}
-          </div>
-        ) : null}
-
-        <div className="section-card p-6">
-          <div className="grid gap-4">
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold">API-URL</span>
-              <Input value={shell.apiUrl} onChange={(event) => shell.setApiUrl(event.target.value)} />
-            </label>
-            {shell.bootstrapReady ? (
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold">Vollständiger Name</span>
-                <Input value={fullName} onChange={(event) => setFullName(event.target.value)} />
-              </label>
-            ) : null}
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold">E-Mail</span>
-              <Input value={email} onChange={(event) => setEmail(event.target.value)} type="email" />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold">Passwort</span>
-              <Input value={password} onChange={(event) => setPassword(event.target.value)} type="password" />
-            </label>
-          </div>
-          <div className="action-row mt-5">
-            {shell.bootstrapReady ? (
-              <Button onClick={handleSubmit}>Initialisieren & anmelden</Button>
-            ) : (
-              <Button onClick={handleSubmit}>Anmelden</Button>
-            )}
-          </div>
-        </div>
-      </section>
-    </main>
+    <AuthScreen
+      productLabel="Billme Pro Web"
+      title="Echte Pro-UI, servergestützt im Browser."
+      description={`Diese Shell lädt die bestehende apps/pro-desktop Oberfläche und verbindet sie über einen HTTP-Adapter mit dem Server-Backend.`}
+      stats={[
+        { label: 'Server', value: shell.health, hint: 'Aktiver API-Endpunkt' },
+        { label: 'Rollen', value: String(shell.roles.length), hint: shell.roles.join(', ') || 'Wird geladen' },
+      ]}
+      formEyebrow={shell.bootstrapReady ? 'Erststart' : 'Anmelden'}
+      formTitle={shell.bootstrapReady ? 'Pro-Mandant initialisieren' : 'Mit Billme Pro verbinden'}
+      formDescription="Desktop-nahe Funktionen laufen im Browser mit Web-Fallbacks, während Dokumente und Stammdaten über die bestehenden Server-Endpunkte geladen werden."
+      message={shell.message || null}
+      messageTone={shell.message?.toLowerCase().includes('fehler') ? 'danger' : 'neutral'}
+      onSubmit={handleSubmit}
+      submitLabel={shell.bootstrapReady ? 'Initialisieren & anmelden' : 'Anmelden'}
+    >
+      <Input
+        label="API-URL"
+        fullWidth
+        value={shell.apiUrl}
+        onChange={(event) => shell.setApiUrl(event.target.value)}
+      />
+      {shell.bootstrapReady ? (
+        <Input
+          label="Vollständiger Name"
+          fullWidth
+          value={fullName}
+          onChange={(event) => setFullName(event.target.value)}
+        />
+      ) : null}
+      <Input
+        label="E-Mail"
+        fullWidth
+        value={email}
+        onChange={(event) => setEmail(event.target.value)}
+        type="email"
+      />
+      <Input
+        label="Passwort"
+        fullWidth
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+        type="password"
+      />
+    </AuthScreen>
   );
 }

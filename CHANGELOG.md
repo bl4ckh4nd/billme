@@ -2,6 +2,12 @@
 
 All notable changes to Billme are documented in this file.
 
+## [0.3.6] - 2026-07-20
+
+### Fixed
+
+- Verify the macOS Pro native modules inside `Billme Pro.app` instead of using the Lite application bundle name.
+
 ## [0.3.5] - 2026-07-20
 
 ### Fixed
@@ -90,6 +96,7 @@ All notable changes to Billme are documented in this file.
 - Restored legacy invoice defaults and tax-mode defaults during migration and merge reconciliation.
 - Included previously missing source files and native runtime dependencies in builds and release packaging.
 
+[0.3.6]: https://github.com/bl4ckh4nd/billme/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/bl4ckh4nd/billme/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/bl4ckh4nd/billme/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/bl4ckh4nd/billme/compare/v0.3.2...v0.3.3

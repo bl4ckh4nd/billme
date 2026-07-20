@@ -12,9 +12,9 @@ const releaseDir = process.env.BILLME_RELEASE_DIR
 const platform = process.platform;
 function findMacResourceDirs() {
   const staticCandidates = [
-    path.join(releaseDir, 'mac', 'Billme.app', 'Contents', 'Resources'),
-    path.join(releaseDir, 'mac-arm64', 'Billme.app', 'Contents', 'Resources'),
-    path.join(releaseDir, 'mac-x64', 'Billme.app', 'Contents', 'Resources'),
+    path.join(releaseDir, 'mac', 'Billme Pro.app', 'Contents', 'Resources'),
+    path.join(releaseDir, 'mac-arm64', 'Billme Pro.app', 'Contents', 'Resources'),
+    path.join(releaseDir, 'mac-x64', 'Billme Pro.app', 'Contents', 'Resources'),
   ];
 
   if (!fs.existsSync(releaseDir)) {
@@ -33,7 +33,7 @@ function findMacResourceDirs() {
     const candidate = path.join(
       releaseDir,
       entry.name,
-      'Billme.app',
+      'Billme Pro.app',
       'Contents',
       'Resources',
     );

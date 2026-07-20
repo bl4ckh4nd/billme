@@ -1,6 +1,6 @@
 {
   "name": "billme-workspace",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "license": "MIT",
   "packageManager": "pnpm@10.0.0",

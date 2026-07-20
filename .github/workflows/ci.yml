@@ -80,6 +80,11 @@ jobs:
       - name: Offer portal build
         run: pnpm -C apps/offer-portal build
 
+      - name: Install Electron runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-0
+
       - name: E2E smoke (desktop + pro)
         run: xvfb-run -a pnpm test:e2e:smoke
         env:

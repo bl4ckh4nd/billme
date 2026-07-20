@@ -1,5 +1,6 @@
 appId: com.billme.pro
 productName: Billme Pro
+electronVersion: 37.10.3
 
 publish:
   provider: github

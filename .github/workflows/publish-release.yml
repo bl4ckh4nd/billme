@@ -90,28 +90,39 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build application
+        run: pnpm -C ${{ matrix.app.dir }} build
+
+      - name: Create isolated production package
+        run: pnpm --filter ${{ matrix.app.name == 'desktop' && 'billme' || 'billme-pro' }} --prod deploy .release-stage/${{ matrix.app.dir }}
+
+      - name: Prepare isolated Electron package
+        run: node scripts/prepare-electron-release-stage.mjs ${{ matrix.app.dir }} .release-stage/${{ matrix.app.dir }}
+
       - name: Install native app dependencies for Electron
-        run: pnpm -C ${{ matrix.app.dir }} exec electron-builder install-app-deps
+        run: pnpm -C ${{ matrix.app.dir }} exec electron-builder install-app-deps --projectDir ${{ github.workspace }}/.release-stage/${{ matrix.app.dir }}
 
       - name: Build distributables
-        run: pnpm -C ${{ matrix.app.dir }} build && pnpm -C ${{ matrix.app.dir }} exec electron-builder --config electron-builder.yml --publish never
+        run: pnpm -C ${{ matrix.app.dir }} exec electron-builder --projectDir ${{ github.workspace }}/.release-stage/${{ matrix.app.dir }} --config electron-builder.yml --publish never
 
       - name: Verify packaged native modules
         run: node ${{ matrix.app.dir }}/scripts/verify-native-packaging.mjs
+        env:
+          BILLME_RELEASE_DIR: ${{ github.workspace }}/.release-stage/${{ matrix.app.dir }}/release
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.app.name }}-release-${{ matrix.os }}-${{ env.RELEASE_TAG }}
           path: |
-            ${{ matrix.app.dir }}/release/**/*.AppImage
-            ${{ matrix.app.dir }}/release/**/*.dmg
-            ${{ matrix.app.dir }}/release/**/* Setup *.exe
-            ${{ matrix.app.dir }}/release/**/*.deb
-            ${{ matrix.app.dir }}/release/**/*.rpm
-            ${{ matrix.app.dir }}/release/**/*.zip
-            ${{ matrix.app.dir }}/release/**/*.blockmap
-            ${{ matrix.app.dir }}/release/**/latest*.yml
+            .release-stage/${{ matrix.app.dir }}/release/**/*.AppImage
+            .release-stage/${{ matrix.app.dir }}/release/**/*.dmg
+            .release-stage/${{ matrix.app.dir }}/release/**/* Setup *.exe
+            .release-stage/${{ matrix.app.dir }}/release/**/*.deb
+            .release-stage/${{ matrix.app.dir }}/release/**/*.rpm
+            .release-stage/${{ matrix.app.dir }}/release/**/*.zip
+            .release-stage/${{ matrix.app.dir }}/release/**/*.blockmap
+            .release-stage/${{ matrix.app.dir }}/release/**/latest*.yml
           if-no-files-found: error
 
   publish:

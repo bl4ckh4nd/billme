@@ -1,5 +1,6 @@
 appId: com.billme.desktop
 productName: Billme
+electronVersion: 37.10.3
 
 publish:
   provider: github

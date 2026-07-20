@@ -40,6 +40,7 @@ apps/pro-desktop/.test-logs/
 apps/pro-desktop/.artifacts/
 .playwright-cli/
 .pnpm-store/
+.release-stage/
 test-results/
 apps/demo/.wrangler/
 doppelteBuchhaltung/*

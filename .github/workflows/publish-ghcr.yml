@@ -39,6 +39,8 @@ jobs:
             dockerfile: apps/web/Dockerfile
           - service: web-pro
             dockerfile: apps/web-pro/Dockerfile
+          - service: admin-web
+            dockerfile: apps/admin-web/Dockerfile
 
     env:
       REGISTRY_IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}

@@ -78,7 +78,7 @@ jobs:
         run: pnpm -C apps/offer-portal build
 
       - name: E2E smoke (desktop + pro)
-        run: pnpm test:e2e:smoke
+        run: xvfb-run -a pnpm test:e2e:smoke
 
   e2e-server-smoke:
     name: E2E smoke (server mode)

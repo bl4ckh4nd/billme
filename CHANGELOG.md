@@ -2,6 +2,15 @@
 
 All notable changes to Billme are documented in this file.
 
+## [0.3.1] - 2026-07-20
+
+### Fixed
+
+- Run Electron smoke tests inside a virtual X display on Linux CI.
+- Give electron-builder enough heap for workspace dependency collection and pin Windows packaging to the Visual Studio-equipped Windows 2022 runner.
+- Include PostgreSQL declarations in the isolated server-worker image build.
+- Publish the platform administration image alongside the other server-mode GHCR images.
+
 ## [0.3.0] - 2026-07-20
 
 ### Added
@@ -45,4 +54,5 @@ All notable changes to Billme are documented in this file.
 - Restored legacy invoice defaults and tax-mode defaults during migration and merge reconciliation.
 - Included previously missing source files and native runtime dependencies in builds and release packaging.
 
+[0.3.1]: https://github.com/bl4ckh4nd/billme/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/bl4ckh4nd/billme/compare/v0.2.0...v0.3.0

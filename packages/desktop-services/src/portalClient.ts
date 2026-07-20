@@ -154,7 +154,7 @@ export const portalClient = {
     const url = `${normalizeBaseUrl(baseUrl)}/health`;
     return fetchWithRetry(
       async (signal) => {
-        const res = await fetch(url, { method: 'GET', signal });
+        const res = await fetch(url, { method: 'GET', redirect: 'error', signal });
         await requireOk(res);
         return (await res.json()) as { ok: boolean; ts: string };
       },
@@ -347,7 +347,7 @@ export const portalClient = {
     const url = `${normalizeBaseUrl(baseUrl)}/offers/${encodeURIComponent(token)}/status`;
     return fetchWithRetry(
       async (signal) => {
-        const res = await fetch(url, { method: 'GET', signal });
+        const res = await fetch(url, { method: 'GET', redirect: 'error', signal });
         await requireOk(res);
         return (await res.json()) as PortalOfferStatus;
       },

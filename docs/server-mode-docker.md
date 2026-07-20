@@ -1,12 +1,14 @@
 # Server-mode Docker deployment
 
-Billme server mode ships as a Docker Compose stack with five services:
+Billme server mode ships as a Docker Compose stack with seven services:
 
 - `postgres` — persistent PostgreSQL database
 - `server-api` — Fastify API with automatic Postgres migrations
-- `server-worker` — recurring invoices, dunning, email queue, portal sync, and maintenance jobs
+- `server-worker` — recurring invoices, dunning, email queue, portal sync, and maintenance jobs, run once per cycle for every `active` tenant (set `WORKER_TENANT_ID` to pin a worker to a single tenant instead)
+- `receipt-worker` — network-isolated OCR worker with a dedicated memory/process budget; it can reach Postgres and the shared document volume but not the public internet
 - `web` — Billme Lite browser shell
 - `web-pro` — Billme Pro browser shell
+- `admin-web` — bare-minimum platform admin console for creating workspaces (tenants) and users
 
 Published images are available from GHCR as:
 
@@ -14,6 +16,7 @@ Published images are available from GHCR as:
 - `ghcr.io/bl4ckh4nd/billme/server-worker`
 - `ghcr.io/bl4ckh4nd/billme/web`
 - `ghcr.io/bl4ckh4nd/billme/web-pro`
+- `ghcr.io/bl4ckh4nd/billme/admin-web`
 
 ## Prerequisites
 
@@ -31,12 +34,19 @@ Edit `.env.server-mode` before the first start:
 - optionally set `BILLME_POSTGRES_DATA_DIR` to an absolute host path if PostgreSQL should use a bind-mounted data directory instead of the default named volume
 - optionally set `BILLME_POSTGRES_RUN_AS` if PostgreSQL must run under a specific container uid:gid
 - set `BILLME_SESSION_SECRET` to a long random value
-- optionally set `BILLME_PUBLIC_API_URL` to override the API URL that browsers will call; if unset, the web shells derive `http://<current-host>:3100` automatically
+- set `BILLME_RENDER_SECRET` to a separate random value of at least 24 characters; it authorizes only short-lived internal PDF render sessions
+- set `BILLME_POSTGRES_PASSWORD` to a long random value
+- set `BILLME_PUBLIC_API_URL` to the public HTTPS API URL in production; leave it blank only for local loopback development
 - optionally adjust exposed ports and worker intervals
 - optionally set `WORKER_RUN_ONCE=1` for run-once worker debugging or future E2E scenarios
 - optionally set `SMTP_PASSWORD` or `RESEND_API_KEY` if queued email delivery should be enabled
+- to enable the platform admin console, set `BILLME_PLATFORM_ADMIN_EMAIL` and `BILLME_PLATFORM_ADMIN_PASSWORD`; the `/api/v1/platform/*` routes stay inert (401 for any credential) until both are set
+- optionally set `BILLME_PLATFORM_SESSION_SECRET` to a distinct random value for signing platform-admin tokens; it falls back to `BILLME_SESSION_SECRET` if unset, but a distinct value is recommended so a leaked tenant session key cannot also grant platform access
+- if `BILLME_PLATFORM_ADMIN_EMAIL` is set while `BILLME_SESSION_SECRET`/`BILLME_PLATFORM_SESSION_SECRET` are left at the dev default, `server-api` logs a startup warning in development and refuses to start in production (`NODE_ENV=production`)
 
-The web shells read `BILLME_PUBLIC_API_URL` at container startup through a generated `runtime-config.js` file. That means Portainer can override the API URL without rebuilding the images.
+The stack binds all published application ports to `BILLME_BIND_ADDRESS=127.0.0.1` by default and never publishes PostgreSQL. Put an HTTPS reverse proxy in front of the Lite, Pro, admin, and API ports for production, then set `BILLME_PUBLIC_API_URL` to that public HTTPS API URL. The web shells read it at container startup through a generated `runtime-config.js` file; `admin-web` uses the same mechanism.
+
+Server-side portal polling is disabled for an unlisted portal URL. Set `BILLME_PORTAL_ALLOWED_ORIGINS` to the comma-separated HTTPS portal origins the worker may contact.
 
 ## Pull the published images
 
@@ -59,9 +69,53 @@ Open:
 
 - Lite shell: `http://localhost:${BILLME_WEB_PORT:-4175}`
 - Pro shell: `http://localhost:${BILLME_WEB_PRO_PORT:-4176}`
+- Platform admin console: `http://localhost:${BILLME_ADMIN_WEB_PORT:-4177}`
 - API health: `http://localhost:${BILLME_API_PORT:-3100}/health`
 
 On a clean database, open one of the browser shells and complete the bootstrap flow for the first owner account.
+
+After login, choose **Pair mobile app** in the lower-left corner. The one-time QR code expires after five minutes. See [Mobile app](mobile-app.md) for development builds, secure storage, and deployment requirements.
+
+## Creating a second workspace (multi-tenant)
+
+Server mode is single-tenant per product until an operator explicitly creates additional workspaces through the platform admin console. This is separate from the desktop apps (`apps/desktop`, `apps/pro-desktop`), which remain single-business-per-install and are not part of multi-tenancy.
+
+1. Set `BILLME_PLATFORM_ADMIN_EMAIL` / `BILLME_PLATFORM_ADMIN_PASSWORD` in `.env.server-mode` and restart `server-api`.
+2. Open the admin console at `http://localhost:${BILLME_ADMIN_WEB_PORT:-4177}` and sign in with those credentials.
+3. Use "Create workspace" to provision a new tenant (slug, display name, product, and an owner account) — this works even if a tenant already exists for that product, unlike the public self-service `/auth/bootstrap` flow, which only ever creates the first tenant per product.
+4. From a workspace's "Manage users" screen, add additional users with a role from `owner, admin, accountant, sales, viewer`.
+5. Users log in normally through the Lite/Pro web shells using their workspace credentials; their session token is scoped to that tenant only.
+
+## Agent access
+
+Server-mode agents should use scoped agent tokens instead of a human session
+token. Create them from an owner/admin human session with the CLI:
+
+```bash
+billme auth agent-token create --product lite \
+  --label "Invoice agent" --scopes read,clients:write
+billme auth agent-token list --product lite
+billme auth agent-token revoke --product lite --id <token-id> --confirm
+```
+
+The raw token is returned only at creation time. Store it as a secret and pass
+it to the CLI with `--token` or `BILLME_TOKEN`; do not commit it or place it in
+the CLI profile if that profile is shared. Tokens are bound to one tenant and
+product, stored as hashes, and checked against both their scopes and the
+tenant role capabilities.
+
+Inspect and invoke the supported server action surface with:
+
+```bash
+billme actions list --target server --product lite
+billme action run clients:list --target server --product lite
+```
+
+Mutating actions require `--reason`; destructive actions also require
+`--confirm`. `actions list` intentionally shows only actions with an existing
+server route. The remaining business actions are available through the
+authenticated local desktop bridge when the corresponding Electron app is
+running; they are not silently emulated on the server.
 
 ## Operations
 

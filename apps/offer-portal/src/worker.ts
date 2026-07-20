@@ -20,8 +20,8 @@ export default {
         publicBaseUrl: env.PUBLIC_BASE_URL,
         requirePublishApiKey:
           typeof env.REQUIRE_PUBLISH_API_KEY === 'string'
-            ? ['1', 'true', 'yes', 'on'].includes(env.REQUIRE_PUBLISH_API_KEY.toLowerCase())
-            : false,
+            ? !['0', 'false', 'no', 'off'].includes(env.REQUIRE_PUBLISH_API_KEY.toLowerCase())
+            : true,
       },
     });
     return app.fetch(request, env, ctx);

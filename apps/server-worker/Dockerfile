@@ -5,6 +5,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 RUN corepack enable
+RUN apk add --no-cache chromium poppler-utils tesseract-ocr tesseract-ocr-data-deu tesseract-ocr-data-eng
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps ./apps

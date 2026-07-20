@@ -1,0 +1,4 @@
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${BILLME_POSTGRES_PORT:?BILLME_POSTGRES_PORT must be set}:5432"

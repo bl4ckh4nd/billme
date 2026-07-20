@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { SettingsSchema } from '@billme/desktop-data/validation-schemas';
 import { sendEmail } from '@billme/desktop-core/services/emailService';
@@ -25,10 +26,13 @@ import {
   saveServerSettings,
   withPostgresTransaction,
   type PostgresTransactionClient,
+  updateDocumentDelivery,
+  enqueueMobilePush,
 } from '@billme/server-data';
 import {
   ensureDefaultProjectForClient,
   finalizeDocumentNumber,
+  isPortalUrlAllowed,
   listOffersPendingPortalSync,
   processDunningRun,
   runMaintenanceSweep,
@@ -53,6 +57,9 @@ import {
 } from '@billme/server-core';
 import type { WorkerLogger } from './logger.js';
 import { dispatchQueuedEmailBatch } from './emailQueue.js';
+import { processReceiptBatch } from './receiptProcessing.js';
+import { processDocumentRenderBatch } from './documentRendering.js';
+import { dispatchMobilePushBatch } from './pushNotifications.js';
 
 type WorkerSettings = z.infer<typeof SettingsSchema>;
 
@@ -61,6 +68,13 @@ export interface WorkerEnvironment {
   smtpPassword?: string;
   resendApiKey?: string;
   tenantId?: string;
+  portalAllowedOrigins: ReadonlySet<string>;
+  documentStoragePath: string;
+  apiUrl: string;
+  webUrl: string;
+  webProUrl: string;
+  renderSecret: string;
+  chromiumPath?: string;
 }
 
 export interface WorkerTaskResult {
@@ -164,370 +178,507 @@ export class ServerWorkerRuntime {
   }
 
   async runRecurringJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
+    const resolutions = await this.resolveScopes();
+    if (resolutions.length === 0) {
       return {
         status: 'skipped',
-        message: 'No primary tenant is bootstrapped yet',
+        message: 'No tenants are bootstrapped yet',
       };
     }
 
-    const settingsSnapshot = await this.readSettings(resolved.scope);
-    if (!settingsSnapshot) {
-      return {
-        status: 'skipped',
-        message: 'Server settings are not initialized yet',
-      };
-    }
+    const perTenant: Record<string, unknown> = {};
 
-    if (!shouldRunScheduledRecurring(settingsSnapshot.settings)) {
-      return {
-        status: 'skipped',
-        message: 'Recurring schedule window is not due',
-      };
-    }
+    for (const resolved of resolutions) {
+      try {
+        const settingsSnapshot = await this.readSettings(resolved.scope);
+        if (!settingsSnapshot) {
+          perTenant[resolved.tenant.id] = { status: 'skipped', message: 'Server settings are not initialized yet' };
+          continue;
+        }
 
-    const result = await processRecurringRun(resolved.scope, this.createRecurringDependencies(resolved.scope));
-    await this.saveSettings(resolved.scope, {
-      ...settingsSnapshot.settings,
-      automation: {
-        ...settingsSnapshot.settings.automation,
-        lastRecurringRun: new Date().toISOString(),
-      },
-    }, settingsSnapshot.createdAt);
+        if (!shouldRunScheduledRecurring(settingsSnapshot.settings)) {
+          perTenant[resolved.tenant.id] = { status: 'skipped', message: 'Recurring schedule window is not due' };
+          continue;
+        }
+
+        const result = await processRecurringRun(resolved.scope, this.createRecurringDependencies(resolved.scope));
+        await this.saveSettings(resolved.scope, {
+          ...settingsSnapshot.settings,
+          automation: {
+            ...settingsSnapshot.settings.automation,
+            lastRecurringRun: new Date().toISOString(),
+          },
+        }, settingsSnapshot.createdAt);
+
+        perTenant[resolved.tenant.id] = {
+          status: 'completed',
+          generated: result.generated,
+          deactivated: result.deactivated,
+          errors: result.errors.length,
+        };
+      } catch (error) {
+        this.logger.warn('Recurring run failed for tenant', {
+          tenantId: resolved.tenant.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        perTenant[resolved.tenant.id] = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+      }
+    }
 
     return {
       status: 'completed',
       message: 'Recurring run finished',
-      details: {
-        generated: result.generated,
-        deactivated: result.deactivated,
-        errors: result.errors.length,
-      },
+      details: { tenants: perTenant },
     };
   }
 
+  async runReceiptExtractionJob(): Promise<WorkerTaskResult> {
+    const result = await processReceiptBatch(
+      this.pool,
+      this.env.documentStoragePath,
+      (message, details) => this.logger.info(message, details),
+    );
+    return {
+      status: 'completed',
+      message: 'Receipt extraction run finished',
+      details: result,
+    };
+  }
+
+  async runDocumentRenderingJob(): Promise<WorkerTaskResult> {
+    const result = await processDocumentRenderBatch(
+      this.pool,
+      {
+        apiUrl: this.env.apiUrl,
+        webUrl: this.env.webUrl,
+        webProUrl: this.env.webProUrl,
+        renderSecret: this.env.renderSecret,
+        storageRoot: this.env.documentStoragePath,
+        chromiumPath: this.env.chromiumPath,
+      },
+      (message, details) => this.logger.info(message, details),
+    );
+    return {
+      status: 'completed',
+      message: 'Document rendering run finished',
+      details: result,
+    };
+  }
+
+  async runMobilePushJob(): Promise<WorkerTaskResult> {
+    const result = await dispatchMobilePushBatch(this.pool);
+    return { status: 'completed', message: 'Mobile push run finished', details: result };
+  }
+
   async runDunningJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
+    const resolutions = await this.resolveScopes();
+    if (resolutions.length === 0) {
       return {
         status: 'skipped',
-        message: 'No primary tenant is bootstrapped yet',
+        message: 'No tenants are bootstrapped yet',
       };
     }
 
-    const settingsSnapshot = await this.readSettings(resolved.scope);
-    if (!settingsSnapshot) {
-      return {
-        status: 'skipped',
-        message: 'Server settings are not initialized yet',
-      };
-    }
+    const perTenant: Record<string, unknown> = {};
 
-    if (!shouldRunScheduledDunning(settingsSnapshot.settings)) {
-      return {
-        status: 'skipped',
-        message: 'Dunning schedule window is not due',
-      };
-    }
+    for (const resolved of resolutions) {
+      try {
+        const settingsSnapshot = await this.readSettings(resolved.scope);
+        if (!settingsSnapshot) {
+          perTenant[resolved.tenant.id] = { status: 'skipped', message: 'Server settings are not initialized yet' };
+          continue;
+        }
 
-    const result = await processDunningRun(resolved.scope, {
-      invoiceRepo: {
-        list: (scope) => createPostgresInvoiceRepository(this.currentQueryable()).list(scope),
-        getById: (scope, id) => createPostgresInvoiceRepository(this.currentQueryable()).getById(scope, id),
-        save: (scope, invoice) => createPostgresInvoiceRepository(this.currentQueryable()).save(scope, invoice),
-      },
-      settingsRepo: {
-        get: async (scope) => (await this.readSettings(scope))?.settings ?? null,
-        save: async (scope, settings) => {
-          const current = await this.readSettings(scope);
-          await this.saveSettings(scope, settings, current?.createdAt);
-        },
-      },
-      dunningHistoryRepo: createPostgresDunningHistoryRepository(this.currentQueryable()),
-      emailPort: {
-        send,
-        log: async (scope, entry) => {
-          const id = randomUUID();
-          const createdAt = new Date().toISOString();
-          await insertEmailLogRow(this.currentQueryable(), scope.tenantId, {
-            id,
-            documentType: entry.documentType,
-            documentId: entry.documentId,
-            documentNumber: entry.documentNumber,
-            recipientEmail: entry.recipientEmail,
-            recipientName: entry.recipientName,
-            subject: entry.subject,
-            bodyText: entry.bodyText,
-            provider: entry.provider,
-            status: entry.status,
-            errorMessage: entry.errorMessage ?? null,
-            sentAt: entry.sentAt,
-            createdAt,
-          });
-          return {
-            ...entry,
-            id,
-            createdAt,
-          };
-        },
-      },
-      secretStore: {
-        get: async (key) => {
-          if (key === 'smtp.password') {
-            return this.env.smtpPassword ?? null;
-          }
-          return this.env.resendApiKey ?? null;
-        },
-      },
-      auditLog: createPostgresAuditLogPort(this.currentQueryable()),
-      actor: workerActor,
-      logger: this.logger.child({ job: 'dunning' }),
-      isRetryableError: isRetryableEmailError,
-    });
+        if (!shouldRunScheduledDunning(settingsSnapshot.settings)) {
+          perTenant[resolved.tenant.id] = { status: 'skipped', message: 'Dunning schedule window is not due' };
+          continue;
+        }
+
+        const result = await processDunningRun(resolved.scope, {
+          invoiceRepo: {
+            list: (scope) => createPostgresInvoiceRepository(this.currentQueryable()).list(scope),
+            getById: (scope, id) => createPostgresInvoiceRepository(this.currentQueryable()).getById(scope, id),
+            save: (scope, invoice) => createPostgresInvoiceRepository(this.currentQueryable()).save(scope, invoice),
+          },
+          settingsRepo: {
+            get: async (scope) => (await this.readSettings(scope))?.settings ?? null,
+            save: async (scope, settings) => {
+              const current = await this.readSettings(scope);
+              await this.saveSettings(scope, settings, current?.createdAt);
+            },
+          },
+          dunningHistoryRepo: createPostgresDunningHistoryRepository(this.currentQueryable()),
+          emailPort: {
+            send,
+            log: async (scope, entry) => {
+              const id = randomUUID();
+              const createdAt = new Date().toISOString();
+              await insertEmailLogRow(this.currentQueryable(), scope.tenantId, {
+                id,
+                documentType: entry.documentType,
+                documentId: entry.documentId,
+                documentNumber: entry.documentNumber,
+                recipientEmail: entry.recipientEmail,
+                recipientName: entry.recipientName,
+                subject: entry.subject,
+                bodyText: entry.bodyText,
+                provider: entry.provider,
+                status: entry.status,
+                errorMessage: entry.errorMessage ?? null,
+                sentAt: entry.sentAt,
+                createdAt,
+              });
+              return {
+                ...entry,
+                id,
+                createdAt,
+              };
+            },
+          },
+          secretStore: {
+            get: async (key) => {
+              if (key === 'smtp.password') {
+                return this.env.smtpPassword ?? null;
+              }
+              return this.env.resendApiKey ?? null;
+            },
+          },
+          auditLog: createPostgresAuditLogPort(this.currentQueryable()),
+          actor: workerActor,
+          logger: this.logger.child({ job: 'dunning', tenantId: resolved.tenant.id }),
+          isRetryableError: isRetryableEmailError,
+        });
+
+        perTenant[resolved.tenant.id] = {
+          status: 'completed',
+          processedInvoices: result.processedInvoices,
+          emailsSent: result.emailsSent,
+          feesApplied: result.feesApplied,
+          errors: result.errors.length,
+        };
+      } catch (error) {
+        this.logger.warn('Dunning run failed for tenant', {
+          tenantId: resolved.tenant.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        perTenant[resolved.tenant.id] = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+      }
+    }
 
     return {
       status: 'completed',
       message: 'Dunning run finished',
-      details: {
-        processedInvoices: result.processedInvoices,
-        emailsSent: result.emailsSent,
-        feesApplied: result.feesApplied,
-        errors: result.errors.length,
-      },
+      details: { tenants: perTenant },
     };
   }
 
   async runQueuedEmailJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
+    const resolutions = await this.resolveScopes();
+    if (resolutions.length === 0) {
       return {
         status: 'skipped',
-        message: 'No primary tenant is bootstrapped yet',
+        message: 'No tenants are bootstrapped yet',
       };
     }
 
-    const settingsSnapshot = await this.readSettings(resolved.scope);
-    if (!settingsSnapshot) {
-      return {
-        status: 'skipped',
-        message: 'Server settings are not initialized yet',
-      };
-    }
+    const perTenant: Record<string, unknown> = {};
 
-    let deliveryConfig: {
-      provider: 'smtp' | 'resend';
-      config: Parameters<typeof sendEmail>[1];
-      from: {
-        name: string;
-        email: string;
-      };
-    };
+    for (const resolved of resolutions) {
+      try {
+        const settingsSnapshot = await this.readSettings(resolved.scope);
+        if (!settingsSnapshot) {
+          perTenant[resolved.tenant.id] = { status: 'skipped', message: 'Server settings are not initialized yet' };
+          continue;
+        }
 
-    try {
-      deliveryConfig = await this.resolveEmailDeliveryConfig(settingsSnapshot.settings);
-    } catch (error) {
-      return this.blockedJob(error instanceof Error ? error.message : String(error));
-    }
+        let deliveryConfig: {
+          provider: 'smtp' | 'resend';
+          config: Parameters<typeof sendEmail>[1];
+          from: {
+            name: string;
+            email: string;
+          };
+        };
 
-    const logger = this.logger.child({ job: 'queued-email-dispatch' });
-    const batch = await dispatchQueuedEmailBatch({
-      claimDue: async () => {
-        const now = new Date();
-        return createPostgresEmailOutboxRepository(this.currentQueryable()).claimDue(resolved.scope, {
-          limit: 25,
-          workerId: this.workerId,
-          now: now.toISOString(),
-          leaseExpiresAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
-        });
-      },
-      send: async (entry) => {
-        return sendEmail(deliveryConfig.provider, deliveryConfig.config, {
-          from: deliveryConfig.from,
-          to: {
-            name: entry.recipientName,
-            email: entry.recipientEmail,
+        try {
+          deliveryConfig = await this.resolveEmailDeliveryConfig(settingsSnapshot.settings);
+        } catch (error) {
+          perTenant[resolved.tenant.id] = { status: 'blocked', message: error instanceof Error ? error.message : String(error) };
+          continue;
+        }
+
+        const logger = this.logger.child({ job: 'queued-email-dispatch', tenantId: resolved.tenant.id });
+        const batch = await dispatchQueuedEmailBatch({
+          claimDue: async () => {
+            const now = new Date();
+            return createPostgresEmailOutboxRepository(this.currentQueryable()).claimDue(resolved.scope, {
+              limit: 25,
+              workerId: this.workerId,
+              now: now.toISOString(),
+              leaseExpiresAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
+            });
           },
-          subject: entry.subject,
-          text: entry.bodyText,
+          send: async (entry) => {
+            return sendEmail(deliveryConfig.provider, deliveryConfig.config, {
+              from: deliveryConfig.from,
+              to: {
+                name: entry.recipientName,
+                email: entry.recipientEmail,
+              },
+              subject: entry.subject,
+              text: entry.bodyText,
+              attachments: entry.attachmentStorageKey ? [{
+                filename: `${entry.documentNumber}.pdf`,
+                path: join(this.env.documentStoragePath, entry.attachmentStorageKey),
+              }] : undefined,
+            });
+          },
+          recordSuccess: async (entry, args) => {
+            await this.inTransaction(async () => {
+              await this.logQueuedEmailAttempt(resolved.scope, entry, {
+                provider: deliveryConfig.provider,
+                status: 'sent',
+                errorMessage: undefined,
+                attemptedAt: args.sentAt,
+              });
+
+              const updated = await createPostgresEmailOutboxRepository(this.currentQueryable()).markSent(resolved.scope, {
+                id: entry.id,
+                workerId: this.workerId,
+                sentAt: args.sentAt,
+                provider: deliveryConfig.provider,
+                providerMessageId: args.messageId,
+              });
+
+              if (!updated) {
+                throw new Error(`Queued email ${entry.id} was not locked by this worker`);
+              }
+              if (entry.deliveryId) {
+                await updateDocumentDelivery(this.currentQueryable(), resolved.scope.tenantId, entry.deliveryId, {
+                  status: 'sent',
+                  sentAt: args.sentAt,
+                });
+                await enqueueMobilePush(this.currentQueryable(), {
+                  tenantId: resolved.scope.tenantId,
+                  product: resolved.scope.product,
+                  title: 'Document sent',
+                  body: 'Open Billme to view delivery details.',
+                  route: `/documents/${entry.documentType}/${entry.documentId}`,
+                });
+              }
+            });
+          },
+          recordFailure: async (entry, args) => {
+            return this.inTransaction(async () => {
+              await this.logQueuedEmailAttempt(resolved.scope, entry, {
+                provider: deliveryConfig.provider,
+                status: 'failed',
+                errorMessage: args.error,
+                attemptedAt: args.failedAt,
+              });
+
+              const updated = await createPostgresEmailOutboxRepository(this.currentQueryable()).markFailed(resolved.scope, {
+                id: entry.id,
+                workerId: this.workerId,
+                failedAt: args.failedAt,
+                provider: deliveryConfig.provider,
+                error: args.error,
+                retryAt: args.retryAt,
+              });
+
+              if (entry.deliveryId && updated?.status === 'failed') {
+                await updateDocumentDelivery(this.currentQueryable(), resolved.scope.tenantId, entry.deliveryId, {
+                  status: 'failed',
+                  errorCode: args.error,
+                });
+              }
+
+              return updated?.status === 'pending' ? 'pending' : 'failed';
+            });
+          },
+          logger,
+          isRetryableError: isRetryableEmailError,
         });
-      },
-      recordSuccess: async (entry, args) => {
-        await this.inTransaction(async () => {
-          await this.logQueuedEmailAttempt(resolved.scope, entry, {
-            provider: deliveryConfig.provider,
-            status: 'sent',
-            errorMessage: undefined,
-            attemptedAt: args.sentAt,
-          });
 
-          const updated = await createPostgresEmailOutboxRepository(this.currentQueryable()).markSent(resolved.scope, {
-            id: entry.id,
-            workerId: this.workerId,
-            sentAt: args.sentAt,
-            provider: deliveryConfig.provider,
-            providerMessageId: args.messageId,
-          });
-
-          if (!updated) {
-            throw new Error(`Queued email ${entry.id} was not locked by this worker`);
-          }
+        perTenant[resolved.tenant.id] = { status: 'completed', ...batch };
+      } catch (error) {
+        this.logger.warn('Queued email dispatch failed for tenant', {
+          tenantId: resolved.tenant.id,
+          error: error instanceof Error ? error.message : String(error),
         });
-      },
-      recordFailure: async (entry, args) => {
-        return this.inTransaction(async () => {
-          await this.logQueuedEmailAttempt(resolved.scope, entry, {
-            provider: deliveryConfig.provider,
-            status: 'failed',
-            errorMessage: args.error,
-            attemptedAt: args.failedAt,
-          });
-
-          const updated = await createPostgresEmailOutboxRepository(this.currentQueryable()).markFailed(resolved.scope, {
-            id: entry.id,
-            workerId: this.workerId,
-            failedAt: args.failedAt,
-            provider: deliveryConfig.provider,
-            error: args.error,
-            retryAt: args.retryAt,
-          });
-
-          return updated?.status === 'pending' ? 'pending' : 'failed';
-        });
-      },
-      logger,
-      isRetryableError: isRetryableEmailError,
-    });
+        perTenant[resolved.tenant.id] = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+      }
+    }
 
     return {
       status: 'completed',
       message: 'Queued email dispatch finished',
-      details: { ...batch },
+      details: { tenants: perTenant },
     };
   }
 
   async runPortalSyncJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
+    const resolutions = await this.resolveScopes();
+    if (resolutions.length === 0) {
       return {
         status: 'skipped',
-        message: 'No primary tenant is bootstrapped yet',
+        message: 'No tenants are bootstrapped yet',
       };
     }
 
-    const settingsSnapshot = await this.readSettings(resolved.scope);
-    if (!settingsSnapshot) {
-      return {
-        status: 'skipped',
-        message: 'Server settings are not initialized yet',
-      };
-    }
+    const perTenant: Record<string, unknown> = {};
 
-    const baseUrl = settingsSnapshot.settings.portal?.baseUrl?.trim();
-    if (!baseUrl) {
-      return {
-        status: 'skipped',
-        message: 'Portal base URL is not configured',
-      };
-    }
-
-    const offerRepository = createPostgresOfferRepository(this.currentQueryable());
-    const auditLog = createPostgresAuditLogPort(this.currentQueryable());
-    const offers = await offerRepository.list(resolved.scope);
-    const pendingOffers = listOffersPendingPortalSync(resolved.scope, {
-      offerRepo: {
-        list: () => offers,
-        getById: (_scope, id) => offers.find((offer) => offer.id === id) ?? null,
-        save: (_scope, offer) => offer,
-        remove: () => undefined,
-      },
-    });
-
-    let updated = 0;
-
-    for (const pendingOffer of pendingOffers) {
-      const currentOffer = offers.find((offer) => offer.id === pendingOffer.id);
-      if (!currentOffer) {
-        continue;
-      }
-
-      const bufferedOffers = createBufferedOfferRepository(currentOffer);
-      const bufferedAuditLog = createBufferedAuditLog();
-
+    for (const resolved of resolutions) {
       try {
-        const result = await syncPublishedOfferDecisionFromPortal(
-          resolved.scope,
-          {
-            offerRepo: bufferedOffers.port,
-            auditLog: bufferedAuditLog.port,
-            portalGateway: {
-              getOfferStatus: (shareToken) => portalClient.getOfferStatus(baseUrl, shareToken),
-            },
-          } satisfies OfferDomainDependencies & {
-            portalGateway: {
-              getOfferStatus: (shareToken: string) => Promise<{ decision?: unknown }>;
-            };
-          },
-          {
-            offerId: pendingOffer.id,
-            actor: workerActor,
-          },
-        );
-
-        if (!result.updated) {
+        const settingsSnapshot = await this.readSettings(resolved.scope);
+        if (!settingsSnapshot) {
+          perTenant[resolved.tenant.id] = { status: 'skipped', message: 'Server settings are not initialized yet' };
           continue;
         }
 
-        await offerRepository.save(resolved.scope, stripOfferHistory(bufferedOffers.current()));
-        for (const entry of bufferedAuditLog.entries) {
-          await auditLog.append(resolved.scope, entry);
+        const baseUrl = settingsSnapshot.settings.portal?.baseUrl?.trim();
+        if (!baseUrl) {
+          perTenant[resolved.tenant.id] = { status: 'skipped', message: 'Portal base URL is not configured' };
+          continue;
+        }
+        if (!isPortalUrlAllowed(baseUrl, this.env.portalAllowedOrigins)) {
+          this.logger.warn('Skipped portal sync for a non-allowlisted origin', { tenantId: resolved.tenant.id });
+          perTenant[resolved.tenant.id] = { status: 'skipped', message: 'Portal base URL is not allowlisted' };
+          continue;
         }
 
-        updated += 1;
+        const offerRepository = createPostgresOfferRepository(this.currentQueryable());
+        const auditLog = createPostgresAuditLogPort(this.currentQueryable());
+        const offers = await offerRepository.list(resolved.scope);
+        const pendingOffers = listOffersPendingPortalSync(resolved.scope, {
+          offerRepo: {
+            list: () => offers,
+            getById: (_scope, id) => offers.find((offer) => offer.id === id) ?? null,
+            save: (_scope, offer) => offer,
+            remove: () => undefined,
+          },
+        });
+
+        let updated = 0;
+
+        for (const pendingOffer of pendingOffers) {
+          const currentOffer = offers.find((offer) => offer.id === pendingOffer.id);
+          if (!currentOffer) {
+            continue;
+          }
+
+          const bufferedOffers = createBufferedOfferRepository(currentOffer);
+          const bufferedAuditLog = createBufferedAuditLog();
+
+          try {
+            const result = await syncPublishedOfferDecisionFromPortal(
+              resolved.scope,
+              {
+                offerRepo: bufferedOffers.port,
+                auditLog: bufferedAuditLog.port,
+                portalGateway: {
+                  getOfferStatus: (shareToken) => portalClient.getOfferStatus(baseUrl, shareToken),
+                },
+              } satisfies OfferDomainDependencies & {
+                portalGateway: {
+                  getOfferStatus: (shareToken: string) => Promise<{ decision?: unknown }>;
+                };
+              },
+              {
+                offerId: pendingOffer.id,
+                actor: workerActor,
+              },
+            );
+
+            if (!result.updated) {
+              continue;
+            }
+
+            await offerRepository.save(resolved.scope, stripOfferHistory(bufferedOffers.current()));
+            for (const entry of bufferedAuditLog.entries) {
+              await auditLog.append(resolved.scope, entry);
+            }
+            const decision = bufferedOffers.current().share?.decision;
+            await enqueueMobilePush(this.currentQueryable(), {
+              tenantId: resolved.scope.tenantId,
+              product: resolved.scope.product,
+              title: decision === 'accepted' ? 'Offer accepted' : 'Offer decision received',
+              body: 'Open Billme to review the decision.',
+              route: `/documents/offer/${pendingOffer.id}`,
+            });
+
+            updated += 1;
+          } catch (error) {
+            this.logger.warn('Portal sync offer failed', {
+              tenantId: resolved.tenant.id,
+              offerId: pendingOffer.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+
+        perTenant[resolved.tenant.id] = {
+          status: 'completed',
+          pending: pendingOffers.length,
+          updated,
+        };
       } catch (error) {
-        this.logger.warn('Portal sync offer failed', {
-          offerId: pendingOffer.id,
+        this.logger.warn('Portal sync run failed for tenant', {
+          tenantId: resolved.tenant.id,
           error: error instanceof Error ? error.message : String(error),
         });
+        perTenant[resolved.tenant.id] = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
       }
     }
 
     return {
       status: 'completed',
       message: 'Portal sync run finished',
-      details: {
-        pending: pendingOffers.length,
-        updated,
-      },
+      details: { tenants: perTenant },
     };
   }
 
   async runMaintenanceJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
+    const resolutions = await this.resolveScopes();
+    if (resolutions.length === 0) {
       return {
         status: 'skipped',
-        message: 'No primary tenant is bootstrapped yet',
+        message: 'No tenants are bootstrapped yet',
       };
     }
 
-    const result = await runMaintenanceSweep(resolved.scope, {
-      retentionRepo: createPostgresMaintenanceRepository(this.currentQueryable()),
-      auditLog: createPostgresAuditLogPort(this.currentQueryable()),
-      actor: workerActor,
-    });
+    const perTenant: Record<string, unknown> = {};
+
+    for (const resolved of resolutions) {
+      try {
+        const result = await runMaintenanceSweep(resolved.scope, {
+          retentionRepo: createPostgresMaintenanceRepository(this.currentQueryable()),
+          auditLog: createPostgresAuditLogPort(this.currentQueryable()),
+          actor: workerActor,
+        });
+
+        perTenant[resolved.tenant.id] = {
+          status: 'completed',
+          totalDeleted: result.totalDeleted,
+          steps: result.steps.map((step) => ({
+            key: step.key,
+            deletedCount: step.deletedCount,
+            deleteBefore: step.deleteBefore,
+          })),
+        };
+      } catch (error) {
+        this.logger.warn('Maintenance sweep failed for tenant', {
+          tenantId: resolved.tenant.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        perTenant[resolved.tenant.id] = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+      }
+    }
 
     return {
       status: 'completed',
       message: 'Maintenance sweep finished',
-      details: {
-        totalDeleted: result.totalDeleted,
-        steps: result.steps.map((step) => ({
-          key: step.key,
-          deletedCount: step.deletedCount,
-          deleteBefore: step.deleteBefore,
-        })),
-      },
+      details: { tenants: perTenant },
     };
   }
 
@@ -553,19 +704,22 @@ export class ServerWorkerRuntime {
     });
   }
 
-  private async resolveScope(): Promise<ScopeResolution | null> {
+  private async resolveScopes(): Promise<ScopeResolution[]> {
     const tenantRepository = createPostgresTenantRepository(this.currentQueryable());
-    const tenant = this.env.tenantId
-      ? await tenantRepository.getById(this.env.tenantId)
-      : await tenantRepository.getPrimary();
-    if (!tenant) {
-      return null;
+
+    if (this.env.tenantId) {
+      const tenant = await tenantRepository.getById(this.env.tenantId);
+      if (!tenant) {
+        return [];
+      }
+      return [{ tenant, scope: createDefaultTenantScope(tenant.id, tenant.product) }];
     }
 
-    return {
+    const tenants = await tenantRepository.listActive();
+    return tenants.map((tenant) => ({
       tenant,
       scope: createDefaultTenantScope(tenant.id, tenant.product),
-    };
+    }));
   }
 
   private async resolveEmailDeliveryConfig(settings: WorkerSettings): Promise<{

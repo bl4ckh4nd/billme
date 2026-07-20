@@ -6,9 +6,7 @@ services:
     environment:
       POSTGRES_DB: ${BILLME_POSTGRES_DB:-billme}
       POSTGRES_USER: ${BILLME_POSTGRES_USER:-billme}
-      POSTGRES_PASSWORD: ${BILLME_POSTGRES_PASSWORD:-billme}
-    ports:
-      - "${BILLME_POSTGRES_PORT:-5432}:5432"
+      POSTGRES_PASSWORD: ${BILLME_POSTGRES_PASSWORD:?BILLME_POSTGRES_PASSWORD must be set}
     volumes:
       - "${BILLME_POSTGRES_DATA_DIR:-billme-postgres-data}:/var/lib/postgresql/data"
     healthcheck:
@@ -17,6 +15,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    networks: [default, receipt-internal]
 
   server-api:
     image: ${BILLME_SERVER_API_IMAGE:-ghcr.io/bl4ckh4nd/billme/server-api:latest}
@@ -28,13 +27,21 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 3100
-      SESSION_SECRET: ${BILLME_SESSION_SECRET:-billme-dev-session-secret}
-      DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:-billme}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
+      SESSION_SECRET: ${BILLME_SESSION_SECRET:?BILLME_SESSION_SECRET must be set}
+      PLATFORM_SESSION_SECRET: ${BILLME_PLATFORM_SESSION_SECRET:-}
+      PLATFORM_ADMIN_EMAIL: ${BILLME_PLATFORM_ADMIN_EMAIL:-}
+      PLATFORM_ADMIN_PASSWORD: ${BILLME_PLATFORM_ADMIN_PASSWORD:-}
+      BILLME_PORTAL_ALLOWED_ORIGINS: ${BILLME_PORTAL_ALLOWED_ORIGINS:-}
+      BILLME_DOCUMENT_STORAGE_PATH: /data/billme-documents
+      BILLME_RENDER_SECRET: ${BILLME_RENDER_SECRET:?BILLME_RENDER_SECRET must be set}
+      DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:?BILLME_POSTGRES_PASSWORD must be set}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "${BILLME_API_PORT:-3100}:3100"
+      - "${BILLME_BIND_ADDRESS:-127.0.0.1}:${BILLME_API_PORT:-3100}:3100"
+    volumes:
+      - "${BILLME_DOCUMENT_DATA_DIR:-billme-document-data}:/data/billme-documents"
 
   server-worker:
     image: ${BILLME_SERVER_WORKER_IMAGE:-ghcr.io/bl4ckh4nd/billme/server-worker:latest}
@@ -45,21 +52,65 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     environment:
-      DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:-billme}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
+      DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:?BILLME_POSTGRES_PASSWORD must be set}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
       WORKER_LOG_LEVEL: ${WORKER_LOG_LEVEL:-info}
       WORKER_RECURRING_INTERVAL_MS: ${WORKER_RECURRING_INTERVAL_MS:-900000}
       WORKER_DUNNING_INTERVAL_MS: ${WORKER_DUNNING_INTERVAL_MS:-900000}
       WORKER_EMAIL_QUEUE_INTERVAL_MS: ${WORKER_EMAIL_QUEUE_INTERVAL_MS:-60000}
       WORKER_PORTAL_SYNC_INTERVAL_MS: ${WORKER_PORTAL_SYNC_INTERVAL_MS:-60000}
       WORKER_MAINTENANCE_INTERVAL_MS: ${WORKER_MAINTENANCE_INTERVAL_MS:-86400000}
+      WORKER_RECEIPT_INTERVAL_MS: ${WORKER_RECEIPT_INTERVAL_MS:-15000}
+      WORKER_MOBILE_PUSH_INTERVAL_MS: ${WORKER_MOBILE_PUSH_INTERVAL_MS:-15000}
+      WORKER_ENABLED_JOBS: document-rendering,recurring-invoices,dunning,queued-email-dispatch,offer-portal-sync,scheduled-maintenance,mobile-push
       WORKER_RUN_ONCE: ${WORKER_RUN_ONCE:-0}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      BILLME_PORTAL_ALLOWED_ORIGINS: ${BILLME_PORTAL_ALLOWED_ORIGINS:-}
+      BILLME_DOCUMENT_STORAGE_PATH: /data/billme-documents
+      BILLME_RENDER_SECRET: ${BILLME_RENDER_SECRET:?BILLME_RENDER_SECRET must be set}
+      BILLME_INTERNAL_API_URL: http://server-api:3100
+      BILLME_INTERNAL_WEB_URL: http://web:8080
+      BILLME_INTERNAL_WEB_PRO_URL: http://web-pro:8080
+      CHROMIUM_PATH: /usr/bin/chromium-browser
+      WORKER_DOCUMENT_RENDER_INTERVAL_MS: ${WORKER_DOCUMENT_RENDER_INTERVAL_MS:-10000}
+    volumes:
+      - "${BILLME_DOCUMENT_DATA_DIR:-billme-document-data}:/data/billme-documents"
     depends_on:
       postgres:
         condition: service_healthy
       server-api:
         condition: service_started
+      web:
+        condition: service_started
+      web-pro:
+        condition: service_started
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 256
+
+  receipt-worker:
+    image: ${BILLME_SERVER_WORKER_IMAGE:-ghcr.io/bl4ckh4nd/billme/server-worker:latest}
+    build:
+      context: .
+      dockerfile: apps/server-worker/Dockerfile
+    init: true
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:?BILLME_POSTGRES_PASSWORD must be set}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
+      BILLME_RENDER_SECRET: ${BILLME_RENDER_SECRET:?BILLME_RENDER_SECRET must be set}
+      BILLME_DOCUMENT_STORAGE_PATH: /data/billme-documents
+      WORKER_ENABLED_JOBS: receipt-extraction
+      WORKER_RECEIPT_INTERVAL_MS: ${WORKER_RECEIPT_INTERVAL_MS:-15000}
+    volumes:
+      - "${BILLME_DOCUMENT_DATA_DIR:-billme-document-data}:/data/billme-documents"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [receipt-internal]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 128
+    mem_limit: 768m
 
   web:
     image: ${BILLME_WEB_IMAGE:-ghcr.io/bl4ckh4nd/billme/web:latest}
@@ -73,7 +124,7 @@ services:
       server-api:
         condition: service_started
     ports:
-      - "${BILLME_WEB_PORT:-4175}:8080"
+      - "${BILLME_BIND_ADDRESS:-127.0.0.1}:${BILLME_WEB_PORT:-4175}:8080"
 
   web-pro:
     image: ${BILLME_WEB_PRO_IMAGE:-ghcr.io/bl4ckh4nd/billme/web-pro:latest}
@@ -87,7 +138,27 @@ services:
       server-api:
         condition: service_started
     ports:
-      - "${BILLME_WEB_PRO_PORT:-4176}:8080"
+      - "${BILLME_BIND_ADDRESS:-127.0.0.1}:${BILLME_WEB_PRO_PORT:-4176}:8080"
+
+  admin-web:
+    image: ${BILLME_ADMIN_WEB_IMAGE:-ghcr.io/bl4ckh4nd/billme/admin-web:latest}
+    build:
+      context: .
+      dockerfile: apps/admin-web/Dockerfile
+    restart: unless-stopped
+    environment:
+      BILLME_PUBLIC_API_URL: ${BILLME_PUBLIC_API_URL:-}
+    depends_on:
+      server-api:
+        condition: service_started
+    ports:
+      - "${BILLME_BIND_ADDRESS:-127.0.0.1}:${BILLME_ADMIN_WEB_PORT:-4177}:8080"
 
 volumes:
   billme-postgres-data:
+  billme-document-data:
+
+networks:
+  default: {}
+  receipt-internal:
+    internal: true

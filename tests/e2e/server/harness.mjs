@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 const composeFile = path.join(repoRoot, 'docker-compose.server-mode.yml');
+const composeE2eFile = path.join(repoRoot, 'docker-compose.server-mode.e2e.yml');
 const exampleEnvFile = path.join(repoRoot, '.env.server-mode.example');
 const runtimeDir = path.join(repoRoot, 'test-results', 'server-mode');
 const latestStateFile = path.join(runtimeDir, 'runtime-state.json');
@@ -288,6 +289,8 @@ const composeArgs = (state, args) => [
   state.envFile,
   '-f',
   composeFile,
+  '-f',
+  composeE2eFile,
   ...args,
 ];
 
@@ -426,6 +429,17 @@ const isProcessAlive = (pid) => {
   } catch {
     return false;
   }
+};
+
+const waitForProcessLog = async (pid, logPath, text, description) => {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const content = await fs.readFile(logPath, 'utf8').catch(() => '');
+    if (content.includes(text)) return;
+    if (!isProcessAlive(pid)) throw new Error(`${description} exited during startup.\n${content}`);
+    await sleep(250);
+  }
+  throw new Error(`Timed out waiting for ${description}.\n${await fs.readFile(logPath, 'utf8').catch(() => '')}`);
 };
 
 const startProcessService = async ({
@@ -588,6 +602,8 @@ const startServerModeProcessStack = async (state, startupError) => {
     HOST: '127.0.0.1',
     PORT: String(state.ports.api),
     SESSION_SECRET: env.BILLME_SESSION_SECRET ?? 'billme-e2e-session-secret',
+    BILLME_RENDER_SECRET: env.BILLME_RENDER_SECRET,
+    BILLME_DOCUMENT_STORAGE_PATH: env.BILLME_DOCUMENT_STORAGE_PATH,
   };
   const workerEnv = {
     ...process.env,
@@ -600,12 +616,21 @@ const startServerModeProcessStack = async (state, startupError) => {
     WORKER_EMAIL_QUEUE_INTERVAL_MS: env.WORKER_EMAIL_QUEUE_INTERVAL_MS ?? '60000',
     WORKER_PORTAL_SYNC_INTERVAL_MS: env.WORKER_PORTAL_SYNC_INTERVAL_MS ?? '60000',
     WORKER_MAINTENANCE_INTERVAL_MS: env.WORKER_MAINTENANCE_INTERVAL_MS ?? '86400000',
+    WORKER_RECEIPT_INTERVAL_MS: '1000',
+    WORKER_DOCUMENT_RENDER_INTERVAL_MS: '1000',
+    WORKER_MOBILE_PUSH_INTERVAL_MS: env.WORKER_MOBILE_PUSH_INTERVAL_MS ?? '15000',
+    BILLME_RENDER_SECRET: env.BILLME_RENDER_SECRET,
+    BILLME_DOCUMENT_STORAGE_PATH: env.BILLME_DOCUMENT_STORAGE_PATH,
+    BILLME_INTERNAL_API_URL: state.urls.api,
+    BILLME_INTERNAL_WEB_URL: state.urls.web,
+    BILLME_INTERNAL_WEB_PRO_URL: state.urls.webPro,
+    CHROMIUM_PATH: process.env.CHROMIUM_PATH ?? '/usr/bin/google-chrome',
     WORKER_RUN_ONCE: '0',
   };
 
   const apiPid = await startProcessService({
-    command: 'pnpm',
-    args: ['-C', 'apps/server-api', 'exec', 'node', '--import', 'tsx', 'src/server.ts'],
+    command: process.execPath,
+    args: ['--import', 'tsx', 'apps/server-api/src/server.ts'],
     env: commonServerEnv,
     logFileName: 'server-api.log',
     diagnosticsDirPath: state.diagnosticsDir,
@@ -620,14 +645,14 @@ const startServerModeProcessStack = async (state, startupError) => {
 
   const [webPid, webProPid] = await Promise.all([
     startProcessService({
-      command: 'pnpm',
+      command: path.join(repoRoot, 'node_modules', '.bin', 'vite'),
       args: ['preview', '--host', '127.0.0.1', '--port', String(state.ports.web)],
       cwd: path.join(repoRoot, 'apps', 'web'),
       logFileName: 'web.log',
       diagnosticsDirPath: state.diagnosticsDir,
     }),
     startProcessService({
-      command: 'pnpm',
+      command: path.join(repoRoot, 'node_modules', '.bin', 'vite'),
       args: ['preview', '--host', '127.0.0.1', '--port', String(state.ports.webPro)],
       cwd: path.join(repoRoot, 'apps', 'web-pro'),
       logFileName: 'web-pro.log',
@@ -665,8 +690,8 @@ const startServerModeProcessStack = async (state, startupError) => {
   ]);
 
   const workerPid = await startProcessService({
-    command: 'pnpm',
-    args: ['-C', 'apps/server-worker', 'exec', 'node', '--import', 'tsx', 'src/worker.ts'],
+    command: process.execPath,
+    args: ['--import', 'tsx', 'apps/server-worker/src/worker.ts'],
     env: workerEnv,
     logFileName: 'server-worker.log',
     diagnosticsDirPath: state.diagnosticsDir,
@@ -675,6 +700,12 @@ const startServerModeProcessStack = async (state, startupError) => {
   if (!workerPid || !isProcessAlive(workerPid)) {
     throw new Error('Failed to start the server-mode worker process.');
   }
+  await waitForProcessLog(
+    workerPid,
+    path.join(state.diagnosticsDir, 'server-worker.log'),
+    'Worker runtime initialized',
+    'server-mode worker',
+  );
   debugLog('process:worker-started', workerPid);
 
   const startedState = {
@@ -749,6 +780,8 @@ const createRuntimeState = async () => {
     BILLME_API_PORT: apiPort,
     BILLME_PUBLIC_API_URL: publicApiUrl,
     BILLME_SESSION_SECRET: processEnv.BILLME_SESSION_SECRET ?? userEnv.BILLME_SESSION_SECRET ?? randomValue(),
+    BILLME_RENDER_SECRET: processEnv.BILLME_RENDER_SECRET ?? userEnv.BILLME_RENDER_SECRET ?? randomValue(),
+    BILLME_DOCUMENT_STORAGE_PATH: path.join(runDir, 'documents'),
     BILLME_WEB_PORT: webPort,
     BILLME_WEB_PRO_PORT: webProPort,
     WORKER_LOG_LEVEL: sourceEnv.WORKER_LOG_LEVEL ?? 'info',

@@ -422,7 +422,7 @@ export async function launchDesktopApp(options = {}) {
   const launchedApp = await electron.launch({
     executablePath: electronBinary,
     cwd,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu-sandbox', `--user-data-dir=${userDataDir}`, '.'],
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', `--user-data-dir=${userDataDir}`, '.'],
     env: {
       ...process.env,
       ELECTRON_DISABLE_SANDBOX: '1',

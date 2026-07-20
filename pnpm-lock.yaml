@@ -3,7 +3,6 @@ lockfileVersion: '9.0'
 settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
-  injectWorkspacePackages: true
 
 importers:
 
@@ -115,7 +114,7 @@ importers:
         version: link:../../packages/desktop-core
       '@billme/desktop-data':
         specifier: workspace:*
-        version: file:packages/desktop-data(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(@types/react@19.2.13)(better-sqlite3@12.6.2)(electron@37.10.3)(expo-sqlite@57.0.0(expo@57.0.4)(react-native@0.86.0(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
+        version: link:../../packages/desktop-data
       '@billme/desktop-designer':
         specifier: workspace:*
         version: link:../../packages/desktop-designer
@@ -127,10 +126,10 @@ importers:
         version: link:../../packages/desktop-renderer
       '@billme/desktop-services':
         specifier: workspace:*
-        version: file:packages/desktop-services(@types/react@19.2.13)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
+        version: link:../../packages/desktop-services
       '@billme/desktop-state':
         specifier: workspace:*
-        version: file:packages/desktop-state(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
+        version: link:../../packages/desktop-state
       '@billme/desktop-ui':
         specifier: workspace:*
         version: link:../../packages/desktop-ui
@@ -434,7 +433,7 @@ importers:
         version: link:../../packages/desktop-core
       '@billme/desktop-data':
         specifier: workspace:*
-        version: file:packages/desktop-data(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(@types/react@19.2.13)(better-sqlite3@12.6.2)(electron@37.10.3)(expo-sqlite@57.0.0(expo@57.0.4)(react-native@0.86.0(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
+        version: link:../../packages/desktop-data
       '@billme/desktop-designer':
         specifier: workspace:*
         version: link:../../packages/desktop-designer
@@ -443,10 +442,10 @@ importers:
         version: link:../../packages/desktop-hooks
       '@billme/desktop-services':
         specifier: workspace:*
-        version: file:packages/desktop-services(@types/react@19.2.13)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
+        version: link:../../packages/desktop-services
       '@billme/desktop-state':
         specifier: workspace:*
-        version: file:packages/desktop-state(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
+        version: link:../../packages/desktop-state
       '@billme/desktop-ui':
         specifier: workspace:*
         version: link:../../packages/desktop-ui
@@ -616,7 +615,7 @@ importers:
     dependencies:
       '@billme/desktop-core':
         specifier: workspace:*
-        version: file:packages/desktop-core(@types/react@19.2.17)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
+        version: link:../../packages/desktop-core
       '@billme/desktop-data':
         specifier: workspace:*
         version: link:../../packages/desktop-data
@@ -659,7 +658,7 @@ importers:
         version: link:../../packages/desktop-contracts
       '@billme/desktop-data':
         specifier: workspace:*
-        version: file:packages/desktop-data(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(@types/react@19.2.13)(better-sqlite3@12.6.2)(electron@37.10.3)(expo-sqlite@57.0.0(expo@57.0.4)(react-native@0.86.0(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
+        version: link:../../packages/desktop-data
       '@billme/desktop-renderer':
         specifier: workspace:*
         version: link:../../packages/desktop-renderer
@@ -855,7 +854,7 @@ importers:
     dependencies:
       '@billme/desktop-core':
         specifier: workspace:*
-        version: file:packages/desktop-core(@types/react@19.2.17)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
+        version: link:../desktop-core
       '@billme/desktop-services':
         specifier: workspace:*
         version: link:../desktop-services
@@ -967,7 +966,7 @@ importers:
     dependencies:
       '@billme/desktop-core':
         specifier: workspace:*
-        version: file:packages/desktop-core(@types/react@19.2.17)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
+        version: link:../desktop-core
       '@billme/finance-intelligence':
         specifier: workspace:*
         version: link:../finance-intelligence
@@ -1595,33 +1594,6 @@ packages:
   '@bcoe/v8-coverage@1.0.2':
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
     engines: {node: '>=18'}
-
-  '@billme/accounting-shared@file:packages/accounting-shared':
-    resolution: {directory: packages/accounting-shared, type: directory}
-
-  '@billme/desktop-core@file:packages/desktop-core':
-    resolution: {directory: packages/desktop-core, type: directory}
-    peerDependencies:
-      electron: '>=37.0.0'
-      react: ^19.0.0
-      react-dom: ^19.0.0
-
-  '@billme/desktop-data@file:packages/desktop-data':
-    resolution: {directory: packages/desktop-data, type: directory}
-    peerDependencies:
-      better-sqlite3: ^12.4.1
-
-  '@billme/desktop-services@file:packages/desktop-services':
-    resolution: {directory: packages/desktop-services, type: directory}
-
-  '@billme/desktop-state@file:packages/desktop-state':
-    resolution: {directory: packages/desktop-state, type: directory}
-
-  '@billme/finance-intelligence@file:packages/finance-intelligence':
-    resolution: {directory: packages/finance-intelligence, type: directory}
-
-  '@billme/server-core@file:packages/server-core':
-    resolution: {directory: packages/server-core, type: directory}
 
   '@cfcs/core@0.0.6':
     resolution: {integrity: sha512-FxfJMwoLB8MEMConeXUCqtMGqxdtePQxRBOiGip9ULcYYam3WfCgoY6xdnMaSkYvRvmosp5iuG+TiPofm65+Pw==}
@@ -7859,106 +7831,6 @@ snapshots:
 
   '@bcoe/v8-coverage@1.0.2': {}
 
-  '@billme/accounting-shared@file:packages/accounting-shared': {}
-
-  '@billme/desktop-core@file:packages/desktop-core(@types/react@19.2.13)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))':
-    dependencies:
-      electron: 37.10.3
-      nodemailer: 6.10.1
-      react: 19.2.4
-      react-dom: 19.2.4(react@19.2.4)
-      zustand: 5.0.11(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
-    transitivePeerDependencies:
-      - '@types/react'
-      - immer
-      - use-sync-external-store
-
-  '@billme/desktop-core@file:packages/desktop-core(@types/react@19.2.17)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))':
-    dependencies:
-      electron: 37.10.3
-      nodemailer: 6.10.1
-      react: 19.2.4
-      react-dom: 19.2.4(react@19.2.4)
-      zustand: 5.0.11(@types/react@19.2.17)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
-    transitivePeerDependencies:
-      - '@types/react'
-      - immer
-      - use-sync-external-store
-
-  '@billme/desktop-data@file:packages/desktop-data(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(@types/react@19.2.13)(better-sqlite3@12.6.2)(electron@37.10.3)(expo-sqlite@57.0.0(expo@57.0.4)(react-native@0.86.0(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))':
-    dependencies:
-      '@billme/desktop-core': file:packages/desktop-core(@types/react@19.2.13)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
-      '@billme/desktop-services': file:packages/desktop-services(@types/react@19.2.13)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
-      '@billme/server-core': file:packages/server-core
-      better-sqlite3: 12.6.2
-      drizzle-orm: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(expo-sqlite@57.0.0(expo@57.0.4)(react-native@0.86.0(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(pg@8.20.0)
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/react'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - bun-types
-      - electron
-      - expo-sqlite
-      - gel
-      - immer
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - react
-      - react-dom
-      - sql.js
-      - sqlite3
-      - use-sync-external-store
-
-  '@billme/desktop-services@file:packages/desktop-services(@types/react@19.2.13)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))':
-    dependencies:
-      '@billme/desktop-core': file:packages/desktop-core(@types/react@19.2.13)(electron@37.10.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
-      '@billme/finance-intelligence': file:packages/finance-intelligence
-      iconv-lite: 0.6.3
-      papaparse: 5.5.3
-    transitivePeerDependencies:
-      - '@types/react'
-      - electron
-      - immer
-      - react
-      - react-dom
-      - use-sync-external-store
-
-  '@billme/desktop-state@file:packages/desktop-state(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))':
-    dependencies:
-      zustand: 5.0.11(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
-    transitivePeerDependencies:
-      - '@types/react'
-      - immer
-      - react
-      - use-sync-external-store
-
-  '@billme/finance-intelligence@file:packages/finance-intelligence': {}
-
-  '@billme/server-core@file:packages/server-core':
-    dependencies:
-      '@billme/accounting-shared': file:packages/accounting-shared
-      zod: 3.25.76
-
   '@cfcs/core@0.0.6':
     dependencies:
       '@egjs/component': 3.0.5
@@ -9770,9 +9642,7 @@ snapshots:
       metro-runtime: 0.84.4
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.86.0': {}
 

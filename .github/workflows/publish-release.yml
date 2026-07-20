@@ -94,7 +94,7 @@ jobs:
         run: pnpm -C ${{ matrix.app.dir }} build
 
       - name: Create isolated production package
-        run: pnpm --filter ${{ matrix.app.name == 'desktop' && 'billme' || 'billme-pro' }} --prod deploy .release-stage/${{ matrix.app.dir }}
+        run: pnpm --config.inject-workspace-packages=true --config.force-legacy-deploy=true --filter ${{ matrix.app.name == 'desktop' && 'billme' || 'billme-pro' }} --prod deploy .release-stage/${{ matrix.app.dir }}
 
       - name: Prepare isolated Electron package
         run: node scripts/prepare-electron-release-stage.mjs ${{ matrix.app.dir }} .release-stage/${{ matrix.app.dir }}

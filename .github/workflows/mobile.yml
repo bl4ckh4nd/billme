@@ -1,0 +1,48 @@
+name: Mobile
+
+on:
+  pull_request:
+    paths: ['apps/mobile/**', 'packages/server-core/**', 'packages/ui/**', 'pnpm-lock.yaml', '.github/workflows/mobile.yml']
+  push:
+    paths: ['apps/mobile/**', 'packages/server-core/**', 'packages/ui/**', 'pnpm-lock.yaml', '.github/workflows/mobile.yml']
+  workflow_dispatch:
+    inputs:
+      platform:
+        type: choice
+        options: [android, ios, all]
+        default: all
+      profile:
+        type: choice
+        options: [preview, production]
+        default: preview
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.0.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C apps/mobile typecheck
+      - run: pnpm -C apps/mobile exec expo export --platform android --output-dir /tmp/billme-mobile-export
+
+  eas-build:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.0.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - working-directory: apps/mobile
+        run: eas build --non-interactive --platform "${{ inputs.platform }}" --profile "${{ inputs.profile }}"

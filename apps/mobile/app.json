@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "Billme",
+    "slug": "billme-mobile",
+    "scheme": "billme",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "../desktop/build/icons/icon-1024.png",
+    "splash": {
+      "backgroundColor": "#D5EBD2"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.billme.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Billme uses the camera to capture receipts and pair with your workspace.",
+        "NSFaceIDUsageDescription": "Use Face ID to unlock your encrypted Billme workspace."
+      }
+    },
+    "android": {
+      "package": "com.billme.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#D5EBD2",
+        "foregroundImage": "../desktop/build/icons/icon-512.png"
+      },
+      "permissions": ["CAMERA", "USE_BIOMETRIC"],
+      "blockedPermissions": ["android.permission.RECORD_AUDIO"]
+    },
+    "plugins": [
+      "expo-router",
+      ["expo-camera", {
+        "cameraPermission": "Billme uses the camera to scan a one-time workspace pairing code.",
+        "recordAudioAndroid": false
+      }],
+      "expo-document-picker",
+      "expo-image-picker",
+      "expo-notifications",
+      "expo-local-authentication",
+      ["expo-secure-store", {
+        "configureAndroidBackup": true,
+        "faceIDPermission": "Use Face ID to unlock your encrypted Billme workspace."
+      }],
+      ["expo-sqlite", { "useSQLCipher": true }]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": { "router": {} },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    }
+  }
+}

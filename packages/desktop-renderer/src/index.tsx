@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { BillmeApi as LiteBillmeApi } from '@billme/desktop-contracts/api';
 import type { BillmeApi as ProBillmeApi } from '@billme/desktop-contracts-pro/api';
+export { MobilePairingControl } from './MobilePairingControl';
 
 export type DesktopRendererApi = LiteBillmeApi | ProBillmeApi;
 

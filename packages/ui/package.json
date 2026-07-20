@@ -18,6 +18,10 @@
     "@types/react-dom": "^19.2.3"
   },
   "exports": {
+    "./colors": {
+      "types": "./src/utils/colors.ts",
+      "default": "./src/utils/colors.ts"
+    },
     ".": "./src/index.ts",
     "./styles.css": "./styles.css"
   }

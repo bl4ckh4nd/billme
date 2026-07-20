@@ -15,6 +15,7 @@ This project is still beta software. Expect rough edges and report issues with r
 - **Billme Lite desktop**: Electron + React + SQLite invoicing app.
 - **Billme Pro desktop**: Electron + React + SQLite app with Pro accounting, ledger, EÜR, and finance workflows.
 - **Server mode**: Fastify API, Postgres, worker jobs, and Lite/Pro browser shells.
+- **Billme Mobile**: iOS/Android action cockpit for receipt capture, document creation, approvals, and Pro accounting review.
 - **Offer portal**: Public Hono service for published document snapshots, customer access links, and offer decisions.
 - **Demo and landing page**: Browser demo and marketing site.
 
@@ -28,7 +29,7 @@ This project is still beta software. Expect rough edges and report issues with r
 - Pro double-entry accounting surfaces backed by shared accounting packages.
 - Public offer/invoice portal publishing, PDF links, and customer decision sync.
 - Server-mode Docker stack with Lite and Pro browser shells.
-- Typed server CLI for auth, billing CRUD, exports, and Pro catalog/template operations.
+- Typed `billme` CLI and agent-control surface for shared Lite/Pro business actions.
 
 ## GoBD-Oriented Controls
 
@@ -50,6 +51,7 @@ GoBD conformity is process- and setup-dependent, including organizational contro
 - `apps/pro-desktop`: Pro Electron desktop app with accounting extensions.
 - `apps/server-api`: Fastify server-mode API.
 - `apps/server-worker`: recurring, dunning, email, portal sync, and maintenance worker.
+- `apps/mobile`: Expo development-build app with encrypted offline storage and Lite/Pro server-mode pairing.
 - `apps/web`: Lite browser shell for server mode.
 - `apps/web-pro`: Pro browser shell for server mode.
 - `apps/offer-portal`: Hono offer/invoice portal for Node or Cloudflare Workers.
@@ -61,10 +63,12 @@ GoBD conformity is process- and setup-dependent, including organizational contro
 - `packages/server-core`: server-mode schemas, typed client, routes, domain/services, tax/e-invoice rules.
 - `packages/server-data`: Postgres schema, migrations, repositories, seeding, SQLite import.
 - `packages/server-cli`: typed server-mode SDK and `billme` CLI binary.
+- `packages/agent-control`: shared Lite/Pro action catalog, validation, and local desktop bridge.
 - `packages/desktop-contracts` and `packages/desktop-contracts-pro`: Lite/Pro IPC contracts and schemas.
 - `packages/desktop-data`: shared desktop repositories/data modules, EÜR report/classification, validation, backup/audit helpers.
 - `packages/desktop-renderer`: shared product-aware renderer mounting, browser shell, print readiness, browser runtime helpers.
 - `packages/desktop-core`, `desktop-services`, `desktop-hooks`, `desktop-state`, `desktop-ui`, `desktop-utils`: shared desktop runtime, services, hooks, state, UI, and utility modules.
+- `packages/desktop-designer`: shared visual invoice/offer document editor (canvas, layers, inspector, toolbar/top bar, template designer) used by both Lite and Pro.
 - `packages/accounting-engine`, `accounting-shared`, `accounting-ui-pro`, `finance-intelligence`: Pro accounting and finance modules.
 - `packages/ui`: base design system primitives.
 
@@ -149,7 +153,29 @@ pnpm test:e2e:server:full
 
 ## Server CLI
 
-`packages/server-cli` provides a typed HTTP client and the `billme` CLI binary. The binary wrapper lives at `packages/server-cli/bin/billme.mjs` and launches through `tsx` because workspace packages export TypeScript source.
+`packages/server-cli` provides a typed HTTP client and the `billme` CLI binary. The binary wrapper lives at `packages/server-cli/bin/billme.mjs` and launches through `tsx` because workspace packages export TypeScript source. The action catalog is derived from the Lite/Pro desktop contracts, so agents use the same validated business route keys as the app.
+
+```bash
+# Inspect actions supported by the selected target.
+billme actions list --target server --product lite
+billme actions list --target desktop --product pro
+
+# Invoke a typed action with JSON input. Mutations require a reason;
+# destructive actions additionally require --confirm.
+billme action run clients:list --target server --product lite
+billme action run clients:delete --target server --product lite \
+  --input delete-client.json --reason "Duplicate client cleanup" --confirm
+
+# Create a scoped server token (the raw token is returned once).
+billme auth agent-token create --product lite \
+  --label "Invoice agent" --scopes read,clients:write
+billme auth agent-token list --product lite
+billme auth agent-token revoke --product lite --id <token-id> --confirm
+```
+
+Mutations require `--reason`; destructive actions additionally require `--confirm`. The local desktop bridge is started by the running Lite or Pro Electron app, listens only on `127.0.0.1`, writes a mode-`0600` endpoint file, and uses a random bearer token. Set `BILLME_DESKTOP_ENDPOINT` to that file or pass `--endpoint` explicitly. The CLI never opens desktop SQLite directly; it invokes the existing typed IPC handlers.
+
+Server agent tokens are product- and tenant-bound, stored only as hashes, and returned in raw form only when created. Only an owner/admin human session can create or revoke them. Every request must include `read`, and write access is the intersection of the token scopes and the existing tenant role capabilities. `billme actions list --target server` shows the server-supported subset; actions without a server route remain desktop-only and are rejected rather than silently emulated.
 
 Typical package-level checks:
 
@@ -157,6 +183,8 @@ Typical package-level checks:
 pnpm -C packages/server-cli typecheck
 pnpm -C packages/server-cli test
 pnpm -C packages/server-cli build
+pnpm -C packages/agent-control typecheck
+pnpm -C packages/agent-control test
 ```
 
 ## Documentation

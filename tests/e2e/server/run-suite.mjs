@@ -12,6 +12,7 @@ import {
   runLiteWorkflowScenario,
 } from './lite/scenarios.mjs';
 import { runWorkerFlowScenario } from './worker-flows.mjs';
+import { runMobileApiScenario, runMobileProApiScenario } from './mobile-scenarios.mjs';
 import {
   runProAccountingScenario,
   runProAuthRestoreScenario,
@@ -35,9 +36,23 @@ const buildScenarioList = () => {
   const includeStack = scope === 'all' || scope === 'stack' || scope === 'lite' || scope === 'pro';
   const includeLite = scope === 'all' || scope === 'lite';
   const includePro = scope === 'all' || scope === 'pro';
+  const includeMobile = includeLite || scope === 'mobile';
 
   if (includeStack) {
     scenarios.push({ name: 'stack-smoke', kind: 'plain', run: runStackSmokeScenario });
+  }
+
+  if (includeMobile) {
+    scenarios.push({ name: 'mobile-api', kind: 'plain', run: runMobileApiScenario });
+    if (scope === 'mobile') scenarios.push({ name: 'mobile-pro-api', kind: 'plain', run: runMobileProApiScenario });
+  }
+
+  if (scope === 'mobile-pro') {
+    scenarios.push({ name: 'mobile-pro-api', kind: 'plain', run: runMobileProApiScenario });
+  }
+
+  if (scope === 'mobile-lite') {
+    scenarios.push({ name: 'mobile-api', kind: 'plain', run: runMobileApiScenario });
   }
 
   if (includeLite) {
@@ -51,6 +66,7 @@ const buildScenarioList = () => {
   }
 
   if (includePro) {
+    scenarios.push({ name: 'mobile-pro-api', kind: 'plain', run: runMobileProApiScenario });
     scenarios.push({ name: 'pro-smoke', kind: 'browser', run: runProSmokeScenario });
     scenarios.push({ name: 'pro-offer-persistence', kind: 'plain', run: runProOfferPersistenceScenario });
     if (level === 'full') {

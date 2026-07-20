@@ -1,7 +1,7 @@
 {
   "name": "billme",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Billme desktop invoicing application",
   "license": "MIT",
   "homepage": "https://billme.app",
@@ -29,8 +29,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@billme/agent-control": "workspace:*",
     "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-core": "workspace:*",
+    "@billme/desktop-designer": "workspace:*",
     "@billme/desktop-data": "workspace:*",
     "@billme/desktop-hooks": "workspace:*",
     "@billme/desktop-renderer": "workspace:*",

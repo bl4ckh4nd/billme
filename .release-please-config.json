@@ -3,10 +3,22 @@
   "include-v-in-tag": true,
   "include-component-in-tag": false,
   "packages": {
-    "apps/desktop": {
+    ".": {
       "release-type": "node",
       "package-name": "billme",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "apps/desktop/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "apps/pro-desktop/package.json",
+          "jsonpath": "$.version"
+        }
+      ]
     }
   }
 }

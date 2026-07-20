@@ -1,7 +1,7 @@
 {
   "name": "billme-pro",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Billme Pro desktop accounting application",
   "license": "MIT",
   "homepage": "https://billme.app",
@@ -30,11 +30,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@billme/agent-control": "workspace:*",
     "@billme/accounting-engine": "workspace:*",
     "@billme/accounting-shared": "workspace:*",
     "@billme/accounting-ui-pro": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/desktop-core": "workspace:*",
+    "@billme/desktop-designer": "workspace:*",
     "@billme/desktop-data": "workspace:*",
     "@billme/desktop-hooks": "workspace:*",
     "@billme/desktop-services": "workspace:*",

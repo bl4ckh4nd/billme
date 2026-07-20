@@ -2,6 +2,20 @@
 
 All notable changes to Billme are documented in this file.
 
+## [0.3.3] - 2026-07-20
+
+### Fixed
+
+- Preserve the server worker's internal render API URL when the browser runtime configuration script loads, restoring queued PDF rendering without exposing the container-local API address to users.
+- Upgrade the Electron packager to a pnpm-aware dependency collector so Lite and Pro installers can be produced without exhausting the release runner heap.
+- Make Linux Electron smoke tests reliable by installing the native keychain runtime, disabling hardware acceleration in E2E mode, and launching through Playwright's Electron instrumentation.
+- Rebuild shared Electron native dependencies sequentially while retaining the normal PDF readiness timeout and release memory limit.
+
+### Changed
+
+- Add actionable Electron startup checkpoints, child-process output, and browser-launch diagnostics to CI failures.
+- Add browser-render failure diagnostics to the server worker while preserving typed job failure reporting.
+
 ## [0.3.2] - 2026-07-20
 
 ### Fixed
@@ -62,5 +76,7 @@ All notable changes to Billme are documented in this file.
 - Restored legacy invoice defaults and tax-mode defaults during migration and merge reconciliation.
 - Included previously missing source files and native runtime dependencies in builds and release packaging.
 
+[0.3.3]: https://github.com/bl4ckh4nd/billme/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/bl4ckh4nd/billme/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/bl4ckh4nd/billme/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/bl4ckh4nd/billme/compare/v0.2.0...v0.3.0

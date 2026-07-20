@@ -46,6 +46,7 @@ const isDev = Boolean(process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RE
 
 app.setName(PRODUCT_PROFILE.appName);
 if (process.env.BILLME_E2E) app.disableHardwareAcceleration();
+if (process.env.BILLME_E2E) console.log('[e2e-startup] pro main loaded');
 
 let userDataPath: string | null = null;
 let portalSyncStop: (() => void) | null = null;
@@ -164,6 +165,7 @@ process.on('uncaughtException', (error: Error) => {
 });
 
 app.whenReady().then(async () => {
+  if (process.env.BILLME_E2E) console.log('[e2e-startup] pro app ready');
   const e2eUserDataDir = process.env.BILLME_E2E_USER_DATA_DIR;
   if (e2eUserDataDir) {
     app.setPath('userData', e2eUserDataDir);
@@ -177,11 +179,13 @@ app.whenReady().then(async () => {
 
   userDataPath = app.getPath('userData');
   const db = initDb(userDataPath, { dbFileName: PRODUCT_PROFILE.dbFileName });
+  if (process.env.BILLME_E2E) console.log('[e2e-startup] pro database ready');
   localAgentBridge = await startLocalAgentBridge({
     userDataPath,
     product: 'pro',
     invoke: ({ action, args }) => ipcHandlers.invoke(action as IpcRouteKey, args as never),
   });
+  if (process.env.BILLME_E2E) console.log('[e2e-startup] pro agent bridge ready');
   logger.info('Startup', 'Local agent bridge started', { endpointPath: localAgentBridge.endpointPath });
 
   if (isDev) {
@@ -284,6 +288,7 @@ app.whenReady().then(async () => {
   ensureAccountDefaultSkrMappings(db);
   ensureProAccountingSeedData(db, resolveRuntimeProTenantScope());
 
+  if (process.env.BILLME_E2E) console.log('[e2e-startup] pro creating window');
   await createWindow();
 
   // Background portal decision sync (polling).

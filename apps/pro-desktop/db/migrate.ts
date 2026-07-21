@@ -76,10 +76,16 @@ export const runMigrations = (db: Database.Database): void => {
   // Invoices: structured address snapshots
   addColumnIfMissing(db, 'invoices', 'billing_address_json', 'TEXT');
   addColumnIfMissing(db, 'invoices', 'shipping_address_json', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'tax_mode', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'tax_meta_json', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'tax_snapshot_json', 'TEXT');
 
   // Offers: structured address snapshots
   addColumnIfMissing(db, 'offers', 'billing_address_json', 'TEXT');
   addColumnIfMissing(db, 'offers', 'shipping_address_json', 'TEXT');
+  addColumnIfMissing(db, 'offers', 'tax_mode', 'TEXT');
+  addColumnIfMissing(db, 'offers', 'tax_meta_json', 'TEXT');
+  addColumnIfMissing(db, 'offers', 'tax_snapshot_json', 'TEXT');
 
   // Offers: portal publication + decision fields
   addColumnIfMissing(db, 'offers', 'share_token', 'TEXT');
@@ -94,8 +100,10 @@ export const runMigrations = (db: Database.Database): void => {
   // Invoice/Offer items: structured article linkage + category snapshot
   addColumnIfMissing(db, 'invoice_items', 'article_id', 'TEXT');
   addColumnIfMissing(db, 'invoice_items', 'category', 'TEXT');
+  addColumnIfMissing(db, 'invoice_items', 'tax_rate', 'REAL');
   addColumnIfMissing(db, 'offer_items', 'article_id', 'TEXT');
   addColumnIfMissing(db, 'offer_items', 'category', 'TEXT');
+  addColumnIfMissing(db, 'offer_items', 'tax_rate', 'REAL');
 
   // Finance: transaction import support (non-audit-locked)
   tryAddColumn(db, 'accounts', 'default_skr_account_number', "TEXT NOT NULL DEFAULT '1200'");

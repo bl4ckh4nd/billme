@@ -87,6 +87,23 @@ describe('taxMode', () => {
     expect(snapshot.einvoiceCategoryCode).toBe('S');
   });
 
+  it('calculates standard VAT from each invoice line', () => {
+    const snapshot = calculateInvoiceTaxSnapshot(
+      {
+        items: [
+          { description: 'Standard', quantity: 1, price: 100, total: 100, taxRate: 19 },
+          { description: 'Reduced', quantity: 1, price: 100, total: 100, taxRate: 7 },
+          { description: 'Zero', quantity: 1, price: 50, total: 50, taxRate: 0 },
+        ],
+        taxMode: 'standard_vat',
+      },
+      settings,
+    );
+    expect(snapshot.netAmount).toBe(250);
+    expect(snapshot.vatAmount).toBe(26);
+    expect(snapshot.grossAmount).toBe(276);
+  });
+
   it('forces zero VAT for reverse charge', () => {
     const snapshot = calculateInvoiceTaxSnapshot(
       {
@@ -107,4 +124,3 @@ describe('taxMode', () => {
     expect(mode).toBe('small_business_19_ustg');
   });
 });
-

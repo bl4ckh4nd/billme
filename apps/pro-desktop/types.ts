@@ -177,6 +177,7 @@ export interface InvoiceItem {
   total: number;
   articleId?: string;
   category?: string;
+  taxRate?: number;
 }
 
 export interface Payment {

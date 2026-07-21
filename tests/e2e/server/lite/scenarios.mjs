@@ -120,6 +120,33 @@ export const runLiteRegressionScenario = async (page, scenarioKey = 'regressions
   await expect(page.getByText(seed.invoices[0].number)).toBeVisible();
 };
 
+export const runLiteVatPersistenceScenario = async (scenarioKey = 'vat-persistence') => {
+  const runtime = await getLiteRuntime();
+  const identity = createLiteIdentity(scenarioKey);
+  const { session, seed } = await provisionLiteSession({
+    apiBaseUrl: runtime.state.urls.api,
+    databaseUrl: runtime.databaseUrl,
+    ...identity,
+  });
+  const source = await apiJson(runtime.state, session, `/api/v1/lite/invoices/${seed.invoices[0].id}`);
+  const invoice = {
+    ...source,
+    items: source.items.map((item, index) => ({
+      ...item,
+      taxRate: index === 0 ? 7 : item.taxRate,
+    })),
+  };
+
+  const saved = await apiJson(runtime.state, session, '/api/v1/lite/invoices', {
+    method: 'POST',
+    body: { invoice, reason: 'Verify line VAT persistence' },
+  });
+  expect(saved.items[0]?.taxRate).toBe(7);
+
+  const refetched = await apiJson(runtime.state, session, `/api/v1/lite/invoices/${invoice.id}`);
+  expect(refetched.items[0]?.taxRate).toBe(7);
+};
+
 export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') => {
   const runtime = await getLiteRuntime();
   const identity = createLiteIdentity(scenarioKey);

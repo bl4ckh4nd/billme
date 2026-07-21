@@ -177,6 +177,7 @@ export interface InvoiceItem {
   total: number;
   articleId?: string;
   category?: string;
+  taxRate?: number;
 }
 
 export interface Payment {
@@ -210,6 +211,7 @@ export interface InvoiceTaxSnapshot {
   grossAmount: number;
   einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O';
   label?: string;
+  vatBreakdown?: Array<{ rate: number; netAmount: number; vatAmount: number }>;
 }
 
 export interface InvoiceTaxModeDefinition {

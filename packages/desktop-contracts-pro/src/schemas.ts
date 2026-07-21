@@ -20,6 +20,7 @@ export const invoiceItemSchema = z.object({
   total: z.number(),
   articleId: z.string().optional(),
   category: z.string().optional(),
+  taxRate: z.number().min(0).optional(),
 });
 
 export const paymentSchema = z.object({

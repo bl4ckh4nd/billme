@@ -20,6 +20,7 @@ export const invoiceItemSchema = z.object({
   total: z.number(),
   articleId: z.string().optional(),
   category: z.string().optional(),
+  taxRate: z.number().min(0).optional(),
 });
 
 export const paymentSchema = z.object({
@@ -54,6 +55,7 @@ export const invoiceTaxSnapshotSchema = z.object({
   grossAmount: z.number(),
   einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']),
   label: z.string().optional(),
+  vatBreakdown: z.array(z.object({ rate: z.number(), netAmount: z.number(), vatAmount: z.number() })).optional(),
 });
 
 export const invoiceSchema = z.object({

@@ -259,7 +259,7 @@ export const ArticlesView: React.FC = () => {
               sku: (formData.sku ?? '').trim() || undefined,
               unit: (formData.unit ?? 'Stk').trim(),
               category: safeCategory,
-              taxRate: Number(formData.taxRate) || 19,
+              taxRate: Number(formData.taxRate),
               price: Number(formData.price),
               description: formData.description ?? '',
             } as Article);
@@ -271,7 +271,7 @@ export const ArticlesView: React.FC = () => {
                 price: Number(formData.price),
                 unit: (formData.unit ?? 'Stk').trim(),
                 category: safeCategory,
-                taxRate: Number(formData.taxRate) || 19,
+                taxRate: Number(formData.taxRate),
                 sku: (formData.sku ?? '').trim() || undefined
             };
             await upsertArticle.mutateAsync(newArticle);
@@ -330,6 +330,7 @@ export const ArticlesView: React.FC = () => {
                         </div>
 
                         <button
+                            aria-label="Neuer Artikel"
                             onClick={() => handleOpenForm()}
                             className="w-12 h-12 bg-black text-white rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-sm ml-2"
                         >

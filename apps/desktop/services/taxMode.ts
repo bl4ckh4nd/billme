@@ -138,9 +138,20 @@ export const calculateInvoiceTaxSnapshot = (
 ): InvoiceTaxSnapshot => {
   const taxMode = resolveInvoiceTaxMode(invoice.taxMode, settings);
   const definition = getInvoiceTaxModeDefinition(taxMode);
-  const netAmount = round2((invoice.items ?? []).reduce((sum, item) => sum + toNumber(item.total), 0));
-  const vatRateApplied = definition.forceZeroVat ? 0 : getDefaultTaxRate(settings);
-  const vatAmount = round2(netAmount * (vatRateApplied / 100));
+  const defaultRate = definition.forceZeroVat ? 0 : getDefaultTaxRate(settings);
+  const netByRate = new Map<number, number>();
+  for (const item of invoice.items ?? []) {
+    const rate = definition.forceZeroVat ? 0 : item.taxRate ?? defaultRate;
+    netByRate.set(rate, (netByRate.get(rate) ?? 0) + toNumber(item.total));
+  }
+  const vatBreakdown = [...netByRate.entries()].map(([rate, net]) => ({
+    rate,
+    netAmount: round2(net),
+    vatAmount: round2(net * rate / 100),
+  }));
+  const netAmount = round2(vatBreakdown.reduce((sum, entry) => sum + entry.netAmount, 0));
+  const vatAmount = round2(vatBreakdown.reduce((sum, entry) => sum + entry.vatAmount, 0));
+  const vatRateApplied = vatBreakdown.length === 1 ? vatBreakdown[0]!.rate : defaultRate;
   const grossAmount = round2(netAmount + vatAmount);
   return {
     vatRateApplied,
@@ -149,5 +160,6 @@ export const calculateInvoiceTaxSnapshot = (
     grossAmount,
     einvoiceCategoryCode: definition.einvoiceCategoryCode,
     label: definition.label,
+    vatBreakdown,
   };
 };

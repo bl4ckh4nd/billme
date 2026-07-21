@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
   description TEXT NOT NULL,
+  tax_rate REAL,
   quantity REAL NOT NULL,
   price REAL NOT NULL,
   total REAL NOT NULL
@@ -80,6 +81,7 @@ CREATE TABLE IF NOT EXISTS offer_items (
   offer_id TEXT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
   description TEXT NOT NULL,
+  tax_rate REAL,
   quantity REAL NOT NULL,
   price REAL NOT NULL,
   total REAL NOT NULL

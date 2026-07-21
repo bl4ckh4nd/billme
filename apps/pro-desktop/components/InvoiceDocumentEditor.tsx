@@ -160,6 +160,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
           description: article.title,
           articleId: article.id,
           category: article.category,
+          taxRate: article.taxRate,
           quantity: 1,
           price: article.price,
           total: article.price,
@@ -177,11 +178,16 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
 
   const calculateTotals = () => {
       const net = formData.items.reduce((sum, i) => sum + i.total, 0);
-      const vatRate = effectiveSettings.legal.smallBusinessRule ? 0 : (effectiveSettings.legal.defaultVatRate ?? 0) / 100;
+      const vat = effectiveSettings.legal.smallBusinessRule
+        ? 0
+        : formData.items.reduce(
+            (sum, item) => sum + item.total * ((item.taxRate ?? effectiveSettings.legal.defaultVatRate ?? 0) / 100),
+            0,
+          );
       return {
           net,
-          vat: net * vatRate,
-          gross: net + net * vatRate
+          vat,
+          gross: net + vat
       };
   };
 
@@ -289,7 +295,8 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                     </h3>
                     <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1">Kunde auswählen</label>
-                        <select
+                            <select
+                                aria-label="Kunde auswählen"
                             value={selectedClientId}
                             onChange={(e) => handleSelectClient(e.target.value)}
                             className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium focus:ring-2 focus:ring-accent outline-none mb-3"
@@ -359,6 +366,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                         <div className="flex items-center gap-2">
                             <div className="flex items-center gap-1">
                                 <select
+                                    aria-label="Artikel auswählen"
                                     value={articleToAddId}
                                     onChange={(e) => setArticleToAddId(e.target.value)}
                                     className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-xs font-bold outline-none focus:ring-2 focus:ring-accent"
@@ -413,7 +421,18 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                                         <Trash2 size={14} />
                                     </button>
                                 </div>
-                                <div className="grid grid-cols-4 gap-2">
+                                <div className="grid grid-cols-5 gap-2">
+                                    <div>
+                                        <label className="text-[10px] text-gray-400 font-medium">USt %</label>
+                                        <select
+                                            aria-label={`Umsatzsteuer Position ${idx + 1}`}
+                                            value={item.taxRate ?? effectiveSettings.legal.defaultVatRate ?? 19}
+                                            onChange={(e) => handleItemChange(idx, 'taxRate', Number(e.target.value))}
+                                            className="w-full bg-gray-50 rounded-lg px-2 py-1 text-sm outline-none"
+                                        >
+                                            <option value={19}>19</option><option value={7}>7</option><option value={0}>0</option>
+                                        </select>
+                                    </div>
                                     <div>
                                         <label className="text-[10px] text-gray-400 font-medium">Menge</label>
                                         <input 
@@ -466,7 +485,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
                             <span>{formatCurrency(totals.net)}</span>
                         </div>
                         <div className="flex justify-between text-sm text-gray-500">
-                            <span>MwSt ({effectiveSettings.legal.smallBusinessRule ? '0' : effectiveSettings.legal.defaultVatRate}%)</span>
+                            <span>MwSt</span>
                             <span>{formatCurrency(totals.vat)}</span>
                         </div>
                         <div className="flex justify-between text-base font-bold text-gray-900 border-t border-gray-200 pt-2 mt-2">
@@ -480,7 +499,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
             {/* Actions */}
             <div className="p-6 border-t border-gray-200 bg-white animate-enter" style={{ animationDelay: '450ms' }}>
                 <button
-                    onClick={() => onSave(formData)}
+                    onClick={() => onSave({ ...formData, amount: totals.gross })}
                     className="w-full bg-accent text-black font-bold py-3 rounded-xl hover:bg-accent-hover transition-all flex items-center justify-center gap-2 shadow-lg shadow-accent/20 active:scale-95"
                 >
                     <Save size={18} />

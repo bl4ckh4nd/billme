@@ -115,11 +115,22 @@ export const calculateInvoiceTaxSnapshot = (
   input: TaxableDocumentInput,
   settings: TaxSettingsShape,
 ): InvoiceTaxSnapshot => {
-  const netAmount = round2((input.items ?? []).reduce((sum, item) => sum + (Number(item.total) || 0), 0));
   const resolvedTaxMode = resolveInvoiceTaxMode(input.taxMode, settings);
   const definition = getInvoiceTaxModeDefinition(resolvedTaxMode);
-  const vatRateApplied = definition.forceZeroVat ? 0 : Number(settings.legal.defaultVatRate) || 0;
-  const vatAmount = round2(netAmount * (vatRateApplied / 100));
+  const defaultRate = definition.forceZeroVat ? 0 : Number(settings.legal.defaultVatRate) || 0;
+  const netByRate = new Map<number, number>();
+  for (const item of input.items ?? []) {
+    const rate = definition.forceZeroVat ? 0 : item.taxRate ?? defaultRate;
+    netByRate.set(rate, (netByRate.get(rate) ?? 0) + (Number(item.total) || 0));
+  }
+  const vatBreakdown = [...netByRate.entries()].map(([rate, net]) => ({
+    rate,
+    netAmount: round2(net),
+    vatAmount: round2(net * rate / 100),
+  }));
+  const netAmount = round2(vatBreakdown.reduce((sum, entry) => sum + entry.netAmount, 0));
+  const vatAmount = round2(vatBreakdown.reduce((sum, entry) => sum + entry.vatAmount, 0));
+  const vatRateApplied = vatBreakdown.length === 1 ? vatBreakdown[0]!.rate : defaultRate;
 
   return {
     vatRateApplied,
@@ -128,5 +139,6 @@ export const calculateInvoiceTaxSnapshot = (
     grossAmount: round2(netAmount + vatAmount),
     einvoiceCategoryCode: definition.einvoiceCategoryCode,
     label: definition.label,
+    vatBreakdown,
   };
 };

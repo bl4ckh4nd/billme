@@ -91,9 +91,14 @@ import { seedAccountKeywords } from '../services/accountKeywordSeed';
 import { resolveRuntimeProTenantScope } from '../tenantScope';
 
 const computeGrossFromItems = (doc: Invoice, settings: AppSettings): number => {
-  const net = (doc.items ?? []).reduce((acc, it) => acc + (Number(it.total) || 0), 0);
-  const rate = settings.legal.smallBusinessRule ? 0 : Number(settings.legal.defaultVatRate) || 0;
-  const vat = net * (rate / 100);
+  const items = doc.items ?? [];
+  const net = items.reduce((acc, it) => acc + (Number(it.total) || 0), 0);
+  const vat = settings.legal.smallBusinessRule
+    ? 0
+    : items.reduce(
+        (sum, item) => sum + (Number(item.total) || 0) * ((item.taxRate ?? (Number(settings.legal.defaultVatRate) || 0)) / 100),
+        0,
+      );
   const gross = net + vat;
   return Number.isFinite(gross) ? gross : 0;
 };

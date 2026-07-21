@@ -20,6 +20,8 @@ export const invoiceItemSchema = z.object({
   total: z.number(),
   articleId: z.string().optional(),
   category: z.string().optional(),
+  unit: z.string().optional(),
+  discountPercent: z.number().min(0).max(100).optional(),
   taxRate: z.number().min(0).optional(),
 });
 
@@ -28,6 +30,38 @@ export const paymentSchema = z.object({
   date: z.string(),
   amount: z.number(),
   method: z.string(),
+});
+
+export const invoiceTaxModeSchema = z.enum([
+  'standard_vat',
+  'small_business_19_ustg',
+  'reverse_charge_13b',
+  'intra_eu_supply_6a',
+  'intra_eu_service_reverse_charge',
+  'export_third_country',
+  'vat_exempt_4_ustg',
+  'non_taxable_outside_scope',
+]);
+
+export const invoiceTaxMetaSchema = z.object({
+  legalReference: z.string().optional(),
+  exemptionReasonOverride: z.string().optional(),
+  buyerVatId: z.string().optional(),
+  sellerVatId: z.string().optional(),
+});
+
+export const invoiceTaxSnapshotSchema = z.object({
+  vatRateApplied: z.number(),
+  vatAmount: z.number(),
+  netAmount: z.number(),
+  grossAmount: z.number(),
+  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']),
+  label: z.string().optional(),
+  vatBreakdown: z.array(z.object({
+    rate: z.number(),
+    netAmount: z.number(),
+    vatAmount: z.number(),
+  })).optional(),
 });
 
 export const invoiceSchema = z.object({
@@ -42,6 +76,9 @@ export const invoiceSchema = z.object({
   clientAddress: z.string().optional(),
   billingAddressJson: z.unknown().optional(),
   shippingAddressJson: z.unknown().optional(),
+  taxMode: invoiceTaxModeSchema.optional(),
+  taxMeta: invoiceTaxMetaSchema.optional(),
+  taxSnapshot: invoiceTaxSnapshotSchema.optional(),
   shareToken: z.string().nullable().optional(),
   sharePublishedAt: z.string().nullable().optional(),
   shareDecision: z.enum(['accepted', 'declined']).nullable().optional(),

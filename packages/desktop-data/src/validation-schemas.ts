@@ -29,6 +29,8 @@ const TextElementSchema = z.object({
   content: z.string().optional(),
   style: z.record(z.any()),
   label: z.string().optional(),
+  locked: z.boolean().optional(),
+  hidden: z.boolean().optional(),
 });
 
 const ImageElementSchema = z.object({
@@ -40,6 +42,8 @@ const ImageElementSchema = z.object({
   src: z.string().optional(),
   style: z.record(z.any()),
   label: z.string().optional(),
+  locked: z.boolean().optional(),
+  hidden: z.boolean().optional(),
 });
 
 const BoxElementSchema = z.object({
@@ -50,6 +54,8 @@ const BoxElementSchema = z.object({
   zIndex: z.number(),
   style: z.record(z.any()),
   label: z.string().optional(),
+  locked: z.boolean().optional(),
+  hidden: z.boolean().optional(),
 });
 
 const TableColumnSchema = z.object({
@@ -77,6 +83,8 @@ const TableElementSchema = z.object({
   }).optional(),
   style: z.record(z.any()),
   label: z.string().optional(),
+  locked: z.boolean().optional(),
+  hidden: z.boolean().optional(),
 });
 
 const LineElementSchema = z.object({
@@ -87,6 +95,8 @@ const LineElementSchema = z.object({
   zIndex: z.number(),
   style: z.record(z.any()),
   label: z.string().optional(),
+  locked: z.boolean().optional(),
+  hidden: z.boolean().optional(),
 });
 
 const QRCodeElementSchema = z.object({
@@ -103,6 +113,8 @@ const QRCodeElementSchema = z.object({
   }).optional(),
   style: z.record(z.any()),
   label: z.string().optional(),
+  locked: z.boolean().optional(),
+  hidden: z.boolean().optional(),
 });
 
 export const TemplateElementSchema = z.discriminatedUnion('type', [
@@ -155,7 +167,11 @@ export const InvoiceTaxSnapshotSchema = z.object({
   grossAmount: z.number(),
   einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']),
   label: z.string().optional(),
-  vatBreakdown: z.array(z.object({ rate: z.number(), netAmount: z.number(), vatAmount: z.number() })).optional(),
+  vatBreakdown: z.array(z.object({
+    rate: z.number(),
+    netAmount: z.number(),
+    vatAmount: z.number(),
+  })).optional(),
 });
 
 // Settings schema components

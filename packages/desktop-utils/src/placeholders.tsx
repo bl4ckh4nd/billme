@@ -1,10 +1,11 @@
-import React from 'react';
-
 type InvoiceItemLike = {
   description?: string;
   quantity?: number;
   price?: number;
-  total: number;
+  total?: number;
+  unit?: string;
+  discountPercent?: number;
+  taxRate?: number;
 };
 
 export type InvoiceLike = {
@@ -38,6 +39,7 @@ export type InvoiceLike = {
     grossAmount: number;
     einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O';
     label?: string;
+    vatBreakdown?: Array<{ rate: number; netAmount: number; vatAmount: number }>;
   };
   items: InvoiceItemLike[];
 };
@@ -137,12 +139,40 @@ const formatCurrency = (amount: number) => {
 
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
+const toFiniteNumber = (value: unknown): number | null => {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+export const calculateInvoiceItemTotal = (item: InvoiceItemLike): number => {
+  const quantity = toFiniteNumber(item.quantity);
+  const price = toFiniteNumber(item.price);
+  if (quantity !== null && price !== null) {
+    const discountPercent = Math.min(100, Math.max(0, toFiniteNumber(item.discountPercent) ?? 0));
+    return round2(quantity * price * (1 - discountPercent / 100));
+  }
+
+  const total = toFiniteNumber(item.total);
+  return total !== null ? round2(total) : 0;
+};
+
+export const getDefaultPaymentTermsText = (dueDate?: string): string => {
+  const formattedDueDate = formatDate(dueDate);
+  const paymentSentence = formattedDueDate
+    ? `Bitte überweisen Sie den Betrag bis spätestens ${formattedDueDate} ohne Abzug auf das unten angegebene Konto.`
+    : 'Bitte überweisen Sie den fälligen Betrag innerhalb von 14 Tagen auf das unten angegebene Konto.';
+  return `${paymentSentence}\nEs gelten unsere AGB.`;
+};
+
 export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings: AppSettingsLike): string => {
   if (!text) return '';
 
-  const net = round2(invoice.items.reduce((acc, item) => acc + item.total, 0));
+  const net = round2(invoice.items.reduce((acc, item) => acc + calculateInvoiceItemTotal(item), 0));
+  const hasFreshStoredTaxSnapshot =
+    invoice.taxSnapshot &&
+    Math.abs(round2(invoice.taxSnapshot.netAmount) - net) < 0.005;
   const taxSnapshot =
-    invoice.taxSnapshot ??
+    (hasFreshStoredTaxSnapshot ? invoice.taxSnapshot : undefined) ??
     (() => {
       const taxMode = settings.legal.smallBusinessRule
         ? 'small_business_19_ustg'
@@ -165,8 +195,19 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
         'vat_exempt_4_ustg',
         'non_taxable_outside_scope',
       ]);
-      const vatRateApplied = zeroVatModes.has(taxMode) ? 0 : Number(settings.legal.defaultVatRate) || 0;
-      const vatAmount = round2(net * (vatRateApplied / 100));
+      const defaultTaxRate = zeroVatModes.has(taxMode) ? 0 : Number(settings.legal.defaultVatRate) || 0;
+      const netByRate = new Map<number, number>();
+      for (const item of invoice.items) {
+        const rate = zeroVatModes.has(taxMode) ? 0 : item.taxRate ?? defaultTaxRate;
+        netByRate.set(rate, (netByRate.get(rate) ?? 0) + calculateInvoiceItemTotal(item));
+      }
+      const vatBreakdown = [...netByRate.entries()].map(([rate, netAmount]) => ({
+        rate,
+        netAmount: round2(netAmount),
+        vatAmount: round2(netAmount * (rate / 100)),
+      }));
+      const vatRateApplied = vatBreakdown.length === 1 ? vatBreakdown[0]!.rate : defaultTaxRate;
+      const vatAmount = round2(vatBreakdown.reduce((sum, entry) => sum + entry.vatAmount, 0));
       return {
         vatRateApplied,
         vatAmount,
@@ -174,6 +215,7 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
         grossAmount: round2(net + vatAmount),
         label: zeroVatModes.has(taxMode) ? 'Keine Umsatzsteuer' : `MwSt. ${vatRateApplied.toFixed(0)}%`,
         einvoiceCategoryCode: zeroVatModes.has(taxMode) ? 'E' : 'S',
+        vatBreakdown,
       };
     })();
 
@@ -203,7 +245,9 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
     'total.net': formatCurrency(taxSnapshot.netAmount),
     'total.tax': formatCurrency(taxSnapshot.vatAmount),
     'total.gross': formatCurrency(taxSnapshot.grossAmount),
-    'total.taxRate': `${taxSnapshot.vatRateApplied}%`,
+    'total.taxRate': taxSnapshot.vatBreakdown && taxSnapshot.vatBreakdown.length > 1
+      ? taxSnapshot.vatBreakdown.map((entry) => `${entry.rate}%`).join(' / ')
+      : `${taxSnapshot.vatRateApplied}%`,
   };
 
   return text.replace(/\{\{([^}]+)\}\}/g, (match, key) => {

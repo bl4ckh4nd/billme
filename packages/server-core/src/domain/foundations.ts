@@ -123,7 +123,11 @@ export const invoiceTaxSnapshotSchema = z.object({
   grossAmount: z.number(),
   einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']),
   label: z.string().optional(),
-  vatBreakdown: z.array(z.object({ rate: z.number(), netAmount: z.number(), vatAmount: z.number() })).optional(),
+  vatBreakdown: z.array(z.object({
+    rate: z.number(),
+    netAmount: z.number(),
+    vatAmount: z.number(),
+  })).optional(),
 });
 export type InvoiceTaxSnapshot = z.infer<typeof invoiceTaxSnapshotSchema>;
 
@@ -237,6 +241,8 @@ export const billingLineItemSchema = z.object({
   total: z.number(),
   articleId: z.string().optional(),
   category: z.string().optional(),
+  unit: z.string().optional(),
+  discountPercent: z.number().min(0).max(100).optional(),
   taxRate: z.number().min(0).optional(),
 });
 export type BillingLineItem = z.infer<typeof billingLineItemSchema>;

@@ -36,6 +36,7 @@
     "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/desktop-core": "workspace:*",
     "@billme/desktop-data": "workspace:*",
+    "@billme/desktop-designer": "workspace:*",
     "@billme/desktop-hooks": "workspace:*",
     "@billme/desktop-services": "workspace:*",
     "@billme/desktop-state": "workspace:*",

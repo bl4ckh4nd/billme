@@ -100,9 +100,13 @@ export const runMigrations = (db: Database.Database): void => {
   // Invoice/Offer items: structured article linkage + category snapshot
   addColumnIfMissing(db, 'invoice_items', 'article_id', 'TEXT');
   addColumnIfMissing(db, 'invoice_items', 'category', 'TEXT');
+  addColumnIfMissing(db, 'invoice_items', 'unit', 'TEXT');
+  addColumnIfMissing(db, 'invoice_items', 'discount_percent', 'REAL');
   addColumnIfMissing(db, 'invoice_items', 'tax_rate', 'REAL');
   addColumnIfMissing(db, 'offer_items', 'article_id', 'TEXT');
   addColumnIfMissing(db, 'offer_items', 'category', 'TEXT');
+  addColumnIfMissing(db, 'offer_items', 'unit', 'TEXT');
+  addColumnIfMissing(db, 'offer_items', 'discount_percent', 'REAL');
   addColumnIfMissing(db, 'offer_items', 'tax_rate', 'REAL');
 
   // Finance: transaction import support (non-audit-locked)

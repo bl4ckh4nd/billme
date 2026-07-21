@@ -33,12 +33,15 @@ for (const app of ['desktop', 'pro']) {
       await page.goto(appUrl(baseUrl, '/documents'));
       await page.getByTitle('Neue Rechnung').click();
       await expect(page.getByRole('heading', { name: 'Rechnung erstellen' })).toBeVisible();
-      await page.getByRole('combobox', { name: 'Kunde auswählen' }).selectOption({ label: 'Musterfirma GmbH' });
-      await page.getByRole('combobox', { name: 'Artikel auswählen' }).selectOption({ label: 'E2E Reduced VAT' });
-      await page.getByRole('button', { name: 'Hinzufügen' }).click();
+      await page.getByRole('combobox', { name: 'Kunde auswählen' }).fill('Musterfirma');
+      await page.getByRole('option').filter({ hasText: 'Musterfirma GmbH' }).click();
+      await page.getByRole('button', { name: 'Neu', exact: true }).click();
+      const description = page.getByRole('combobox', { name: 'Beschreibung Position 1' });
+      await description.fill('E2E Reduced VAT');
+      await page.getByRole('option').filter({ hasText: 'E2E Reduced VAT' }).click();
 
       await expect(page.getByRole('combobox', { name: 'Umsatzsteuer Position 1' })).toHaveValue('7');
-      if (app === 'desktop') await expect(page.getByText('Regelbesteuerung (7%)')).toBeVisible();
+      await expect(page.getByText('Regelbesteuerung (7%)')).toBeVisible();
       await expect(page.getByText('107,00 €', { exact: true })).toBeVisible();
       await page.locator('button').filter({ hasText: 'Speichern' }).click();
       await expect(page).toHaveURL(/#\/documents$/);
@@ -48,10 +51,8 @@ for (const app of ['desktop', 'pro']) {
         candidate.items.some((item) => item.description === 'E2E Reduced VAT'),
       );
       expect(invoice?.items[0]?.taxRate).toBe(7);
-      if (app === 'desktop') {
-        expect(invoice?.taxSnapshot?.vatAmount).toBe(7);
-        expect(invoice?.taxSnapshot?.grossAmount).toBe(107);
-      }
+      expect(invoice?.taxSnapshot?.vatAmount).toBe(7);
+      expect(invoice?.taxSnapshot?.grossAmount).toBe(107);
       expect(invoice?.amount).toBe(107);
     } finally {
       await desktop.close();

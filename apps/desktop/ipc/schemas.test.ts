@@ -49,8 +49,10 @@ describe('Invoice Schemas', () => {
         total: 100,
         articleId: 'article-123',
         category: 'Services',
+        unit: 'Std.',
+        discountPercent: 10,
       };
-      expect(() => invoiceItemSchema.parse(item)).not.toThrow();
+      expect(invoiceItemSchema.parse(item)).toMatchObject({ unit: 'Std.', discountPercent: 10 });
     });
 
     it('should reject missing required fields', () => {

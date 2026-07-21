@@ -1,0 +1,46 @@
+{
+  "name": "@billme/desktop-designer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "@billme/desktop-ui": "workspace:*",
+    "@billme/desktop-utils": "workspace:*",
+    "@billme/ui": "workspace:*",
+    "@billme/server-core": "workspace:*",
+    "lucide-react": "^0.562.0",
+    "react-moveable": "^0.56.0",
+    "react-selecto": "^1.26.3",
+    "uuid": "^13.0.0"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.13",
+    "@types/react-dom": "^19.2.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./ElementRenderer": {
+      "types": "./src/ElementRenderer.tsx",
+      "default": "./src/ElementRenderer.tsx"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    },
+    "./constants": {
+      "types": "./src/constants.ts",
+      "default": "./src/constants.ts"
+    },
+    "./document-editor": {
+      "types": "./src/document-editor/index.ts",
+      "default": "./src/document-editor/index.ts"
+    }
+  }
+}

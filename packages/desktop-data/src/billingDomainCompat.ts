@@ -47,6 +47,8 @@ type InvoiceItemRow = {
   description: string;
   article_id: string | null;
   category: string | null;
+  unit: string | null;
+  discount_percent: number | null;
   tax_rate: number | null;
   quantity: number;
   price: number;
@@ -97,6 +99,8 @@ type OfferItemRow = {
   description: string;
   article_id: string | null;
   category: string | null;
+  unit: string | null;
+  discount_percent: number | null;
   tax_rate: number | null;
   quantity: number;
   price: number;
@@ -124,6 +128,8 @@ export interface LegacyInvoiceItem {
   total: number;
   articleId?: string;
   category?: string;
+  unit?: string;
+  discountPercent?: number;
   taxRate?: number;
 }
 
@@ -253,6 +259,8 @@ export const toDomainInvoice = (scope: TenantScope, invoice: LegacyInvoiceDocume
       total: item.total,
       articleId: item.articleId,
       category: item.category,
+      unit: item.unit,
+      discountPercent: item.discountPercent,
       taxRate: item.taxRate,
     })),
     payments: (invoice.payments ?? []).map((payment) => ({
@@ -315,6 +323,8 @@ export const toDomainOffer = (scope: TenantScope, offer: LegacyInvoiceDocument):
       total: item.total,
       articleId: item.articleId,
       category: item.category,
+      unit: item.unit,
+      discountPercent: item.discountPercent,
       taxRate: item.taxRate,
     })),
     history: offer.history ?? [],
@@ -349,6 +359,8 @@ export const toLegacyInvoice = (invoice: Invoice): LegacyInvoiceDocument => {
       total: item.total,
       articleId: item.articleId,
       category: item.category,
+      unit: item.unit,
+      discountPercent: item.discountPercent,
       taxRate: item.taxRate,
     })),
     payments: invoice.payments.map((payment) => ({
@@ -395,6 +407,8 @@ export const toLegacyOffer = (offer: Offer): LegacyInvoiceDocument => {
       total: item.total,
       articleId: item.articleId,
       category: item.category,
+      unit: item.unit,
+      discountPercent: item.discountPercent,
       taxRate: item.taxRate,
     })),
     payments: [],
@@ -439,6 +453,8 @@ const rowToInvoice = (
       total: item.total,
       articleId: item.article_id ?? undefined,
       category: item.category ?? undefined,
+      unit: item.unit ?? undefined,
+      discountPercent: item.discount_percent ?? undefined,
       taxRate: item.tax_rate ?? undefined,
     })),
     payments: paymentRows.map((payment) => ({
@@ -503,6 +519,8 @@ const rowToOffer = (scope: TenantScope, row: OfferRow, itemRows: OfferItemRow[])
       total: item.total,
       articleId: item.article_id ?? undefined,
       category: item.category ?? undefined,
+      unit: item.unit ?? undefined,
+      discountPercent: item.discount_percent ?? undefined,
       taxRate: item.tax_rate ?? undefined,
     })),
     history: [],
@@ -674,8 +692,8 @@ export const createSqliteInvoiceRepository = (db: Database.Database): SqliteInvo
     db.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').run(invoice.id);
     const insertItem = db.prepare(
       `
-        INSERT INTO invoice_items (invoice_id, position, description, article_id, category, tax_rate, quantity, price, total)
-        VALUES (@invoiceId, @position, @description, @articleId, @category, @taxRate, @quantity, @price, @total)
+        INSERT INTO invoice_items (invoice_id, position, description, article_id, category, unit, discount_percent, tax_rate, quantity, price, total)
+        VALUES (@invoiceId, @position, @description, @articleId, @category, @unit, @discountPercent, @taxRate, @quantity, @price, @total)
       `,
     );
     invoice.items.forEach((item: Invoice['items'][number], index: number) => {
@@ -685,6 +703,8 @@ export const createSqliteInvoiceRepository = (db: Database.Database): SqliteInvo
         description: item.description,
         articleId: item.articleId ?? null,
         category: item.category ?? null,
+        unit: item.unit ?? null,
+        discountPercent: item.discountPercent ?? null,
         taxRate: item.taxRate ?? null,
         quantity: item.quantity,
         price: item.price,
@@ -862,8 +882,8 @@ export const createSqliteOfferRepository = (db: Database.Database): SqliteOfferR
     db.prepare('DELETE FROM offer_items WHERE offer_id = ?').run(offer.id);
     const insertItem = db.prepare(
       `
-        INSERT INTO offer_items (offer_id, position, description, article_id, category, tax_rate, quantity, price, total)
-        VALUES (@offerId, @position, @description, @articleId, @category, @taxRate, @quantity, @price, @total)
+        INSERT INTO offer_items (offer_id, position, description, article_id, category, unit, discount_percent, tax_rate, quantity, price, total)
+        VALUES (@offerId, @position, @description, @articleId, @category, @unit, @discountPercent, @taxRate, @quantity, @price, @total)
       `,
     );
     offer.items.forEach((item: Offer['items'][number], index: number) => {
@@ -873,6 +893,8 @@ export const createSqliteOfferRepository = (db: Database.Database): SqliteOfferR
         description: item.description,
         articleId: item.articleId ?? null,
         category: item.category ?? null,
+        unit: item.unit ?? null,
+        discountPercent: item.discountPercent ?? null,
         taxRate: item.taxRate ?? null,
         quantity: item.quantity,
         price: item.price,

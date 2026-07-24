@@ -579,7 +579,7 @@ const startServerModeProcessStack = async (state, startupError) => {
     DATABASE_URL: databaseUrl,
     HOST: '127.0.0.1',
     PORT: String(state.ports.api),
-    SESSION_SECRET: env.BILLME_SESSION_SECRET ?? 'billme-e2e-session-secret',
+    SESSION_SECRET: env.BILLME_SESSION_SECRET ?? randomValue(),
   };
   const workerEnv = {
     ...process.env,

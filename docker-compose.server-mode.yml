@@ -27,7 +27,7 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 3100
-      SESSION_SECRET: ${BILLME_SESSION_SECRET:-billme-dev-session-secret}
+      SESSION_SECRET: ${BILLME_SESSION_SECRET:?set BILLME_SESSION_SECRET in .env.server-mode (openssl rand -hex 32)}
       DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:-billme}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
     depends_on:
       postgres:

@@ -28,10 +28,48 @@ export type AuthSessionInfo = {
 const encodeBase64Url = (value: string): string => Buffer.from(value, 'utf8').toString('base64url');
 const decodeBase64Url = (value: string): string => Buffer.from(value, 'base64url').toString('utf8');
 
+export const DEV_SESSION_SECRET = 'billme-dev-session-secret';
+export const MIN_SESSION_SECRET_LENGTH = 32;
+
+export type SessionSecretVerdict =
+  | { ok: true; warning?: string }
+  | { ok: false; error: string };
+
+/**
+ * A session token is only as trustworthy as its signing secret. The constructor
+ * default keeps `pnpm dev` frictionless, but any deployment that talks to a real
+ * database must not silently sign tokens with a secret that is published in this
+ * repository — anyone could forge a session.
+ */
+export const checkSessionSecret = (
+  env: Record<string, string | undefined> = process.env,
+): SessionSecretVerdict => {
+  const secret = env.SESSION_SECRET?.trim() ?? '';
+  const isDeployed = env.NODE_ENV === 'production' || Boolean(env.DATABASE_URL?.trim());
+
+  let problem: string | undefined;
+  if (!secret) problem = 'SESSION_SECRET is not set';
+  else if (secret === DEV_SESSION_SECRET) problem = 'SESSION_SECRET is still the built-in development value';
+  else if (secret.length < MIN_SESSION_SECRET_LENGTH) {
+    problem = `SESSION_SECRET is shorter than ${MIN_SESSION_SECRET_LENGTH} characters`;
+  }
+
+  if (!problem) return { ok: true };
+  if (!isDeployed) return { ok: true, warning: `${problem}. Fine for local development, never for a deployment.` };
+
+  return {
+    ok: false,
+    error:
+      `${problem}. Refusing to start: session tokens would be forgeable. ` +
+      `Set SESSION_SECRET to at least ${MIN_SESSION_SECRET_LENGTH} random characters ` +
+      `(for example: openssl rand -hex 32).`,
+  };
+};
+
 export class SessionTokenService {
   private readonly secret: string;
 
-  constructor(secret = process.env.SESSION_SECRET?.trim() || 'billme-dev-session-secret') {
+  constructor(secret = process.env.SESSION_SECRET?.trim() || DEV_SESSION_SECRET) {
     this.secret = secret;
   }
 

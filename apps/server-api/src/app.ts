@@ -64,7 +64,7 @@ import {
   upsertArticlePayloadSchema,
   upsertTemplatePayloadSchema,
 } from '@billme/desktop-contracts-pro/schemas';
-import { SessionTokenService, type AuthSession, type AuthSessionInfo } from './auth.js';
+import { SessionTokenService, checkSessionSecret, type AuthSession, type AuthSessionInfo } from './auth.js';
 import { createAuthStore, type AuthStore } from './authStore.js';
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
 
@@ -1298,6 +1298,10 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['authorization', 'content-type'],
   });
+
+  const secretVerdict = checkSessionSecret(process.env);
+  if (!secretVerdict.ok) throw new Error(secretVerdict.error);
+  if (secretVerdict.warning) app.log.warn(secretVerdict.warning);
 
   const databaseUrl = readDatabaseUrl(process.env);
   const pool = databaseUrl ? createPostgresPool(databaseUrl) : undefined;

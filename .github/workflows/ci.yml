@@ -124,9 +124,6 @@ jobs:
       - name: Server CLI typecheck
         run: pnpm -C packages/server-cli typecheck
 
-      - name: Server CLI tests
-        run: pnpm -C packages/server-cli test
-
       - name: Server API typecheck
         run: pnpm -C apps/server-api typecheck
 

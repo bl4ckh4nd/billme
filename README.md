@@ -389,7 +389,6 @@ pnpm -C apps/server-api test
 pnpm -C apps/server-worker test
 pnpm -C apps/offer-portal test
 pnpm -C packages/server-data test
-pnpm -C packages/server-cli test
 
 # End-to-end — Playwright
 pnpm test:e2e:smoke

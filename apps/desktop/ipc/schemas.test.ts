@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { resolveInvoiceTaxMode } from '@billme/server-core/services';
 import {
   invoiceItemSchema,
   paymentSchema,
@@ -157,7 +158,11 @@ describe('Invoice Schemas', () => {
       expect(() => invoiceSchema.parse(invoice)).not.toThrow();
     });
 
-    it('should default taxMode for legacy payloads', () => {
+    // The schema must NOT default taxMode. Resolution needs the business
+    // settings: resolveInvoiceTaxMode() only falls back to §19 Kleinunternehmer
+    // while taxMode is undefined. A schema-level default of 'standard_vat' would
+    // satisfy that check and make a small business issue invoices with 19% VAT.
+    it('should leave taxMode unset for legacy payloads so settings can resolve it', () => {
       const invoice = invoiceSchema.parse({
         id: 'inv-123',
         number: 'INV-001',
@@ -170,7 +175,28 @@ describe('Invoice Schemas', () => {
         items: [] as Array<any>,
         payments: [] as Array<any>,
       });
-      expect(invoice.taxMode).toBe('standard_vat');
+      expect(invoice.taxMode).toBeUndefined();
+    });
+
+    it('resolves a legacy payload against the business settings, not a schema default', () => {
+      const legacy = invoiceSchema.parse({
+        id: 'inv-124',
+        number: 'INV-002',
+        client: 'Acme Corp',
+        clientEmail: 'contact@acme.com',
+        date: '2024-01-01',
+        dueDate: '2024-01-31',
+        amount: 100,
+        status: 'open' as const,
+        items: [] as Array<any>,
+        payments: [] as Array<any>,
+      });
+      expect(resolveInvoiceTaxMode(legacy.taxMode, { legal: { smallBusinessRule: true } })).toBe(
+        'small_business_19_ustg',
+      );
+      expect(resolveInvoiceTaxMode(legacy.taxMode, { legal: { smallBusinessRule: false } })).toBe(
+        'standard_vat',
+      );
     });
   });
 

@@ -30,6 +30,18 @@
     "./components/SkeletonLoader": {
       "types": "./src/components/SkeletonLoader.tsx",
       "default": "./src/components/SkeletonLoader.tsx"
+    },
+    "./components/DunningLevelPreviewModal": {
+      "types": "./src/components/DunningLevelPreviewModal.tsx",
+      "default": "./src/components/DunningLevelPreviewModal.tsx"
+    },
+    "./components/DunningResultModal": {
+      "types": "./src/components/DunningResultModal.tsx",
+      "default": "./src/components/DunningResultModal.tsx"
+    },
+    "./components/ShortcutsModal": {
+      "types": "./src/components/ShortcutsModal.tsx",
+      "default": "./src/components/ShortcutsModal.tsx"
     }
   }
 }

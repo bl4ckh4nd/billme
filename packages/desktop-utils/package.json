@@ -9,7 +9,8 @@
   },
   "devDependencies": {
     "@types/react": "^19.2.13",
-    "@types/react-dom": "^19.2.3"
+    "@types/react-dom": "^19.2.3",
+    "vitest": "^4.0.18"
   },
   "exports": {
     ".": {
@@ -27,6 +28,10 @@
     "./documentPreview": {
       "types": "./src/documentPreview.ts",
       "default": "./src/documentPreview.ts"
+    },
+    "./calculations.test": {
+      "types": "./src/calculations.test.ts",
+      "default": "./src/calculations.test.ts"
     }
   }
 }

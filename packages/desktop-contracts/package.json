@@ -16,6 +16,10 @@
       "types": "./src/api.ts",
       "default": "./src/api.ts"
     },
+    "./api-factory": {
+      "types": "./src/api-factory.ts",
+      "default": "./src/api-factory.ts"
+    },
     "./contract": {
       "types": "./src/contract.ts",
       "default": "./src/contract.ts"

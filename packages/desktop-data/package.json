@@ -3,9 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "scripts": {
+    "test": "vitest --run"
+  },
   "dependencies": {
     "@billme/desktop-core": "workspace:*",
     "@billme/desktop-services": "workspace:*",
+    "@billme/desktop-utils": "workspace:*",
+    "@billme/finance-intelligence": "workspace:*",
     "@billme/server-core": "workspace:*",
     "drizzle-orm": "^0.44.4",
     "zod": "^3.25.76"
@@ -15,7 +20,8 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^24.9.1"
+    "@types/node": "^24.9.1",
+    "vitest": "^4.0.18"
   },
   "exports": {
     ".": {
@@ -41,6 +47,10 @@
     "./drizzle": {
       "types": "./src/drizzle.ts",
       "default": "./src/drizzle.ts"
+    },
+    "./connection": {
+      "types": "./src/connection.ts",
+      "default": "./src/connection.ts"
     },
     "./invoicesRepo": {
       "types": "./src/invoicesRepo.ts",
@@ -70,13 +80,49 @@
       "types": "./src/eurRulesRepo.ts",
       "default": "./src/eurRulesRepo.ts"
     },
+    "./eurClassificationPipeline": {
+      "types": "./src/eurClassificationPipeline.ts",
+      "default": "./src/eurClassificationPipeline.ts"
+    },
+    "./eurReport": {
+      "types": "./src/eurReport.ts",
+      "default": "./src/eurReport.ts"
+    },
     "./financeImportRepo": {
       "types": "./src/financeImportRepo.ts",
       "default": "./src/financeImportRepo.ts"
     },
+    "./transactionsRepo": {
+      "types": "./src/transactionsRepo.ts",
+      "default": "./src/transactionsRepo.ts"
+    },
     "./recurring": {
       "types": "./src/recurring.ts",
       "default": "./src/recurring.ts"
+    },
+    "./articlesRepo": {
+      "types": "./src/articlesRepo.ts",
+      "default": "./src/articlesRepo.ts"
+    },
+    "./templatesRepo": {
+      "types": "./src/templatesRepo.ts",
+      "default": "./src/templatesRepo.ts"
+    },
+    "./projectsRepo": {
+      "types": "./src/projectsRepo.ts",
+      "default": "./src/projectsRepo.ts"
+    },
+    "./settingsRepo": {
+      "types": "./src/settingsRepo.ts",
+      "default": "./src/settingsRepo.ts"
+    },
+    "./numberingRepo": {
+      "types": "./src/numberingRepo.ts",
+      "default": "./src/numberingRepo.ts"
+    },
+    "./clientsRepo": {
+      "types": "./src/clientsRepo.ts",
+      "default": "./src/clientsRepo.ts"
     }
   }
 }

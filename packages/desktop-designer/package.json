@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
+    "@billme/desktop-core": "workspace:*",
     "@billme/desktop-ui": "workspace:*",
     "@billme/desktop-utils": "workspace:*",
     "@billme/ui": "workspace:*",
@@ -41,6 +42,22 @@
     "./document-editor": {
       "types": "./src/document-editor/index.ts",
       "default": "./src/document-editor/index.ts"
+    },
+    "./legacy/CanvasElement": {
+      "types": "./src/legacy/CanvasElement.tsx",
+      "default": "./src/legacy/CanvasElement.tsx"
+    },
+    "./legacy/LayersPanel": {
+      "types": "./src/legacy/LayersPanel.tsx",
+      "default": "./src/legacy/LayersPanel.tsx"
+    },
+    "./legacy/PropertiesPanel": {
+      "types": "./src/legacy/PropertiesPanel.tsx",
+      "default": "./src/legacy/PropertiesPanel.tsx"
+    },
+    "./legacy/Toolbar": {
+      "types": "./src/legacy/Toolbar.tsx",
+      "default": "./src/legacy/Toolbar.tsx"
     }
   }
 }

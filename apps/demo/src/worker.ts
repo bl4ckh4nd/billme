@@ -1,5 +1,10 @@
-import { ipcRoutes, type IpcArgs, type IpcResult, type IpcRouteKey } from '../../desktop/ipc/contract';
-import { createMockInvoke } from '../../desktop/ipc/mockEngine';
+import {
+  ipcRoutes,
+  type IpcArgs,
+  type IpcResult,
+  type IpcRouteKey,
+} from '@billme/desktop-contracts/contract';
+import { createLiteMockInvoke as createMockInvoke } from '@billme/desktop-services/mockEngine';
 
 type Env = {
   ASSETS: Fetcher;

@@ -4,8 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
+    "@billme/desktop-contracts": "workspace:*",
+    "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/finance-intelligence": "workspace:*",
     "@billme/desktop-core": "workspace:*",
+    "@billme/desktop-utils": "workspace:*",
+    "@billme/server-core": "workspace:*",
     "iconv-lite": "^0.6.3",
     "papaparse": "^5.5.3"
   },
@@ -29,6 +33,42 @@
     "./csvImport": {
       "types": "./src/csvImport.ts",
       "default": "./src/csvImport.ts"
+    },
+    "./mockData": {
+      "types": "./src/mockData.ts",
+      "default": "./src/mockData.ts"
+    },
+    "./mockEngine": {
+      "types": "./src/mockEngine.ts",
+      "default": "./src/mockEngine.ts"
+    },
+    "./einvoice/embedZugferdInPdf": {
+      "types": "./src/einvoice/embedZugferdInPdf.ts",
+      "default": "./src/einvoice/embedZugferdInPdf.ts"
+    },
+    "./einvoice/embedZugferdInPdf.test": {
+      "types": "./src/einvoice/embedZugferdInPdf.test.ts",
+      "default": "./src/einvoice/embedZugferdInPdf.test.ts"
+    },
+    "./eurSuggestion.test": {
+      "types": "./src/eurSuggestion.test.ts",
+      "default": "./src/eurSuggestion.test.ts"
+    },
+    "./einvoice/normalizeInvoiceForEinvoice": {
+      "types": "./src/einvoice/normalizeInvoiceForEinvoice.ts",
+      "default": "./src/einvoice/normalizeInvoiceForEinvoice.ts"
+    },
+    "./einvoice/normalizeInvoiceForEinvoice.test": {
+      "types": "./src/einvoice/normalizeInvoiceForEinvoice.test.ts",
+      "default": "./src/einvoice/normalizeInvoiceForEinvoice.test.ts"
+    },
+    "./einvoice/zugferdXml": {
+      "types": "./src/einvoice/zugferdXml.ts",
+      "default": "./src/einvoice/zugferdXml.ts"
+    },
+    "./einvoice/zugferdXml.test": {
+      "types": "./src/einvoice/zugferdXml.test.ts",
+      "default": "./src/einvoice/zugferdXml.test.ts"
     }
   }
 }

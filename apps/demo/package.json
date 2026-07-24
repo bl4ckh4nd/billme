@@ -2,17 +2,20 @@
   "name": "billme-demo",
   "private": true,
   "version": "0.0.0",
-  "license": "MIT",
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local",
     "build:client": "vite build",
     "build": "pnpm run build:client && tsc --noEmit",
     "deploy:cf": "pnpm run build:client && wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
+    "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-renderer": "workspace:*",
+    "@billme/desktop-services": "workspace:*",
     "@billme/ui": "workspace:*",
     "@tanstack/react-query": "^5.90.19",
     "@tanstack/react-router": "^1.153.1",

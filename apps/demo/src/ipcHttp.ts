@@ -1,5 +1,10 @@
-import { createBillmeApi } from '../../desktop/ipc/api';
-import { ipcRoutes, type IpcArgs, type IpcResult, type IpcRouteKey } from '../../desktop/ipc/contract';
+import { createBillmeApi } from '@billme/desktop-contracts/api';
+import {
+  ipcRoutes,
+  type IpcArgs,
+  type IpcResult,
+  type IpcRouteKey,
+} from '@billme/desktop-contracts/contract';
 
 const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<IpcResult<K>> => {
   const route = ipcRoutes[key];

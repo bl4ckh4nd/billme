@@ -24,11 +24,11 @@ vi.mock('./router', () => ({
   AppRouterProvider: mockAppRouterProvider,
 }));
 
-vi.mock('./components/PrintDocument', () => ({
+vi.mock('@billme/desktop-renderer/components/PrintDocument', () => ({
   PrintDocument: mockPrintDocument,
 }));
 
-vi.mock('./components/PrintEurDocument', () => ({
+vi.mock('@billme/desktop-renderer/components/PrintEurDocument', () => ({
   PrintEurDocument: mockPrintEurDocument,
 }));
 

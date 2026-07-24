@@ -9,9 +9,10 @@ describe('mockEngine route coverage', () => {
     const contractRoutes = Object.keys(ipcRoutes).sort();
     const switchCases = [
       ...new Set(
-        readFileSync(path.resolve(process.cwd(), 'ipc/mockEngine.ts'), 'utf8')
+        readFileSync(path.resolve(process.cwd(), '../../packages/desktop-services/src/mockEngine.ts'), 'utf8')
           .match(/case '[-a-zA-Z0-9:]+'/g)
-          ?.map((line) => line.slice(6, -1)) ?? [],
+          ?.map((line) => line.slice(6, -1))
+          .filter((route) => route in ipcRoutes) ?? [],
       ),
     ].sort();
 
@@ -148,5 +149,39 @@ describe('mockEngine route coverage', () => {
     });
 
     expect(saved.customerNumber).toBe('KD-0004');
+  });
+
+  it('isolates instances and preserves the offer tax snapshot during conversion', async () => {
+    const first = createMockInvoke();
+    const second = createMockInvoke();
+    const settings = await first('settings:get', undefined);
+    if (!settings) throw new Error('Expected mock settings');
+
+    const offer = await first('offers:upsert', {
+      offer: {
+        id: 'offer-tax-snapshot',
+        number: 'ANG-TAX-1',
+        client: 'Acme GmbH',
+        clientEmail: 'billing@acme.test',
+        date: '2026-03-01',
+        dueDate: '2026-03-15',
+        amount: 0,
+        status: 'draft',
+        items: [{ description: 'Beratung', quantity: 1, price: 1000, total: 1000 }],
+        payments: [],
+      },
+      reason: 'test',
+    });
+
+    await first('settings:set', {
+      settings: {
+        ...settings,
+        legal: { ...settings.legal, defaultVatRate: 7 },
+      },
+    });
+
+    const converted = await first('documents:convertOfferToInvoice', { offerId: offer.id });
+    expect(converted.taxSnapshot).toEqual(offer.taxSnapshot);
+    expect((await second('settings:get', undefined))?.legal.defaultVatRate).toBe(19);
   });
 });

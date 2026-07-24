@@ -1,0 +1,65 @@
+import '@testing-library/jest-dom';
+import { vi } from 'vitest';
+
+// Mock window.billmeApi for IPC testing
+const mockIpcApi = {
+  'company:list': vi.fn(),
+  'company:get': vi.fn(),
+  'company:create': vi.fn(),
+  'company:update': vi.fn(),
+  'company:delete': vi.fn(),
+  'clients:list': vi.fn(),
+  'clients:get': vi.fn(),
+  'clients:create': vi.fn(),
+  'clients:update': vi.fn(),
+  'clients:delete': vi.fn(),
+  'invoices:list': vi.fn(),
+  'invoices:get': vi.fn(),
+  'invoices:create': vi.fn(),
+  'invoices:update': vi.fn(),
+  'invoices:delete': vi.fn(),
+  'invoices:createFromOffer': vi.fn(),
+  'invoices:send': vi.fn(),
+  'offers:list': vi.fn(),
+  'offers:get': vi.fn(),
+  'offers:create': vi.fn(),
+  'offers:update': vi.fn(),
+  'offers:delete': vi.fn(),
+  'offers:generateShareToken': vi.fn(),
+  'templates:list': vi.fn(),
+  'templates:get': vi.fn(),
+  'templates:create': vi.fn(),
+  'templates:update': vi.fn(),
+  'templates:delete': vi.fn(),
+  'templates:duplicate': vi.fn(),
+  'settings:get': vi.fn(),
+  'settings:set': vi.fn(),
+  'pdf:export': vi.fn(),
+  'pdf:preview': vi.fn(),
+  'email:send': vi.fn(),
+  'email:testSmtpConnection': vi.fn(),
+  'finance:listAccounts': vi.fn(),
+  'finance:createAccount': vi.fn(),
+  'finance:updateAccount': vi.fn(),
+  'finance:deleteAccount': vi.fn(),
+  'finance:listTransactions': vi.fn(),
+  'finance:importCsv': vi.fn(),
+  'finance:linkTransaction': vi.fn(),
+  'finance:unlinkTransaction': vi.fn(),
+  'finance:findInvoiceMatches': vi.fn(),
+  'dunning:getDunningLevels': vi.fn(),
+  'dunning:updateDunningLevels': vi.fn(),
+  'dunning:run': vi.fn(),
+  'dunning:getHistory': vi.fn(),
+  'audit:list': vi.fn(),
+  'recurring:list': vi.fn(),
+  'recurring:create': vi.fn(),
+  'recurring:update': vi.fn(),
+  'recurring:delete': vi.fn(),
+};
+
+global.window = global.window || ({} as any);
+(global.window as any).billmeApi = mockIpcApi;
+
+// Export mock for use in tests
+export { mockIpcApi };

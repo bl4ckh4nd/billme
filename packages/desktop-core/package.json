@@ -4,6 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
+    "electron-updater": "^6.8.3",
+    "keytar": "^7.9.0",
     "nodemailer": "^6.9.15",
     "zustand": "^5.0.10"
   },
@@ -16,20 +18,38 @@
     "@types/node": "^24.9.1",
     "@types/nodemailer": "^6.4.16",
     "@types/react": "^19.2.13",
-    "@types/react-dom": "^19.2.3"
+    "@types/react-dom": "^19.2.3",
+    "@testing-library/jest-dom": "^6.9.1",
+    "vitest": "^4.0.18"
   },
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    },
+    "./constants": {
+      "types": "./src/constants.ts",
+      "default": "./src/constants.ts"
+    },
     "./utils/logger": {
       "types": "./src/utils/logger.ts",
       "default": "./src/utils/logger.ts"
     },
+    "./utils/logger.test": {
+      "types": "./src/utils/logger.test.ts",
+      "default": "./src/utils/logger.test.ts"
+    },
     "./utils/retry": {
       "types": "./src/utils/retry.ts",
       "default": "./src/utils/retry.ts"
+    },
+    "./utils/retry.test": {
+      "types": "./src/utils/retry.test.ts",
+      "default": "./src/utils/retry.test.ts"
     },
     "./ipc/errorHandler": {
       "types": "./src/ipc/errorHandler.ts",
@@ -46,6 +66,38 @@
     "./state/notificationsStore": {
       "types": "./src/state/notificationsStore.ts",
       "default": "./src/state/notificationsStore.ts"
+    },
+    "./electron/notifications": {
+      "types": "./src/electron/notifications.ts",
+      "default": "./src/electron/notifications.ts"
+    },
+    "./electron/pdfExport": {
+      "types": "./src/electron/pdfExport.ts",
+      "default": "./src/electron/pdfExport.ts"
+    },
+    "./electron/secrets": {
+      "types": "./src/electron/secrets.ts",
+      "default": "./src/electron/secrets.ts"
+    },
+    "./electron/updater": {
+      "types": "./src/electron/updater.ts",
+      "default": "./src/electron/updater.ts"
+    },
+    "./electron/schedulers": {
+      "types": "./src/electron/schedulers.ts",
+      "default": "./src/electron/schedulers.ts"
+    },
+    "./electron/preload": {
+      "types": "./src/electron/preload.ts",
+      "default": "./src/electron/preload.ts"
+    },
+    "./electron/portalPolling": {
+      "types": "./src/electron/portalPolling.ts",
+      "default": "./src/electron/portalPolling.ts"
+    },
+    "./test/setup": {
+      "types": "./src/test/setup.ts",
+      "default": "./src/test/setup.ts"
     }
   }
 }

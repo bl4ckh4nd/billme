@@ -4,17 +4,42 @@
   "version": "0.0.0",
   "type": "module",
   "types": "./src/index.tsx",
+  "scripts": {
+    "test": "vitest --run"
+  },
   "exports": {
-    ".": "./src/index.tsx"
+    ".": "./src/index.tsx",
+    "./runtime-api": "./src/runtime-api.ts",
+    "./ui-store": "./src/ui-store.ts",
+    "./createDesktopApp": "./src/createDesktopApp.tsx",
+    "./document-preview": "./src/document-preview.ts",
+    "./hooks/*": "./src/hooks/*.ts",
+    "./components/*": "./src/components/*.tsx"
   },
   "dependencies": {
     "@billme/desktop-contracts": "workspace:*",
+    "@billme/desktop-contracts-pro": "workspace:*",
+    "@billme/desktop-core": "workspace:*",
+    "@billme/desktop-designer": "workspace:*",
+    "@billme/desktop-services": "workspace:*",
+    "@billme/desktop-state": "workspace:*",
+    "@billme/desktop-ui": "workspace:*",
+    "@billme/desktop-utils": "workspace:*",
+    "@billme/server-core": "workspace:*",
+    "@billme/ui": "workspace:*",
     "@tanstack/react-query": "^5.90.19",
+    "@tanstack/react-router": "^1.149.0",
+    "lucide-react": "^0.562.0",
     "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "react-dom": "^19.2.3",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.2.13",
-    "@types/react-dom": "^19.2.3"
+    "@types/react-dom": "^19.2.3",
+    "happy-dom": "^20.5.3",
+    "vitest": "^4.0.18"
   }
 }

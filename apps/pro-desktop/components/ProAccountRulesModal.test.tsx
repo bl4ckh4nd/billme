@@ -8,8 +8,10 @@ import { ProAccountRulesModal } from './ProAccountRulesModal';
 const { mockIpc } = vi.hoisted(() => ({
   mockIpc: {
     pro: {
-      listAccountSuggestionRules: vi.fn(async () => []),
-      listLedgerAccounts: vi.fn(async () => []),
+      // Annotated so the empty default does not infer `never[]`, which would
+      // reject every mockResolvedValue([...]) below.
+      listAccountSuggestionRules: vi.fn(async (): Promise<any[]> => []),
+      listLedgerAccounts: vi.fn(async (): Promise<any[]> => []),
       upsertAccountSuggestionRule: vi.fn(async (payload: any) => ({
         id: payload.id ?? 'rule-new',
         ...payload,

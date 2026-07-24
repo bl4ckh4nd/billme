@@ -1,135 +1,25 @@
+import { createDunningScheduler } from '@billme/desktop-core/electron/schedulers';
 import { getDb } from '../db/connection';
 import { getSettings } from '../db/settingsRepo';
 import { processDunningRun, shouldRunScheduledDunning } from '../services/dunningService';
-import { secrets } from './secrets';
-import { pushNotification } from './notifications';
 import { logger } from '../utils/logger';
+import { pushNotification } from './notifications';
+import { secrets } from './secrets';
 
-let schedulerInterval: NodeJS.Timeout | null = null;
-let isRunning = false;
-
-/**
- * Check if it's time to run dunning based on settings
- */
-const shouldRunDunning = (): boolean => {
-  try {
-    const db = getDb();
-    const settings = getSettings(db);
-    return shouldRunScheduledDunning(settings);
-  } catch (error) {
-    logger.error('DunningScheduler', 'Error checking if should run', error as Error);
-    return false;
-  }
-};
-
-/**
- * Execute dunning run
- */
-const executeDunningRun = async (): Promise<void> => {
-  if (isRunning) {
-    logger.info('DunningScheduler', 'Already running, skipping');
-    return;
-  }
-
-  isRunning = true;
-
-  try {
-    logger.info('DunningScheduler', 'Starting dunning run');
-    const db = getDb();
-    const result = await processDunningRun(db, secrets);
-
-    logger.info('DunningScheduler', 'Dunning run completed', {
-      processedInvoices: result.processedInvoices,
-      emailsSent: result.emailsSent,
-      feesApplied: result.feesApplied,
-      errors: result.errors.length,
-    });
-
-    if (result.emailsSent > 0 || result.processedInvoices > 0) {
-      pushNotification({
-        type: 'dunning',
-        title: 'Mahnlauf abgeschlossen',
-        message: `${result.emailsSent} Mahnung${result.emailsSent !== 1 ? 'en' : ''} versendet, ${result.processedInvoices} Rechnung${result.processedInvoices !== 1 ? 'en' : ''} verarbeitet`,
-      });
+const scheduler = createDunningScheduler({
+  shouldRun: () => {
+    try {
+      return shouldRunScheduledDunning(getSettings(getDb()));
+    } catch (error) {
+      logger.error('DunningScheduler', 'Error checking if should run', error as Error);
+      return false;
     }
+  },
+  run: () => processDunningRun(getDb(), secrets),
+  notify: pushNotification,
+  logger,
+});
 
-    if (result.errors.length > 0) {
-      logger.error('DunningScheduler', 'Errors during dunning run', undefined, { errors: result.errors });
-      pushNotification({
-        type: 'email',
-        title: 'Mahnlauf: Fehler aufgetreten',
-        message: `${result.errors.length} Fehler beim Mahnversand`,
-      });
-    }
-  } catch (error) {
-    logger.error('DunningScheduler', 'Fatal error during dunning run', error as Error);
-  } finally {
-    isRunning = false;
-  }
-};
-
-/**
- * Check and run dunning if needed
- */
-const checkAndRun = async (): Promise<void> => {
-  if (shouldRunDunning()) {
-    await executeDunningRun();
-  }
-};
-
-/**
- * Start the dunning scheduler
- * Checks every 15 minutes if it's time to run
- */
-export const startDunningScheduler = (): void => {
-  if (schedulerInterval) {
-    logger.info('DunningScheduler', 'Already running');
-    return;
-  }
-
-  logger.info('DunningScheduler', 'Starting scheduler (checks every 15 minutes)');
-
-  // Check immediately on start
-  void checkAndRun();
-
-  // Then check every 15 minutes
-  schedulerInterval = setInterval(() => {
-    void checkAndRun();
-  }, 15 * 60 * 1000); // 15 minutes
-};
-
-/**
- * Stop the dunning scheduler
- */
-export const stopDunningScheduler = (): void => {
-  if (schedulerInterval) {
-    clearInterval(schedulerInterval);
-    schedulerInterval = null;
-    logger.info('DunningScheduler', 'Stopped');
-  }
-};
-
-/**
- * Manually trigger a dunning run (for testing or manual execution)
- */
-export const manualDunningRun = async (): Promise<{
-  success: boolean;
-  result?: {
-    processedInvoices: number;
-    emailsSent: number;
-    feesApplied: number;
-    errors: Array<{ invoiceNumber: string; error: string }>;
-  };
-  error?: string;
-}> => {
-  try {
-    logger.info('DunningScheduler', 'Manual run triggered');
-    const db = getDb();
-    const result = await processDunningRun(db, secrets);
-    return { success: true, result };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error('DunningScheduler', 'Manual run failed', error as Error);
-    return { success: false, error: errorMessage };
-  }
-};
+export const startDunningScheduler = scheduler.start;
+export const stopDunningScheduler = scheduler.stop;
+export const manualDunningRun = scheduler.manual;

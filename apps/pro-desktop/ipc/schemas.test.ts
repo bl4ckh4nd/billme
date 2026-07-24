@@ -28,6 +28,42 @@ import {
   templateSchema,
   templateKindSchema,
 } from './schemas';
+import { ipcRoutes } from './contract';
+
+describe('Pro IPC route schemas', () => {
+  it('validates journal entry account filters', () => {
+    expect(
+      ipcRoutes['pro:listJournalEntries'].args.parse({
+        accountNumbers: ['1200', '8400'],
+        limit: 100,
+      }),
+    ).toMatchObject({ accountNumbers: ['1200', '8400'] });
+    expect(() =>
+      ipcRoutes['pro:listJournalEntries'].args.parse({ accountNumbers: [''] }),
+    ).toThrow();
+  });
+
+  it('requires roles and audit reasons for asset mutations', () => {
+    expect(() =>
+      ipcRoutes['pro:runDepreciation'].args.parse({
+        assetId: 'asset-1',
+        year: 2026,
+        postingDate: '2026-12-31',
+        reason: '',
+        actorRole: 'accountant',
+      }),
+    ).toThrow();
+    expect(() =>
+      ipcRoutes['pro:disposeAsset'].args.parse({
+        assetId: 'asset-1',
+        disposalDate: '2026-12-31',
+        proceeds: 0,
+        reason: 'Scrapped',
+        actorRole: 'bookkeeper',
+      }),
+    ).not.toThrow();
+  });
+});
 
 describe('Invoice Schemas', () => {
   describe('invoiceItemSchema', () => {

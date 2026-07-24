@@ -39,6 +39,7 @@ apps/pro-desktop/.test-logs/
 apps/pro-desktop/.artifacts/
 .playwright-cli/
 .pnpm-store/
+.pnpm-store-mobile/
 test-results/
 apps/demo/.wrangler/
 doppelteBuchhaltung/*

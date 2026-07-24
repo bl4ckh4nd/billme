@@ -1,10 +1,15 @@
 appId: com.billme.pro
 productName: Billme Pro
 
+# Lite and Pro publish into the same GitHub release. Without a distinct channel
+# both would emit `latest*.yml`, one would overwrite the other, and the Lite
+# updater could hand a user the Pro build (which uses a different database).
+# Pro therefore ships `pro*.yml`; Lite keeps the default `latest*.yml`.
 publish:
   provider: github
   owner: bl4ckh4nd
   repo: billme
+  channel: pro
 
 directories:
   output: release

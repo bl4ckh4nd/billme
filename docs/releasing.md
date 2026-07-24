@@ -1,52 +1,79 @@
 # Releasing
 
-This repository uses GitHub Actions + Release Please to automate versioning, release notes, and desktop release publishing.
+This repository uses Release Please for the release tag and GitHub Actions for cross-platform Lite and
+Pro desktop artifacts.
 
-## Commit Convention
+## Version ownership
 
-Use Conventional Commits on merge commits/PR titles:
+`.release-please-config.json` links `apps/desktop` and `apps/pro-desktop` into one version group.
+Release Please updates both package versions and changelogs together. Pro skips a separate GitHub
+release because both applications are published by the same tag workflow.
+
+## Commit convention
+
+Use Conventional Commits on merge commits and PR titles:
 
 - `fix: ...` -> patch release
 - `feat: ...` -> minor release
 - `feat!: ...` or `BREAKING CHANGE:` -> major release
 
-## Automated Flow
+## Automated flow
 
-1. Push/merge changes to `main`.
-2. `.github/workflows/release-please.yml` runs and opens/updates a release PR.
-3. The release PR bumps version in `apps/desktop/package.json` and updates `apps/desktop/CHANGELOG.md`.
-4. Merge the release PR.
-5. Release Please creates tag `vX.Y.Z`.
-6. `.github/workflows/publish-release.yml` runs on the tag:
-   - builds desktop distributables via electron-builder on Windows, macOS, and Linux
-   - publishes/updates GitHub Release
-   - attaches release files from all platforms
-   - generates release notes automatically
-   - can also be started manually via `workflow_dispatch` with a `tag` input
+1. Push or merge changes to `main`.
+2. `.github/workflows/release-please.yml` opens or updates the release PR.
+3. Merge the release PR.
+4. Release Please creates `vX.Y.Z`.
+5. `.github/workflows/publish-release.yml` validates Lite and Pro, builds distributables, and publishes
+   the GitHub release with generated notes and attached assets.
 
-## Required Repository Secret
+`publish-release.yml` can also be started manually with `workflow_dispatch` and an existing tag.
 
-`release-please.yml` must use a token that can trigger downstream workflows.
+## Release build matrix and artifacts
 
-- Add repository secret `RELEASE_PLEASE_TOKEN`.
-- Recommended: classic PAT from a bot account with `repo` and `workflow` scopes.
-- Why: tags/releases created with the default `GITHUB_TOKEN` do not trigger other workflows, so `Publish Release` would not start.
+The release workflow builds the Cartesian product of:
 
-## CI And Build Verification
+- `ubuntu-latest`, `macos-latest`, and `windows-latest`
+- `apps/desktop` and `apps/pro-desktop`
 
-`.github/workflows/ci.yml` runs:
+Before packaging, its validation job runs Lite and Pro typechecks and tests. Each matrix job then runs
+the application build, `electron-builder`, and `scripts/verify-native-packaging.mjs`.
 
-- on all pushes and pull requests:
-  - desktop typecheck
-  - desktop tests
-  - desktop build
-  - offer-portal build
-- on push to `main` only:
-  - desktop electron-builder distributable builds on Windows, macOS, and Linux
-  - artifact upload for build outputs
+Both `apps/desktop/electron-builder.yml` and `apps/pro-desktop/electron-builder.yml` configure:
+
+| Platform | electron-builder targets |
+|---|---|
+| Windows | NSIS |
+| macOS | dmg, zip |
+| Linux | AppImage, deb |
+
+The workflow upload globs include `.rpm`, but neither electron-builder configuration declares an RPM
+target, so the current release process does not produce RPM packages.
+
+## Required repository secret
+
+`.github/workflows/release-please.yml` passes `secrets.RELEASE_PLEASE_TOKEN` to Release Please. The
+token must be able to create a tag that triggers the downstream `push.tags: v*` workflow; tags created
+with the default `GITHUB_TOKEN` do not trigger that workflow.
+
+## CI versus release packaging
+
+`.github/workflows/ci.yml` runs on matching pushes and pull requests. Its `validate` job runs:
+
+- Lite desktop typecheck, tests, `test:einvoice`, and build
+- Pro desktop typecheck, tests, `test:einvoice`, and build
+- offer-portal build
+- Playwright desktop smoke tests for Lite and Pro
+
+A separate `e2e-server-smoke` job installs Playwright Chromium, runs
+`pnpm test:e2e:server:smoke`, and uploads the Playwright report and server-mode diagnostics.
+
+CI does not run electron-builder or create desktop distributables. Normal distributable builds happen
+only in `publish-release.yml` for a `v*` tag; the manual dispatch is the recovery path.
 
 ## Troubleshooting
 
-- If release build fails due native module rebuild issues, rerun the workflow after dependency cache refresh.
-- If no release PR is opened, check commit messages follow Conventional Commits.
-- If the GitHub Release exists without assets, run `Publish Release` manually and provide the tag (for example `v1.2.3`).
+- If a release build fails during native dependency packaging, rerun `Publish Release` for the same tag.
+- If no release PR appears, verify that commits follow Conventional Commits and that
+  `RELEASE_PLEASE_TOKEN` is configured.
+- If a GitHub release has no assets, run `Publish Release` manually and provide the tag, for example
+  `v1.2.3`.

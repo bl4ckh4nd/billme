@@ -1,9 +1,9 @@
 {
   "name": "billme",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Billme desktop invoicing application",
-  "license": "MIT",
+  "license": "FSL-1.1-ALv2",
   "homepage": "https://billme.app",
   "author": {
     "name": "Billme Team",

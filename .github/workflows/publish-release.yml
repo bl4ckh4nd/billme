@@ -111,6 +111,7 @@ jobs:
             ${{ matrix.app.dir }}/release/**/*.zip
             ${{ matrix.app.dir }}/release/**/*.blockmap
             ${{ matrix.app.dir }}/release/**/latest*.yml
+            ${{ matrix.app.dir }}/release/**/pro*.yml
           if-no-files-found: error
 
   publish:
@@ -139,3 +140,4 @@ jobs:
             release-assets/**/*.zip
             release-assets/**/*.blockmap
             release-assets/**/latest*.yml
+            release-assets/**/pro*.yml

@@ -6,7 +6,22 @@
     "apps/desktop": {
       "release-type": "node",
       "package-name": "billme",
+      "component": "billme",
       "changelog-path": "CHANGELOG.md"
+    },
+    "apps/pro-desktop": {
+      "release-type": "node",
+      "package-name": "billme-pro",
+      "component": "billme-pro",
+      "changelog-path": "CHANGELOG.md",
+      "skip-github-release": true
     }
-  }
+  },
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "billme",
+      "components": ["billme", "billme-pro"]
+    }
+  ]
 }

@@ -50,6 +50,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Shared desktop data tests
+        run: pnpm -C packages/desktop-data test
+
+      - name: Shared desktop renderer tests
+        run: pnpm -C packages/desktop-renderer test
+
       - name: Desktop typecheck
         run: pnpm -C apps/desktop typecheck
 
@@ -79,6 +85,65 @@ jobs:
 
       - name: E2E smoke (desktop + pro)
         run: pnpm test:e2e:smoke
+
+  server-packages:
+    name: Server packages (Typecheck, Tests)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Server core typecheck
+        run: pnpm -C packages/server-core typecheck
+
+      - name: Server core tests
+        run: pnpm -C packages/server-core test
+
+      - name: Server data typecheck
+        run: pnpm -C packages/server-data typecheck
+
+      - name: Server data tests
+        run: pnpm -C packages/server-data test
+
+      - name: Server CLI typecheck
+        run: pnpm -C packages/server-cli typecheck
+
+      - name: Server CLI tests
+        run: pnpm -C packages/server-cli test
+
+      - name: Server API typecheck
+        run: pnpm -C apps/server-api typecheck
+
+      - name: Server API tests
+        run: pnpm -C apps/server-api test
+
+      - name: Server worker typecheck
+        run: pnpm -C apps/server-worker typecheck
+
+      - name: Server worker tests
+        run: pnpm -C apps/server-worker test
+
+      - name: Offer portal tests
+        run: pnpm -C apps/offer-portal test
+
+      - name: Demo tests
+        run: pnpm -C apps/demo test
 
   e2e-server-smoke:
     name: E2E smoke (server mode)

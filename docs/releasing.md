@@ -35,7 +35,8 @@ The release workflow builds the Cartesian product of:
 - `ubuntu-latest`, `macos-latest`, and `windows-latest`
 - `apps/desktop` and `apps/pro-desktop`
 
-Before packaging, its validation job runs Lite and Pro typechecks and tests. Each matrix job then runs
+Before packaging, its validation job runs Lite and Pro typechecks and tests. Each matrix job installs
+the workspace without lifecycle scripts, rebuilds native dependencies for its selected app, then runs
 the application build, `electron-builder`, and `scripts/verify-native-packaging.mjs`.
 
 Both `apps/desktop/electron-builder.yml` and `apps/pro-desktop/electron-builder.yml` configure:

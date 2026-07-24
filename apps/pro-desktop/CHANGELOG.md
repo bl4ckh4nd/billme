@@ -17,3 +17,7 @@ All notable changes to this project will be documented in this file.
 ### Security
 
 - Server mode now refuses production or database-backed startup with a missing, default, or weak session-signing secret.
+
+### Fixed
+
+- Corrected macOS native-package verification for the `Billme Pro.app` bundle.

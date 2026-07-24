@@ -6,13 +6,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const appRoot = path.resolve(__dirname, '..');
 const releaseDir = path.join(appRoot, 'release');
+const appBundleName = 'Billme Pro.app';
 
 const platform = process.platform;
 function findMacResourceDirs() {
   const staticCandidates = [
-    path.join(releaseDir, 'mac', 'Billme.app', 'Contents', 'Resources'),
-    path.join(releaseDir, 'mac-arm64', 'Billme.app', 'Contents', 'Resources'),
-    path.join(releaseDir, 'mac-x64', 'Billme.app', 'Contents', 'Resources'),
+    path.join(releaseDir, 'mac', appBundleName, 'Contents', 'Resources'),
+    path.join(releaseDir, 'mac-arm64', appBundleName, 'Contents', 'Resources'),
+    path.join(releaseDir, 'mac-x64', appBundleName, 'Contents', 'Resources'),
   ];
 
   if (!fs.existsSync(releaseDir)) {
@@ -31,7 +32,7 @@ function findMacResourceDirs() {
     const candidate = path.join(
       releaseDir,
       entry.name,
-      'Billme.app',
+      appBundleName,
       'Contents',
       'Resources',
     );

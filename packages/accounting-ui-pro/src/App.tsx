@@ -160,11 +160,12 @@ export default function App({ seed, dataAdapter, onPersistEntry }: ProAccounting
             />
           ) : currentView === 'reports' ? (
             <ReportsView
+              dataAdapter={dataAdapter}
               onOpenTransaction={handleOpenTransaction}
               onOpenReceipt={handleOpenInboxTransaction}
             />
           ) : (
-            <AssetManagementView />
+            <AssetManagementView dataAdapter={dataAdapter} />
           )}
         </div>
       </main>

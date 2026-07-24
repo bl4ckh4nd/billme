@@ -35,7 +35,7 @@ export interface SusaReport {
     unmappedAccounts: number;
     warnings: number;
     generatedAt: string;
-    source: 'mock';
+    source: 'mock' | 'live';
   };
 }
 
@@ -62,7 +62,7 @@ export interface GuvReport {
     unmappedAccounts: number;
     warnings: number;
     generatedAt: string;
-    source: 'mock';
+    source: 'mock' | 'live';
   };
 }
 
@@ -88,7 +88,7 @@ export interface BalanceSheetPreview {
     status: 'ok' | 'warning' | 'error';
     notes: string[];
     generatedAt: string;
-    source: 'mock';
+    source: 'mock' | 'live';
   };
 }
 

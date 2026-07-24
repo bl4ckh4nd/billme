@@ -14,6 +14,12 @@ import { ipc } from '../ipc/client';
 import { useImportSkrMutation, useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
 import type { IpcArgs, IpcResult } from '../ipc/contract';
 import { ProAccountRulesModal } from './ProAccountRulesModal';
+import {
+  mapBalanceSheetPreview,
+  mapGuvReport,
+  mapReportDrilldownEntries,
+  mapSusaReport,
+} from './reportAdapters';
 
 const inferAccountType = (accountNumber: string): ProUiAccount['type'] => {
   const first = accountNumber[0];
@@ -387,6 +393,51 @@ export const ProAccountingPage: React.FC = () => {
         const next = { ...adapterTransactionsRef.current[idx], hasReceipt };
         adapterTransactionsRef.current[idx] = next;
         return structuredClone(next);
+      },
+      async getSusaReport(filters) {
+        const [report, accounts] = await Promise.all([
+          ipc.pro.getSusaReport({ asOfDate: filters.asOfDate }),
+          ipc.pro.listLedgerAccounts({ chart: filters.chart, limit: 10_000 }),
+        ]);
+        return mapSusaReport(report, accounts);
+      },
+      async getGuvReport(filters) {
+        const report = await ipc.pro.getGuvReport({
+          from: filters.periodFrom ? `${filters.periodFrom}-01` : undefined,
+          to: filters.periodTo ? `${filters.periodTo}-31` : undefined,
+        });
+        return mapGuvReport(report);
+      },
+      async getBalanceSheetPreview(filters) {
+        const [report, accounts] = await Promise.all([
+          ipc.pro.getBilanzReport({ asOfDate: filters.asOfDate }),
+          ipc.pro.listLedgerAccounts({ chart: filters.chart, limit: 10_000 }),
+        ]);
+        return mapBalanceSheetPreview(report, accounts);
+      },
+      async getReportDrilldownEntries(selection) {
+        if (!selection.accountNumbers.length) return [];
+        const entries = await ipc.pro.listJournalEntries({
+          accountNumbers: selection.accountNumbers,
+          limit: 5000,
+          offset: 0,
+        });
+        return mapReportDrilldownEntries(entries, selection);
+      },
+      listAssets() {
+        return ipc.pro.listAssets();
+      },
+      upsertAsset(asset, reason) {
+        return ipc.pro.upsertAsset({ asset, reason });
+      },
+      getDepreciationSchedule(assetId) {
+        return ipc.pro.getDepreciationSchedule({ assetId });
+      },
+      runDepreciation(args) {
+        return ipc.pro.runDepreciation(args);
+      },
+      disposeAsset(args) {
+        return ipc.pro.disposeAsset(args);
       },
     };
   }, [invalidateProQueries]);

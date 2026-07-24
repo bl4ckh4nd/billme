@@ -5,6 +5,7 @@ import { runMigrations } from './migrate';
 import {
   getDraftByTransactionId,
   insertDatevExport,
+  listJournalEntries,
   postDraft,
 } from './proAccountingRepo';
 import { createProTenantScope } from '../tenantScope';
@@ -108,5 +109,19 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     expect(() =>
       db.prepare('DELETE FROM datev_exports WHERE id = ?').run(datev.id),
     ).toThrow(/immutable/i);
+  });
+
+  it('filters journal entries by account before pagination', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    seedBankTransaction(db, 'tx-filter-1', '2026-03-02', -75);
+    const draft = getDraftByTransactionId(db, 'tx-filter-1', scope);
+    const posted = postDraft(db, draft!.id, { postingDate: '2026-03-02' }, scope);
+    const accountNumber = posted.entry.lines[0].accountNumber;
+
+    expect(listJournalEntries(db, { accountNumbers: [accountNumber], limit: 1 }, scope))
+      .toHaveLength(1);
+    expect(listJournalEntries(db, { accountNumbers: ['does-not-exist'] }, scope))
+      .toEqual([]);
   });
 });

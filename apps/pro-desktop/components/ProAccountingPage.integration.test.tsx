@@ -24,8 +24,10 @@ const {
   mockOnRulesChangedTrigger: vi.fn(),
   mockIpc: {
     pro: {
-      listBankTransactions: vi.fn(async () => []),
-      getDraftByTransactionId: vi.fn(async () => null),
+      // Annotated so the empty defaults do not infer `never[]` / `null`, which
+      // would reject the mockResolvedValue(...) overrides in the tests below.
+      listBankTransactions: vi.fn(async (): Promise<any[]> => []),
+      getDraftByTransactionId: vi.fn(async (_args?: any): Promise<any> => null),
       getSusaReport: vi.fn(async () => ({ totals: { balance: 0 } })),
       getGuvReport: vi.fn(async () => ({ netResult: 0 })),
       getBilanzReport: vi.fn(async () => ({ totals: { delta: 0 } })),

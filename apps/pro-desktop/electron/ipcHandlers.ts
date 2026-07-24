@@ -89,18 +89,38 @@ import { buildDatevBuchungsstapelCsv } from '../services/datevExport';
 import { buildTaxAuditExportPackage } from '../services/auditExportPackage';
 import { seedAccountKeywords } from '../services/accountKeywordSeed';
 import { resolveRuntimeProTenantScope } from '../tenantScope';
+import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import {
+  disposeAsset,
+  getDepreciationSchedule,
+  listAssets,
+  runDepreciation,
+  upsertAsset,
+} from '../db/assetsRepo';
 
-const computeGrossFromItems = (doc: Invoice, settings: AppSettings): number => {
-  const items = doc.items ?? [];
-  const net = items.reduce((acc, it) => acc + (Number(it.total) || 0), 0);
-  const vat = settings.legal.smallBusinessRule
-    ? 0
-    : items.reduce(
-        (sum, item) => sum + (Number(item.total) || 0) * ((item.taxRate ?? (Number(settings.legal.defaultVatRate) || 0)) / 100),
-        0,
-      );
-  const gross = net + vat;
-  return Number.isFinite(gross) ? gross : 0;
+/**
+ * Resolves the document's tax mode against the business settings and stores the
+ * resulting snapshot alongside the gross amount. Pro must use the same shared
+ * rules as Lite and server mode: the tax mode decides the EN 16931 category code
+ * a ZUGFeRD export carries, so a divergent local calculation here produces
+ * non-conformant e-invoices.
+ */
+const normalizeInvoiceTaxData = (doc: Invoice, settings: AppSettings): Invoice => {
+  const taxMode = resolveInvoiceTaxMode(doc.taxMode, settings);
+  const taxSnapshot = calculateInvoiceTaxSnapshot(
+    {
+      items: doc.items ?? [],
+      taxMode,
+      taxMeta: doc.taxMeta,
+    },
+    settings,
+  );
+  return {
+    ...doc,
+    taxMode,
+    taxSnapshot,
+    amount: taxSnapshot.grossAmount,
+  };
 };
 
 const deriveCustomerRef = (doc: Invoice): string => {
@@ -177,11 +197,7 @@ export const registerIpcHandlers = (
   register(ipcMain, 'invoices:upsert', ({ invoice, reason }) => {
     const db = requireDb();
     const settings = requireSettings(db);
-    const computed: Invoice = {
-      ...invoice,
-      amount: computeGrossFromItems(invoice as Invoice, settings),
-    };
-    return upsertInvoice(db, computed, reason);
+    return upsertInvoice(db, normalizeInvoiceTaxData(invoice as Invoice, settings), reason);
   });
 
   register(ipcMain, 'invoices:delete', ({ id, reason }) => {
@@ -198,11 +214,7 @@ export const registerIpcHandlers = (
   register(ipcMain, 'offers:upsert', ({ offer, reason }) => {
     const db = requireDb();
     const settings = requireSettings(db);
-    const computed: Invoice = {
-      ...offer,
-      amount: computeGrossFromItems(offer as Invoice, settings),
-    };
-    return upsertOffer(db, computed, reason);
+    return upsertOffer(db, normalizeInvoiceTaxData(offer as Invoice, settings), reason);
   });
 
   register(ipcMain, 'offers:delete', ({ id, reason }) => {
@@ -323,6 +335,7 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'documents:createFromClient', ({ kind, clientId }) => {
     const db = requireDb();
+    const settings = requireSettings(db);
     const normalizedKind = kind === 'offer' ? 'offer' : 'invoice';
 
     const client = getClient(db, clientId);
@@ -366,6 +379,7 @@ export const registerIpcHandlers = (
       clientAddress: billingAddress ? formatAddressMultiline(billingAddress) : '',
       billingAddressJson: billingAddress ?? null,
       shippingAddressJson: shippingAddress ?? null,
+      taxMode: resolveInvoiceTaxMode(undefined, settings),
       date: today,
       dueDate: normalizedKind === 'offer' ? today : '',
       amount: 0,
@@ -375,7 +389,7 @@ export const registerIpcHandlers = (
       history: [],
     };
 
-    return base;
+    return normalizeInvoiceTaxData(base, settings);
   });
 
   register(ipcMain, 'documents:convertOfferToInvoice', ({ offerId }) => {
@@ -1175,8 +1189,8 @@ export const registerIpcHandlers = (
     return getProAccountingService().reverseJournalEntry(entryId, reason);
   });
 
-  register(ipcMain, 'pro:listJournalEntries', ({ from, to, limit, offset }) => {
-    return getProAccountingService().listJournalEntries({ from, to, limit, offset });
+  register(ipcMain, 'pro:listJournalEntries', ({ from, to, accountNumbers, limit, offset }) => {
+    return getProAccountingService().listJournalEntries({ from, to, accountNumbers, limit, offset });
   });
 
   register(ipcMain, 'pro:getLedgerBalances', ({ asOfDate }) => {
@@ -1193,6 +1207,28 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'pro:getBilanzReport', ({ asOfDate }) => {
     return getProAccountingService().getBilanzReport({ asOfDate });
+  });
+
+  register(ipcMain, 'pro:listAssets', () => {
+    return listAssets(requireDb(), getProScope());
+  });
+
+  register(ipcMain, 'pro:upsertAsset', ({ asset, reason }) => {
+    return upsertAsset(requireDb(), asset, reason, getProScope());
+  });
+
+  register(ipcMain, 'pro:getDepreciationSchedule', ({ assetId }) => {
+    return getDepreciationSchedule(requireDb(), assetId, getProScope());
+  });
+
+  register(ipcMain, 'pro:runDepreciation', ({ actorRole, ...args }) => {
+    assertProRoleAllowed('pro:runDepreciation', actorRole, ['reviewer', 'accountant', 'admin']);
+    return runDepreciation(requireDb(), args, getProScope());
+  });
+
+  register(ipcMain, 'pro:disposeAsset', ({ actorRole, ...args }) => {
+    assertProRoleAllowed('pro:disposeAsset', actorRole, ['reviewer', 'accountant', 'admin']);
+    return disposeAsset(requireDb(), args, getProScope());
   });
 
   register(ipcMain, 'pro:exportDatevBuchungsstapel', ({ from, to, actorRole }) => {

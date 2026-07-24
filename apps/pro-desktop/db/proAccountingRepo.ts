@@ -1498,20 +1498,36 @@ export const reverseJournalEntry = (
 
 export const listJournalEntries = (
   db: Database.Database,
-  args: { from?: string; to?: string; limit?: number; offset?: number } = {},
+  args: { from?: string; to?: string; accountNumbers?: string[]; limit?: number; offset?: number } = {},
   scope: TenantScope,
 ): JournalEntryEntity[] => {
   const tenantId = getTenantId(scope);
-  const where: string[] = ['tenant_id = @tenantId'];
+  const where: string[] = ['je.tenant_id = @tenantId'];
   const params: Record<string, unknown> = { tenantId };
 
   if (args.from) {
-    where.push('posting_date >= @from');
+    where.push('je.posting_date >= @from');
     params.from = args.from;
   }
   if (args.to) {
-    where.push('posting_date <= @to');
+    where.push('je.posting_date <= @to');
     params.to = args.to;
+  }
+  if (args.accountNumbers?.length) {
+    const placeholders = args.accountNumbers.map((accountNumber, index) => {
+      const key = `accountNumber${index}`;
+      params[key] = accountNumber;
+      return `@${key}`;
+    });
+    where.push(
+      `EXISTS (
+        SELECT 1
+        FROM journal_lines filtered_line
+        WHERE filtered_line.tenant_id = je.tenant_id
+          AND filtered_line.entry_id = je.id
+          AND filtered_line.account_number IN (${placeholders.join(', ')})
+      )`,
+    );
   }
 
   params.limit = Math.max(1, Math.min(5000, Math.floor(args.limit ?? 500)));
@@ -1521,7 +1537,7 @@ export const listJournalEntries = (
     .prepare(
       `
       SELECT id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, reversed_entry_id, created_at
-      FROM journal_entries
+      FROM journal_entries je
       WHERE ${where.join(' AND ')}
       ORDER BY posting_date DESC, entry_number DESC
       LIMIT @limit OFFSET @offset

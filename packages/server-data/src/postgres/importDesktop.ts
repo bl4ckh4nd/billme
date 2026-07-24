@@ -97,6 +97,9 @@ type SqliteDraftValidationIssueRow = { id: string; draft_id: string; code: strin
 type SqliteAccountingPeriodRow = { id: string; period: string; fiscal_year: number; status: string; starts_at: string; ends_at: string; created_at: string; updated_at: string };
 type SqliteJournalEntryRow = { id: string; entry_number: number; posting_date: string; document_date: string | null; booking_text: string; reference: string | null; period: string; fiscal_year: number; status: string; source_draft_id: string | null; reversed_entry_id: string | null; created_at: string };
 type SqliteJournalLineRow = { id: string; entry_id: string; line_no: number; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null; tax_case_key: string | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null; gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null; evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null };
+type SqliteAssetRow = { id: string; asset_number: string; name: string; asset_class: string; status: string; activation_date: string; acquisition_cost: number; useful_life_years: number | null; depreciation_method: string; cost_center: string; location: string; receipt_linked: number; supplier: string | null; invoice_ref: string | null; asset_account_number: string; disposal_date: string | null; disposal_proceeds: number | null; created_at: string; updated_at: string };
+type SqliteAssetScheduleRow = { id: string; asset_id: string; year: number; amount: number; months: number; status: string; journal_entry_id: string | null; posted_at: string | null };
+type SqliteAssetMovementRow = { id: string; asset_id: string; type: string; movement_date: string; amount: number; proceeds: number | null; gain_loss: number | null; reason: string; created_at: string };
 type SqliteAccountMappingHgbRow = { id: string; chart: string; account_number: string; statement_type: string; position_key: string; position_label: string; balance_side: string | null; updated_at: string };
 type SqliteReportSnapshotRow = { id: string; report_type: string; args_json: string; payload_json: string; created_at: string };
 type SqliteDatevExportRow = { id: string; file_path: string; record_count: number; from_date: string | null; to_date: string | null; created_at: string; meta_json: string };
@@ -140,6 +143,9 @@ export interface DesktopSqliteImportCounts {
   accountingPeriods: number;
   journalEntries: number;
   journalLines: number;
+  assets: number;
+  assetDepreciationSchedule: number;
+  assetMovements: number;
   accountMappingsHgb: number;
   reportSnapshots: number;
   datevExports: number;
@@ -191,6 +197,9 @@ export const desktopSqliteImportedTables = [
   'accounting_periods',
   'journal_entries',
   'journal_lines',
+  'assets',
+  'asset_depreciation_schedule',
+  'asset_movements',
   'account_mappings_hgb',
   'report_snapshots',
   'datev_exports',
@@ -290,6 +299,9 @@ const loadDraftValidationIssues = (db: SqliteDatabaseType, tenantId: string): Se
 const loadAccountingPeriods = (db: SqliteDatabaseType, tenantId: string): ServerAccountingPeriodRecord[] => tableExists(db, 'accounting_periods') ? (db.prepare('SELECT * FROM accounting_periods ORDER BY fiscal_year ASC, period ASC').all() as SqliteAccountingPeriodRow[]).map((row) => ({ id: row.id, tenantId, period: row.period, fiscalYear: row.fiscal_year, status: row.status, startsAt: row.starts_at, endsAt: row.ends_at, createdAt: row.created_at, updatedAt: row.updated_at })) : [];
 const loadJournalEntries = (db: SqliteDatabaseType, tenantId: string): ServerJournalEntryRecord[] => tableExists(db, 'journal_entries') ? (db.prepare('SELECT * FROM journal_entries ORDER BY posting_date DESC, entry_number DESC').all() as SqliteJournalEntryRow[]).map((row) => ({ id: row.id, tenantId, entryNumber: row.entry_number, postingDate: row.posting_date, documentDate: row.document_date ?? undefined, bookingText: row.booking_text, reference: row.reference ?? undefined, period: row.period, fiscalYear: row.fiscal_year, status: row.status, sourceDraftId: row.source_draft_id ?? undefined, reversedEntryId: row.reversed_entry_id ?? undefined, createdAt: row.created_at })) : [];
 const loadJournalLines = (db: SqliteDatabaseType, tenantId: string): ServerJournalLineRecord[] => tableExists(db, 'journal_lines') ? (db.prepare('SELECT * FROM journal_lines ORDER BY entry_id ASC, line_no ASC').all() as SqliteJournalLineRow[]).map((row) => ({ id: row.id, tenantId, entryId: row.entry_id, lineNo: row.line_no, accountNumber: row.account_number, debitAmount: row.debit_amount, creditAmount: row.credit_amount, taxCode: row.tax_code ?? undefined, taxCaseKey: row.tax_case_key ?? undefined, taxRate: row.tax_rate ?? undefined, netAmount: row.net_amount ?? undefined, taxAmount: row.tax_amount ?? undefined, grossAmount: row.gross_amount ?? undefined, countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, costCenter: row.cost_center ?? undefined, memo: row.memo ?? undefined })) : [];
+const loadAssets = (db: SqliteDatabaseType): SqliteAssetRow[] => tableExists(db, 'assets') ? db.prepare('SELECT * FROM assets ORDER BY asset_number ASC').all() as SqliteAssetRow[] : [];
+const loadAssetSchedule = (db: SqliteDatabaseType): SqliteAssetScheduleRow[] => tableExists(db, 'asset_depreciation_schedule') ? db.prepare('SELECT * FROM asset_depreciation_schedule ORDER BY asset_id, year').all() as SqliteAssetScheduleRow[] : [];
+const loadAssetMovements = (db: SqliteDatabaseType): SqliteAssetMovementRow[] => tableExists(db, 'asset_movements') ? db.prepare('SELECT * FROM asset_movements ORDER BY movement_date, id').all() as SqliteAssetMovementRow[] : [];
 const loadAccountMappingsHgb = (db: SqliteDatabaseType, tenantId: string): ServerAccountMappingHgbRecord[] => tableExists(db, 'account_mappings_hgb') ? (db.prepare('SELECT * FROM account_mappings_hgb ORDER BY chart ASC, account_number ASC').all() as SqliteAccountMappingHgbRow[]).map((row) => ({ id: row.id, tenantId, chart: row.chart, accountNumber: row.account_number, statementType: row.statement_type, positionKey: row.position_key, positionLabel: row.position_label, balanceSide: row.balance_side ?? undefined, updatedAt: row.updated_at })) : [];
 const loadReportSnapshots = (db: SqliteDatabaseType, tenantId: string): ServerReportSnapshotRecord[] => tableExists(db, 'report_snapshots') ? (db.prepare('SELECT * FROM report_snapshots ORDER BY created_at ASC, id ASC').all() as SqliteReportSnapshotRow[]).map((row) => ({ id: row.id, tenantId, reportType: row.report_type, argsJson: row.args_json, payloadJson: row.payload_json, createdAt: row.created_at })) : [];
 const loadDatevExports = (db: SqliteDatabaseType, tenantId: string): ServerDatevExportRecord[] => tableExists(db, 'datev_exports') ? (db.prepare('SELECT * FROM datev_exports ORDER BY created_at ASC, id ASC').all() as SqliteDatevExportRow[]).map((row) => ({ id: row.id, tenantId, filePath: row.file_path, recordCount: row.record_count, fromDate: row.from_date ?? undefined, toDate: row.to_date ?? undefined, createdAt: row.created_at, metaJson: row.meta_json })) : [];
@@ -330,6 +342,9 @@ const emptyCounts = (): DesktopSqliteImportCounts => ({
   accountingPeriods: 0,
   journalEntries: 0,
   journalLines: 0,
+  assets: 0,
+  assetDepreciationSchedule: 0,
+  assetMovements: 0,
   accountMappingsHgb: 0,
   reportSnapshots: 0,
   datevExports: 0,
@@ -403,6 +418,40 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         for (const row of loadAccountingPeriods(sqliteDb, tenantId)) { await saveServerAccountingPeriod(client, row); counts.accountingPeriods += 1; }
         for (const row of loadJournalEntries(sqliteDb, tenantId)) { await saveServerJournalEntry(client, row); counts.journalEntries += 1; }
         for (const row of loadJournalLines(sqliteDb, tenantId)) { await saveServerJournalLine(client, row); counts.journalLines += 1; }
+        for (const row of loadAssets(sqliteDb)) {
+          await client.query(
+            `INSERT INTO assets (
+              id, tenant_id, asset_number, name, asset_class, status, activation_date, acquisition_cost,
+              useful_life_years, depreciation_method, cost_center, location, receipt_linked, supplier,
+              invoice_ref, asset_account_number, disposal_date, disposal_proceeds, created_at, updated_at
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+            )`,
+            [row.id, tenantId, row.asset_number, row.name, row.asset_class, row.status, row.activation_date,
+              row.acquisition_cost, row.useful_life_years, row.depreciation_method, row.cost_center,
+              row.location, Boolean(row.receipt_linked), row.supplier, row.invoice_ref, row.asset_account_number,
+              row.disposal_date, row.disposal_proceeds, row.created_at, row.updated_at],
+          );
+          counts.assets += 1;
+        }
+        for (const row of loadAssetSchedule(sqliteDb)) {
+          await client.query(
+            `INSERT INTO asset_depreciation_schedule
+              (id, tenant_id, asset_id, year, amount, months, status, journal_entry_id, posted_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [row.id, tenantId, row.asset_id, row.year, row.amount, row.months, row.status, row.journal_entry_id, row.posted_at],
+          );
+          counts.assetDepreciationSchedule += 1;
+        }
+        for (const row of loadAssetMovements(sqliteDb)) {
+          await client.query(
+            `INSERT INTO asset_movements
+              (id, tenant_id, asset_id, type, movement_date, amount, proceeds, gain_loss, reason, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [row.id, tenantId, row.asset_id, row.type, row.movement_date, row.amount, row.proceeds, row.gain_loss, row.reason, row.created_at],
+          );
+          counts.assetMovements += 1;
+        }
         for (const row of loadAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerAccountMappingHgb(client, row); counts.accountMappingsHgb += 1; }
         for (const row of loadReportSnapshots(sqliteDb, tenantId)) { await saveServerReportSnapshot(client, row); counts.reportSnapshots += 1; }
         for (const row of loadDatevExports(sqliteDb, tenantId)) { await saveServerDatevExport(client, row); counts.datevExports += 1; }

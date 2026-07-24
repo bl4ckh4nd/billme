@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Archive,
   ArrowRightLeft,
@@ -10,26 +10,8 @@ import {
   Search,
   Sparkles,
 } from 'lucide-react';
-
-type AssetStatus = 'entwurf' | 'aktiv' | 'voll_abgeschrieben' | 'verkauft' | 'stillgelegt';
-
-interface AssetItem {
-  id: string;
-  assetNumber: string;
-  name: string;
-  assetClass: string;
-  status: AssetStatus;
-  activationDate: string;
-  acquisitionCost: number;
-  residualValue: number;
-  annualDepreciation: number;
-  costCenter: string;
-  location: string;
-  nextDepreciation: string;
-  receiptLinked: boolean;
-  supplier?: string;
-  invoiceRef?: string;
-}
+import type { AssetDepreciationScheduleEntry, AssetItem, AssetStatus } from '../domain/assetTypes';
+import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
 
 const mockAssets: AssetItem[] = [
   {
@@ -42,10 +24,12 @@ const mockAssets: AssetItem[] = [
     acquisitionCost: 2899,
     residualValue: 2415.83,
     annualDepreciation: 966.33,
+    depreciationMethod: 'linear',
     costCenter: 'FIN-01',
     location: 'Berlin HQ',
     nextDepreciation: '2026-03-31',
     receiptLinked: true,
+    assetAccountNumber: '0440',
     supplier: 'Apple Retail DE',
     invoiceRef: 'RE-IT-1548',
   },
@@ -59,10 +43,12 @@ const mockAssets: AssetItem[] = [
     acquisitionCost: 4200,
     residualValue: 3500,
     annualDepreciation: 840,
+    depreciationMethod: 'linear',
     costCenter: 'OPS-02',
     location: 'Lager Süd',
     nextDepreciation: '2026-03-31',
     receiptLinked: true,
+    assetAccountNumber: '0480',
   },
   {
     id: 'a3',
@@ -74,10 +60,12 @@ const mockAssets: AssetItem[] = [
     acquisitionCost: 34900,
     residualValue: 23266.67,
     annualDepreciation: 5816.67,
+    depreciationMethod: 'linear',
     costCenter: 'LOG-01',
     location: 'Hamburg',
     nextDepreciation: '2026-03-31',
     receiptLinked: true,
+    assetAccountNumber: '0670',
   },
   {
     id: 'a4',
@@ -89,10 +77,12 @@ const mockAssets: AssetItem[] = [
     acquisitionCost: 799,
     residualValue: 0,
     annualDepreciation: 266.33,
+    depreciationMethod: 'gwg',
     costCenter: 'ADM-01',
     location: 'Berlin HQ',
     nextDepreciation: '—',
     receiptLinked: true,
+    assetAccountNumber: '0490',
   },
   {
     id: 'a5',
@@ -104,10 +94,12 @@ const mockAssets: AssetItem[] = [
     acquisitionCost: 9800,
     residualValue: 9800,
     annualDepreciation: 1960,
+    depreciationMethod: 'linear',
     costCenter: 'RND-01',
     location: 'München Lab',
     nextDepreciation: 'Nicht aktiviert',
     receiptLinked: false,
+    assetAccountNumber: '0400',
     supplier: 'TechTools GmbH',
     invoiceRef: 'TT-7742',
   },
@@ -130,14 +122,22 @@ function statusPill(status: AssetStatus) {
   return map[status];
 }
 
-export default function AssetManagementView() {
+export default function AssetManagementView({ dataAdapter }: { dataAdapter?: ProAccountingDataAdapter }) {
+  const [assets, setAssets] = useState<AssetItem[]>(mockAssets);
+  const [schedule, setSchedule] = useState<AssetDepreciationScheduleEntry[]>([]);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'alle' | AssetStatus>('alle');
   const [selectedId, setSelectedId] = useState<string>(mockAssets[0]?.id ?? '');
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>('Übersicht');
 
+  useEffect(() => {
+    const list = dataAdapter?.listAssets;
+    if (!list) return;
+    void list().then(setAssets).catch(() => setAssets(mockAssets));
+  }, [dataAdapter]);
+
   const filtered = useMemo(() => {
-    return mockAssets.filter((asset) => {
+    return assets.filter((asset) => {
       const matchesStatus = statusFilter === 'alle' || asset.status === statusFilter;
       const q = query.trim().toLowerCase();
       const matchesQuery =
@@ -148,19 +148,28 @@ export default function AssetManagementView() {
           .includes(q);
       return matchesStatus && matchesQuery;
     });
-  }, [query, statusFilter]);
+  }, [assets, query, statusFilter]);
 
   const selected = filtered.find((asset) => asset.id === selectedId) ?? filtered[0] ?? null;
 
+  useEffect(() => {
+    const load = dataAdapter?.getDepreciationSchedule;
+    if (!load || !selected) {
+      setSchedule([]);
+      return;
+    }
+    void load(selected.id).then(setSchedule).catch(() => setSchedule([]));
+  }, [dataAdapter, selected?.id]);
+
   const totals = useMemo(() => {
-    const active = mockAssets.filter((a) => a.status === 'aktiv');
+    const active = assets.filter((a) => a.status === 'aktiv');
     return {
-      totalAssets: mockAssets.length,
+      totalAssets: assets.length,
       activeAssets: active.length,
-      totalAcquisition: mockAssets.reduce((sum, a) => sum + a.acquisitionCost, 0),
-      totalResidual: mockAssets.reduce((sum, a) => sum + a.residualValue, 0),
+      totalAcquisition: assets.reduce((sum, a) => sum + a.acquisitionCost, 0),
+      totalResidual: assets.reduce((sum, a) => sum + a.residualValue, 0),
     };
-  }, []);
+  }, [assets]);
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden xl:flex-row">
@@ -371,18 +380,23 @@ export default function AssetManagementView() {
 
                   {activeTab === 'Abschreibungsplan' && (
                     <div className="space-y-3">
-                      {[
-                        ['2026-03', euro(selected.annualDepreciation / 12), 'Offen', euro(Math.max(selected.residualValue - selected.annualDepreciation / 12, 0))],
-                        ['2026-04', euro(selected.annualDepreciation / 12), 'Geplant', euro(Math.max(selected.residualValue - (selected.annualDepreciation / 6), 0))],
-                        ['2026-05', euro(selected.annualDepreciation / 12), 'Geplant', euro(Math.max(selected.residualValue - (selected.annualDepreciation / 4), 0))],
-                      ].map(([period, afa, status, rbw]) => (
-                        <div key={period} className="grid grid-cols-4 gap-3 rounded-lg border border-gray-100 p-3 text-sm">
-                          <div><div className="text-xs text-gray-400 font-bold">Periode</div><div className="font-bold text-gray-800">{period}</div></div>
-                          <div><div className="text-xs text-gray-400 font-bold">AfA</div><div className="font-bold text-gray-800">{afa}</div></div>
-                          <div><div className="text-xs text-gray-400 font-bold">Status</div><div className="font-bold text-gray-800">{status}</div></div>
-                          <div><div className="text-xs text-gray-400 font-bold">RBW danach</div><div className="font-bold text-gray-800">{rbw}</div></div>
+                      {(schedule.length ? schedule : [{
+                        id: 'mock',
+                        assetId: selected.id,
+                        year: Number(selected.activationDate.slice(0, 4)),
+                        amount: selected.annualDepreciation,
+                        months: 12,
+                        status: 'planned' as const,
+                      }]).map((period, index, rows) => {
+                        const depreciated = rows.slice(0, index + 1).reduce((sum, row) => sum + row.amount, 0);
+                        return (
+                        <div key={period.id} className="grid grid-cols-4 gap-3 rounded-lg border border-gray-100 p-3 text-sm">
+                          <div><div className="text-xs text-gray-400 font-bold">Jahr</div><div className="font-bold text-gray-800">{period.year}</div></div>
+                          <div><div className="text-xs text-gray-400 font-bold">AfA</div><div className="font-bold text-gray-800">{euro(period.amount)}</div></div>
+                          <div><div className="text-xs text-gray-400 font-bold">Status</div><div className="font-bold text-gray-800">{period.status === 'posted' ? 'Gebucht' : 'Geplant'}</div></div>
+                          <div><div className="text-xs text-gray-400 font-bold">RBW danach</div><div className="font-bold text-gray-800">{euro(Math.max(selected.acquisitionCost - depreciated, 0))}</div></div>
                         </div>
-                      ))}
+                      );})}
                     </div>
                   )}
 

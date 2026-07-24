@@ -56,6 +56,9 @@ import {
   proListAccountSuggestionRulesArgsSchema,
   proUpsertAccountSuggestionRuleArgsSchema,
   proDeleteAccountSuggestionRuleArgsSchema,
+  assetSchema,
+  assetUpsertSchema,
+  assetDepreciationScheduleEntrySchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -581,6 +584,7 @@ const proReverseJournalEntryResultSchema = z.object({
 const proListJournalEntriesArgsSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
+  accountNumbers: z.array(z.string().min(1)).optional(),
   limit: z.number().int().positive().max(5000).optional(),
   offset: z.number().int().min(0).optional(),
 });
@@ -644,6 +648,31 @@ const proGetBilanzReportResultSchema = z.object({
     liabilities: z.number(),
     delta: z.number(),
   }),
+});
+
+const proUpsertAssetArgsSchema = z.object({
+  asset: assetUpsertSchema,
+  reason: z.string().min(1),
+});
+
+const proGetDepreciationScheduleArgsSchema = z.object({
+  assetId: z.string().min(1),
+});
+
+const proRunDepreciationArgsSchema = z.object({
+  assetId: z.string().min(1),
+  year: z.number().int(),
+  postingDate: z.string(),
+  reason: z.string().min(1),
+  actorRole: proActorRoleSchema,
+});
+
+const proDisposeAssetArgsSchema = z.object({
+  assetId: z.string().min(1),
+  disposalDate: z.string(),
+  proceeds: z.number().nonnegative(),
+  reason: z.string().min(1),
+  actorRole: proActorRoleSchema,
 });
 
 const proExportDatevBuchungsstapelArgsSchema = z.object({
@@ -1038,6 +1067,39 @@ export const ipcRoutes = {
     channel: 'pro:getBilanzReport',
     args: proGetBilanzReportArgsSchema,
     result: proGetBilanzReportResultSchema,
+  },
+  'pro:listAssets': {
+    channel: 'pro:listAssets',
+    args: z.undefined(),
+    result: z.array(assetSchema),
+  },
+  'pro:upsertAsset': {
+    channel: 'pro:upsertAsset',
+    args: proUpsertAssetArgsSchema,
+    result: assetSchema,
+  },
+  'pro:getDepreciationSchedule': {
+    channel: 'pro:getDepreciationSchedule',
+    args: proGetDepreciationScheduleArgsSchema,
+    result: z.array(assetDepreciationScheduleEntrySchema),
+  },
+  'pro:runDepreciation': {
+    channel: 'pro:runDepreciation',
+    args: proRunDepreciationArgsSchema,
+    result: z.object({
+      asset: assetSchema,
+      scheduleEntry: assetDepreciationScheduleEntrySchema,
+      journalEntryId: z.string().min(1),
+    }),
+  },
+  'pro:disposeAsset': {
+    channel: 'pro:disposeAsset',
+    args: proDisposeAssetArgsSchema,
+    result: z.object({
+      asset: assetSchema,
+      residualBookValue: z.number().nonnegative(),
+      gainLoss: z.number(),
+    }),
   },
   'pro:exportDatevBuchungsstapel': {
     channel: 'pro:exportDatevBuchungsstapel',

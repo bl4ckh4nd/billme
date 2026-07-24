@@ -330,6 +330,7 @@ export interface PostDraftOptions {
 export interface ListJournalEntriesOptions {
   from?: string;
   to?: string;
+  accountNumbers?: string[];
   limit?: number;
   offset?: number;
 }

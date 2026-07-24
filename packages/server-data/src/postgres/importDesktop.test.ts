@@ -14,6 +14,7 @@ const proDesktopSchemaUrl = new URL('apps/pro-desktop/db/schema.ts', rootUrl);
 const postgresMigrationUrls = [
   new URL('./sql/0000_server_data.sql', import.meta.url),
   new URL('./sql/0001_server_data_pro_accounting.sql', import.meta.url),
+  new URL('./sql/0002_server_data_assets.sql', import.meta.url),
 ];
 
 const extractSqliteTableNames = async (schemaUrl: URL): Promise<string[]> => {

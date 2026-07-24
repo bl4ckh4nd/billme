@@ -409,6 +409,76 @@ export const journalLines = sqliteTable(
   }),
 );
 
+export const assets = sqliteTable(
+  'assets',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    assetNumber: text('asset_number').notNull(),
+    name: text('name').notNull(),
+    assetClass: text('asset_class').notNull(),
+    status: text('status').notNull(),
+    activationDate: text('activation_date').notNull(),
+    acquisitionCost: real('acquisition_cost').notNull(),
+    usefulLifeYears: integer('useful_life_years'),
+    depreciationMethod: text('depreciation_method').notNull(),
+    costCenter: text('cost_center').notNull(),
+    location: text('location').notNull(),
+    receiptLinked: integer('receipt_linked').notNull().default(0),
+    supplier: text('supplier'),
+    invoiceRef: text('invoice_ref'),
+    assetAccountNumber: text('asset_account_number').notNull(),
+    disposalDate: text('disposal_date'),
+    disposalProceeds: real('disposal_proceeds'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    byTenantNumber: uniqueIndex('idx_assets_tenant_number').on(t.tenantId, t.assetNumber),
+  }),
+);
+
+export const assetDepreciationSchedule = sqliteTable(
+  'asset_depreciation_schedule',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    assetId: text('asset_id')
+      .notNull()
+      .references(() => assets.id, { onDelete: 'cascade' }),
+    year: integer('year').notNull(),
+    amount: real('amount').notNull(),
+    months: integer('months').notNull(),
+    status: text('status').notNull(),
+    journalEntryId: text('journal_entry_id'),
+    postedAt: text('posted_at'),
+  },
+  (t) => ({
+    byTenantAssetYear: uniqueIndex('idx_asset_schedule_tenant_asset_year').on(t.tenantId, t.assetId, t.year),
+  }),
+);
+
+export const assetMovements = sqliteTable(
+  'asset_movements',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    assetId: text('asset_id')
+      .notNull()
+      .references(() => assets.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    movementDate: text('movement_date').notNull(),
+    amount: real('amount').notNull().default(0),
+    proceeds: real('proceeds'),
+    gainLoss: real('gain_loss'),
+    reason: text('reason').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => ({
+    byTenantAssetDate: index('idx_asset_movements_tenant_asset_date').on(t.tenantId, t.assetId, t.movementDate),
+  }),
+);
+
 export const accountMappingsHgb = sqliteTable(
   'account_mappings_hgb',
   {

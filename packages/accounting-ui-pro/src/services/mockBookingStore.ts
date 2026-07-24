@@ -7,6 +7,19 @@ import { mockBookingDrafts } from '../mocks/bookings';
 import { mockTransactions } from '../mocks/transactions';
 import { permissionContextForRole } from '../mocks/users';
 import { Account, BookingAction, BookingDraft, Transaction, UserRole } from '../types';
+import type {
+  BalanceSheetPreview,
+  GuvReport,
+  ReportDrilldownEntry,
+  ReportDrilldownSelection,
+  ReportFilterState,
+  SusaReport,
+} from '../domain/reportTypes';
+import type {
+  AssetDepreciationScheduleEntry,
+  AssetItem,
+  AssetUpsertInput,
+} from '../domain/assetTypes';
 
 let drafts = structuredClone(mockBookingDrafts) as BookingDraft[];
 let transactions = structuredClone(mockTransactions) as Transaction[];
@@ -40,6 +53,27 @@ export interface ProAccountingDataAdapter {
   resolveException?: (transactionId: string, resolutionNote: string, actorName: string) => Transaction;
   reopenException?: (transactionId: string, actorName: string) => Transaction;
   setTransactionReceiptStatus?: (transactionId: string, hasReceipt: boolean, actorName: string) => Transaction;
+  getSusaReport?: (filters: ReportFilterState) => Promise<SusaReport>;
+  getGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  getBalanceSheetPreview?: (filters: ReportFilterState) => Promise<BalanceSheetPreview>;
+  getReportDrilldownEntries?: (selection: ReportDrilldownSelection) => Promise<ReportDrilldownEntry[]>;
+  listAssets?: () => Promise<AssetItem[]>;
+  upsertAsset?: (asset: AssetUpsertInput, reason: string) => Promise<AssetItem>;
+  getDepreciationSchedule?: (assetId: string) => Promise<AssetDepreciationScheduleEntry[]>;
+  runDepreciation?: (args: {
+    assetId: string;
+    year: number;
+    postingDate: string;
+    reason: string;
+    actorRole: UserRole;
+  }) => Promise<{ asset: AssetItem; scheduleEntry: AssetDepreciationScheduleEntry; journalEntryId: string }>;
+  disposeAsset?: (args: {
+    assetId: string;
+    disposalDate: string;
+    proceeds: number;
+    reason: string;
+    actorRole: UserRole;
+  }) => Promise<{ asset: AssetItem; residualBookValue: number; gainLoss: number }>;
 }
 
 let dataAdapter: ProAccountingDataAdapter | null = null;

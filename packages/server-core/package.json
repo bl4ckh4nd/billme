@@ -2,10 +2,11 @@
   "name": "@billme/server-core",
   "private": true,
   "version": "0.0.0",
-  "license": "MIT",
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",

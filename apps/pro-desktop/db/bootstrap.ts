@@ -349,6 +349,60 @@ CREATE INDEX IF NOT EXISTS idx_journal_lines_entry
 CREATE INDEX IF NOT EXISTS idx_journal_lines_account
   ON journal_lines(tenant_id, account_number);
 
+CREATE TABLE IF NOT EXISTS assets (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  asset_number TEXT NOT NULL,
+  name TEXT NOT NULL,
+  asset_class TEXT NOT NULL,
+  status TEXT NOT NULL,
+  activation_date TEXT NOT NULL,
+  acquisition_cost REAL NOT NULL,
+  useful_life_years INTEGER,
+  depreciation_method TEXT NOT NULL,
+  cost_center TEXT NOT NULL,
+  location TEXT NOT NULL,
+  receipt_linked INTEGER NOT NULL DEFAULT 0 CHECK (receipt_linked IN (0,1)),
+  supplier TEXT,
+  invoice_ref TEXT,
+  asset_account_number TEXT NOT NULL,
+  disposal_date TEXT,
+  disposal_proceeds REAL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_tenant_number
+  ON assets(tenant_id, asset_number);
+
+CREATE TABLE IF NOT EXISTS asset_depreciation_schedule (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+  year INTEGER NOT NULL,
+  amount REAL NOT NULL,
+  months INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  journal_entry_id TEXT,
+  posted_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_schedule_tenant_asset_year
+  ON asset_depreciation_schedule(tenant_id, asset_id, year);
+
+CREATE TABLE IF NOT EXISTS asset_movements (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  movement_date TEXT NOT NULL,
+  amount REAL NOT NULL DEFAULT 0,
+  proceeds REAL,
+  gain_loss REAL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_asset_movements_tenant_asset_date
+  ON asset_movements(tenant_id, asset_id, movement_date);
+
 CREATE TRIGGER IF NOT EXISTS journal_entries_protect_core_fields
 BEFORE UPDATE ON journal_entries
 FOR EACH ROW

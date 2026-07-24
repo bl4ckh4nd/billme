@@ -598,6 +598,62 @@ export const ledgerBalanceRowSchema = z.object({
   closingBalance: z.number(),
 });
 
+export const assetStatusSchema = z.enum([
+  'entwurf',
+  'aktiv',
+  'voll_abgeschrieben',
+  'verkauft',
+  'stillgelegt',
+]);
+
+export const depreciationMethodSchema = z.enum(['linear', 'gwg', 'pool']);
+
+export const assetSchema = z.object({
+  id: z.string(),
+  assetNumber: z.string(),
+  name: z.string(),
+  assetClass: z.string(),
+  status: assetStatusSchema,
+  activationDate: z.string(),
+  acquisitionCost: z.number().nonnegative(),
+  residualValue: z.number().nonnegative(),
+  annualDepreciation: z.number().nonnegative(),
+  usefulLifeYears: z.number().int().positive().optional(),
+  depreciationMethod: depreciationMethodSchema,
+  costCenter: z.string(),
+  location: z.string(),
+  nextDepreciation: z.string(),
+  receiptLinked: z.boolean(),
+  supplier: z.string().optional(),
+  invoiceRef: z.string().optional(),
+  assetAccountNumber: z.string(),
+  disposalDate: z.string().optional(),
+  disposalProceeds: z.number().optional(),
+});
+
+export const assetUpsertSchema = assetSchema
+  .omit({
+    residualValue: true,
+    annualDepreciation: true,
+    nextDepreciation: true,
+    disposalDate: true,
+    disposalProceeds: true,
+  })
+  .extend({
+    id: z.string().optional(),
+  });
+
+export const assetDepreciationScheduleEntrySchema = z.object({
+  id: z.string(),
+  assetId: z.string(),
+  year: z.number().int(),
+  amount: z.number().nonnegative(),
+  months: z.number().int().min(1).max(12),
+  status: z.enum(['planned', 'posted']),
+  journalEntryId: z.string().optional(),
+  postedAt: z.string().optional(),
+});
+
 export const datevExportResultSchema = z.object({
   id: z.string(),
   filePath: z.string(),

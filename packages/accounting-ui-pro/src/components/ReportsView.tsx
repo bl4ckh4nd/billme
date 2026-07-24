@@ -17,6 +17,7 @@ import {
   getReportDrilldownEntries,
   getSusaReport,
 } from '../services/mockReportService';
+import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
 import ReportToolbar from './reports/ReportToolbar';
 import ReportTabSwitch from './reports/ReportTabSwitch';
 import SusaTable from './reports/SusaTable';
@@ -48,11 +49,12 @@ function buildDefaultFilters(): ReportFilterState {
 }
 
 interface ReportsViewProps {
+  dataAdapter?: ProAccountingDataAdapter;
   onOpenTransaction?: (transactionId: string) => void;
   onOpenReceipt?: (transactionId: string) => void;
 }
 
-export default function ReportsView({ onOpenTransaction, onOpenReceipt }: ReportsViewProps) {
+export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenReceipt }: ReportsViewProps) {
   const [activeTab, setActiveTab] = useState<'susa' | 'guv' | 'bilanz'>('susa');
   const [filters, setFilters] = useState<ReportFilterState>(() => buildDefaultFilters());
   const [susaReport, setSusaReport] = useState<SusaReport | null>(null);
@@ -71,9 +73,9 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
     setReportsError(null);
 
     Promise.all([
-      getSusaReport(filters),
-      getGuvReport(filters),
-      getBalanceSheetPreview(filters),
+      (dataAdapter?.getSusaReport ?? getSusaReport)(filters),
+      (dataAdapter?.getGuvReport ?? getGuvReport)(filters),
+      (dataAdapter?.getBalanceSheetPreview ?? getBalanceSheetPreview)(filters),
     ])
       .then(([susa, guv, bilanz]) => {
         if (cancelled) return;
@@ -92,7 +94,7 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
     return () => {
       cancelled = true;
     };
-  }, [filters]);
+  }, [dataAdapter, filters]);
 
   useEffect(() => {
     if (!drilldownSelection) {
@@ -103,7 +105,7 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
     let cancelled = false;
     setDrilldownLoading(true);
 
-    getReportDrilldownEntries(drilldownSelection)
+    (dataAdapter?.getReportDrilldownEntries ?? getReportDrilldownEntries)(drilldownSelection)
       .then((rows) => {
         if (!cancelled) setDrilldownEntries(rows);
       })
@@ -114,13 +116,19 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
     return () => {
       cancelled = true;
     };
-  }, [drilldownSelection]);
+  }, [dataAdapter, drilldownSelection]);
 
   const activeReportLabel = useMemo(() => {
     if (activeTab === 'susa') return 'Summen- und Saldenliste';
     if (activeTab === 'guv') return 'Gewinn- und Verlustrechnung';
     return 'Bilanz Preview';
   }, [activeTab]);
+  const activeSource =
+    activeTab === 'susa'
+      ? susaReport?.quality.source
+      : activeTab === 'guv'
+        ? guvReport?.quality.source
+        : balanceSheetPreview?.quality.source;
 
   const handleSusaSelect = (row: SusaRow) => {
     setDrilldownSelection({
@@ -145,7 +153,7 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
       reportType: 'bilanz',
       targetId: line.id,
       targetLabel: `${line.code} · ${line.label}`,
-      accountNumbers: BILANZ_ACCOUNT_MAP[line.id] ?? [],
+      accountNumbers: BILANZ_ACCOUNT_MAP[line.id] ?? [line.code],
     });
   };
 
@@ -161,9 +169,7 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
           </div>
           <div className="flex-1 min-w-0">
             <h1 className="text-sm font-black tracking-tight text-gray-900">SuSa, GuV und Bilanz-Preview</h1>
-            <p className="text-xs text-gray-400">
-              Prototypische Reporting-UI mit Drilldown-Struktur, vorbereitet für spätere SQLite-/Ledger-Anbindung.
-            </p>
+            <p className="text-xs text-gray-400">SuSa, GuV und Bilanz mit Journal-Drilldown.</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button className="px-3 h-8 rounded-full border border-gray-200 bg-white text-xs font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1.5 transition-colors">
@@ -180,7 +186,21 @@ export default function ReportsView({ onOpenTransaction, onOpenReceipt }: Report
         <ReportToolbar filters={filters} onChange={setFilters} />
         <div className="flex items-center justify-between gap-3">
           <ReportTabSwitch activeTab={activeTab} onChange={setActiveTab} />
-          <div className="text-xs text-gray-500 hidden md:block">Aktive Ansicht: {activeReportLabel}</div>
+          <div className="text-xs text-gray-500 flex items-center gap-2">
+            Aktive Ansicht: {activeReportLabel}
+            {activeSource ? (
+              <span
+                className="rounded-full border border-gray-200 bg-white px-2 py-0.5 font-semibold uppercase tracking-wide"
+                title={
+                  activeSource === 'live'
+                    ? 'Auswertung aus den gebuchten Daten dieser Installation.'
+                    : 'Beispieldaten zur Ansicht — nicht aus Ihrer Buchhaltung.'
+                }
+              >
+                {activeSource === 'live' ? 'Live-Daten' : 'Beispieldaten'}
+              </span>
+            ) : null}
+          </div>
         </div>
 
         <div className="flex flex-col xl:flex-row gap-4">

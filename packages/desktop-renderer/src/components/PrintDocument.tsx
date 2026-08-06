@@ -1,7 +1,7 @@
 import React from 'react';
 import type { InvoiceElement } from '@billme/desktop-core/types';
 import { A4_HEIGHT_PX, A4_WIDTH_PX, INITIAL_INVOICE_TEMPLATE, INITIAL_OFFER_TEMPLATE } from '@billme/desktop-core/constants';
-import { CanvasElement } from '@billme/desktop-designer/legacy/CanvasElement';
+import { DocumentPages } from '@billme/desktop-designer/DocumentPages';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { useActiveTemplateQuery } from '../hooks/useTemplates';
 import { MOCK_SETTINGS } from '@billme/desktop-services/mockData';
@@ -31,16 +31,14 @@ export const PrintDocument: React.FC<{ kind: 'invoice' | 'offer'; id: string }> 
     (globalThis as any).__PDF_READY__ = false;
   }, []);
 
-  React.useEffect(() => {
-    if (!doc) return;
-    if (previewElements.length === 0) return;
-    // Ensure layout has painted before printToPDF.
+  // Ensure layout has painted before printToPDF.
+  const handleReady = React.useCallback(() => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         (globalThis as any).__PDF_READY__ = true;
       });
     });
-  }, [doc, previewElements.length]);
+  }, []);
 
   return (
     <div>
@@ -50,36 +48,32 @@ export const PrintDocument: React.FC<{ kind: 'invoice' | 'offer'; id: string }> 
         #root { height: auto !important; }
       `}</style>
 
-      <div
-        id="print-page"
-        style={{
-          width: `${A4_WIDTH_PX}px`,
-          height: `${A4_HEIGHT_PX}px`,
-          background: 'white',
-          position: 'relative',
-          overflow: 'hidden',
-        }}
-      >
-        {doc ? (
-          previewElements.map((el) => (
-            <CanvasElement
-              key={el.id}
-              element={el}
-              elements={previewElements}
-              isSelected={false}
-              scale={1}
-              readOnly
-            />
-          ))
-        ) : (
+      {doc ? (
+        <DocumentPages
+          elements={previewElements}
+          pageWidth={A4_WIDTH_PX}
+          pageHeight={A4_HEIGHT_PX}
+          onReady={handleReady}
+        />
+      ) : (
+        <div
+          id="print-page"
+          style={{
+            width: `${A4_WIDTH_PX}px`,
+            height: `${A4_HEIGHT_PX}px`,
+            background: 'white',
+            position: 'relative',
+            overflow: 'hidden',
+          }}
+        >
           <div style={{ padding: 24, fontFamily: 'system-ui' }}>
             <h1 style={{ fontSize: 18, margin: 0 }}>Dokument nicht gefunden</h1>
             <p style={{ marginTop: 8, color: '#666' }}>
               {kind} / {id}
             </p>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

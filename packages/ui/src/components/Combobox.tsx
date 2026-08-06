@@ -2,6 +2,12 @@ import { forwardRef, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import { cn } from '../utils/cn';
 
+const normalizeSearchText = (value: string) => value
+  .normalize('NFD')
+  .replace(/\p{Diacritic}/gu, '')
+  .replace(/ß/g, 'ss')
+  .toLocaleLowerCase('de-DE');
+
 export interface ComboboxItem {
   id: string;
 }
@@ -59,9 +65,9 @@ function ComboboxInner<T extends ComboboxItem>(
   }, []);
 
   const filtered = useMemo(() => {
-    const search = query.trim().toLocaleLowerCase('de-DE');
+    const search = normalizeSearchText(query.trim());
     return items
-      .filter((item) => !search || getSearchText(item).toLocaleLowerCase('de-DE').includes(search))
+      .filter((item) => !search || normalizeSearchText(getSearchText(item)).includes(search))
       .slice(0, maxResults);
   }, [getSearchText, items, maxResults, query]);
   const activeOption = filtered[activeIndex];

@@ -63,6 +63,9 @@ keep double-entry books.
 
 ### Documents and billing — Lite and Pro
 
+- **Document-first invoice and offer editor** — centered A4 editing surface with inline customer,
+  address, dates, tax, line-item, and live-total fields; preview uses the active template pagination
+  and the same editor is shared by Lite, Pro, desktop, and browser shells
 - **Visual document designer** — drag-and-drop canvas, element rail, inspector, layers panel, rulers,
   snapping, undo/redo, and reusable templates for invoices and offers
 - **Unified documents dashboard** — search, status filters, portal sync state, offer-to-invoice conversion

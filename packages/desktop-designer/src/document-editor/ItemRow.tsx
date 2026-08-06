@@ -87,7 +87,7 @@ export function ItemRow({
             placeholder="Beschreibung"
             getLabel={(article) => article.title}
             getSublabel={(article) => `${article.sku ? `${article.sku} · ` : ''}${formatCurrency(article.price)} / ${article.unit}`}
-            getSearchText={(article) => `${article.title} ${article.sku ?? ''} ${article.category}`}
+            getSearchText={(article) => `${article.title} ${article.description ?? ''} ${article.sku ?? ''} ${article.category} ${article.unit}`}
             onValueChange={(description) => onChange('description', description)}
             onSelect={onSelectArticle}
             inputClassName={`bg-surface-muted border hover:border-border focus:border-accent rounded-lg px-2 py-1 text-sm font-bold ${descriptionError ? 'border-error focus:ring-error' : 'border-transparent'}`}

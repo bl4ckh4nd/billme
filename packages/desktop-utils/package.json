@@ -29,6 +29,14 @@
       "types": "./src/documentPreview.ts",
       "default": "./src/documentPreview.ts"
     },
+    "./documentPagination": {
+      "types": "./src/documentPagination.ts",
+      "default": "./src/documentPagination.ts"
+    },
+    "./documentPagination.test": {
+      "types": "./src/documentPagination.test.ts",
+      "default": "./src/documentPagination.test.ts"
+    },
     "./calculations.test": {
       "types": "./src/calculations.test.ts",
       "default": "./src/calculations.test.ts"

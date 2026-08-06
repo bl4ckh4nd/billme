@@ -61,7 +61,13 @@ export const ElementRenderer = forwardRef<HTMLDivElement, ElementRendererProps>(
     userSelect: editing ? 'text' : 'none',
     outline: selected && !readOnly ? '1px solid var(--color-accent)' : undefined,
     cursor: readOnly ? 'default' : editing ? 'text' : 'move',
-    overflow: element.type === ElementType.LINE && !readOnly ? 'visible' : 'hidden',
+    // Read-only text is never clipped: the authored box height is a layout hint,
+    // and cutting off a line of the footer/address in the PDF loses content.
+    overflow:
+      (element.type === ElementType.LINE && !readOnly) ||
+      (readOnly && element.type === ElementType.TEXT)
+        ? 'visible'
+        : 'hidden',
   };
 
   return (

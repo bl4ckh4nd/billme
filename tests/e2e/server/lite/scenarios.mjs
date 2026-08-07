@@ -131,6 +131,22 @@ export const runLiteVatPersistenceScenario = async (scenarioKey = 'vat-persisten
   const source = await apiJson(runtime.state, session, `/api/v1/lite/invoices/${seed.invoices[0].id}`);
   const invoice = {
     ...source,
+    taxMode: 'intra_eu_service_reverse_charge',
+    taxMeta: {
+      sellerCountryCode: 'DE',
+      buyerCountryCode: 'AT',
+      buyerVatId: 'ATU12345678',
+      taxRuleConfirmed: true,
+    },
+    taxSnapshot: {
+      netAmount: source.amount,
+      vatAmount: 0,
+      grossAmount: source.amount,
+      vatRateApplied: 0,
+      einvoiceCategoryCode: 'AE',
+      label: 'EU-Leistung Reverse Charge',
+      taxNotice: 'Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)',
+    },
     items: source.items.map((item, index) => ({
       ...item,
       taxRate: index === 0 ? 7 : item.taxRate,
@@ -145,6 +161,33 @@ export const runLiteVatPersistenceScenario = async (scenarioKey = 'vat-persisten
 
   const refetched = await apiJson(runtime.state, session, `/api/v1/lite/invoices/${invoice.id}`);
   expect(refetched.items[0]?.taxRate).toBe(7);
+  expect(refetched.taxMode).toBe(invoice.taxMode);
+  expect(refetched.taxMeta).toEqual(invoice.taxMeta);
+  expect(refetched.taxSnapshot).toEqual(invoice.taxSnapshot);
+
+  const sourceOffer = await apiJson(runtime.state, session, `/api/v1/lite/offers/${seed.offers[0].id}`);
+  const offer = {
+    ...sourceOffer,
+    taxMode: 'export_third_country',
+    taxMeta: { sellerCountryCode: 'DE', buyerCountryCode: 'CH', taxRuleConfirmed: true },
+    taxSnapshot: {
+      netAmount: sourceOffer.amount,
+      vatAmount: 0,
+      grossAmount: sourceOffer.amount,
+      vatRateApplied: 0,
+      einvoiceCategoryCode: 'G',
+      label: 'Drittlandsausfuhr',
+      taxNotice: 'Steuerfreie Ausfuhrlieferung',
+    },
+  };
+  await apiJson(runtime.state, session, '/api/v1/lite/offers', {
+    method: 'POST',
+    body: { offer, reason: 'Verify offer tax persistence' },
+  });
+  const refetchedOffer = await apiJson(runtime.state, session, `/api/v1/lite/offers/${offer.id}`);
+  expect(refetchedOffer.taxMode).toBe(offer.taxMode);
+  expect(refetchedOffer.taxMeta).toEqual(offer.taxMeta);
+  expect(refetchedOffer.taxSnapshot).toEqual(offer.taxSnapshot);
 };
 
 export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') => {
@@ -199,7 +242,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
   await expect(page.getByText(companyName)).toBeVisible();
   await page.getByRole('button', { name: 'Neue Rechnung' }).click();
   await expect(page.getByRole('heading', { name: 'Rechnung erstellen' })).toBeVisible();
-  await expect(page.locator('label:has-text("Firmenname / Kunde") + input')).toHaveValue(companyName);
+  await expect(page.getByRole('textbox', { name: 'Empfängername' })).toHaveValue(companyName);
   const createdInvoice = await page.evaluate(async ({ clientId, description, price }) => {
     const api = globalThis.billmeApi;
     if (!api) {

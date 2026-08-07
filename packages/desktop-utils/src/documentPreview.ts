@@ -62,7 +62,9 @@ export const getPreviewElements = (
   template: InvoiceElementLike[],
   settings: AppSettingsLike,
 ): InvoiceElementLike[] => {
-  return template.map((el) => {
+  const hasTaxNotice = Boolean(invoice.taxSnapshot?.taxNotice || invoice.taxMeta?.exemptionReasonOverride || invoice.taxMode && invoice.taxMode !== 'standard_vat');
+  let renderedNotice = false;
+  const elements = template.map((el) => {
     if (el.label === 'items_table' || el.type === 'TABLE') {
       const rows = invoice.items.map((item, idx) => ({
         id: idx.toString(),
@@ -90,20 +92,40 @@ export const getPreviewElements = (
     }
 
     if (el.type === 'TEXT' && typeof el.content === 'string') {
-      const content = el.label === 'invoice_meta' ? enrichInvoiceMetaContent(el.content) : el.content;
+      let content = el.label === 'invoice_meta' ? enrichInvoiceMetaContent(el.content) : el.content;
+      if (hasTaxNotice && content.includes('{{invoice.taxNotice}}')) {
+        renderedNotice = true;
+      }
+      if (hasTaxNotice && !renderedNotice && (el.label === 'totals_block' || el.label === 'payment_terms')) {
+        content = `${content}\n{{invoice.taxNotice}}`;
+        renderedNotice = true;
+      }
       return {
         ...el,
-        style:
-          el.label === 'invoice_meta'
-            ? {
-                ...el.style,
-                height: Math.max(Number(el.style?.height) || 0, 120),
-              }
-            : el.style,
+        style: {
+          ...el.style,
+          ...(el.label === 'invoice_meta' ? { height: Math.max(Number(el.style?.height) || 0, 120) } : {}),
+          ...(hasTaxNotice && (el.label === 'totals_block' || el.label === 'payment_terms')
+            ? { height: (Number(el.style?.height) || 0) + 30 }
+            : {}),
+        },
         content: replacePlaceholders(content, invoice, settings),
       };
     }
 
     return el;
   });
+  if (hasTaxNotice && !renderedNotice) {
+    elements.push({
+      id: 'tax_notice',
+      type: 'TEXT',
+      x: 76,
+      y: 900,
+      zIndex: 20,
+      content: replacePlaceholders('{{invoice.taxNotice}}', invoice, settings),
+      style: { width: 700, height: 40, fontSize: 10, fontWeight: 'bold' },
+      label: 'tax_notice',
+    });
+  }
+  return elements;
 };

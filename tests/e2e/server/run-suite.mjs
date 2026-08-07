@@ -9,6 +9,7 @@ import {
   runLiteAuthScenario,
   runLiteRegressionScenario,
   runLiteSmokeScenario,
+  runLiteVatPersistenceScenario,
   runLiteWorkflowScenario,
 } from './lite/scenarios.mjs';
 import { runWorkerFlowScenario } from './worker-flows.mjs';
@@ -44,6 +45,7 @@ const buildScenarioList = () => {
     if (level === 'full') {
       scenarios.push({ name: 'lite-auth', kind: 'browser', run: (page) => runLiteAuthScenario(page, 'runner-lite-auth') });
       scenarios.push({ name: 'lite-regressions', kind: 'browser', run: (page) => runLiteRegressionScenario(page, 'runner-lite-regressions') });
+      scenarios.push({ name: 'lite-vat-persistence', kind: 'plain', run: () => runLiteVatPersistenceScenario('runner-lite-vat-persistence') });
       scenarios.push({ name: 'lite-workflow', kind: 'browser', run: (page) => runLiteWorkflowScenario(page, 'runner-lite-workflow') });
       scenarios.push({ name: 'lite-worker-flows', kind: 'plain', run: () => runWorkerFlowScenario('lite') });
     }
@@ -90,7 +92,10 @@ const main = async () => {
     await fs.writeFile(stableStateFile, JSON.stringify({ ...state, stateFile: stableStateFile }, null, 2));
     process.env.E2E_SERVER_STATE_FILE = stableStateFile;
     if (scenarios.some((scenario) => scenario.kind === 'browser')) {
-      browser = await chromium.launch({ headless });
+      browser = await chromium.launch({
+        headless,
+        executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
+      });
     }
 
     for (const scenario of scenarios) {

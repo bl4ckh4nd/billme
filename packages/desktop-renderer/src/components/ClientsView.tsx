@@ -670,6 +670,48 @@ export const ClientsView: React.FC = () => {
                              </section>
 
                               <section className="space-y-3">
+                                  <div>
+                                      <h4 className="font-bold text-sm">Steuerprofil</h4>
+                                      <p className="text-[11px] text-gray-500 mt-0.5">
+                                          Wird beim Erstellen einer Rechnung als Vorschlag übernommen. Die Rechnung speichert danach ihren eigenen Snapshot.
+                                      </p>
+                                  </div>
+                                  <div className="grid grid-cols-12 gap-4">
+                                      <div className="col-span-4">
+                                          <label className="block text-[10px] font-bold text-gray-500 mb-1">Kundentyp</label>
+                                          <select
+                                              value={draft.taxProfile?.type ?? 'business'}
+                                              onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: event.target.value as 'business' | 'consumer' } })}
+                                              className="w-full bg-surface-muted border border-border rounded-xl p-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                          >
+                                              <option value="business">Unternehmen</option>
+                                              <option value="consumer">Privatkunde</option>
+                                          </select>
+                                      </div>
+                                      <div className="col-span-4">
+                                          <label className="block text-[10px] font-bold text-gray-500 mb-1">Land (ISO)</label>
+                                          <input
+                                              value={draft.taxProfile?.countryCode ?? ''}
+                                              onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', countryCode: event.target.value.toUpperCase() } })}
+                                              placeholder="DE"
+                                              maxLength={2}
+                                              className="w-full bg-surface-muted border border-border rounded-xl p-3 text-sm font-medium uppercase outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                          />
+                                      </div>
+                                      <div className="col-span-4">
+                                          <label className="block text-[10px] font-bold text-gray-500 mb-1">USt-IdNr.</label>
+                                          <input
+                                              value={draft.taxProfile?.vatId ?? ''}
+                                              onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', vatId: event.target.value.toUpperCase(), vatIdValidation: undefined, vatIdValidationAt: undefined } })}
+                                              placeholder="DE123456789"
+                                              className="w-full bg-surface-muted border border-border rounded-xl p-3 text-sm font-mono outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                          />
+                                          {draft.taxProfile?.vatIdValidation ? <p className="mt-1 text-[11px] text-muted">Status: {draft.taxProfile.vatIdValidation}</p> : null}
+                                      </div>
+                                  </div>
+                              </section>
+
+                              <section className="space-y-3">
                                   <div className="flex items-center justify-between">
                                       <div>
                                           <h4 className="font-bold text-sm">E-Mails</h4>

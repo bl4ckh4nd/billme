@@ -22,6 +22,7 @@ const fixture: NormalizedEinvoice = {
     postalCode: '20095',
     countryCode: 'DE',
   },
+  buyerVatId: 'ATU12345678',
   lines: [
     {
       lineId: '1',
@@ -50,5 +51,6 @@ describe('buildZugferdXml', () => {
     expect(xml).toContain('<ram:GrandTotalAmount>119.00</ram:GrandTotalAmount>');
     expect(xml).toContain('<ram:Name>Billme GmbH</ram:Name>');
     expect(xml).toContain('<ram:Name>Kunde GmbH</ram:Name>');
+    expect(xml).toContain('ATU12345678');
   });
 });

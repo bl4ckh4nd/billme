@@ -31,6 +31,10 @@
       "types": "./src/ElementRenderer.tsx",
       "default": "./src/ElementRenderer.tsx"
     },
+    "./DocumentPages": {
+      "types": "./src/DocumentPages.tsx",
+      "default": "./src/DocumentPages.tsx"
+    },
     "./types": {
       "types": "./src/types.ts",
       "default": "./src/types.ts"

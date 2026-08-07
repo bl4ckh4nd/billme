@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "dependencies": {
+    "@billme/server-core": "workspace:*"
+  },
   "peerDependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -28,6 +31,14 @@
     "./documentPreview": {
       "types": "./src/documentPreview.ts",
       "default": "./src/documentPreview.ts"
+    },
+    "./documentPagination": {
+      "types": "./src/documentPagination.ts",
+      "default": "./src/documentPagination.ts"
+    },
+    "./documentPagination.test": {
+      "types": "./src/documentPagination.test.ts",
+      "default": "./src/documentPagination.test.ts"
     },
     "./calculations.test": {
       "types": "./src/calculations.test.ts",

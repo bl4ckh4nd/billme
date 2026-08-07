@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { DocumentEditor } from '@billme/desktop-designer/document-editor';
 import type {
   ArticleLike,
@@ -14,7 +14,7 @@ import { useClientsQuery } from '../hooks/useClients';
 import { useProjectsQuery } from '../hooks/useProjects';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { useActiveTemplateQuery } from '../hooks/useTemplates';
-import { useUiStore } from '../ui-store';
+import { getRendererRuntime } from '../runtime-api';
 import type { Invoice } from '@billme/desktop-core/types';
 
 interface InvoiceDocumentEditorProps {
@@ -33,6 +33,9 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
   onCancel,
 }) => {
   const [selectedClientId, setSelectedClientId] = useState(invoice.clientId ?? '');
+  useEffect(() => {
+    setSelectedClientId(invoice.clientId ?? '');
+  }, [invoice.clientId, invoice.id]);
   const { data: clients = [] } = useClientsQuery();
   const { data: articles = [] } = useArticlesQuery();
   const { data: settings } = useSettingsQuery();
@@ -40,9 +43,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
   const { data: projects = [] } = useProjectsQuery(
     selectedClientId ? { clientId: selectedClientId, includeArchived: false } : undefined,
   );
-  const sidebarCollapsed = useUiStore((state) => state.editorSidebarCollapsed);
-  const setSidebarCollapsed = useUiStore((state) => state.setEditorSidebarCollapsed);
-
+  const runtime = getRendererRuntime();
   return (
     <DocumentEditor
       document={invoice as unknown as DocumentDraft}
@@ -53,8 +54,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
       projects={projects as unknown as ProjectLike[]}
       settings={(settings ?? MOCK_SETTINGS) as unknown as SettingsLike}
       templateElements={activeTemplate?.elements ?? (templateType === 'offer' ? INITIAL_OFFER_TEMPLATE : INITIAL_INVOICE_TEMPLATE)}
-      sidebarCollapsed={sidebarCollapsed}
-      onSidebarCollapsedChange={setSidebarCollapsed}
+      onValidateVatId={runtime.validateVatId}
       onSelectedClientChange={setSelectedClientId}
       onSave={(document) => onSave(document as unknown as Invoice)}
       onCancel={onCancel}

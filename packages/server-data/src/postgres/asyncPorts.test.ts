@@ -101,6 +101,7 @@ const createProfile = (): RecurringProfile => ({
   interval: 'monthly',
   nextRun: '2026-04-20',
   amount: 119,
+  taxMode: 'standard_vat',
   items: [
     {
       description: 'Hosting',

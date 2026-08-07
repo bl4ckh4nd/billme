@@ -22,6 +22,7 @@ interface ItemRowProps {
   onDragOver: (event: DragEvent<HTMLDivElement>) => void;
   onDrop: (event: DragEvent<HTMLDivElement>) => void;
   onDragEnd: () => void;
+  taxRateOptions?: number[];
 }
 
 const numberInputClassName = 'min-w-0 w-full bg-surface-muted rounded-lg px-1.5 py-1 text-sm outline-none focus:ring-2 focus:ring-accent tabular-nums text-right';
@@ -47,6 +48,7 @@ export function ItemRow({
   onDragOver,
   onDrop,
   onDragEnd,
+  taxRateOptions = [19, 7, 0],
 }: ItemRowProps) {
   const baseTotal = item.quantity * item.price;
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -87,7 +89,7 @@ export function ItemRow({
             placeholder="Beschreibung"
             getLabel={(article) => article.title}
             getSublabel={(article) => `${article.sku ? `${article.sku} · ` : ''}${formatCurrency(article.price)} / ${article.unit}`}
-            getSearchText={(article) => `${article.title} ${article.sku ?? ''} ${article.category}`}
+            getSearchText={(article) => `${article.title} ${article.description ?? ''} ${article.sku ?? ''} ${article.category} ${article.unit}`}
             onValueChange={(description) => onChange('description', description)}
             onSelect={onSelectArticle}
             inputClassName={`bg-surface-muted border hover:border-border focus:border-accent rounded-lg px-2 py-1 text-sm font-bold ${descriptionError ? 'border-error focus:ring-error' : 'border-transparent'}`}
@@ -150,9 +152,8 @@ export function ItemRow({
             className={inputClassName}
           >
             <option value="">Standard</option>
-            <option value="19">19%</option>
-            <option value="7">7%</option>
-            <option value="0">0%</option>
+            {item.taxRate !== undefined && !taxRateOptions.includes(item.taxRate) ? <option value={item.taxRate}>{item.taxRate}% (individuell)</option> : null}
+            {taxRateOptions.map((rate) => <option key={rate} value={rate}>{rate}%</option>)}
           </select>
         </label>
         <div className="min-w-0 pb-1">

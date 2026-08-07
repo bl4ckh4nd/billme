@@ -8,6 +8,7 @@ import {
   invoiceSchema as serverInvoiceSchema,
   offerSchema as serverOfferSchema,
   recurringProfileSchema as serverRecurringProfileSchema,
+  vatValidationResultSchema,
 } from '@billme/server-core';
 import {
   chooseDefaultBillingAddress,
@@ -32,6 +33,10 @@ type LiteWebApiOptions = {
   token: string;
   onAuthFailure?: () => void;
   onRequestClose?: () => void;
+};
+
+export type LiteWebBillmeApi = BillmeApi & {
+  validateVatId: (args: { countryCode: string; vatNumber: string }) => Promise<z.output<typeof vatValidationResultSchema>>;
 };
 
 type DesktopClient = IpcResult<'clients:list'>[number];
@@ -155,7 +160,7 @@ const buildEmptyEurReport = (args: IpcArgs<'eur:getReport'>): IpcResult<'eur:get
   });
 };
 
-export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onRequestClose }: LiteWebApiOptions): BillmeApi => {
+export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onRequestClose }: LiteWebApiOptions): LiteWebBillmeApi => {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
 
   const requestJson = async <TSchema extends z.ZodTypeAny>(
@@ -569,5 +574,13 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
     }
   };
 
-  return createBillmeApi(invoke);
+  const api = createBillmeApi(invoke);
+  return Object.assign(api, {
+    validateVatId: (args: { countryCode: string; vatNumber: string }) => requestJson(
+      'POST',
+      `${PRODUCT_PREFIX}/tax/validate-vat-id`,
+      vatValidationResultSchema,
+      args,
+    ),
+  });
 };

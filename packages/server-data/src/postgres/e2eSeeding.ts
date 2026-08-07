@@ -453,6 +453,7 @@ const buildBillingSeed = (
       interval: 'monthly',
       nextRun: '2026-04-01',
       amount: 150,
+      taxMode: 'standard_vat',
       items: [{ description: 'Monatliche Wartung', quantity: 1, price: 150, total: 150 }],
       createdAt: now,
       updatedAt: now,

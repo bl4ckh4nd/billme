@@ -4,6 +4,7 @@ import {
   getInvoiceTaxExemptionReason,
   getInvoiceTaxModeDefinition,
   resolveInvoiceTaxMode,
+  calculateInvoiceTaxSnapshot,
 } from '@billme/server-core/services';
 
 type NormalizedAddress = {
@@ -24,6 +25,7 @@ export type NormalizedEinvoice = {
     taxId?: string;
   };
   buyer: NormalizedAddress;
+  buyerVatId?: string;
   lines: Array<{
     lineId: string;
     name: string;
@@ -32,7 +34,7 @@ export type NormalizedEinvoice = {
     netUnitPrice: number;
     netLineTotal: number;
     taxRate: number;
-    taxCategoryCode: 'S' | 'E' | 'AE' | 'O';
+    taxCategoryCode: 'S' | 'E' | 'AE' | 'O' | 'K' | 'G';
     taxExemptionReason?: string;
   }>;
   totals: {
@@ -118,7 +120,7 @@ const normalizeSellerAddress = (settings: AppSettings): NormalizedAddress & { va
     street,
     city,
     postalCode,
-    countryCode: 'DE',
+    countryCode: settings.legal.countryCode ?? 'DE',
     vatId: vatId || undefined,
     taxId: taxId || undefined,
   };
@@ -141,6 +143,10 @@ export const normalizeInvoiceForEinvoice = (
   const isZeroVatMode = Boolean(definition.forceZeroVat);
   const defaultTaxRate = isZeroVatMode ? 0 : getDefaultTaxRate(settings);
   const taxExemptionReason = getInvoiceTaxExemptionReason(taxMode, invoice.taxMeta);
+  const taxSnapshot = invoice.taxSnapshot ?? calculateInvoiceTaxSnapshot(
+    { items: invoice.items, taxMode, taxMeta: invoice.taxMeta },
+    settings,
+  );
 
   assertRequired('Rechnungsnummer', invoice.number);
   assertRequired('Rechnungsdatum', invoice.date);
@@ -158,7 +164,7 @@ export const normalizeInvoiceForEinvoice = (
     const quantity = toAmount(item.quantity) || 1;
     const netLineTotal = round2(toAmount(item.total));
     const netUnitPrice = round2(quantity === 0 ? 0 : netLineTotal / quantity);
-    const taxRate = defaultTaxRate;
+    const taxRate = isZeroVatMode ? 0 : item.taxRate ?? (invoice.taxMeta?.defaultVatRate ?? defaultTaxRate);
     return {
       lineId: String(idx + 1),
       name: (item.description || `Position ${idx + 1}`).trim(),
@@ -177,12 +183,8 @@ export const normalizeInvoiceForEinvoice = (
   }
 
   const lineNetTotal = round2(lines.reduce((acc, line) => acc + line.netLineTotal, 0));
-  const taxTotal = round2(
-    isZeroVatMode
-      ? 0
-      : lines.reduce((acc, line) => acc + line.netLineTotal * (line.taxRate / 100), 0),
-  );
-  const grandTotal = round2(lineNetTotal + taxTotal);
+  const taxTotal = taxSnapshot.vatAmount;
+  const grandTotal = taxSnapshot.grossAmount;
 
   return {
     invoiceNumber: invoice.number.trim(),
@@ -191,6 +193,7 @@ export const normalizeInvoiceForEinvoice = (
     currency: 'EUR',
     seller,
     buyer,
+    buyerVatId: invoice.taxMeta?.buyerVatId?.trim() || undefined,
     lines,
     totals: {
       lineNetTotal,

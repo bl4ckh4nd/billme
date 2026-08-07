@@ -188,4 +188,24 @@ describe('getPreviewElements', () => {
     expect(preview[0]?.content).toContain('21.05.2026');
     expect(preview[0]?.content).not.toContain('{{invoice.dueDate}}');
   });
+
+  it('always renders a legal tax notice for a zero-rated document', () => {
+    const preview = getPreviewElements(
+      { ...invoice, taxMode: 'intra_eu_service_reverse_charge', taxMeta: { buyerVatId: 'ATU12345678' } },
+      [{ id: 'totals', type: 'TEXT', x: 0, y: 0, zIndex: 1, label: 'totals_block', content: 'Gesamt: {{total.gross}}', style: { height: 50 } }],
+      settings,
+    );
+    expect(preview[0]?.content).toContain('Steuerschuldnerschaft');
+  });
+
+  it('renders exactly one reverse-charge notice even when the template already exposes the placeholder', () => {
+    const preview = getPreviewElements(
+      { ...invoice, taxMode: 'intra_eu_service_reverse_charge', taxMeta: { buyerVatId: 'ATU12345678' } },
+      [{ id: 'totals', type: 'TEXT', x: 0, y: 0, zIndex: 1, label: 'totals_block', content: 'Gesamt: {{total.gross}}\n{{invoice.taxNotice}}', style: { height: 50 } }],
+      settings,
+    );
+    const text = preview.filter((element) => element.type === 'TEXT').map((element) => element.content ?? '').join('\n');
+    expect([...text.matchAll(/Steuerschuldnerschaft des Leistungsempfängers/g)]).toHaveLength(1);
+    expect(text).not.toContain('{{invoice.taxNotice}}');
+  });
 });

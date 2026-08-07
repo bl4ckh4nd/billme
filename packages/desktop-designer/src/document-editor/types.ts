@@ -67,6 +67,13 @@ export interface ClientLike {
   address?: string;
   addresses?: ClientAddressLike[];
   emails?: ClientEmailLike[];
+  taxProfile?: {
+    type: 'business' | 'consumer';
+    countryCode?: string;
+    vatId?: string;
+    vatIdValidation?: 'valid' | 'invalid' | 'unavailable' | 'manual_override';
+    vatIdValidationAt?: string;
+  };
 }
 
 export interface ProjectLike {

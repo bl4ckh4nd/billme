@@ -10,6 +10,7 @@ export type TaxSettingsShape = {
   legal: {
     smallBusinessRule?: boolean;
     defaultVatRate?: number;
+    countryCode?: string;
   };
 };
 
@@ -63,7 +64,7 @@ export const INVOICE_TAX_MODE_DEFINITIONS: InvoiceTaxModeDefinition[] = [
     label: 'Innergemeinschaftliche Lieferung',
     description: 'Steuerfreie innergemeinschaftliche Lieferung.',
     legalReference: '§ 6a UStG',
-    einvoiceCategoryCode: 'E',
+    einvoiceCategoryCode: 'K',
     requiresBuyerVatId: true,
     requiresExemptionReason: true,
     forceZeroVat: true,
@@ -83,7 +84,7 @@ export const INVOICE_TAX_MODE_DEFINITIONS: InvoiceTaxModeDefinition[] = [
     label: 'Drittlandsausfuhr',
     description: 'Lieferung/Leistung ins Drittland.',
     legalReference: '§ 4 Nr. 1a UStG',
-    einvoiceCategoryCode: 'E',
+    einvoiceCategoryCode: 'G',
     requiresExemptionReason: true,
     forceZeroVat: true,
   },
@@ -115,6 +116,62 @@ export const getDefaultTaxRate = (settings: TaxSettingsShape): number =>
   Math.max(0, toFiniteNumber(settings.legal.defaultVatRate));
 
 /**
+ * Small, offline DACH rate catalog used for suggestions and the editor's rate
+ * picker. It is intentionally not a full EU product classification table;
+ * callers can still enter a document-specific rate override.
+ */
+export const DACH_VAT_RATES: Readonly<Record<'DE' | 'AT' | 'CH', readonly number[]>> = {
+  DE: [19, 7],
+  AT: [20, 10, 13, 4.9],
+  CH: [8.1, 2.6, 3.8],
+};
+
+export const getDachVatRates = (countryCode: string | undefined, fallback = 19): number[] => {
+  const country = countryCode?.trim().toUpperCase() as keyof typeof DACH_VAT_RATES;
+  const rates = DACH_VAT_RATES[country];
+  return rates ? [...rates] : [Math.max(0, toFiniteNumber(fallback))];
+};
+
+export type TaxRecommendationInput = {
+  sellerCountryCode?: string;
+  buyerCountryCode?: string;
+  buyerType?: 'business' | 'consumer';
+  buyerVatId?: string;
+  sellerVatId?: string;
+  supplyType?: 'goods' | 'service';
+};
+
+export type TaxRecommendation = {
+  mode: InvoiceTaxMode;
+  reason: string;
+  requiresConfirmation: true;
+};
+
+const EU_COUNTRIES = new Set([
+  'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU',
+  'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE',
+]);
+
+/** Suggests a rule only. The caller must display and explicitly confirm it. */
+export const recommendInvoiceTaxMode = (input: TaxRecommendationInput): TaxRecommendation => {
+  const seller = input.sellerCountryCode?.trim().toUpperCase();
+  const buyer = input.buyerCountryCode?.trim().toUpperCase();
+  const crossBorder = Boolean(seller && buyer && seller !== buyer);
+  const hasIds = Boolean(input.sellerVatId?.trim() && input.buyerVatId?.trim());
+  if (crossBorder && input.buyerType === 'business' && hasIds && seller && buyer && EU_COUNTRIES.has(seller) && EU_COUNTRIES.has(buyer)) {
+    return input.supplyType === 'goods'
+      ? { mode: 'intra_eu_supply_6a', reason: 'Innergemeinschaftliche Warenlieferung zwischen Unternehmen.', requiresConfirmation: true }
+      : { mode: 'intra_eu_service_reverse_charge', reason: 'Grenzüberschreitende B2B-Leistung innerhalb der EU.', requiresConfirmation: true };
+  }
+  if (crossBorder && seller && buyer && EU_COUNTRIES.has(seller) && !EU_COUNTRIES.has(buyer)) {
+    return input.supplyType === 'goods'
+      ? { mode: 'export_third_country', reason: 'Warenlieferung in ein Drittland; Ausfuhrnachweis erforderlich.', requiresConfirmation: true }
+      : { mode: 'non_taxable_outside_scope', reason: 'Leistungsort liegt voraussichtlich außerhalb der EU.', requiresConfirmation: true };
+  }
+  return { mode: 'standard_vat', reason: 'Inlandssachverhalt oder unvollständige Empfängerdaten.', requiresConfirmation: true };
+};
+
+/**
  * EN 16931 requires a reason whenever VAT is not charged. Every zero-rated mode
  * therefore needs a legal sentence; an explicit override always wins.
  */
@@ -123,19 +180,24 @@ export const getInvoiceTaxExemptionReason = (
   taxMeta?: InvoiceTaxMeta,
 ): string | undefined => {
   if (taxMeta?.exemptionReasonOverride?.trim()) return taxMeta.exemptionReasonOverride.trim();
+  const country = taxMeta?.sellerCountryCode?.trim().toUpperCase() ?? 'DE';
   switch (mode) {
     case 'small_business_19_ustg':
-      return 'Kleinunternehmerregelung nach §19 UStG';
+      return country === 'CH' ? 'Keine MWST wegen Kleinunternehmen' : country === 'AT' ? 'Kleinunternehmerregelung nach UStG' : 'Kleinunternehmerregelung nach §19 UStG';
     case 'reverse_charge_13b':
-      return 'Steuerschuldnerschaft des Leistungsempfängers (§13b UStG)';
+      return country === 'CH'
+        ? 'Bezugsteuer durch den Leistungsempfänger (Reverse Charge)'
+        : country === 'AT'
+          ? 'Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)'
+          : 'Steuerschuldnerschaft des Leistungsempfängers (§13b UStG)';
     case 'intra_eu_supply_6a':
-      return 'Steuerfreie innergemeinschaftliche Lieferung (§6a UStG)';
+      return 'Steuerfreie innergemeinschaftliche Lieferung';
     case 'intra_eu_service_reverse_charge':
       return 'Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)';
     case 'export_third_country':
-      return 'Steuerfreie Ausfuhrlieferung';
+      return country === 'CH' ? 'Steuerfreie Ausfuhrlieferung nach Schweizer MWST-Recht' : 'Steuerfreie Ausfuhrlieferung';
     case 'vat_exempt_4_ustg':
-      return 'Steuerfreie Leistung nach §4 UStG';
+      return country === 'CH' ? 'Steuerfreie Leistung nach Schweizer MWST-Recht' : country === 'AT' ? 'Steuerfreie Leistung nach österreichischem UStG' : 'Steuerfreie Leistung nach §4 UStG';
     case 'non_taxable_outside_scope':
       return 'Nicht steuerbarer Umsatz';
     default:
@@ -158,7 +220,9 @@ export const calculateInvoiceTaxSnapshot = (
 ): InvoiceTaxSnapshot => {
   const resolvedTaxMode = resolveInvoiceTaxMode(input.taxMode, settings);
   const definition = getInvoiceTaxModeDefinition(resolvedTaxMode);
-  const defaultRate = definition.forceZeroVat ? 0 : getDefaultTaxRate(settings);
+  const defaultRate = definition.forceZeroVat
+    ? 0
+    : Math.max(0, toFiniteNumber(input.taxMeta?.defaultVatRate ?? getDefaultTaxRate(settings)));
   const netByRate = new Map<number, number>();
   for (const item of input.items ?? []) {
     const rate = definition.forceZeroVat
@@ -185,5 +249,7 @@ export const calculateInvoiceTaxSnapshot = (
     einvoiceCategoryCode: definition.einvoiceCategoryCode,
     label: definition.label,
     vatBreakdown,
+    taxNotice: getInvoiceTaxExemptionReason(resolvedTaxMode, input.taxMeta),
+    taxRuleConfirmed: input.taxMeta?.taxRuleConfirmed,
   };
 };

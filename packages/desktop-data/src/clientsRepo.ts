@@ -24,6 +24,12 @@ type ClientRow = {
   avatar: string | null;
   tags_json: string;
   notes: string;
+  tax_profile_json: string | null;
+};
+
+const parseTaxProfile = (value: string | null): Client['taxProfile'] | undefined => {
+  if (!value) return undefined;
+  try { return JSON.parse(value) as Client['taxProfile']; } catch { return undefined; }
 };
 
 type ClientAddressRow = {
@@ -173,6 +179,7 @@ export const listClients = (db: Database.Database): Client[] => {
       avatar: c.avatar ?? undefined,
       tags: safeJsonParse(c.tags_json, TagsSchema, [], `Client ${c.id} tags`),
       notes: c.notes,
+      taxProfile: parseTaxProfile(c.tax_profile_json),
       projects: projectsByClient.get(c.id) ?? [],
       activities: activitiesByClient.get(c.id) ?? [],
       addresses: addressesByClient.get(c.id) ?? [],
@@ -229,9 +236,9 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
       db.prepare(
         `
           INSERT INTO clients (
-            id, customer_number, company, contact_person, email, phone, address, status, avatar, tags_json, notes
+            id, customer_number, company, contact_person, email, phone, address, status, avatar, tags_json, notes, tax_profile_json
           ) VALUES (
-            @id, @customerNumber, @company, @contactPerson, @email, @phone, @address, @status, @avatar, @tagsJson, @notes
+            @id, @customerNumber, @company, @contactPerson, @email, @phone, @address, @status, @avatar, @tagsJson, @notes, @taxProfileJson
           )
         `,
       ).run({
@@ -246,6 +253,7 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
         avatar: client.avatar ?? null,
         tagsJson: JSON.stringify(client.tags ?? []),
         notes: client.notes ?? '',
+        taxProfileJson: client.taxProfile ? JSON.stringify(client.taxProfile) : null,
       });
     } else {
       db.prepare(
@@ -260,7 +268,8 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
             status=@status,
             avatar=@avatar,
             tags_json=@tagsJson,
-            notes=@notes
+            notes=@notes,
+            tax_profile_json=@taxProfileJson
           WHERE id=@id
         `,
       ).run({
@@ -275,6 +284,7 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
         avatar: client.avatar ?? null,
         tagsJson: JSON.stringify(client.tags ?? []),
         notes: client.notes ?? '',
+        taxProfileJson: client.taxProfile ? JSON.stringify(client.taxProfile) : null,
       });
     }
 

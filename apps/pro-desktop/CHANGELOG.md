@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- Added guided DE/AT/CH VAT rates, cross-border tax-rule confirmation, and mandatory reverse-charge notices for invoice output.
+- Aligned fresh SQLite billing-item tables with the shared invoice and offer repositories.
+
 ## [0.4.0] - 2026-07-24
 
 ### Added

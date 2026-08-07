@@ -6,6 +6,7 @@ export interface DatePickerProps {
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
+  'aria-label'?: string;
 }
 
 const MONTHS_DE = [
@@ -38,6 +39,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
   onChange,
   placeholder = 'Datum wählen',
   className,
+  'aria-label': ariaLabel,
 }) => {
   const today = new Date();
   const todayIso = toIso(today);
@@ -106,6 +108,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
       {/* Trigger */}
       <button
         type="button"
+        aria-label={ariaLabel}
         onClick={() => setOpen(o => !o)}
         className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-sm font-medium outline-none flex items-center justify-between gap-2 hover:border-gray-300 focus:ring-2 focus:ring-accent transition-colors"
       >

@@ -1,3 +1,5 @@
+import { calculateInvoiceTaxSnapshot } from '@billme/server-core/services';
+
 type InvoiceItemLike = {
   description?: string;
   quantity?: number;
@@ -31,14 +33,17 @@ export type InvoiceLike = {
     exemptionReasonOverride?: string;
     buyerVatId?: string;
     sellerVatId?: string;
+    defaultVatRate?: number;
   };
   taxSnapshot?: {
     vatRateApplied: number;
     vatAmount: number;
     netAmount: number;
     grossAmount: number;
-    einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O';
+    einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O' | 'K' | 'G';
     label?: string;
+    taxNotice?: string;
+    taxRuleConfirmed?: boolean;
     vatBreakdown?: Array<{ rate: number; netAmount: number; vatAmount: number }>;
   };
   items: InvoiceItemLike[];
@@ -48,6 +53,7 @@ export type AppSettingsLike = {
   legal: {
     smallBusinessRule?: boolean;
     defaultVatRate: number;
+    countryCode?: 'DE' | 'AT' | 'CH';
   };
   company: {
     name: string;
@@ -82,6 +88,10 @@ export const VARIABLE_GROUPS = [
       { key: 'invoice.date', label: 'Datum', description: 'Rechnungsdatum' },
       { key: 'invoice.dueDate', label: 'Fälligkeit', description: 'Fälligkeitsdatum' },
       { key: 'invoice.servicePeriod', label: 'Leistungszeitraum', description: 'Datum der Leistung' },
+      { key: 'invoice.taxModeLabel', label: 'Steuer-Modell', description: 'Gewähltes Umsatzsteuer-Modell' },
+      { key: 'invoice.taxNotice', label: 'Steuerhinweis', description: 'Reverse-Charge-/Steuerfrei-Hinweis' },
+      { key: 'invoice.buyerVatId', label: 'Käufer-USt-ID', description: 'USt-IdNr. des Kunden' },
+      { key: 'invoice.sellerVatId', label: 'Verkäufer-USt-ID', description: 'USt-IdNr. des Verkäufers' },
     ]
   },
   {
@@ -173,51 +183,20 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
     Math.abs(round2(invoice.taxSnapshot.netAmount) - net) < 0.005;
   const taxSnapshot =
     (hasFreshStoredTaxSnapshot ? invoice.taxSnapshot : undefined) ??
-    (() => {
-      const taxMode = settings.legal.smallBusinessRule
-        ? 'small_business_19_ustg'
-        : invoice.taxMode ?? 'standard_vat';
-      if (taxMode === 'small_business_19_ustg') {
-        return {
-          vatRateApplied: 0,
-          vatAmount: 0,
-          netAmount: net,
-          grossAmount: net,
-          label: 'Keine Umsatzsteuer',
-          einvoiceCategoryCode: 'E' as const,
-        };
-      }
-      const zeroVatModes = new Set([
-        'reverse_charge_13b',
-        'intra_eu_supply_6a',
-        'intra_eu_service_reverse_charge',
-        'export_third_country',
-        'vat_exempt_4_ustg',
-        'non_taxable_outside_scope',
-      ]);
-      const defaultTaxRate = zeroVatModes.has(taxMode) ? 0 : Number(settings.legal.defaultVatRate) || 0;
-      const netByRate = new Map<number, number>();
-      for (const item of invoice.items) {
-        const rate = zeroVatModes.has(taxMode) ? 0 : item.taxRate ?? defaultTaxRate;
-        netByRate.set(rate, (netByRate.get(rate) ?? 0) + calculateInvoiceItemTotal(item));
-      }
-      const vatBreakdown = [...netByRate.entries()].map(([rate, netAmount]) => ({
-        rate,
-        netAmount: round2(netAmount),
-        vatAmount: round2(netAmount * (rate / 100)),
-      }));
-      const vatRateApplied = vatBreakdown.length === 1 ? vatBreakdown[0]!.rate : defaultTaxRate;
-      const vatAmount = round2(vatBreakdown.reduce((sum, entry) => sum + entry.vatAmount, 0));
-      return {
-        vatRateApplied,
-        vatAmount,
-        netAmount: net,
-        grossAmount: round2(net + vatAmount),
-        label: zeroVatModes.has(taxMode) ? 'Keine Umsatzsteuer' : `MwSt. ${vatRateApplied.toFixed(0)}%`,
-        einvoiceCategoryCode: zeroVatModes.has(taxMode) ? 'E' : 'S',
-        vatBreakdown,
-      };
-    })();
+    calculateInvoiceTaxSnapshot(
+      {
+        taxMode: settings.legal.smallBusinessRule ? 'small_business_19_ustg' : invoice.taxMode,
+        taxMeta: invoice.taxMeta,
+        items: invoice.items.map((item) => ({
+          description: item.description ?? '',
+          quantity: item.quantity ?? 1,
+          price: item.price ?? item.total ?? 0,
+          total: calculateInvoiceItemTotal(item),
+          taxRate: item.taxRate,
+        })),
+      },
+      { legal: { smallBusinessRule: settings.legal.smallBusinessRule, defaultVatRate: settings.legal.defaultVatRate, countryCode: settings.legal.countryCode } },
+    );
 
   const dataMap: Record<string, string> = {
     'invoice.number': invoice.number,
@@ -248,6 +227,10 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
     'total.taxRate': taxSnapshot.vatBreakdown && taxSnapshot.vatBreakdown.length > 1
       ? taxSnapshot.vatBreakdown.map((entry) => `${entry.rate}%`).join(' / ')
       : `${taxSnapshot.vatRateApplied}%`,
+    'invoice.taxModeLabel': taxSnapshot.label ?? '',
+    'invoice.taxNotice': taxSnapshot.taxNotice ?? invoice.taxMeta?.exemptionReasonOverride ?? '',
+    'invoice.buyerVatId': invoice.taxMeta?.buyerVatId ?? '',
+    'invoice.sellerVatId': invoice.taxMeta?.sellerVatId ?? settings.finance.vatId ?? '',
   };
 
   return text.replace(/\{\{([^}]+)\}\}/g, (match, key) => {

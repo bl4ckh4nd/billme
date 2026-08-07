@@ -24,6 +24,11 @@ import {
 } from '@billme/server-core/services';
 import { safeJsonParse, InvoiceItemsSchema } from './validation-schemas';
 
+const parseOptionalJson = <T>(value: string | null | undefined): T | undefined => {
+  if (!value) return undefined;
+  try { return JSON.parse(value) as T; } catch { return undefined; }
+};
+
 export interface LegacyRecurringItem {
   description: string;
   quantity?: number | string;
@@ -43,6 +48,7 @@ export interface LegacyRecurringProfile {
   lastRun?: string;
   endDate?: string;
   amount: number;
+  taxMode?: DomainRecurringProfile['taxMode'];
   items?: LegacyRecurringItem[];
 }
 
@@ -141,6 +147,8 @@ interface RecurringRow {
   end_date: string | null;
   amount: number;
   items_json: string;
+  tax_mode?: DomainRecurringProfile['taxMode'] | null;
+  tax_meta_json?: string | null;
 }
 
 interface LoggerPort {
@@ -237,6 +245,8 @@ const rowToDomainRecurringProfile = (
   lastRun: row.last_run ?? undefined,
   endDate: row.end_date ?? undefined,
   amount: row.amount,
+  taxMode: row.tax_mode ?? 'standard_vat',
+  taxMeta: parseOptionalJson(row.tax_meta_json),
   items: safeJsonParse(row.items_json, InvoiceItemsSchema, [], `Recurring profile ${row.id} items`),
 });
 
@@ -250,6 +260,7 @@ const toLegacyRecurringProfile = (profile: DomainRecurringProfile): LegacyRecurr
   lastRun: profile.lastRun,
   endDate: profile.endDate,
   amount: profile.amount,
+  taxMode: profile.taxMode ?? 'standard_vat',
   items: profile.items,
 });
 
@@ -267,6 +278,7 @@ const toDomainRecurringProfile = (
   lastRun: profile.lastRun,
   endDate: profile.endDate,
   amount: profile.amount,
+  taxMode: profile.taxMode ?? 'standard_vat',
   items: normalizeRecurringItems(profile.items),
 });
 
@@ -382,15 +394,17 @@ export const createSqliteRecurringProfileStore = (db: Database.Database): SyncRe
       endDate: profile.endDate ?? null,
       amount: profile.amount,
       itemsJson: JSON.stringify(profile.items ?? []),
+      taxMode: profile.taxMode ?? 'standard_vat',
+      taxMetaJson: profile.taxMeta ? JSON.stringify(profile.taxMeta) : null,
     };
 
     if (!exists) {
       db.prepare(
         `
           INSERT INTO recurring_profiles (
-            id, client_id, active, name, interval, next_run, last_run, end_date, amount, items_json
+            id, client_id, active, name, interval, next_run, last_run, end_date, amount, items_json, tax_mode, tax_meta_json
           ) VALUES (
-            @id, @clientId, @active, @name, @interval, @nextRun, @lastRun, @endDate, @amount, @itemsJson
+            @id, @clientId, @active, @name, @interval, @nextRun, @lastRun, @endDate, @amount, @itemsJson, @taxMode, @taxMetaJson
           )
         `,
       ).run(payload);
@@ -406,7 +420,9 @@ export const createSqliteRecurringProfileStore = (db: Database.Database): SyncRe
             last_run=@lastRun,
             end_date=@endDate,
             amount=@amount,
-            items_json=@itemsJson
+            items_json=@itemsJson,
+            tax_mode=@taxMode,
+            tax_meta_json=@taxMetaJson
           WHERE id=@id
         `,
       ).run(payload);

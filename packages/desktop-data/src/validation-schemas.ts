@@ -158,6 +158,13 @@ export const InvoiceTaxMetaSchema = z.object({
   exemptionReasonOverride: z.string().optional(),
   buyerVatId: z.string().optional(),
   sellerVatId: z.string().optional(),
+  defaultVatRate: z.number().min(0).max(100).optional(),
+  buyerCountryCode: z.string().length(2).optional(),
+  sellerCountryCode: z.string().length(2).optional(),
+  buyerType: z.enum(['business', 'consumer']).optional(),
+  vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
+  vatIdValidationAt: z.string().optional(),
+  taxRuleConfirmed: z.boolean().optional(),
 });
 
 export const InvoiceTaxSnapshotSchema = z.object({
@@ -165,13 +172,15 @@ export const InvoiceTaxSnapshotSchema = z.object({
   vatAmount: z.number(),
   netAmount: z.number(),
   grossAmount: z.number(),
-  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']),
+  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O', 'K', 'G']),
   label: z.string().optional(),
   vatBreakdown: z.array(z.object({
     rate: z.number(),
     netAmount: z.number(),
     vatAmount: z.number(),
   })).optional(),
+  taxNotice: z.string().optional(),
+  taxRuleConfirmed: z.boolean().optional(),
 });
 
 // Settings schema components
@@ -223,6 +232,7 @@ const DunningSettingsSchema = z.object({
 const LegalSettingsSchema = z.object({
   smallBusinessRule: z.boolean(),
   defaultVatRate: z.number(),
+  countryCode: z.enum(['DE', 'AT', 'CH']).optional(),
   taxAccountingMethod: z.enum(['soll', 'ist']).optional().default('soll'),
   paymentTermsDays: z.number(),
   defaultIntroText: z.string(),

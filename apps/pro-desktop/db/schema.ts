@@ -112,6 +112,7 @@ export const clients = sqliteTable(
     avatar: text('avatar'),
     tagsJson: text('tags_json').notNull(),
     notes: text('notes').notNull(),
+    taxProfileJson: text('tax_profile_json'),
   },
   (t) => ({
     byCustomerNumber: uniqueIndex('idx_clients_customer_number_unique').on(t.customerNumber),
@@ -785,6 +786,8 @@ export const recurringProfiles = sqliteTable('recurring_profiles', {
   endDate: text('end_date'),
   amount: real('amount').notNull(),
   itemsJson: text('items_json').notNull(),
+  taxMode: text('tax_mode').notNull().default('standard_vat'),
+  taxMetaJson: text('tax_meta_json'),
 });
 
 export const settings = sqliteTable('settings', {

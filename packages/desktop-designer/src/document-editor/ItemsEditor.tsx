@@ -12,6 +12,7 @@ interface ItemsEditorProps {
   formatCurrency: (amount: number) => string;
   onItemsChange: (items: DraftItem[], options?: { coalesce?: boolean }) => void;
   itemErrors?: Record<number, string>;
+  taxRateOptions?: number[];
 }
 
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -24,6 +25,7 @@ export function ItemsEditor({
   formatCurrency,
   onItemsChange,
   itemErrors = {},
+  taxRateOptions = [19, 7, 0],
 }: ItemsEditorProps) {
   const descriptionRefs = useRef<Array<HTMLInputElement | null>>([]);
   const focusIndexRef = useRef<number | null>(null);
@@ -102,6 +104,7 @@ export function ItemsEditor({
             dragging={dragIndex === index}
             dropTarget={dropIndex === index && dragIndex !== index}
             descriptionError={itemErrors[index]}
+            taxRateOptions={taxRateOptions}
             onChange={(field, value) => changeItem(index, field, value)}
             onSelectArticle={(article) => {
               const next = {

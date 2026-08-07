@@ -2,3 +2,10 @@ packages:
   - "apps/*"
   - "packages/*"
 
+# pnpm 10 reads build-script allowlists from the workspace config (not the
+# root package.json). Electron's postinstall downloads the executable used by
+# Playwright's Electron launcher.
+onlyBuiltDependencies:
+  - electron
+  - better-sqlite3
+  - keytar

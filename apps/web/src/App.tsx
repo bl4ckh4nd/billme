@@ -79,6 +79,7 @@ const DesktopShell: React.FC<{
       product: 'lite',
       navigation: ['dashboard', 'clients', 'documents'],
       onLogout,
+      validateVatId: api.validateVatId,
     };
 
     let cancelled = false;

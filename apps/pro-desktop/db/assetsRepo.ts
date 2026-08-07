@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { and, asc, count, eq } from 'drizzle-orm';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import {
   buildDepreciationSchedule,
   computeAssetDisposal,
@@ -10,6 +12,7 @@ import {
 import type { TenantScope } from '@billme/server-core';
 import { appendAuditLog } from './audit';
 import { postDraft, saveDraft, type BookingDraftEntity } from './proAccountingRepo';
+import { ensureTaxCaseSeedData } from './taxCasesRepo';
 import { getTenantId } from '../tenantScope';
 
 export type AssetStatus = 'entwurf' | 'aktiv' | 'voll_abgeschrieben' | 'verkauft' | 'stillgelegt';
@@ -84,9 +87,16 @@ const scheduleInput = (row: AssetRow | AssetUpsertInput) => ({
 });
 
 const getAssetRow = (db: Database.Database, tenantId: string, assetId: string): AssetRow => {
-  const row = db.prepare('SELECT * FROM assets WHERE tenant_id = ? AND id = ?').get(tenantId, assetId) as
-    | AssetRow
-    | undefined;
+  const row = createDrizzle(db).select({
+    id: schema.assets.id, asset_number: schema.assets.assetNumber, name: schema.assets.name,
+    asset_class: schema.assets.assetClass, status: schema.assets.status, activation_date: schema.assets.activationDate,
+    acquisition_cost: schema.assets.acquisitionCost, useful_life_years: schema.assets.usefulLifeYears,
+    depreciation_method: schema.assets.depreciationMethod, cost_center: schema.assets.costCenter,
+    location: schema.assets.location, receipt_linked: schema.assets.receiptLinked, supplier: schema.assets.supplier,
+    invoice_ref: schema.assets.invoiceRef, asset_account_number: schema.assets.assetAccountNumber,
+    disposal_date: schema.assets.disposalDate, disposal_proceeds: schema.assets.disposalProceeds,
+  }).from(schema.assets)
+    .where(and(eq(schema.assets.tenantId, tenantId), eq(schema.assets.id, assetId))).get() as AssetRow | undefined;
   if (!row) throw new Error('Asset not found');
   return row;
 };
@@ -97,29 +107,17 @@ export const getDepreciationSchedule = (
   scope: TenantScope,
 ): AssetScheduleEntry[] => {
   const tenantId = getTenantId(scope);
-  return (db.prepare(
-    `SELECT id, asset_id, year, amount, months, status, journal_entry_id, posted_at
-     FROM asset_depreciation_schedule
-     WHERE tenant_id = ? AND asset_id = ?
-     ORDER BY year ASC`,
-  ).all(tenantId, assetId) as Array<{
-    id: string;
-    asset_id: string;
-    year: number;
-    amount: number;
-    months: number;
-    status: 'planned' | 'posted';
-    journal_entry_id: string | null;
-    posted_at: string | null;
-  }>).map((row) => ({
+  return createDrizzle(db).select().from(schema.assetDepreciationSchedule)
+    .where(and(eq(schema.assetDepreciationSchedule.tenantId, tenantId), eq(schema.assetDepreciationSchedule.assetId, assetId)))
+    .orderBy(asc(schema.assetDepreciationSchedule.year)).all().map((row) => ({
     id: row.id,
-    assetId: row.asset_id,
+    assetId: row.assetId,
     year: row.year,
     amount: Number(row.amount),
     months: row.months,
-    status: row.status,
-    journalEntryId: row.journal_entry_id ?? undefined,
-    postedAt: row.posted_at ?? undefined,
+    status: row.status as 'planned' | 'posted',
+    journalEntryId: row.journalEntryId ?? undefined,
+    postedAt: row.postedAt ?? undefined,
   }));
 };
 
@@ -164,9 +162,17 @@ const mapAsset = (db: Database.Database, row: AssetRow, scope: TenantScope): Ass
 
 export const listAssets = (db: Database.Database, scope: TenantScope): AssetRecord[] => {
   const tenantId = getTenantId(scope);
-  return (db.prepare(
-    'SELECT * FROM assets WHERE tenant_id = ? ORDER BY asset_number ASC',
-  ).all(tenantId) as AssetRow[]).map((row) => mapAsset(db, row, scope));
+  return createDrizzle(db).select({
+    id: schema.assets.id, asset_number: schema.assets.assetNumber, name: schema.assets.name,
+    asset_class: schema.assets.assetClass, status: schema.assets.status, activation_date: schema.assets.activationDate,
+    acquisition_cost: schema.assets.acquisitionCost, useful_life_years: schema.assets.usefulLifeYears,
+    depreciation_method: schema.assets.depreciationMethod, cost_center: schema.assets.costCenter,
+    location: schema.assets.location, receipt_linked: schema.assets.receiptLinked, supplier: schema.assets.supplier,
+    invoice_ref: schema.assets.invoiceRef, asset_account_number: schema.assets.assetAccountNumber,
+    disposal_date: schema.assets.disposalDate, disposal_proceeds: schema.assets.disposalProceeds,
+  }).from(schema.assets)
+    .where(eq(schema.assets.tenantId, tenantId)).orderBy(asc(schema.assets.assetNumber)).all()
+    .map((row) => mapAsset(db, row as AssetRow, scope));
 };
 
 export const upsertAsset = (
@@ -180,69 +186,37 @@ export const upsertAsset = (
   const now = new Date().toISOString();
   const method = resolveDepreciationMethod(scheduleInput(input));
   const schedule = buildDepreciationSchedule({ ...scheduleInput(input), method });
-  const existing = db.prepare('SELECT id FROM assets WHERE tenant_id = ? AND id = ?').get(tenantId, id);
+  const existing = createDrizzle(db).select({ id: schema.assets.id }).from(schema.assets)
+    .where(and(eq(schema.assets.tenantId, tenantId), eq(schema.assets.id, id))).get();
 
   const tx = db.transaction(() => {
-    db.prepare(
-      `INSERT INTO assets (
-        id, tenant_id, asset_number, name, asset_class, status, activation_date, acquisition_cost,
-        useful_life_years, depreciation_method, cost_center, location, receipt_linked, supplier,
-        invoice_ref, asset_account_number, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        asset_number = excluded.asset_number,
-        name = excluded.name,
-        asset_class = excluded.asset_class,
-        status = excluded.status,
-        activation_date = excluded.activation_date,
-        acquisition_cost = excluded.acquisition_cost,
-        useful_life_years = excluded.useful_life_years,
-        depreciation_method = excluded.depreciation_method,
-        cost_center = excluded.cost_center,
-        location = excluded.location,
-        receipt_linked = excluded.receipt_linked,
-        supplier = excluded.supplier,
-        invoice_ref = excluded.invoice_ref,
-        asset_account_number = excluded.asset_account_number,
-        updated_at = excluded.updated_at`,
-    ).run(
-      id,
-      tenantId,
-      input.assetNumber,
-      input.name,
-      input.assetClass,
-      input.status,
-      input.activationDate,
-      input.acquisitionCost,
-      input.usefulLifeYears ?? null,
-      method,
-      input.costCenter,
-      input.location,
-      input.receiptLinked ? 1 : 0,
-      input.supplier ?? null,
-      input.invoiceRef ?? null,
-      input.assetAccountNumber,
-      now,
-      now,
-    );
+    const drizzle = createDrizzle(db);
+    drizzle.insert(schema.assets).values({
+      id, tenantId, assetNumber: input.assetNumber, name: input.name, assetClass: input.assetClass,
+      status: input.status, activationDate: input.activationDate, acquisitionCost: input.acquisitionCost,
+      usefulLifeYears: input.usefulLifeYears ?? null, depreciationMethod: method, costCenter: input.costCenter,
+      location: input.location, receiptLinked: input.receiptLinked ? 1 : 0, supplier: input.supplier ?? null,
+      invoiceRef: input.invoiceRef ?? null, assetAccountNumber: input.assetAccountNumber, createdAt: now, updatedAt: now,
+    }).onConflictDoUpdate({ target: schema.assets.id, set: {
+      assetNumber: input.assetNumber, name: input.name, assetClass: input.assetClass, status: input.status,
+      activationDate: input.activationDate, acquisitionCost: input.acquisitionCost,
+      usefulLifeYears: input.usefulLifeYears ?? null, depreciationMethod: method, costCenter: input.costCenter,
+      location: input.location, receiptLinked: input.receiptLinked ? 1 : 0, supplier: input.supplier ?? null,
+      invoiceRef: input.invoiceRef ?? null, assetAccountNumber: input.assetAccountNumber, updatedAt: now,
+    }}).run();
 
-    db.prepare(
-      "DELETE FROM asset_depreciation_schedule WHERE tenant_id = ? AND asset_id = ? AND status = 'planned'",
-    ).run(tenantId, id);
-    const insertSchedule = db.prepare(
-      `INSERT OR IGNORE INTO asset_depreciation_schedule
-        (id, tenant_id, asset_id, year, amount, months, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'planned')`,
-    );
+    drizzle.delete(schema.assetDepreciationSchedule).where(and(
+      eq(schema.assetDepreciationSchedule.tenantId, tenantId), eq(schema.assetDepreciationSchedule.assetId, id),
+      eq(schema.assetDepreciationSchedule.status, 'planned'),
+    )).run();
     schedule.forEach((period) => {
-      insertSchedule.run(randomUUID(), tenantId, id, period.year, period.amount, period.months);
+      drizzle.insert(schema.assetDepreciationSchedule).values({ id: randomUUID(), tenantId, assetId: id,
+        year: period.year, amount: period.amount, months: period.months, status: 'planned' })
+        .onConflictDoNothing().run();
     });
     if (!existing) {
-      db.prepare(
-        `INSERT INTO asset_movements
-          (id, tenant_id, asset_id, type, movement_date, amount, reason, created_at)
-         VALUES (?, ?, ?, 'activation', ?, ?, ?, ?)`,
-      ).run(randomUUID(), tenantId, id, input.activationDate, input.acquisitionCost, reason, now);
+      drizzle.insert(schema.assetMovements).values({ id: randomUUID(), tenantId, assetId: id, type: 'activation',
+        movementDate: input.activationDate, amount: input.acquisitionCost, proceeds: null, gainLoss: null, reason, createdAt: now }).run();
     }
     appendAuditLog(db, {
       entityType: 'asset',
@@ -259,10 +233,8 @@ export const upsertAsset = (
 };
 
 const activeChart = (db: Database.Database): 'SKR03' | 'SKR04' => {
-  const rows = db.prepare('SELECT chart, COUNT(*) AS count FROM ledger_accounts GROUP BY chart').all() as Array<{
-    chart: 'SKR03' | 'SKR04';
-    count: number;
-  }>;
+  const rows = createDrizzle(db).select({ chart: schema.ledgerAccounts.chart, count: count() })
+    .from(schema.ledgerAccounts).groupBy(schema.ledgerAccounts.chart).all() as Array<{ chart: 'SKR03' | 'SKR04'; count: number }>;
   const counts = Object.fromEntries(rows.map((row) => [row.chart, row.count]));
   return Number(counts.SKR04 ?? 0) > Number(counts.SKR03 ?? 0) ? 'SKR04' : 'SKR03';
 };
@@ -272,12 +244,14 @@ export const runDepreciation = (
   args: { assetId: string; year: number; postingDate: string; reason: string },
   scope: TenantScope,
 ): { asset: AssetRecord; scheduleEntry: AssetScheduleEntry; journalEntryId: string } => {
+  // Posting requires canonical tax cases even on first-run/import paths that
+  // have only executed schema migrations so far.
+  ensureTaxCaseSeedData(db);
   const tenantId = getTenantId(scope);
   const asset = getAssetRow(db, tenantId, args.assetId);
   const period = args.postingDate.slice(0, 7);
-  const periodRow = db.prepare(
-    'SELECT status FROM accounting_periods WHERE tenant_id = ? AND period = ?',
-  ).get(tenantId, period) as { status: string } | undefined;
+  const periodRow = createDrizzle(db).select({ status: schema.accountingPeriods.status }).from(schema.accountingPeriods)
+    .where(and(eq(schema.accountingPeriods.tenantId, tenantId), eq(schema.accountingPeriods.period, period))).get() as { status: string } | undefined;
   if (periodRow && periodRow.status !== 'open') {
     appendAuditLog(db, {
       entityType: 'asset',
@@ -315,6 +289,9 @@ export const runDepreciation = (
         accountNumber: expenseAccount,
         debitAmount: scheduleEntry.amount,
         creditAmount: 0,
+        taxCaseKey: 'DE_ZERO_EXEMPT',
+        evidenceType: 'asset_depreciation',
+        evidenceReference: asset.invoice_ref ?? asset.asset_number,
         costCenter: asset.cost_center,
         memo: args.reason,
       },
@@ -340,16 +317,11 @@ export const runDepreciation = (
     }
     journalEntryId = posted.entry.id;
     const postedAt = new Date().toISOString();
-    db.prepare(
-      `UPDATE asset_depreciation_schedule
-       SET status = 'posted', journal_entry_id = ?, posted_at = ?
-       WHERE tenant_id = ? AND id = ?`,
-    ).run(journalEntryId, postedAt, tenantId, scheduleEntry.id);
-    db.prepare(
-      `INSERT INTO asset_movements
-        (id, tenant_id, asset_id, type, movement_date, amount, reason, created_at)
-       VALUES (?, ?, ?, 'depreciation', ?, ?, ?, ?)`,
-    ).run(randomUUID(), tenantId, asset.id, args.postingDate, scheduleEntry.amount, args.reason, postedAt);
+    const drizzle = createDrizzle(db);
+    drizzle.update(schema.assetDepreciationSchedule).set({ status: 'posted', journalEntryId, postedAt })
+      .where(and(eq(schema.assetDepreciationSchedule.tenantId, tenantId), eq(schema.assetDepreciationSchedule.id, scheduleEntry.id))).run();
+    drizzle.insert(schema.assetMovements).values({ id: randomUUID(), tenantId, assetId: asset.id, type: 'depreciation',
+      movementDate: args.postingDate, amount: scheduleEntry.amount, proceeds: null, gainLoss: null, reason: args.reason, createdAt: postedAt }).run();
     appendAuditLog(db, {
       entityType: 'asset',
       entityId: asset.id,
@@ -385,26 +357,11 @@ export const disposeAsset = (
   const now = new Date().toISOString();
   const status: AssetStatus = args.proceeds > 0 ? 'verkauft' : 'stillgelegt';
   const tx = db.transaction(() => {
-    db.prepare(
-      `UPDATE assets
-       SET status = ?, disposal_date = ?, disposal_proceeds = ?, updated_at = ?
-       WHERE tenant_id = ? AND id = ?`,
-    ).run(status, args.disposalDate, args.proceeds, now, tenantId, row.id);
-    db.prepare(
-      `INSERT INTO asset_movements
-        (id, tenant_id, asset_id, type, movement_date, amount, proceeds, gain_loss, reason, created_at)
-       VALUES (?, ?, ?, 'disposal', ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      randomUUID(),
-      tenantId,
-      row.id,
-      args.disposalDate,
-      result.residualBookValue,
-      args.proceeds,
-      result.gainLoss,
-      args.reason,
-      now,
-    );
+    const drizzle = createDrizzle(db);
+    drizzle.update(schema.assets).set({ status, disposalDate: args.disposalDate, disposalProceeds: args.proceeds, updatedAt: now })
+      .where(and(eq(schema.assets.tenantId, tenantId), eq(schema.assets.id, row.id))).run();
+    drizzle.insert(schema.assetMovements).values({ id: randomUUID(), tenantId, assetId: row.id, type: 'disposal',
+      movementDate: args.disposalDate, amount: result.residualBookValue, proceeds: args.proceeds, gainLoss: result.gainLoss, reason: args.reason, createdAt: now }).run();
     appendAuditLog(db, {
       entityType: 'asset',
       entityId: row.id,

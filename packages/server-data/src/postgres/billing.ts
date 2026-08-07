@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool } from "pg";
 import {
   buildEmailOutboxDedupeKey,
   clientSchema,
@@ -40,10 +40,28 @@ import {
   type OfferRepository,
   type RecurringProfileRepository,
   userAccountSchema,
-} from '@billme/server-core';
-import type { PostgresQueryable, PostgresTransactionClient } from './connection.js';
-import { withPostgresTransaction } from './connection.js';
-import { createPostgresAuditLogPort } from './audit.js';
+} from "@billme/server-core";
+import type {
+  PostgresQueryable,
+  PostgresTransactionClient,
+} from "./connection.js";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
+import { schema, tryCreateDrizzle } from "./drizzle.js";
+import { withPostgresTransaction } from "./connection.js";
+import { createPostgresAuditLogPort } from "./audit.js";
 
 export interface ServerSettingsRecord {
   tenantId: string;
@@ -55,10 +73,10 @@ export interface ServerSettingsRecord {
 export interface ServerNumberReservation {
   id: string;
   tenantId: string;
-  kind: 'invoice' | 'offer' | 'customer';
+  kind: "invoice" | "offer" | "customer";
   number: string;
   counterValue: number;
-  status: 'reserved' | 'released' | 'finalized';
+  status: "reserved" | "released" | "finalized";
   documentId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -68,9 +86,9 @@ type TenantRow = {
   id: string;
   slug: string;
   display_name: string;
-  product: Tenant['product'];
-  deployment_mode: Tenant['deploymentMode'];
-  status: Tenant['status'];
+  product: Tenant["product"];
+  deployment_mode: Tenant["deploymentMode"];
+  status: Tenant["status"];
   created_at: string;
   updated_at: string;
 };
@@ -89,7 +107,7 @@ type MembershipRow = {
   id: string;
   tenant_id: string;
   user_id: string;
-  role: TenantMembership['role'];
+  role: TenantMembership["role"];
   invited_by_user_id: string | null;
   created_at: string;
   updated_at: string;
@@ -104,7 +122,7 @@ type ClientRow = {
   email: string;
   phone: string;
   address: string;
-  status: Client['status'];
+  status: Client["status"];
   avatar: string | null;
   tags_json: string;
   notes: string;
@@ -133,12 +151,12 @@ type InvoiceRow = {
   due_date: string;
   service_period: string | null;
   amount: string | number;
-  status: Invoice['status'];
+  status: Invoice["status"];
   dunning_level: number;
   items_json: string | null;
   payments_json: string | null;
   history_json: string | null;
-  tax_mode: Invoice['taxMode'] | null;
+  tax_mode: Invoice["taxMode"] | null;
   tax_meta_json: string | null;
   tax_snapshot_json: string | null;
   created_at: string | null;
@@ -160,9 +178,9 @@ type OfferRow = {
   date: string;
   valid_until: string;
   amount: string | number;
-  status: Offer['status'];
+  status: Offer["status"];
   items_json: string | null;
-  tax_mode: Offer['taxMode'] | null;
+  tax_mode: Offer["taxMode"] | null;
   tax_meta_json: string | null;
   tax_snapshot_json: string | null;
   share_json: string | null;
@@ -177,13 +195,13 @@ type RecurringProfileRow = {
   client_id: string;
   active: boolean;
   name: string;
-  interval: RecurringProfile['interval'];
+  interval: RecurringProfile["interval"];
   next_run: string;
   last_run: string | null;
   end_date: string | null;
   amount: string | number;
   items_json: string | null;
-  tax_mode: Invoice['taxMode'] | null;
+  tax_mode: Invoice["taxMode"] | null;
   tax_meta_json: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -207,14 +225,14 @@ type EmailOutboxRow = {
   id: string;
   tenant_id: string;
   dedupe_key: string;
-  document_type: EmailOutboxEntry['documentType'];
+  document_type: EmailOutboxEntry["documentType"];
   document_id: string;
   document_number: string;
   recipient_email: string;
   recipient_name: string;
   subject: string;
   body_text: string;
-  status: EmailOutboxEntry['status'];
+  status: EmailOutboxEntry["status"];
   attempt_count: number;
   max_attempts: number;
   next_attempt_at: string;
@@ -223,7 +241,7 @@ type EmailOutboxRow = {
   lease_expires_at: string | null;
   locked_by: string | null;
   last_error: string | null;
-  provider: EmailOutboxEntry['provider'] | null;
+  provider: EmailOutboxEntry["provider"] | null;
   provider_message_id: string | null;
   sent_at: string | null;
   created_at: string;
@@ -231,14 +249,23 @@ type EmailOutboxRow = {
 };
 
 const nowIso = (): string => new Date().toISOString();
-const randomId = (): string => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+const randomId = (): string =>
+  globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+
+const requireDrizzle = (db: PostgresQueryable) => {
+  const drizzleDb = tryCreateDrizzle(db);
+  if (!drizzleDb) {
+    throw new Error('Postgres billing repositories require a real pg Pool/PoolClient');
+  }
+  return drizzleDb;
+};
 
 const parseJson = <T>(value: unknown, fallback: T): T => {
   if (value === null || value === undefined) {
     return fallback;
   }
 
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     try {
       return JSON.parse(value) as T;
     } catch {
@@ -250,7 +277,8 @@ const parseJson = <T>(value: unknown, fallback: T): T => {
 };
 
 const toJson = (value: unknown): string => JSON.stringify(value ?? null);
-const toNumber = (value: string | number): number => (typeof value === 'number' ? value : Number(value));
+const toNumber = (value: string | number): number =>
+  typeof value === "number" ? value : Number(value);
 
 const rowToTenant = (row: TenantRow): Tenant =>
   tenantSchema.parse({
@@ -311,7 +339,7 @@ const rowToClient = (row: ClientRow): Client =>
 
 const rowToInvoice = (row: InvoiceRow): Invoice =>
   invoiceSchema.parse({
-    kind: 'invoice',
+    kind: "invoice",
     id: row.id,
     tenantId: row.tenant_id,
     clientId: row.client_id ?? undefined,
@@ -332,7 +360,7 @@ const rowToInvoice = (row: InvoiceRow): Invoice =>
     items: parseJson(row.items_json, []),
     payments: parseJson(row.payments_json, []),
     history: parseJson(row.history_json, []),
-    taxMode: row.tax_mode ?? 'standard_vat',
+    taxMode: row.tax_mode ?? "standard_vat",
     taxMeta: parseJson(row.tax_meta_json, undefined),
     taxSnapshot: parseJson(row.tax_snapshot_json, undefined),
     createdAt: row.created_at ?? undefined,
@@ -341,7 +369,7 @@ const rowToInvoice = (row: InvoiceRow): Invoice =>
 
 const rowToOffer = (row: OfferRow): Offer =>
   offerSchema.parse({
-    kind: 'offer',
+    kind: "offer",
     id: row.id,
     tenantId: row.tenant_id,
     clientId: row.client_id ?? undefined,
@@ -359,7 +387,7 @@ const rowToOffer = (row: OfferRow): Offer =>
     status: row.status,
     share: parseJson(row.share_json, undefined),
     items: parseJson(row.items_json, []),
-    taxMode: row.tax_mode ?? 'standard_vat',
+    taxMode: row.tax_mode ?? "standard_vat",
     taxMeta: parseJson(row.tax_meta_json, undefined),
     taxSnapshot: parseJson(row.tax_snapshot_json, undefined),
     history: parseJson(row.history_json, []),
@@ -380,7 +408,7 @@ const rowToRecurringProfile = (row: RecurringProfileRow): RecurringProfile =>
     endDate: row.end_date ?? undefined,
     amount: toNumber(row.amount),
     items: parseJson(row.items_json, []),
-    taxMode: row.tax_mode ?? 'standard_vat',
+    taxMode: row.tax_mode ?? "standard_vat",
     taxMeta: parseJson(row.tax_meta_json, undefined),
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
@@ -428,174 +456,389 @@ const rowToEmailOutbox = (row: EmailOutboxRow): EmailOutboxEntry =>
     updatedAt: row.updated_at,
   });
 
-export const createPostgresTenantRepository = (db: PostgresQueryable): TenantRepository => ({
+const toDunningHistoryRow = (row: any): DunningHistoryRow => ({
+  id: row.id!,
+  tenant_id: row.tenantId!,
+  invoice_id: row.invoiceId!,
+  invoice_number: row.invoiceNumber!,
+  dunning_level: row.dunningLevel!,
+  days_overdue: row.daysOverdue!,
+  fee_applied: row.feeApplied!,
+  email_sent: row.emailSent!,
+  email_log_id: row.emailLogId ?? null,
+  processed_at: row.processedAt!,
+  created_at: row.createdAt!,
+});
+
+const toEmailOutboxRow = (row: any): EmailOutboxRow => ({
+  id: row.id!,
+  tenant_id: row.tenantId!,
+  dedupe_key: row.dedupeKey!,
+  document_type: row.documentType!,
+  document_id: row.documentId!,
+  document_number: row.documentNumber!,
+  recipient_email: row.recipientEmail!,
+  recipient_name: row.recipientName!,
+  subject: row.subject!,
+  body_text: row.bodyText!,
+  status: row.status!,
+  attempt_count: row.attemptCount!,
+  max_attempts: row.maxAttempts!,
+  next_attempt_at: row.nextAttemptAt!,
+  last_attempt_at: row.lastAttemptAt ?? null,
+  locked_at: row.lockedAt ?? null,
+  lease_expires_at: row.leaseExpiresAt ?? null,
+  locked_by: row.lockedBy ?? null,
+  last_error: row.lastError ?? null,
+  provider: row.provider ?? null,
+  provider_message_id: row.providerMessageId ?? null,
+  sent_at: row.sentAt ?? null,
+  created_at: row.createdAt!,
+  updated_at: row.updatedAt!,
+});
+
+const toTenantRow = (r: any): TenantRow => ({
+  id: r.id!,
+  slug: r.slug!,
+  display_name: r.displayName!,
+  product: r.product,
+  deployment_mode: r.deploymentMode,
+  status: r.status,
+  created_at: r.createdAt!,
+  updated_at: r.updatedAt!,
+});
+const toUserRow = (r: any): UserRow => ({
+  id: r.id!,
+  email: r.email!,
+  full_name: r.fullName!,
+  status: r.status,
+  last_login_at: r.lastLoginAt ?? null,
+  created_at: r.createdAt!,
+  updated_at: r.updatedAt!,
+});
+const toMembershipRow = (r: any): MembershipRow => ({
+  id: r.id!,
+  tenant_id: r.tenantId!,
+  user_id: r.userId!,
+  role: r.role,
+  invited_by_user_id: r.invitedByUserId ?? null,
+  created_at: r.createdAt!,
+  updated_at: r.updatedAt!,
+});
+const toClientRow = (r: any): ClientRow => ({
+  id: r.id!,
+  tenant_id: r.tenantId!,
+  customer_number: r.customerNumber ?? null,
+  company: r.company!,
+  contact_person: r.contactPerson!,
+  email: r.email!,
+  phone: r.phone!,
+  address: r.address!,
+  status: r.status,
+  avatar: r.avatar ?? null,
+  tags_json: r.tagsJson!,
+  notes: r.notes!,
+  addresses_json: r.addressesJson ?? null,
+  emails_json: r.emailsJson ?? null,
+  projects_json: r.projectsJson ?? null,
+  activities_json: r.activitiesJson ?? null,
+  tax_profile_json: r.taxProfileJson ?? null,
+  created_at: r.createdAt ?? null,
+  updated_at: r.updatedAt ?? null,
+});
+const toInvoiceRow = (r: any): InvoiceRow => ({
+  id: r.id!,
+  tenant_id: r.tenantId!,
+  client_id: r.clientId ?? null,
+  client_number: r.clientNumber ?? null,
+  project_id: r.projectId ?? null,
+  number: r.number!,
+  client: r.client!,
+  client_email: r.clientEmail!,
+  client_address: r.clientAddress ?? null,
+  billing_address_json: r.billingAddressJson ?? null,
+  shipping_address_json: r.shippingAddressJson ?? null,
+  date: r.date!,
+  due_date: r.dueDate!,
+  service_period: r.servicePeriod ?? null,
+  amount: r.amount as any,
+  status: r.status,
+  dunning_level: r.dunningLevel ?? 0,
+  items_json: r.itemsJson ?? null,
+  payments_json: r.paymentsJson ?? null,
+  history_json: r.historyJson ?? null,
+  tax_mode: r.taxMode ?? null,
+  tax_meta_json: r.taxMetaJson ?? null,
+  tax_snapshot_json: r.taxSnapshotJson ?? null,
+  created_at: r.createdAt ?? null,
+  updated_at: r.updatedAt ?? null,
+});
+const toOfferRow = (r: any): OfferRow => ({
+  id: r.id!,
+  tenant_id: r.tenantId!,
+  client_id: r.clientId ?? null,
+  client_number: r.clientNumber ?? null,
+  project_id: r.projectId ?? null,
+  number: r.number!,
+  client: r.client!,
+  client_email: r.clientEmail!,
+  client_address: r.clientAddress ?? null,
+  billing_address_json: r.billingAddressJson ?? null,
+  shipping_address_json: r.shippingAddressJson ?? null,
+  date: r.date!,
+  valid_until: r.validUntil!,
+  amount: r.amount as any,
+  status: r.status,
+  items_json: r.itemsJson ?? null,
+  tax_mode: r.taxMode ?? null,
+  tax_meta_json: r.taxMetaJson ?? null,
+  tax_snapshot_json: r.taxSnapshotJson ?? null,
+  share_json: r.shareJson ?? null,
+  history_json: r.historyJson ?? null,
+  created_at: r.createdAt ?? null,
+  updated_at: r.updatedAt ?? null,
+});
+const toRecurringRow = (r: any): RecurringProfileRow => ({
+  id: r.id!,
+  tenant_id: r.tenantId!,
+  client_id: r.clientId!,
+  active: r.active!,
+  name: r.name!,
+  interval: r.interval,
+  next_run: r.nextRun!,
+  last_run: r.lastRun ?? null,
+  end_date: r.endDate ?? null,
+  amount: r.amount as any,
+  items_json: r.itemsJson ?? null,
+  tax_mode: r.taxMode ?? null,
+  tax_meta_json: r.taxMetaJson ?? null,
+  created_at: r.createdAt ?? null,
+  updated_at: r.updatedAt ?? null,
+});
+
+export const createPostgresTenantRepository = (
+  db: PostgresQueryable,
+): TenantRepository => ({
   async getById(id) {
-    const result = await db.query<TenantRow>('SELECT * FROM tenants WHERE id = $1 LIMIT 1', [id]);
-    return result.rows[0] ? rowToTenant(result.rows[0]) : null;
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.tenants)
+        .where(eq(schema.tenants.id, id))
+        .limit(1);
+      return rows[0] ? rowToTenant(toTenantRow(rows[0])) : null;
+      },
   async getPrimary() {
-    const result = await db.query<TenantRow>('SELECT * FROM tenants ORDER BY created_at ASC LIMIT 1');
-    return result.rows[0] ? rowToTenant(result.rows[0]) : null;
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.tenants)
+        .orderBy(asc(schema.tenants.createdAt))
+        .limit(1);
+      return rows[0] ? rowToTenant(toTenantRow(rows[0])) : null;
+      },
   async save(tenant) {
     const nextTenant: Tenant = {
       ...tenant,
       createdAt: tenant.createdAt ?? nowIso(),
       updatedAt: tenant.updatedAt ?? nowIso(),
     };
-    await db.query(
-      `
-        INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (id) DO UPDATE SET
-          slug = EXCLUDED.slug,
-          display_name = EXCLUDED.display_name,
-          product = EXCLUDED.product,
-          deployment_mode = EXCLUDED.deployment_mode,
-          status = EXCLUDED.status,
-          updated_at = EXCLUDED.updated_at
-      `,
-      [
-        nextTenant.id,
-        nextTenant.slug,
-        nextTenant.displayName,
-        nextTenant.product,
-        nextTenant.deploymentMode,
-        nextTenant.status,
-        nextTenant.createdAt,
-        nextTenant.updatedAt,
-      ],
-    );
-    return nextTenant;
-  },
+    const drizzleDb = requireDrizzle(db);
+      await drizzleDb
+        .insert(schema.tenants)
+        .values({
+          id: nextTenant.id,
+          slug: nextTenant.slug,
+          displayName: nextTenant.displayName,
+          product: nextTenant.product,
+          deploymentMode: nextTenant.deploymentMode,
+          status: nextTenant.status,
+          createdAt: nextTenant.createdAt,
+          updatedAt: nextTenant.updatedAt,
+        })
+        .onConflictDoUpdate({
+          target: schema.tenants.id,
+          set: {
+            slug: nextTenant.slug,
+            displayName: nextTenant.displayName,
+            product: nextTenant.product,
+            deploymentMode: nextTenant.deploymentMode,
+            status: nextTenant.status,
+            updatedAt: nextTenant.updatedAt,
+          },
+        });
+      return nextTenant;
+      },
 });
 
-export const createPostgresUserRepository = (db: PostgresQueryable): UserAccountRepository => ({
+export const createPostgresUserRepository = (
+  db: PostgresQueryable,
+): UserAccountRepository => ({
   async getById(scope, id) {
-    const result = await db.query<UserRow>(
-      `
-        SELECT u.*
-        FROM user_accounts u
-        JOIN tenant_memberships m ON m.user_id = u.id
-        WHERE m.tenant_id = $1 AND u.id = $2
-        LIMIT 1
-      `,
-      [scope.tenantId, id],
-    );
-    return result.rows[0] ? rowToUser(result.rows[0]) : null;
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select({ user: schema.userAccounts })
+        .from(schema.userAccounts)
+        .innerJoin(
+          schema.tenantMemberships,
+          eq(schema.userAccounts.id, schema.tenantMemberships.userId),
+        )
+        .where(
+          and(
+            eq(schema.tenantMemberships.tenantId, scope.tenantId),
+            eq(schema.userAccounts.id, id),
+          ),
+        )
+        .limit(1);
+      return rows[0] ? rowToUser(toUserRow(rows[0].user)) : null;
+      },
   async getByEmail(scope, email) {
-    const result = await db.query<UserRow>(
-      `
-        SELECT u.*
-        FROM user_accounts u
-        JOIN tenant_memberships m ON m.user_id = u.id
-        WHERE m.tenant_id = $1 AND lower(u.email) = lower($2)
-        LIMIT 1
-      `,
-      [scope.tenantId, email],
-    );
-    return result.rows[0] ? rowToUser(result.rows[0]) : null;
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select({ user: schema.userAccounts })
+        .from(schema.userAccounts)
+        .innerJoin(
+          schema.tenantMemberships,
+          eq(schema.userAccounts.id, schema.tenantMemberships.userId),
+        )
+        .where(
+          and(
+            eq(schema.tenantMemberships.tenantId, scope.tenantId),
+            eq(schema.userAccounts.email, email),
+          ),
+        )
+        .limit(1);
+      return rows[0] ? rowToUser(toUserRow(rows[0].user)) : null;
+      },
   async list(scope) {
-    const result = await db.query<UserRow>(
-      `
-        SELECT u.*
-        FROM user_accounts u
-        JOIN tenant_memberships m ON m.user_id = u.id
-        WHERE m.tenant_id = $1
-        ORDER BY u.created_at ASC
-      `,
-      [scope.tenantId],
-    );
-    return result.rows.map(rowToUser);
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select({ user: schema.userAccounts })
+        .from(schema.userAccounts)
+        .innerJoin(
+          schema.tenantMemberships,
+          eq(schema.userAccounts.id, schema.tenantMemberships.userId),
+        )
+        .where(eq(schema.tenantMemberships.tenantId, scope.tenantId))
+        .orderBy(asc(schema.userAccounts.createdAt));
+      return rows.map((row) => rowToUser(toUserRow(row.user)));
+      },
   async save(_scope, user) {
     const nextUser: UserAccount = {
       ...user,
       createdAt: user.createdAt ?? nowIso(),
       updatedAt: user.updatedAt ?? nowIso(),
     };
-    await db.query(
-      `
-        INSERT INTO user_accounts (id, email, full_name, status, last_login_at, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (id) DO UPDATE SET
-          email = EXCLUDED.email,
-          full_name = EXCLUDED.full_name,
-          status = EXCLUDED.status,
-          last_login_at = EXCLUDED.last_login_at,
-          updated_at = EXCLUDED.updated_at
-      `,
-      [
-        nextUser.id,
-        nextUser.email,
-        nextUser.fullName,
-        nextUser.status,
-        nextUser.lastLoginAt ?? null,
-        nextUser.createdAt,
-        nextUser.updatedAt,
-      ],
-    );
-    return nextUser;
-  },
+    const drizzleDb = requireDrizzle(db);
+      await drizzleDb
+        .insert(schema.userAccounts)
+        .values({
+          id: nextUser.id,
+          email: nextUser.email,
+          fullName: nextUser.fullName,
+          status: nextUser.status,
+          lastLoginAt: nextUser.lastLoginAt ?? null,
+          createdAt: nextUser.createdAt,
+          updatedAt: nextUser.updatedAt,
+        })
+        .onConflictDoUpdate({
+          target: schema.userAccounts.id,
+          set: {
+            email: nextUser.email,
+            fullName: nextUser.fullName,
+            status: nextUser.status,
+            lastLoginAt: nextUser.lastLoginAt ?? null,
+            updatedAt: nextUser.updatedAt,
+          },
+        });
+      return nextUser;
+      },
 });
 
-export const createPostgresTenantMembershipRepository = (db: PostgresQueryable): TenantMembershipRepository => ({
+export const createPostgresTenantMembershipRepository = (
+  db: PostgresQueryable,
+): TenantMembershipRepository => ({
   async list(scope) {
-    const result = await db.query<MembershipRow>(
-      'SELECT * FROM tenant_memberships WHERE tenant_id = $1 ORDER BY created_at ASC',
-      [scope.tenantId],
-    );
-    return result.rows.map((row) => rowToMembership(row));
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.tenantMemberships)
+        .where(eq(schema.tenantMemberships.tenantId, scope.tenantId))
+        .orderBy(asc(schema.tenantMemberships.createdAt));
+      return rows.map((row) => rowToMembership(toMembershipRow(row)));
+      },
   async get(scope, userId) {
-    const result = await db.query<MembershipRow>(
-      'SELECT * FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 LIMIT 1',
-      [scope.tenantId, userId],
-    );
-    return result.rows[0] ? rowToMembership(result.rows[0]) : null;
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.tenantMemberships)
+        .where(
+          and(
+            eq(schema.tenantMemberships.tenantId, scope.tenantId),
+            eq(schema.tenantMemberships.userId, userId),
+          ),
+        )
+        .limit(1);
+      return rows[0] ? rowToMembership(toMembershipRow(rows[0])) : null;
+      },
   async save(_scope, membership) {
     const nextMembership: TenantMembership = {
       ...membership,
       createdAt: membership.createdAt ?? nowIso(),
       updatedAt: membership.updatedAt ?? nowIso(),
     };
-    await db.query(
-      `
-        INSERT INTO tenant_memberships (id, tenant_id, user_id, role, invited_by_user_id, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (id) DO UPDATE SET
-          tenant_id = EXCLUDED.tenant_id,
-          user_id = EXCLUDED.user_id,
-          role = EXCLUDED.role,
-          invited_by_user_id = EXCLUDED.invited_by_user_id,
-          updated_at = EXCLUDED.updated_at
-      `,
-      [
-        nextMembership.id,
-        nextMembership.tenantId,
-        nextMembership.userId,
-        nextMembership.role,
-        nextMembership.invitedByUserId ?? null,
-        nextMembership.createdAt,
-        nextMembership.updatedAt,
-      ],
-    );
-    return nextMembership;
-  },
+    const drizzleDb = requireDrizzle(db);
+      await drizzleDb
+        .insert(schema.tenantMemberships)
+        .values({
+          id: nextMembership.id,
+          tenantId: nextMembership.tenantId,
+          userId: nextMembership.userId,
+          role: nextMembership.role,
+          invitedByUserId: nextMembership.invitedByUserId ?? null,
+          createdAt: nextMembership.createdAt,
+          updatedAt: nextMembership.updatedAt,
+        })
+        .onConflictDoUpdate({
+          target: schema.tenantMemberships.id,
+          set: {
+            tenantId: nextMembership.tenantId,
+            userId: nextMembership.userId,
+            role: nextMembership.role,
+            invitedByUserId: nextMembership.invitedByUserId ?? null,
+            updatedAt: nextMembership.updatedAt,
+          },
+        });
+      return nextMembership;
+      },
 });
 
-export const createPostgresClientRepository = (db: PostgresQueryable): ClientRepository => ({
+export const createPostgresClientRepository = (
+  db: PostgresQueryable,
+): ClientRepository => ({
   async list(scope) {
-    const result = await db.query<ClientRow>('SELECT * FROM clients WHERE tenant_id = $1 ORDER BY company ASC, id ASC', [scope.tenantId]);
-    return result.rows.map((row) => rowToClient(row));
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.clients)
+        .where(eq(schema.clients.tenantId, scope.tenantId))
+        .orderBy(asc(schema.clients.company), asc(schema.clients.id));
+      return rows.map((row) => rowToClient(toClientRow(row)));
+      },
   async getById(scope, id) {
-    const result = await db.query<ClientRow>('SELECT * FROM clients WHERE tenant_id = $1 AND id = $2 LIMIT 1', [scope.tenantId, id]);
-    return result.rows[0] ? rowToClient(result.rows[0]) : null;
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.clients)
+        .where(
+          and(
+            eq(schema.clients.tenantId, scope.tenantId),
+            eq(schema.clients.id, id),
+          ),
+        )
+        .limit(1);
+      return rows[0] ? rowToClient(toClientRow(rows[0])) : null;
+      },
   async save(scope, client) {
     const nextClient: Client = {
       ...client,
@@ -603,75 +846,102 @@ export const createPostgresClientRepository = (db: PostgresQueryable): ClientRep
       createdAt: client.createdAt ?? nowIso(),
       updatedAt: client.updatedAt ?? nowIso(),
     };
-    await db.query(
-      `
-        INSERT INTO clients (
-          id, tenant_id, customer_number, company, contact_person, email, phone, address, status, avatar,
-          tags_json, notes, addresses_json, emails_json, projects_json, activities_json, tax_profile_json, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          $11, $12, $13, $14, $15, $16, $17, $18, $19
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          tenant_id = EXCLUDED.tenant_id,
-          customer_number = EXCLUDED.customer_number,
-          company = EXCLUDED.company,
-          contact_person = EXCLUDED.contact_person,
-          email = EXCLUDED.email,
-          phone = EXCLUDED.phone,
-          address = EXCLUDED.address,
-          status = EXCLUDED.status,
-          avatar = EXCLUDED.avatar,
-          tags_json = EXCLUDED.tags_json,
-          notes = EXCLUDED.notes,
-          addresses_json = EXCLUDED.addresses_json,
-          emails_json = EXCLUDED.emails_json,
-          projects_json = EXCLUDED.projects_json,
-          activities_json = EXCLUDED.activities_json,
-          tax_profile_json = EXCLUDED.tax_profile_json,
-          updated_at = EXCLUDED.updated_at
-      `,
-      [
-        nextClient.id,
-        scope.tenantId,
-        nextClient.customerNumber ?? null,
-        nextClient.company,
-        nextClient.contactPerson,
-        nextClient.email,
-        nextClient.phone,
-        nextClient.address,
-        nextClient.status,
-        nextClient.avatar ?? null,
-        toJson(nextClient.tags),
-        nextClient.notes,
-        toJson(nextClient.addresses ?? []),
-        toJson(nextClient.emails ?? []),
-        toJson(nextClient.projects ?? []),
-        toJson(nextClient.activities ?? []),
-        nextClient.taxProfile ? toJson(nextClient.taxProfile) : null,
-        nextClient.createdAt ?? null,
-        nextClient.updatedAt ?? null,
-      ],
-    );
-    return nextClient;
-  },
+    const drizzleDb = requireDrizzle(db);
+      await drizzleDb
+        .insert(schema.clients)
+        .values({
+          id: nextClient.id,
+          tenantId: scope.tenantId,
+          customerNumber: nextClient.customerNumber ?? null,
+          company: nextClient.company,
+          contactPerson: nextClient.contactPerson,
+          email: nextClient.email,
+          phone: nextClient.phone,
+          address: nextClient.address,
+          status: nextClient.status,
+          avatar: nextClient.avatar ?? null,
+          tagsJson: toJson(nextClient.tags),
+          notes: nextClient.notes,
+          addressesJson: toJson(nextClient.addresses ?? []),
+          emailsJson: toJson(nextClient.emails ?? []),
+          projectsJson: toJson(nextClient.projects ?? []),
+          activitiesJson: toJson(nextClient.activities ?? []),
+          taxProfileJson: nextClient.taxProfile
+            ? toJson(nextClient.taxProfile)
+            : null,
+          createdAt: nextClient.createdAt ?? null,
+          updatedAt: nextClient.updatedAt ?? null,
+        })
+        .onConflictDoUpdate({
+          target: schema.clients.id,
+          set: {
+            tenantId: scope.tenantId,
+            customerNumber: nextClient.customerNumber ?? null,
+            company: nextClient.company,
+            contactPerson: nextClient.contactPerson,
+            email: nextClient.email,
+            phone: nextClient.phone,
+            address: nextClient.address,
+            status: nextClient.status,
+            avatar: nextClient.avatar ?? null,
+            tagsJson: toJson(nextClient.tags),
+            notes: nextClient.notes,
+            addressesJson: toJson(nextClient.addresses ?? []),
+            emailsJson: toJson(nextClient.emails ?? []),
+            projectsJson: toJson(nextClient.projects ?? []),
+            activitiesJson: toJson(nextClient.activities ?? []),
+            taxProfileJson: nextClient.taxProfile
+              ? toJson(nextClient.taxProfile)
+              : null,
+            updatedAt: nextClient.updatedAt ?? null,
+          },
+        });
+      return nextClient;
+      },
   async remove(scope, id) {
-    await db.query('DELETE FROM clients WHERE tenant_id = $1 AND id = $2', [scope.tenantId, id]);
-  },
+    const drizzleDb = requireDrizzle(db);
+      await drizzleDb
+        .delete(schema.clients)
+        .where(
+          and(
+            eq(schema.clients.tenantId, scope.tenantId),
+            eq(schema.clients.id, id),
+          ),
+        );
+      return;
+      },
 });
 
-export const createPostgresInvoiceRepository = (db: PostgresQueryable): InvoiceRepository => ({
+export const createPostgresInvoiceRepository = (
+  db: PostgresQueryable,
+): InvoiceRepository => ({
   async list(scope) {
-    const result = await db.query<InvoiceRow>(
-      'SELECT * FROM invoices WHERE tenant_id = $1 ORDER BY date DESC, created_at DESC NULLS LAST, id DESC',
-      [scope.tenantId],
-    );
-    return result.rows.map((row) => rowToInvoice(row));
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.invoices)
+        .where(eq(schema.invoices.tenantId, scope.tenantId))
+        .orderBy(
+          desc(schema.invoices.date),
+          desc(schema.invoices.createdAt),
+          desc(schema.invoices.id),
+        );
+      return rows.map((row) => rowToInvoice(toInvoiceRow(row)));
+      },
   async getById(scope, id) {
-    const result = await db.query<InvoiceRow>('SELECT * FROM invoices WHERE tenant_id = $1 AND id = $2 LIMIT 1', [scope.tenantId, id]);
-    return result.rows[0] ? rowToInvoice(result.rows[0]) : null;
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.invoices)
+        .where(
+          and(
+            eq(schema.invoices.tenantId, scope.tenantId),
+            eq(schema.invoices.id, id),
+          ),
+        )
+        .limit(1);
+      return rows[0] ? rowToInvoice(toInvoiceRow(rows[0])) : null;
+      },
   async save(scope, invoice) {
     const nextInvoice: Invoice = {
       ...invoice,
@@ -679,89 +949,124 @@ export const createPostgresInvoiceRepository = (db: PostgresQueryable): InvoiceR
       createdAt: invoice.createdAt ?? nowIso(),
       updatedAt: invoice.updatedAt ?? nowIso(),
     };
-    await db.query(
-      `
-        INSERT INTO invoices (
-          id, tenant_id, client_id, client_number, project_id, number, client, client_email, client_address,
-          billing_address_json, shipping_address_json, date, due_date, service_period, amount, status,
-          dunning_level, items_json, payments_json, history_json, tax_mode, tax_meta_json, tax_snapshot_json, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          tenant_id = EXCLUDED.tenant_id,
-          client_id = EXCLUDED.client_id,
-          client_number = EXCLUDED.client_number,
-          project_id = EXCLUDED.project_id,
-          number = EXCLUDED.number,
-          client = EXCLUDED.client,
-          client_email = EXCLUDED.client_email,
-          client_address = EXCLUDED.client_address,
-          billing_address_json = EXCLUDED.billing_address_json,
-          shipping_address_json = EXCLUDED.shipping_address_json,
-          date = EXCLUDED.date,
-          due_date = EXCLUDED.due_date,
-          service_period = EXCLUDED.service_period,
-          amount = EXCLUDED.amount,
-          status = EXCLUDED.status,
-          dunning_level = EXCLUDED.dunning_level,
-          items_json = EXCLUDED.items_json,
-          payments_json = EXCLUDED.payments_json,
-          history_json = EXCLUDED.history_json,
-          tax_mode = EXCLUDED.tax_mode,
-          tax_meta_json = EXCLUDED.tax_meta_json,
-          tax_snapshot_json = EXCLUDED.tax_snapshot_json,
-          updated_at = EXCLUDED.updated_at
-      `,
-      [
-        nextInvoice.id,
-        scope.tenantId,
-        nextInvoice.clientId ?? null,
-        nextInvoice.clientNumber ?? null,
-        nextInvoice.projectId ?? null,
-        nextInvoice.number,
-        nextInvoice.client,
-        nextInvoice.clientEmail,
-        nextInvoice.clientAddress ?? null,
-        nextInvoice.billingAddress ? toJson(nextInvoice.billingAddress) : null,
-        nextInvoice.shippingAddress ? toJson(nextInvoice.shippingAddress) : null,
-        nextInvoice.date,
-        nextInvoice.dueDate,
-        nextInvoice.servicePeriod ?? null,
-        nextInvoice.amount,
-        nextInvoice.status,
-        nextInvoice.dunningLevel ?? 0,
-        toJson(nextInvoice.items ?? []),
-        toJson(nextInvoice.payments ?? []),
-        toJson(nextInvoice.history ?? []),
-        nextInvoice.taxMode ?? 'standard_vat',
-        nextInvoice.taxMeta ? toJson(nextInvoice.taxMeta) : null,
-        nextInvoice.taxSnapshot ? toJson(nextInvoice.taxSnapshot) : null,
-        nextInvoice.createdAt ?? null,
-        nextInvoice.updatedAt ?? null,
-      ],
-    );
-    return nextInvoice;
-  },
+    const drizzleDb = requireDrizzle(db);
+      await drizzleDb
+        .insert(schema.invoices)
+        .values({
+          id: nextInvoice.id,
+          tenantId: scope.tenantId,
+          clientId: nextInvoice.clientId ?? null,
+          clientNumber: nextInvoice.clientNumber ?? null,
+          projectId: nextInvoice.projectId ?? null,
+          number: nextInvoice.number,
+          client: nextInvoice.client,
+          clientEmail: nextInvoice.clientEmail,
+          clientAddress: nextInvoice.clientAddress ?? null,
+          billingAddressJson: nextInvoice.billingAddress
+            ? toJson(nextInvoice.billingAddress)
+            : null,
+          shippingAddressJson: nextInvoice.shippingAddress
+            ? toJson(nextInvoice.shippingAddress)
+            : null,
+          date: nextInvoice.date,
+          dueDate: nextInvoice.dueDate,
+          servicePeriod: nextInvoice.servicePeriod ?? null,
+          amount: String(nextInvoice.amount),
+          status: nextInvoice.status,
+          dunningLevel: nextInvoice.dunningLevel ?? 0,
+          itemsJson: toJson(nextInvoice.items ?? []),
+          paymentsJson: toJson(nextInvoice.payments ?? []),
+          historyJson: toJson(nextInvoice.history ?? []),
+          taxMode: nextInvoice.taxMode ?? "standard_vat",
+          taxMetaJson: nextInvoice.taxMeta ? toJson(nextInvoice.taxMeta) : null,
+          taxSnapshotJson: nextInvoice.taxSnapshot
+            ? toJson(nextInvoice.taxSnapshot)
+            : null,
+          createdAt: nextInvoice.createdAt ?? null,
+          updatedAt: nextInvoice.updatedAt ?? null,
+        })
+        .onConflictDoUpdate({
+          target: schema.invoices.id,
+          set: {
+            tenantId: scope.tenantId,
+            clientId: nextInvoice.clientId ?? null,
+            clientNumber: nextInvoice.clientNumber ?? null,
+            projectId: nextInvoice.projectId ?? null,
+            number: nextInvoice.number,
+            client: nextInvoice.client,
+            clientEmail: nextInvoice.clientEmail,
+            clientAddress: nextInvoice.clientAddress ?? null,
+            billingAddressJson: nextInvoice.billingAddress
+              ? toJson(nextInvoice.billingAddress)
+              : null,
+            shippingAddressJson: nextInvoice.shippingAddress
+              ? toJson(nextInvoice.shippingAddress)
+              : null,
+            date: nextInvoice.date,
+            dueDate: nextInvoice.dueDate,
+            servicePeriod: nextInvoice.servicePeriod ?? null,
+            amount: String(nextInvoice.amount),
+            status: nextInvoice.status,
+            dunningLevel: nextInvoice.dunningLevel ?? 0,
+            itemsJson: toJson(nextInvoice.items ?? []),
+            paymentsJson: toJson(nextInvoice.payments ?? []),
+            historyJson: toJson(nextInvoice.history ?? []),
+            taxMode: nextInvoice.taxMode ?? "standard_vat",
+            taxMetaJson: nextInvoice.taxMeta
+              ? toJson(nextInvoice.taxMeta)
+              : null,
+            taxSnapshotJson: nextInvoice.taxSnapshot
+              ? toJson(nextInvoice.taxSnapshot)
+              : null,
+            updatedAt: nextInvoice.updatedAt ?? null,
+          },
+        });
+      return nextInvoice;
+      },
   async remove(scope, id) {
-    await db.query('DELETE FROM invoices WHERE tenant_id = $1 AND id = $2', [scope.tenantId, id]);
-  },
+    const drizzleDb = requireDrizzle(db);
+      await drizzleDb
+        .delete(schema.invoices)
+        .where(
+          and(
+            eq(schema.invoices.tenantId, scope.tenantId),
+            eq(schema.invoices.id, id),
+          ),
+        );
+      return;
+      },
 });
 
-export const createPostgresOfferRepository = (db: PostgresQueryable): OfferRepository => ({
+export const createPostgresOfferRepository = (
+  db: PostgresQueryable,
+): OfferRepository => ({
   async list(scope) {
-    const result = await db.query<OfferRow>(
-      'SELECT * FROM offers WHERE tenant_id = $1 ORDER BY date DESC, created_at DESC NULLS LAST, id DESC',
-      [scope.tenantId],
-    );
-    return result.rows.map((row) => rowToOffer(row));
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.offers)
+        .where(eq(schema.offers.tenantId, scope.tenantId))
+        .orderBy(
+          desc(schema.offers.date),
+          desc(schema.offers.createdAt),
+          desc(schema.offers.id),
+        );
+      return rows.map((row) => rowToOffer(toOfferRow(row)));
+      },
   async getById(scope, id) {
-    const result = await db.query<OfferRow>('SELECT * FROM offers WHERE tenant_id = $1 AND id = $2 LIMIT 1', [scope.tenantId, id]);
-    return result.rows[0] ? rowToOffer(result.rows[0]) : null;
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.offers)
+        .where(
+          and(
+            eq(schema.offers.tenantId, scope.tenantId),
+            eq(schema.offers.id, id),
+          ),
+        )
+        .limit(1);
+      return rows[0] ? rowToOffer(toOfferRow(rows[0])) : null;
+      },
   async save(scope, offer) {
     const nextOffer: Offer = {
       ...offer,
@@ -769,88 +1074,117 @@ export const createPostgresOfferRepository = (db: PostgresQueryable): OfferRepos
       createdAt: offer.createdAt ?? nowIso(),
       updatedAt: offer.updatedAt ?? nowIso(),
     };
-    await db.query(
-      `
-        INSERT INTO offers (
-          id, tenant_id, client_id, client_number, project_id, number, client, client_email, client_address,
-          billing_address_json, shipping_address_json, date, valid_until, amount, status, share_json,
-          history_json, items_json, tax_mode, tax_meta_json, tax_snapshot_json, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          tenant_id = EXCLUDED.tenant_id,
-          client_id = EXCLUDED.client_id,
-          client_number = EXCLUDED.client_number,
-          project_id = EXCLUDED.project_id,
-          number = EXCLUDED.number,
-          client = EXCLUDED.client,
-          client_email = EXCLUDED.client_email,
-          client_address = EXCLUDED.client_address,
-          billing_address_json = EXCLUDED.billing_address_json,
-          shipping_address_json = EXCLUDED.shipping_address_json,
-          date = EXCLUDED.date,
-          valid_until = EXCLUDED.valid_until,
-          amount = EXCLUDED.amount,
-          status = EXCLUDED.status,
-          share_json = EXCLUDED.share_json,
-          history_json = EXCLUDED.history_json,
-          items_json = EXCLUDED.items_json,
-          tax_mode = EXCLUDED.tax_mode,
-          tax_meta_json = EXCLUDED.tax_meta_json,
-          tax_snapshot_json = EXCLUDED.tax_snapshot_json,
-          updated_at = EXCLUDED.updated_at
-      `,
-      [
-        nextOffer.id,
-        scope.tenantId,
-        nextOffer.clientId ?? null,
-        nextOffer.clientNumber ?? null,
-        nextOffer.projectId ?? null,
-        nextOffer.number,
-        nextOffer.client,
-        nextOffer.clientEmail,
-        nextOffer.clientAddress ?? null,
-        nextOffer.billingAddress ? toJson(nextOffer.billingAddress) : null,
-        nextOffer.shippingAddress ? toJson(nextOffer.shippingAddress) : null,
-        nextOffer.date,
-        nextOffer.validUntil,
-        nextOffer.amount,
-        nextOffer.status,
-        nextOffer.share ? toJson(nextOffer.share) : null,
-        toJson(nextOffer.history ?? []),
-        toJson(nextOffer.items ?? []),
-        nextOffer.taxMode ?? 'standard_vat',
-        nextOffer.taxMeta ? toJson(nextOffer.taxMeta) : null,
-        nextOffer.taxSnapshot ? toJson(nextOffer.taxSnapshot) : null,
-        nextOffer.createdAt ?? null,
-        nextOffer.updatedAt ?? null,
-      ],
-    );
-    return nextOffer;
-  },
+    const drizzleDb = requireDrizzle(db);
+      await drizzleDb
+        .insert(schema.offers)
+        .values({
+          id: nextOffer.id,
+          tenantId: scope.tenantId,
+          clientId: nextOffer.clientId ?? null,
+          clientNumber: nextOffer.clientNumber ?? null,
+          projectId: nextOffer.projectId ?? null,
+          number: nextOffer.number,
+          client: nextOffer.client,
+          clientEmail: nextOffer.clientEmail,
+          clientAddress: nextOffer.clientAddress ?? null,
+          billingAddressJson: nextOffer.billingAddress
+            ? toJson(nextOffer.billingAddress)
+            : null,
+          shippingAddressJson: nextOffer.shippingAddress
+            ? toJson(nextOffer.shippingAddress)
+            : null,
+          date: nextOffer.date,
+          validUntil: nextOffer.validUntil,
+          amount: String(nextOffer.amount),
+          status: nextOffer.status,
+          shareJson: nextOffer.share ? toJson(nextOffer.share) : null,
+          historyJson: toJson(nextOffer.history ?? []),
+          itemsJson: toJson(nextOffer.items ?? []),
+          taxMode: nextOffer.taxMode ?? "standard_vat",
+          taxMetaJson: nextOffer.taxMeta ? toJson(nextOffer.taxMeta) : null,
+          taxSnapshotJson: nextOffer.taxSnapshot
+            ? toJson(nextOffer.taxSnapshot)
+            : null,
+          createdAt: nextOffer.createdAt ?? null,
+          updatedAt: nextOffer.updatedAt ?? null,
+        })
+        .onConflictDoUpdate({
+          target: schema.offers.id,
+          set: {
+            tenantId: scope.tenantId,
+            clientId: nextOffer.clientId ?? null,
+            clientNumber: nextOffer.clientNumber ?? null,
+            projectId: nextOffer.projectId ?? null,
+            number: nextOffer.number,
+            client: nextOffer.client,
+            clientEmail: nextOffer.clientEmail,
+            clientAddress: nextOffer.clientAddress ?? null,
+            billingAddressJson: nextOffer.billingAddress
+              ? toJson(nextOffer.billingAddress)
+              : null,
+            shippingAddressJson: nextOffer.shippingAddress
+              ? toJson(nextOffer.shippingAddress)
+              : null,
+            date: nextOffer.date,
+            validUntil: nextOffer.validUntil,
+            amount: String(nextOffer.amount),
+            status: nextOffer.status,
+            shareJson: nextOffer.share ? toJson(nextOffer.share) : null,
+            historyJson: toJson(nextOffer.history ?? []),
+            itemsJson: toJson(nextOffer.items ?? []),
+            taxMode: nextOffer.taxMode ?? "standard_vat",
+            taxMetaJson: nextOffer.taxMeta ? toJson(nextOffer.taxMeta) : null,
+            taxSnapshotJson: nextOffer.taxSnapshot
+              ? toJson(nextOffer.taxSnapshot)
+              : null,
+            updatedAt: nextOffer.updatedAt ?? null,
+          },
+        });
+      return nextOffer;
+      },
   async remove(scope, id) {
-    await db.query('DELETE FROM offers WHERE tenant_id = $1 AND id = $2', [scope.tenantId, id]);
-  },
+    const drizzleDb = requireDrizzle(db);
+      await drizzleDb
+        .delete(schema.offers)
+        .where(
+          and(
+            eq(schema.offers.tenantId, scope.tenantId),
+            eq(schema.offers.id, id),
+          ),
+        );
+      return;
+      },
 });
 
-export const createPostgresRecurringProfileRepository = (db: PostgresQueryable): RecurringProfileRepository => ({
+export const createPostgresRecurringProfileRepository = (
+  db: PostgresQueryable,
+): RecurringProfileRepository => ({
   async list(scope) {
-    const result = await db.query<RecurringProfileRow>(
-      'SELECT * FROM recurring_profiles WHERE tenant_id = $1 ORDER BY next_run ASC, name ASC',
-      [scope.tenantId],
-    );
-    return result.rows.map((row) => rowToRecurringProfile(row));
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.recurringProfiles)
+        .where(eq(schema.recurringProfiles.tenantId, scope.tenantId))
+        .orderBy(
+          asc(schema.recurringProfiles.nextRun),
+          asc(schema.recurringProfiles.name),
+        );
+      return rows.map((row) => rowToRecurringProfile(toRecurringRow(row)));
+      },
   async getById(scope, id) {
-    const result = await db.query<RecurringProfileRow>(
-      'SELECT * FROM recurring_profiles WHERE tenant_id = $1 AND id = $2 LIMIT 1',
-      [scope.tenantId, id],
-    );
-    return result.rows[0] ? rowToRecurringProfile(result.rows[0]) : null;
-  },
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.recurringProfiles)
+        .where(
+          and(
+            eq(schema.recurringProfiles.tenantId, scope.tenantId),
+            eq(schema.recurringProfiles.id, id),
+          ),
+        )
+        .limit(1);
+      return rows[0] ? rowToRecurringProfile(toRecurringRow(rows[0])) : null;
+      },
   async save(scope, profile) {
     const nextProfile: RecurringProfile = {
       ...profile,
@@ -858,95 +1192,95 @@ export const createPostgresRecurringProfileRepository = (db: PostgresQueryable):
       createdAt: profile.createdAt ?? nowIso(),
       updatedAt: profile.updatedAt ?? nowIso(),
     };
-    await db.query(
-      `
-        INSERT INTO recurring_profiles (
-          id, tenant_id, client_id, active, name, interval, next_run, last_run, end_date,
-          amount, items_json, tax_mode, tax_meta_json, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13, $14, $15
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          tenant_id = EXCLUDED.tenant_id,
-          client_id = EXCLUDED.client_id,
-          active = EXCLUDED.active,
-          name = EXCLUDED.name,
-          interval = EXCLUDED.interval,
-          next_run = EXCLUDED.next_run,
-          last_run = EXCLUDED.last_run,
-          end_date = EXCLUDED.end_date,
-          amount = EXCLUDED.amount,
-          items_json = EXCLUDED.items_json,
-          tax_mode = EXCLUDED.tax_mode,
-          tax_meta_json = EXCLUDED.tax_meta_json,
-          updated_at = EXCLUDED.updated_at
-      `,
-      [
-        nextProfile.id,
-        scope.tenantId,
-        nextProfile.clientId,
-        nextProfile.active,
-        nextProfile.name,
-        nextProfile.interval,
-        nextProfile.nextRun,
-        nextProfile.lastRun ?? null,
-        nextProfile.endDate ?? null,
-        nextProfile.amount,
-        toJson(nextProfile.items ?? []),
-        nextProfile.taxMode ?? 'standard_vat',
-        nextProfile.taxMeta ? toJson(nextProfile.taxMeta) : null,
-        nextProfile.createdAt ?? null,
-        nextProfile.updatedAt ?? null,
-      ],
-    );
-    return nextProfile;
-  },
+    const drizzleDb = requireDrizzle(db);
+      await drizzleDb
+        .insert(schema.recurringProfiles)
+        .values({
+          id: nextProfile.id,
+          tenantId: scope.tenantId,
+          clientId: nextProfile.clientId,
+          active: nextProfile.active,
+          name: nextProfile.name,
+          interval: nextProfile.interval,
+          nextRun: nextProfile.nextRun,
+          lastRun: nextProfile.lastRun ?? null,
+          endDate: nextProfile.endDate ?? null,
+          amount: String(nextProfile.amount),
+          itemsJson: toJson(nextProfile.items ?? []),
+          taxMode: nextProfile.taxMode ?? "standard_vat",
+          taxMetaJson: nextProfile.taxMeta ? toJson(nextProfile.taxMeta) : null,
+          createdAt: nextProfile.createdAt ?? null,
+          updatedAt: nextProfile.updatedAt ?? null,
+        })
+        .onConflictDoUpdate({
+          target: schema.recurringProfiles.id,
+          set: {
+            tenantId: scope.tenantId,
+            clientId: nextProfile.clientId,
+            active: nextProfile.active,
+            name: nextProfile.name,
+            interval: nextProfile.interval,
+            nextRun: nextProfile.nextRun,
+            lastRun: nextProfile.lastRun ?? null,
+            endDate: nextProfile.endDate ?? null,
+            amount: String(nextProfile.amount),
+            itemsJson: toJson(nextProfile.items ?? []),
+            taxMode: nextProfile.taxMode ?? "standard_vat",
+            taxMetaJson: nextProfile.taxMeta
+              ? toJson(nextProfile.taxMeta)
+              : null,
+            updatedAt: nextProfile.updatedAt ?? null,
+          },
+        });
+      return nextProfile;
+      },
   async remove(scope, id) {
-    await db.query('DELETE FROM recurring_profiles WHERE tenant_id = $1 AND id = $2', [scope.tenantId, id]);
+    const drizzleDb = requireDrizzle(db);
+    await drizzleDb
+      .delete(schema.recurringProfiles)
+      .where(
+        and(
+          eq(schema.recurringProfiles.tenantId, scope.tenantId),
+          eq(schema.recurringProfiles.id, id),
+        ),
+      );
   },
 });
 
-export const createPostgresDunningHistoryRepository = (db: PostgresQueryable): DunningHistoryRepository => ({
+export const createPostgresDunningHistoryRepository = (
+  db: PostgresQueryable,
+): DunningHistoryRepository => ({
   async listByInvoice(scope, invoiceId) {
-    const result = await db.query<DunningHistoryRow>(
-      `
-        SELECT *
-        FROM dunning_history
-        WHERE tenant_id = $1 AND invoice_id = $2
-        ORDER BY dunning_level DESC, processed_at DESC
-      `,
-      [scope.tenantId, invoiceId],
-    );
-    return result.rows.map((row) => rowToDunningHistory(row));
+    const drizzleDb = requireDrizzle(db);
+    const rows = await drizzleDb
+      .select()
+      .from(schema.dunningHistory)
+      .where(
+        and(
+          eq(schema.dunningHistory.tenantId, scope.tenantId),
+          eq(schema.dunningHistory.invoiceId, invoiceId),
+        ),
+      )
+      .orderBy(desc(schema.dunningHistory.dunningLevel), desc(schema.dunningHistory.processedAt));
+    return rows.map((row) => rowToDunningHistory(toDunningHistoryRow(row)));
   },
   async record(scope, entry: DunningHistoryEntryDraft) {
     const createdAt = nowIso();
     const id = randomId();
-    await db.query(
-      `
-        INSERT INTO dunning_history (
-          id, tenant_id, invoice_id, invoice_number, dunning_level, days_overdue,
-          fee_applied, email_sent, email_log_id, processed_at, created_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, $10, $11
-        )
-      `,
-      [
-        id,
-        scope.tenantId,
-        entry.invoiceId,
-        entry.invoiceNumber,
-        entry.dunningLevel,
-        entry.daysOverdue,
-        entry.feeApplied,
-        entry.emailSent,
-        entry.emailLogId ?? null,
-        entry.processedAt,
-        createdAt,
-      ],
-    );
+    const drizzleDb = requireDrizzle(db);
+    await drizzleDb.insert(schema.dunningHistory).values({
+      id,
+      tenantId: scope.tenantId,
+      invoiceId: entry.invoiceId,
+      invoiceNumber: entry.invoiceNumber,
+      dunningLevel: entry.dunningLevel,
+      daysOverdue: entry.daysOverdue,
+      feeApplied: String(entry.feeApplied),
+      emailSent: entry.emailSent,
+      emailLogId: entry.emailLogId ?? null,
+      processedAt: entry.processedAt,
+      createdAt,
+    });
     return {
       ...entry,
       id,
@@ -955,7 +1289,9 @@ export const createPostgresDunningHistoryRepository = (db: PostgresQueryable): D
   },
 });
 
-export const createPostgresEmailOutboxRepository = (db: PostgresQueryable): EmailOutboxRepository => ({
+export const createPostgresEmailOutboxRepository = (
+  db: PostgresQueryable,
+): EmailOutboxRepository => ({
   async enqueue(scope, entry: QueueEmailDeliveryInput) {
     const createdAt = nowIso();
     const nextEntry = {
@@ -969,7 +1305,7 @@ export const createPostgresEmailOutboxRepository = (db: PostgresQueryable): Emai
       recipientName: entry.recipientName,
       subject: entry.subject,
       bodyText: entry.bodyText,
-      status: 'pending' as const,
+      status: "pending" as const,
       attemptCount: 0,
       maxAttempts: entry.maxAttempts ?? defaultEmailOutboxMaxAttempts,
       nextAttemptAt: entry.nextAttemptAt ?? createdAt,
@@ -977,225 +1313,212 @@ export const createPostgresEmailOutboxRepository = (db: PostgresQueryable): Emai
       updatedAt: createdAt,
     };
 
-    const inserted = await db.query<EmailOutboxRow>(
-      `
-        INSERT INTO email_outbox (
-          id, tenant_id, dedupe_key, document_type, document_id, document_number,
-          recipient_email, recipient_name, subject, body_text, status, attempt_count,
-          max_attempts, next_attempt_at, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, $10, $11, $12,
-          $13, $14, $15, $16
-        )
-        ON CONFLICT DO NOTHING
-        RETURNING *
-      `,
-      [
-        nextEntry.id,
-        nextEntry.tenantId,
-        nextEntry.dedupeKey,
-        nextEntry.documentType,
-        nextEntry.documentId,
-        nextEntry.documentNumber,
-        nextEntry.recipientEmail,
-        nextEntry.recipientName,
-        nextEntry.subject,
-        nextEntry.bodyText,
-        nextEntry.status,
-        nextEntry.attemptCount,
-        nextEntry.maxAttempts,
-        nextEntry.nextAttemptAt,
-        nextEntry.createdAt,
-        nextEntry.updatedAt,
-      ],
-    );
+    const drizzleDb = requireDrizzle(db);
+    const inserted = await drizzleDb
+      .insert(schema.emailOutbox)
+      .values(nextEntry)
+      .onConflictDoNothing()
+      .returning();
 
-    if (inserted.rows[0]) {
-      return rowToEmailOutbox(inserted.rows[0]);
+    if (inserted[0]) {
+      return rowToEmailOutbox(toEmailOutboxRow(inserted[0]));
     }
 
-    const existing = await db.query<EmailOutboxRow>(
-      `
-        SELECT *
-        FROM email_outbox
-        WHERE tenant_id = $1
-          AND dedupe_key = $2
-          AND status IN ('pending', 'processing')
-        ORDER BY created_at ASC
-        LIMIT 1
-      `,
-      [scope.tenantId, nextEntry.dedupeKey],
-    );
+    const existing = await drizzleDb
+      .select()
+      .from(schema.emailOutbox)
+      .where(
+        and(
+          eq(schema.emailOutbox.tenantId, scope.tenantId),
+          eq(schema.emailOutbox.dedupeKey, nextEntry.dedupeKey),
+          inArray(schema.emailOutbox.status, ['pending', 'processing']),
+        ),
+      )
+      .orderBy(asc(schema.emailOutbox.createdAt))
+      .limit(1);
 
-    if (!existing.rows[0]) {
-      throw new Error('Failed to enqueue email outbox entry');
+    if (!existing[0]) {
+      throw new Error("Failed to enqueue email outbox entry");
     }
 
-    return rowToEmailOutbox(existing.rows[0]);
+    return rowToEmailOutbox(toEmailOutboxRow(existing[0]));
   },
 
   async claimDue(scope, args) {
-    const result = await db.query<EmailOutboxRow>(
-      `
-        WITH due AS (
-          SELECT id
-          FROM email_outbox
-          WHERE tenant_id = $1
-            AND (
-              (status = 'pending' AND next_attempt_at <= $2)
-              OR (status = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $2)
-            )
-          ORDER BY next_attempt_at ASC, created_at ASC
-          FOR UPDATE SKIP LOCKED
-          LIMIT $3
+    const drizzleDb = requireDrizzle(db);
+    const rows = await drizzleDb.transaction(async (tx) => {
+      const due = await tx
+        .select()
+        .from(schema.emailOutbox)
+        .where(
+          and(
+            eq(schema.emailOutbox.tenantId, scope.tenantId),
+            or(
+              and(
+                eq(schema.emailOutbox.status, 'pending'),
+                lte(schema.emailOutbox.nextAttemptAt, args.now),
+              ),
+              and(
+                eq(schema.emailOutbox.status, 'processing'),
+                isNotNull(schema.emailOutbox.leaseExpiresAt),
+                lte(schema.emailOutbox.leaseExpiresAt, args.now),
+              ),
+            ),
+          ),
         )
-        UPDATE email_outbox
-        SET status = 'processing',
-            locked_by = $4,
-            locked_at = $2,
-            lease_expires_at = $5,
-            updated_at = $2
-        FROM due
-        WHERE email_outbox.id = due.id
-        RETURNING email_outbox.*
-      `,
-      [scope.tenantId, args.now, args.limit, args.workerId, args.leaseExpiresAt],
-    );
-
-    return result.rows.map((row) => rowToEmailOutbox(row));
+        .orderBy(asc(schema.emailOutbox.nextAttemptAt), asc(schema.emailOutbox.createdAt))
+        .limit(args.limit)
+        .for('update', { skipLocked: true });
+      if (!due.length) return [];
+      const updated = await tx
+        .update(schema.emailOutbox)
+        .set({
+          status: 'processing',
+          lockedBy: args.workerId,
+          lockedAt: args.now,
+          leaseExpiresAt: args.leaseExpiresAt,
+          updatedAt: args.now,
+        })
+        .where(inArray(schema.emailOutbox.id, due.map((row) => row.id!)))
+        .returning();
+      return updated;
+    });
+    return rows.map((row) => rowToEmailOutbox(toEmailOutboxRow(row)));
   },
 
   async markSent(scope, args) {
-    const result = await db.query<EmailOutboxRow>(
-      `
-        UPDATE email_outbox
-        SET status = 'sent',
-            attempt_count = attempt_count + 1,
-            next_attempt_at = $3,
-            last_attempt_at = $3,
-            last_error = NULL,
-            provider = $4,
-            provider_message_id = $5,
-            sent_at = $3,
-            locked_at = NULL,
-            lease_expires_at = NULL,
-            locked_by = NULL,
-            updated_at = $3
-        WHERE tenant_id = $1
-          AND id = $2
-          AND status = 'processing'
-          AND locked_by = $6
-        RETURNING *
-      `,
-      [scope.tenantId, args.id, args.sentAt, args.provider, args.providerMessageId ?? null, args.workerId],
-    );
+    const drizzleDb = requireDrizzle(db);
+    const rows = await drizzleDb
+      .update(schema.emailOutbox)
+      .set({
+        status: 'sent',
+        attemptCount: sql`${schema.emailOutbox.attemptCount} + 1`,
+        nextAttemptAt: args.sentAt,
+        lastAttemptAt: args.sentAt,
+        lastError: null,
+        provider: args.provider,
+        providerMessageId: args.providerMessageId ?? null,
+        sentAt: args.sentAt,
+        lockedAt: null,
+        leaseExpiresAt: null,
+        lockedBy: null,
+        updatedAt: args.sentAt,
+      })
+      .where(
+        and(
+          eq(schema.emailOutbox.tenantId, scope.tenantId),
+          eq(schema.emailOutbox.id, args.id),
+          eq(schema.emailOutbox.status, 'processing'),
+          eq(schema.emailOutbox.lockedBy, args.workerId),
+        ),
+      )
+      .returning();
 
-    return result.rows[0] ? rowToEmailOutbox(result.rows[0]) : null;
+    return rows[0] ? rowToEmailOutbox(toEmailOutboxRow(rows[0])) : null;
   },
 
   async markFailed(scope, args) {
-    const result = await db.query<EmailOutboxRow>(
-      `
-        UPDATE email_outbox
-        SET status = CASE
-              WHEN attempt_count + 1 >= max_attempts OR $4::text IS NULL THEN 'failed'
-              ELSE 'pending'
-            END,
-            attempt_count = attempt_count + 1,
-            next_attempt_at = CASE
-              WHEN attempt_count + 1 >= max_attempts OR $4::text IS NULL THEN $3
-              ELSE $4
-            END,
-            last_attempt_at = $3,
-            last_error = $5,
-            provider = $6,
-            provider_message_id = NULL,
-            locked_at = NULL,
-            lease_expires_at = NULL,
-            locked_by = NULL,
-            updated_at = $3
-        WHERE tenant_id = $1
-          AND id = $2
-          AND status = 'processing'
-          AND locked_by = $7
-        RETURNING *
-      `,
-      [scope.tenantId, args.id, args.failedAt, args.retryAt ?? null, args.error, args.provider, args.workerId],
-    );
+    const drizzleDb = requireDrizzle(db);
+    const rows = await drizzleDb
+      .update(schema.emailOutbox)
+      .set({
+        status: sql`CASE WHEN ${schema.emailOutbox.attemptCount} + 1 >= ${schema.emailOutbox.maxAttempts} OR ${args.retryAt ?? null} IS NULL THEN 'failed' ELSE 'pending' END`,
+        attemptCount: sql`${schema.emailOutbox.attemptCount} + 1`,
+        nextAttemptAt: sql`CASE WHEN ${schema.emailOutbox.attemptCount} + 1 >= ${schema.emailOutbox.maxAttempts} OR ${args.retryAt ?? null} IS NULL THEN ${args.failedAt} ELSE ${args.retryAt} END`,
+        lastAttemptAt: args.failedAt,
+        lastError: args.error,
+        provider: args.provider,
+        providerMessageId: null,
+        lockedAt: null,
+        leaseExpiresAt: null,
+        lockedBy: null,
+        updatedAt: args.failedAt,
+      })
+      .where(
+        and(
+          eq(schema.emailOutbox.tenantId, scope.tenantId),
+          eq(schema.emailOutbox.id, args.id),
+          eq(schema.emailOutbox.status, 'processing'),
+          eq(schema.emailOutbox.lockedBy, args.workerId),
+        ),
+      )
+      .returning();
 
-    return result.rows[0] ? rowToEmailOutbox(result.rows[0]) : null;
+    return rows[0] ? rowToEmailOutbox(toEmailOutboxRow(rows[0])) : null;
   },
 });
 
-export const getServerSettings = async (db: PostgresQueryable, tenantId: string): Promise<ServerSettingsRecord | null> => {
-  const result = await db.query<{
-    tenant_id: string;
-    settings_json: string;
-    created_at: string;
-    updated_at: string;
-  }>('SELECT * FROM server_settings WHERE tenant_id = $1 LIMIT 1', [tenantId]);
-
-  const row = result.rows[0];
-  if (!row) {
-    return null;
-  }
-
-  return {
-    tenantId: row.tenant_id,
-    settingsJson: row.settings_json,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
+export const getServerSettings = async (
+  db: PostgresQueryable,
+  tenantId: string,
+): Promise<ServerSettingsRecord | null> => {
+  const drizzleDb = requireDrizzle(db);
+    const row = await drizzleDb
+      .select()
+      .from(schema.serverSettings)
+      .where(eq(schema.serverSettings.tenantId, tenantId))
+      .limit(1);
+    const value = row[0];
+    return value
+      ? {
+          tenantId: value.tenantId!,
+          settingsJson: value.settingsJson!,
+          createdAt: value.createdAt!,
+          updatedAt: value.updatedAt!,
+        }
+      : null;
 };
 
-export const saveServerSettings = async (db: PostgresQueryable, record: ServerSettingsRecord): Promise<ServerSettingsRecord> => {
+export const saveServerSettings = async (
+  db: PostgresQueryable,
+  record: ServerSettingsRecord,
+): Promise<ServerSettingsRecord> => {
   const nextRecord: ServerSettingsRecord = {
     ...record,
     createdAt: record.createdAt || nowIso(),
     updatedAt: record.updatedAt || nowIso(),
   };
-  await db.query(
-    `
-      INSERT INTO server_settings (tenant_id, settings_json, created_at, updated_at)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (tenant_id) DO UPDATE SET
-        settings_json = EXCLUDED.settings_json,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [nextRecord.tenantId, nextRecord.settingsJson, nextRecord.createdAt, nextRecord.updatedAt],
-  );
-  return nextRecord;
-};
+  const drizzleDb = requireDrizzle(db);
+    await drizzleDb
+      .insert(schema.serverSettings)
+      .values({
+        tenantId: nextRecord.tenantId,
+        settingsJson: nextRecord.settingsJson,
+        createdAt: nextRecord.createdAt,
+        updatedAt: nextRecord.updatedAt,
+      })
+      .onConflictDoUpdate({
+        target: schema.serverSettings.tenantId,
+        set: {
+          settingsJson: nextRecord.settingsJson,
+          updatedAt: nextRecord.updatedAt,
+        },
+      });
+    return nextRecord;
+  };
 
 export const listServerNumberReservations = async (
   db: PostgresQueryable,
   tenantId: string,
 ): Promise<ServerNumberReservation[]> => {
-  const result = await db.query<{
-    id: string;
-    tenant_id: string;
-    kind: ServerNumberReservation['kind'];
-    number: string;
-    counter_value: number;
-    status: ServerNumberReservation['status'];
-    document_id: string | null;
-    created_at: string;
-    updated_at: string;
-  }>('SELECT * FROM number_reservations WHERE tenant_id = $1 ORDER BY created_at ASC', [tenantId]);
-
-  return result.rows.map((row) => ({
-    id: row.id,
-    tenantId: row.tenant_id,
-    kind: row.kind,
-    number: row.number,
-    counterValue: row.counter_value,
-    status: row.status,
-    documentId: row.document_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }));
-};
+  const drizzleDb = requireDrizzle(db);
+    const rows = await drizzleDb
+      .select()
+      .from(schema.numberReservations)
+      .where(eq(schema.numberReservations.tenantId, tenantId))
+      .orderBy(asc(schema.numberReservations.createdAt));
+    return rows.map((row) => ({
+      id: row.id!,
+      tenantId: row.tenantId!,
+      kind: row.kind as ServerNumberReservation["kind"],
+      number: row.number!,
+      counterValue: row.counterValue!,
+      status: row.status as ServerNumberReservation["status"],
+      documentId: row.documentId ?? null,
+      createdAt: row.createdAt!,
+      updatedAt: row.updatedAt!,
+    }));
+  };
 
 export const saveServerNumberReservation = async (
   db: PostgresQueryable,
@@ -1207,55 +1530,53 @@ export const saveServerNumberReservation = async (
     updatedAt: reservation.updatedAt || nowIso(),
   };
 
-  await db.query(
-    `
-      INSERT INTO number_reservations (
-        id, tenant_id, kind, number, counter_value, status, document_id, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        kind = EXCLUDED.kind,
-        number = EXCLUDED.number,
-        counter_value = EXCLUDED.counter_value,
-        status = EXCLUDED.status,
-        document_id = EXCLUDED.document_id,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      nextReservation.id,
-      nextReservation.tenantId,
-      nextReservation.kind,
-      nextReservation.number,
-      nextReservation.counterValue,
-      nextReservation.status,
-      nextReservation.documentId,
-      nextReservation.createdAt,
-      nextReservation.updatedAt,
-    ],
-  );
-
-  return nextReservation;
-};
+  const drizzleDb = requireDrizzle(db);
+    await drizzleDb
+      .insert(schema.numberReservations)
+      .values({
+        id: nextReservation.id,
+        tenantId: nextReservation.tenantId,
+        kind: nextReservation.kind,
+        number: nextReservation.number,
+        counterValue: nextReservation.counterValue,
+        status: nextReservation.status,
+        documentId: nextReservation.documentId,
+        createdAt: nextReservation.createdAt,
+        updatedAt: nextReservation.updatedAt,
+      })
+      .onConflictDoUpdate({
+        target: schema.numberReservations.id,
+        set: {
+          tenantId: nextReservation.tenantId,
+          kind: nextReservation.kind,
+          number: nextReservation.number,
+          counterValue: nextReservation.counterValue,
+          status: nextReservation.status,
+          documentId: nextReservation.documentId,
+          updatedAt: nextReservation.updatedAt,
+        },
+      });
+    return nextReservation;
+  };
 
 export const deleteReleasedServerNumberReservationsBefore = async (
   db: PostgresQueryable,
   tenantId: string,
   updatedBefore: string,
 ): Promise<number> => {
-  const result = await db.query(
-    `
-      DELETE FROM number_reservations
-      WHERE tenant_id = $1
-        AND status = 'released'
-        AND updated_at IS NOT NULL
-        AND updated_at::timestamptz < $2::timestamptz
-    `,
-    [tenantId, updatedBefore],
-  );
-
-  return result.rowCount ?? 0;
+  const drizzleDb = requireDrizzle(db);
+  const rows = await drizzleDb
+    .delete(schema.numberReservations)
+    .where(
+      and(
+        eq(schema.numberReservations.tenantId, tenantId),
+        eq(schema.numberReservations.status, 'released'),
+        isNotNull(schema.numberReservations.updatedAt),
+        lt(schema.numberReservations.updatedAt, updatedBefore),
+      ),
+    )
+    .returning({ id: schema.numberReservations.id });
+  return rows.length;
 };
 
 export const deleteServerSqliteImportRunsBefore = async (
@@ -1268,26 +1589,38 @@ export const deleteServerSqliteImportRunsBefore = async (
     return 0;
   }
 
-  const result = await db.query(
-    `
-      DELETE FROM sqlite_import_runs
-      WHERE tenant_id = $1
-        AND status = ANY($2::text[])
-        AND completed_at IS NOT NULL
-        AND completed_at::timestamptz < $3::timestamptz
-    `,
-    [tenantId, statuses, completedBefore],
-  );
-
-  return result.rowCount ?? 0;
+  const drizzleDb = requireDrizzle(db);
+  const rows = await drizzleDb
+    .delete(schema.sqliteImportRuns)
+    .where(
+      and(
+        eq(schema.sqliteImportRuns.tenantId, tenantId),
+        inArray(schema.sqliteImportRuns.status, statuses),
+        isNotNull(schema.sqliteImportRuns.completedAt),
+        lt(schema.sqliteImportRuns.completedAt, completedBefore),
+      ),
+    )
+    .returning({ id: schema.sqliteImportRuns.id });
+  return rows.length;
 };
 
-export const createPostgresMaintenanceRepository = (db: PostgresQueryable): MaintenanceRetentionRepository => ({
+export const createPostgresMaintenanceRepository = (
+  db: PostgresQueryable,
+): MaintenanceRetentionRepository => ({
   deleteReleasedNumberReservations(scope, args) {
-    return deleteReleasedServerNumberReservationsBefore(db, scope.tenantId, args.updatedBefore);
+    return deleteReleasedServerNumberReservationsBefore(
+      db,
+      scope.tenantId,
+      args.updatedBefore,
+    );
   },
   deleteSqliteImportRuns(scope, args) {
-    return deleteServerSqliteImportRunsBefore(db, scope.tenantId, args.completedBefore, args.statuses);
+    return deleteServerSqliteImportRunsBefore(
+      db,
+      scope.tenantId,
+      args.completedBefore,
+      args.statuses,
+    );
   },
 });
 
@@ -1306,8 +1639,13 @@ export const createPostgresBillingDependencies = (
   auditLog: createPostgresAuditLogPort(db),
 });
 
-export const createPostgresBillingUnitOfWork = (pool: Pool): BillingUnitOfWork => ({
-  async withTransaction<TResult>(scope: TenantScope, work: (context: BillingUnitOfWorkContext) => Promise<TResult> | TResult) {
+export const createPostgresBillingUnitOfWork = (
+  pool: Pool,
+): BillingUnitOfWork => ({
+  async withTransaction<TResult>(
+    scope: TenantScope,
+    work: (context: BillingUnitOfWorkContext) => Promise<TResult> | TResult,
+  ) {
     return withPostgresTransaction(pool, async (client) => {
       const repositories = createPostgresBillingDependencies(client);
       return work({
@@ -1319,57 +1657,104 @@ export const createPostgresBillingUnitOfWork = (pool: Pool): BillingUnitOfWork =
   },
 });
 
-export const createDefaultTenantScope = (tenantId: string, product: Tenant['product']): TenantScope => {
+export const createDefaultTenantScope = (
+  tenantId: string,
+  product: Tenant["product"],
+): TenantScope => {
   return createSingleTenantScope(tenantId, product);
 };
 
 export const tenantCoreRowCountTables = [
-  'server_settings',
-  'number_reservations',
-  'clients',
-  'invoices',
-  'offers',
-  'recurring_profiles',
-  'articles',
-  'accounts',
-  'pro_workflow_entries',
-  'bank_transactions',
-  'booking_drafts',
-  'booking_draft_lines',
-  'draft_validation_issues',
-  'accounting_periods',
-  'journal_entries',
-  'journal_lines',
-  'assets',
-  'asset_depreciation_schedule',
-  'asset_movements',
-  'account_mappings_hgb',
-  'report_snapshots',
-  'datev_exports',
-  'vat_evidence',
-  'journal_posting_pairs',
-  'transactions',
-  'eur_classifications',
-  'eur_rules',
-  'account_keywords',
-  'account_suggestion_rules',
-  'import_batches',
-  'templates',
-  'active_templates',
-  'dunning_history',
-  'email_outbox',
-  'email_log',
-  'audit_log',
+  "server_settings",
+  "number_reservations",
+  "clients",
+  "invoices",
+  "offers",
+  "recurring_profiles",
+  "articles",
+  "accounts",
+  "pro_workflow_entries",
+  "bank_transactions",
+  "booking_drafts",
+  "booking_draft_lines",
+  "draft_validation_issues",
+  "accounting_periods",
+  "journal_entries",
+  "journal_lines",
+  "assets",
+  "asset_depreciation_schedule",
+  "asset_movements",
+  "account_mappings_hgb",
+  "report_snapshots",
+  "datev_exports",
+  "vat_evidence",
+  "journal_posting_pairs",
+  "transactions",
+  "eur_classifications",
+  "eur_rules",
+  "account_keywords",
+  "account_suggestion_rules",
+  "import_batches",
+  "templates",
+  "active_templates",
+  "dunning_history",
+  "email_outbox",
+  "email_log",
+  "audit_log",
 ] as const;
 
-export const countTenantCoreRows = async (db: PostgresQueryable, tenantId: string): Promise<number> => {
-  const tables = [
-    ...tenantCoreRowCountTables,
-  ];
+export const countTenantCoreRows = async (
+  db: PostgresQueryable,
+  tenantId: string,
+): Promise<number> => {
+  const drizzleDb = requireDrizzle(db);
+  const tableMap: Record<string, any> = {
+    server_settings: schema.serverSettings,
+    number_reservations: schema.numberReservations,
+    clients: schema.clients,
+    invoices: schema.invoices,
+    offers: schema.offers,
+    recurring_profiles: schema.recurringProfiles,
+    articles: schema.articles,
+    accounts: schema.accounts,
+    pro_workflow_entries: schema.proWorkflowEntries,
+    bank_transactions: schema.bankTransactions,
+    booking_drafts: schema.bookingDrafts,
+    booking_draft_lines: schema.bookingDraftLines,
+    draft_validation_issues: schema.draftValidationIssues,
+    accounting_periods: schema.accountingPeriods,
+    journal_entries: schema.journalEntries,
+    journal_lines: schema.journalLines,
+    assets: schema.assets,
+    asset_depreciation_schedule: schema.assetDepreciationSchedule,
+    asset_movements: schema.assetMovements,
+    account_mappings_hgb: schema.accountMappingsHgb,
+    report_snapshots: schema.reportSnapshots,
+    datev_exports: schema.datevExports,
+    vat_evidence: schema.vatEvidence,
+    journal_posting_pairs: schema.journalPostingPairs,
+    transactions: schema.transactions,
+    eur_classifications: schema.eurClassifications,
+    eur_rules: schema.eurRules,
+    account_keywords: schema.accountKeywords,
+    account_suggestion_rules: schema.accountSuggestionRules,
+    import_batches: schema.importBatches,
+    templates: schema.templates,
+    active_templates: schema.activeTemplates,
+    dunning_history: schema.dunningHistory,
+    email_outbox: schema.emailOutbox,
+    email_log: schema.emailLog,
+    audit_log: schema.auditLog,
+  };
   let total = 0;
-  for (const table of tables) {
-    const result = await db.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM ${table} WHERE tenant_id = $1`, [tenantId]);
-    total += Number(result.rows[0]?.count ?? 0);
+  for (const tableName of tenantCoreRowCountTables) {
+    const table = tableMap[tableName];
+    if (!table) continue;
+    const rows = await drizzleDb
+      .select({ count: count() })
+      .from(table)
+      .where(eq(table.tenantId, tenantId));
+    total += Number(rows[0]?.count ?? 0);
   }
   return total;
 };
@@ -1393,33 +1778,23 @@ export const insertEmailLogRow = async (
     createdAt: string;
   },
 ): Promise<void> => {
-  await db.query(
-    `
-      INSERT INTO email_log (
-        id, tenant_id, document_type, document_id, document_number, recipient_email,
-        recipient_name, subject, body_text, provider, status, error_message, sent_at, created_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, $12, $13, $14
-      )
-    `,
-    [
-      row.id,
-      tenantId,
-      row.documentType,
-      row.documentId,
-      row.documentNumber,
-      row.recipientEmail,
-      row.recipientName,
-      row.subject,
-      row.bodyText,
-      row.provider,
-      row.status,
-      row.errorMessage ?? null,
-      row.sentAt,
-      row.createdAt,
-    ],
-  );
+  const drizzleDb = requireDrizzle(db);
+  await drizzleDb.insert(schema.emailLog).values({
+    id: row.id,
+    tenantId,
+    documentType: row.documentType,
+    documentId: row.documentId,
+    documentNumber: row.documentNumber,
+    recipientEmail: row.recipientEmail,
+    recipientName: row.recipientName,
+    subject: row.subject,
+    bodyText: row.bodyText,
+    provider: row.provider,
+    status: row.status,
+    errorMessage: row.errorMessage ?? null,
+    sentAt: row.sentAt,
+    createdAt: row.createdAt,
+  });
 };
 
 export const insertAuditRow = async (
@@ -1439,29 +1814,20 @@ export const insertAuditRow = async (
     actor: string;
   },
 ): Promise<void> => {
-  await db.query(
-    `
-      INSERT INTO audit_log (
-        tenant_id, sequence, ts, entity_type, entity_id, action, reason,
-        before_json, after_json, prev_hash, hash, actor
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12
-      )
-    `,
-    [
-      tenantId,
-      row.sequence,
-      row.ts,
-      row.entityType,
-      row.entityId,
-      row.action,
-      row.reason ?? null,
-      row.beforeJson ?? null,
-      row.afterJson ?? null,
-      row.prevHash ?? null,
-      row.hash,
-      row.actor,
-    ],
-  );
+  const drizzleDb = requireDrizzle(db);
+  await drizzleDb.insert(schema.auditLog).values({
+    id: randomId(),
+    tenantId,
+    sequence: row.sequence,
+    ts: row.ts,
+    entityType: row.entityType,
+    entityId: row.entityId,
+    action: row.action,
+    reason: row.reason ?? null,
+    beforeJson: row.beforeJson ?? null,
+    afterJson: row.afterJson ?? null,
+    prevHash: row.prevHash ?? null,
+    hash: row.hash,
+    actor: row.actor,
+  });
 };

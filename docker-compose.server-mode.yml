@@ -18,6 +18,19 @@ services:
       retries: 5
       start_period: 10s
 
+  server-migrate:
+    build:
+      context: .
+      dockerfile: apps/server-api/Dockerfile
+    init: true
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:-billme}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["node", "--import", "tsx", "/app/packages/server-data/src/cli/migrate.ts"]
+
   server-api:
     build:
       context: .
@@ -32,6 +45,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      server-migrate:
+        condition: service_completed_successfully
     ports:
       - "${BILLME_API_PORT:-3100}:3100"
 
@@ -59,6 +74,33 @@ services:
       server-api:
         condition: service_healthy
 
+  offer-portal:
+    build:
+      context: .
+      dockerfile: apps/offer-portal/Dockerfile
+    init: true
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3001
+      DATABASE_PATH: /app/data/offer-portal.sqlite
+      STORAGE_DIR: /app/storage
+      STORAGE_MODE: sqlite
+      PUBLIC_BASE_URL: ${BILLME_PUBLIC_PORTAL_URL:-http://localhost:3001}
+      PUBLISH_API_KEY: ${BILLME_PORTAL_PUBLISH_API_KEY:?set BILLME_PORTAL_PUBLISH_API_KEY in .env.server-mode}
+      REQUIRE_PUBLISH_API_KEY: "1"
+    volumes:
+      - "${BILLME_PORTAL_DATA_DIR:-billme-offer-portal-data}:/app/data"
+      - "${BILLME_PORTAL_STORAGE_DIR:-billme-offer-portal-storage}:/app/storage"
+    ports:
+      - "${BILLME_PORTAL_PORT:-3001}:3001"
+    healthcheck:
+      test: ["CMD", "node", "--input-type=module", "-e", "fetch('http://127.0.0.1:3001/health').then(r => { if (!r.ok) process.exit(1) })"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   web:
     build:
       context: .
@@ -68,6 +110,8 @@ services:
     restart: unless-stopped
     depends_on:
       server-api:
+        condition: service_healthy
+      offer-portal:
         condition: service_healthy
     ports:
       - "${BILLME_WEB_PORT:-4175}:8080"
@@ -87,3 +131,5 @@ services:
 
 volumes:
   billme-postgres-data:
+  billme-offer-portal-data:
+  billme-offer-portal-storage:

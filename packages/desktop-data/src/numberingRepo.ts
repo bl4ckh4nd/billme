@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
+import { and, eq, ne } from 'drizzle-orm';
 import {
   finalizeDocumentNumber,
   formatDocumentNumber as formatSharedDocumentNumber,
@@ -13,6 +14,7 @@ import type {
 } from '@billme/server-core/ports';
 import type { AppSettings } from '@billme/desktop-core/types';
 import { getSettings, setSettings } from './settingsRepo';
+import { createDrizzle, schema } from './drizzle';
 
 export type NumberKind = DocumentNumberKind;
 type ReservationStatus = 'reserved' | 'released' | 'finalized';
@@ -47,15 +49,7 @@ const createDocumentNumberingPorts = (db: Database.Database): SyncDocumentNumber
   saveSettings: (settings) => setSettings(db, settings),
   createReservation: (reservation) => {
     const now = new Date().toISOString();
-    db.prepare(
-      `
-        INSERT INTO number_reservations (
-          id, kind, number, counter_value, status, document_id, created_at, updated_at
-        ) VALUES (
-          @id, @kind, @number, @counterValue, @status, @documentId, @createdAt, @updatedAt
-        )
-      `,
-    ).run({
+    createDrizzle(db).insert(schema.numberReservations).values({
       id: reservation.id,
       kind: reservation.kind,
       number: reservation.number,
@@ -64,50 +58,43 @@ const createDocumentNumberingPorts = (db: Database.Database): SyncDocumentNumber
       documentId: reservation.documentId,
       createdAt: now,
       updatedAt: now,
-    });
+    }).run();
   },
   getReservationById: (reservationId) => {
-    const row = db
-      .prepare(
-        `SELECT id, kind, number, counter_value, status, document_id, created_at, updated_at
-         FROM number_reservations
-         WHERE id = ?`,
-      )
-      .get(reservationId) as NumberReservationRow | undefined;
+    const row = createDrizzle(db).select({
+      id: schema.numberReservations.id,
+      kind: schema.numberReservations.kind,
+      number: schema.numberReservations.number,
+      counter_value: schema.numberReservations.counterValue,
+      status: schema.numberReservations.status,
+      document_id: schema.numberReservations.documentId,
+      created_at: schema.numberReservations.createdAt,
+      updated_at: schema.numberReservations.updatedAt,
+    }).from(schema.numberReservations).where(eq(schema.numberReservations.id, reservationId)).get() as NumberReservationRow | undefined;
     return row ? rowToReservation(row) : null;
   },
   updateReservation: (reservation) => {
-    db.prepare(
-      `
-        UPDATE number_reservations
-        SET status = @status, document_id = @documentId, updated_at = @updatedAt
-        WHERE id = @id
-      `,
-    ).run({
-      id: reservation.id,
+    createDrizzle(db).update(schema.numberReservations).set({
       status: reservation.status,
       documentId: reservation.documentId,
       updatedAt: new Date().toISOString(),
-    });
+    }).where(eq(schema.numberReservations.id, reservation.id)).run();
   },
   isNumberTaken: (kind, number) => {
+    const drizzle = createDrizzle(db);
     const existingEntity = kind === 'customer'
-      ? db.prepare('SELECT 1 FROM clients WHERE customer_number = ? LIMIT 1').get(number)
-      : db.prepare(`SELECT 1 FROM ${kind === 'invoice' ? 'invoices' : 'offers'} WHERE number = ? LIMIT 1`).get(number);
+      ? drizzle.select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.customerNumber, number)).limit(1).get()
+      : kind === 'invoice'
+        ? drizzle.select({ id: schema.invoices.id }).from(schema.invoices).where(eq(schema.invoices.number, number)).limit(1).get()
+        : drizzle.select({ id: schema.offers.id }).from(schema.offers).where(eq(schema.offers.number, number)).limit(1).get();
     if (existingEntity) return true;
 
-    const existingReservation = db
-      .prepare(
-        `
-          SELECT 1
-          FROM number_reservations
-          WHERE kind = ?
-            AND number = ?
-            AND status <> 'released'
-          LIMIT 1
-        `,
-      )
-      .get(kind, number) as { 1: number } | undefined;
+    const existingReservation = drizzle.select({ id: schema.numberReservations.id })
+      .from(schema.numberReservations).where(and(
+        eq(schema.numberReservations.kind, kind),
+        eq(schema.numberReservations.number, number),
+        ne(schema.numberReservations.status, 'released'),
+      )).limit(1).get();
     return Boolean(existingReservation);
   },
   generateReservationId: () => randomUUID(),

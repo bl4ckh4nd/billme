@@ -181,8 +181,6 @@ export const runMigrations = (db: Database.Database): void => {
       PRIMARY KEY (tenant_id, transaction_id)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_pro_workflow_entries_updated
-      ON pro_workflow_entries(tenant_id, updated_at DESC);
   `);
 
   const workflowColumns = getColumns(db, 'pro_workflow_entries');
@@ -209,6 +207,11 @@ export const runMigrations = (db: Database.Database): void => {
         ON pro_workflow_entries(tenant_id, updated_at DESC);
     `);
   }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_pro_workflow_entries_updated
+      ON pro_workflow_entries(tenant_id, updated_at DESC);
+  `);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS bank_transactions (

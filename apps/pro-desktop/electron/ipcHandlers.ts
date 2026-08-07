@@ -78,6 +78,8 @@ import {
   createProAccountingService,
   createProWorkflowService,
 } from '@billme/accounting-engine';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
+import { eq } from 'drizzle-orm';
 import { PRODUCT_PROFILE } from '../productProfile';
 import { importSkrCharts } from '../services/skrImport';
 import {
@@ -664,13 +666,11 @@ export const registerIpcHandlers = (
         toInsert.map((t) => ({ ...t, importBatchId: batchId, linkedInvoiceId: null })),
       );
 
-      db.prepare(
-        `
-          UPDATE import_batches
-          SET imported_count = @imported, skipped_count = @skipped, error_count = @errors
-          WHERE id = @id
-        `,
-      ).run({ id: batchId, imported: inserted, skipped, errors: errors.length });
+      createDrizzle(db)
+        .update(schema.importBatches)
+        .set({ importedCount: inserted, skippedCount: skipped, errorCount: errors.length })
+        .where(eq(schema.importBatches.id, batchId))
+        .run();
 
       return { batchId, inserted, skipped };
     })();

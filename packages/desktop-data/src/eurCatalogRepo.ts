@@ -1,10 +1,12 @@
 import type Database from 'better-sqlite3';
+import { asc, eq } from 'drizzle-orm';
 import {
   EUR_SOURCE_VERSION_2025,
   getCatalogForYear,
   type EurLineDef,
   type EurLineKind,
 } from '@billme/desktop-services/eurCatalog';
+import { createDrizzle, schema } from './drizzle';
 
 export interface EurLine {
   id: string;
@@ -28,32 +30,14 @@ export const seedEurCatalog = (db: Database.Database, year: number): number => {
   if (catalog.length === 0) return 0;
 
   const now = new Date().toISOString();
-  const upsert = db.prepare(`
-    INSERT INTO eur_lines (
-      id, tax_year, kennziffer, label, kind, exportable, sort_order, computed_from_json,
-      source_version, created_at, updated_at
-    ) VALUES (
-      @id, @taxYear, @kennziffer, @label, @kind, @exportable, @sortOrder, @computedFromJson,
-      @sourceVersion, @createdAt, @updatedAt
-    )
-    ON CONFLICT(id) DO UPDATE SET
-      tax_year = excluded.tax_year,
-      kennziffer = excluded.kennziffer,
-      label = excluded.label,
-      kind = excluded.kind,
-      exportable = excluded.exportable,
-      sort_order = excluded.sort_order,
-      computed_from_json = excluded.computed_from_json,
-      source_version = excluded.source_version,
-      updated_at = excluded.updated_at
-  `);
+  const drizzle = createDrizzle(db);
 
   let count = 0;
   for (const [idx, line] of catalog.entries()) {
-    upsert.run({
+    drizzle.insert(schema.eurLines).values({
       id: line.id,
       taxYear: year,
-      kennziffer: line.kennziffer,
+      kennziffer: line.kennziffer ?? null,
       label: line.label,
       kind: line.kind,
       exportable: line.exportable ? 1 : 0,
@@ -62,7 +46,20 @@ export const seedEurCatalog = (db: Database.Database, year: number): number => {
       sourceVersion: sourceVersionForYear(year),
       createdAt: now,
       updatedAt: now,
-    });
+    }).onConflictDoUpdate({
+      target: schema.eurLines.id,
+      set: {
+        taxYear: year,
+        kennziffer: line.kennziffer ?? null,
+        label: line.label,
+        kind: line.kind,
+        exportable: line.exportable ? 1 : 0,
+        sortOrder: idx,
+        computedFromJson: JSON.stringify(line.computedFromIds ?? []),
+        sourceVersion: sourceVersionForYear(year),
+        updatedAt: now,
+      },
+    }).run();
     count += 1;
   }
 
@@ -70,37 +67,33 @@ export const seedEurCatalog = (db: Database.Database, year: number): number => {
 };
 
 export const listEurLines = (db: Database.Database, taxYear: number): EurLine[] => {
-  const rows = db
-    .prepare(
-      `
-      SELECT id, tax_year, kennziffer, label, kind, exportable, sort_order, computed_from_json, source_version
-      FROM eur_lines
-      WHERE tax_year = ?
-      ORDER BY sort_order ASC, id ASC
-    `,
-    )
-    .all(taxYear) as Array<{
-    id: string;
-    tax_year: number;
-    kennziffer: string | null;
-    label: string;
-    kind: string;
-    exportable: number;
-    sort_order: number;
-    computed_from_json: string | null;
-    source_version: string;
-  }>;
+  const rows = createDrizzle(db)
+    .select({
+      id: schema.eurLines.id,
+      taxYear: schema.eurLines.taxYear,
+      kennziffer: schema.eurLines.kennziffer,
+      label: schema.eurLines.label,
+      kind: schema.eurLines.kind,
+      exportable: schema.eurLines.exportable,
+      sortOrder: schema.eurLines.sortOrder,
+      computedFromJson: schema.eurLines.computedFromJson,
+      sourceVersion: schema.eurLines.sourceVersion,
+    })
+    .from(schema.eurLines)
+    .where(eq(schema.eurLines.taxYear, taxYear))
+    .orderBy(asc(schema.eurLines.sortOrder), asc(schema.eurLines.id))
+    .all();
 
   return rows.map((row) => ({
     id: row.id,
-    taxYear: row.tax_year,
+    taxYear: row.taxYear!,
     kennziffer: row.kennziffer ?? undefined,
     label: row.label,
     kind: row.kind as EurLineKind,
     exportable: row.exportable === 1,
-    sortOrder: row.sort_order,
-    computedFromIds: parseComputedFrom(row.computed_from_json),
-    sourceVersion: row.source_version,
+    sortOrder: row.sortOrder!,
+    computedFromIds: parseComputedFrom(row.computedFromJson),
+    sourceVersion: row.sourceVersion!,
   }));
 };
 

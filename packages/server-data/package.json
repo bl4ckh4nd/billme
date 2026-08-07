@@ -14,7 +14,8 @@
     "@billme/accounting-shared": "workspace:*",
     "@billme/server-core": "workspace:*",
     "pg": "^8.16.3",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "drizzle-orm": "^0.44.4"
   },
   "peerDependencies": {
     "better-sqlite3": "^12.4.1"
@@ -29,7 +30,8 @@
     "@types/node": "^22.19.7",
     "@types/pg": "^8.15.5",
     "tsx": "^4.20.5",
-    "typescript": "~5.8.3"
+    "typescript": "~5.8.3",
+    "drizzle-kit": "^0.31.4"
   },
   "exports": {
     ".": {

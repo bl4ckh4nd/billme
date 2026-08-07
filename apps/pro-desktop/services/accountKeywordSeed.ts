@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
+import { asc, count, eq } from 'drizzle-orm';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import { normalizeGermanText } from '@billme/finance-intelligence';
 import type { TenantScope } from '@billme/server-core';
 import { getTenantId } from '../tenantScope';
@@ -102,42 +104,32 @@ const insertKeyword = (
     now: string;
   },
 ): void => {
-  db.prepare(
-    `
-      INSERT INTO account_keywords
-        (id, tenant_id, chart, account_number, keyword, source, active, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-      ON CONFLICT(tenant_id, chart, account_number, keyword) DO UPDATE SET
-        source = excluded.source,
-        active = 1,
-        updated_at = excluded.updated_at
-    `,
-  ).run(
-    randomUUID(),
-    args.tenantId,
-    args.chart,
-    args.accountNumber,
-    normalizeGermanText(args.keyword),
-    args.source,
-    args.now,
-    args.now,
-  );
+  createDrizzle(db).insert(schema.accountKeywords).values({
+    id: randomUUID(),
+    tenantId: args.tenantId,
+    chart: args.chart,
+    accountNumber: args.accountNumber,
+    keyword: normalizeGermanText(args.keyword),
+    source: args.source,
+    active: 1,
+    createdAt: args.now,
+    updatedAt: args.now,
+  }).onConflictDoUpdate({ target: [schema.accountKeywords.tenantId, schema.accountKeywords.chart, schema.accountKeywords.accountNumber, schema.accountKeywords.keyword], set: {
+    source: args.source,
+    active: 1,
+    updatedAt: args.now,
+  }}).run();
 };
 
 export const seedAccountKeywords = (db: Database.Database, scope: TenantScope): void => {
   const tenantId = getTenantId(scope);
-  const count = db
-    .prepare('SELECT COUNT(*) as c FROM account_keywords WHERE tenant_id = ?')
-    .get(tenantId) as { c: number };
-  if (count.c > 0) return;
+  const drizzle = createDrizzle(db);
+  const existing = drizzle.select({ count: count() }).from(schema.accountKeywords)
+    .where(eq(schema.accountKeywords.tenantId, tenantId)).get();
+  if (Number(existing?.count ?? 0) > 0) return;
 
-  const accounts = db.prepare(
-    `
-      SELECT chart, account_number, name
-      FROM ledger_accounts
-      ORDER BY chart ASC, account_number ASC
-    `,
-  ).all() as LedgerAccount[];
+  const accounts = drizzle.select({ chart: schema.ledgerAccounts.chart, account_number: schema.ledgerAccounts.accountNumber, name: schema.ledgerAccounts.name })
+    .from(schema.ledgerAccounts).orderBy(asc(schema.ledgerAccounts.chart), asc(schema.ledgerAccounts.accountNumber)).all() as LedgerAccount[];
   if (accounts.length === 0) return;
 
   const now = new Date().toISOString();

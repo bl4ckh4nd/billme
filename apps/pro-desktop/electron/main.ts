@@ -38,6 +38,8 @@ import { PRODUCT_PROFILE } from '../productProfile';
 import { ensureSkrChartsImported } from '../services/skrImport';
 import { ensureProAccountingSeedData } from '../db/proAccountingRepo';
 import { resolveRuntimeProTenantScope } from '../tenantScope';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
+import { count, eq } from 'drizzle-orm';
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL);
@@ -173,11 +175,12 @@ app.whenReady().then(async () => {
 
   userDataPath = app.getPath('userData');
   const db = initDb(userDataPath, { dbFileName: PRODUCT_PROFILE.dbFileName });
+  const drizzleDb = createDrizzle(db);
 
   if (isDev) {
     // Dev convenience: seed initial data if DB is empty.
-    const invoiceCountRow = db.prepare('SELECT COUNT(*) as c FROM invoices').get() as { c: number };
-    if (invoiceCountRow.c === 0) {
+    const invoiceCount = drizzleDb.select({ c: count() }).from(schema.invoices).get()?.c ?? 0;
+    if (invoiceCount === 0) {
       for (const inv of MOCK_INVOICES) {
         try {
           upsertInvoice(db, inv, 'seed');
@@ -187,13 +190,13 @@ app.whenReady().then(async () => {
       }
     }
 
-    const offerCountRow = db.prepare('SELECT COUNT(*) as c FROM offers').get() as { c: number };
-    if (offerCountRow.c === 0) {
+    const offerCount = drizzleDb.select({ c: count() }).from(schema.offers).get()?.c ?? 0;
+    if (offerCount === 0) {
       // seed offers: none for now
     }
 
-    const clientCountRow = db.prepare('SELECT COUNT(*) as c FROM clients').get() as { c: number };
-    if (clientCountRow.c === 0) {
+    const clientCount = drizzleDb.select({ c: count() }).from(schema.clients).get()?.c ?? 0;
+    if (clientCount === 0) {
       for (const c of MOCK_CLIENTS) {
         try {
           upsertClient(db, c);
@@ -203,8 +206,8 @@ app.whenReady().then(async () => {
       }
     }
 
-    const articleCountRow = db.prepare('SELECT COUNT(*) as c FROM articles').get() as { c: number };
-    if (articleCountRow.c === 0) {
+    const articleCount = drizzleDb.select({ c: count() }).from(schema.articles).get()?.c ?? 0;
+    if (articleCount === 0) {
       for (const a of MOCK_ARTICLES) {
         try {
           upsertArticle(db, a);
@@ -214,8 +217,8 @@ app.whenReady().then(async () => {
       }
     }
 
-    const accountCountRow = db.prepare('SELECT COUNT(*) as c FROM accounts').get() as { c: number };
-    if (accountCountRow.c === 0) {
+    const accountCount = drizzleDb.select({ c: count() }).from(schema.accounts).get()?.c ?? 0;
+    if (accountCount === 0) {
       for (const acc of MOCK_ACCOUNTS) {
         try {
           upsertAccount(db, acc);
@@ -225,10 +228,8 @@ app.whenReady().then(async () => {
       }
     }
 
-    const recurringCountRow = db.prepare('SELECT COUNT(*) as c FROM recurring_profiles').get() as {
-      c: number;
-    };
-    if (recurringCountRow.c === 0) {
+    const recurringCount = drizzleDb.select({ c: count() }).from(schema.recurringProfiles).get()?.c ?? 0;
+    if (recurringCount === 0) {
       for (const p of MOCK_RECURRING_PROFILES) {
         try {
           upsertRecurringProfile(db, p);
@@ -238,7 +239,11 @@ app.whenReady().then(async () => {
       }
     }
 
-    const settingsRow = db.prepare('SELECT 1 FROM settings WHERE id = 1').get() as { 1: 1 } | undefined;
+    const settingsRow = drizzleDb
+      .select({ id: schema.settings.id })
+      .from(schema.settings)
+      .where(eq(schema.settings.id, 1))
+      .get();
     if (!settingsRow) {
       try {
         setSettings(db, MOCK_SETTINGS);
@@ -248,8 +253,8 @@ app.whenReady().then(async () => {
     }
   }
 
-  const templateCountRow = db.prepare('SELECT COUNT(*) as c FROM templates').get() as { c: number };
-  if (templateCountRow.c === 0) {
+  const templateCount = drizzleDb.select({ c: count() }).from(schema.templates).get()?.c ?? 0;
+  if (templateCount === 0) {
     try {
       const invoiceTemplate = upsertTemplate(db, {
         id: 'default-invoice',

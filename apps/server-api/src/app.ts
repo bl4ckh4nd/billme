@@ -37,7 +37,7 @@ import {
   listServerNumberReservations,
   listServerTemplates,
   readDatabaseUrl,
-  runPostgresMigrations,
+  assertDrizzleSchemaCurrent,
   saveServerActiveTemplates,
   saveServerArticle,
   saveServerBankAccount,
@@ -1324,7 +1324,7 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
   const databaseUrl = readDatabaseUrl(process.env);
   const pool = databaseUrl ? createPostgresPool(databaseUrl) : undefined;
   if (pool) {
-    await runPostgresMigrations(pool);
+    await assertDrizzleSchemaCurrent(pool);
     app.decorate('serverPool', pool);
     app.addHook('onClose', async () => {
       await pool.end();

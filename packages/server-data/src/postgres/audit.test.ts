@@ -1,40 +1,50 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
-import { createPostgresAuditLogPort, sha256Hex, stableStringify, verifyAuditChainRows } from './audit';
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createPostgresPool } from "./connection";
+import { runDrizzleMigrations } from "./migrations";
+import {
+  createPostgresAuditLogPort,
+  sha256Hex,
+  stableStringify,
+  verifyAuditChainRows,
+  verifyPostgresAuditChain,
+} from "./audit";
 
-test('stableStringify keeps object keys deterministic', () => {
+test("stableStringify keeps object keys deterministic", () => {
   const left = stableStringify({ b: 2, a: 1, nested: { z: true, y: false } });
   const right = stableStringify({ nested: { y: false, z: true }, a: 1, b: 2 });
   assert.equal(left, right);
 });
 
-test('verifyAuditChainRows accepts a valid chain', () => {
+test("verifyAuditChainRows accepts a valid chain", () => {
   const firstPayload = {
     sequence: 1,
-    ts: '2026-01-01T00:00:00.000Z',
-    entityType: 'invoice',
-    entityId: 'inv-1',
-    action: 'created',
+    ts: "2026-01-01T00:00:00.000Z",
+    entityType: "invoice",
+    entityId: "inv-1",
+    action: "created",
     reason: null,
     before: null,
-    after: { id: 'inv-1' },
+    after: { id: "inv-1" },
     prevHash: null,
-    actor: 'local',
+    actor: "local",
   };
   const firstHash = sha256Hex(`:${stableStringify(firstPayload)}`);
   const secondPayload = {
     sequence: 2,
-    ts: '2026-01-02T00:00:00.000Z',
-    entityType: 'invoice',
-    entityId: 'inv-1',
-    action: 'updated',
+    ts: "2026-01-02T00:00:00.000Z",
+    entityType: "invoice",
+    entityId: "inv-1",
+    action: "updated",
     reason: null,
-    before: { id: 'inv-1' },
-    after: { id: 'inv-1', status: 'paid' },
+    before: { id: "inv-1" },
+    after: { id: "inv-1", status: "paid" },
     prevHash: firstHash,
-    actor: 'local',
+    actor: "local",
   };
-  const secondHash = sha256Hex(`${firstHash}:${stableStringify(secondPayload)}`);
+  const secondHash = sha256Hex(
+    `${firstHash}:${stableStringify(secondPayload)}`,
+  );
 
   const result = verifyAuditChainRows([
     {
@@ -48,7 +58,7 @@ test('verifyAuditChainRows accepts a valid chain', () => {
       after_json: JSON.stringify(firstPayload.after),
       prev_hash: null,
       hash: firstHash,
-      actor: 'local',
+      actor: "local",
     },
     {
       sequence: 2,
@@ -61,7 +71,7 @@ test('verifyAuditChainRows accepts a valid chain', () => {
       after_json: JSON.stringify(secondPayload.after),
       prev_hash: firstHash,
       hash: secondHash,
-      actor: 'local',
+      actor: "local",
     },
   ]);
 
@@ -70,76 +80,83 @@ test('verifyAuditChainRows accepts a valid chain', () => {
   assert.equal(result.headHash, secondHash);
 });
 
-test('verifyAuditChainRows reports hash mismatches', () => {
+test("verifyAuditChainRows reports hash mismatches", () => {
   const result = verifyAuditChainRows([
     {
       sequence: 1,
-      ts: '2026-01-01T00:00:00.000Z',
-      entity_type: 'invoice',
-      entity_id: 'inv-1',
-      action: 'created',
+      ts: "2026-01-01T00:00:00.000Z",
+      entity_type: "invoice",
+      entity_id: "inv-1",
+      action: "created",
       reason: null,
       before_json: null,
       after_json: '{"id":"inv-1"}',
       prev_hash: null,
-      hash: 'broken',
-      actor: 'local',
+      hash: "broken",
+      actor: "local",
     },
   ]);
 
   assert.equal(result.ok, false);
-  assert.match(result.errors[0]?.message ?? '', /hash mismatch/);
+  assert.match(result.errors[0]?.message ?? "", /hash mismatch/);
 });
 
-test('createPostgresAuditLogPort reuses active transaction clients', async () => {
-  const queries: string[] = [];
-  const target = {
-    async connect() {
-      throw new Error('should not reconnect active transaction clients');
-    },
-    async query(sql: string) {
-      queries.push(sql);
-      if (sql.includes('SELECT pg_advisory_xact_lock($1)')) {
-        return { rows: [] };
-      }
+const databaseUrl =
+  process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 
-      if (sql.includes('SELECT sequence, hash FROM audit_log')) {
-        return { rows: [] };
-      }
+test(
+  "createPostgresAuditLogPort persists and verifies a real Postgres chain",
+  { skip: !databaseUrl },
+  async () => {
+    const pool = createPostgresPool(databaseUrl!);
+    const tenantId = `audit-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const now = new Date().toISOString();
+    await runDrizzleMigrations(pool);
+    const client = await pool.connect();
+    try {
+      // Keep the append-only audit rows inside a rolled-back transaction. A
+      // direct DELETE is intentionally rejected by the production trigger.
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at)
+         VALUES ($1, $2, $3, 'lite', 'single-tenant', 'active', $4, $4)`,
+        [tenantId, tenantId, "Audit integration test", now],
+      );
+      const auditLog = createPostgresAuditLogPort(client);
+      const scope = {
+        tenantId,
+        product: "lite",
+        deploymentMode: "single-tenant",
+      } as const;
+      const entry = {
+        occurredAt: now,
+        action: "client.create",
+        reason: "Regression test",
+        actor: { type: "system", displayName: "test-runner" },
+        subject: {
+          entityType: "client",
+          entityId: "client-1",
+        },
+        change: {
+          before: null,
+          after: { id: "client-1" },
+        },
+      } as const;
+      const appended = await auditLog.append(scope, entry);
+      assert.equal(appended.sequence, 1);
 
-      if (sql.includes('INSERT INTO audit_log')) {
-        return { rows: [] };
-      }
+      const listed = await auditLog.listBySubject(scope, entry.subject);
+      assert.equal(listed.length, 1);
+      assert.equal(listed[0]?.hash, appended.hash);
 
-      throw new Error(`Unexpected query: ${sql}`);
-    },
-    release() {
-      // PoolClient marker used by the type guard.
-    },
-  };
-
-  const auditLog = createPostgresAuditLogPort(target as never);
-  const scope = { tenantId: 'tenant-1', product: 'lite', deploymentMode: 'single-tenant' } as const;
-  const entry = {
-    occurredAt: '2026-01-01T00:00:00.000Z',
-    action: 'client.create',
-    reason: 'Regression test',
-    actor: { type: 'system', displayName: 'test-runner' },
-    subject: {
-      entityType: 'client',
-      entityId: 'client-1',
-    },
-    change: {
-      before: null,
-      after: { id: 'client-1' },
-    },
-  } as const;
-
-  const appended = await auditLog.append(scope, entry);
-
-  assert.equal(appended.sequence, 1);
-  assert.equal(queries.length, 3);
-  assert.match(queries[0] ?? '', /SELECT pg_advisory_xact_lock/);
-  assert.match(queries[1] ?? '', /SELECT sequence, hash FROM audit_log/);
-  assert.match(queries[2] ?? '', /INSERT INTO audit_log/);
-});
+      const verified = await verifyPostgresAuditChain(client, tenantId);
+      assert.equal(verified.ok, true);
+      assert.equal(verified.count, 1);
+      assert.equal(verified.headHash, appended.hash);
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+      await pool.end();
+    }
+  },
+);

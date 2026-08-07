@@ -1,5 +1,8 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, lte, max, sum } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import type { TenantScope } from '@billme/server-core';
 import { appendAuditLog } from './audit';
 import { listAccountSuggestionRules } from './accountSuggestionRulesRepo';
@@ -247,9 +250,9 @@ const normalizeDraftLine = (line: BookingDraftLineEntity, idx: number): BookingD
 });
 
 const ensurePeriodExists = (db: Database.Database, period: string, fiscalYear: number, tenantId: string): void => {
-  const existing = db
-    .prepare('SELECT id FROM accounting_periods WHERE tenant_id = ? AND period = ?')
-    .get(tenantId, period) as { id: string } | undefined;
+  const drizzle = createDrizzle(db);
+  const existing = drizzle.select({ id: schema.accountingPeriods.id }).from(schema.accountingPeriods)
+    .where(and(eq(schema.accountingPeriods.tenantId, tenantId), eq(schema.accountingPeriods.period, period))).get();
   if (existing) return;
 
   const startsAt = `${period}-01`;
@@ -260,18 +263,12 @@ const ensurePeriodExists = (db: Database.Database, period: string, fiscalYear: n
   const endsAt = `${endDate.getUTCFullYear()}-${String(endDate.getUTCMonth() + 1).padStart(2, '0')}-${String(endDate.getUTCDate()).padStart(2, '0')}`;
   const now = new Date().toISOString();
 
-  db.prepare(
-    `
-      INSERT INTO accounting_periods (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)
-    `,
-  ).run(randomUUID(), tenantId, period, fiscalYear, startsAt, endsAt, now, now);
+  drizzle.insert(schema.accountingPeriods).values({ id: randomUUID(), tenantId, period, fiscalYear, status: 'open', startsAt, endsAt, createdAt: now, updatedAt: now }).run();
 };
 
 const loadPeriodStatus = (db: Database.Database, period: string, tenantId: string): AccountingPeriodStatus => {
-  const row = db
-    .prepare('SELECT status FROM accounting_periods WHERE tenant_id = ? AND period = ?')
-    .get(tenantId, period) as { status: AccountingPeriodStatus } | undefined;
+  const row = createDrizzle(db).select({ status: schema.accountingPeriods.status }).from(schema.accountingPeriods)
+    .where(and(eq(schema.accountingPeriods.tenantId, tenantId), eq(schema.accountingPeriods.period, period))).get() as { status: AccountingPeriodStatus } | undefined;
   return row?.status ?? 'open';
 };
 
@@ -345,75 +342,23 @@ const parseDraftRow = (
 };
 
 const getNextEntryNumber = (db: Database.Database, tenantId: string): number => {
-  const row = db
-    .prepare('SELECT COALESCE(MAX(entry_number), 0) as n FROM journal_entries WHERE tenant_id = ?')
-    .get(tenantId) as { n: number };
-  return Number(row.n || 0) + 1;
+  const row = createDrizzle(db).select({ n: max(schema.journalEntries.entryNumber) }).from(schema.journalEntries)
+    .where(eq(schema.journalEntries.tenantId, tenantId)).get();
+  return Number(row?.n || 0) + 1;
 };
 
 const saveDraftLinesAndIssues = (db: Database.Database, draft: BookingDraftEntity): void => {
-  db.prepare('DELETE FROM booking_draft_lines WHERE draft_id = ?').run(draft.id);
-  db.prepare('DELETE FROM draft_validation_issues WHERE draft_id = ?').run(draft.id);
-
-  const insertLine = db.prepare(
-    `
-      INSERT INTO booking_draft_lines
-        (
-          id, tenant_id, draft_id, line_no, account_number, debit_amount, credit_amount, tax_code,
-          tax_case_key, tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id,
-          evidence_type, evidence_reference, cost_center, memo
-        )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-  );
+  const drizzle = createDrizzle(db);
+  drizzle.delete(schema.bookingDraftLines).where(eq(schema.bookingDraftLines.draftId, draft.id)).run();
+  drizzle.delete(schema.draftValidationIssues).where(eq(schema.draftValidationIssues.draftId, draft.id)).run();
 
   draft.lines.forEach((line, idx) => {
-    insertLine.run(
-      line.id || randomUUID(),
-      draft.tenantId,
-      draft.id,
-      idx + 1,
-      line.accountNumber,
-      round2(line.debitAmount),
-      round2(line.creditAmount),
-      line.taxCode ?? null,
-      line.taxCaseKey ?? null,
-      line.taxRate ?? null,
-      line.netAmount ?? null,
-      line.taxAmount ?? null,
-      line.grossAmount ?? null,
-      line.countryCode ?? null,
-      line.counterpartyVatId ?? null,
-      line.evidenceType ?? null,
-      line.evidenceReference ?? null,
-      line.costCenter ?? null,
-      line.memo ?? null,
-    );
+    drizzle.insert(schema.bookingDraftLines).values({ id: line.id || randomUUID(), tenantId: draft.tenantId, draftId: draft.id, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: round2(line.debitAmount), creditAmount: round2(line.creditAmount), taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
   });
-
-  const insertIssue = db.prepare(
-    `
-      INSERT INTO draft_validation_issues
-        (id, tenant_id, draft_id, code, severity, message, field_path, blocking, source, issue_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-  );
 
   const now = new Date().toISOString();
   for (const issue of draft.validationIssues) {
-    insertIssue.run(
-      issue.id || randomUUID(),
-      draft.tenantId,
-      draft.id,
-      issue.code,
-      issue.severity,
-      issue.message,
-      issue.fieldPath ?? null,
-      issue.blocking ? 1 : 0,
-      issue.source,
-      JSON.stringify(issue),
-      now,
-    );
+    drizzle.insert(schema.draftValidationIssues).values({ id: issue.id || randomUUID(), tenantId: draft.tenantId, draftId: draft.id, code: issue.code, severity: issue.severity, message: issue.message, fieldPath: issue.fieldPath ?? null, blocking: issue.blocking ? 1 : 0, source: issue.source, issueJson: JSON.stringify(issue), createdAt: now }).run();
   }
 };
 
@@ -584,15 +529,8 @@ const toBankTransaction = (row: {
 });
 
 const getActiveChart = (db: Database.Database): 'SKR03' | 'SKR04' => {
-  const rows = db
-    .prepare(
-      `
-      SELECT chart, COUNT(*) as c
-      FROM ledger_accounts
-      GROUP BY chart
-      `,
-    )
-    .all() as Array<{ chart: string; c: number }>;
+  const rows = createDrizzle(db).select({ chart: schema.ledgerAccounts.chart, c: count() })
+    .from(schema.ledgerAccounts).groupBy(schema.ledgerAccounts.chart).all() as Array<{ chart: string; c: number }>;
   const byChart = rows.reduce(
     (acc, row) => {
       if (row.chart === 'SKR03') acc.SKR03 = row.c;
@@ -609,41 +547,17 @@ const resolveFallbackBankLedgerAccount = (
   chart: 'SKR03' | 'SKR04',
 ): string => {
   const preferred = chart === 'SKR04' ? '1800' : '1200';
-  const preferredRow = db
-    .prepare(
-      `
-      SELECT account_number
-      FROM ledger_accounts
-      WHERE chart = ? AND account_number = ?
-      LIMIT 1
-      `,
-    )
-    .get(chart, preferred) as { account_number: string } | undefined;
+  const drizzle = createDrizzle(db);
+  const preferredRow = drizzle.select({ account_number: schema.ledgerAccounts.accountNumber }).from(schema.ledgerAccounts)
+    .where(and(eq(schema.ledgerAccounts.chart, chart), eq(schema.ledgerAccounts.accountNumber, preferred))).limit(1).get();
   if (preferredRow?.account_number) return preferredRow.account_number;
 
-  const chartRow = db
-    .prepare(
-      `
-      SELECT account_number
-      FROM ledger_accounts
-      WHERE chart = ?
-      ORDER BY account_number
-      LIMIT 1
-      `,
-    )
-    .get(chart) as { account_number: string } | undefined;
+  const chartRow = drizzle.select({ account_number: schema.ledgerAccounts.accountNumber }).from(schema.ledgerAccounts)
+    .where(eq(schema.ledgerAccounts.chart, chart)).orderBy(asc(schema.ledgerAccounts.accountNumber)).limit(1).get();
   if (chartRow?.account_number) return chartRow.account_number;
 
-  const anyRow = db
-    .prepare(
-      `
-      SELECT account_number
-      FROM ledger_accounts
-      ORDER BY chart, account_number
-      LIMIT 1
-      `,
-    )
-    .get() as { account_number: string } | undefined;
+  const anyRow = drizzle.select({ account_number: schema.ledgerAccounts.accountNumber }).from(schema.ledgerAccounts)
+    .orderBy(asc(schema.ledgerAccounts.chart), asc(schema.ledgerAccounts.accountNumber)).limit(1).get();
   if (anyRow?.account_number) return anyRow.account_number;
 
   return preferred;
@@ -654,25 +568,16 @@ const resolveBankLedgerAccountForTransaction = (
   tx: ProBankTransaction,
 ): string => {
   const activeChart = getActiveChart(db);
-  const row = db
-    .prepare(
-      `
-      SELECT default_skr_account_number
-      FROM accounts
-      WHERE id = ?
-      LIMIT 1
-      `,
-    )
-    .get(tx.accountId) as { default_skr_account_number: string | null } | undefined;
+  const row = createDrizzle(db).select({ default_skr_account_number: schema.accounts.defaultSkrAccountNumber }).from(schema.accounts)
+    .where(eq(schema.accounts.id, tx.accountId)).limit(1).get() as { default_skr_account_number: string | null } | undefined;
 
   const candidate = String(row?.default_skr_account_number ?? '').trim();
   if (!candidate) {
     return resolveFallbackBankLedgerAccount(db, activeChart);
   }
 
-  const exists = db
-    .prepare('SELECT 1 FROM ledger_accounts WHERE account_number = ? LIMIT 1')
-    .get(candidate) as { 1: 1 } | undefined;
+  const exists = createDrizzle(db).select({ id: schema.ledgerAccounts.id }).from(schema.ledgerAccounts)
+    .where(eq(schema.ledgerAccounts.accountNumber, candidate)).limit(1).get();
 
   return exists ? candidate : resolveFallbackBankLedgerAccount(db, activeChart);
 };
@@ -703,16 +608,19 @@ const buildSuggestionsByTransaction = (
 
 export const listBankTransactions = (db: Database.Database, scope: TenantScope): ProBankTransaction[] => {
   const tenantId = getTenantId(scope);
-  const rows = db
-    .prepare(
-      `
-      SELECT id, tenant_id, account_id, date, amount, type, counterparty, purpose, status, linked_invoice_id
-      FROM bank_transactions
-      WHERE tenant_id = ?
-      ORDER BY date DESC, id ASC
-    `,
-    )
-    .all(tenantId) as Array<{
+  const rows = createDrizzle(db).select({
+    id: schema.bankTransactions.id,
+    tenant_id: schema.bankTransactions.tenantId,
+    account_id: schema.bankTransactions.accountId,
+    date: schema.bankTransactions.date,
+    amount: schema.bankTransactions.amount,
+    type: schema.bankTransactions.type,
+    counterparty: schema.bankTransactions.counterparty,
+    purpose: schema.bankTransactions.purpose,
+    status: schema.bankTransactions.status,
+    linked_invoice_id: schema.bankTransactions.linkedInvoiceId,
+  }).from(schema.bankTransactions).where(eq(schema.bankTransactions.tenantId, tenantId))
+    .orderBy(desc(schema.bankTransactions.date), asc(schema.bankTransactions.id)).all() as Array<{
     id: string;
     tenant_id: string;
     account_id: string;
@@ -746,29 +654,25 @@ export const getDraftByTransactionId = (
   scope: TenantScope,
 ): BookingDraftEntity | null => {
   const tenantId = getTenantId(scope);
-  const row = db
-    .prepare(
-      `
-        SELECT draft_json, updated_at
-        FROM booking_drafts
-        WHERE tenant_id = ? AND transaction_id = ?
-      `,
-    )
-    .get(tenantId, transactionId) as { draft_json: string; updated_at: string } | undefined;
+  const row = createDrizzle(db).select({ draft_json: schema.bookingDrafts.draftJson, updated_at: schema.bookingDrafts.updatedAt })
+    .from(schema.bookingDrafts).where(and(eq(schema.bookingDrafts.tenantId, tenantId), eq(schema.bookingDrafts.transactionId, transactionId))).get() as { draft_json: string; updated_at: string } | undefined;
 
   if (row) {
     return parseDraftRow(row, tenantId);
   }
 
-  const txRow = db
-    .prepare(
-      `
-      SELECT id, tenant_id, account_id, date, amount, type, counterparty, purpose, status, linked_invoice_id
-      FROM bank_transactions
-      WHERE tenant_id = ? AND id = ?
-    `,
-    )
-    .get(tenantId, transactionId) as
+  const txRow = createDrizzle(db).select({
+    id: schema.bankTransactions.id,
+    tenant_id: schema.bankTransactions.tenantId,
+    account_id: schema.bankTransactions.accountId,
+    date: schema.bankTransactions.date,
+    amount: schema.bankTransactions.amount,
+    type: schema.bankTransactions.type,
+    counterparty: schema.bankTransactions.counterparty,
+    purpose: schema.bankTransactions.purpose,
+    status: schema.bankTransactions.status,
+    linked_invoice_id: schema.bankTransactions.linkedInvoiceId,
+  }).from(schema.bankTransactions).where(and(eq(schema.bankTransactions.tenantId, tenantId), eq(schema.bankTransactions.id, transactionId))).get() as
     | {
         id: string;
         tenant_id: string;
@@ -830,24 +734,8 @@ export const saveDraft = (
       : 'incomplete'
     : normalized.workflowStatus;
 
-  db.prepare(
-    `
-      INSERT INTO booking_drafts (id, tenant_id, transaction_id, workflow_status, draft_json, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        transaction_id = excluded.transaction_id,
-        workflow_status = excluded.workflow_status,
-        draft_json = excluded.draft_json,
-        updated_at = excluded.updated_at
-    `,
-  ).run(
-    normalized.id,
-    tenantId,
-    normalized.transactionId,
-    normalized.workflowStatus,
-    JSON.stringify(normalized),
-    now,
-  );
+  createDrizzle(db).insert(schema.bookingDrafts).values({ id: normalized.id, tenantId, transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus, draftJson: JSON.stringify(normalized), updatedAt: now })
+    .onConflictDoUpdate({ target: schema.bookingDrafts.id, set: { transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus, draftJson: JSON.stringify(normalized), updatedAt: now } }).run();
 
   saveDraftLinesAndIssues(db, normalized);
   return normalized;
@@ -919,9 +807,8 @@ export const validateTaxCompliance = (
   const tenantId = getTenantId(scope);
   let draft: BookingDraftEntity | null = null;
   if (args.draftId) {
-    const row = db
-      .prepare('SELECT draft_json FROM booking_drafts WHERE tenant_id = ? AND id = ?')
-      .get(tenantId, args.draftId) as { draft_json: string } | undefined;
+    const row = createDrizzle(db).select({ draft_json: schema.bookingDrafts.draftJson }).from(schema.bookingDrafts)
+      .where(and(eq(schema.bookingDrafts.tenantId, tenantId), eq(schema.bookingDrafts.id, args.draftId))).get() as { draft_json: string } | undefined;
     if (!row) throw new Error('Draft not found');
     draft = safeJsonParse<BookingDraftEntity>(row.draft_json, null as never);
   } else if (args.transactionId) {
@@ -986,9 +873,8 @@ export const postDraft = (
   scope: TenantScope,
 ): { entry: JournalEntryEntity; issues: DraftValidationIssue[] } => {
   const tenantId = getTenantId(scope);
-  const row = db
-    .prepare('SELECT draft_json FROM booking_drafts WHERE tenant_id = ? AND id = ?')
-    .get(tenantId, draftId) as { draft_json: string } | undefined;
+  const row = createDrizzle(db).select({ draft_json: schema.bookingDrafts.draftJson }).from(schema.bookingDrafts)
+    .where(and(eq(schema.bookingDrafts.tenantId, tenantId), eq(schema.bookingDrafts.id, draftId))).get() as { draft_json: string } | undefined;
 
   if (!row) {
     throw new Error('Draft not found');
@@ -1088,124 +974,28 @@ export const postDraft = (
   });
 
   const tx = db.transaction(() => {
-    db.prepare(
-      `
-      INSERT INTO journal_entries
-        (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, reversed_entry_id, created_at)
-      VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, NULL, ?)
-      `,
-    ).run(
-      entryId,
-      tenantId,
-      entryNumber,
-      postingDate,
-      validated.documentDate ?? null,
-      validated.bookingText,
-      validated.reference ?? null,
-      period,
-      fiscalYear,
-      validated.id,
-      createdAt,
-    );
-
-    const insertLine = db.prepare(
-      `
-      INSERT INTO journal_lines
-        (
-          id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount, tax_code,
-          tax_case_key, tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id,
-          evidence_type, evidence_reference, cost_center, memo
-        )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
+    const drizzle = createDrizzle(db);
+    drizzle.insert(schema.journalEntries).values({ id: entryId, tenantId, entryNumber, postingDate, documentDate: validated.documentDate ?? null, bookingText: validated.bookingText, reference: validated.reference ?? null, period, fiscalYear, status: 'posted', sourceDraftId: validated.id, reversedEntryId: null, createdAt }).run();
 
     postingLines.forEach((line, idx) => {
-      insertLine.run(
-        line.id,
-        tenantId,
-        entryId,
-        idx + 1,
-        line.accountNumber,
-        round2(line.debitAmount),
-        round2(line.creditAmount),
-        line.taxCode ?? null,
-        line.taxCaseKey ?? null,
-        line.taxRate ?? null,
-        line.netAmount ?? null,
-        line.taxAmount ?? null,
-        line.grossAmount ?? null,
-        line.countryCode ?? null,
-        line.counterpartyVatId ?? null,
-        line.evidenceType ?? null,
-        line.evidenceReference ?? null,
-        line.costCenter ?? null,
-        line.memo ?? null,
-      );
+      drizzle.insert(schema.journalLines).values({ id: line.id, tenantId, entryId, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: round2(line.debitAmount), creditAmount: round2(line.creditAmount), taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
     });
 
-    const insertEvidence = db.prepare(
-      `
-      INSERT INTO vat_evidence
-        (id, tenant_id, draft_id, entry_id, line_id, tax_case_key, evidence_type, evidence_reference, country_code, counterparty_vat_id, captured_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
     for (const line of postingLines) {
       const taxCase = getTaxCaseByKey(db, line.taxCaseKey ?? line.taxCode);
       if (!taxCase) continue;
       const hasEvidence = Boolean(line.evidenceType || line.evidenceReference || line.countryCode || line.counterpartyVatId);
       if (!taxCase.requiresEvidence && !hasEvidence) continue;
-      insertEvidence.run(
-        randomUUID(),
-        tenantId,
-        validated.id,
-        entryId,
-        line.id,
-        taxCase.key,
-        line.evidenceType ?? null,
-        line.evidenceReference ?? null,
-        line.countryCode ?? null,
-        line.counterpartyVatId ?? null,
-        createdAt,
-      );
+      drizzle.insert(schema.vatEvidence).values({ id: randomUUID(), tenantId, draftId: validated.id, entryId, lineId: line.id, taxCaseKey: taxCase.key, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, capturedAt: createdAt }).run();
     }
 
-    const insertPair = db.prepare(
-      `
-      INSERT INTO journal_posting_pairs
-        (id, tenant_id, entry_id, debit_line_id, credit_line_id, amount, tax_case_key, datev_bu_key, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
     for (const pair of buildPostingPairs(postingLines)) {
       const datevBuKey = resolveDatevBuKeyForTaxCase(db, chart, pair.taxCaseKey);
-      insertPair.run(
-        randomUUID(),
-        tenantId,
-        entryId,
-        pair.debitLineId,
-        pair.creditLineId,
-        round2(pair.amount),
-        pair.taxCaseKey ?? null,
-        datevBuKey ?? null,
-        createdAt,
-      );
+      drizzle.insert(schema.journalPostingPairs).values({ id: randomUUID(), tenantId, entryId, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: round2(pair.amount), taxCaseKey: pair.taxCaseKey ?? null, datevBuKey: datevBuKey ?? null, createdAt }).run();
     }
 
-    db.prepare('UPDATE booking_drafts SET workflow_status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?').run(
-      'posted',
-      createdAt,
-      validated.id,
-      tenantId,
-    );
-
-    db.prepare('UPDATE bank_transactions SET status = ? WHERE id = ? AND tenant_id = ?').run(
-      'booked',
-      validated.transactionId,
-      tenantId,
-    );
+    drizzle.update(schema.bookingDrafts).set({ workflowStatus: 'posted', updatedAt: createdAt }).where(and(eq(schema.bookingDrafts.id, validated.id), eq(schema.bookingDrafts.tenantId, tenantId))).run();
+    drizzle.update(schema.bankTransactions).set({ status: 'booked', updatedAt: createdAt }).where(and(eq(schema.bankTransactions.id, validated.transactionId), eq(schema.bankTransactions.tenantId, tenantId))).run();
 
     appendAuditLog(db, {
       entityType: 'pro_journal_entry',
@@ -1253,26 +1043,15 @@ export const reverseJournalEntry = (
   scope: TenantScope,
 ): { ok: true; reversalEntryId: string } => {
   const tenantId = getTenantId(scope);
-  const entry = db
-    .prepare(
-      `
-      SELECT id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status
-      FROM journal_entries
-      WHERE tenant_id = ? AND id = ?
-    `,
-    )
-    .get(tenantId, entryId) as
-    | {
-        id: string;
-        entry_number: number;
-        posting_date: string;
-        document_date: string | null;
-        booking_text: string;
-        reference: string | null;
-        period: string;
-        fiscal_year: number;
-        status: string;
-      }
+  const drizzle = createDrizzle(db);
+  const entry = drizzle.select({
+    id: schema.journalEntries.id, entry_number: schema.journalEntries.entryNumber,
+    posting_date: schema.journalEntries.postingDate, document_date: schema.journalEntries.documentDate,
+    booking_text: schema.journalEntries.bookingText, reference: schema.journalEntries.reference,
+    period: schema.journalEntries.period, fiscal_year: schema.journalEntries.fiscalYear,
+    status: schema.journalEntries.status,
+  }).from(schema.journalEntries).where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.id, entryId))).get() as
+    | { id: string; entry_number: number; posting_date: string; document_date: string | null; booking_text: string; reference: string | null; period: string; fiscal_year: number; status: string }
     | undefined;
 
   if (!entry) {
@@ -1282,148 +1061,49 @@ export const reverseJournalEntry = (
     throw new Error('Journal entry already reversed');
   }
 
-  const lines = db
-    .prepare(
-      `
-      SELECT
-        id,
-        account_number,
-        debit_amount,
-        credit_amount,
-        tax_code,
-        tax_case_key,
-        tax_rate,
-        net_amount,
-        tax_amount,
-        gross_amount,
-        country_code,
-        counterparty_vat_id,
-        evidence_type,
-        evidence_reference,
-        cost_center,
-        memo
-      FROM journal_lines
-      WHERE tenant_id = ? AND entry_id = ?
-      ORDER BY line_no ASC
-    `,
-    )
-    .all(tenantId, entryId) as Array<{
-    id: string;
-    account_number: string;
-    debit_amount: number;
-    credit_amount: number;
-    tax_code: string | null;
-    tax_case_key: TaxCaseKey | null;
-    tax_rate: number | null;
-    net_amount: number | null;
-    tax_amount: number | null;
-    gross_amount: number | null;
-    country_code: string | null;
-    counterparty_vat_id: string | null;
-    evidence_type: string | null;
-    evidence_reference: string | null;
-    cost_center: string | null;
-    memo: string | null;
-  }>;
+  const lineSelect = {
+    id: schema.journalLines.id, account_number: schema.journalLines.accountNumber,
+    debit_amount: schema.journalLines.debitAmount, credit_amount: schema.journalLines.creditAmount,
+    tax_code: schema.journalLines.taxCode, tax_case_key: schema.journalLines.taxCaseKey,
+    tax_rate: schema.journalLines.taxRate, net_amount: schema.journalLines.netAmount,
+    tax_amount: schema.journalLines.taxAmount, gross_amount: schema.journalLines.grossAmount,
+    country_code: schema.journalLines.countryCode, counterparty_vat_id: schema.journalLines.counterpartyVatId,
+    evidence_type: schema.journalLines.evidenceType, evidence_reference: schema.journalLines.evidenceReference,
+    cost_center: schema.journalLines.costCenter, memo: schema.journalLines.memo,
+  };
+  const lines = drizzle.select(lineSelect).from(schema.journalLines)
+    .where(and(eq(schema.journalLines.tenantId, tenantId), eq(schema.journalLines.entryId, entryId)))
+    .orderBy(asc(schema.journalLines.lineNo)).all() as Array<{
+      id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
+      tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
+      gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null;
+      evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
+    }>;
 
   const reversalEntryId = randomUUID();
   const reversalNumber = getNextEntryNumber(db, tenantId);
   const now = new Date().toISOString();
 
   const tx = db.transaction(() => {
-    db.prepare(
-      `
-      INSERT INTO journal_entries
-        (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, reversed_entry_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'posted', NULL, ?, ?)
-      `,
-    ).run(
-      reversalEntryId,
-      tenantId,
-      reversalNumber,
-      now.slice(0, 10),
-      entry.document_date,
-      `Storno ${entry.entry_number}: ${entry.booking_text}`,
-      reason,
-      entry.period,
-      entry.fiscal_year,
-      entryId,
-      now,
-    );
-
-    const insertLine = db.prepare(
-      `
-      INSERT INTO journal_lines
-        (
-          id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount, tax_code,
-          tax_case_key, tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id,
-          evidence_type, evidence_reference, cost_center, memo
-        )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
+    const txDrizzle = createDrizzle(db);
+    txDrizzle.insert(schema.journalEntries).values({ id: reversalEntryId, tenantId, entryNumber: reversalNumber,
+      postingDate: now.slice(0, 10), documentDate: entry.document_date, bookingText: `Storno ${entry.entry_number}: ${entry.booking_text}`,
+      reference: reason, period: entry.period, fiscalYear: entry.fiscal_year, status: 'posted', sourceDraftId: null,
+      reversedEntryId: entryId, createdAt: now }).run();
 
     lines.forEach((line, idx) => {
-      insertLine.run(
-        randomUUID(),
-        tenantId,
-        reversalEntryId,
-        idx + 1,
-        line.account_number,
-        round2(Number(line.credit_amount || 0)),
-        round2(Number(line.debit_amount || 0)),
-        line.tax_code,
-        line.tax_case_key,
-        line.tax_rate,
-        line.net_amount,
-        line.tax_amount,
-        line.gross_amount,
-        line.country_code,
-        line.counterparty_vat_id,
-        line.evidence_type,
-        line.evidence_reference,
-        line.cost_center,
-        line.memo,
-      );
+      txDrizzle.insert(schema.journalLines).values({ id: randomUUID(), tenantId, entryId: reversalEntryId, lineNo: idx + 1,
+        accountNumber: line.account_number, debitAmount: round2(Number(line.credit_amount || 0)), creditAmount: round2(Number(line.debit_amount || 0)),
+        taxCode: line.tax_code, taxCaseKey: line.tax_case_key, taxRate: line.tax_rate, netAmount: line.net_amount,
+        taxAmount: line.tax_amount, grossAmount: line.gross_amount, countryCode: line.country_code,
+        counterpartyVatId: line.counterparty_vat_id, evidenceType: line.evidence_type, evidenceReference: line.evidence_reference,
+        costCenter: line.cost_center, memo: line.memo }).run();
     });
 
-    const reversalLines = db
-      .prepare(
-        `
-        SELECT
-          id, account_number, debit_amount, credit_amount, tax_code, tax_case_key, tax_rate, net_amount, tax_amount, gross_amount,
-          country_code, counterparty_vat_id, evidence_type, evidence_reference, cost_center, memo
-        FROM journal_lines
-        WHERE tenant_id = ? AND entry_id = ?
-        ORDER BY line_no ASC
-        `,
-      )
-      .all(tenantId, reversalEntryId) as Array<{
-      id: string;
-      account_number: string;
-      debit_amount: number;
-      credit_amount: number;
-      tax_code: string | null;
-      tax_case_key: TaxCaseKey | null;
-      tax_rate: number | null;
-      net_amount: number | null;
-      tax_amount: number | null;
-      gross_amount: number | null;
-      country_code: string | null;
-      counterparty_vat_id: string | null;
-      evidence_type: string | null;
-      evidence_reference: string | null;
-      cost_center: string | null;
-      memo: string | null;
-    }>;
+    const reversalLines = txDrizzle.select(lineSelect).from(schema.journalLines)
+      .where(and(eq(schema.journalLines.tenantId, tenantId), eq(schema.journalLines.entryId, reversalEntryId)))
+      .orderBy(asc(schema.journalLines.lineNo)).all() as typeof lines;
     const chart = getActiveChart(db);
-    const insertPair = db.prepare(
-      `
-      INSERT INTO journal_posting_pairs
-        (id, tenant_id, entry_id, debit_line_id, credit_line_id, amount, tax_case_key, datev_bu_key, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
     const pairLines: JournalLineEntity[] = reversalLines.map((line) => ({
       id: line.id,
       accountNumber: line.account_number,
@@ -1444,25 +1124,13 @@ export const reverseJournalEntry = (
     }));
     for (const pair of buildPostingPairs(pairLines)) {
       const datevBuKey = resolveDatevBuKeyForTaxCase(db, chart, pair.taxCaseKey);
-      insertPair.run(
-        randomUUID(),
-        tenantId,
-        reversalEntryId,
-        pair.debitLineId,
-        pair.creditLineId,
-        round2(pair.amount),
-        pair.taxCaseKey ?? null,
-        datevBuKey ?? null,
-        now,
-      );
+      txDrizzle.insert(schema.journalPostingPairs).values({ id: randomUUID(), tenantId, entryId: reversalEntryId,
+        debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: round2(pair.amount),
+        taxCaseKey: pair.taxCaseKey ?? null, datevBuKey: datevBuKey ?? null, createdAt: now }).run();
     }
 
-    db.prepare('UPDATE journal_entries SET status = ?, reversed_entry_id = ? WHERE tenant_id = ? AND id = ?').run(
-      'reversed',
-      reversalEntryId,
-      tenantId,
-      entryId,
-    );
+    txDrizzle.update(schema.journalEntries).set({ status: 'reversed', reversedEntryId: reversalEntryId })
+      .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.id, entryId))).run();
 
     appendAuditLog(db, {
       entityType: 'pro_journal_entry',
@@ -1502,87 +1170,49 @@ export const listJournalEntries = (
   scope: TenantScope,
 ): JournalEntryEntity[] => {
   const tenantId = getTenantId(scope);
-  const where: string[] = ['je.tenant_id = @tenantId'];
-  const params: Record<string, unknown> = { tenantId };
-
-  if (args.from) {
-    where.push('je.posting_date >= @from');
-    params.from = args.from;
-  }
-  if (args.to) {
-    where.push('je.posting_date <= @to');
-    params.to = args.to;
-  }
+  const drizzle = createDrizzle(db);
+  const conditions = [eq(schema.journalEntries.tenantId, tenantId)];
+  if (args.from) conditions.push(gte(schema.journalEntries.postingDate, args.from));
+  if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
   if (args.accountNumbers?.length) {
-    const placeholders = args.accountNumbers.map((accountNumber, index) => {
-      const key = `accountNumber${index}`;
-      params[key] = accountNumber;
-      return `@${key}`;
-    });
-    where.push(
-      `EXISTS (
-        SELECT 1
-        FROM journal_lines filtered_line
-        WHERE filtered_line.tenant_id = je.tenant_id
-          AND filtered_line.entry_id = je.id
-          AND filtered_line.account_number IN (${placeholders.join(', ')})
-      )`,
-    );
+    const matching = drizzle.select({ entryId: schema.journalLines.entryId }).from(schema.journalLines)
+      .where(and(eq(schema.journalLines.tenantId, tenantId), inArray(schema.journalLines.accountNumber, args.accountNumbers))).all();
+    const ids = [...new Set(matching.map((row) => row.entryId))];
+    if (ids.length === 0) return [];
+    conditions.push(inArray(schema.journalEntries.id, ids));
   }
+  const rows = drizzle.select({
+    id: schema.journalEntries.id, tenant_id: schema.journalEntries.tenantId, entry_number: schema.journalEntries.entryNumber,
+    posting_date: schema.journalEntries.postingDate, document_date: schema.journalEntries.documentDate,
+    booking_text: schema.journalEntries.bookingText, reference: schema.journalEntries.reference,
+    period: schema.journalEntries.period, fiscal_year: schema.journalEntries.fiscalYear, status: schema.journalEntries.status,
+    source_draft_id: schema.journalEntries.sourceDraftId, reversed_entry_id: schema.journalEntries.reversedEntryId,
+    created_at: schema.journalEntries.createdAt,
+  }).from(schema.journalEntries).where(and(...conditions))
+    .orderBy(desc(schema.journalEntries.postingDate), desc(schema.journalEntries.entryNumber))
+    .limit(Math.max(1, Math.min(5000, Math.floor(args.limit ?? 500))))
+    .offset(Math.max(0, Math.floor(args.offset ?? 0))).all() as Array<{
+      id: string; tenant_id: string; entry_number: number; posting_date: string; document_date: string | null;
+      booking_text: string; reference: string | null; period: string; fiscal_year: number; status: string;
+      source_draft_id: string | null; reversed_entry_id: string | null; created_at: string;
+    }>;
 
-  params.limit = Math.max(1, Math.min(5000, Math.floor(args.limit ?? 500)));
-  params.offset = Math.max(0, Math.floor(args.offset ?? 0));
-
-  const rows = db
-    .prepare(
-      `
-      SELECT id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, reversed_entry_id, created_at
-      FROM journal_entries je
-      WHERE ${where.join(' AND ')}
-      ORDER BY posting_date DESC, entry_number DESC
-      LIMIT @limit OFFSET @offset
-    `,
-    )
-    .all(params) as Array<{
-    id: string;
-    tenant_id: string;
-    entry_number: number;
-    posting_date: string;
-    document_date: string | null;
-    booking_text: string;
-    reference: string | null;
-    period: string;
-    fiscal_year: number;
-    status: string;
-    source_draft_id: string | null;
-    reversed_entry_id: string | null;
-    created_at: string;
-  }>;
-
-  const getLines = db.prepare(
-    `
-      SELECT
-        id,
-        account_number,
-        debit_amount,
-        credit_amount,
-        tax_code,
-        tax_case_key,
-        tax_rate,
-        net_amount,
-        tax_amount,
-        gross_amount,
-        country_code,
-        counterparty_vat_id,
-        evidence_type,
-        evidence_reference,
-        cost_center,
-        memo
-      FROM journal_lines
-      WHERE tenant_id = ? AND entry_id = ?
-      ORDER BY line_no ASC
-    `,
-  );
+  const getLines = (entryId: string) => drizzle.select({
+    id: schema.journalLines.id, account_number: schema.journalLines.accountNumber,
+    debit_amount: schema.journalLines.debitAmount, credit_amount: schema.journalLines.creditAmount,
+    tax_code: schema.journalLines.taxCode, tax_case_key: schema.journalLines.taxCaseKey,
+    tax_rate: schema.journalLines.taxRate, net_amount: schema.journalLines.netAmount, tax_amount: schema.journalLines.taxAmount,
+    gross_amount: schema.journalLines.grossAmount, country_code: schema.journalLines.countryCode,
+    counterparty_vat_id: schema.journalLines.counterpartyVatId, evidence_type: schema.journalLines.evidenceType,
+    evidence_reference: schema.journalLines.evidenceReference, cost_center: schema.journalLines.costCenter,
+    memo: schema.journalLines.memo,
+  }).from(schema.journalLines).where(and(eq(schema.journalLines.tenantId, tenantId), eq(schema.journalLines.entryId, entryId)))
+    .orderBy(asc(schema.journalLines.lineNo)).all() as Array<{
+      id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
+      tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
+      gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null;
+      evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
+    }>;
 
   return rows.map((row) => ({
     id: row.id,
@@ -1598,24 +1228,7 @@ export const listJournalEntries = (
     sourceDraftId: row.source_draft_id ?? undefined,
     reversedEntryId: row.reversed_entry_id ?? undefined,
     createdAt: row.created_at,
-    lines: (getLines.all(tenantId, row.id) as Array<{
-      id: string;
-      account_number: string;
-      debit_amount: number;
-      credit_amount: number;
-      tax_code: string | null;
-      tax_case_key: TaxCaseKey | null;
-      tax_rate: number | null;
-      net_amount: number | null;
-      tax_amount: number | null;
-      gross_amount: number | null;
-      country_code: string | null;
-      counterparty_vat_id: string | null;
-      evidence_type: string | null;
-      evidence_reference: string | null;
-      cost_center: string | null;
-      memo: string | null;
-    }>).map((line) => ({
+    lines: getLines(row.id).map((line) => ({
       id: line.id,
       accountNumber: line.account_number,
       debitAmount: Number(line.debit_amount || 0),
@@ -1642,27 +1255,16 @@ export const getLedgerBalances = (
   scope: TenantScope,
 ): LedgerBalanceRow[] => {
   const tenantId = getTenantId(scope);
-  const rows = db
-    .prepare(
-      `
-      SELECT jl.account_number,
-             SUM(jl.debit_amount) as debit_turnover,
-             SUM(jl.credit_amount) as credit_turnover
-      FROM journal_lines jl
-      INNER JOIN journal_entries je ON je.id = jl.entry_id
-      WHERE jl.tenant_id = ?
-        AND je.tenant_id = ?
-        AND je.status = 'posted'
-        AND (? IS NULL OR je.posting_date <= ?)
-      GROUP BY jl.account_number
-      ORDER BY jl.account_number ASC
-    `,
-    )
-    .all(tenantId, tenantId, args.asOfDate ?? null, args.asOfDate ?? null) as Array<{
-    account_number: string;
-    debit_turnover: number;
-    credit_turnover: number;
-  }>;
+  const drizzle = createDrizzle(db);
+  const conditions = [eq(schema.journalLines.tenantId, tenantId), eq(schema.journalEntries.tenantId, tenantId),
+    eq(schema.journalEntries.status, 'posted')];
+  if (args.asOfDate) conditions.push(lte(schema.journalEntries.postingDate, args.asOfDate));
+  const rows = drizzle.select({ account_number: schema.journalLines.accountNumber,
+    debit_turnover: sum(schema.journalLines.debitAmount), credit_turnover: sum(schema.journalLines.creditAmount) })
+    .from(schema.journalLines).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
+    .where(and(...conditions)).groupBy(schema.journalLines.accountNumber).orderBy(asc(schema.journalLines.accountNumber)).all() as Array<{
+      account_number: string; debit_turnover: number | null; credit_turnover: number | null;
+    }>;
 
   return rows.map((row) => {
     const debit = Number(row.debit_turnover || 0);
@@ -1710,82 +1312,37 @@ export const getSusaReport = (
 };
 
 const ensureDefaultMappings = (db: Database.Database, tenantId: string): void => {
-  const row = db
-    .prepare('SELECT COUNT(*) as c FROM account_mappings_hgb WHERE tenant_id = ?')
-    .get(tenantId) as { c: number };
+  const drizzle = createDrizzle(db);
+  const row = drizzle.select({ c: count() }).from(schema.accountMappingsHgb)
+    .where(eq(schema.accountMappingsHgb.tenantId, tenantId)).get() as { c: number };
   if (row.c > 0) return;
 
-  const accounts = db
-    .prepare('SELECT chart, account_number FROM ledger_accounts ORDER BY chart, account_number')
-    .all() as Array<{ chart: string; account_number: string }>;
+  const accounts = drizzle.select({ chart: schema.ledgerAccounts.chart, account_number: schema.ledgerAccounts.accountNumber })
+    .from(schema.ledgerAccounts).orderBy(asc(schema.ledgerAccounts.chart), asc(schema.ledgerAccounts.accountNumber)).all() as Array<{ chart: string; account_number: string }>;
   if (!accounts.length) return;
 
   const now = new Date().toISOString();
-  const insert = db.prepare(
-    `
-      INSERT INTO account_mappings_hgb
-        (id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(tenant_id, chart, account_number, statement_type) DO UPDATE SET
-        position_key = excluded.position_key,
-        position_label = excluded.position_label,
-        balance_side = excluded.balance_side,
-        updated_at = excluded.updated_at
-    `,
-  );
+  const insert = (values: typeof schema.accountMappingsHgb['$inferInsert']) => drizzle.insert(schema.accountMappingsHgb).values(values)
+    .onConflictDoUpdate({ target: [schema.accountMappingsHgb.tenantId, schema.accountMappingsHgb.chart,
+      schema.accountMappingsHgb.accountNumber, schema.accountMappingsHgb.statementType],
+      set: { positionKey: values.positionKey, positionLabel: values.positionLabel, balanceSide: values.balanceSide ?? null, updatedAt: now } }).run();
 
   for (const account of accounts) {
     const first = account.account_number[0] ?? '';
     if (['8', '9'].includes(first)) {
-      insert.run(
-        randomUUID(),
-        tenantId,
-        account.chart,
-        account.account_number,
-        'guv',
-        'revenue',
-        'Umsatzerloese',
-        null,
-        now,
-      );
+      insert({ id: randomUUID(), tenantId, chart: account.chart, accountNumber: account.account_number, statementType: 'guv',
+        positionKey: 'revenue', positionLabel: 'Umsatzerloese', balanceSide: null, updatedAt: now });
     } else if (['4', '5', '6', '7'].includes(first)) {
-      insert.run(
-        randomUUID(),
-        tenantId,
-        account.chart,
-        account.account_number,
-        'guv',
-        'expense',
-        'Aufwendungen',
-        null,
-        now,
-      );
+      insert({ id: randomUUID(), tenantId, chart: account.chart, accountNumber: account.account_number, statementType: 'guv',
+        positionKey: 'expense', positionLabel: 'Aufwendungen', balanceSide: null, updatedAt: now });
     }
 
     if (['0', '1'].includes(first)) {
-      insert.run(
-        randomUUID(),
-        tenantId,
-        account.chart,
-        account.account_number,
-        'bilanz',
-        'assets',
-        'Aktiva',
-        'asset',
-        now,
-      );
+      insert({ id: randomUUID(), tenantId, chart: account.chart, accountNumber: account.account_number, statementType: 'bilanz',
+        positionKey: 'assets', positionLabel: 'Aktiva', balanceSide: 'asset', updatedAt: now });
     } else if (['2', '3'].includes(first)) {
-      insert.run(
-        randomUUID(),
-        tenantId,
-        account.chart,
-        account.account_number,
-        'bilanz',
-        'liabilities',
-        'Passiva',
-        'liability',
-        now,
-      );
+      insert({ id: randomUUID(), tenantId, chart: account.chart, accountNumber: account.account_number, statementType: 'bilanz',
+        positionKey: 'liabilities', positionLabel: 'Passiva', balanceSide: 'liability', updatedAt: now });
     }
   }
 };
@@ -1803,31 +1360,24 @@ export const getGuvReport = (
   const tenantId = getTenantId(scope);
   ensureDefaultMappings(db, tenantId);
 
-  const rows = db
-    .prepare(
-      `
-      SELECT map.position_key, map.position_label,
-             SUM(jl.credit_amount - jl.debit_amount) as amount
-      FROM journal_lines jl
-      INNER JOIN journal_entries je ON je.id = jl.entry_id
-      INNER JOIN account_mappings_hgb map
-              ON map.tenant_id = jl.tenant_id
-             AND map.account_number = jl.account_number
-             AND map.statement_type = 'guv'
-      WHERE jl.tenant_id = @tenantId
-        AND je.tenant_id = @tenantId
-        AND je.status = 'posted'
-        AND (@from IS NULL OR je.posting_date >= @from)
-        AND (@to IS NULL OR je.posting_date <= @to)
-      GROUP BY map.position_key, map.position_label
-      ORDER BY map.position_key ASC
-    `,
-    )
-    .all({ tenantId, from: args.from ?? null, to: args.to ?? null }) as Array<{
-    position_key: string;
-    position_label: string;
-    amount: number;
-  }>;
+  const conditions = [eq(schema.journalLines.tenantId, tenantId), eq(schema.journalEntries.tenantId, tenantId),
+    eq(schema.journalEntries.status, 'posted'), eq(schema.accountMappingsHgb.tenantId, tenantId), eq(schema.accountMappingsHgb.statementType, 'guv')];
+  if (args.from) conditions.push(gte(schema.journalEntries.postingDate, args.from));
+  if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
+  const sourceRows = createDrizzle(db).select({ position_key: schema.accountMappingsHgb.positionKey,
+    position_label: schema.accountMappingsHgb.positionLabel, debit: schema.journalLines.debitAmount, credit: schema.journalLines.creditAmount })
+    .from(schema.journalLines).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
+    .innerJoin(schema.accountMappingsHgb, and(eq(schema.accountMappingsHgb.accountNumber, schema.journalLines.accountNumber),
+      eq(schema.accountMappingsHgb.tenantId, schema.journalLines.tenantId), eq(schema.accountMappingsHgb.statementType, 'guv')))
+    .where(and(...conditions)).all();
+  const grouped = new Map<string, { position_key: string; position_label: string; amount: number }>();
+  for (const row of sourceRows) {
+    const key = row.position_key;
+    const current = grouped.get(key) ?? { position_key: key, position_label: row.position_label, amount: 0 };
+    current.amount += Number(row.credit ?? 0) - Number(row.debit ?? 0);
+    grouped.set(key, current);
+  }
+  const rows = [...grouped.values()].sort((a, b) => a.position_key.localeCompare(b.position_key));
 
   const mapped = rows.map((row) => ({
     positionKey: row.position_key,
@@ -1863,30 +1413,23 @@ export const getBilanzReport = (
   const tenantId = getTenantId(scope);
   ensureDefaultMappings(db, tenantId);
 
-  const rows = db
-    .prepare(
-      `
-      SELECT map.balance_side, jl.account_number,
-             SUM(jl.debit_amount - jl.credit_amount) as amount
-      FROM journal_lines jl
-      INNER JOIN journal_entries je ON je.id = jl.entry_id
-      INNER JOIN account_mappings_hgb map
-              ON map.tenant_id = jl.tenant_id
-             AND map.account_number = jl.account_number
-             AND map.statement_type = 'bilanz'
-      WHERE jl.tenant_id = @tenantId
-        AND je.tenant_id = @tenantId
-        AND je.status = 'posted'
-        AND (@asOfDate IS NULL OR je.posting_date <= @asOfDate)
-      GROUP BY map.balance_side, jl.account_number
-      ORDER BY jl.account_number ASC
-    `,
-    )
-    .all({ tenantId, asOfDate: args.asOfDate ?? null }) as Array<{
-    balance_side: 'asset' | 'liability' | null;
-    account_number: string;
-    amount: number;
-  }>;
+  const conditions = [eq(schema.journalLines.tenantId, tenantId), eq(schema.journalEntries.tenantId, tenantId),
+    eq(schema.journalEntries.status, 'posted'), eq(schema.accountMappingsHgb.tenantId, tenantId), eq(schema.accountMappingsHgb.statementType, 'bilanz')];
+  if (args.asOfDate) conditions.push(lte(schema.journalEntries.postingDate, args.asOfDate));
+  const sourceRows = createDrizzle(db).select({ balance_side: schema.accountMappingsHgb.balanceSide,
+    account_number: schema.journalLines.accountNumber, debit: schema.journalLines.debitAmount, credit: schema.journalLines.creditAmount })
+    .from(schema.journalLines).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
+    .innerJoin(schema.accountMappingsHgb, and(eq(schema.accountMappingsHgb.accountNumber, schema.journalLines.accountNumber),
+      eq(schema.accountMappingsHgb.tenantId, schema.journalLines.tenantId), eq(schema.accountMappingsHgb.statementType, 'bilanz')))
+    .where(and(...conditions)).all();
+  const grouped = new Map<string, { balance_side: 'asset' | 'liability' | null; account_number: string; amount: number }>();
+  for (const row of sourceRows) {
+    const key = row.account_number;
+    const current = grouped.get(key) ?? { balance_side: row.balance_side as 'asset' | 'liability' | null, account_number: key, amount: 0 };
+    current.amount += Number(row.debit ?? 0) - Number(row.credit ?? 0);
+    grouped.set(key, current);
+  }
+  const rows = [...grouped.values()].sort((a, b) => a.account_number.localeCompare(b.account_number));
 
   const assets = rows
     .filter((row) => row.balance_side === 'asset')
@@ -1912,23 +1455,12 @@ export const getBilanzReport = (
 
 export const listDatevExports = (db: Database.Database, scope: TenantScope): DatevExportResult[] => {
   const tenantId = getTenantId(scope);
-  const rows = db
-    .prepare(
-      `
-      SELECT id, file_path, record_count, from_date, to_date, created_at
-      FROM datev_exports
-      WHERE tenant_id = ?
-      ORDER BY created_at DESC
-    `,
-    )
-    .all(tenantId) as Array<{
-    id: string;
-    file_path: string;
-    record_count: number;
-    from_date: string | null;
-    to_date: string | null;
-    created_at: string;
-  }>;
+  const rows = createDrizzle(db).select({ id: schema.datevExports.id, file_path: schema.datevExports.filePath,
+    record_count: schema.datevExports.recordCount, from_date: schema.datevExports.fromDate,
+    to_date: schema.datevExports.toDate, created_at: schema.datevExports.createdAt }).from(schema.datevExports)
+    .where(eq(schema.datevExports.tenantId, tenantId)).orderBy(desc(schema.datevExports.createdAt)).all() as Array<{
+      id: string; file_path: string; record_count: number; from_date: string | null; to_date: string | null; created_at: string;
+    }>;
 
   return rows.map((row) => ({
     id: row.id,
@@ -1948,12 +1480,8 @@ export const insertDatevExport = (
   const tenantId = getTenantId(scope);
   const id = randomUUID();
   const createdAt = new Date().toISOString();
-  db.prepare(
-    `
-      INSERT INTO datev_exports (id, tenant_id, file_path, record_count, from_date, to_date, created_at, meta_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-  ).run(id, tenantId, args.filePath, args.recordCount, args.fromDate ?? null, args.toDate ?? null, createdAt, '{}');
+  createDrizzle(db).insert(schema.datevExports).values({ id, tenantId, filePath: args.filePath, recordCount: args.recordCount,
+    fromDate: args.fromDate ?? null, toDate: args.toDate ?? null, createdAt, metaJson: '{}' }).run();
 
   appendAuditLog(db, {
     entityType: 'pro_datev_export',
@@ -1992,34 +1520,22 @@ export const getAccountingHealth = (
   lastDatevExportAt?: string;
 } => {
   const tenantId = getTenantId(scope);
-  const draftCount = (db
-    .prepare('SELECT COUNT(*) as c FROM booking_drafts WHERE tenant_id = ?')
-    .get(tenantId) as { c: number }).c;
-  const postedCount = (db
-    .prepare("SELECT COUNT(*) as c FROM journal_entries WHERE tenant_id = ? AND status = 'posted'")
-    .get(tenantId) as { c: number }).c;
-  const reversedCount = (db
-    .prepare("SELECT COUNT(*) as c FROM journal_entries WHERE tenant_id = ? AND status = 'reversed'")
-    .get(tenantId) as { c: number }).c;
-  const unbalancedDraftCount = (db
-    .prepare("SELECT COUNT(*) as c FROM draft_validation_issues WHERE tenant_id = ? AND code = 'UNBALANCED_ENTRY'")
-    .get(tenantId) as { c: number }).c;
-  const unmappedAccountCount = (db
-    .prepare(
-      `
-        SELECT COUNT(DISTINCT jl.account_number) as c
-        FROM journal_lines jl
-        LEFT JOIN account_mappings_hgb map
-          ON map.tenant_id = jl.tenant_id
-         AND map.account_number = jl.account_number
-        WHERE jl.tenant_id = ?
-          AND map.account_number IS NULL
-      `,
-    )
-    .get(tenantId) as { c: number }).c;
-  const lastDatevExport = db
-    .prepare('SELECT created_at FROM datev_exports WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 1')
-    .get(tenantId) as { created_at: string } | undefined;
+  const drizzle = createDrizzle(db);
+  const draftCount = Number(drizzle.select({ c: count() }).from(schema.bookingDrafts)
+    .where(eq(schema.bookingDrafts.tenantId, tenantId)).get()?.c ?? 0);
+  const postedCount = Number(drizzle.select({ c: count() }).from(schema.journalEntries)
+    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.status, 'posted'))).get()?.c ?? 0);
+  const reversedCount = Number(drizzle.select({ c: count() }).from(schema.journalEntries)
+    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.status, 'reversed'))).get()?.c ?? 0);
+  const unbalancedDraftCount = Number(drizzle.select({ c: count() }).from(schema.draftValidationIssues)
+    .where(and(eq(schema.draftValidationIssues.tenantId, tenantId), eq(schema.draftValidationIssues.code, 'UNBALANCED_ENTRY'))).get()?.c ?? 0);
+  const lineAccounts = new Set(drizzle.select({ accountNumber: schema.journalLines.accountNumber }).from(schema.journalLines)
+    .where(eq(schema.journalLines.tenantId, tenantId)).all().map((row) => row.accountNumber));
+  const mappedAccounts = new Set(drizzle.select({ accountNumber: schema.accountMappingsHgb.accountNumber }).from(schema.accountMappingsHgb)
+    .where(eq(schema.accountMappingsHgb.tenantId, tenantId)).all().map((row) => row.accountNumber));
+  const unmappedAccountCount = [...lineAccounts].filter((accountNumber) => !mappedAccounts.has(accountNumber)).length;
+  const lastDatevExport = drizzle.select({ created_at: schema.datevExports.createdAt }).from(schema.datevExports)
+    .where(eq(schema.datevExports.tenantId, tenantId)).orderBy(desc(schema.datevExports.createdAt)).limit(1).get() as { created_at: string } | undefined;
 
   return {
     draftCount,
@@ -2047,38 +1563,26 @@ export const getVatSummary = (
   }>;
 } => {
   const tenantId = getTenantId(scope);
-  const rows = db
-    .prepare(
-      `
-      SELECT
-        jl.tax_case_key,
-        SUM(COALESCE(jl.net_amount, 0)) AS net_amount,
-        SUM(COALESCE(jl.tax_amount, 0)) AS tax_amount,
-        SUM(COALESCE(jl.gross_amount, CASE WHEN jl.debit_amount > 0 THEN jl.debit_amount ELSE jl.credit_amount END)) AS gross_amount,
-        COUNT(*) AS line_count
-      FROM journal_lines jl
-      INNER JOIN journal_entries je ON je.id = jl.entry_id
-      WHERE jl.tenant_id = @tenantId
-        AND je.tenant_id = @tenantId
-        AND je.status = 'posted'
-        AND jl.tax_case_key IS NOT NULL
-        AND (@from IS NULL OR je.posting_date >= @from)
-        AND (@to IS NULL OR je.posting_date <= @to)
-      GROUP BY jl.tax_case_key
-      ORDER BY jl.tax_case_key ASC
-      `,
-    )
-    .all({
-      tenantId,
-      from: args.from ?? null,
-      to: args.to ?? null,
-    }) as Array<{
-    tax_case_key: TaxCaseKey;
-    net_amount: number;
-    tax_amount: number;
-    gross_amount: number;
-    line_count: number;
-  }>;
+  const conditions = [eq(schema.journalLines.tenantId, tenantId), eq(schema.journalEntries.tenantId, tenantId),
+    eq(schema.journalEntries.status, 'posted'), isNotNull(schema.journalLines.taxCaseKey)];
+  if (args.from) conditions.push(gte(schema.journalEntries.postingDate, args.from));
+  if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
+  const sourceRows = createDrizzle(db).select({ tax_case_key: schema.journalLines.taxCaseKey,
+    net: schema.journalLines.netAmount, tax: schema.journalLines.taxAmount, gross: schema.journalLines.grossAmount,
+    debit: schema.journalLines.debitAmount, credit: schema.journalLines.creditAmount })
+    .from(schema.journalLines).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
+    .where(and(...conditions)).all();
+  const grouped = new Map<string, { tax_case_key: TaxCaseKey; net_amount: number; tax_amount: number; gross_amount: number; line_count: number }>();
+  for (const row of sourceRows) {
+    if (!row.tax_case_key) continue;
+    const current = grouped.get(row.tax_case_key) ?? { tax_case_key: row.tax_case_key as TaxCaseKey, net_amount: 0, tax_amount: 0, gross_amount: 0, line_count: 0 };
+    current.net_amount += Number(row.net ?? 0);
+    current.tax_amount += Number(row.tax ?? 0);
+    current.gross_amount += Number(row.gross ?? (Number(row.debit ?? 0) > 0 ? row.debit : row.credit) ?? 0);
+    current.line_count += 1;
+    grouped.set(row.tax_case_key, current);
+  }
+  const rows = [...grouped.values()].sort((a, b) => a.tax_case_key.localeCompare(b.tax_case_key));
 
   return {
     from: args.from,
@@ -2108,42 +1612,23 @@ export const buildDatevRows = (
   umsatz: number;
 }> => {
   const tenantId = getTenantId(scope);
-  const params = {
-    tenantId,
-    from: args.from ?? null,
-    to: args.to ?? null,
-  };
-  const pairedRows = db
-    .prepare(
-      `
-      SELECT
-        je.posting_date,
-        je.entry_number,
-        je.booking_text,
-        debit.account_number AS debit_account,
-        credit.account_number AS credit_account,
-        jpp.amount,
-        jpp.datev_bu_key
-      FROM journal_posting_pairs jpp
-      INNER JOIN journal_entries je ON je.id = jpp.entry_id AND je.tenant_id = jpp.tenant_id
-      INNER JOIN journal_lines debit ON debit.id = jpp.debit_line_id AND debit.entry_id = je.id
-      INNER JOIN journal_lines credit ON credit.id = jpp.credit_line_id AND credit.entry_id = je.id
-      WHERE jpp.tenant_id = @tenantId
-        AND je.status = 'posted'
-        AND (@from IS NULL OR je.posting_date >= @from)
-        AND (@to IS NULL OR je.posting_date <= @to)
-      ORDER BY je.posting_date ASC, je.entry_number ASC, jpp.id ASC
-      `,
-    )
-    .all(params) as Array<{
-    posting_date: string;
-    entry_number: number;
-    booking_text: string;
-    debit_account: string;
-    credit_account: string;
-    amount: number;
-    datev_bu_key: string | null;
-  }>;
+  const conditions = [eq(schema.journalPostingPairs.tenantId, tenantId), eq(schema.journalEntries.tenantId, tenantId),
+    eq(schema.journalEntries.status, 'posted')];
+  if (args.from) conditions.push(gte(schema.journalEntries.postingDate, args.from));
+  if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
+  const debit = alias(schema.journalLines, 'debit');
+  const credit = alias(schema.journalLines, 'credit');
+  const pairedRows = createDrizzle(db).select({ posting_date: schema.journalEntries.postingDate,
+    entry_number: schema.journalEntries.entryNumber, booking_text: schema.journalEntries.bookingText,
+    debit_account: debit.accountNumber, credit_account: credit.accountNumber,
+    amount: schema.journalPostingPairs.amount, datev_bu_key: schema.journalPostingPairs.datevBuKey })
+    .from(schema.journalPostingPairs).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalPostingPairs.entryId))
+    .innerJoin(debit, eq(debit.id, schema.journalPostingPairs.debitLineId))
+    .innerJoin(credit, eq(credit.id, schema.journalPostingPairs.creditLineId))
+    .where(and(...conditions)).orderBy(asc(schema.journalEntries.postingDate), asc(schema.journalEntries.entryNumber), asc(schema.journalPostingPairs.id)).all() as Array<{
+      posting_date: string; entry_number: number; booking_text: string; debit_account: string; credit_account: string;
+      amount: number; datev_bu_key: string | null;
+    }>;
 
   if (pairedRows.length > 0) {
     return pairedRows.map((row) => ({
@@ -2188,31 +1673,19 @@ export const ensureProAccountingSeedData = (db: Database.Database, scope: Tenant
   ensurePeriodExists(db, prevPeriod, Number(prevPeriod.slice(0, 4)), tenantId);
   ensurePeriodExists(db, thisPeriod, now.getFullYear(), tenantId);
 
-  const bankCount = (db
-    .prepare('SELECT COUNT(*) as c FROM bank_transactions WHERE tenant_id = ?')
-    .get(tenantId) as { c: number }).c;
+  const drizzle = createDrizzle(db);
+  const bankCount = Number(drizzle.select({ c: count() }).from(schema.bankTransactions)
+    .where(eq(schema.bankTransactions.tenantId, tenantId)).get()?.c ?? 0);
 
   if (bankCount === 0) {
-    db.prepare(
-      `
-      INSERT INTO bank_transactions (id, tenant_id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, source_transaction_id, created_at, updated_at)
-      SELECT
-        t.id,
-        ?,
-        t.account_id,
-        t.date,
-        t.amount,
-        CASE WHEN t.amount >= 0 THEN 'income' ELSE 'expense' END,
-        t.counterparty,
-        t.purpose,
-        t.linked_invoice_id,
-        t.status,
-        t.id,
-        COALESCE(t.date || 'T00:00:00.000Z', datetime('now')),
-        datetime('now')
-      FROM transactions t
-      `,
-    ).run(tenantId);
+    const sourceTransactions = drizzle.select().from(schema.transactions).all();
+    for (const transaction of sourceTransactions) {
+      const createdAt = `${transaction.date}T00:00:00.000Z`;
+      drizzle.insert(schema.bankTransactions).values({ id: transaction.id, tenantId, accountId: transaction.accountId,
+        date: transaction.date, amount: transaction.amount, type: Number(transaction.amount) >= 0 ? 'income' : 'expense',
+        counterparty: transaction.counterparty, purpose: transaction.purpose, linkedInvoiceId: transaction.linkedInvoiceId,
+        status: transaction.status, sourceTransactionId: transaction.id, createdAt, updatedAt: createdAt }).onConflictDoNothing().run();
+    }
   }
 
   seedAccountKeywords(db, scope);

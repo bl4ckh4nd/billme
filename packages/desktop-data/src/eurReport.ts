@@ -1,8 +1,10 @@
 import type Database from 'better-sqlite3';
+import { and, asc, eq, gte, isNull, lte, or } from 'drizzle-orm';
 import { listEurClassificationsMap, type EurClassification, type EurSourceType, upsertEurClassification } from './eurClassificationRepo';
 import { listEurLines, type EurLine } from './eurCatalogRepo';
 import type { AppSettings } from '@billme/desktop-core/types';
 import { buildPipelineContext, classifyItem, type SuggestionLayer } from './eurClassificationPipeline';
+import { createDrizzle, schema } from './drizzle';
 
 export interface EurReportParams {
   taxYear: number;
@@ -304,43 +306,37 @@ const listRawEurItems = (
   counterparty: string;
   purpose: string;
 }> => {
-  const invoicePayments = db
-    .prepare(
-      `
-      SELECT ip.invoice_id, ip.date, ip.amount, i.client, i.number
-      FROM invoice_payments ip
-      INNER JOIN invoices i ON i.id = ip.invoice_id
-      WHERE ip.date >= ? AND ip.date <= ?
-    `,
-    )
-    .all(from, to) as Array<{
-    invoice_id: string;
-    date: string;
-    amount: number;
-    client: string;
-    number: string;
+  const drizzle = createDrizzle(db);
+  const invoicePayments = drizzle.select({
+    invoice_id: schema.invoicePayments.invoiceId,
+    date: schema.invoicePayments.date,
+    amount: schema.invoicePayments.amount,
+    client: schema.invoices.client,
+    number: schema.invoices.number,
+  }).from(schema.invoicePayments).innerJoin(schema.invoices, eq(schema.invoices.id, schema.invoicePayments.invoiceId))
+    .where(and(gte(schema.invoicePayments.date, from), lte(schema.invoicePayments.date, to))).all() as Array<{
+    invoice_id: string; date: string; amount: number; client: string; number: string;
   }>;
 
-  const transactions = db
-    .prepare(
-      `
-      SELECT id, date, amount, type, counterparty, purpose
-           , account_id, linked_invoice_id
-      FROM transactions
-      WHERE status = 'booked'
-        AND date >= ?
-        AND date <= ?
-        AND (deleted_at IS NULL OR deleted_at = '')
-        AND (
-          type = 'expense'
-          OR (
-            type = 'income'
-            AND (linked_invoice_id IS NULL OR linked_invoice_id = '')
-          )
-        )
-    `,
-    )
-    .all(from, to) as Array<{
+  const transactions = drizzle.select({
+    id: schema.transactions.id,
+    date: schema.transactions.date,
+    amount: schema.transactions.amount,
+    type: schema.transactions.type,
+    counterparty: schema.transactions.counterparty,
+    purpose: schema.transactions.purpose,
+    account_id: schema.transactions.accountId,
+    linked_invoice_id: schema.transactions.linkedInvoiceId,
+  }).from(schema.transactions).where(and(
+    eq(schema.transactions.status, 'booked'),
+    gte(schema.transactions.date, from),
+    lte(schema.transactions.date, to),
+    or(isNull(schema.transactions.deletedAt), eq(schema.transactions.deletedAt, '')),
+    or(
+      eq(schema.transactions.type, 'expense'),
+      and(eq(schema.transactions.type, 'income'), or(isNull(schema.transactions.linkedInvoiceId), eq(schema.transactions.linkedInvoiceId, ''))),
+    ),
+  )).all() as Array<{
     id: string;
     date: string;
     amount: number;

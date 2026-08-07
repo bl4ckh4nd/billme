@@ -4,7 +4,7 @@ import test from 'node:test';
 
 const rootUrl = new URL('../../../../', import.meta.url);
 const sqliteBootstrapUrl = new URL('apps/pro-desktop/db/bootstrap.ts', rootUrl);
-const postgresMigrationUrl = new URL('./sql/0002_server_data_assets.sql', import.meta.url);
+const postgresMigrationUrl = new URL('../../drizzle/0002_server_data_assets.sql', import.meta.url);
 
 const columns = (sql: string, table: string): string[] => {
   const body = sql.match(new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(([\\s\\S]*?)\\);`))?.[1];

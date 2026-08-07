@@ -12,11 +12,11 @@ const rootUrl = new URL('../../../../', import.meta.url);
 const liteDesktopSchemaUrl = new URL('apps/desktop/db/schema.ts', rootUrl);
 const proDesktopSchemaUrl = new URL('apps/pro-desktop/db/schema.ts', rootUrl);
 const postgresMigrationUrls = [
-  new URL('./sql/0000_server_data.sql', import.meta.url),
-  new URL('./sql/0001_server_data_pro_accounting.sql', import.meta.url),
-  new URL('./sql/0002_server_data_assets.sql', import.meta.url),
-  new URL('./sql/0003_server_data_offer_items.sql', import.meta.url),
-  new URL('./sql/0004_server_data_tax_rules.sql', import.meta.url),
+  new URL('../../drizzle/0000_server_data.sql', import.meta.url),
+  new URL('../../drizzle/0001_server_data_pro_accounting.sql', import.meta.url),
+  new URL('../../drizzle/0002_server_data_assets.sql', import.meta.url),
+  new URL('../../drizzle/0003_server_data_offer_items.sql', import.meta.url),
+  new URL('../../drizzle/0004_server_data_tax_rules.sql', import.meta.url),
 ];
 
 const extractSqliteTableNames = async (schemaUrl: URL): Promise<string[]> => {
@@ -95,16 +95,16 @@ test('tenant-scoped postgres tables stay covered by import overwrite guards', as
   assert.deepEqual([...tenantCoreRowCountTables].sort(), expected);
 });
 
-test('incremental Postgres migrations stay mirrored in the Drizzle tree', async () => {
-  for (const name of ['0003_server_data_offer_items.sql', '0004_server_data_tax_rules.sql']) {
-    const postgres = await readFile(new URL(`./sql/${name}`, import.meta.url), 'utf8');
-    const drizzle = await readFile(new URL(`../../drizzle/${name}`, import.meta.url), 'utf8');
-    assert.equal(drizzle, postgres, name);
-  }
+test('Drizzle migration journal contains incremental migrations', async () => {
+  const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ tag: string }> };
+  assert.deepEqual(journal.entries.map((entry) => entry.tag), [
+    '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
+    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads',
+  ]);
 });
 
 test('tax columns are present in both incremental migration files', async () => {
-  const sql = await readFile(new URL('./sql/0004_server_data_tax_rules.sql', import.meta.url), 'utf8');
+  const sql = await readFile(new URL('../../drizzle/0004_server_data_tax_rules.sql', import.meta.url), 'utf8');
   for (const table of ['clients', 'invoices', 'offers', 'recurring_profiles']) {
     assert.match(sql, new RegExp(`ALTER TABLE ${table} ADD COLUMN`), table);
   }

@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
+import { and, asc, eq } from 'drizzle-orm';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import type {
   AccountSuggestionRule,
   AccountSuggestionRuleField,
@@ -54,25 +56,25 @@ export const listAccountSuggestionRules = (
   scope: TenantScope,
 ): AccountSuggestionRule[] => {
   const tenantId = getTenantId(scope);
-  const where = ['tenant_id = @tenantId'];
-  const params: Record<string, unknown> = { tenantId };
-
-  if (args.chart) {
-    where.push('chart = @chart');
-    params.chart = args.chart;
-  }
-  if (args.activeOnly) {
-    where.push('active = 1');
-  }
-
-  const rows = db.prepare(
-    `
-      SELECT id, tenant_id, chart, priority, field, operator, value, target_account_number, flow_type, active, created_at, updated_at
-      FROM account_suggestion_rules
-      WHERE ${where.join(' AND ')}
-      ORDER BY chart ASC, priority ASC, created_at ASC
-    `,
-  ).all(params) as RuleRow[];
+  const drizzle = createDrizzle(db);
+  const conditions = [eq(schema.accountSuggestionRules.tenantId, tenantId)];
+  if (args.chart) conditions.push(eq(schema.accountSuggestionRules.chart, args.chart));
+  if (args.activeOnly) conditions.push(eq(schema.accountSuggestionRules.active, 1));
+  const rows = drizzle.select({
+    id: schema.accountSuggestionRules.id,
+    tenant_id: schema.accountSuggestionRules.tenantId,
+    chart: schema.accountSuggestionRules.chart,
+    priority: schema.accountSuggestionRules.priority,
+    field: schema.accountSuggestionRules.field,
+    operator: schema.accountSuggestionRules.operator,
+    value: schema.accountSuggestionRules.value,
+    target_account_number: schema.accountSuggestionRules.targetAccountNumber,
+    flow_type: schema.accountSuggestionRules.flowType,
+    active: schema.accountSuggestionRules.active,
+    created_at: schema.accountSuggestionRules.createdAt,
+    updated_at: schema.accountSuggestionRules.updatedAt,
+  }).from(schema.accountSuggestionRules).where(and(...conditions))
+    .orderBy(asc(schema.accountSuggestionRules.chart), asc(schema.accountSuggestionRules.priority), asc(schema.accountSuggestionRules.createdAt)).all() as RuleRow[];
 
   return rows.map(mapRow);
 };
@@ -88,25 +90,8 @@ export const upsertAccountSuggestionRule = (
   const active = input.active !== false;
   const flowType = input.flowType ?? 'any';
 
-  db.prepare(
-    `
-      INSERT INTO account_suggestion_rules
-        (id, tenant_id, chart, priority, field, operator, value, target_account_number, flow_type, active, created_at, updated_at)
-      VALUES
-        (@id, @tenantId, @chart, @priority, @field, @operator, @value, @targetAccountNumber, @flowType, @active, @createdAt, @updatedAt)
-      ON CONFLICT(id) DO UPDATE SET
-        tenant_id = excluded.tenant_id,
-        chart = excluded.chart,
-        priority = excluded.priority,
-        field = excluded.field,
-        operator = excluded.operator,
-        value = excluded.value,
-        target_account_number = excluded.target_account_number,
-        flow_type = excluded.flow_type,
-        active = excluded.active,
-        updated_at = excluded.updated_at
-    `,
-  ).run({
+  const drizzle = createDrizzle(db);
+  drizzle.insert(schema.accountSuggestionRules).values({
     id,
     tenantId,
     chart: input.chart,
@@ -119,15 +104,26 @@ export const upsertAccountSuggestionRule = (
     active: active ? 1 : 0,
     createdAt: now,
     updatedAt: now,
-  });
+  }).onConflictDoUpdate({ target: schema.accountSuggestionRules.id, set: {
+    tenantId, chart: input.chart, priority: input.priority, field: input.field,
+    operator: input.operator, value: input.value.trim(), targetAccountNumber: input.targetAccountNumber.trim(),
+    flowType, active: active ? 1 : 0, updatedAt: now,
+  }}).run();
 
-  const row = db.prepare(
-    `
-      SELECT id, tenant_id, chart, priority, field, operator, value, target_account_number, flow_type, active, created_at, updated_at
-      FROM account_suggestion_rules
-      WHERE id = ?
-    `,
-  ).get(id) as RuleRow | undefined;
+  const row = drizzle.select({
+    id: schema.accountSuggestionRules.id,
+    tenant_id: schema.accountSuggestionRules.tenantId,
+    chart: schema.accountSuggestionRules.chart,
+    priority: schema.accountSuggestionRules.priority,
+    field: schema.accountSuggestionRules.field,
+    operator: schema.accountSuggestionRules.operator,
+    value: schema.accountSuggestionRules.value,
+    target_account_number: schema.accountSuggestionRules.targetAccountNumber,
+    flow_type: schema.accountSuggestionRules.flowType,
+    active: schema.accountSuggestionRules.active,
+    created_at: schema.accountSuggestionRules.createdAt,
+    updated_at: schema.accountSuggestionRules.updatedAt,
+  }).from(schema.accountSuggestionRules).where(eq(schema.accountSuggestionRules.id, id)).get() as RuleRow | undefined;
 
   if (!row) {
     throw new Error('Failed to upsert account suggestion rule');
@@ -136,5 +132,8 @@ export const upsertAccountSuggestionRule = (
 };
 
 export const deleteAccountSuggestionRule = (db: Database.Database, id: string, scope: TenantScope): void => {
-  db.prepare('DELETE FROM account_suggestion_rules WHERE tenant_id = ? AND id = ?').run(getTenantId(scope), id);
+  createDrizzle(db).delete(schema.accountSuggestionRules).where(and(
+    eq(schema.accountSuggestionRules.tenantId, getTenantId(scope)),
+    eq(schema.accountSuggestionRules.id, id),
+  )).run();
 };

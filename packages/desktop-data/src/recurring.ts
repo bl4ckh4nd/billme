@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { asc, desc, eq } from 'drizzle-orm';
 import {
   createSingleTenantScope,
   type BillingAddress,
@@ -23,6 +24,7 @@ import {
   type RecurringResult,
 } from '@billme/server-core/services';
 import { safeJsonParse, InvoiceItemsSchema } from './validation-schemas';
+import { createDrizzle, schema } from './drizzle';
 
 const parseOptionalJson = <T>(value: string | null | undefined): T | undefined => {
   if (!value) return undefined;
@@ -374,15 +376,42 @@ const toDomainInvoice = (scope: TenantScope, invoice: LegacyRecurringInvoice): D
 
 export const createSqliteRecurringProfileStore = (db: Database.Database): SyncRecurringProfileStore => ({
   list(scope) {
-    const rows = db.prepare('SELECT * FROM recurring_profiles ORDER BY active DESC, name ASC').all() as RecurringRow[];
+    const rows = createDrizzle(db).select({
+      id: schema.recurringProfiles.id,
+      client_id: schema.recurringProfiles.clientId,
+      active: schema.recurringProfiles.active,
+      name: schema.recurringProfiles.name,
+      interval: schema.recurringProfiles.interval,
+      next_run: schema.recurringProfiles.nextRun,
+      last_run: schema.recurringProfiles.lastRun,
+      end_date: schema.recurringProfiles.endDate,
+      amount: schema.recurringProfiles.amount,
+      items_json: schema.recurringProfiles.itemsJson,
+      tax_mode: schema.recurringProfiles.taxMode,
+      tax_meta_json: schema.recurringProfiles.taxMetaJson,
+    }).from(schema.recurringProfiles).orderBy(desc(schema.recurringProfiles.active), asc(schema.recurringProfiles.name)).all() as RecurringRow[];
     return rows.map((row) => rowToDomainRecurringProfile(scope, row));
   },
   getById(scope, id) {
-    const row = db.prepare('SELECT * FROM recurring_profiles WHERE id = ?').get(id) as RecurringRow | undefined;
+    const row = createDrizzle(db).select({
+      id: schema.recurringProfiles.id,
+      client_id: schema.recurringProfiles.clientId,
+      active: schema.recurringProfiles.active,
+      name: schema.recurringProfiles.name,
+      interval: schema.recurringProfiles.interval,
+      next_run: schema.recurringProfiles.nextRun,
+      last_run: schema.recurringProfiles.lastRun,
+      end_date: schema.recurringProfiles.endDate,
+      amount: schema.recurringProfiles.amount,
+      items_json: schema.recurringProfiles.itemsJson,
+      tax_mode: schema.recurringProfiles.taxMode,
+      tax_meta_json: schema.recurringProfiles.taxMetaJson,
+    }).from(schema.recurringProfiles).where(eq(schema.recurringProfiles.id, id)).get() as RecurringRow | undefined;
     return row ? rowToDomainRecurringProfile(scope, row) : null;
   },
   save(_scope, profile) {
-    const exists = db.prepare('SELECT 1 FROM recurring_profiles WHERE id = ?').get(profile.id) as { 1: 1 } | undefined;
+    const drizzle = createDrizzle(db);
+    const exists = drizzle.select({ id: schema.recurringProfiles.id }).from(schema.recurringProfiles).where(eq(schema.recurringProfiles.id, profile.id)).get();
     const payload = {
       id: profile.id,
       clientId: profile.clientId,
@@ -398,40 +427,38 @@ export const createSqliteRecurringProfileStore = (db: Database.Database): SyncRe
       taxMetaJson: profile.taxMeta ? JSON.stringify(profile.taxMeta) : null,
     };
 
-    if (!exists) {
-      db.prepare(
-        `
-          INSERT INTO recurring_profiles (
-            id, client_id, active, name, interval, next_run, last_run, end_date, amount, items_json, tax_mode, tax_meta_json
-          ) VALUES (
-            @id, @clientId, @active, @name, @interval, @nextRun, @lastRun, @endDate, @amount, @itemsJson, @taxMode, @taxMetaJson
-          )
-        `,
-      ).run(payload);
-    } else {
-      db.prepare(
-        `
-          UPDATE recurring_profiles SET
-            client_id=@clientId,
-            active=@active,
-            name=@name,
-            interval=@interval,
-            next_run=@nextRun,
-            last_run=@lastRun,
-            end_date=@endDate,
-            amount=@amount,
-            items_json=@itemsJson,
-            tax_mode=@taxMode,
-            tax_meta_json=@taxMetaJson
-          WHERE id=@id
-        `,
-      ).run(payload);
-    }
+    if (!exists) drizzle.insert(schema.recurringProfiles).values({
+      id: payload.id,
+      clientId: payload.clientId,
+      active: payload.active,
+      name: payload.name,
+      interval: payload.interval,
+      nextRun: payload.nextRun,
+      lastRun: payload.lastRun,
+      endDate: payload.endDate,
+      amount: payload.amount,
+      itemsJson: payload.itemsJson,
+      taxMode: payload.taxMode,
+      taxMetaJson: payload.taxMetaJson,
+    }).run();
+    else drizzle.update(schema.recurringProfiles).set({
+      clientId: payload.clientId,
+      active: payload.active,
+      name: payload.name,
+      interval: payload.interval,
+      nextRun: payload.nextRun,
+      lastRun: payload.lastRun,
+      endDate: payload.endDate,
+      amount: payload.amount,
+      itemsJson: payload.itemsJson,
+      taxMode: payload.taxMode,
+      taxMetaJson: payload.taxMetaJson,
+    }).where(eq(schema.recurringProfiles.id, profile.id)).run();
 
     return profile;
   },
   remove(_scope, id) {
-    db.prepare('DELETE FROM recurring_profiles WHERE id = ?').run(id);
+    createDrizzle(db).delete(schema.recurringProfiles).where(eq(schema.recurringProfiles.id, id)).run();
   },
 });
 

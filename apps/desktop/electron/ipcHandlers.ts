@@ -72,6 +72,8 @@ import { buildEurCsv, getEurReport, listEurItems, upsertEurItemClassification } 
 import { listAllEurRules, upsertEurRule, deleteEurRule } from '../db/eurRulesRepo';
 import { PRODUCT_PROFILE } from '../productProfile';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
+import { eq } from 'drizzle-orm';
 
 const normalizeInvoiceTaxData = (doc: Invoice, settings: AppSettings): Invoice => {
   const taxMode = resolveInvoiceTaxMode(doc.taxMode, settings);
@@ -612,13 +614,11 @@ export const registerIpcHandlers = (
         toInsert.map((t) => ({ ...t, importBatchId: batchId, linkedInvoiceId: null })),
       );
 
-      db.prepare(
-        `
-          UPDATE import_batches
-          SET imported_count = @imported, skipped_count = @skipped, error_count = @errors
-          WHERE id = @id
-        `,
-      ).run({ id: batchId, imported: inserted, skipped, errors: errors.length });
+      createDrizzle(db)
+        .update(schema.importBatches)
+        .set({ importedCount: inserted, skippedCount: skipped, errorCount: errors.length })
+        .where(eq(schema.importBatches.id, batchId))
+        .run();
 
       return { batchId, inserted, skipped };
     })();

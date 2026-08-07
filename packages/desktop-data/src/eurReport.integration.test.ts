@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
 
 const mockLines = [
   {
@@ -69,6 +70,10 @@ vi.mock('./eurClassificationRepo', () => ({
   upsertEurClassification: vi.fn(),
 }));
 
+vi.mock('./eurRulesRepo', () => ({
+  listEurRules: vi.fn(() => []),
+}));
+
 import { getEurReport, listEurItems } from './eurReport';
 
 const makeSettings = () => ({
@@ -135,15 +140,18 @@ const buildFakeDb = () => {
     },
   ];
 
-  return {
-    prepare: (sql: string) => ({
-      all: () => {
-        if (sql.includes('FROM invoice_payments')) return invoiceRows;
-        if (sql.includes('FROM transactions')) return txRows;
-        return [];
-      },
-    }),
-  } as any;
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE invoices (id TEXT PRIMARY KEY, client TEXT NOT NULL, number TEXT NOT NULL);
+    CREATE TABLE invoice_payments (id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL, date TEXT NOT NULL, amount REAL NOT NULL, method TEXT NOT NULL);
+    CREATE TABLE transactions (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, date TEXT NOT NULL, amount REAL NOT NULL, type TEXT NOT NULL, counterparty TEXT NOT NULL, purpose TEXT NOT NULL, linked_invoice_id TEXT, status TEXT NOT NULL, dedup_hash TEXT, import_batch_id TEXT, deleted_at TEXT);
+    CREATE TABLE eur_classifications (id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL, tax_year INTEGER NOT NULL, eur_line_id TEXT, excluded INTEGER NOT NULL, vat_mode TEXT NOT NULL, note TEXT, updated_at TEXT NOT NULL);
+  `);
+  db.prepare('INSERT INTO invoices (id, client, number) VALUES (?, ?, ?)').run('inv-1', invoiceRows[0]!.client, invoiceRows[0]!.number);
+  db.prepare('INSERT INTO invoice_payments (id, invoice_id, date, amount, method) VALUES (?, ?, ?, ?, ?)').run('p-1', 'inv-1', invoiceRows[0]!.date, invoiceRows[0]!.amount, 'wire');
+  const insertTransaction = db.prepare('INSERT INTO transactions (id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  for (const row of txRows) insertTransaction.run(row.id, row.account_id, row.date, row.amount, row.type, row.counterparty, row.purpose, row.linked_invoice_id, 'booked');
+  return db as any;
 };
 
 describe('eurReport integration (service boundary)', () => {

@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import type Database from 'better-sqlite3';
+import { and, asc, gte, lte } from 'drizzle-orm';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import { exportAuditCsv, verifyAuditChain } from '../db/audit';
 
 export interface TaxAuditExportPackageArgs {
@@ -39,46 +41,34 @@ const writeJsonl = (filePath: string, rows: unknown[]): { sizeBytes: number; row
   return { sizeBytes: stat.size, rowCount: rows.length };
 };
 
-const addDateWhere = (
-  baseSql: string,
-  dateColumn: string,
-  args: TaxAuditExportPackageArgs,
-): { sql: string; params: unknown[] } => {
-  const where: string[] = [];
-  const params: unknown[] = [];
-  if (args.from) {
-    where.push(`${dateColumn} >= ?`);
-    params.push(args.from);
-  }
-  if (args.to) {
-    where.push(`${dateColumn} <= ?`);
-    params.push(args.to);
-  }
-
-  if (where.length === 0) {
-    return { sql: baseSql, params };
-  }
-  return { sql: `${baseSql} WHERE ${where.join(' AND ')}`, params };
-};
-
 const queryRows = (
   db: Database.Database,
   table: string,
   orderBy: string,
   args: TaxAuditExportPackageArgs,
 ): unknown[] => {
-  const dateColumns = ['posting_date', 'date', 'created_at', 'ts'];
-  const availableCols = new Set(
-    (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((r) => r.name),
-  );
-  const dateColumn = dateColumns.find((col) => availableCols.has(col));
-
-  const baseSql = `SELECT * FROM ${table}`;
-  const { sql, params } = dateColumn
-    ? addDateWhere(baseSql, dateColumn, args)
-    : { sql: baseSql, params: [] as unknown[] };
-
-  return db.prepare(`${sql} ORDER BY ${orderBy}`).all(...params) as unknown[];
+  const drizzleDb = createDrizzle(db);
+  const configs: Record<string, { table: any; dateColumn?: any; orderBy: any[] }> = {
+    journal_entries: { table: schema.journalEntries, dateColumn: schema.journalEntries.postingDate, orderBy: [asc(schema.journalEntries.postingDate), asc(schema.journalEntries.entryNumber)] },
+    journal_lines: { table: schema.journalLines, orderBy: [asc(schema.journalLines.entryId), asc(schema.journalLines.lineNo)] },
+    accounting_periods: { table: schema.accountingPeriods, dateColumn: schema.accountingPeriods.startsAt, orderBy: [asc(schema.accountingPeriods.period)] },
+    account_mappings_hgb: { table: schema.accountMappingsHgb, orderBy: [asc(schema.accountMappingsHgb.statementType), asc(schema.accountMappingsHgb.accountNumber)] },
+    bank_transactions: { table: schema.bankTransactions, dateColumn: schema.bankTransactions.date, orderBy: [asc(schema.bankTransactions.date), asc(schema.bankTransactions.id)] },
+    datev_exports: { table: schema.datevExports, dateColumn: schema.datevExports.createdAt, orderBy: [asc(schema.datevExports.createdAt), asc(schema.datevExports.id)] },
+    booking_drafts: { table: schema.bookingDrafts, dateColumn: schema.bookingDrafts.updatedAt, orderBy: [asc(schema.bookingDrafts.updatedAt), asc(schema.bookingDrafts.id)] },
+    draft_validation_issues: { table: schema.draftValidationIssues, dateColumn: schema.draftValidationIssues.createdAt, orderBy: [asc(schema.draftValidationIssues.createdAt), asc(schema.draftValidationIssues.id)] },
+    invoices: { table: schema.invoices, dateColumn: schema.invoices.date, orderBy: [asc(schema.invoices.date), asc(schema.invoices.id)] },
+    offers: { table: schema.offers, dateColumn: schema.offers.date, orderBy: [asc(schema.offers.date), asc(schema.offers.id)] },
+    transactions: { table: schema.transactions, dateColumn: schema.transactions.date, orderBy: [asc(schema.transactions.date), asc(schema.transactions.id)] },
+  };
+  const config = configs[table];
+  if (!config) throw new Error(`Unsupported tax audit export table: ${table}`);
+  const predicates = [];
+  if (args.from && config.dateColumn) predicates.push(gte(config.dateColumn, args.from));
+  if (args.to && config.dateColumn) predicates.push(lte(config.dateColumn, args.to));
+  const query = drizzleDb.select().from(config.table);
+  if (predicates.length) query.where(and(...predicates));
+  return query.orderBy(...config.orderBy).all() as unknown[];
 };
 
 export const buildTaxAuditExportPackage = (

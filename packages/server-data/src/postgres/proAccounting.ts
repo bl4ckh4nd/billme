@@ -16,11 +16,17 @@ import type {
   ValidationIssue,
 } from '@billme/accounting-shared';
 import type { ProAccountingCatalogRepository, ProWorkflowRepository, TenantScope } from '@billme/server-core';
+import { and, asc, count, desc, eq, ilike, or } from 'drizzle-orm';
 import type { PostgresQueryable } from './connection.js';
+import { createDrizzle, schema } from './drizzle.js';
 
 const toNumber = (value: string | number): number => (typeof value === 'number' ? value : Number(value));
 const getTenantId = (scope: TenantScope): string => scope.tenantId;
 const nowIso = (): string => new Date().toISOString();
+const drizzleDb = (db: PostgresQueryable) => createDrizzle(db as never);
+const upsert = async (db: PostgresQueryable, table: any, values: any, target: any, set: any): Promise<void> => {
+  await drizzleDb(db).insert(table).values(values).onConflictDoUpdate({ target, set });
+};
 
 export interface ServerArticleRecord {
   id: string;
@@ -312,27 +318,18 @@ export const listServerArticles = async (
   db: PostgresQueryable,
   tenantId: string,
 ): Promise<ServerArticleRecord[]> => {
-  const result = await db.query<{
-    id: string;
-    tenant_id: string;
-    sku: string | null;
-    title: string;
-    description: string;
-    price: string | number;
-    unit: string;
-    category: string;
-    tax_rate: string | number;
-  }>('SELECT * FROM articles WHERE tenant_id = $1 ORDER BY title ASC, id ASC', [tenantId]);
-  return result.rows.map((row) => ({
-    id: row.id,
-    tenantId: row.tenant_id,
+  const rows = await drizzleDb(db).select().from(schema.articles).where(eq(schema.articles.tenantId, tenantId))
+    .orderBy(asc(schema.articles.title), asc(schema.articles.id));
+  return rows.map((row) => ({
+    id: row.id!,
+    tenantId: row.tenantId!,
     sku: row.sku ?? undefined,
-    title: row.title,
-    description: row.description,
-    price: toNumber(row.price),
-    unit: row.unit,
-    category: row.category,
-    taxRate: toNumber(row.tax_rate),
+    title: row.title!,
+    description: row.description!,
+    price: toNumber(row.price!),
+    unit: row.unit!,
+    category: row.category!,
+    taxRate: toNumber(row.taxRate!),
   }));
 };
 
@@ -340,32 +337,12 @@ export const saveServerArticle = async (
   db: PostgresQueryable,
   record: ServerArticleRecord,
 ): Promise<ServerArticleRecord> => {
-  await db.query(
-    `
-      INSERT INTO articles (id, tenant_id, sku, title, description, price, unit, category, tax_rate)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        sku = EXCLUDED.sku,
-        title = EXCLUDED.title,
-        description = EXCLUDED.description,
-        price = EXCLUDED.price,
-        unit = EXCLUDED.unit,
-        category = EXCLUDED.category,
-        tax_rate = EXCLUDED.tax_rate
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.sku ?? null,
-      record.title,
-      record.description,
-      record.price,
-      record.unit,
-      record.category,
-      record.taxRate,
-    ],
-  );
+  await upsert(db, schema.articles, { id: record.id, tenantId: record.tenantId, sku: record.sku ?? null,
+    title: record.title, description: record.description, price: record.price, unit: record.unit,
+    category: record.category, taxRate: record.taxRate }, schema.articles.id, {
+      tenantId: record.tenantId, sku: record.sku ?? null, title: record.title, description: record.description,
+      price: record.price, unit: record.unit, category: record.category, taxRate: record.taxRate,
+    });
   return record;
 };
 
@@ -373,25 +350,17 @@ export const listServerBankAccounts = async (
   db: PostgresQueryable,
   tenantId: string,
 ): Promise<ServerBankAccountRecord[]> => {
-  const result = await db.query<{
-    id: string;
-    tenant_id: string;
-    name: string;
-    iban: string;
-    balance: string | number;
-    default_skr_account_number: string;
-    type: string;
-    color: string;
-  }>('SELECT * FROM accounts WHERE tenant_id = $1 ORDER BY name ASC, id ASC', [tenantId]);
-  return result.rows.map((row) => ({
-    id: row.id,
-    tenantId: row.tenant_id,
-    name: row.name,
-    iban: row.iban,
-    balance: toNumber(row.balance),
-    defaultSkrAccountNumber: row.default_skr_account_number,
-    type: row.type,
-    color: row.color,
+  const rows = await drizzleDb(db).select().from(schema.accounts).where(eq(schema.accounts.tenantId, tenantId))
+    .orderBy(asc(schema.accounts.name), asc(schema.accounts.id));
+  return rows.map((row) => ({
+    id: row.id!,
+    tenantId: row.tenantId!,
+    name: row.name!,
+    iban: row.iban!,
+    balance: toNumber(row.balance!),
+    defaultSkrAccountNumber: row.defaultSkrAccountNumber!,
+    type: row.type!,
+    color: row.color!,
   }));
 };
 
@@ -399,33 +368,10 @@ export const saveServerBankAccount = async (
   db: PostgresQueryable,
   record: ServerBankAccountRecord,
 ): Promise<ServerBankAccountRecord> => {
-  await db.query(
-    `
-      INSERT INTO accounts (
-        id, tenant_id, name, iban, balance, default_skr_account_number, type, color
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        name = EXCLUDED.name,
-        iban = EXCLUDED.iban,
-        balance = EXCLUDED.balance,
-        default_skr_account_number = EXCLUDED.default_skr_account_number,
-        type = EXCLUDED.type,
-        color = EXCLUDED.color
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.name,
-      record.iban,
-      record.balance,
-      record.defaultSkrAccountNumber,
-      record.type,
-      record.color,
-    ],
-  );
+  await upsert(db, schema.accounts, { id: record.id, tenantId: record.tenantId, name: record.name, iban: record.iban,
+    balance: record.balance, defaultSkrAccountNumber: record.defaultSkrAccountNumber, type: record.type, color: record.color },
+    schema.accounts.id, { tenantId: record.tenantId, name: record.name, iban: record.iban, balance: record.balance,
+      defaultSkrAccountNumber: record.defaultSkrAccountNumber, type: record.type, color: record.color });
   return record;
 };
 
@@ -433,23 +379,16 @@ export const listServerTemplates = async (
   db: PostgresQueryable,
   tenantId: string,
 ): Promise<ServerTemplateRecord[]> => {
-  const result = await db.query<{
-    id: string;
-    tenant_id: string;
-    kind: string;
-    name: string;
-    elements_json: string;
-    created_at: string;
-    updated_at: string;
-  }>('SELECT * FROM templates WHERE tenant_id = $1 ORDER BY kind ASC, name ASC, id ASC', [tenantId]);
-  return result.rows.map((row) => ({
-    id: row.id,
-    tenantId: row.tenant_id,
-    kind: row.kind,
-    name: row.name,
-    elementsJson: row.elements_json,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+  const rows = await drizzleDb(db).select().from(schema.templates).where(eq(schema.templates.tenantId, tenantId))
+    .orderBy(asc(schema.templates.kind), asc(schema.templates.name), asc(schema.templates.id));
+  return rows.map((row) => ({
+    id: row.id!,
+    tenantId: row.tenantId!,
+    kind: row.kind!,
+    name: row.name!,
+    elementsJson: row.elementsJson!,
+    createdAt: row.createdAt!,
+    updatedAt: row.updatedAt!,
   }));
 };
 
@@ -457,27 +396,9 @@ export const saveServerTemplate = async (
   db: PostgresQueryable,
   record: ServerTemplateRecord,
 ): Promise<ServerTemplateRecord> => {
-  await db.query(
-    `
-      INSERT INTO templates (id, tenant_id, kind, name, elements_json, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        kind = EXCLUDED.kind,
-        name = EXCLUDED.name,
-        elements_json = EXCLUDED.elements_json,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.kind,
-      record.name,
-      record.elementsJson,
-      record.createdAt,
-      record.updatedAt,
-    ],
-  );
+  await upsert(db, schema.templates, { id: record.id, tenantId: record.tenantId, kind: record.kind, name: record.name,
+    elementsJson: record.elementsJson, createdAt: record.createdAt, updatedAt: record.updatedAt }, schema.templates.id,
+    { tenantId: record.tenantId, kind: record.kind, name: record.name, elementsJson: record.elementsJson, updatedAt: record.updatedAt });
   return record;
 };
 
@@ -485,19 +406,14 @@ export const getServerActiveTemplates = async (
   db: PostgresQueryable,
   tenantId: string,
 ): Promise<ServerActiveTemplatesRecord | null> => {
-  const result = await db.query<{
-    tenant_id: string;
-    id: number;
-    invoice_template_id: string | null;
-    offer_template_id: string | null;
-  }>('SELECT * FROM active_templates WHERE tenant_id = $1 LIMIT 1', [tenantId]);
-  const row = result.rows[0];
+  const row = (await drizzleDb(db).select().from(schema.activeTemplates)
+    .where(eq(schema.activeTemplates.tenantId, tenantId)).limit(1))[0];
   if (!row) return null;
   return {
-    tenantId: row.tenant_id,
-    id: row.id,
-    invoiceTemplateId: row.invoice_template_id ?? undefined,
-    offerTemplateId: row.offer_template_id ?? undefined,
+    tenantId: row.tenantId!,
+    id: row.id!,
+    invoiceTemplateId: row.invoiceTemplateId ?? undefined,
+    offerTemplateId: row.offerTemplateId ?? undefined,
   };
 };
 
@@ -505,917 +421,137 @@ export const saveServerActiveTemplates = async (
   db: PostgresQueryable,
   record: ServerActiveTemplatesRecord,
 ): Promise<ServerActiveTemplatesRecord> => {
-  await db.query(
-    `
-      INSERT INTO active_templates (tenant_id, id, invoice_template_id, offer_template_id)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (tenant_id) DO UPDATE SET
-        id = EXCLUDED.id,
-        invoice_template_id = EXCLUDED.invoice_template_id,
-        offer_template_id = EXCLUDED.offer_template_id
-    `,
-    [record.tenantId, record.id, record.invoiceTemplateId ?? null, record.offerTemplateId ?? null],
-  );
+  await upsert(db, schema.activeTemplates, { tenantId: record.tenantId, id: record.id,
+    invoiceTemplateId: record.invoiceTemplateId ?? null, offerTemplateId: record.offerTemplateId ?? null }, schema.activeTemplates.tenantId,
+    { id: record.id, invoiceTemplateId: record.invoiceTemplateId ?? null, offerTemplateId: record.offerTemplateId ?? null });
   return record;
 };
 
-export const saveServerLedgerAccount = async (
-  db: PostgresQueryable,
-  account: LedgerAccount,
-): Promise<LedgerAccount> => {
-  await db.query(
-    `
-      INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (chart, account_number) DO UPDATE SET
-        name = EXCLUDED.name,
-        source = EXCLUDED.source,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      account.id,
-      account.chart,
-      account.accountNumber,
-      account.name,
-      account.source,
-      account.createdAt,
-      account.updatedAt,
-    ],
-  );
+export const saveServerLedgerAccount = async (db: PostgresQueryable, account: LedgerAccount): Promise<LedgerAccount> => {
+  await upsert(db, schema.ledgerAccounts, { id: account.id, chart: account.chart, accountNumber: account.accountNumber, name: account.name, source: account.source, createdAt: account.createdAt, updatedAt: account.updatedAt },
+    [schema.ledgerAccounts.chart, schema.ledgerAccounts.accountNumber], { name: account.name, source: account.source, updatedAt: account.updatedAt });
   return account;
 };
-
-export const saveServerTaxCase = async (
-  db: PostgresQueryable,
-  record: ServerTaxCaseRecord,
-): Promise<ServerTaxCaseRecord> => {
-  await db.query(
-    `
-      INSERT INTO tax_cases (
-        key, label, mechanism, default_rate, requires_counterparty_vat_id,
-        requires_country, requires_evidence, active, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5,
-        $6, $7, $8, $9
-      )
-      ON CONFLICT (key) DO UPDATE SET
-        label = EXCLUDED.label,
-        mechanism = EXCLUDED.mechanism,
-        default_rate = EXCLUDED.default_rate,
-        requires_counterparty_vat_id = EXCLUDED.requires_counterparty_vat_id,
-        requires_country = EXCLUDED.requires_country,
-        requires_evidence = EXCLUDED.requires_evidence,
-        active = EXCLUDED.active,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      record.key,
-      record.label,
-      record.mechanism,
-      record.defaultRate,
-      record.requiresCounterpartyVatId,
-      record.requiresCountry,
-      record.requiresEvidence,
-      record.active,
-      record.updatedAt,
-    ],
-  );
+export const saveServerTaxCase = async (db: PostgresQueryable, record: ServerTaxCaseRecord): Promise<ServerTaxCaseRecord> => {
+  await upsert(db, schema.taxCases, { key: record.key, label: record.label, mechanism: record.mechanism, defaultRate: record.defaultRate, requiresCounterpartyVatId: record.requiresCounterpartyVatId, requiresCountry: record.requiresCountry, requiresEvidence: record.requiresEvidence, active: record.active, updatedAt: record.updatedAt }, schema.taxCases.key,
+    { label: record.label, mechanism: record.mechanism, defaultRate: record.defaultRate, requiresCounterpartyVatId: record.requiresCounterpartyVatId, requiresCountry: record.requiresCountry, requiresEvidence: record.requiresEvidence, active: record.active, updatedAt: record.updatedAt });
   return record;
 };
-
-export const saveServerTaxCaseAccountMapping = async (
-  db: PostgresQueryable,
-  mapping: TaxCaseAccountMapping,
-): Promise<TaxCaseAccountMapping> => {
-  await db.query(
-    `
-      INSERT INTO tax_case_account_mappings (
-        id, chart, tax_case_key, role, account_number, datev_bu_key, valid_from, valid_to, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9
-      )
-      ON CONFLICT (chart, tax_case_key, role) DO UPDATE SET
-        account_number = EXCLUDED.account_number,
-        datev_bu_key = EXCLUDED.datev_bu_key,
-        valid_from = EXCLUDED.valid_from,
-        valid_to = EXCLUDED.valid_to,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      mapping.id,
-      mapping.chart,
-      mapping.taxCaseKey,
-      mapping.role,
-      mapping.accountNumber,
-      mapping.datevBuKey ?? null,
-      mapping.validFrom ?? null,
-      mapping.validTo ?? null,
-      mapping.updatedAt,
-    ],
-  );
+export const saveServerTaxCaseAccountMapping = async (db: PostgresQueryable, mapping: TaxCaseAccountMapping): Promise<TaxCaseAccountMapping> => {
+  await upsert(db, schema.taxCaseAccountMappings, { id: mapping.id, chart: mapping.chart, taxCaseKey: mapping.taxCaseKey, role: mapping.role, accountNumber: mapping.accountNumber, datevBuKey: mapping.datevBuKey ?? null, validFrom: mapping.validFrom ?? null, validTo: mapping.validTo ?? null, updatedAt: mapping.updatedAt },
+    [schema.taxCaseAccountMappings.chart, schema.taxCaseAccountMappings.taxCaseKey, schema.taxCaseAccountMappings.role], { accountNumber: mapping.accountNumber, datevBuKey: mapping.datevBuKey ?? null, validFrom: mapping.validFrom ?? null, validTo: mapping.validTo ?? null, updatedAt: mapping.updatedAt });
   return mapping;
 };
-
-export const saveServerAccountKeyword = async (
-  db: PostgresQueryable,
-  record: ServerAccountKeywordRecord,
-): Promise<ServerAccountKeywordRecord> => {
-  await db.query(
-    `
-      INSERT INTO account_keywords (
-        id, tenant_id, chart, account_number, keyword, source, active, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9
-      )
-      ON CONFLICT (tenant_id, chart, account_number, keyword) DO UPDATE SET
-        source = EXCLUDED.source,
-        active = EXCLUDED.active,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.chart,
-      record.accountNumber,
-      record.keyword,
-      record.source,
-      record.active,
-      record.createdAt,
-      record.updatedAt,
-    ],
-  );
+export const saveServerAccountKeyword = async (db: PostgresQueryable, record: ServerAccountKeywordRecord): Promise<ServerAccountKeywordRecord> => {
+  await upsert(db, schema.accountKeywords, { id: record.id, tenantId: record.tenantId, chart: record.chart, accountNumber: record.accountNumber, keyword: record.keyword, source: record.source, active: record.active, createdAt: record.createdAt, updatedAt: record.updatedAt },
+    [schema.accountKeywords.tenantId, schema.accountKeywords.chart, schema.accountKeywords.accountNumber, schema.accountKeywords.keyword], { source: record.source, active: record.active, updatedAt: record.updatedAt });
   return record;
 };
-
-export const saveServerAccountSuggestionRule = async (
-  db: PostgresQueryable,
-  rule: AccountSuggestionRule,
-): Promise<AccountSuggestionRule> => {
-  await db.query(
-    `
-      INSERT INTO account_suggestion_rules (
-        id, tenant_id, chart, priority, field, operator, value, target_account_number,
-        flow_type, active, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8,
-        $9, $10, $11, $12
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        chart = EXCLUDED.chart,
-        priority = EXCLUDED.priority,
-        field = EXCLUDED.field,
-        operator = EXCLUDED.operator,
-        value = EXCLUDED.value,
-        target_account_number = EXCLUDED.target_account_number,
-        flow_type = EXCLUDED.flow_type,
-        active = EXCLUDED.active,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      rule.id,
-      rule.tenantId,
-      rule.chart,
-      rule.priority,
-      rule.field,
-      rule.operator,
-      rule.value,
-      rule.targetAccountNumber,
-      rule.flowType,
-      rule.active,
-      rule.createdAt,
-      rule.updatedAt,
-    ],
-  );
+export const saveServerAccountSuggestionRule = async (db: PostgresQueryable, rule: AccountSuggestionRule): Promise<AccountSuggestionRule> => {
+  await upsert(db, schema.accountSuggestionRules, { id: rule.id, tenantId: rule.tenantId, chart: rule.chart, priority: rule.priority, field: rule.field, operator: rule.operator, value: rule.value, targetAccountNumber: rule.targetAccountNumber, flowType: rule.flowType, active: rule.active, createdAt: rule.createdAt, updatedAt: rule.updatedAt }, schema.accountSuggestionRules.id,
+    { tenantId: rule.tenantId, chart: rule.chart, priority: rule.priority, field: rule.field, operator: rule.operator, value: rule.value, targetAccountNumber: rule.targetAccountNumber, flowType: rule.flowType, active: rule.active, updatedAt: rule.updatedAt });
   return rule;
 };
-
-export const saveServerProWorkflowEntry = async (
-  db: PostgresQueryable,
-  record: ServerProWorkflowRecord,
-): Promise<ServerProWorkflowRecord> => {
-  await db.query(
-    `
-      INSERT INTO pro_workflow_entries (tenant_id, transaction_id, transaction_json, draft_json, updated_at)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (tenant_id, transaction_id) DO UPDATE SET
-        transaction_json = EXCLUDED.transaction_json,
-        draft_json = EXCLUDED.draft_json,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [record.tenantId, record.transactionId, record.transactionJson, record.draftJson, record.updatedAt],
-  );
+export const saveServerProWorkflowEntry = async (db: PostgresQueryable, record: ServerProWorkflowRecord): Promise<ServerProWorkflowRecord> => {
+  await upsert(db, schema.proWorkflowEntries, { tenantId: record.tenantId, transactionId: record.transactionId, transactionJson: record.transactionJson, draftJson: record.draftJson, updatedAt: record.updatedAt },
+    [schema.proWorkflowEntries.tenantId, schema.proWorkflowEntries.transactionId], { transactionJson: record.transactionJson, draftJson: record.draftJson, updatedAt: record.updatedAt });
   return record;
 };
-
-export const saveServerBankTransaction = async (
-  db: PostgresQueryable,
-  record: ServerBankTransactionRecord,
-): Promise<ServerBankTransactionRecord> => {
-  await db.query(
-    `
-      INSERT INTO bank_transactions (
-        id, tenant_id, account_id, date, amount, type, counterparty, purpose,
-        linked_invoice_id, status, source_transaction_id, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8,
-        $9, $10, $11, $12, $13
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        account_id = EXCLUDED.account_id,
-        date = EXCLUDED.date,
-        amount = EXCLUDED.amount,
-        type = EXCLUDED.type,
-        counterparty = EXCLUDED.counterparty,
-        purpose = EXCLUDED.purpose,
-        linked_invoice_id = EXCLUDED.linked_invoice_id,
-        status = EXCLUDED.status,
-        source_transaction_id = EXCLUDED.source_transaction_id,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.accountId,
-      record.date,
-      record.amount,
-      record.type,
-      record.counterparty,
-      record.purpose,
-      record.linkedInvoiceId ?? null,
-      record.status,
-      record.sourceTransactionId ?? null,
-      record.createdAt,
-      record.updatedAt,
-    ],
-  );
+export const saveServerBankTransaction = async (db: PostgresQueryable, record: ServerBankTransactionRecord): Promise<ServerBankTransactionRecord> => {
+  await upsert(db, schema.bankTransactions, { id: record.id, tenantId: record.tenantId, accountId: record.accountId, date: record.date, amount: record.amount, type: record.type, counterparty: record.counterparty, purpose: record.purpose, linkedInvoiceId: record.linkedInvoiceId ?? null, status: record.status, sourceTransactionId: record.sourceTransactionId ?? null, createdAt: record.createdAt, updatedAt: record.updatedAt }, schema.bankTransactions.id,
+    { tenantId: record.tenantId, accountId: record.accountId, date: record.date, amount: record.amount, type: record.type, counterparty: record.counterparty, purpose: record.purpose, linkedInvoiceId: record.linkedInvoiceId ?? null, status: record.status, sourceTransactionId: record.sourceTransactionId ?? null, updatedAt: record.updatedAt });
   return record;
 };
-
-export const saveServerBookingDraft = async (
-  db: PostgresQueryable,
-  record: ServerBookingDraftRecord,
-): Promise<ServerBookingDraftRecord> => {
-  await db.query(
-    `
-      INSERT INTO booking_drafts (id, tenant_id, transaction_id, workflow_status, draft_json, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        transaction_id = EXCLUDED.transaction_id,
-        workflow_status = EXCLUDED.workflow_status,
-        draft_json = EXCLUDED.draft_json,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [record.id, record.tenantId, record.transactionId, record.workflowStatus, record.draftJson, record.updatedAt],
-  );
+export const saveServerBookingDraft = async (db: PostgresQueryable, record: ServerBookingDraftRecord): Promise<ServerBookingDraftRecord> => {
+  await upsert(db, schema.bookingDrafts, { id: record.id, tenantId: record.tenantId, transactionId: record.transactionId, workflowStatus: record.workflowStatus, draftJson: record.draftJson, updatedAt: record.updatedAt }, schema.bookingDrafts.id,
+    { tenantId: record.tenantId, transactionId: record.transactionId, workflowStatus: record.workflowStatus, draftJson: record.draftJson, updatedAt: record.updatedAt });
   return record;
 };
-
-export const saveServerBookingDraftLine = async (
-  db: PostgresQueryable,
-  record: ServerBookingDraftLineRecord,
-): Promise<ServerBookingDraftLineRecord> => {
-  await db.query(
-    `
-      INSERT INTO booking_draft_lines (
-        id, tenant_id, draft_id, line_no, account_number, debit_amount, credit_amount,
-        tax_code, tax_case_key, tax_rate, net_amount, tax_amount, gross_amount,
-        country_code, counterparty_vat_id, evidence_type, evidence_reference, cost_center, memo
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        draft_id = EXCLUDED.draft_id,
-        line_no = EXCLUDED.line_no,
-        account_number = EXCLUDED.account_number,
-        debit_amount = EXCLUDED.debit_amount,
-        credit_amount = EXCLUDED.credit_amount,
-        tax_code = EXCLUDED.tax_code,
-        tax_case_key = EXCLUDED.tax_case_key,
-        tax_rate = EXCLUDED.tax_rate,
-        net_amount = EXCLUDED.net_amount,
-        tax_amount = EXCLUDED.tax_amount,
-        gross_amount = EXCLUDED.gross_amount,
-        country_code = EXCLUDED.country_code,
-        counterparty_vat_id = EXCLUDED.counterparty_vat_id,
-        evidence_type = EXCLUDED.evidence_type,
-        evidence_reference = EXCLUDED.evidence_reference,
-        cost_center = EXCLUDED.cost_center,
-        memo = EXCLUDED.memo
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.draftId,
-      record.lineNo,
-      record.accountNumber,
-      record.debitAmount,
-      record.creditAmount,
-      record.taxCode ?? null,
-      record.taxCaseKey ?? null,
-      record.taxRate ?? null,
-      record.netAmount ?? null,
-      record.taxAmount ?? null,
-      record.grossAmount ?? null,
-      record.countryCode ?? null,
-      record.counterpartyVatId ?? null,
-      record.evidenceType ?? null,
-      record.evidenceReference ?? null,
-      record.costCenter ?? null,
-      record.memo ?? null,
-    ],
-  );
+export const saveServerBookingDraftLine = async (db: PostgresQueryable, record: ServerBookingDraftLineRecord): Promise<ServerBookingDraftLineRecord> => {
+  await upsert(db, schema.bookingDraftLines, { id: record.id, tenantId: record.tenantId, draftId: record.draftId, lineNo: record.lineNo, accountNumber: record.accountNumber, debitAmount: record.debitAmount, creditAmount: record.creditAmount, taxCode: record.taxCode ?? null, taxCaseKey: record.taxCaseKey ?? null, taxRate: record.taxRate ?? null, netAmount: record.netAmount ?? null, taxAmount: record.taxAmount ?? null, grossAmount: record.grossAmount ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, costCenter: record.costCenter ?? null, memo: record.memo ?? null }, schema.bookingDraftLines.id,
+    { tenantId: record.tenantId, draftId: record.draftId, lineNo: record.lineNo, accountNumber: record.accountNumber, debitAmount: record.debitAmount, creditAmount: record.creditAmount, taxCode: record.taxCode ?? null, taxCaseKey: record.taxCaseKey ?? null, taxRate: record.taxRate ?? null, netAmount: record.netAmount ?? null, grossAmount: record.grossAmount ?? null, taxAmount: record.taxAmount ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, costCenter: record.costCenter ?? null, memo: record.memo ?? null });
   return record;
 };
-
-export const saveServerDraftValidationIssue = async (
-  db: PostgresQueryable,
-  record: ServerDraftValidationIssueRecord,
-): Promise<ServerDraftValidationIssueRecord> => {
-  await db.query(
-    `
-      INSERT INTO draft_validation_issues (
-        id, tenant_id, draft_id, code, severity, message, field_path, blocking, source, issue_json, created_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        draft_id = EXCLUDED.draft_id,
-        code = EXCLUDED.code,
-        severity = EXCLUDED.severity,
-        message = EXCLUDED.message,
-        field_path = EXCLUDED.field_path,
-        blocking = EXCLUDED.blocking,
-        source = EXCLUDED.source,
-        issue_json = EXCLUDED.issue_json,
-        created_at = EXCLUDED.created_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.draftId,
-      record.code,
-      record.severity,
-      record.message,
-      record.fieldPath ?? null,
-      record.blocking,
-      record.source,
-      record.issueJson,
-      record.createdAt,
-    ],
-  );
+export const saveServerDraftValidationIssue = async (db: PostgresQueryable, record: ServerDraftValidationIssueRecord): Promise<ServerDraftValidationIssueRecord> => {
+  await upsert(db, schema.draftValidationIssues, { id: record.id, tenantId: record.tenantId, draftId: record.draftId, code: record.code, severity: record.severity, message: record.message, fieldPath: record.fieldPath ?? null, blocking: record.blocking, source: record.source, issueJson: record.issueJson, createdAt: record.createdAt }, schema.draftValidationIssues.id,
+    { tenantId: record.tenantId, draftId: record.draftId, code: record.code, severity: record.severity, message: record.message, fieldPath: record.fieldPath ?? null, blocking: record.blocking, source: record.source, issueJson: record.issueJson, createdAt: record.createdAt });
   return record;
 };
-
-export const saveServerAccountingPeriod = async (
-  db: PostgresQueryable,
-  record: ServerAccountingPeriodRecord,
-): Promise<ServerAccountingPeriodRecord> => {
-  await db.query(
-    `
-      INSERT INTO accounting_periods (
-        id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        period = EXCLUDED.period,
-        fiscal_year = EXCLUDED.fiscal_year,
-        status = EXCLUDED.status,
-        starts_at = EXCLUDED.starts_at,
-        ends_at = EXCLUDED.ends_at,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.period,
-      record.fiscalYear,
-      record.status,
-      record.startsAt,
-      record.endsAt,
-      record.createdAt,
-      record.updatedAt,
-    ],
-  );
+export const saveServerAccountingPeriod = async (db: PostgresQueryable, record: ServerAccountingPeriodRecord): Promise<ServerAccountingPeriodRecord> => {
+  await upsert(db, schema.accountingPeriods, { id: record.id, tenantId: record.tenantId, period: record.period, fiscalYear: record.fiscalYear, status: record.status, startsAt: record.startsAt, endsAt: record.endsAt, createdAt: record.createdAt, updatedAt: record.updatedAt }, schema.accountingPeriods.id,
+    { tenantId: record.tenantId, period: record.period, fiscalYear: record.fiscalYear, status: record.status, startsAt: record.startsAt, endsAt: record.endsAt, updatedAt: record.updatedAt });
   return record;
 };
-
-export const saveServerJournalEntry = async (
-  db: PostgresQueryable,
-  record: ServerJournalEntryRecord,
-): Promise<ServerJournalEntryRecord> => {
-  await db.query(
-    `
-      INSERT INTO journal_entries (
-        id, tenant_id, entry_number, posting_date, document_date, booking_text, reference,
-        period, fiscal_year, status, source_draft_id, reversed_entry_id, created_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12, $13
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        entry_number = EXCLUDED.entry_number,
-        posting_date = EXCLUDED.posting_date,
-        document_date = EXCLUDED.document_date,
-        booking_text = EXCLUDED.booking_text,
-        reference = EXCLUDED.reference,
-        period = EXCLUDED.period,
-        fiscal_year = EXCLUDED.fiscal_year,
-        status = EXCLUDED.status,
-        source_draft_id = EXCLUDED.source_draft_id,
-        reversed_entry_id = EXCLUDED.reversed_entry_id,
-        created_at = EXCLUDED.created_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.entryNumber,
-      record.postingDate,
-      record.documentDate ?? null,
-      record.bookingText,
-      record.reference ?? null,
-      record.period,
-      record.fiscalYear,
-      record.status,
-      record.sourceDraftId ?? null,
-      record.reversedEntryId ?? null,
-      record.createdAt,
-    ],
-  );
+export const saveServerJournalEntry = async (db: PostgresQueryable, record: ServerJournalEntryRecord): Promise<ServerJournalEntryRecord> => {
+  await upsert(db, schema.journalEntries, { id: record.id, tenantId: record.tenantId, entryNumber: record.entryNumber, postingDate: record.postingDate, documentDate: record.documentDate ?? null, bookingText: record.bookingText, reference: record.reference ?? null, period: record.period, fiscalYear: record.fiscalYear, status: record.status, sourceDraftId: record.sourceDraftId ?? null, reversedEntryId: record.reversedEntryId ?? null, createdAt: record.createdAt }, schema.journalEntries.id,
+    { tenantId: record.tenantId, entryNumber: record.entryNumber, postingDate: record.postingDate, documentDate: record.documentDate ?? null, bookingText: record.bookingText, reference: record.reference ?? null, period: record.period, fiscalYear: record.fiscalYear, status: record.status, sourceDraftId: record.sourceDraftId ?? null, reversedEntryId: record.reversedEntryId ?? null, createdAt: record.createdAt });
   return record;
 };
-
-export const saveServerJournalLine = async (
-  db: PostgresQueryable,
-  record: ServerJournalLineRecord,
-): Promise<ServerJournalLineRecord> => {
-  await db.query(
-    `
-      INSERT INTO journal_lines (
-        id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount,
-        tax_code, tax_case_key, tax_rate, net_amount, tax_amount, gross_amount,
-        country_code, counterparty_vat_id, evidence_type, evidence_reference, cost_center, memo
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        entry_id = EXCLUDED.entry_id,
-        line_no = EXCLUDED.line_no,
-        account_number = EXCLUDED.account_number,
-        debit_amount = EXCLUDED.debit_amount,
-        credit_amount = EXCLUDED.credit_amount,
-        tax_code = EXCLUDED.tax_code,
-        tax_case_key = EXCLUDED.tax_case_key,
-        tax_rate = EXCLUDED.tax_rate,
-        net_amount = EXCLUDED.net_amount,
-        tax_amount = EXCLUDED.tax_amount,
-        gross_amount = EXCLUDED.gross_amount,
-        country_code = EXCLUDED.country_code,
-        counterparty_vat_id = EXCLUDED.counterparty_vat_id,
-        evidence_type = EXCLUDED.evidence_type,
-        evidence_reference = EXCLUDED.evidence_reference,
-        cost_center = EXCLUDED.cost_center,
-        memo = EXCLUDED.memo
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.entryId,
-      record.lineNo,
-      record.accountNumber,
-      record.debitAmount,
-      record.creditAmount,
-      record.taxCode ?? null,
-      record.taxCaseKey ?? null,
-      record.taxRate ?? null,
-      record.netAmount ?? null,
-      record.taxAmount ?? null,
-      record.grossAmount ?? null,
-      record.countryCode ?? null,
-      record.counterpartyVatId ?? null,
-      record.evidenceType ?? null,
-      record.evidenceReference ?? null,
-      record.costCenter ?? null,
-      record.memo ?? null,
-    ],
-  );
+export const saveServerJournalLine = async (db: PostgresQueryable, record: ServerJournalLineRecord): Promise<ServerJournalLineRecord> => {
+  const values = { id: record.id, tenantId: record.tenantId, entryId: record.entryId, lineNo: record.lineNo, accountNumber: record.accountNumber, debitAmount: record.debitAmount, creditAmount: record.creditAmount, taxCode: record.taxCode ?? null, taxCaseKey: record.taxCaseKey ?? null, taxRate: record.taxRate ?? null, netAmount: record.netAmount ?? null, taxAmount: record.taxAmount ?? null, grossAmount: record.grossAmount ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, costCenter: record.costCenter ?? null, memo: record.memo ?? null };
+  await upsert(db, schema.journalLines, values, schema.journalLines.id, values);
   return record;
 };
-
-export const saveServerAccountMappingHgb = async (
-  db: PostgresQueryable,
-  record: ServerAccountMappingHgbRecord,
-): Promise<ServerAccountMappingHgbRecord> => {
-  await db.query(
-    `
-      INSERT INTO account_mappings_hgb (
-        id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        chart = EXCLUDED.chart,
-        account_number = EXCLUDED.account_number,
-        statement_type = EXCLUDED.statement_type,
-        position_key = EXCLUDED.position_key,
-        position_label = EXCLUDED.position_label,
-        balance_side = EXCLUDED.balance_side,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.chart,
-      record.accountNumber,
-      record.statementType,
-      record.positionKey,
-      record.positionLabel,
-      record.balanceSide ?? null,
-      record.updatedAt,
-    ],
-  );
+export const saveServerAccountMappingHgb = async (db: PostgresQueryable, record: ServerAccountMappingHgbRecord): Promise<ServerAccountMappingHgbRecord> => {
+  await upsert(db, schema.accountMappingsHgb, { id: record.id, tenantId: record.tenantId, chart: record.chart, accountNumber: record.accountNumber, statementType: record.statementType, positionKey: record.positionKey, positionLabel: record.positionLabel, balanceSide: record.balanceSide ?? null, updatedAt: record.updatedAt },
+    [schema.accountMappingsHgb.tenantId, schema.accountMappingsHgb.chart, schema.accountMappingsHgb.accountNumber, schema.accountMappingsHgb.statementType], { positionKey: record.positionKey, positionLabel: record.positionLabel, balanceSide: record.balanceSide ?? null, updatedAt: record.updatedAt });
   return record;
 };
-
-export const saveServerReportSnapshot = async (
-  db: PostgresQueryable,
-  record: ServerReportSnapshotRecord,
-): Promise<ServerReportSnapshotRecord> => {
-  await db.query(
-    `
-      INSERT INTO report_snapshots (id, tenant_id, report_type, args_json, payload_json, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        report_type = EXCLUDED.report_type,
-        args_json = EXCLUDED.args_json,
-        payload_json = EXCLUDED.payload_json,
-        created_at = EXCLUDED.created_at
-    `,
-    [record.id, record.tenantId, record.reportType, record.argsJson, record.payloadJson, record.createdAt],
-  );
+export const saveServerReportSnapshot = async (db: PostgresQueryable, record: ServerReportSnapshotRecord): Promise<ServerReportSnapshotRecord> => {
+  await upsert(db, schema.reportSnapshots, { id: record.id, tenantId: record.tenantId, reportType: record.reportType, argsJson: record.argsJson, payloadJson: record.payloadJson, createdAt: record.createdAt }, schema.reportSnapshots.id,
+    { tenantId: record.tenantId, reportType: record.reportType, argsJson: record.argsJson, payloadJson: record.payloadJson, createdAt: record.createdAt });
   return record;
 };
-
-export const saveServerDatevExport = async (
-  db: PostgresQueryable,
-  record: ServerDatevExportRecord,
-): Promise<ServerDatevExportRecord> => {
-  await db.query(
-    `
-      INSERT INTO datev_exports (
-        id, tenant_id, file_path, record_count, from_date, to_date, created_at, meta_json
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        file_path = EXCLUDED.file_path,
-        record_count = EXCLUDED.record_count,
-        from_date = EXCLUDED.from_date,
-        to_date = EXCLUDED.to_date,
-        created_at = EXCLUDED.created_at,
-        meta_json = EXCLUDED.meta_json
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.filePath,
-      record.recordCount,
-      record.fromDate ?? null,
-      record.toDate ?? null,
-      record.createdAt,
-      record.metaJson,
-    ],
-  );
+export const saveServerDatevExport = async (db: PostgresQueryable, record: ServerDatevExportRecord): Promise<ServerDatevExportRecord> => {
+  await upsert(db, schema.datevExports, { id: record.id, tenantId: record.tenantId, filePath: record.filePath, recordCount: record.recordCount, fromDate: record.fromDate ?? null, toDate: record.toDate ?? null, createdAt: record.createdAt, metaJson: record.metaJson }, schema.datevExports.id,
+    { tenantId: record.tenantId, filePath: record.filePath, recordCount: record.recordCount, fromDate: record.fromDate ?? null, toDate: record.toDate ?? null, createdAt: record.createdAt, metaJson: record.metaJson });
   return record;
 };
-
-export const saveServerVatEvidence = async (
-  db: PostgresQueryable,
-  record: ServerVatEvidenceRecord,
-): Promise<ServerVatEvidenceRecord> => {
-  await db.query(
-    `
-      INSERT INTO vat_evidence (
-        id, tenant_id, draft_id, entry_id, line_id, tax_case_key, evidence_type,
-        evidence_reference, country_code, counterparty_vat_id, captured_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        draft_id = EXCLUDED.draft_id,
-        entry_id = EXCLUDED.entry_id,
-        line_id = EXCLUDED.line_id,
-        tax_case_key = EXCLUDED.tax_case_key,
-        evidence_type = EXCLUDED.evidence_type,
-        evidence_reference = EXCLUDED.evidence_reference,
-        country_code = EXCLUDED.country_code,
-        counterparty_vat_id = EXCLUDED.counterparty_vat_id,
-        captured_at = EXCLUDED.captured_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.draftId ?? null,
-      record.entryId ?? null,
-      record.lineId ?? null,
-      record.taxCaseKey,
-      record.evidenceType ?? null,
-      record.evidenceReference ?? null,
-      record.countryCode ?? null,
-      record.counterpartyVatId ?? null,
-      record.capturedAt,
-    ],
-  );
+export const saveServerVatEvidence = async (db: PostgresQueryable, record: ServerVatEvidenceRecord): Promise<ServerVatEvidenceRecord> => {
+  await upsert(db, schema.vatEvidence, { id: record.id, tenantId: record.tenantId, draftId: record.draftId ?? null, entryId: record.entryId ?? null, lineId: record.lineId ?? null, taxCaseKey: record.taxCaseKey, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, capturedAt: record.capturedAt }, schema.vatEvidence.id,
+    { tenantId: record.tenantId, draftId: record.draftId ?? null, entryId: record.entryId ?? null, lineId: record.lineId ?? null, taxCaseKey: record.taxCaseKey, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, capturedAt: record.capturedAt });
   return record;
 };
-
-export const saveServerJournalPostingPair = async (
-  db: PostgresQueryable,
-  record: ServerJournalPostingPairRecord,
-): Promise<ServerJournalPostingPairRecord> => {
-  await db.query(
-    `
-      INSERT INTO journal_posting_pairs (
-        id, tenant_id, entry_id, debit_line_id, credit_line_id, amount, tax_case_key, datev_bu_key, created_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        entry_id = EXCLUDED.entry_id,
-        debit_line_id = EXCLUDED.debit_line_id,
-        credit_line_id = EXCLUDED.credit_line_id,
-        amount = EXCLUDED.amount,
-        tax_case_key = EXCLUDED.tax_case_key,
-        datev_bu_key = EXCLUDED.datev_bu_key,
-        created_at = EXCLUDED.created_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.entryId,
-      record.debitLineId,
-      record.creditLineId,
-      record.amount,
-      record.taxCaseKey ?? null,
-      record.datevBuKey ?? null,
-      record.createdAt,
-    ],
-  );
+export const saveServerJournalPostingPair = async (db: PostgresQueryable, record: ServerJournalPostingPairRecord): Promise<ServerJournalPostingPairRecord> => {
+  await upsert(db, schema.journalPostingPairs, { id: record.id, tenantId: record.tenantId, entryId: record.entryId, debitLineId: record.debitLineId, creditLineId: record.creditLineId, amount: record.amount, taxCaseKey: record.taxCaseKey ?? null, datevBuKey: record.datevBuKey ?? null, createdAt: record.createdAt }, schema.journalPostingPairs.id,
+    { tenantId: record.tenantId, entryId: record.entryId, debitLineId: record.debitLineId, creditLineId: record.creditLineId, amount: record.amount, taxCaseKey: record.taxCaseKey ?? null, datevBuKey: record.datevBuKey ?? null, createdAt: record.createdAt });
   return record;
 };
-
-export const saveServerImportedTransaction = async (
-  db: PostgresQueryable,
-  record: ServerImportedTransactionRecord,
-): Promise<ServerImportedTransactionRecord> => {
-  await db.query(
-    `
-      INSERT INTO transactions (
-        id, tenant_id, account_id, date, amount, type, counterparty, purpose,
-        linked_invoice_id, status, dedup_hash, import_batch_id, deleted_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8,
-        $9, $10, $11, $12, $13
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        account_id = EXCLUDED.account_id,
-        date = EXCLUDED.date,
-        amount = EXCLUDED.amount,
-        type = EXCLUDED.type,
-        counterparty = EXCLUDED.counterparty,
-        purpose = EXCLUDED.purpose,
-        linked_invoice_id = EXCLUDED.linked_invoice_id,
-        status = EXCLUDED.status,
-        dedup_hash = EXCLUDED.dedup_hash,
-        import_batch_id = EXCLUDED.import_batch_id,
-        deleted_at = EXCLUDED.deleted_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.accountId,
-      record.date,
-      record.amount,
-      record.type,
-      record.counterparty,
-      record.purpose,
-      record.linkedInvoiceId ?? null,
-      record.status,
-      record.dedupHash ?? null,
-      record.importBatchId ?? null,
-      record.deletedAt ?? null,
-    ],
-  );
+export const saveServerImportedTransaction = async (db: PostgresQueryable, record: ServerImportedTransactionRecord): Promise<ServerImportedTransactionRecord> => {
+  const values = { id: record.id, tenantId: record.tenantId, accountId: record.accountId, date: record.date, amount: record.amount, type: record.type, counterparty: record.counterparty, purpose: record.purpose, linkedInvoiceId: record.linkedInvoiceId ?? null, status: record.status, dedupHash: record.dedupHash ?? null, importBatchId: record.importBatchId ?? null, deletedAt: record.deletedAt ?? null };
+  await upsert(db, schema.transactions, values, schema.transactions.id, values);
   return record;
 };
-
-export const saveServerImportBatch = async (
-  db: PostgresQueryable,
-  record: ServerImportBatchRecord,
-): Promise<ServerImportBatchRecord> => {
-  await db.query(
-    `
-      INSERT INTO import_batches (
-        id, tenant_id, account_id, profile, file_name, file_sha256, mapping_json,
-        imported_count, skipped_count, error_count, created_at, rolled_back_at, rollback_reason
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12, $13
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        account_id = EXCLUDED.account_id,
-        profile = EXCLUDED.profile,
-        file_name = EXCLUDED.file_name,
-        file_sha256 = EXCLUDED.file_sha256,
-        mapping_json = EXCLUDED.mapping_json,
-        imported_count = EXCLUDED.imported_count,
-        skipped_count = EXCLUDED.skipped_count,
-        error_count = EXCLUDED.error_count,
-        created_at = EXCLUDED.created_at,
-        rolled_back_at = EXCLUDED.rolled_back_at,
-        rollback_reason = EXCLUDED.rollback_reason
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.accountId,
-      record.profile,
-      record.fileName,
-      record.fileSha256,
-      record.mappingJson,
-      record.importedCount,
-      record.skippedCount,
-      record.errorCount,
-      record.createdAt,
-      record.rolledBackAt ?? null,
-      record.rollbackReason ?? null,
-    ],
-  );
+export const saveServerImportBatch = async (db: PostgresQueryable, record: ServerImportBatchRecord): Promise<ServerImportBatchRecord> => {
+  const values = { id: record.id, tenantId: record.tenantId, accountId: record.accountId, profile: record.profile, fileName: record.fileName, fileSha256: record.fileSha256, mappingJson: record.mappingJson, importedCount: record.importedCount, skippedCount: record.skippedCount, errorCount: record.errorCount, createdAt: record.createdAt, rolledBackAt: record.rolledBackAt ?? null, rollbackReason: record.rollbackReason ?? null };
+  await upsert(db, schema.importBatches, values, schema.importBatches.id, values);
   return record;
 };
-
-export const saveServerEurLine = async (
-  db: PostgresQueryable,
-  record: ServerEurLineRecord,
-): Promise<ServerEurLineRecord> => {
-  await db.query(
-    `
-      INSERT INTO eur_lines (
-        id, tax_year, kennziffer, label, kind, exportable, sort_order,
-        computed_from_json, source_version, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tax_year = EXCLUDED.tax_year,
-        kennziffer = EXCLUDED.kennziffer,
-        label = EXCLUDED.label,
-        kind = EXCLUDED.kind,
-        exportable = EXCLUDED.exportable,
-        sort_order = EXCLUDED.sort_order,
-        computed_from_json = EXCLUDED.computed_from_json,
-        source_version = EXCLUDED.source_version,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      record.id,
-      record.taxYear,
-      record.kennziffer ?? null,
-      record.label,
-      record.kind,
-      record.exportable,
-      record.sortOrder,
-      record.computedFromJson ?? null,
-      record.sourceVersion,
-      record.createdAt,
-      record.updatedAt,
-    ],
-  );
+export const saveServerEurLine = async (db: PostgresQueryable, record: ServerEurLineRecord): Promise<ServerEurLineRecord> => {
+  const values = { id: record.id, taxYear: record.taxYear, kennziffer: record.kennziffer ?? null, label: record.label, kind: record.kind, exportable: record.exportable, sortOrder: record.sortOrder, computedFromJson: record.computedFromJson ?? null, sourceVersion: record.sourceVersion, createdAt: record.createdAt, updatedAt: record.updatedAt };
+  await upsert(db, schema.eurLines, values, schema.eurLines.id, values);
   return record;
 };
-
-export const saveServerEurClassification = async (
-  db: PostgresQueryable,
-  record: ServerEurClassificationRecord,
-): Promise<ServerEurClassificationRecord> => {
-  await db.query(
-    `
-      INSERT INTO eur_classifications (
-        id, tenant_id, source_type, source_id, tax_year, eur_line_id,
-        excluded, vat_mode, note, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10
-      )
-      ON CONFLICT (tenant_id, source_type, source_id, tax_year) DO UPDATE SET
-        eur_line_id = EXCLUDED.eur_line_id,
-        excluded = EXCLUDED.excluded,
-        vat_mode = EXCLUDED.vat_mode,
-        note = EXCLUDED.note,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.sourceType,
-      record.sourceId,
-      record.taxYear,
-      record.eurLineId ?? null,
-      record.excluded,
-      record.vatMode,
-      record.note ?? null,
-      record.updatedAt,
-    ],
-  );
+export const saveServerEurClassification = async (db: PostgresQueryable, record: ServerEurClassificationRecord): Promise<ServerEurClassificationRecord> => {
+  const values = { id: record.id, tenantId: record.tenantId, sourceType: record.sourceType, sourceId: record.sourceId, taxYear: record.taxYear, eurLineId: record.eurLineId ?? null, excluded: record.excluded, vatMode: record.vatMode, note: record.note ?? null, updatedAt: record.updatedAt };
+  await upsert(db, schema.eurClassifications, values, schema.eurClassifications.id, values);
   return record;
 };
-
-export const saveServerEurRule = async (
-  db: PostgresQueryable,
-  record: ServerEurRuleRecord,
-): Promise<ServerEurRuleRecord> => {
-  await db.query(
-    `
-      INSERT INTO eur_rules (
-        id, tenant_id, tax_year, priority, field, operator, value,
-        target_eur_line_id, active, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        tax_year = EXCLUDED.tax_year,
-        priority = EXCLUDED.priority,
-        field = EXCLUDED.field,
-        operator = EXCLUDED.operator,
-        value = EXCLUDED.value,
-        target_eur_line_id = EXCLUDED.target_eur_line_id,
-        active = EXCLUDED.active,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      record.id,
-      record.tenantId,
-      record.taxYear,
-      record.priority,
-      record.field,
-      record.operator,
-      record.value,
-      record.targetEurLineId,
-      record.active,
-      record.createdAt,
-      record.updatedAt,
-    ],
-  );
+export const saveServerEurRule = async (db: PostgresQueryable, record: ServerEurRuleRecord): Promise<ServerEurRuleRecord> => {
+  const values = { id: record.id, tenantId: record.tenantId, taxYear: record.taxYear, priority: record.priority, field: record.field, operator: record.operator, value: record.value, targetEurLineId: record.targetEurLineId, active: record.active, createdAt: record.createdAt, updatedAt: record.updatedAt };
+  await upsert(db, schema.eurRules, values, schema.eurRules.id, values);
   return record;
 };
-
 export const createPostgresProWorkflowRepository = (
   db: PostgresQueryable,
 ): ProWorkflowRepository => ({
   async list(scope) {
     const tenantId = getTenantId(scope);
-    const result = await db.query<{
-      transaction_id: string;
-      transaction_json: string;
-      draft_json: string;
-      updated_at: string;
-    }>(
-      `
-        SELECT transaction_id, transaction_json, draft_json, updated_at
-        FROM pro_workflow_entries
-        WHERE tenant_id = $1
-        ORDER BY updated_at DESC, transaction_id ASC
-      `,
-      [tenantId],
-    );
-    return result.rows.map((row) => ({
-      transactionId: row.transaction_id,
-      transactionJson: row.transaction_json,
-      draftJson: row.draft_json,
-      updatedAt: row.updated_at,
+    const rows = await drizzleDb(db).select().from(schema.proWorkflowEntries)
+      .where(eq(schema.proWorkflowEntries.tenantId, tenantId))
+      .orderBy(desc(schema.proWorkflowEntries.updatedAt), asc(schema.proWorkflowEntries.transactionId));
+    return rows.map((row) => ({
+      transactionId: row.transactionId!, transactionJson: row.transactionJson!, draftJson: row.draftJson!, updatedAt: row.updatedAt!,
     }));
   },
 
@@ -1436,83 +572,33 @@ export const createPostgresProAccountingCatalogRepository = (
 ): ProAccountingCatalogRepository => ({
   async listLedgerAccounts(scope, args = {}) {
     const tenantId = getTenantId(scope);
-    const params: Array<string | number> = [tenantId];
-    const filters: string[] = [];
-
-    if (args.chart) {
-      params.push(args.chart);
-      filters.push(`la.chart = $${params.length}`);
-    }
-
-    if (args.search && args.search.trim().length > 0) {
-      params.push(`%${args.search.trim()}%`);
-      filters.push(`(la.account_number ILIKE $${params.length} OR la.name ILIKE $${params.length})`);
-    }
-
     const limit = Math.max(1, Math.min(10_000, Math.floor(args.limit ?? 500)));
     const offset = Math.max(0, Math.floor(args.offset ?? 0));
-    params.push(limit);
-    const limitIndex = params.length;
-    params.push(offset);
-    const offsetIndex = params.length;
-
-    const whereSql = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
-    const result = await db.query<{
-      id: string;
-      chart: LedgerAccount['chart'];
-      account_number: string;
-      name: string;
-      source: string;
-      created_at: string;
-      updated_at: string;
-      keywords: string[] | null;
-    }>(
-      `
-        SELECT
-          la.id,
-          la.chart,
-          la.account_number,
-          la.name,
-          la.source,
-          la.created_at,
-          la.updated_at,
-          (
-            SELECT array_agg(ak.keyword ORDER BY ak.keyword)
-            FROM account_keywords ak
-            WHERE ak.tenant_id = $1
-              AND ak.chart = la.chart
-              AND ak.account_number = la.account_number
-              AND ak.active = TRUE
-          ) AS keywords
-        FROM ledger_accounts la
-        ${whereSql}
-        ORDER BY la.chart ASC, la.account_number ASC
-        LIMIT $${limitIndex} OFFSET $${offsetIndex}
-      `,
-      params,
-    );
-    return result.rows.map((row) => ({
-      id: row.id,
-      chart: row.chart,
-      accountNumber: row.account_number,
-      name: row.name,
-      keywords: row.keywords ?? undefined,
-      source: row.source,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+    const conditions = [];
+    if (args.chart) conditions.push(eq(schema.ledgerAccounts.chart, args.chart));
+    if (args.search?.trim()) {
+      const search = `%${args.search.trim()}%`;
+      conditions.push(or(ilike(schema.ledgerAccounts.accountNumber, search), ilike(schema.ledgerAccounts.name, search))!);
+    }
+    const rows = await drizzleDb(db).select().from(schema.ledgerAccounts)
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(asc(schema.ledgerAccounts.chart), asc(schema.ledgerAccounts.accountNumber)).limit(limit).offset(offset);
+    const filtered = rows;
+    const keywords = await drizzleDb(db).select().from(schema.accountKeywords)
+      .where(and(eq(schema.accountKeywords.tenantId, tenantId), eq(schema.accountKeywords.active, true))).orderBy(asc(schema.accountKeywords.keyword));
+    const keywordMap = new Map<string, string[]>();
+    for (const keyword of keywords) keywordMap.set(`${keyword.chart}:${keyword.accountNumber}`, [...(keywordMap.get(`${keyword.chart}:${keyword.accountNumber}`) ?? []), keyword.keyword!]);
+    return filtered.map((row) => ({
+    id: row.id!,
+      chart: row.chart as LedgerAccount['chart'], accountNumber: row.accountNumber!, name: row.name!,
+      keywords: keywordMap.get(`${row.chart}:${row.accountNumber}`), source: row.source!, createdAt: row.createdAt!, updatedAt: row.updatedAt!,
     }));
   },
 
   async getLedgerStats() {
-    const result = await db.query<{ chart: LedgerAccount['chart']; count: string }>(
-      `
-        SELECT chart, COUNT(*)::text AS count
-        FROM ledger_accounts
-        GROUP BY chart
-      `,
-    );
+    const result = await drizzleDb(db).select({ chart: schema.ledgerAccounts.chart, count: count() }).from(schema.ledgerAccounts).groupBy(schema.ledgerAccounts.chart);
     const byChart: LedgerAccountStats['byChart'] = { SKR03: 0, SKR04: 0 };
-    for (const row of result.rows) {
+    for (const row of result) {
       if (row.chart === 'SKR03' || row.chart === 'SKR04') {
         byChart[row.chart] = Number(row.count);
       }
@@ -1524,91 +610,34 @@ export const createPostgresProAccountingCatalogRepository = (
   },
 
   async listTaxCases(_scope, args = {}) {
-    const result = await db.query<{
-      key: TaxCaseDefinition['key'];
-      label: string;
-      mechanism: TaxCaseDefinition['mechanism'];
-      default_rate: string | number;
-      requires_counterparty_vat_id: boolean;
-      requires_country: boolean;
-      requires_evidence: boolean;
-      active: boolean;
-    }>(
-      `
-        SELECT key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active
-        FROM tax_cases
-        ${args.activeOnly ? 'WHERE active = TRUE' : ''}
-        ORDER BY key ASC
-      `,
-    );
-    return result.rows.map((row) => ({
-      key: row.key,
-      label: row.label,
-      mechanism: row.mechanism,
-      defaultRate: toNumber(row.default_rate),
-      requiresCounterpartyVatId: row.requires_counterparty_vat_id,
-      requiresCountry: row.requires_country,
-      requiresEvidence: row.requires_evidence,
-      active: row.active,
+    const rows = await drizzleDb(db).select().from(schema.taxCases)
+      .where(args.activeOnly ? eq(schema.taxCases.active, true) : undefined).orderBy(asc(schema.taxCases.key));
+    return rows.map((row) => ({
+      key: row.key as TaxCaseDefinition['key'], label: row.label!, mechanism: row.mechanism as TaxCaseDefinition['mechanism'],
+      defaultRate: toNumber(row.defaultRate!), requiresCounterpartyVatId: Boolean(row.requiresCounterpartyVatId),
+      requiresCountry: Boolean(row.requiresCountry), requiresEvidence: Boolean(row.requiresEvidence), active: Boolean(row.active),
     }));
   },
 
   async listTaxCaseAccountMappings(_scope, args = {}) {
-    const params: string[] = [];
-    const filters: string[] = [];
-    if (args.chart) {
-      params.push(args.chart);
-      filters.push(`chart = $${params.length}`);
-    }
-    if (args.taxCaseKey) {
-      params.push(args.taxCaseKey);
-      filters.push(`tax_case_key = $${params.length}`);
-    }
-    const whereSql = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
-    const result = await db.query<{
-      id: string;
-      chart: TaxCaseAccountMapping['chart'];
-      tax_case_key: TaxCaseAccountMapping['taxCaseKey'];
-      role: TaxCaseAccountMapping['role'];
-      account_number: string;
-      datev_bu_key: string | null;
-      valid_from: string | null;
-      valid_to: string | null;
-      updated_at: string;
-    }>(
-      `
-        SELECT id, chart, tax_case_key, role, account_number, datev_bu_key, valid_from, valid_to, updated_at
-        FROM tax_case_account_mappings
-        ${whereSql}
-        ORDER BY chart ASC, tax_case_key ASC, role ASC
-      `,
-      params,
-    );
-    return result.rows.map((row) => ({
-      id: row.id,
-      chart: row.chart,
-      taxCaseKey: row.tax_case_key,
-      role: row.role,
-      accountNumber: row.account_number,
-      datevBuKey: row.datev_bu_key ?? undefined,
-      validFrom: row.valid_from ?? undefined,
-      validTo: row.valid_to ?? undefined,
-      updatedAt: row.updated_at,
+    const conditions = [];
+    if (args.chart) conditions.push(eq(schema.taxCaseAccountMappings.chart, args.chart));
+    if (args.taxCaseKey) conditions.push(eq(schema.taxCaseAccountMappings.taxCaseKey, args.taxCaseKey));
+    const rows = await drizzleDb(db).select().from(schema.taxCaseAccountMappings)
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(asc(schema.taxCaseAccountMappings.chart), asc(schema.taxCaseAccountMappings.taxCaseKey), asc(schema.taxCaseAccountMappings.role));
+    return rows.map((row) => ({
+      id: row.id!, chart: row.chart as TaxCaseAccountMapping['chart'], taxCaseKey: row.taxCaseKey as TaxCaseAccountMapping['taxCaseKey'],
+      role: row.role as TaxCaseAccountMapping['role'], accountNumber: row.accountNumber!, datevBuKey: row.datevBuKey ?? undefined,
+      validFrom: row.validFrom ?? undefined, validTo: row.validTo ?? undefined, updatedAt: row.updatedAt!,
     }));
   },
 
   async upsertTaxCaseAccountMapping(_scope, args) {
-    const existing = await db.query<{ id: string }>(
-      `
-        SELECT id
-        FROM tax_case_account_mappings
-        WHERE chart = $1 AND tax_case_key = $2 AND role = $3
-        LIMIT 1
-      `,
-      [args.chart, args.taxCaseKey, args.role],
-    );
+    const existing = await drizzleDb(db).select({ id: schema.taxCaseAccountMappings.id }).from(schema.taxCaseAccountMappings)
+      .where(and(eq(schema.taxCaseAccountMappings.chart, args.chart), eq(schema.taxCaseAccountMappings.taxCaseKey, args.taxCaseKey), eq(schema.taxCaseAccountMappings.role, args.role))).limit(1);
     const mapping: TaxCaseAccountMapping = {
-      id: args.id ?? existing.rows[0]?.id ?? randomUUID(),
+      id: args.id ?? existing[0]?.id ?? randomUUID(),
       chart: args.chart,
       taxCaseKey: args.taxCaseKey,
       role: args.role,
@@ -1623,60 +652,24 @@ export const createPostgresProAccountingCatalogRepository = (
 
   async listAccountSuggestionRules(scope, args = {}) {
     const tenantId = getTenantId(scope);
-    const params: Array<string | boolean> = [tenantId];
-    const filters = ['tenant_id = $1'];
-    if (args.chart) {
-      params.push(args.chart);
-      filters.push(`chart = $${params.length}`);
-    }
-    if (args.activeOnly) {
-      params.push(true);
-      filters.push(`active = $${params.length}`);
-    }
-    const result = await db.query<{
-      id: string;
-      tenant_id: string;
-      chart: TaxCaseAccountMapping['chart'];
-      priority: number;
-      field: AccountSuggestionRuleField;
-      operator: AccountSuggestionRuleOperator;
-      value: string;
-      target_account_number: string;
-      flow_type: AccountSuggestionRuleFlowType;
-      active: boolean;
-      created_at: string;
-      updated_at: string;
-    }>(
-      `
-        SELECT id, tenant_id, chart, priority, field, operator, value, target_account_number, flow_type, active, created_at, updated_at
-        FROM account_suggestion_rules
-        WHERE ${filters.join(' AND ')}
-        ORDER BY chart ASC, priority ASC, created_at ASC
-      `,
-      params,
-    );
-    return result.rows.map((row) => ({
-      id: row.id,
-      tenantId: row.tenant_id,
-      chart: row.chart,
-      priority: row.priority,
-      field: row.field,
-      operator: row.operator,
-      value: row.value,
-      targetAccountNumber: row.target_account_number,
-      flowType: row.flow_type,
-      active: row.active,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+    const conditions = [eq(schema.accountSuggestionRules.tenantId, tenantId)];
+    if (args.chart) conditions.push(eq(schema.accountSuggestionRules.chart, args.chart));
+    if (args.activeOnly) conditions.push(eq(schema.accountSuggestionRules.active, true));
+    const rows = await drizzleDb(db).select().from(schema.accountSuggestionRules).where(and(...conditions))
+      .orderBy(asc(schema.accountSuggestionRules.chart), asc(schema.accountSuggestionRules.priority), asc(schema.accountSuggestionRules.createdAt));
+    return rows.map((row) => ({
+      id: row.id!, tenantId: row.tenantId!, chart: row.chart as TaxCaseAccountMapping['chart'], priority: row.priority!,
+      field: row.field as AccountSuggestionRuleField, operator: row.operator as AccountSuggestionRuleOperator, value: row.value!,
+      targetAccountNumber: row.targetAccountNumber!, flowType: row.flowType as AccountSuggestionRuleFlowType, active: Boolean(row.active),
+      createdAt: row.createdAt!, updatedAt: row.updatedAt!,
     }));
   },
 
   async upsertAccountSuggestionRule(scope, input) {
     const tenantId = input.tenantId ?? getTenantId(scope);
     const now = nowIso();
-    const existing = input.id
-      ? await db.query<{ created_at: string }>('SELECT created_at FROM account_suggestion_rules WHERE id = $1 LIMIT 1', [input.id])
-      : { rows: [] as Array<{ created_at: string }> };
+    const existing = input.id ? await drizzleDb(db).select({ createdAt: schema.accountSuggestionRules.createdAt }).from(schema.accountSuggestionRules)
+      .where(eq(schema.accountSuggestionRules.id, input.id)).limit(1) : [];
     const rule: AccountSuggestionRule = {
       id: input.id ?? randomUUID(),
       tenantId,
@@ -1688,13 +681,13 @@ export const createPostgresProAccountingCatalogRepository = (
       targetAccountNumber: input.targetAccountNumber.trim(),
       flowType: input.flowType ?? 'any',
       active: input.active !== false,
-      createdAt: existing.rows[0]?.created_at ?? now,
+      createdAt: existing[0]?.createdAt ?? now,
       updatedAt: now,
     };
     return saveServerAccountSuggestionRule(db, rule);
   },
 
   async deleteAccountSuggestionRule(scope, id) {
-    await db.query('DELETE FROM account_suggestion_rules WHERE tenant_id = $1 AND id = $2', [getTenantId(scope), id]);
+    await drizzleDb(db).delete(schema.accountSuggestionRules).where(and(eq(schema.accountSuggestionRules.tenantId, getTenantId(scope)), eq(schema.accountSuggestionRules.id, id)));
   },
 });

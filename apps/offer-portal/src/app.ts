@@ -246,7 +246,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   <body style="font-family: system-ui; max-width: 720px; margin: 40px auto; padding: 0 16px;">
     ${renderPortalBranding('Offer Portal')}
     <h1>Setup</h1>
-    <p>This portal supports self-hosting (Node) and Cloudflare Workers.</p>
+    <p>This portal runs as a self-hosted Node service.</p>
     <ul>
       <li><strong>PUBLIC_BASE_URL</strong>: ${baseUrl}</li>
       <li><strong>PUBLISH_API_KEY</strong>: ${hasKey ? 'set' : 'not set'}</li>

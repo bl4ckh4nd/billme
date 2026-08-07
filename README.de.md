@@ -282,10 +282,10 @@ Engine für Aufbewahrungsrichtlinien. Betrachte dies als technische Unterstützu
 veröffentlicht und Entscheidungen erfasst. Die Desktop- und Serveranwendungen übertragen Snapshots und
 bleiben die Quelle der Wahrheit — das Portal enthält niemals die buchhalterische Wahrheit.
 
-Der Dienst läuft entweder selbst gehostet auf Node oder auf Cloudflare Workers und bietet Speicheradapter
-für Arbeitsspeicher, SQLite + Dateisystem oder D1 + R2. Die Veröffentlichung wird mit einem `x-api-key`
-geschützt; Kunden-URLs basieren auf Token. Das Portal ist bewusst **nicht** Bestandteil des
-Servermodus-Docker-Stacks.
+Der Dienst läuft als selbst gehosteter Node-Dienst mit SQLite-Snapshots und PDF-Speicher im Dateisystem
+(für Tests steht weiterhin ein In-Memory-Adapter bereit). Die Veröffentlichung wird mit einem `x-api-key`
+geschützt; Kunden-URLs basieren auf Token. Der Servermodus-Docker-Stack enthält das Portal und verlangt
+für sichere Veröffentlichung den Wert `BILLME_PORTAL_PUBLISH_API_KEY`.
 
 Siehe [`docs/offer-portal.md`](docs/offer-portal.md).
 
@@ -394,7 +394,6 @@ pnpm docker:server-mode:down
 
 # Deploy
 pnpm deploy:demo                     # demo to Cloudflare Workers
-pnpm -C apps/offer-portal deploy:cf  # offer portal to Cloudflare Workers
 ```
 
 Die Typprüfung erfolgt pro Package, beispielsweise mit `pnpm -C apps/desktop typecheck`.

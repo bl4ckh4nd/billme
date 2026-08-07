@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { and, asc, desc, eq, isNotNull } from 'drizzle-orm';
 import type { EurLine } from './eurCatalogRepo';
 import { listEurRules, type EurRule } from './eurRulesRepo';
 import { suggestEurLine } from '@billme/desktop-services/eurSuggestion';
@@ -9,6 +10,7 @@ import {
   trainNaiveBayes as trainSharedNaiveBayes,
   type NaiveBayesModel as SharedNaiveBayesModel,
 } from '@billme/finance-intelligence';
+import { createDrizzle, schema } from './drizzle';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -135,22 +137,24 @@ export const buildCounterpartyMemory = (
   db: Database.Database,
   taxYear: number,
 ): Map<string, string> => {
-  const rows = db
-    .prepare(
-      `SELECT t.counterparty, ec.eur_line_id, MAX(ec.updated_at) AS latest
-       FROM eur_classifications ec
-       INNER JOIN transactions t ON t.id = ec.source_id AND ec.source_type = 'transaction'
-       WHERE ec.tax_year = ?
-         AND ec.excluded = 0
-         AND ec.eur_line_id IS NOT NULL
-       GROUP BY LOWER(TRIM(REPLACE(t.counterparty, '  ', ' ')))
-       ORDER BY latest DESC`,
-    )
-    .all(taxYear) as Array<{ counterparty: string; eur_line_id: string }>;
+  const rows = createDrizzle(db).select({
+    counterparty: schema.transactions.counterparty,
+    eur_line_id: schema.eurClassifications.eurLineId,
+    latest: schema.eurClassifications.updatedAt,
+  }).from(schema.eurClassifications)
+    .innerJoin(schema.transactions, and(
+      eq(schema.transactions.id, schema.eurClassifications.sourceId),
+      eq(schema.eurClassifications.sourceType, 'transaction'),
+    )).where(and(
+      eq(schema.eurClassifications.taxYear, taxYear),
+      eq(schema.eurClassifications.excluded, 0),
+      isNotNull(schema.eurClassifications.eurLineId),
+    )).orderBy(desc(schema.eurClassifications.updatedAt)).all() as Array<{ counterparty: string; eur_line_id: string; latest: string }>;
 
   const map = new Map<string, string>();
   for (const row of rows) {
-    map.set(normalizeText(row.counterparty), row.eur_line_id);
+    const key = normalizeText(row.counterparty);
+    if (!map.has(key)) map.set(key, row.eur_line_id);
   }
   return map;
 };
@@ -209,27 +213,35 @@ export const buildBayesTrainingData = (
   db: Database.Database,
   taxYear: number,
 ): Array<{ counterparty: string; purpose: string; eurLineId: string }> => {
-  const rows = db
-    .prepare(
-      `SELECT t.counterparty, t.purpose, ec.eur_line_id
-       FROM eur_classifications ec
-       INNER JOIN transactions t ON t.id = ec.source_id AND ec.source_type = 'transaction'
-       WHERE ec.tax_year = ?
-         AND ec.excluded = 0
-         AND ec.eur_line_id IS NOT NULL
-       UNION ALL
-       SELECT i.client AS counterparty, 'Rechnung ' || i.number AS purpose, ec.eur_line_id
-       FROM eur_classifications ec
-       INNER JOIN invoices i ON i.id = ec.source_id AND ec.source_type = 'invoice'
-       WHERE ec.tax_year = ?
-         AND ec.excluded = 0
-         AND ec.eur_line_id IS NOT NULL`,
-    )
-    .all(taxYear, taxYear) as Array<{ counterparty: string; purpose: string; eur_line_id: string }>;
+  const drizzle = createDrizzle(db);
+  const transactionRows = drizzle.select({
+    counterparty: schema.transactions.counterparty,
+    purpose: schema.transactions.purpose,
+    eur_line_id: schema.eurClassifications.eurLineId,
+  }).from(schema.eurClassifications).innerJoin(schema.transactions, and(
+    eq(schema.transactions.id, schema.eurClassifications.sourceId),
+    eq(schema.eurClassifications.sourceType, 'transaction'),
+  )).where(and(
+    eq(schema.eurClassifications.taxYear, taxYear),
+    eq(schema.eurClassifications.excluded, 0),
+    isNotNull(schema.eurClassifications.eurLineId),
+  )).all() as Array<{ counterparty: string; purpose: string; eur_line_id: string }>;
+  const invoiceRows = drizzle.select({
+    counterparty: schema.invoices.client,
+    purpose: schema.invoices.number,
+    eur_line_id: schema.eurClassifications.eurLineId,
+  }).from(schema.eurClassifications).innerJoin(schema.invoices, and(
+    eq(schema.invoices.id, schema.eurClassifications.sourceId),
+    eq(schema.eurClassifications.sourceType, 'invoice'),
+  )).where(and(
+    eq(schema.eurClassifications.taxYear, taxYear),
+    eq(schema.eurClassifications.excluded, 0),
+    isNotNull(schema.eurClassifications.eurLineId),
+  )).all() as Array<{ counterparty: string; purpose: string; eur_line_id: string }>;
 
-  return rows.map((r) => ({
+  return [...transactionRows, ...invoiceRows].map((r) => ({
     counterparty: r.counterparty,
-    purpose: r.purpose,
+    purpose: invoiceRows.includes(r) ? `Rechnung ${r.purpose}` : r.purpose,
     eurLineId: r.eur_line_id,
   }));
 };

@@ -20,7 +20,7 @@ import {
   getServerSettings,
   insertEmailLogRow,
   listServerNumberReservations,
-  runPostgresMigrations,
+  assertDrizzleSchemaCurrent,
   saveServerNumberReservation,
   saveServerSettings,
   withPostgresTransaction,
@@ -156,7 +156,7 @@ export class ServerWorkerRuntime {
   }
 
   async init(): Promise<void> {
-    await runPostgresMigrations(this.pool);
+    await assertDrizzleSchemaCurrent(this.pool);
   }
 
   async close(): Promise<void> {

@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3';
+import { and, asc, count, desc, eq } from 'drizzle-orm';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import type { Account, Transaction } from '../types';
 
 type AccountRow = {
@@ -29,15 +31,8 @@ const DEFAULT_BANK_ACCOUNT_BY_CHART: Record<'SKR03' | 'SKR04', string> = {
 };
 
 const getActiveChart = (db: Database.Database): 'SKR03' | 'SKR04' => {
-  const rows = db
-    .prepare(
-      `
-      SELECT chart, COUNT(*) as c
-      FROM ledger_accounts
-      GROUP BY chart
-      `,
-    )
-    .all() as Array<{ chart: string; c: number }>;
+  const rows = createDrizzle(db).select({ chart: schema.ledgerAccounts.chart, c: count() })
+    .from(schema.ledgerAccounts).groupBy(schema.ledgerAccounts.chart).all() as Array<{ chart: string; c: number }>;
 
   const byChart = rows.reduce(
     (acc, row) => {
@@ -52,14 +47,13 @@ const getActiveChart = (db: Database.Database): 'SKR03' | 'SKR04' => {
 };
 
 const countLedgerAccounts = (db: Database.Database): number => {
-  const row = db.prepare('SELECT COUNT(*) as c FROM ledger_accounts').get() as { c: number };
-  return Number(row.c || 0);
+  const row = createDrizzle(db).select({ c: count() }).from(schema.ledgerAccounts).get();
+  return Number(row?.c ?? 0);
 };
 
 const ledgerAccountExists = (db: Database.Database, accountNumber: string): boolean => {
-  const row = db
-    .prepare('SELECT 1 FROM ledger_accounts WHERE account_number = ? LIMIT 1')
-    .get(accountNumber) as { 1: 1 } | undefined;
+  const row = createDrizzle(db).select({ id: schema.ledgerAccounts.id }).from(schema.ledgerAccounts)
+    .where(eq(schema.ledgerAccounts.accountNumber, accountNumber)).limit(1).get();
   return Boolean(row);
 };
 
@@ -67,31 +61,14 @@ const findFirstLedgerAccountByChart = (
   db: Database.Database,
   chart: 'SKR03' | 'SKR04',
 ): string | undefined => {
-  const row = db
-    .prepare(
-      `
-      SELECT account_number
-      FROM ledger_accounts
-      WHERE chart = ?
-      ORDER BY account_number
-      LIMIT 1
-      `,
-    )
-    .get(chart) as { account_number: string } | undefined;
+  const row = createDrizzle(db).select({ account_number: schema.ledgerAccounts.accountNumber }).from(schema.ledgerAccounts)
+    .where(eq(schema.ledgerAccounts.chart, chart)).orderBy(asc(schema.ledgerAccounts.accountNumber)).limit(1).get();
   return row?.account_number;
 };
 
 const findFirstLedgerAccountAny = (db: Database.Database): string | undefined => {
-  const row = db
-    .prepare(
-      `
-      SELECT account_number
-      FROM ledger_accounts
-      ORDER BY chart, account_number
-      LIMIT 1
-      `,
-    )
-    .get() as { account_number: string } | undefined;
+  const row = createDrizzle(db).select({ account_number: schema.ledgerAccounts.accountNumber }).from(schema.ledgerAccounts)
+    .orderBy(asc(schema.ledgerAccounts.chart), asc(schema.ledgerAccounts.accountNumber)).limit(1).get();
   return row?.account_number;
 };
 
@@ -100,16 +77,8 @@ const fallbackSkrAccountNumber = (
   preferredChart: 'SKR03' | 'SKR04',
 ): string => {
   const preferred = DEFAULT_BANK_ACCOUNT_BY_CHART[preferredChart];
-  const byChart = db
-    .prepare(
-      `
-      SELECT account_number
-      FROM ledger_accounts
-      WHERE chart = ? AND account_number = ?
-      LIMIT 1
-      `,
-    )
-    .get(preferredChart, preferred) as { account_number: string } | undefined;
+  const byChart = createDrizzle(db).select({ account_number: schema.ledgerAccounts.accountNumber }).from(schema.ledgerAccounts)
+    .where(and(eq(schema.ledgerAccounts.chart, preferredChart), eq(schema.ledgerAccounts.accountNumber, preferred))).limit(1).get();
   if (byChart?.account_number) return byChart.account_number;
 
   const firstByChart = findFirstLedgerAccountByChart(db, preferredChart);
@@ -142,10 +111,11 @@ const resolveDefaultSkrAccountNumber = (
 
 export const listAccounts = (db: Database.Database): Account[] => {
   const activeChart = getActiveChart(db);
-  const accountRows = db.prepare('SELECT * FROM accounts ORDER BY name ASC').all() as AccountRow[];
-  const txRows = db
-    .prepare('SELECT * FROM transactions ORDER BY account_id, date DESC')
-    .all() as TransactionRow[];
+  const drizzle = createDrizzle(db);
+  const accountRows = drizzle.select({ id: schema.accounts.id, name: schema.accounts.name, iban: schema.accounts.iban, balance: schema.accounts.balance, default_skr_account_number: schema.accounts.defaultSkrAccountNumber, type: schema.accounts.type, color: schema.accounts.color })
+    .from(schema.accounts).orderBy(asc(schema.accounts.name)).all() as AccountRow[];
+  const txRows = drizzle.select({ id: schema.transactions.id, account_id: schema.transactions.accountId, date: schema.transactions.date, amount: schema.transactions.amount, type: schema.transactions.type, counterparty: schema.transactions.counterparty, purpose: schema.transactions.purpose, linked_invoice_id: schema.transactions.linkedInvoiceId, status: schema.transactions.status })
+    .from(schema.transactions).orderBy(asc(schema.transactions.accountId), desc(schema.transactions.date)).all() as TransactionRow[];
 
   const txByAccount = new Map<string, Transaction[]>();
   for (const t of txRows) {
@@ -189,17 +159,11 @@ export const upsertAccount = (db: Database.Database, account: Account): Account 
     );
     const nextAccount: Account = { ...account, defaultSkrAccountNumber };
 
-    const exists = db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(account.id) as
-      | { 1: 1 }
-      | undefined;
+    const drizzle = createDrizzle(db);
+    const exists = drizzle.select({ id: schema.accounts.id }).from(schema.accounts).where(eq(schema.accounts.id, account.id)).get();
 
     if (!exists) {
-      db.prepare(
-        `
-          INSERT INTO accounts (id, name, iban, balance, default_skr_account_number, type, color)
-          VALUES (@id, @name, @iban, @balance, @defaultSkrAccountNumber, @type, @color)
-        `,
-      ).run({
+      drizzle.insert(schema.accounts).values({
         id: nextAccount.id,
         name: nextAccount.name,
         iban: nextAccount.iban,
@@ -207,42 +171,21 @@ export const upsertAccount = (db: Database.Database, account: Account): Account 
         defaultSkrAccountNumber: nextAccount.defaultSkrAccountNumber,
         type: nextAccount.type,
         color: nextAccount.color,
-      });
+      }).run();
     } else {
-      db.prepare(
-        `
-          UPDATE accounts SET
-            name=@name,
-            iban=@iban,
-            balance=@balance,
-            default_skr_account_number=@defaultSkrAccountNumber,
-            type=@type,
-            color=@color
-          WHERE id=@id
-        `,
-      ).run({
-        id: nextAccount.id,
+      drizzle.update(schema.accounts).set({
         name: nextAccount.name,
         iban: nextAccount.iban,
         balance: nextAccount.balance,
         defaultSkrAccountNumber: nextAccount.defaultSkrAccountNumber,
         type: nextAccount.type,
         color: nextAccount.color,
-      });
+      }).where(eq(schema.accounts.id, nextAccount.id)).run();
     }
 
-    db.prepare('DELETE FROM transactions WHERE account_id = ?').run(nextAccount.id);
-    const insertTx = db.prepare(
-      `
-        INSERT INTO transactions (
-          id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status
-        ) VALUES (
-          @id, @accountId, @date, @amount, @type, @counterparty, @purpose, @linkedInvoiceId, @status
-        )
-      `,
-    );
+    drizzle.delete(schema.transactions).where(eq(schema.transactions.accountId, nextAccount.id)).run();
     for (const t of nextAccount.transactions ?? []) {
-      insertTx.run({
+      drizzle.insert(schema.transactions).values({
         id: t.id,
         accountId: nextAccount.id,
         date: t.date,
@@ -252,7 +195,7 @@ export const upsertAccount = (db: Database.Database, account: Account): Account 
         purpose: t.purpose,
         linkedInvoiceId: t.linkedInvoiceId ?? null,
         status: t.status,
-      });
+      }).run();
     }
 
     return nextAccount;
@@ -263,26 +206,19 @@ export const upsertAccount = (db: Database.Database, account: Account): Account 
 
 export const deleteAccount = (db: Database.Database, id: string): void => {
   const tx = db.transaction(() => {
-    db.prepare('DELETE FROM transactions WHERE account_id = ?').run(id);
-    db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
+    const drizzle = createDrizzle(db);
+    drizzle.delete(schema.transactions).where(eq(schema.transactions.accountId, id)).run();
+    drizzle.delete(schema.accounts).where(eq(schema.accounts.id, id)).run();
   });
   tx();
 };
 
 export const ensureAccountDefaultSkrMappings = (db: Database.Database): void => {
   const activeChart = getActiveChart(db);
-  const rows = db
-    .prepare('SELECT id, default_skr_account_number FROM accounts ORDER BY id ASC')
-    .all() as Array<{ id: string; default_skr_account_number: string | null }>;
+  const drizzle = createDrizzle(db);
+  const rows = drizzle.select({ id: schema.accounts.id, default_skr_account_number: schema.accounts.defaultSkrAccountNumber })
+    .from(schema.accounts).orderBy(asc(schema.accounts.id)).all() as Array<{ id: string; default_skr_account_number: string | null }>;
   if (!rows.length) return;
-
-  const update = db.prepare(
-    `
-      UPDATE accounts
-      SET default_skr_account_number = ?
-      WHERE id = ?
-    `,
-  );
 
   const tx = db.transaction(() => {
     for (const row of rows) {
@@ -294,7 +230,7 @@ export const ensureAccountDefaultSkrMappings = (db: Database.Database): void => 
       if ((row.default_skr_account_number ?? '').trim() === resolved) {
         continue;
       }
-      update.run(resolved, row.id);
+      drizzle.update(schema.accounts).set({ defaultSkrAccountNumber: resolved }).where(eq(schema.accounts.id, row.id)).run();
     }
   });
 

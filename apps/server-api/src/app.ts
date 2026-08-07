@@ -21,8 +21,6 @@ import {
   supportedServerRoles,
   type AuditEntryDraft,
   type TenantScope,
-  validateVatId,
-  vatValidationResultSchema,
 } from '@billme/server-core';
 import {
   createPostgresBillingDependencies,
@@ -69,6 +67,7 @@ import {
 import { SessionTokenService, checkSessionSecret, type AuthSession, type AuthSessionInfo } from './auth.js';
 import { createAuthStore, type AuthStore } from './authStore.js';
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
+import { registerServerApiOrpc } from './orpc.js';
 
 type Pool = ReturnType<typeof createPostgresPool>;
 type AppSettings = z.infer<typeof appSettingsSchema>;
@@ -93,11 +92,6 @@ const numberFinalizeBodySchema = z.object({
   reservationId: z.string().min(1),
   documentId: z.string().min(1),
 });
-const vatValidationBodySchema = z.object({
-  countryCode: z.string().length(2).transform((value) => value.toUpperCase()),
-  vatNumber: z.string().trim().min(4).max(32),
-});
-const vatValidationResponseSchema = vatValidationResultSchema;
 const authSessionInfoSchema = z.object({
   user: authUserSchema,
   tenantId: z.string().min(1),
@@ -386,84 +380,7 @@ const finalizeNumberForScope = async (pool: Pool, scope: TenantScope, reservatio
   );
 };
 
-const registerAuthRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefix: string) => {
-  typedRoute(app, {
-    method: 'GET',
-    url: `${prefix}/auth/bootstrap/status`,
-    response: z.object({
-      bootstrapped: z.boolean(),
-      userCount: z.number().int().nonnegative(),
-    }),
-    async handler() {
-      return app.authStore.getBootstrapStatus(product);
-    },
-  });
-
-  typedRoute(app, {
-    method: 'POST',
-    url: `${prefix}/auth/bootstrap`,
-    body: bootstrapRequestSchema,
-    response: z.object({
-      token: z.string().min(1),
-      user: authUserSchema,
-    }),
-    async handler({ body }) {
-      const principal = await app.authStore.bootstrap(product, body);
-      return {
-        token: app.tokenService.sign({
-          user: principal.user,
-          scope: createSingleTenantScope(principal.tenantId, principal.product),
-          role: principal.role,
-        }),
-        user: principal.user,
-      };
-    },
-  });
-
-  typedRoute(app, {
-    method: 'POST',
-    url: `${prefix}/auth/login`,
-    body: loginRequestSchema,
-    response: z.object({
-      token: z.string().min(1),
-      user: authUserSchema,
-    }),
-    async handler({ body }) {
-      const principal = await app.authStore.login(product, body);
-      return {
-        token: app.tokenService.sign({
-          user: principal.user,
-          scope: createSingleTenantScope(principal.tenantId, principal.product),
-          role: principal.role,
-        }),
-        user: principal.user,
-      };
-    },
-  });
-
-  typedRoute(app, {
-    method: 'GET',
-    url: `${prefix}/auth/me`,
-    response: authSessionInfoSchema,
-    async handler({ request }) {
-      const session = await requireSession(app, product, request.headers.authorization);
-      return toSessionInfo(session);
-    },
-  });
-};
-
 const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefix: string) => {
-  typedRoute(app, {
-    method: 'POST',
-    url: `${prefix}/tax/validate-vat-id`,
-    body: vatValidationBodySchema,
-    response: vatValidationResponseSchema,
-    async handler({ request, body }) {
-      await requireSession(app, product, request.headers.authorization);
-      return validateVatId(body);
-    },
-  });
-
   typedRoute(app, {
     method: 'GET',
     url: `${prefix}/clients`,
@@ -1384,8 +1301,8 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
     },
   });
 
-  registerAuthRoutes(app, 'lite', '/api/v1/lite');
-  registerAuthRoutes(app, 'pro', '/api/v1/pro');
+  // Product auth and VAT validation are contract-first oRPC routes. Generic
+  // query-based auth below remains a compatibility surface.
   registerBillingRoutes(app, 'lite', '/api/v1/lite');
   registerBillingRoutes(app, 'pro', '/api/v1/pro');
   registerProRoutes(app);
@@ -1444,6 +1361,8 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
       return toSessionInfo(session);
     },
   });
+
+  await registerServerApiOrpc(app);
 
   return app;
 };

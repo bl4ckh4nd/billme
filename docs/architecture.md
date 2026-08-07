@@ -94,6 +94,12 @@ Postgres pool and verifies the Drizzle journal through `assertDrizzleSchemaCurre
 billing routes live under `/api/v1/lite` and `/api/v1/pro`. `requireSession` rejects a token whose
 product does not match the route with `403`.
 
+`packages/server-core/src/orpc/contract.ts` is the shared contract-first seam for the stable product
+boundaries. `apps/server-api` mounts its Lite/Pro auth and VAT procedures through the Fastify oRPC
+adapter while leaving the generic query-auth compatibility routes, `/health`, and billing/download
+exceptions on direct Fastify handlers. The deterministic generated document is available at
+`GET /api/v1/openapi.json`; shared clients use the oRPC OpenAPI link for supported JSON procedures.
+
 Authentication uses bearer tokens implemented in `apps/server-api/src/auth.ts`: a base64url payload
 plus an HMAC-SHA256 signature, not a standard JWT. Passwords are derived with scrypt in
 `apps/server-api/src/authStore.ts` and `packages/server-data/src/postgres/auth.ts`.

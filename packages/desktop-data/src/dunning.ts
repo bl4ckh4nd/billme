@@ -1,11 +1,13 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
+import { desc, eq } from 'drizzle-orm';
 import type { DunningSettings, DunningHistoryEntry, DunningRunResult, InvoiceDunningStatus } from '@billme/server-core/domain';
 import type { ServerProduct } from '@billme/server-core';
 import type { AuditActor, Clock, DunningEmailPort, DunningSecretPort } from '@billme/server-core/ports';
 import { processDunningRun as processDomainDunningRun, summarizeInvoiceDunningStatus } from '@billme/server-core/services';
 import { logEmail } from './emailRepo';
 import { createBillingScope, createSqliteAuditLogPort, createSqliteInvoiceRepository } from './billingDomainCompat';
+import { createDrizzle, schema } from './drizzle';
 
 type LoggerPort = {
   debug?(message: string, meta?: Record<string, unknown>): void;
@@ -53,33 +55,26 @@ const rowToDunningHistory = (row: DunningHistoryRow): DunningHistoryEntry => ({
 
 export const createSqliteDunningHistoryRepository = (db: Database.Database) => ({
   listByInvoice(_scope: { tenantId: string }, invoiceId: string): DunningHistoryEntry[] {
-    const rows = db
-      .prepare(
-        `
-          SELECT *
-          FROM dunning_history
-          WHERE invoice_id = ?
-          ORDER BY dunning_level DESC, processed_at DESC
-        `,
-      )
-      .all(invoiceId) as DunningHistoryRow[];
+    const rows = createDrizzle(db).select({
+      id: schema.dunningHistory.id,
+      invoice_id: schema.dunningHistory.invoiceId,
+      invoice_number: schema.dunningHistory.invoiceNumber,
+      dunning_level: schema.dunningHistory.dunningLevel,
+      days_overdue: schema.dunningHistory.daysOverdue,
+      fee_applied: schema.dunningHistory.feeApplied,
+      email_sent: schema.dunningHistory.emailSent,
+      email_log_id: schema.dunningHistory.emailLogId,
+      processed_at: schema.dunningHistory.processedAt,
+      created_at: schema.dunningHistory.createdAt,
+    }).from(schema.dunningHistory).where(eq(schema.dunningHistory.invoiceId, invoiceId))
+      .orderBy(desc(schema.dunningHistory.dunningLevel), desc(schema.dunningHistory.processedAt)).all() as DunningHistoryRow[];
 
     return rows.map(rowToDunningHistory);
   },
   record(_scope: { tenantId: string }, entry: Omit<DunningHistoryEntry, 'id' | 'createdAt'>): DunningHistoryEntry {
     const createdAt = new Date().toISOString();
     const id = randomUUID();
-    db.prepare(
-      `
-        INSERT INTO dunning_history (
-          id, invoice_id, invoice_number, dunning_level, days_overdue,
-          fee_applied, email_sent, email_log_id, processed_at, created_at
-        ) VALUES (
-          @id, @invoiceId, @invoiceNumber, @dunningLevel, @daysOverdue,
-          @feeApplied, @emailSent, @emailLogId, @processedAt, @createdAt
-        )
-      `,
-    ).run({
+    createDrizzle(db).insert(schema.dunningHistory).values({
       id,
       invoiceId: entry.invoiceId,
       invoiceNumber: entry.invoiceNumber,
@@ -90,7 +85,7 @@ export const createSqliteDunningHistoryRepository = (db: Database.Database) => (
       emailLogId: entry.emailLogId ?? null,
       processedAt: entry.processedAt,
       createdAt,
-    });
+    }).run();
 
     return {
       ...entry,

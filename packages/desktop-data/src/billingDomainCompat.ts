@@ -1,4 +1,6 @@
-import type Database from 'better-sqlite3';
+import type Database from "better-sqlite3";
+import { and, asc, desc, eq } from "drizzle-orm";
+import { createDrizzle, schema } from "./drizzle";
 import {
   createSingleTenantScope,
   type AuditActor,
@@ -13,9 +15,9 @@ import {
   type OfferDecision,
   type ServerProduct,
   type TenantScope,
-} from '@billme/server-core';
-import { appendAuditLog } from './audit';
-import { AddressSchema, safeJsonParse } from './validation-schemas';
+} from "@billme/server-core";
+import { appendAuditLog } from "./audit";
+import { AddressSchema, safeJsonParse } from "./validation-schemas";
 
 type InvoiceRow = {
   id: string;
@@ -152,7 +154,7 @@ export interface LegacyInvoiceDocument {
   clientAddress?: string;
   billingAddressJson?: unknown;
   shippingAddressJson?: unknown;
-  taxMode?: Invoice['taxMode'];
+  taxMode?: Invoice["taxMode"];
   taxMeta?: InvoiceTaxMeta;
   taxSnapshot?: InvoiceTaxSnapshot;
   shareToken?: string | null;
@@ -205,7 +207,9 @@ const parseJson = <T>(value: string | null, fallback: T): T => {
   }
 };
 
-const normalizeBillingAddress = (value: unknown): BillingAddress | undefined => {
+const normalizeBillingAddress = (
+  value: unknown,
+): BillingAddress | undefined => {
   if (value === undefined || value === null) {
     return undefined;
   }
@@ -218,7 +222,10 @@ const normalizeBillingAddress = (value: unknown): BillingAddress | undefined => 
   return undefined;
 };
 
-const parseStoredAddress = (value: string | null, label: string): BillingAddress | undefined => {
+const parseStoredAddress = (
+  value: string | null,
+  label: string,
+): BillingAddress | undefined => {
   if (!value) {
     return undefined;
   }
@@ -226,12 +233,15 @@ const parseStoredAddress = (value: string | null, label: string): BillingAddress
 };
 
 export const createBillingScope = (product: ServerProduct): TenantScope => {
-  return createSingleTenantScope('default', product);
+  return createSingleTenantScope("default", product);
 };
 
-export const toDomainInvoice = (scope: TenantScope, invoice: LegacyInvoiceDocument): Invoice => {
+export const toDomainInvoice = (
+  scope: TenantScope,
+  invoice: LegacyInvoiceDocument,
+): Invoice => {
   return {
-    kind: 'invoice',
+    kind: "invoice",
     tenantId: scope.tenantId,
     id: invoice.id,
     clientId: invoice.clientId,
@@ -243,14 +253,14 @@ export const toDomainInvoice = (scope: TenantScope, invoice: LegacyInvoiceDocume
     clientAddress: invoice.clientAddress,
     billingAddress: normalizeBillingAddress(invoice.billingAddressJson),
     shippingAddress: normalizeBillingAddress(invoice.shippingAddressJson),
-    taxMode: invoice.taxMode ?? 'standard_vat',
+    taxMode: invoice.taxMode ?? "standard_vat",
     taxMeta: invoice.taxMeta,
     taxSnapshot: invoice.taxSnapshot,
     date: invoice.date,
     dueDate: invoice.dueDate,
     servicePeriod: invoice.servicePeriod,
     amount: invoice.amount,
-    status: invoice.status as Invoice['status'],
+    status: invoice.status as Invoice["status"],
     dunningLevel: invoice.dunningLevel,
     items: (invoice.items ?? []).map((item) => ({
       description: item.description,
@@ -273,7 +283,10 @@ export const toDomainInvoice = (scope: TenantScope, invoice: LegacyInvoiceDocume
   };
 };
 
-export const toDomainOffer = (scope: TenantScope, offer: LegacyInvoiceDocument): Offer => {
+export const toDomainOffer = (
+  scope: TenantScope,
+  offer: LegacyInvoiceDocument,
+): Offer => {
   const share =
     offer.shareToken ||
     offer.sharePublishedAt ||
@@ -296,7 +309,7 @@ export const toDomainOffer = (scope: TenantScope, offer: LegacyInvoiceDocument):
       : undefined;
 
   return {
-    kind: 'offer',
+    kind: "offer",
     tenantId: scope.tenantId,
     id: offer.id,
     clientId: offer.clientId,
@@ -308,13 +321,13 @@ export const toDomainOffer = (scope: TenantScope, offer: LegacyInvoiceDocument):
     clientAddress: offer.clientAddress,
     billingAddress: normalizeBillingAddress(offer.billingAddressJson),
     shippingAddress: normalizeBillingAddress(offer.shippingAddressJson),
-    taxMode: offer.taxMode ?? 'standard_vat',
+    taxMode: offer.taxMode ?? "standard_vat",
     taxMeta: offer.taxMeta,
     taxSnapshot: offer.taxSnapshot,
     date: offer.date,
     validUntil: offer.dueDate,
     amount: offer.amount,
-    status: offer.status as Offer['status'],
+    status: offer.status as Offer["status"],
     share,
     items: (offer.items ?? []).map((item) => ({
       description: item.description,
@@ -423,7 +436,7 @@ const rowToInvoice = (
   paymentRows: InvoicePaymentRow[],
 ): Invoice => {
   return {
-    kind: 'invoice',
+    kind: "invoice",
     tenantId: scope.tenantId,
     id: row.id,
     clientId: row.client_id ?? undefined,
@@ -433,16 +446,22 @@ const rowToInvoice = (
     client: row.client,
     clientEmail: row.client_email,
     clientAddress: row.client_address ?? undefined,
-    billingAddress: parseStoredAddress(row.billing_address_json, `Invoice ${row.id} billing address`),
-    shippingAddress: parseStoredAddress(row.shipping_address_json, `Invoice ${row.id} shipping address`),
-    taxMode: (row.tax_mode as Invoice['taxMode'] | null) ?? 'standard_vat',
+    billingAddress: parseStoredAddress(
+      row.billing_address_json,
+      `Invoice ${row.id} billing address`,
+    ),
+    shippingAddress: parseStoredAddress(
+      row.shipping_address_json,
+      `Invoice ${row.id} shipping address`,
+    ),
+    taxMode: (row.tax_mode as Invoice["taxMode"] | null) ?? "standard_vat",
     taxMeta: parseJson(row.tax_meta_json, undefined),
     taxSnapshot: parseJson(row.tax_snapshot_json, undefined),
     date: row.date,
     dueDate: row.due_date,
     servicePeriod: row.service_period ?? undefined,
     amount: row.amount,
-    status: row.status as Invoice['status'],
+    status: row.status as Invoice["status"],
     dunningLevel: row.dunning_level,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -467,7 +486,11 @@ const rowToInvoice = (
   };
 };
 
-const rowToOffer = (scope: TenantScope, row: OfferRow, itemRows: OfferItemRow[]): Offer => {
+const rowToOffer = (
+  scope: TenantScope,
+  row: OfferRow,
+  itemRows: OfferItemRow[],
+): Offer => {
   const share =
     row.share_token ||
     row.share_published_at ||
@@ -490,7 +513,7 @@ const rowToOffer = (scope: TenantScope, row: OfferRow, itemRows: OfferItemRow[])
       : undefined;
 
   return {
-    kind: 'offer',
+    kind: "offer",
     tenantId: scope.tenantId,
     id: row.id,
     clientId: row.client_id ?? undefined,
@@ -500,15 +523,21 @@ const rowToOffer = (scope: TenantScope, row: OfferRow, itemRows: OfferItemRow[])
     client: row.client,
     clientEmail: row.client_email,
     clientAddress: row.client_address ?? undefined,
-    billingAddress: parseStoredAddress(row.billing_address_json, `Offer ${row.id} billing address`),
-    shippingAddress: parseStoredAddress(row.shipping_address_json, `Offer ${row.id} shipping address`),
-    taxMode: (row.tax_mode as Offer['taxMode'] | null) ?? 'standard_vat',
+    billingAddress: parseStoredAddress(
+      row.billing_address_json,
+      `Offer ${row.id} billing address`,
+    ),
+    shippingAddress: parseStoredAddress(
+      row.shipping_address_json,
+      `Offer ${row.id} shipping address`,
+    ),
+    taxMode: (row.tax_mode as Offer["taxMode"] | null) ?? "standard_vat",
     taxMeta: parseJson(row.tax_meta_json, undefined),
     taxSnapshot: parseJson(row.tax_snapshot_json, undefined),
     date: row.date,
     validUntil: row.valid_until,
     amount: row.amount,
-    status: row.status as Offer['status'],
+    status: row.status as Offer["status"],
     share,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -528,21 +557,21 @@ const rowToOffer = (scope: TenantScope, row: OfferRow, itemRows: OfferItemRow[])
 };
 
 const encodeAuditActor = (actor: AuditActor): string => {
-  if (actor.type === 'system' && actor.displayName === 'local' && !actor.id) {
-    return 'local';
+  if (actor.type === "system" && actor.displayName === "local" && !actor.id) {
+    return "local";
   }
 
   return JSON.stringify(actor);
 };
 
 const decodeAuditActor = (value: string): AuditActor => {
-  if (!value || value === 'local') {
-    return { type: 'system', displayName: 'local' };
+  if (!value || value === "local") {
+    return { type: "system", displayName: "local" };
   }
 
   try {
     const parsed = JSON.parse(value) as AuditActor;
-    if (parsed && typeof parsed === 'object' && parsed.type) {
+    if (parsed && typeof parsed === "object" && parsed.type) {
       return parsed;
     }
   } catch {
@@ -550,371 +579,399 @@ const decodeAuditActor = (value: string): AuditActor => {
   }
 
   return {
-    type: 'system',
+    type: "system",
     displayName: value,
   };
 };
 
-export const createSqliteInvoiceRepository = (db: Database.Database): SqliteInvoiceRepository => ({
-  list(scope: TenantScope) {
-    const invoiceRows = db
-      .prepare('SELECT * FROM invoices ORDER BY date DESC, created_at DESC')
-      .all() as InvoiceRow[];
-    const itemRows = db
-      .prepare('SELECT * FROM invoice_items ORDER BY invoice_id, position ASC')
+const invoiceSelect = {
+  id: schema.invoices.id,
+  client_id: schema.invoices.clientId,
+  client_number: schema.invoices.clientNumber,
+  project_id: schema.invoices.projectId,
+  number: schema.invoices.number,
+  client: schema.invoices.client,
+  client_email: schema.invoices.clientEmail,
+  client_address: schema.invoices.clientAddress,
+  billing_address_json: schema.invoices.billingAddressJson,
+  shipping_address_json: schema.invoices.shippingAddressJson,
+  tax_mode: schema.invoices.taxMode,
+  tax_meta_json: schema.invoices.taxMetaJson,
+  tax_snapshot_json: schema.invoices.taxSnapshotJson,
+  date: schema.invoices.date,
+  due_date: schema.invoices.dueDate,
+  service_period: schema.invoices.servicePeriod,
+  amount: schema.invoices.amount,
+  status: schema.invoices.status,
+  dunning_level: schema.invoices.dunningLevel,
+  created_at: schema.invoices.createdAt,
+  updated_at: schema.invoices.updatedAt,
+};
+const invoiceItemSelect = {
+  invoice_id: schema.invoiceItems.invoiceId,
+  position: schema.invoiceItems.position,
+  description: schema.invoiceItems.description,
+  article_id: schema.invoiceItems.articleId,
+  category: schema.invoiceItems.category,
+  unit: schema.invoiceItems.unit,
+  discount_percent: schema.invoiceItems.discountPercent,
+  tax_rate: schema.invoiceItems.taxRate,
+  quantity: schema.invoiceItems.quantity,
+  price: schema.invoiceItems.price,
+  total: schema.invoiceItems.total,
+};
+const invoicePaymentSelect = {
+  id: schema.invoicePayments.id,
+  invoice_id: schema.invoicePayments.invoiceId,
+  date: schema.invoicePayments.date,
+  amount: schema.invoicePayments.amount,
+  method: schema.invoicePayments.method,
+};
+const offerSelect = {
+  id: schema.offers.id,
+  client_id: schema.offers.clientId,
+  client_number: schema.offers.clientNumber,
+  project_id: schema.offers.projectId,
+  number: schema.offers.number,
+  client: schema.offers.client,
+  client_email: schema.offers.clientEmail,
+  client_address: schema.offers.clientAddress,
+  billing_address_json: schema.offers.billingAddressJson,
+  shipping_address_json: schema.offers.shippingAddressJson,
+  tax_mode: schema.offers.taxMode,
+  tax_meta_json: schema.offers.taxMetaJson,
+  tax_snapshot_json: schema.offers.taxSnapshotJson,
+  date: schema.offers.date,
+  valid_until: schema.offers.validUntil,
+  amount: schema.offers.amount,
+  status: schema.offers.status,
+  share_token: schema.offers.shareToken,
+  share_published_at: schema.offers.sharePublishedAt,
+  accepted_at: schema.offers.acceptedAt,
+  accepted_by: schema.offers.acceptedBy,
+  accepted_email: schema.offers.acceptedEmail,
+  accepted_user_agent: schema.offers.acceptedUserAgent,
+  decision: schema.offers.decision,
+  decision_text_version: schema.offers.decisionTextVersion,
+  created_at: schema.offers.createdAt,
+  updated_at: schema.offers.updatedAt,
+};
+const offerItemSelect = {
+  offer_id: schema.offerItems.offerId,
+  position: schema.offerItems.position,
+  description: schema.offerItems.description,
+  article_id: schema.offerItems.articleId,
+  category: schema.offerItems.category,
+  unit: schema.offerItems.unit,
+  discount_percent: schema.offerItems.discountPercent,
+  tax_rate: schema.offerItems.taxRate,
+  quantity: schema.offerItems.quantity,
+  price: schema.offerItems.price,
+  total: schema.offerItems.total,
+};
+
+const invoiceValues = (invoice: Invoice, now: string) => ({
+  id: invoice.id,
+  clientId: invoice.clientId ?? null,
+  clientNumber: invoice.clientNumber ?? null,
+  projectId: invoice.projectId ?? null,
+  number: invoice.number,
+  client: invoice.client,
+  clientEmail: invoice.clientEmail,
+  clientAddress: invoice.clientAddress ?? null,
+  billingAddressJson: invoice.billingAddress
+    ? JSON.stringify(invoice.billingAddress)
+    : null,
+  shippingAddressJson: invoice.shippingAddress
+    ? JSON.stringify(invoice.shippingAddress)
+    : null,
+  taxMode: invoice.taxMode ?? "standard_vat",
+  taxMetaJson: invoice.taxMeta ? JSON.stringify(invoice.taxMeta) : null,
+  taxSnapshotJson: invoice.taxSnapshot
+    ? JSON.stringify(invoice.taxSnapshot)
+    : null,
+  date: invoice.date,
+  dueDate: invoice.dueDate,
+  servicePeriod: invoice.servicePeriod ?? null,
+  amount: invoice.amount,
+  status: invoice.status,
+  dunningLevel: invoice.dunningLevel ?? 0,
+  createdAt: now,
+  updatedAt: now,
+});
+
+const offerValues = (offer: Offer, now: string) => ({
+  id: offer.id,
+  clientId: offer.clientId ?? null,
+  clientNumber: offer.clientNumber ?? null,
+  projectId: offer.projectId ?? null,
+  number: offer.number,
+  client: offer.client,
+  clientEmail: offer.clientEmail,
+  clientAddress: offer.clientAddress ?? null,
+  billingAddressJson: offer.billingAddress
+    ? JSON.stringify(offer.billingAddress)
+    : null,
+  shippingAddressJson: offer.shippingAddress
+    ? JSON.stringify(offer.shippingAddress)
+    : null,
+  taxMode: offer.taxMode ?? "standard_vat",
+  taxMetaJson: offer.taxMeta ? JSON.stringify(offer.taxMeta) : null,
+  taxSnapshotJson: offer.taxSnapshot ? JSON.stringify(offer.taxSnapshot) : null,
+  date: offer.date,
+  validUntil: offer.validUntil,
+  amount: offer.amount,
+  status: offer.status,
+  shareToken: offer.share?.token ?? null,
+  sharePublishedAt: offer.share?.publishedAt ?? null,
+  acceptedAt: offer.share?.acceptedAt ?? null,
+  acceptedBy: offer.share?.acceptedBy ?? null,
+  acceptedEmail: offer.share?.acceptedEmail ?? null,
+  acceptedUserAgent: offer.share?.acceptedUserAgent ?? null,
+  decision: offer.share?.decision ?? null,
+  decisionTextVersion: offer.share?.decisionTextVersion ?? null,
+  createdAt: now,
+  updatedAt: now,
+});
+
+export const createSqliteInvoiceRepository = (
+  db: Database.Database,
+): SqliteInvoiceRepository => {
+  const sql = createDrizzle(db);
+  const getById = (scope: TenantScope, id: string): Invoice | null => {
+    const row = sql
+      .select(invoiceSelect)
+      .from(schema.invoices)
+      .where(eq(schema.invoices.id, id))
+      .get() as InvoiceRow | undefined;
+    if (!row) return null;
+    const itemRows = sql
+      .select(invoiceItemSelect)
+      .from(schema.invoiceItems)
+      .where(eq(schema.invoiceItems.invoiceId, id))
+      .orderBy(asc(schema.invoiceItems.position))
       .all() as InvoiceItemRow[];
-    const paymentRows = db
-      .prepare('SELECT * FROM invoice_payments ORDER BY invoice_id, date DESC')
+    const paymentRows = sql
+      .select(invoicePaymentSelect)
+      .from(schema.invoicePayments)
+      .where(eq(schema.invoicePayments.invoiceId, id))
+      .orderBy(desc(schema.invoicePayments.date))
       .all() as InvoicePaymentRow[];
-
-    const itemsByInvoice = new Map<string, InvoiceItemRow[]>();
-    for (const row of itemRows) {
-      const list = itemsByInvoice.get(row.invoice_id) ?? [];
-      list.push(row);
-      itemsByInvoice.set(row.invoice_id, list);
-    }
-
-    const paymentsByInvoice = new Map<string, InvoicePaymentRow[]>();
-    for (const row of paymentRows) {
-      const list = paymentsByInvoice.get(row.invoice_id) ?? [];
-      list.push(row);
-      paymentsByInvoice.set(row.invoice_id, list);
-    }
-
-    return invoiceRows.map((row) =>
-      rowToInvoice(scope, row, itemsByInvoice.get(row.id) ?? [], paymentsByInvoice.get(row.id) ?? []),
-    );
-  },
-  getById(scope: TenantScope, id: string) {
-    const row = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id) as InvoiceRow | undefined;
-    if (!row) {
-      return null;
-    }
-
-    const itemRows = db
-      .prepare('SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY position ASC')
-      .all(id) as InvoiceItemRow[];
-    const paymentRows = db
-      .prepare('SELECT * FROM invoice_payments WHERE invoice_id = ? ORDER BY date DESC')
-      .all(id) as InvoicePaymentRow[];
-
     return rowToInvoice(scope, row, itemRows, paymentRows);
-  },
-  save(scope: TenantScope, invoice: Invoice) {
-    const now = new Date().toISOString();
-    const exists = db.prepare('SELECT 1 FROM invoices WHERE id = ?').get(invoice.id) as { 1: 1 } | undefined;
-
-    if (!exists) {
-      db.prepare(
-        `
-          INSERT INTO invoices (
-            id, client_id, client_number, project_id, number, client, client_email, client_address, billing_address_json, shipping_address_json,
-            tax_mode, tax_meta_json, tax_snapshot_json, date, due_date, service_period, amount, status, dunning_level,
-            created_at, updated_at
-          ) VALUES (
-            @id, @clientId, @clientNumber, @projectId, @number, @client, @clientEmail, @clientAddress, @billingAddressJson, @shippingAddressJson,
-            @taxMode, @taxMetaJson, @taxSnapshotJson, @date, @dueDate, @servicePeriod, @amount, @status, @dunningLevel,
-            @createdAt, @updatedAt
+  };
+  return {
+    list(scope) {
+      const invoiceRows = sql
+        .select(invoiceSelect)
+        .from(schema.invoices)
+        .orderBy(desc(schema.invoices.date), desc(schema.invoices.createdAt))
+        .all() as InvoiceRow[];
+      const itemRows = sql
+        .select(invoiceItemSelect)
+        .from(schema.invoiceItems)
+        .orderBy(
+          asc(schema.invoiceItems.invoiceId),
+          asc(schema.invoiceItems.position),
+        )
+        .all() as InvoiceItemRow[];
+      const paymentRows = sql
+        .select(invoicePaymentSelect)
+        .from(schema.invoicePayments)
+        .orderBy(
+          asc(schema.invoicePayments.invoiceId),
+          desc(schema.invoicePayments.date),
+        )
+        .all() as InvoicePaymentRow[];
+      const itemsByInvoice = new Map<string, InvoiceItemRow[]>();
+      for (const row of itemRows)
+        itemsByInvoice.set(row.invoice_id, [
+          ...(itemsByInvoice.get(row.invoice_id) ?? []),
+          row,
+        ]);
+      const paymentsByInvoice = new Map<string, InvoicePaymentRow[]>();
+      for (const row of paymentRows)
+        paymentsByInvoice.set(row.invoice_id, [
+          ...(paymentsByInvoice.get(row.invoice_id) ?? []),
+          row,
+        ]);
+      return invoiceRows.map((row) =>
+        rowToInvoice(
+          scope,
+          row,
+          itemsByInvoice.get(row.id) ?? [],
+          paymentsByInvoice.get(row.id) ?? [],
+        ),
+      );
+    },
+    getById,
+    save(scope, invoice) {
+      const now = new Date().toISOString();
+      const values = invoiceValues(invoice, now);
+      sql
+        .insert(schema.invoices)
+        .values(values)
+        .onConflictDoUpdate({
+          target: schema.invoices.id,
+          set: { ...values, createdAt: undefined },
+        })
+        .run();
+      sql
+        .delete(schema.invoiceItems)
+        .where(eq(schema.invoiceItems.invoiceId, invoice.id))
+        .run();
+      if (invoice.items.length > 0) {
+        sql
+          .insert(schema.invoiceItems)
+          .values(
+            invoice.items.map((item, position) => ({
+              invoiceId: invoice.id,
+              position,
+              description: item.description,
+              articleId: item.articleId ?? null,
+              category: item.category ?? null,
+              unit: item.unit ?? null,
+              discountPercent: item.discountPercent ?? null,
+              taxRate: item.taxRate ?? null,
+              quantity: item.quantity,
+              price: item.price,
+              total: item.total,
+            })),
           )
-        `,
-      ).run({
-        id: invoice.id,
-        clientId: invoice.clientId ?? null,
-        clientNumber: invoice.clientNumber ?? null,
-        projectId: invoice.projectId ?? null,
-        number: invoice.number,
-        client: invoice.client,
-        clientEmail: invoice.clientEmail,
-        clientAddress: invoice.clientAddress ?? null,
-        billingAddressJson: invoice.billingAddress ? JSON.stringify(invoice.billingAddress) : null,
-        shippingAddressJson: invoice.shippingAddress ? JSON.stringify(invoice.shippingAddress) : null,
-        taxMode: invoice.taxMode ?? null,
-        taxMetaJson: invoice.taxMeta ? JSON.stringify(invoice.taxMeta) : null,
-        taxSnapshotJson: invoice.taxSnapshot ? JSON.stringify(invoice.taxSnapshot) : null,
-        date: invoice.date,
-        dueDate: invoice.dueDate,
-        servicePeriod: invoice.servicePeriod ?? null,
-        amount: invoice.amount,
-        status: invoice.status,
-        dunningLevel: invoice.dunningLevel ?? 0,
-        createdAt: now,
-        updatedAt: now,
-      });
-    } else {
-      db.prepare(
-        `
-          UPDATE invoices SET
-            client_id = @clientId,
-            client_number = @clientNumber,
-            project_id = @projectId,
-            number = @number,
-            client = @client,
-            client_email = @clientEmail,
-            client_address = @clientAddress,
-            billing_address_json = @billingAddressJson,
-            shipping_address_json = @shippingAddressJson,
-            tax_mode = @taxMode,
-            tax_meta_json = @taxMetaJson,
-            tax_snapshot_json = @taxSnapshotJson,
-            date = @date,
-            due_date = @dueDate,
-            service_period = @servicePeriod,
-            amount = @amount,
-            status = @status,
-            dunning_level = @dunningLevel,
-            updated_at = @updatedAt
-          WHERE id = @id
-        `,
-      ).run({
-        id: invoice.id,
-        clientId: invoice.clientId ?? null,
-        clientNumber: invoice.clientNumber ?? null,
-        projectId: invoice.projectId ?? null,
-        number: invoice.number,
-        client: invoice.client,
-        clientEmail: invoice.clientEmail,
-        clientAddress: invoice.clientAddress ?? null,
-        billingAddressJson: invoice.billingAddress ? JSON.stringify(invoice.billingAddress) : null,
-        shippingAddressJson: invoice.shippingAddress ? JSON.stringify(invoice.shippingAddress) : null,
-        taxMode: invoice.taxMode ?? null,
-        taxMetaJson: invoice.taxMeta ? JSON.stringify(invoice.taxMeta) : null,
-        taxSnapshotJson: invoice.taxSnapshot ? JSON.stringify(invoice.taxSnapshot) : null,
-        date: invoice.date,
-        dueDate: invoice.dueDate,
-        servicePeriod: invoice.servicePeriod ?? null,
-        amount: invoice.amount,
-        status: invoice.status,
-        dunningLevel: invoice.dunningLevel ?? 0,
-        updatedAt: now,
-      });
-    }
+          .run();
+      }
+      sql
+        .delete(schema.invoicePayments)
+        .where(eq(schema.invoicePayments.invoiceId, invoice.id))
+        .run();
+      if (invoice.payments.length > 0) {
+        sql
+          .insert(schema.invoicePayments)
+          .values(
+            invoice.payments.map((payment) => ({
+              id: payment.id,
+              invoiceId: invoice.id,
+              date: payment.date,
+              amount: payment.amount,
+              method: payment.method,
+            })),
+          )
+          .run();
+      }
+      const saved = getById(scope, invoice.id);
+      if (!saved) throw new Error("Failed to retrieve invoice after save");
+      return saved;
+    },
+    remove(_scope, id) {
+      sql
+        .delete(schema.invoiceItems)
+        .where(eq(schema.invoiceItems.invoiceId, id))
+        .run();
+      sql
+        .delete(schema.invoicePayments)
+        .where(eq(schema.invoicePayments.invoiceId, id))
+        .run();
+      sql.delete(schema.invoices).where(eq(schema.invoices.id, id)).run();
+    },
+  };
+};
 
-    db.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').run(invoice.id);
-    const insertItem = db.prepare(
-      `
-        INSERT INTO invoice_items (invoice_id, position, description, article_id, category, unit, discount_percent, tax_rate, quantity, price, total)
-        VALUES (@invoiceId, @position, @description, @articleId, @category, @unit, @discountPercent, @taxRate, @quantity, @price, @total)
-      `,
-    );
-    invoice.items.forEach((item: Invoice['items'][number], index: number) => {
-      insertItem.run({
-        invoiceId: invoice.id,
-        position: index,
-        description: item.description,
-        articleId: item.articleId ?? null,
-        category: item.category ?? null,
-        unit: item.unit ?? null,
-        discountPercent: item.discountPercent ?? null,
-        taxRate: item.taxRate ?? null,
-        quantity: item.quantity,
-        price: item.price,
-        total: item.total,
-      });
-    });
-
-    db.prepare('DELETE FROM invoice_payments WHERE invoice_id = ?').run(invoice.id);
-    const insertPayment = db.prepare(
-      `
-        INSERT INTO invoice_payments (id, invoice_id, date, amount, method)
-        VALUES (@id, @invoiceId, @date, @amount, @method)
-      `,
-    );
-    invoice.payments.forEach((payment: Invoice['payments'][number]) => {
-      insertPayment.run({
-        id: payment.id,
-        invoiceId: invoice.id,
-        date: payment.date,
-        amount: payment.amount,
-        method: payment.method,
-      });
-    });
-
-    const saved = this.getById(scope, invoice.id);
-    if (!saved) {
-      throw new Error('Failed to retrieve invoice after save');
-    }
-    return saved;
-  },
-  remove(_scope: TenantScope, id: string) {
-    db.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').run(id);
-    db.prepare('DELETE FROM invoice_payments WHERE invoice_id = ?').run(id);
-    db.prepare('DELETE FROM invoices WHERE id = ?').run(id);
-  },
-});
-
-export const createSqliteOfferRepository = (db: Database.Database): SqliteOfferRepository => ({
-  list(scope: TenantScope) {
-    const offerRows = db.prepare('SELECT * FROM offers ORDER BY date DESC, created_at DESC').all() as OfferRow[];
-    const itemRows = db
-      .prepare('SELECT * FROM offer_items ORDER BY offer_id, position ASC')
+export const createSqliteOfferRepository = (
+  db: Database.Database,
+): SqliteOfferRepository => {
+  const sql = createDrizzle(db);
+  const getById = (scope: TenantScope, id: string): Offer | null => {
+    const row = sql
+      .select(offerSelect)
+      .from(schema.offers)
+      .where(eq(schema.offers.id, id))
+      .get() as OfferRow | undefined;
+    if (!row) return null;
+    const itemRows = sql
+      .select(offerItemSelect)
+      .from(schema.offerItems)
+      .where(eq(schema.offerItems.offerId, id))
+      .orderBy(asc(schema.offerItems.position))
       .all() as OfferItemRow[];
-
-    const itemsByOffer = new Map<string, OfferItemRow[]>();
-    for (const row of itemRows) {
-      const list = itemsByOffer.get(row.offer_id) ?? [];
-      list.push(row);
-      itemsByOffer.set(row.offer_id, list);
-    }
-
-    return offerRows.map((row) => rowToOffer(scope, row, itemsByOffer.get(row.id) ?? []));
-  },
-  getById(scope: TenantScope, id: string) {
-    const row = db.prepare('SELECT * FROM offers WHERE id = ?').get(id) as OfferRow | undefined;
-    if (!row) {
-      return null;
-    }
-
-    const itemRows = db
-      .prepare('SELECT * FROM offer_items WHERE offer_id = ? ORDER BY position ASC')
-      .all(id) as OfferItemRow[];
-
     return rowToOffer(scope, row, itemRows);
-  },
-  save(scope: TenantScope, offer: Offer) {
-    const now = new Date().toISOString();
-    const exists = db.prepare('SELECT 1 FROM offers WHERE id = ?').get(offer.id) as { 1: 1 } | undefined;
-
-    if (!exists) {
-      db.prepare(
-        `
-          INSERT INTO offers (
-            id, client_id, client_number, project_id, number, client, client_email, client_address, billing_address_json, shipping_address_json,
-            tax_mode, tax_meta_json, tax_snapshot_json, date, valid_until, amount, status,
-            share_token, share_published_at, accepted_at, accepted_by, accepted_email, accepted_user_agent, decision, decision_text_version,
-            created_at, updated_at
-          ) VALUES (
-            @id, @clientId, @clientNumber, @projectId, @number, @client, @clientEmail, @clientAddress, @billingAddressJson, @shippingAddressJson,
-            @taxMode, @taxMetaJson, @taxSnapshotJson, @date, @validUntil, @amount, @status,
-            @shareToken, @sharePublishedAt, @acceptedAt, @acceptedBy, @acceptedEmail, @acceptedUserAgent, @decision, @decisionTextVersion,
-            @createdAt, @updatedAt
+  };
+  return {
+    list(scope) {
+      const offerRows = sql
+        .select(offerSelect)
+        .from(schema.offers)
+        .orderBy(desc(schema.offers.date), desc(schema.offers.createdAt))
+        .all() as OfferRow[];
+      const itemRows = sql
+        .select(offerItemSelect)
+        .from(schema.offerItems)
+        .orderBy(
+          asc(schema.offerItems.offerId),
+          asc(schema.offerItems.position),
+        )
+        .all() as OfferItemRow[];
+      const itemsByOffer = new Map<string, OfferItemRow[]>();
+      for (const row of itemRows)
+        itemsByOffer.set(row.offer_id, [
+          ...(itemsByOffer.get(row.offer_id) ?? []),
+          row,
+        ]);
+      return offerRows.map((row) =>
+        rowToOffer(scope, row, itemsByOffer.get(row.id) ?? []),
+      );
+    },
+    getById,
+    save(scope, offer) {
+      const now = new Date().toISOString();
+      const values = offerValues(offer, now);
+      sql
+        .insert(schema.offers)
+        .values(values)
+        .onConflictDoUpdate({
+          target: schema.offers.id,
+          set: { ...values, createdAt: undefined },
+        })
+        .run();
+      sql
+        .delete(schema.offerItems)
+        .where(eq(schema.offerItems.offerId, offer.id))
+        .run();
+      if (offer.items.length > 0) {
+        sql
+          .insert(schema.offerItems)
+          .values(
+            offer.items.map((item, position) => ({
+              offerId: offer.id,
+              position,
+              description: item.description,
+              articleId: item.articleId ?? null,
+              category: item.category ?? null,
+              unit: item.unit ?? null,
+              discountPercent: item.discountPercent ?? null,
+              taxRate: item.taxRate ?? null,
+              quantity: item.quantity,
+              price: item.price,
+              total: item.total,
+            })),
           )
-        `,
-      ).run({
-        id: offer.id,
-        clientId: offer.clientId ?? null,
-        clientNumber: offer.clientNumber ?? null,
-        projectId: offer.projectId ?? null,
-        number: offer.number,
-        client: offer.client,
-        clientEmail: offer.clientEmail,
-        clientAddress: offer.clientAddress ?? null,
-        billingAddressJson: offer.billingAddress ? JSON.stringify(offer.billingAddress) : null,
-        shippingAddressJson: offer.shippingAddress ? JSON.stringify(offer.shippingAddress) : null,
-        taxMode: offer.taxMode ?? null,
-        taxMetaJson: offer.taxMeta ? JSON.stringify(offer.taxMeta) : null,
-        taxSnapshotJson: offer.taxSnapshot ? JSON.stringify(offer.taxSnapshot) : null,
-        date: offer.date,
-        validUntil: offer.validUntil,
-        amount: offer.amount,
-        status: offer.status,
-        shareToken: offer.share?.token ?? null,
-        sharePublishedAt: offer.share?.publishedAt ?? null,
-        acceptedAt: offer.share?.acceptedAt ?? null,
-        acceptedBy: offer.share?.acceptedBy ?? null,
-        acceptedEmail: offer.share?.acceptedEmail ?? null,
-        acceptedUserAgent: offer.share?.acceptedUserAgent ?? null,
-        decision: offer.share?.decision ?? null,
-        decisionTextVersion: offer.share?.decisionTextVersion ?? null,
-        createdAt: now,
-        updatedAt: now,
-      });
-    } else {
-      db.prepare(
-        `
-          UPDATE offers SET
-            client_id = @clientId,
-            client_number = @clientNumber,
-            project_id = @projectId,
-            number = @number,
-            client = @client,
-            client_email = @clientEmail,
-            client_address = @clientAddress,
-            billing_address_json = @billingAddressJson,
-            shipping_address_json = @shippingAddressJson,
-            tax_mode = @taxMode,
-            tax_meta_json = @taxMetaJson,
-            tax_snapshot_json = @taxSnapshotJson,
-            date = @date,
-            valid_until = @validUntil,
-            amount = @amount,
-            status = @status,
-            share_token = @shareToken,
-            share_published_at = @sharePublishedAt,
-            accepted_at = @acceptedAt,
-            accepted_by = @acceptedBy,
-            accepted_email = @acceptedEmail,
-            accepted_user_agent = @acceptedUserAgent,
-            decision = @decision,
-            decision_text_version = @decisionTextVersion,
-            updated_at = @updatedAt
-          WHERE id = @id
-        `,
-      ).run({
-        id: offer.id,
-        clientId: offer.clientId ?? null,
-        clientNumber: offer.clientNumber ?? null,
-        projectId: offer.projectId ?? null,
-        number: offer.number,
-        client: offer.client,
-        clientEmail: offer.clientEmail,
-        clientAddress: offer.clientAddress ?? null,
-        billingAddressJson: offer.billingAddress ? JSON.stringify(offer.billingAddress) : null,
-        shippingAddressJson: offer.shippingAddress ? JSON.stringify(offer.shippingAddress) : null,
-        taxMode: offer.taxMode ?? null,
-        taxMetaJson: offer.taxMeta ? JSON.stringify(offer.taxMeta) : null,
-        taxSnapshotJson: offer.taxSnapshot ? JSON.stringify(offer.taxSnapshot) : null,
-        date: offer.date,
-        validUntil: offer.validUntil,
-        amount: offer.amount,
-        status: offer.status,
-        shareToken: offer.share?.token ?? null,
-        sharePublishedAt: offer.share?.publishedAt ?? null,
-        acceptedAt: offer.share?.acceptedAt ?? null,
-        acceptedBy: offer.share?.acceptedBy ?? null,
-        acceptedEmail: offer.share?.acceptedEmail ?? null,
-        acceptedUserAgent: offer.share?.acceptedUserAgent ?? null,
-        decision: offer.share?.decision ?? null,
-        decisionTextVersion: offer.share?.decisionTextVersion ?? null,
-        updatedAt: now,
-      });
-    }
+          .run();
+      }
+      const saved = getById(scope, offer.id);
+      if (!saved) throw new Error("Failed to retrieve offer after save");
+      return saved;
+    },
+    remove(_scope, id) {
+      sql
+        .delete(schema.offerItems)
+        .where(eq(schema.offerItems.offerId, id))
+        .run();
+      sql.delete(schema.offers).where(eq(schema.offers.id, id)).run();
+    },
+  };
+};
 
-    db.prepare('DELETE FROM offer_items WHERE offer_id = ?').run(offer.id);
-    const insertItem = db.prepare(
-      `
-        INSERT INTO offer_items (offer_id, position, description, article_id, category, unit, discount_percent, tax_rate, quantity, price, total)
-        VALUES (@offerId, @position, @description, @articleId, @category, @unit, @discountPercent, @taxRate, @quantity, @price, @total)
-      `,
-    );
-    offer.items.forEach((item: Offer['items'][number], index: number) => {
-      insertItem.run({
-        offerId: offer.id,
-        position: index,
-        description: item.description,
-        articleId: item.articleId ?? null,
-        category: item.category ?? null,
-        unit: item.unit ?? null,
-        discountPercent: item.discountPercent ?? null,
-        taxRate: item.taxRate ?? null,
-        quantity: item.quantity,
-        price: item.price,
-        total: item.total,
-      });
-    });
-
-    const saved = this.getById(scope, offer.id);
-    if (!saved) {
-      throw new Error('Failed to retrieve offer after save');
-    }
-    return saved;
-  },
-  remove(_scope: TenantScope, id: string) {
-    db.prepare('DELETE FROM offer_items WHERE offer_id = ?').run(id);
-    db.prepare('DELETE FROM offers WHERE id = ?').run(id);
-  },
-});
-
-export const createSqliteAuditLogPort = (db: Database.Database): SqliteAuditLogPort => ({
+export const createSqliteAuditLogPort = (
+  db: Database.Database,
+): SqliteAuditLogPort => ({
   append(scope: TenantScope, entry: AuditEntryDraft) {
     const result = appendAuditLog(db, {
       entityType: entry.subject.entityType,
@@ -943,16 +1000,22 @@ export const createSqliteAuditLogPort = (db: Database.Database): SqliteAuditLogP
     };
   },
   listBySubject(scope: TenantScope, subject: AuditSubject) {
-    const rows = db
-      .prepare(
-        `
-          SELECT sequence, ts, entity_type, entity_id, action, reason, before_json, after_json, prev_hash, hash, actor
-          FROM audit_log
-          WHERE entity_type = ? AND entity_id = ?
-          ORDER BY sequence DESC
-        `,
-      )
-      .all(subject.entityType, subject.entityId) as AuditRow[];
+    const rows = createDrizzle(db).select({
+      sequence: schema.auditLog.sequence,
+      ts: schema.auditLog.ts,
+      entity_type: schema.auditLog.entityType,
+      entity_id: schema.auditLog.entityId,
+      action: schema.auditLog.action,
+      reason: schema.auditLog.reason,
+      before_json: schema.auditLog.beforeJson,
+      after_json: schema.auditLog.afterJson,
+      prev_hash: schema.auditLog.prevHash,
+      hash: schema.auditLog.hash,
+      actor: schema.auditLog.actor,
+    }).from(schema.auditLog).where(and(
+      eq(schema.auditLog.entityType, subject.entityType),
+      eq(schema.auditLog.entityId, subject.entityId),
+    )).orderBy(desc(schema.auditLog.sequence)).all() as AuditRow[];
 
     return rows.map((row) => ({
       sequence: row.sequence,
@@ -981,6 +1044,9 @@ export const createSqliteBillingDependencies = (db: Database.Database) => ({
   auditLog: createSqliteAuditLogPort(db),
 });
 
-export const withSqliteTransaction = <T>(db: Database.Database, work: () => T): T => {
+export const withSqliteTransaction = <T>(
+  db: Database.Database,
+  work: () => T,
+): T => {
   return db.transaction(work)();
 };

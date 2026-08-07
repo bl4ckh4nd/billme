@@ -8,21 +8,19 @@
     "dev": "tsx watch src/node.ts",
     "start": "node dist/node.js",
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test src/**/*.test.ts",
-    "deploy:cf": "wrangler deploy"
+    "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",
     "better-sqlite3": "^12.4.1",
     "hono": "^4.9.0",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "drizzle-orm": "^0.44.4"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260118.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.19.7",
     "tsx": "^4.20.5",
-    "typescript": "~5.8.3",
-    "wrangler": "^4.13.2"
+    "typescript": "~5.8.3"
   }
 }

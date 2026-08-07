@@ -1,8 +1,24 @@
 import type Database from 'better-sqlite3';
+import { and, desc, eq, isNull, isNotNull, or, inArray } from 'drizzle-orm';
 import { upsertInvoice, getInvoice } from './invoicesRepo';
 import type { Invoice } from '@billme/desktop-core/types';
 import type { ServerProduct } from '@billme/server-core';
 import { v4 as uuidv4 } from 'uuid';
+import { createDrizzle, schema } from './drizzle';
+
+const transactionSelection = {
+  id: schema.transactions.id,
+  account_id: schema.transactions.accountId,
+  date: schema.transactions.date,
+  amount: schema.transactions.amount,
+  type: schema.transactions.type,
+  counterparty: schema.transactions.counterparty,
+  purpose: schema.transactions.purpose,
+  linked_invoice_id: schema.transactions.linkedInvoiceId,
+  status: schema.transactions.status,
+  dedup_hash: schema.transactions.dedupHash,
+  import_batch_id: schema.transactions.importBatchId,
+};
 
 export interface Transaction {
   id: string;
@@ -29,28 +45,9 @@ export interface InvoiceMatchSuggestion {
  * Get all unmatched transactions (income only)
  */
 export const getUnmatchedTransactions = (db: Database.Database): Transaction[] => {
-  const rows = db
-    .prepare(
-      `
-        SELECT * FROM transactions
-        WHERE type = 'income'
-          AND (linked_invoice_id IS NULL OR linked_invoice_id = '')
-        ORDER BY date DESC, amount DESC
-      `,
-    )
-    .all() as Array<{
-    id: string;
-    account_id: string;
-    date: string;
-    amount: number;
-    type: string;
-    counterparty: string;
-    purpose: string;
-    linked_invoice_id: string | null;
-    status: string;
-    dedup_hash: string | null;
-    import_batch_id: string | null;
-  }>;
+  const rows = createDrizzle(db).select(transactionSelection).from(schema.transactions)
+    .where(and(eq(schema.transactions.type, 'income'), or(isNull(schema.transactions.linkedInvoiceId), eq(schema.transactions.linkedInvoiceId, ''))))
+    .orderBy(desc(schema.transactions.date), desc(schema.transactions.amount)).all();
 
   return rows.map((r) => ({
     id: r.id,
@@ -76,15 +73,8 @@ export const findInvoiceMatches = (
   product: ServerProduct,
 ): InvoiceMatchSuggestion[] => {
   // Get all open invoices
-  const invoiceRows = db
-    .prepare(
-      `
-        SELECT * FROM invoices
-        WHERE status IN ('open', 'overdue')
-        ORDER BY date DESC
-      `,
-    )
-    .all() as Array<{ id: string; [key: string]: unknown }>;
+  const invoiceRows = createDrizzle(db).select({ id: schema.invoices.id }).from(schema.invoices)
+    .where(inArray(schema.invoices.status, ['open', 'overdue'])).orderBy(desc(schema.invoices.date)).all();
 
   const suggestions: InvoiceMatchSuggestion[] = [];
 
@@ -180,9 +170,12 @@ export const linkTransactionToInvoice = (
 ): { success: boolean; invoice?: Invoice } => {
   return db.transaction(() => {
     // Get transaction
-    const txRow = db
-      .prepare('SELECT * FROM transactions WHERE id = ?')
-      .get(transactionId) as { id: string; date: string; amount: number; linked_invoice_id: string | null; counterparty: string; [key: string]: unknown } | undefined;
+    const txRow = createDrizzle(db).select({
+      date: schema.transactions.date,
+      amount: schema.transactions.amount,
+      linked_invoice_id: schema.transactions.linkedInvoiceId,
+      counterparty: schema.transactions.counterparty,
+    }).from(schema.transactions).where(eq(schema.transactions.id, transactionId)).get() as { id?: string; date: string; amount: number; linked_invoice_id: string | null; counterparty: string } | undefined;
 
     if (!txRow) {
       throw new Error('Transaction not found');
@@ -200,10 +193,8 @@ export const linkTransactionToInvoice = (
     }
 
     // Link transaction
-    db.prepare('UPDATE transactions SET linked_invoice_id = ? WHERE id = ?').run(
-      invoiceId,
-      transactionId,
-    );
+    createDrizzle(db).update(schema.transactions).set({ linkedInvoiceId: invoiceId })
+      .where(eq(schema.transactions.id, transactionId)).run();
 
     // Create payment record
     const paymentId = uuidv4();
@@ -250,9 +241,11 @@ export const unlinkTransactionFromInvoice = (
 ): { success: boolean } => {
   return db.transaction(() => {
     // Get transaction
-    const txRow = db
-      .prepare('SELECT * FROM transactions WHERE id = ?')
-      .get(transactionId) as { id: string; date: string; amount: number; linked_invoice_id: string | null; [key: string]: unknown } | undefined;
+    const txRow = createDrizzle(db).select({
+      date: schema.transactions.date,
+      amount: schema.transactions.amount,
+      linked_invoice_id: schema.transactions.linkedInvoiceId,
+    }).from(schema.transactions).where(eq(schema.transactions.id, transactionId)).get() as { date: string; amount: number; linked_invoice_id: string | null } | undefined;
 
     if (!txRow) {
       throw new Error('Transaction not found');
@@ -265,7 +258,8 @@ export const unlinkTransactionFromInvoice = (
     const invoiceId: string = txRow.linked_invoice_id;
 
     // Unlink transaction
-    db.prepare('UPDATE transactions SET linked_invoice_id = NULL WHERE id = ?').run(transactionId);
+    createDrizzle(db).update(schema.transactions).set({ linkedInvoiceId: null })
+      .where(eq(schema.transactions.id, transactionId)).run();
 
     // Get invoice and remove payment
     const invoice = getInvoice(db, product, invoiceId) as Invoice | null;
@@ -301,42 +295,14 @@ export const listTransactions = (
     unlinkedOnly?: boolean;
   },
 ): Transaction[] => {
-  let query = 'SELECT * FROM transactions WHERE 1=1';
-  const params: unknown[] = [];
-
-  if (filters?.accountId) {
-    query += ' AND account_id = ?';
-    params.push(filters.accountId);
-  }
-
-  if (filters?.type) {
-    query += ' AND type = ?';
-    params.push(filters.type);
-  }
-
-  if (filters?.linkedOnly) {
-    query += ' AND linked_invoice_id IS NOT NULL';
-  }
-
-  if (filters?.unlinkedOnly) {
-    query += " AND (linked_invoice_id IS NULL OR linked_invoice_id = '')";
-  }
-
-  query += ' ORDER BY date DESC, amount DESC';
-
-  const rows = db.prepare(query).all(...params) as Array<{
-    id: string;
-    account_id: string;
-    date: string;
-    amount: number;
-    type: string;
-    counterparty: string;
-    purpose: string;
-    linked_invoice_id: string | null;
-    status: string;
-    dedup_hash: string | null;
-    import_batch_id: string | null;
-  }>;
+  const conditions = [];
+  if (filters?.accountId) conditions.push(eq(schema.transactions.accountId, filters.accountId));
+  if (filters?.type) conditions.push(eq(schema.transactions.type, filters.type));
+  if (filters?.linkedOnly) conditions.push(isNotNull(schema.transactions.linkedInvoiceId));
+  if (filters?.unlinkedOnly) conditions.push(or(isNull(schema.transactions.linkedInvoiceId), eq(schema.transactions.linkedInvoiceId, '')));
+  const rows = createDrizzle(db).select(transactionSelection).from(schema.transactions)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(schema.transactions.date), desc(schema.transactions.amount)).all();
 
   return rows.map((r) => ({
     id: r.id,

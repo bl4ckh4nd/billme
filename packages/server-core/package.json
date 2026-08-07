@@ -10,6 +10,9 @@
   },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",
+    "@orpc/client": "1.14.15",
+    "@orpc/contract": "1.14.15",
+    "@orpc/openapi-client": "1.14.15",
     "zod": "^3.25.76"
   },
   "devDependencies": {
@@ -27,6 +30,10 @@
     "./ports": {
       "types": "./src/ports/index.ts",
       "default": "./src/ports/index.ts"
+    },
+    "./orpc": {
+      "types": "./src/orpc/index.ts",
+      "default": "./src/orpc/index.ts"
     },
     "./services": {
       "types": "./src/services/index.ts",

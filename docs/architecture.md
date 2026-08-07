@@ -90,9 +90,15 @@ and embeds `ProAccountingWorkspace`; it does not call `mountDesktopRendererApp`.
 ## Server mode
 
 `apps/server-api/src/app.ts` creates the Fastify API. When `DATABASE_URL` is available it creates the
-Postgres pool and runs `runPostgresMigrations` before registering the pool. Lite and Pro auth and
+Postgres pool and verifies the Drizzle journal through `assertDrizzleSchemaCurrent` before registering the pool. Schema changes are applied by the one-shot `packages/server-data/src/cli/migrate.ts` command. Lite and Pro auth and
 billing routes live under `/api/v1/lite` and `/api/v1/pro`. `requireSession` rejects a token whose
 product does not match the route with `403`.
+
+`packages/server-core/src/orpc/contract.ts` is the shared contract-first seam for the stable product
+boundaries. `apps/server-api` mounts its Lite/Pro auth and VAT procedures through the Fastify oRPC
+adapter while leaving the generic query-auth compatibility routes, `/health`, and billing/download
+exceptions on direct Fastify handlers. The deterministic generated document is available at
+`GET /api/v1/openapi.json`; shared clients use the oRPC OpenAPI link for supported JSON procedures.
 
 Authentication uses bearer tokens implemented in `apps/server-api/src/auth.ts`: a base64url payload
 plus an HMAC-SHA256 signature, not a standard JWT. Passwords are derived with scrypt in
@@ -127,13 +133,11 @@ declares `pro:getSusaReport`, `pro:getGuvReport`, and `pro:getBilanzReport`, and
 
 ## Offer portal
 
-`apps/offer-portal` uses Hono with separate entrypoints for Node (`src/node.ts`) and Cloudflare Workers
-(`src/worker.ts`). Its storage ports have adapters for memory, SQLite plus filesystem on Node, and D1
-plus R2 on Workers.
+`apps/offer-portal` uses Hono with a Node entrypoint (`src/node.ts`). Its production storage adapter is
+SQLite plus filesystem PDF storage; an in-memory adapter remains available for tests and development.
 
-The current tree has no `apps/offer-portal/src/documentPolicy.ts`. Publish authentication, origin
-checks, rate limits, sensitive response headers, and request schemas are currently centralized in
-`apps/offer-portal/src/app.ts`.
+Publish authentication, origin checks, rate limits, sensitive response headers, and request schemas are
+centralized in `apps/offer-portal/src/app.ts`.
 
 The portal stores published document snapshots and customer decisions. Desktop SQLite and server
 Postgres remain the accounting sources of truth; portal state must never become accounting truth.

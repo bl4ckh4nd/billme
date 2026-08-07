@@ -9,6 +9,7 @@ import {
   createPostgresInvoiceRepository,
   createPostgresOfferRepository,
   createPostgresRecurringProfileRepository,
+  createPostgresTenantRepository,
   saveServerSettings,
 } from './billing.js';
 import type { PostgresQueryable } from './connection.js';
@@ -767,6 +768,17 @@ const applyServerModeBillingSeed = async (
   const offerRepo = createPostgresOfferRepository(db);
   const recurringProfileRepo = createPostgresRecurringProfileRepository(db);
   const now = seed.clients[0]?.createdAt ?? DEFAULT_TIMESTAMP;
+  const tenantRepo = createPostgresTenantRepository(db);
+  await tenantRepo.save({
+    id: seed.tenantId,
+    slug: seed.namespace,
+    displayName: `${product === 'pro' ? 'Pro' : 'Lite'} E2E ${seed.namespace}`,
+    product,
+    deploymentMode: 'single-tenant',
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  });
   await saveServerSettings(db, {
     tenantId: seed.tenantId,
     settingsJson: JSON.stringify(seed.settings),

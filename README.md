@@ -160,13 +160,20 @@ pnpm docker:server-mode
 Then open the Lite shell at <http://localhost:4175> or the Pro shell at <http://localhost:4176> and
 complete the first-owner bootstrap. API health: <http://localhost:3100/health>.
 
+The stack runs the one-shot `server-migrate` service before the API starts. It applies the checked-in
+Drizzle migrations to Postgres; the API and worker then fail fast if the schema is not current. The
+offer portal is a separate SQLite service at <http://localhost:3001/health> and owns only published
+document snapshots.
+
 ### Services
 
 | Service | Image / build | Host port |
 |---|---|---|
 | `postgres` | `postgres:16-alpine` | `BILLME_POSTGRES_PORT` (5432) |
+| `server-migrate` | one-shot Drizzle migration job | — |
 | `server-api` | `apps/server-api` — Fastify | `BILLME_API_PORT` (3100) |
 | `server-worker` | `apps/server-worker` | — |
+| `offer-portal` | `apps/offer-portal` — Hono + SQLite | `BILLME_PORTAL_PORT` (3001) |
 | `web` | `apps/web` → nginx | `BILLME_WEB_PORT` (4175) |
 | `web-pro` | `apps/web-pro` → nginx | `BILLME_WEB_PRO_PORT` (4176) |
 
@@ -262,9 +269,10 @@ retention policy engine yet. Treat this as engineering support, not legal advice
 collects decisions. The desktop and server apps push snapshots to it and remain the source of truth —
 the portal never holds accounting truth.
 
-It runs either self-hosted on Node or on Cloudflare Workers, with storage adapters for in-memory,
-SQLite + filesystem, or D1 + R2. Publishing is protected by an `x-api-key`; customer URLs are token-based.
-It is deliberately **not** part of the server-mode Docker stack.
+It runs as a self-hosted Node service with SQLite snapshots and filesystem PDF storage (an in-memory
+adapter remains available for tests). Publishing is protected by an `x-api-key`; customer URLs are
+token-based. The server-mode Docker stack includes the portal and requires
+`BILLME_PORTAL_PUBLISH_API_KEY` for production-safe publishing protection.
 
 See [`docs/offer-portal.md`](docs/offer-portal.md).
 
@@ -369,7 +377,6 @@ pnpm docker:server-mode:down
 
 # Deploy
 pnpm deploy:demo                     # demo to Cloudflare Workers
-pnpm -C apps/offer-portal deploy:cf  # offer portal to Cloudflare Workers
 ```
 
 Typechecking is per package, e.g. `pnpm -C apps/desktop typecheck`.

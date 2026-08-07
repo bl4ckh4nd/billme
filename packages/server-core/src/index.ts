@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { createORPCClient } from '@orpc/client';
+import { OpenAPILink } from '@orpc/openapi-client/fetch';
+import type { ContractRouterClient } from '@orpc/contract';
 import {
   deploymentModeSchema,
   serverProductSchema,
@@ -7,6 +10,30 @@ import {
   supportedServerRoles,
 } from './shared/runtime-profile.js';
 import { vatValidationResultSchema, type VatValidationResult } from './services/vatValidation.js';
+import {
+  healthResponseSchema,
+  capabilitiesResponseSchema,
+  bootstrapRequestSchema,
+  loginRequestSchema,
+  authResponseSchema,
+  authSessionInfoSchema,
+  bootstrapStatusSchema,
+  ensureServerApiSessionRequestSchema,
+  serverApiSessionSchema,
+  vatValidationRequestSchema,
+} from './api-schemas.js';
+import { serverApiContract } from './orpc/contract.js';
+import type {
+  HealthResponse,
+  CapabilitiesResponse,
+  BootstrapStatus,
+  BootstrapRequest,
+  AuthResponse,
+  LoginRequest,
+  AuthSessionInfo,
+  EnsureServerApiSessionRequest,
+  ServerApiSession,
+} from './api-schemas.js';
 
 export {
   deploymentModeSchema,
@@ -21,91 +48,8 @@ export * from './services/index.js';
 export type ServerProduct = z.infer<typeof serverProductSchema>;
 export type ServerRole = z.infer<typeof serverRoleSchema>;
 
-export const healthResponseSchema = z.object({
-  ok: z.literal(true),
-  service: z.string().min(1),
-  backend: z.literal('fastify'),
-  mode: z.enum(['api', 'worker']),
-  ts: z.string().min(1),
-});
-export type HealthResponse = z.infer<typeof healthResponseSchema>;
-
-export const capabilitiesResponseSchema = z.object({
-  backend: z.literal('fastify'),
-  deploymentMode: z.literal('single-tenant'),
-  desktopServerMode: z.literal(true),
-  database: z.object({
-    production: z.literal('postgres'),
-    local: z.literal('sqlite'),
-  }),
-  auth: z.object({
-    multiUser: z.literal(true),
-    roles: z.array(serverRoleSchema),
-  }),
-  products: z.array(serverProductSchema),
-});
-export type CapabilitiesResponse = z.infer<typeof capabilitiesResponseSchema>;
-
-export const bootstrapRequestSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(12),
-  fullName: z.string().min(1),
-});
-export type BootstrapRequest = z.infer<typeof bootstrapRequestSchema>;
-
-export const loginRequestSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
-export type LoginRequest = z.infer<typeof loginRequestSchema>;
-
-export const authUserSchema = z.object({
-  id: z.string().min(1),
-  email: z.string().email(),
-  fullName: z.string().min(1),
-  role: serverRoleSchema,
-});
-export type AuthUser = z.infer<typeof authUserSchema>;
-
-export const authResponseSchema = z.object({
-  token: z.string().min(1),
-  user: authUserSchema,
-});
-export type AuthResponse = z.infer<typeof authResponseSchema>;
-
-export const authSessionInfoSchema = z.object({
-  user: authUserSchema,
-  tenantId: z.string().min(1),
-  product: serverProductSchema,
-  role: serverRoleSchema,
-});
-export type AuthSessionInfo = z.infer<typeof authSessionInfoSchema>;
-
-export const bootstrapStatusSchema = z.object({
-  bootstrapped: z.boolean(),
-  userCount: z.number().int().nonnegative(),
-});
-export type BootstrapStatus = z.infer<typeof bootstrapStatusSchema>;
-
-export const ensureServerApiSessionRequestSchema = bootstrapRequestSchema.extend({
-  product: serverProductSchema.default('lite'),
-});
-export type EnsureServerApiSessionRequest = z.infer<typeof ensureServerApiSessionRequestSchema>;
-
-export const serverApiSessionSchema = authResponseSchema.extend({
-  tenantId: z.string().min(1),
-  product: serverProductSchema,
-  role: serverRoleSchema,
-  via: z.enum(['bootstrap', 'login']),
-});
-export type ServerApiSession = z.infer<typeof serverApiSessionSchema>;
-
-export const vatValidationRequestSchema = z.object({
-  countryCode: z.string().length(2).transform((value) => value.toUpperCase()),
-  vatNumber: z.string().trim().min(4).max(32),
-});
-export type VatValidationRequest = z.input<typeof vatValidationRequestSchema>;
-
+export * from './api-schemas.js';
+export * from './orpc/contract.js';
 const parseJsonResponse = async <T>(response: Response, schema: z.ZodType<T>): Promise<T> => {
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
@@ -134,29 +78,12 @@ export interface ServerApiClient {
 
 export const createServerApiClient = (baseUrl: string): ServerApiClient => {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, '');
-  const buildAuthUrl = (path: string, product: ServerProduct): string => {
-    const url = new URL(path, `${normalizedBaseUrl}/`);
-    url.searchParams.set('product', product);
-    return url.toString();
-  };
-  const requestJson = async <TResponse>(
-    url: string,
-    schema: z.ZodType<TResponse>,
-    options?: {
-      method?: 'GET' | 'POST';
-      body?: unknown;
-      token?: string;
-    },
-  ): Promise<TResponse> => {
-    const response = await fetch(url, {
-      method: options?.method ?? 'GET',
-      headers: {
-        ...(options?.body === undefined ? {} : { 'content-type': 'application/json' }),
-        ...(options?.token ? { authorization: `Bearer ${options.token}` } : {}),
-      },
-      body: options?.body === undefined ? undefined : JSON.stringify(options.body),
+  const createOrpcClient = (token?: string): ContractRouterClient<typeof serverApiContract> => {
+    const link = new OpenAPILink(serverApiContract, {
+      url: normalizedBaseUrl,
+      headers: () => (token ? { authorization: `Bearer ${token}` } : {}),
     });
-    return parseJsonResponse(response, schema);
+    return createORPCClient<ContractRouterClient<typeof serverApiContract>>(link);
   };
   return {
     async getHealth() {
@@ -164,32 +91,29 @@ export const createServerApiClient = (baseUrl: string): ServerApiClient => {
       return parseJsonResponse(response, healthResponseSchema);
     },
     async getCapabilities() {
-      const response = await fetch(`${normalizedBaseUrl}/api/v1/meta/capabilities`);
-      return parseJsonResponse(response, capabilitiesResponseSchema);
+      const response = await createOrpcClient().meta.capabilities({});
+      return capabilitiesResponseSchema.parse(response);
     },
     async getBootstrapStatus() {
       return this.getBootstrapStatusFor('lite');
     },
     async getBootstrapStatusFor(product) {
-      return requestJson(buildAuthUrl('/api/v1/auth/bootstrap/status', product), bootstrapStatusSchema);
+      const response = await createOrpcClient()[product].auth.bootstrapStatus({});
+      return bootstrapStatusSchema.parse(response);
     },
     async bootstrap(input) {
       return this.bootstrapFor('lite', input);
     },
     async bootstrapFor(product, input) {
-      return requestJson(buildAuthUrl('/api/v1/auth/bootstrap', product), authResponseSchema, {
-        method: 'POST',
-        body: bootstrapRequestSchema.parse(input),
-      });
+      const response = await createOrpcClient()[product].auth.bootstrap(bootstrapRequestSchema.parse(input));
+      return authResponseSchema.parse(response);
     },
     async login(input) {
       return this.loginFor('lite', input);
     },
     async loginFor(product, input) {
-      return requestJson(buildAuthUrl('/api/v1/auth/login', product), authResponseSchema, {
-        method: 'POST',
-        body: loginRequestSchema.parse(input),
-      });
+      const response = await createOrpcClient()[product].auth.login(loginRequestSchema.parse(input));
+      return authResponseSchema.parse(response);
     },
     async getSessionInfo(args) {
       const parsed = z
@@ -198,9 +122,8 @@ export const createServerApiClient = (baseUrl: string): ServerApiClient => {
           product: serverProductSchema.default('lite'),
         })
         .parse(args);
-      return requestJson(buildAuthUrl('/api/v1/auth/me', parsed.product), authSessionInfoSchema, {
-        token: parsed.token,
-      });
+      const response = await createOrpcClient(parsed.token)[parsed.product].auth.me({});
+      return authSessionInfoSchema.parse(response);
     },
     async ensureSession(input) {
       const parsed = ensureServerApiSessionRequestSchema.parse(input);
@@ -222,11 +145,8 @@ export const createServerApiClient = (baseUrl: string): ServerApiClient => {
     },
     async validateVatId(args) {
       const parsed = vatValidationRequestSchema.parse(args);
-      return requestJson(`${normalizedBaseUrl}/api/v1/${args.product}/tax/validate-vat-id`, vatValidationResultSchema, {
-        method: 'POST',
-        token: args.token,
-        body: parsed,
-      });
+      const response = await createOrpcClient(args.token)[args.product].tax.validateVatId(parsed);
+      return vatValidationResultSchema.parse(response);
     },
   };
 };

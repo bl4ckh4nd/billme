@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import type Database from 'better-sqlite3';
+import { asc, desc } from 'drizzle-orm';
+import { createDrizzle, schema } from './drizzle';
 
 const stableStringify = (value: unknown): string => {
   if (value === null || typeof value !== 'object') {
@@ -37,9 +39,8 @@ export const appendAuditLog = (db: Database.Database, params: AuditWriteParams) 
   const ts = params.ts ?? new Date().toISOString();
   const actor = params.actor ?? 'local';
 
-  const prev = db
-    .prepare('SELECT sequence, hash FROM audit_log ORDER BY sequence DESC LIMIT 1')
-    .get() as { sequence?: number; hash?: string } | undefined;
+  const prev = createDrizzle(db).select({ sequence: schema.auditLog.sequence, hash: schema.auditLog.hash })
+    .from(schema.auditLog).orderBy(desc(schema.auditLog.sequence)).limit(1).get() as { sequence?: number; hash?: string } | undefined;
 
   const prevSequence = prev?.sequence ?? 0;
   const nextSequence = prevSequence + 1;
@@ -61,42 +62,37 @@ export const appendAuditLog = (db: Database.Database, params: AuditWriteParams) 
   const payloadStr = stableStringify(payload);
   const hash = sha256Hex(`${prevHash ?? ''}:${payloadStr}`);
 
-  db.prepare(
-    `
-      INSERT INTO audit_log (
-        sequence, ts, entity_type, entity_id, action, reason,
-        before_json, after_json, prev_hash, hash, actor
-      ) VALUES (
-        @sequence, @ts, @entityType, @entityId, @action, @reason,
-        @beforeJson, @afterJson, @prevHash, @hash, @actor
-      )
-    `,
-  ).run({
+  createDrizzle(db).insert(schema.auditLog).values({
     sequence: nextSequence,
     ts,
     entityType: params.entityType,
     entityId: params.entityId,
     action: params.action,
     reason: params.reason ?? null,
-    beforeJson: params.before ? stableStringify(params.before) : null,
-    afterJson: params.after ? stableStringify(params.after) : null,
+    beforeJson: params.before === undefined ? null : stableStringify(params.before),
+    afterJson: params.after === undefined ? null : stableStringify(params.after),
     prevHash,
     hash,
     actor,
-  });
+  }).run();
 
   return { sequence: nextSequence, hash };
 };
 
 export const verifyAuditChain = (db: Database.Database) => {
-  const rows = db
-    .prepare(
-      `SELECT sequence, ts, entity_type, entity_id, action, reason,
-              before_json, after_json, prev_hash, hash, actor
-       FROM audit_log
-       ORDER BY sequence ASC`,
-    )
-    .all() as Array<{
+  const rows = createDrizzle(db).select({
+    sequence: schema.auditLog.sequence,
+    ts: schema.auditLog.ts,
+    entity_type: schema.auditLog.entityType,
+    entity_id: schema.auditLog.entityId,
+    action: schema.auditLog.action,
+    reason: schema.auditLog.reason,
+    before_json: schema.auditLog.beforeJson,
+    after_json: schema.auditLog.afterJson,
+    prev_hash: schema.auditLog.prevHash,
+    hash: schema.auditLog.hash,
+    actor: schema.auditLog.actor,
+  }).from(schema.auditLog).orderBy(asc(schema.auditLog.sequence)).all() as Array<{
     sequence: number;
     ts: string;
     entity_type: string;
@@ -161,14 +157,19 @@ const csvEscape = (value: unknown): string => {
 };
 
 export const exportAuditCsv = (db: Database.Database) => {
-  const rows = db
-    .prepare(
-      `SELECT sequence, ts, entity_type, entity_id, action, reason,
-              prev_hash, hash, actor, before_json, after_json
-       FROM audit_log
-       ORDER BY sequence ASC`,
-    )
-    .all() as Array<Record<string, unknown>>;
+  const rows = createDrizzle(db).select({
+    sequence: schema.auditLog.sequence,
+    ts: schema.auditLog.ts,
+    entity_type: schema.auditLog.entityType,
+    entity_id: schema.auditLog.entityId,
+    action: schema.auditLog.action,
+    reason: schema.auditLog.reason,
+    prev_hash: schema.auditLog.prevHash,
+    hash: schema.auditLog.hash,
+    actor: schema.auditLog.actor,
+    before_json: schema.auditLog.beforeJson,
+    after_json: schema.auditLog.afterJson,
+  }).from(schema.auditLog).orderBy(asc(schema.auditLog.sequence)).all() as Array<Record<string, unknown>>;
 
   const header = [
     'sequence',

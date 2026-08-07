@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { Database as SqliteDatabaseType } from 'better-sqlite3';
 import type { Pool } from 'pg';
+import { count, eq } from 'drizzle-orm';
 import { createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile, type ServerProduct, type Tenant } from '@billme/server-core';
 import { DEFAULT_TAX_MODE } from '@billme/server-core/services';
 import { verifyAuditChainRows, verifyPostgresAuditChain } from './audit.js';
@@ -14,6 +15,7 @@ import {
   saveServerSettings,
 } from './billing.js';
 import { withPostgresTransaction } from './connection.js';
+import { createDrizzle, schema } from './drizzle.js';
 import { runPostgresMigrations } from './migrations.js';
 import {
   saveServerAccountKeyword,
@@ -384,11 +386,16 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
       throw new Error(`SQLite audit log verification failed: ${sourceAuditVerification.errors.map((entry) => `#${entry.sequence} ${entry.message}`).join(', ')}`);
     }
     const importRunId = randomUUID();
-    await options.pool.query(`INSERT INTO sqlite_import_runs (id, tenant_id, source_path, source_product, source_sha256, status, details_json, started_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [importRunId, tenantId, options.sqlitePath, options.product, await sha256File(options.sqlitePath), 'started', JSON.stringify({ unsupportedTables }), new Date().toISOString()]);
+    const drizzle = createDrizzle(options.pool);
+    await drizzle.insert(schema.sqliteImportRuns).values({ id: importRunId, tenantId, sourcePath: options.sqlitePath,
+      sourceProduct: options.product, sourceSha256: await sha256File(options.sqlitePath), status: 'started',
+      detailsJson: JSON.stringify({ unsupportedTables }), startedAt: new Date().toISOString(), completedAt: null });
     try {
       await withPostgresTransaction(options.pool, async (client) => {
         if ((await countTenantCoreRows(client, tenantId)) > 0) throw new Error(`Target tenant ${tenantId} already contains server billing data`);
-        if (Number((await client.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM audit_log WHERE tenant_id = $1', [tenantId])).rows[0]?.count ?? 0) > 0) throw new Error(`Target tenant ${tenantId} already contains audit log rows`);
+        const auditCount = await createDrizzle(client).select({ count: count() }).from(schema.auditLog)
+          .where(eq(schema.auditLog.tenantId, tenantId));
+        if (Number(auditCount[0]?.count ?? 0) > 0) throw new Error(`Target tenant ${tenantId} already contains audit log rows`);
         const dependencies = createPostgresBillingDependencies(client);
         await dependencies.tenantRepo.save({ id: tenantId, slug: options.tenant.slug, displayName: options.tenant.displayName, product: options.product, deploymentMode: 'single-tenant', status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         const settingsJson = loadSettingsJson(sqliteDb);
@@ -419,37 +426,22 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         for (const row of loadJournalEntries(sqliteDb, tenantId)) { await saveServerJournalEntry(client, row); counts.journalEntries += 1; }
         for (const row of loadJournalLines(sqliteDb, tenantId)) { await saveServerJournalLine(client, row); counts.journalLines += 1; }
         for (const row of loadAssets(sqliteDb)) {
-          await client.query(
-            `INSERT INTO assets (
-              id, tenant_id, asset_number, name, asset_class, status, activation_date, acquisition_cost,
-              useful_life_years, depreciation_method, cost_center, location, receipt_linked, supplier,
-              invoice_ref, asset_account_number, disposal_date, disposal_proceeds, created_at, updated_at
-            ) VALUES (
-              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
-            )`,
-            [row.id, tenantId, row.asset_number, row.name, row.asset_class, row.status, row.activation_date,
-              row.acquisition_cost, row.useful_life_years, row.depreciation_method, row.cost_center,
-              row.location, Boolean(row.receipt_linked), row.supplier, row.invoice_ref, row.asset_account_number,
-              row.disposal_date, row.disposal_proceeds, row.created_at, row.updated_at],
-          );
+          await createDrizzle(client).insert(schema.assets).values({ id: row.id, tenantId, assetNumber: row.asset_number, name: row.name,
+            assetClass: row.asset_class, status: row.status, activationDate: row.activation_date, acquisitionCost: row.acquisition_cost,
+            usefulLifeYears: row.useful_life_years, depreciationMethod: row.depreciation_method, costCenter: row.cost_center,
+            location: row.location, receiptLinked: Boolean(row.receipt_linked), supplier: row.supplier, invoiceRef: row.invoice_ref,
+            assetAccountNumber: row.asset_account_number, disposalDate: row.disposal_date, disposalProceeds: row.disposal_proceeds,
+            createdAt: row.created_at, updatedAt: row.updated_at } as any);
           counts.assets += 1;
         }
         for (const row of loadAssetSchedule(sqliteDb)) {
-          await client.query(
-            `INSERT INTO asset_depreciation_schedule
-              (id, tenant_id, asset_id, year, amount, months, status, journal_entry_id, posted_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-            [row.id, tenantId, row.asset_id, row.year, row.amount, row.months, row.status, row.journal_entry_id, row.posted_at],
-          );
+          await createDrizzle(client).insert(schema.assetDepreciationSchedule).values({ id: row.id, tenantId, assetId: row.asset_id,
+            year: row.year, amount: row.amount, months: row.months, status: row.status, journalEntryId: row.journal_entry_id, postedAt: row.posted_at } as any);
           counts.assetDepreciationSchedule += 1;
         }
         for (const row of loadAssetMovements(sqliteDb)) {
-          await client.query(
-            `INSERT INTO asset_movements
-              (id, tenant_id, asset_id, type, movement_date, amount, proceeds, gain_loss, reason, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [row.id, tenantId, row.asset_id, row.type, row.movement_date, row.amount, row.proceeds, row.gain_loss, row.reason, row.created_at],
-          );
+          await createDrizzle(client).insert(schema.assetMovements).values({ id: row.id, tenantId, assetId: row.asset_id, type: row.type,
+            movementDate: row.movement_date, amount: row.amount, proceeds: row.proceeds, gainLoss: row.gain_loss, reason: row.reason, createdAt: row.created_at } as any);
           counts.assetMovements += 1;
         }
         for (const row of loadAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerAccountMappingHgb(client, row); counts.accountMappingsHgb += 1; }
@@ -461,14 +453,14 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         for (const row of loadTransactions(sqliteDb, tenantId)) { await saveServerImportedTransaction(client, row); counts.transactions += 1; }
         for (const row of loadEurClassifications(sqliteDb, tenantId)) { await saveServerEurClassification(client, row); counts.eurClassifications += 1; }
         for (const row of loadEmailLog(sqliteDb)) { await insertEmailLogRow(client, tenantId, { id: row.id, documentType: row.document_type, documentId: row.document_id, documentNumber: row.document_number, recipientEmail: row.recipient_email, recipientName: row.recipient_name, subject: row.subject, bodyText: row.body_text, provider: row.provider, status: row.status, errorMessage: row.error_message, sentAt: row.sent_at, createdAt: row.created_at }); counts.emailLog += 1; }
-        for (const row of loadDunningHistory(sqliteDb)) { await client.query(`INSERT INTO dunning_history (id, tenant_id, invoice_id, invoice_number, dunning_level, days_overdue, fee_applied, email_sent, email_log_id, processed_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, [row.id, tenantId, row.invoice_id, row.invoice_number, row.dunning_level, row.days_overdue, row.fee_applied, Boolean(row.email_sent), row.email_log_id, row.processed_at, row.created_at]); counts.dunningHistory += 1; }
+        for (const row of loadDunningHistory(sqliteDb)) { await createDrizzle(client).insert(schema.dunningHistory).values({ id: row.id, tenantId, invoiceId: row.invoice_id, invoiceNumber: row.invoice_number, dunningLevel: row.dunning_level, daysOverdue: row.days_overdue, feeApplied: row.fee_applied, emailSent: Boolean(row.email_sent), emailLogId: row.email_log_id, processedAt: row.processed_at, createdAt: row.created_at } as any); counts.dunningHistory += 1; }
         for (const row of sourceAuditRows) { await insertAuditRow(client, tenantId, { sequence: row.sequence, ts: row.ts, entityType: row.entity_type, entityId: row.entity_id, action: row.action, reason: row.reason, beforeJson: row.before_json, afterJson: row.after_json, prevHash: row.prev_hash, hash: row.hash, actor: row.actor }); counts.auditLog += 1; }
         const importedVerification = await verifyPostgresAuditChain(client, tenantId);
         if (!importedVerification.ok) throw new Error(`Imported audit log verification failed: ${importedVerification.errors.map((entry) => `#${entry.sequence} ${entry.message}`).join(', ')}`);
       });
-      await options.pool.query(`UPDATE sqlite_import_runs SET status = $2, details_json = $3, completed_at = $4 WHERE id = $1`, [importRunId, 'completed', JSON.stringify({ counts, unsupportedTables }), new Date().toISOString()]);
+      await createDrizzle(options.pool).update(schema.sqliteImportRuns).set({ status: 'completed', detailsJson: JSON.stringify({ counts, unsupportedTables }), completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
     } catch (error) {
-      await options.pool.query(`UPDATE sqlite_import_runs SET status = $2, details_json = $3, completed_at = $4 WHERE id = $1`, [importRunId, 'failed', JSON.stringify({ counts, unsupportedTables, error: error instanceof Error ? error.message : String(error) }), new Date().toISOString()]);
+      await createDrizzle(options.pool).update(schema.sqliteImportRuns).set({ status: 'failed', detailsJson: JSON.stringify({ counts, unsupportedTables, error: error instanceof Error ? error.message : String(error) }), completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
       throw error;
     }
     return { importRunId, counts, unsupportedTables };

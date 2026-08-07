@@ -1,10 +1,12 @@
 # Server-mode Docker deployment
 
-Billme server mode ships as a Docker Compose stack with five services:
+Billme server mode ships as a Docker Compose stack with six services:
 
 - `postgres` — persistent PostgreSQL database
-- `server-api` — Fastify API with automatic Postgres migrations
+- `server-migrate` — one-shot Drizzle migration job; API and worker start only after it succeeds
+- `server-api` — Fastify API with schema-version gating (it never mutates schema at boot)
 - `server-worker` — recurring invoices, dunning, email queue, portal sync, and maintenance jobs
+- `offer-portal` — Node/Hono public offer and invoice portal (SQLite snapshots + filesystem PDF storage)
 - `web` — Billme Lite browser shell
 - `web-pro` — Billme Pro browser shell
 
@@ -28,6 +30,7 @@ Edit `.env.server-mode` before the first start:
 - optionally adjust exposed ports and worker intervals
 - optionally set `WORKER_RUN_ONCE=1` for run-once worker debugging or future E2E scenarios
 - optionally set `SMTP_PASSWORD` or `RESEND_API_KEY` if queued email delivery should be enabled
+- optionally set `BILLME_PORTAL_PUBLISH_API_KEY` and `BILLME_PUBLIC_PORTAL_URL` for the public portal
 
 `BILLME_PUBLIC_API_URL` is baked into the two web images at build time. Rebuild `web` and `web-pro` after changing it.
 
@@ -67,7 +70,7 @@ pnpm docker:server-mode:down
 
 ## Persistence
 
-PostgreSQL data is stored in the named Docker volume `billme-postgres-data` by default.
+PostgreSQL data is stored in the named Docker volume `billme-postgres-data` by default. The offer portal stores its SQLite database in `billme-offer-portal-data` and PDFs in `billme-offer-portal-storage`; set `BILLME_PORTAL_DATA_DIR`/`BILLME_PORTAL_STORAGE_DIR` to bind-mounted host paths.
 If `BILLME_POSTGRES_DATA_DIR` is set to an absolute host path, PostgreSQL uses that bind-mounted
 directory instead.
 
@@ -97,6 +100,7 @@ docker volume inspect billme-postgres-data
 - `postgres` uses `pg_isready`
 - `server-api` probes `GET /health`
 - `server-worker` validates its `DATABASE_URL` with `SELECT 1`
+- `offer-portal` probes `GET /health`
 - `web` and `web-pro` expose an internal `/health` endpoint from nginx
 
 ## Server-mode E2E coverage matrix
@@ -122,7 +126,7 @@ This is the approved first-pass E2E scope for server mode:
 
 | Area | Smoke coverage | Full coverage | Notes |
 | --- | --- | --- | --- |
-| Docker + stack bootstrap | Bring up `postgres`, `server-api`, `server-worker`, `web`, and `web-pro` from `docker-compose.server-mode.yml`; wait for `/health` and browser shell reachability; confirm clean-db bootstrap status is `bootstrapped=false`. | Re-run stack startup against an already migrated database and confirm migrations stay idempotent and tenant data survives restart. | Keep this as the stack entry gate for all other server-mode E2E projects. |
+| Docker + stack bootstrap | Bring up `postgres`, one-shot `server-migrate`, `server-api`, `server-worker`, `web`, and `web-pro` from `docker-compose.server-mode.yml`; wait for `/health` and browser shell reachability; confirm clean-db bootstrap status is `bootstrapped=false`. | Re-run stack startup against an already migrated database and confirm the one-shot migration job is idempotent and tenant data survives restart. | Keep this as the stack entry gate for all other server-mode E2E projects. |
 | Auth + bootstrap | Cover first-owner bootstrap through the public auth flow, then login and session restore via `/api/v1/lite/auth/me` and `/api/v1/auth/me?product=pro`. | Add product-boundary assertions: lite token rejected on pro routes, pro token rejected on lite routes, logout clears stored session, expired/invalid token returns user to auth screen. | First owner should be created through public auth routes, not direct DB seeding. |
 | Lite web | Bootstrap/login, mount the shared renderer shell, visit the major lite routes, create one client, create one invoice or offer draft from that client, and verify one export path works. | CRUD for clients, invoices, offers, and recurring profiles; settings write/read; document number reserve/release/finalize; JSON export and CSV export; session survives reload. | Align with implemented lite routes under `/api/v1/lite/*` and the mounted desktop renderer navigation (`dashboard`, `clients`, `documents`). |
 | Pro web | Bootstrap/login, open the core hash routes (`overview`, `documents`, `clients`, `catalog`, `settings`, `accounting`), and persist one settings/catalog record. | Persist articles, bank accounts, templates, active templates, workflow entries, tax mappings, and suggestion rules; verify ledger stats/accounts load and accounting deep links stay stable after reload. | Align with `apps/web-pro/src/App.tsx` and `/api/v1/pro/*` routes. |

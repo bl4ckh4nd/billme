@@ -1,35 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createSingleTenantScope, type Invoice, type Offer } from '@billme/server-core';
-import type { PostgresQueryable } from './connection.js';
-import { createPostgresInvoiceRepository, createPostgresOfferRepository } from './billing.js';
+import {
+  createPostgresInvoiceRepository,
+  createPostgresOfferRepository,
+  createPostgresTenantRepository,
+} from './billing.js';
+import { createPostgresPool } from './connection.js';
+import { runDrizzleMigrations } from './migrations.js';
 
 const scope = createSingleTenantScope('tenant-tax', 'lite');
-
-const createRoundtripDb = (): PostgresQueryable => {
-  const invoices = new Map<string, Record<string, unknown>>();
-  const offers = new Map<string, Record<string, unknown>>();
-  const db = {
-    async query(sql: string, values: unknown[] = []) {
-      if (/INSERT INTO invoices/.test(sql)) {
-        invoices.set(String(values[0]), {
-          id: values[0], tenant_id: values[1], client_id: values[2], client_number: values[3], project_id: values[4], number: values[5], client: values[6], client_email: values[7], client_address: values[8], billing_address_json: values[9], shipping_address_json: values[10], date: values[11], due_date: values[12], service_period: values[13], amount: values[14], status: values[15], dunning_level: values[16], items_json: values[17], payments_json: values[18], history_json: values[19], tax_mode: values[20], tax_meta_json: values[21], tax_snapshot_json: values[22], created_at: values[23], updated_at: values[24],
-        });
-        return { rowCount: 1, rows: [] };
-      }
-      if (/INSERT INTO offers/.test(sql)) {
-        offers.set(String(values[0]), {
-          id: values[0], tenant_id: values[1], client_id: values[2], client_number: values[3], project_id: values[4], number: values[5], client: values[6], client_email: values[7], client_address: values[8], billing_address_json: values[9], shipping_address_json: values[10], date: values[11], valid_until: values[12], amount: values[13], status: values[14], share_json: values[15], history_json: values[16], items_json: values[17], tax_mode: values[18], tax_meta_json: values[19], tax_snapshot_json: values[20], created_at: values[21], updated_at: values[22],
-        });
-        return { rowCount: 1, rows: [] };
-      }
-      if (/SELECT \* FROM invoices/.test(sql)) return { rowCount: invoices.size ? 1 : 0, rows: [...invoices.values()] };
-      if (/SELECT \* FROM offers/.test(sql)) return { rowCount: offers.size ? 1 : 0, rows: [...offers.values()] };
-      throw new Error(`Unexpected SQL: ${sql}`);
-    },
-  };
-  return db as unknown as PostgresQueryable;
-};
 
 const invoice: Invoice = {
   kind: 'invoice',
@@ -70,8 +50,21 @@ const offer: Offer = {
   taxSnapshot: { netAmount: 100, vatAmount: 0, grossAmount: 100, vatRateApplied: 0, einvoiceCategoryCode: 'G', label: 'Drittlandsausfuhr', taxNotice: 'Steuerfreie Ausfuhrlieferung' },
 };
 
-test('Postgres billing repositories save and refetch invoice/offer tax fields', async () => {
-  const db = createRoundtripDb();
+test('Postgres billing repositories save and refetch invoice/offer tax fields', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const db = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  await runDrizzleMigrations(db);
+  const tenantRepo = createPostgresTenantRepository(db);
+  const now = new Date().toISOString();
+  await tenantRepo.save({
+    id: scope.tenantId,
+    slug: scope.tenantId,
+    displayName: 'Billing tax integration test',
+    product: 'lite',
+    deploymentMode: 'single-tenant',
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  });
   const invoiceRepo = createPostgresInvoiceRepository(db);
   const offerRepo = createPostgresOfferRepository(db);
 
@@ -84,4 +77,8 @@ test('Postgres billing repositories save and refetch invoice/offer tax fields', 
   assert.deepEqual((await offerRepo.getById(scope, offer.id))?.taxMeta, offer.taxMeta);
   assert.deepEqual((await offerRepo.getById(scope, offer.id))?.taxSnapshot, offer.taxSnapshot);
   assert.equal((await offerRepo.getById(scope, offer.id))?.taxMode, offer.taxMode);
+  await db.query('DELETE FROM invoices WHERE id = $1', [invoice.id]);
+  await db.query('DELETE FROM offers WHERE id = $1', [offer.id]);
+  await db.query('DELETE FROM tenants WHERE id = $1', [scope.tenantId]);
+  await db.end();
 });

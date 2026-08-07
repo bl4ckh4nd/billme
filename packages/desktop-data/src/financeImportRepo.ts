@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import type Database from 'better-sqlite3';
+import { and, desc, eq, isNotNull, isNull, ne, or } from 'drizzle-orm';
+import { createDrizzle, schema } from './drizzle';
 
 export type ImportBatchMeta = {
   accountId: string;
@@ -15,17 +17,7 @@ export type ImportBatchMeta = {
 export const createImportBatch = (db: Database.Database, meta: ImportBatchMeta): string => {
   const id = crypto.randomUUID();
   const createdAt = new Date().toISOString();
-  db.prepare(
-    `
-      INSERT INTO import_batches (
-        id, account_id, profile, file_name, file_sha256, mapping_json,
-        imported_count, skipped_count, error_count, created_at
-      ) VALUES (
-        @id, @accountId, @profile, @fileName, @fileSha256, @mappingJson,
-        @importedCount, @skippedCount, @errorCount, @createdAt
-      )
-    `,
-  ).run({
+  createDrizzle(db).insert(schema.importBatches).values({
     id,
     accountId: meta.accountId,
     profile: meta.profile,
@@ -36,7 +28,7 @@ export const createImportBatch = (db: Database.Database, meta: ImportBatchMeta):
     skippedCount: meta.skippedCount,
     errorCount: meta.errorCount,
     createdAt,
-  });
+  }).run();
   return id;
 };
 
@@ -58,19 +50,11 @@ export const insertTransactionsIgnoringDuplicates = (
   db: Database.Database,
   txs: InsertableTransaction[],
 ): { inserted: number; skipped: number } => {
-  const insert = db.prepare(
-    `
-      INSERT OR IGNORE INTO transactions (
-        id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, dedup_hash, import_batch_id
-      ) VALUES (
-        @id, @accountId, @date, @amount, @type, @counterparty, @purpose, @linkedInvoiceId, @status, @dedupHash, @importBatchId
-      )
-    `,
-  );
+  const drizzle = createDrizzle(db);
 
   let inserted = 0;
   for (const t of txs) {
-    const res = insert.run({
+    const res = drizzle.insert(schema.transactions).values({
       id: t.id,
       accountId: t.accountId,
       date: t.date,
@@ -82,7 +66,7 @@ export const insertTransactionsIgnoringDuplicates = (
       status: t.status,
       dedupHash: t.dedupHash,
       importBatchId: t.importBatchId,
-    });
+    }).onConflictDoNothing().run();
     if (res.changes === 1) inserted++;
   }
 
@@ -112,18 +96,21 @@ export const listImportBatches = (
   accountId?: string,
   limit: number = 50,
 ): ImportBatch[] => {
-  let query = 'SELECT * FROM import_batches';
-  const params: unknown[] = [];
-
-  if (accountId) {
-    query += ' WHERE account_id = ?';
-    params.push(accountId);
-  }
-
-  query += ' ORDER BY created_at DESC LIMIT ?';
-  params.push(limit);
-
-  const rows = db.prepare(query).all(...params) as Array<{
+  const rows = createDrizzle(db).select({
+    id: schema.importBatches.id,
+    account_id: schema.importBatches.accountId,
+    profile: schema.importBatches.profile,
+    file_name: schema.importBatches.fileName,
+    file_sha256: schema.importBatches.fileSha256,
+    mapping_json: schema.importBatches.mappingJson,
+    imported_count: schema.importBatches.importedCount,
+    skipped_count: schema.importBatches.skippedCount,
+    error_count: schema.importBatches.errorCount,
+    created_at: schema.importBatches.createdAt,
+    rolled_back_at: schema.importBatches.rolledBackAt,
+    rollback_reason: schema.importBatches.rollbackReason,
+  }).from(schema.importBatches).where(accountId ? eq(schema.importBatches.accountId, accountId) : undefined)
+    .orderBy(desc(schema.importBatches.createdAt)).limit(limit).all() as Array<{
     id: string;
     account_id: string;
     profile: string;
@@ -183,17 +170,19 @@ export const getImportBatchDetails = (
   }
 
   // Get transactions for this batch (excluding soft-deleted)
-  const txRows = db
-    .prepare(
-      `
-      SELECT * FROM transactions
-      WHERE import_batch_id = ?
-        AND (deleted_at IS NULL OR deleted_at = '')
-      ORDER BY date DESC
-      LIMIT 50
-    `,
-    )
-    .all(batchId) as Array<{
+  const txRows = createDrizzle(db).select({
+    id: schema.transactions.id,
+    date: schema.transactions.date,
+    amount: schema.transactions.amount,
+    type: schema.transactions.type,
+    counterparty: schema.transactions.counterparty,
+    purpose: schema.transactions.purpose,
+    linked_invoice_id: schema.transactions.linkedInvoiceId,
+    status: schema.transactions.status,
+  }).from(schema.transactions).where(and(
+    eq(schema.transactions.importBatchId, batchId),
+    or(isNull(schema.transactions.deletedAt), eq(schema.transactions.deletedAt, '')),
+  )).orderBy(desc(schema.transactions.date)).limit(50).all() as Array<{
     id: string;
     date: string;
     amount: number;
@@ -216,17 +205,14 @@ export const getImportBatchDetails = (
   }));
 
   // Count how many transactions are linked to invoices
-  const linkedCount = db
-    .prepare(
-      `
-      SELECT COUNT(*) as count FROM transactions
-      WHERE import_batch_id = ?
-        AND linked_invoice_id IS NOT NULL
-        AND linked_invoice_id <> ''
-        AND (deleted_at IS NULL OR deleted_at = '')
-    `,
-    )
-    .get(batchId) as { count: number };
+  const linkedRows = createDrizzle(db).select({ linkedInvoiceId: schema.transactions.linkedInvoiceId }).from(schema.transactions)
+    .where(and(
+      eq(schema.transactions.importBatchId, batchId),
+      isNotNull(schema.transactions.linkedInvoiceId),
+      ne(schema.transactions.linkedInvoiceId, ''),
+      or(isNull(schema.transactions.deletedAt), eq(schema.transactions.deletedAt, '')),
+    )).all();
+  const linkedCount = { count: linkedRows.length };
 
   const canRollback = linkedCount.count === 0 && !batch.rolledBackAt;
 
@@ -265,25 +251,15 @@ export const rollbackImportBatch = (
     const now = new Date().toISOString();
 
     // Soft delete all transactions from this batch
-    const result = db
-      .prepare(
-        `
-        UPDATE transactions
-        SET deleted_at = ?
-        WHERE import_batch_id = ?
-          AND (deleted_at IS NULL OR deleted_at = '')
-      `,
-      )
-      .run(now, batchId);
+    const result = createDrizzle(db).update(schema.transactions).set({ deletedAt: now })
+      .where(and(
+        eq(schema.transactions.importBatchId, batchId),
+        or(isNull(schema.transactions.deletedAt), eq(schema.transactions.deletedAt, '')),
+      )).run();
 
     // Mark batch as rolled back
-    db.prepare(
-      `
-        UPDATE import_batches
-        SET rolled_back_at = ?, rollback_reason = ?
-        WHERE id = ?
-      `,
-    ).run(now, reason, batchId);
+    createDrizzle(db).update(schema.importBatches).set({ rolledBackAt: now, rollbackReason: reason })
+      .where(eq(schema.importBatches.id, batchId)).run();
 
     return {
       success: true,
@@ -291,4 +267,3 @@ export const rollbackImportBatch = (
     };
   })();
 };
-

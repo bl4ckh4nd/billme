@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { asc, desc, eq, and, ne } from 'drizzle-orm';
 import {
   chooseDefaultBillingAddress,
   chooseDefaultBillingEmail,
@@ -11,6 +12,7 @@ import { formatAddressMultiline } from '@billme/desktop-utils/formatters';
 import { ensureDefaultProjectForClient } from './projectsRepo';
 import { safeJsonParse, TagsSchema } from './validation-schemas';
 import { finalizeNumber, reserveNumber } from './numberingRepo';
+import { createDrizzle, schema } from './drizzle';
 
 type ClientRow = {
   id: string;
@@ -83,19 +85,67 @@ type ActivityRow = {
 };
 
 export const listClients = (db: Database.Database): Client[] => {
-  const clients = db.prepare('SELECT * FROM clients ORDER BY company ASC').all() as ClientRow[];
-  const projects = db
-    .prepare('SELECT * FROM client_projects ORDER BY client_id, start_date DESC')
-    .all() as ProjectRow[];
-  const activities = db
-    .prepare('SELECT * FROM client_activities ORDER BY client_id, date DESC')
-    .all() as ActivityRow[];
-  const addressRows = db
-    .prepare('SELECT * FROM client_addresses ORDER BY client_id, is_default_billing DESC, label ASC')
-    .all() as ClientAddressRow[];
-  const emailRows = db
-    .prepare('SELECT * FROM client_emails ORDER BY client_id, is_default_billing DESC, label ASC')
-    .all() as ClientEmailRow[];
+  const drizzle = createDrizzle(db);
+  const clients = drizzle.select({
+    id: schema.clients.id,
+    customer_number: schema.clients.customerNumber,
+    company: schema.clients.company,
+    contact_person: schema.clients.contactPerson,
+    email: schema.clients.email,
+    phone: schema.clients.phone,
+    address: schema.clients.address,
+    status: schema.clients.status,
+    avatar: schema.clients.avatar,
+    tags_json: schema.clients.tagsJson,
+    notes: schema.clients.notes,
+    tax_profile_json: schema.clients.taxProfileJson,
+  }).from(schema.clients).orderBy(asc(schema.clients.company)).all() as ClientRow[];
+  const projects = drizzle.select({
+    id: schema.clientProjects.id,
+    client_id: schema.clientProjects.clientId,
+    code: schema.clientProjects.code,
+    name: schema.clientProjects.name,
+    status: schema.clientProjects.status,
+    budget: schema.clientProjects.budget,
+    start_date: schema.clientProjects.startDate,
+    end_date: schema.clientProjects.endDate,
+    description: schema.clientProjects.description,
+    archived_at: schema.clientProjects.archivedAt,
+    created_at: schema.clientProjects.createdAt,
+    updated_at: schema.clientProjects.updatedAt,
+  }).from(schema.clientProjects).orderBy(asc(schema.clientProjects.clientId), desc(schema.clientProjects.startDate)).all() as ProjectRow[];
+  const activities = drizzle.select({
+    id: schema.clientActivities.id,
+    client_id: schema.clientActivities.clientId,
+    type: schema.clientActivities.type,
+    content: schema.clientActivities.content,
+    date: schema.clientActivities.date,
+    author: schema.clientActivities.author,
+  }).from(schema.clientActivities).orderBy(asc(schema.clientActivities.clientId), desc(schema.clientActivities.date)).all() as ActivityRow[];
+  const addressRows = drizzle.select({
+    id: schema.clientAddresses.id,
+    client_id: schema.clientAddresses.clientId,
+    label: schema.clientAddresses.label,
+    kind: schema.clientAddresses.kind,
+    company: schema.clientAddresses.company,
+    contact_person: schema.clientAddresses.contactPerson,
+    street: schema.clientAddresses.street,
+    line2: schema.clientAddresses.line2,
+    zip: schema.clientAddresses.zip,
+    city: schema.clientAddresses.city,
+    country: schema.clientAddresses.country,
+    is_default_billing: schema.clientAddresses.isDefaultBilling,
+    is_default_shipping: schema.clientAddresses.isDefaultShipping,
+  }).from(schema.clientAddresses).orderBy(asc(schema.clientAddresses.clientId), desc(schema.clientAddresses.isDefaultBilling), asc(schema.clientAddresses.label)).all() as ClientAddressRow[];
+  const emailRows = drizzle.select({
+    id: schema.clientEmails.id,
+    client_id: schema.clientEmails.clientId,
+    label: schema.clientEmails.label,
+    kind: schema.clientEmails.kind,
+    email: schema.clientEmails.email,
+    is_default_general: schema.clientEmails.isDefaultGeneral,
+    is_default_billing: schema.clientEmails.isDefaultBilling,
+  }).from(schema.clientEmails).orderBy(asc(schema.clientEmails.clientId), desc(schema.clientEmails.isDefaultBilling), asc(schema.clientEmails.label)).all() as ClientEmailRow[];
 
   const projectsByClient = new Map<string, Project[]>();
   for (const p of projects) {
@@ -209,7 +259,9 @@ export const getClient = (db: Database.Database, id: string): Client | null => {
 
 export const upsertClient = (db: Database.Database, client: Client): Client => {
   const tx = db.transaction(() => {
-    const exists = db.prepare('SELECT id, customer_number FROM clients WHERE id = ?').get(client.id) as
+    const drizzle = createDrizzle(db);
+    const exists = drizzle.select({ id: schema.clients.id, customer_number: schema.clients.customerNumber })
+      .from(schema.clients).where(eq(schema.clients.id, client.id)).get() as
       | { id: string; customer_number: string | null }
       | undefined;
     const existingCustomerNumber = exists?.customer_number?.trim() ?? '';
@@ -217,9 +269,10 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
     const prepared = prepareClientForUpsert(client, {
       existingCustomerNumber,
       customerNumberExists: (customerNumber: string) => {
-        const conflictingCustomerNumber = db
-          .prepare('SELECT id FROM clients WHERE customer_number = ? AND id <> ? LIMIT 1')
-          .get(customerNumber, client.id) as { id: string } | undefined;
+        const conflictingCustomerNumber = drizzle.select({ id: schema.clients.id })
+          .from(schema.clients)
+          .where(and(eq(schema.clients.customerNumber, customerNumber), ne(schema.clients.id, client.id)))
+          .limit(1).get() as { id: string } | undefined;
         return Boolean(conflictingCustomerNumber);
       },
       reserveCustomerNumber: () => reserveNumber(db, 'customer'),
@@ -233,15 +286,7 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
     const customerReservationId = prepared.customerNumberReservationId;
 
     if (!exists) {
-      db.prepare(
-        `
-          INSERT INTO clients (
-            id, customer_number, company, contact_person, email, phone, address, status, avatar, tags_json, notes, tax_profile_json
-          ) VALUES (
-            @id, @customerNumber, @company, @contactPerson, @email, @phone, @address, @status, @avatar, @tagsJson, @notes, @taxProfileJson
-          )
-        `,
-      ).run({
+      drizzle.insert(schema.clients).values({
         id: client.id,
         customerNumber,
         company: client.company,
@@ -254,26 +299,9 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
         tagsJson: JSON.stringify(client.tags ?? []),
         notes: client.notes ?? '',
         taxProfileJson: client.taxProfile ? JSON.stringify(client.taxProfile) : null,
-      });
+      }).run();
     } else {
-      db.prepare(
-        `
-          UPDATE clients SET
-            customer_number=@customerNumber,
-            company=@company,
-            contact_person=@contactPerson,
-            email=@email,
-            phone=@phone,
-            address=@address,
-            status=@status,
-            avatar=@avatar,
-            tags_json=@tagsJson,
-            notes=@notes,
-            tax_profile_json=@taxProfileJson
-          WHERE id=@id
-        `,
-      ).run({
-        id: client.id,
+      drizzle.update(schema.clients).set({
         customerNumber,
         company: client.company,
         contactPerson: client.contactPerson,
@@ -285,22 +313,11 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
         tagsJson: JSON.stringify(client.tags ?? []),
         notes: client.notes ?? '',
         taxProfileJson: client.taxProfile ? JSON.stringify(client.taxProfile) : null,
-      });
+      }).where(eq(schema.clients.id, client.id)).run();
     }
 
     // Replace addresses/emails for now (simple UX). Future: add partial CRUD endpoints.
-    db.prepare('DELETE FROM client_addresses WHERE client_id = ?').run(client.id);
-    const insertAddress = db.prepare(
-      `
-        INSERT INTO client_addresses (
-          id, client_id, label, kind, company, contact_person, street, line2, zip, city, country,
-          is_default_billing, is_default_shipping, created_at, updated_at
-        ) VALUES (
-          @id, @clientId, @label, @kind, @company, @contactPerson, @street, @line2, @zip, @city, @country,
-          @isDefaultBilling, @isDefaultShipping, @createdAt, @updatedAt
-        )
-      `,
-    );
+    drizzle.delete(schema.clientAddresses).where(eq(schema.clientAddresses.clientId, client.id)).run();
     const now = new Date().toISOString();
     let seenBilling = false;
     let seenShipping = false;
@@ -309,7 +326,7 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
       const isDefaultShipping = Boolean(a.isDefaultShipping) && !seenShipping;
       if (isDefaultBilling) seenBilling = true;
       if (isDefaultShipping) seenShipping = true;
-      insertAddress.run({
+      drizzle.insert(schema.clientAddresses).values({
         id: a.id,
         clientId: client.id,
         label: a.label,
@@ -325,25 +342,16 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
         isDefaultShipping: isDefaultShipping ? 1 : 0,
         createdAt: now,
         updatedAt: now,
-      });
+      }).run();
     }
     if (!seenBilling && addresses.length > 0) {
-      db.prepare('UPDATE client_addresses SET is_default_billing = 1 WHERE id = ?').run(addresses[0].id);
+      drizzle.update(schema.clientAddresses).set({ isDefaultBilling: 1 }).where(eq(schema.clientAddresses.id, addresses[0].id)).run();
     }
     if (!seenShipping && addresses.length > 0) {
-      db.prepare('UPDATE client_addresses SET is_default_shipping = 1 WHERE id = ?').run(addresses[0].id);
+      drizzle.update(schema.clientAddresses).set({ isDefaultShipping: 1 }).where(eq(schema.clientAddresses.id, addresses[0].id)).run();
     }
 
-    db.prepare('DELETE FROM client_emails WHERE client_id = ?').run(client.id);
-    const insertEmail = db.prepare(
-      `
-        INSERT INTO client_emails (
-          id, client_id, label, kind, email, is_default_general, is_default_billing, created_at, updated_at
-        ) VALUES (
-          @id, @clientId, @label, @kind, @email, @isDefaultGeneral, @isDefaultBilling, @createdAt, @updatedAt
-        )
-      `,
-    );
+    drizzle.delete(schema.clientEmails).where(eq(schema.clientEmails.clientId, client.id)).run();
     let seenBillingEmail = false;
     let seenGeneralEmail = false;
     for (const e of emails) {
@@ -351,7 +359,7 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
       const isDefaultGeneral = Boolean(e.isDefaultGeneral) && !seenGeneralEmail;
       if (isDefaultBilling) seenBillingEmail = true;
       if (isDefaultGeneral) seenGeneralEmail = true;
-      insertEmail.run({
+      drizzle.insert(schema.clientEmails).values({
         id: e.id,
         clientId: client.id,
         label: e.label,
@@ -361,13 +369,13 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
         isDefaultBilling: isDefaultBilling ? 1 : 0,
         createdAt: now,
         updatedAt: now,
-      });
+      }).run();
     }
     if (!seenBillingEmail && emails.length > 0) {
-      db.prepare('UPDATE client_emails SET is_default_billing = 1 WHERE id = ?').run(emails[0].id);
+      drizzle.update(schema.clientEmails).set({ isDefaultBilling: 1 }).where(eq(schema.clientEmails.id, emails[0].id)).run();
     }
     if (!seenGeneralEmail && emails.length > 0) {
-      db.prepare('UPDATE client_emails SET is_default_general = 1 WHERE id = ?').run(emails[0].id);
+      drizzle.update(schema.clientEmails).set({ isDefaultGeneral: 1 }).where(eq(schema.clientEmails.id, emails[0].id)).run();
     }
 
     // Projects and activities are managed via their own flows and should not be
@@ -392,9 +400,10 @@ export const upsertClient = (db: Database.Database, client: Client): Client => {
 
 export const deleteClient = (db: Database.Database, id: string): void => {
   const tx = db.transaction(() => {
-    db.prepare('DELETE FROM client_projects WHERE client_id = ?').run(id);
-    db.prepare('DELETE FROM client_activities WHERE client_id = ?').run(id);
-    db.prepare('DELETE FROM clients WHERE id = ?').run(id);
+    const drizzle = createDrizzle(db);
+    drizzle.delete(schema.clientProjects).where(eq(schema.clientProjects.clientId, id)).run();
+    drizzle.delete(schema.clientActivities).where(eq(schema.clientActivities.clientId, id)).run();
+    drizzle.delete(schema.clients).where(eq(schema.clients.id, id)).run();
   });
 
   tx();

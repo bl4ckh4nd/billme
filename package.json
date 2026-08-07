@@ -25,6 +25,7 @@
     "preview:landing": "pnpm -C apps/landing-page preview",
     "db:generate": "pnpm -C apps/desktop db:generate",
     "db:studio": "pnpm -C apps/desktop db:studio",
+    "check:raw-sql": "node scripts/raw-sql-guard.mjs",
     "dist": "pnpm -C apps/desktop dist",
     "docker:server-mode": "pnpm docker:server-mode:up",
     "docker:server-mode:down": "docker compose --env-file .env.server-mode -f docker-compose.server-mode.yml down",

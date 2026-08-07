@@ -1,19 +1,14 @@
-import type Database from 'better-sqlite3';
-import type { Article } from '@billme/desktop-core/types';
-
-type ArticleRow = {
-  id: string;
-  sku: string | null;
-  title: string;
-  description: string;
-  price: number;
-  unit: string;
-  category: string;
-  tax_rate: number;
-};
+import type Database from "better-sqlite3";
+import { asc, eq } from "drizzle-orm";
+import type { Article } from "@billme/desktop-core/types";
+import { createDrizzle, schema } from "./drizzle";
 
 export const listArticles = (db: Database.Database): Article[] => {
-  const rows = db.prepare('SELECT * FROM articles ORDER BY title ASC').all() as ArticleRow[];
+  const rows = createDrizzle(db)
+    .select()
+    .from(schema.articles)
+    .orderBy(asc(schema.articles.title))
+    .all();
   return rows.map((r) => ({
     id: r.id,
     sku: r.sku ?? undefined,
@@ -22,22 +17,17 @@ export const listArticles = (db: Database.Database): Article[] => {
     price: r.price,
     unit: r.unit,
     category: r.category,
-    taxRate: r.tax_rate,
+    taxRate: r.taxRate,
   }));
 };
 
-export const upsertArticle = (db: Database.Database, article: Article): Article => {
-  const exists = db.prepare('SELECT 1 FROM articles WHERE id = ?').get(article.id) as
-    | { 1: 1 }
-    | undefined;
-
-  if (!exists) {
-    db.prepare(
-      `
-        INSERT INTO articles (id, sku, title, description, price, unit, category, tax_rate)
-        VALUES (@id, @sku, @title, @description, @price, @unit, @category, @taxRate)
-      `,
-    ).run({
+export const upsertArticle = (
+  db: Database.Database,
+  article: Article,
+): Article => {
+  createDrizzle(db)
+    .insert(schema.articles)
+    .values({
       id: article.id,
       sku: article.sku ?? null,
       title: article.title,
@@ -46,35 +36,26 @@ export const upsertArticle = (db: Database.Database, article: Article): Article 
       unit: article.unit,
       category: article.category,
       taxRate: article.taxRate,
-    });
-  } else {
-    db.prepare(
-      `
-        UPDATE articles SET
-          sku=@sku,
-          title=@title,
-          description=@description,
-          price=@price,
-          unit=@unit,
-          category=@category,
-          tax_rate=@taxRate
-        WHERE id=@id
-      `,
-    ).run({
-      id: article.id,
-      sku: article.sku ?? null,
-      title: article.title,
-      description: article.description,
-      price: article.price,
-      unit: article.unit,
-      category: article.category,
-      taxRate: article.taxRate,
-    });
-  }
-
+    })
+    .onConflictDoUpdate({
+      target: schema.articles.id,
+      set: {
+        sku: article.sku ?? null,
+        title: article.title,
+        description: article.description,
+        price: article.price,
+        unit: article.unit,
+        category: article.category,
+        taxRate: article.taxRate,
+      },
+    })
+    .run();
   return article;
 };
 
 export const deleteArticle = (db: Database.Database, id: string): void => {
-  db.prepare('DELETE FROM articles WHERE id = ?').run(id);
+  createDrizzle(db)
+    .delete(schema.articles)
+    .where(eq(schema.articles.id, id))
+    .run();
 };

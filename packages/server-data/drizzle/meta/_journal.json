@@ -2,10 +2,47 @@
   "version": "7",
   "dialect": "postgresql",
   "entries": [
-    {"idx":0,"version":"7","when":1768900000000,"tag":"0000_server_data","breakpoints":false},
-    {"idx":1,"version":"7","when":1768900000001,"tag":"0001_server_data_pro_accounting","breakpoints":false},
-    {"idx":2,"version":"7","when":1768900000002,"tag":"0002_server_data_assets","breakpoints":false},
-    {"idx":3,"version":"7","when":1768900000003,"tag":"0003_server_data_offer_items","breakpoints":false},
-    {"idx":4,"version":"7","when":1768900000004,"tag":"0004_server_data_tax_rules","breakpoints":false}
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1768900000000,
+      "tag": "0000_server_data",
+      "breakpoints": false
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1768900000001,
+      "tag": "0001_server_data_pro_accounting",
+      "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1768900000002,
+      "tag": "0002_server_data_assets",
+      "breakpoints": false
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1768900000003,
+      "tag": "0003_server_data_offer_items",
+      "breakpoints": false
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1768900000004,
+      "tag": "0004_server_data_tax_rules",
+      "breakpoints": false
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786092000000,
+      "tag": "0005_server_data_audit_heads",
+      "breakpoints": false
+    }
   ]
 }

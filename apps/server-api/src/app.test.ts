@@ -204,3 +204,46 @@ test('VAT validation requires auth and keeps Swiss IDs out of VIES', async () =>
     });
   });
 });
+
+test('oRPC publishes a deterministic OpenAPI document for Lite and Pro', async () => {
+  await withServerApi(async (app) => {
+    const first = await app.inject({ method: 'GET', url: '/api/v1/openapi.json' });
+    const second = await app.inject({ method: 'GET', url: '/api/v1/openapi.json' });
+    assert.equal(first.statusCode, 200);
+    assert.equal(second.statusCode, 200);
+    assert.equal(first.body, second.body);
+    const document = first.json() as {
+      openapi: string;
+      paths: Record<string, unknown>;
+    };
+    assert.equal(document.openapi, '3.1.1');
+    assert.ok(document.paths['/api/v1/lite/auth/login']);
+    assert.ok(document.paths['/api/v1/pro/auth/login']);
+    assert.ok(document.paths['/api/v1/lite/tax/validate-vat-id']);
+    assert.ok(document.paths['/api/v1/pro/tax/validate-vat-id']);
+  });
+});
+
+test('oRPC maps expected authentication failures to stable HTTP errors', async () => {
+  await withServerApi(async (app) => {
+    const payload = {
+      email: 'orpc-errors@example.com',
+      password: 'billme-server-123',
+      fullName: 'oRPC errors',
+    };
+    const first = await app.inject({ method: 'POST', url: '/api/v1/lite/auth/bootstrap', payload });
+    assert.equal(first.statusCode, 200);
+
+    const duplicate = await app.inject({ method: 'POST', url: '/api/v1/lite/auth/bootstrap', payload });
+    assert.equal(duplicate.statusCode, 409);
+    assert.match(duplicate.body, /Bootstrap already completed/i);
+
+    const invalidLogin = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/auth/login',
+      payload: { email: payload.email, password: 'wrong-password' },
+    });
+    assert.equal(invalidLogin.statusCode, 401);
+    assert.match(invalidLogin.body, /Invalid email or password/i);
+  });
+});

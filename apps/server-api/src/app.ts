@@ -21,6 +21,8 @@ import {
   supportedServerRoles,
   type AuditEntryDraft,
   type TenantScope,
+  validateVatId,
+  vatValidationResultSchema,
 } from '@billme/server-core';
 import {
   createPostgresBillingDependencies,
@@ -91,6 +93,11 @@ const numberFinalizeBodySchema = z.object({
   reservationId: z.string().min(1),
   documentId: z.string().min(1),
 });
+const vatValidationBodySchema = z.object({
+  countryCode: z.string().length(2).transform((value) => value.toUpperCase()),
+  vatNumber: z.string().trim().min(4).max(32),
+});
+const vatValidationResponseSchema = vatValidationResultSchema;
 const authSessionInfoSchema = z.object({
   user: authUserSchema,
   tenantId: z.string().min(1),
@@ -446,6 +453,17 @@ const registerAuthRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefi
 };
 
 const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefix: string) => {
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/tax/validate-vat-id`,
+    body: vatValidationBodySchema,
+    response: vatValidationResponseSchema,
+    async handler({ request, body }) {
+      await requireSession(app, product, request.headers.authorization);
+      return validateVatId(body);
+    },
+  });
+
   typedRoute(app, {
     method: 'GET',
     url: `${prefix}/clients`,

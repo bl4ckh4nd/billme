@@ -6,6 +6,7 @@ import {
   supportedServerProducts,
   supportedServerRoles,
 } from './shared/runtime-profile.js';
+import { vatValidationResultSchema, type VatValidationResult } from './services/vatValidation.js';
 
 export {
   deploymentModeSchema,
@@ -99,6 +100,12 @@ export const serverApiSessionSchema = authResponseSchema.extend({
 });
 export type ServerApiSession = z.infer<typeof serverApiSessionSchema>;
 
+export const vatValidationRequestSchema = z.object({
+  countryCode: z.string().length(2).transform((value) => value.toUpperCase()),
+  vatNumber: z.string().trim().min(4).max(32),
+});
+export type VatValidationRequest = z.input<typeof vatValidationRequestSchema>;
+
 const parseJsonResponse = async <T>(response: Response, schema: z.ZodType<T>): Promise<T> => {
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
@@ -122,6 +129,7 @@ export interface ServerApiClient {
   loginFor: (product: ServerProduct, input: LoginRequest) => Promise<AuthResponse>;
   getSessionInfo: (args: { token: string; product?: ServerProduct }) => Promise<AuthSessionInfo>;
   ensureSession: (input: EnsureServerApiSessionRequest) => Promise<ServerApiSession>;
+  validateVatId: (args: { token: string; product: ServerProduct; countryCode: string; vatNumber: string }) => Promise<VatValidationResult>;
 }
 
 export const createServerApiClient = (baseUrl: string): ServerApiClient => {
@@ -210,6 +218,14 @@ export const createServerApiClient = (baseUrl: string): ServerApiClient => {
         product: sessionInfo.product,
         role: sessionInfo.role,
         via: status.bootstrapped ? 'login' : 'bootstrap',
+      });
+    },
+    async validateVatId(args) {
+      const parsed = vatValidationRequestSchema.parse(args);
+      return requestJson(`${normalizedBaseUrl}/api/v1/${args.product}/tax/validate-vat-id`, vatValidationResultSchema, {
+        method: 'POST',
+        token: args.token,
+        body: parsed,
       });
     },
   };

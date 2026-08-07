@@ -113,6 +113,15 @@ export const invoiceTaxMetaSchema = z.object({
   exemptionReasonOverride: z.string().optional(),
   buyerVatId: z.string().optional(),
   sellerVatId: z.string().optional(),
+  /** Optional document-level rate. Position rates remain explicit exceptions. */
+  defaultVatRate: z.number().min(0).max(100).optional(),
+  buyerCountryCode: z.string().length(2).optional(),
+  sellerCountryCode: z.string().length(2).optional(),
+  buyerType: z.enum(['business', 'consumer']).optional(),
+  /** `valid`/`invalid` are VIES results; unavailable can be overridden with a reason. */
+  vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
+  vatIdValidationAt: isoDateTimeSchema.optional(),
+  taxRuleConfirmed: z.boolean().optional(),
 });
 export type InvoiceTaxMeta = z.infer<typeof invoiceTaxMetaSchema>;
 
@@ -121,13 +130,15 @@ export const invoiceTaxSnapshotSchema = z.object({
   vatAmount: z.number(),
   netAmount: z.number(),
   grossAmount: z.number(),
-  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']),
+  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O', 'K', 'G']),
   label: z.string().optional(),
   vatBreakdown: z.array(z.object({
     rate: z.number(),
     netAmount: z.number(),
     vatAmount: z.number(),
   })).optional(),
+  taxNotice: z.string().optional(),
+  taxRuleConfirmed: z.boolean().optional(),
 });
 export type InvoiceTaxSnapshot = z.infer<typeof invoiceTaxSnapshotSchema>;
 
@@ -136,7 +147,7 @@ export const invoiceTaxModeDefinitionSchema = z.object({
   label: z.string(),
   description: z.string(),
   legalReference: z.string().optional(),
-  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']),
+  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O', 'K', 'G']),
   requiresBuyerVatId: z.boolean().optional(),
   requiresExemptionReason: z.boolean().optional(),
   forceZeroVat: z.boolean().optional(),
@@ -229,6 +240,13 @@ export const clientSchema = z.object({
   emails: z.array(clientEmailSchema).default([]),
   projects: z.array(clientProjectSchema).default([]),
   activities: z.array(clientActivitySchema).default([]),
+  taxProfile: z.object({
+    type: z.enum(['business', 'consumer']).default('business'),
+    countryCode: z.string().length(2).optional(),
+    vatId: z.string().optional(),
+    vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
+    vatIdValidationAt: isoDateTimeSchema.optional(),
+  }).optional(),
   createdAt: isoDateTimeSchema.optional(),
   updatedAt: isoDateTimeSchema.optional(),
 });
@@ -339,6 +357,8 @@ export const recurringProfileSchema = z.object({
   endDate: isoDateSchema.optional(),
   amount: z.number(),
   items: z.array(billingLineItemSchema).default([]),
+  taxMode: invoiceTaxModeSchema.default('standard_vat'),
+  taxMeta: invoiceTaxMetaSchema.optional(),
   createdAt: isoDateTimeSchema.optional(),
   updatedAt: isoDateTimeSchema.optional(),
 });

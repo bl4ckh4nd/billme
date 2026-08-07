@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
   description TEXT NOT NULL,
+  article_id TEXT,
+  category TEXT,
+  unit TEXT,
+  discount_percent REAL,
   tax_rate REAL,
   quantity REAL NOT NULL,
   price REAL NOT NULL,
@@ -81,6 +85,10 @@ CREATE TABLE IF NOT EXISTS offer_items (
   offer_id TEXT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
   description TEXT NOT NULL,
+  article_id TEXT,
+  category TEXT,
+  unit TEXT,
+  discount_percent REAL,
   tax_rate REAL,
   quantity REAL NOT NULL,
   price REAL NOT NULL,
@@ -98,7 +106,8 @@ CREATE TABLE IF NOT EXISTS clients (
   status TEXT NOT NULL,
   avatar TEXT,
   tags_json TEXT NOT NULL,
-  notes TEXT NOT NULL
+  notes TEXT NOT NULL,
+  tax_profile_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS client_addresses (
@@ -255,7 +264,9 @@ CREATE TABLE IF NOT EXISTS recurring_profiles (
   last_run TEXT,
   end_date TEXT,
   amount REAL NOT NULL,
-  items_json TEXT NOT NULL
+  items_json TEXT NOT NULL,
+  tax_mode TEXT NOT NULL DEFAULT 'standard_vat',
+  tax_meta_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (

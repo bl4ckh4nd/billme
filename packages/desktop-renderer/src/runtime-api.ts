@@ -10,8 +10,18 @@ import {
   createLiteMockInvoke,
   createProMockInvoke,
 } from '@billme/desktop-services/mockEngine';
+import type { VatValidationResult } from '@billme/server-core';
 
 export type RendererProduct = 'lite' | 'pro';
+
+export type VatValidationClient = (args: {
+  countryCode: string;
+  vatNumber: string;
+}) => Promise<VatValidationResult>;
+
+export type RendererRuntime = {
+  validateVatId?: VatValidationClient;
+};
 
 type RendererApi = LiteBillmeApi | ProBillmeApi;
 
@@ -21,6 +31,9 @@ let proFallback: ProBillmeApi | undefined;
 
 const getExternalApi = (): RendererApi | undefined =>
   (globalThis as { billmeApi?: RendererApi }).billmeApi;
+
+export const getRendererRuntime = (): RendererRuntime =>
+  (globalThis as { billmeRuntime?: RendererRuntime }).billmeRuntime ?? {};
 
 const getFallbackApi = (product: RendererProduct): RendererApi => {
   if (product === 'pro') {

@@ -112,6 +112,7 @@ type ClientRow = {
   emails_json: string | null;
   projects_json: string | null;
   activities_json: string | null;
+  tax_profile_json: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -137,6 +138,9 @@ type InvoiceRow = {
   items_json: string | null;
   payments_json: string | null;
   history_json: string | null;
+  tax_mode: Invoice['taxMode'] | null;
+  tax_meta_json: string | null;
+  tax_snapshot_json: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -157,6 +161,10 @@ type OfferRow = {
   valid_until: string;
   amount: string | number;
   status: Offer['status'];
+  items_json: string | null;
+  tax_mode: Offer['taxMode'] | null;
+  tax_meta_json: string | null;
+  tax_snapshot_json: string | null;
   share_json: string | null;
   history_json: string | null;
   created_at: string | null;
@@ -175,6 +183,8 @@ type RecurringProfileRow = {
   end_date: string | null;
   amount: string | number;
   items_json: string | null;
+  tax_mode: Invoice['taxMode'] | null;
+  tax_meta_json: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -294,6 +304,7 @@ const rowToClient = (row: ClientRow): Client =>
     emails: parseJson(row.emails_json, []),
     projects: parseJson(row.projects_json, []),
     activities: parseJson(row.activities_json, []),
+    taxProfile: parseJson(row.tax_profile_json, undefined),
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
   });
@@ -321,6 +332,9 @@ const rowToInvoice = (row: InvoiceRow): Invoice =>
     items: parseJson(row.items_json, []),
     payments: parseJson(row.payments_json, []),
     history: parseJson(row.history_json, []),
+    taxMode: row.tax_mode ?? 'standard_vat',
+    taxMeta: parseJson(row.tax_meta_json, undefined),
+    taxSnapshot: parseJson(row.tax_snapshot_json, undefined),
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
   });
@@ -344,6 +358,10 @@ const rowToOffer = (row: OfferRow): Offer =>
     amount: toNumber(row.amount),
     status: row.status,
     share: parseJson(row.share_json, undefined),
+    items: parseJson(row.items_json, []),
+    taxMode: row.tax_mode ?? 'standard_vat',
+    taxMeta: parseJson(row.tax_meta_json, undefined),
+    taxSnapshot: parseJson(row.tax_snapshot_json, undefined),
     history: parseJson(row.history_json, []),
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
@@ -362,6 +380,8 @@ const rowToRecurringProfile = (row: RecurringProfileRow): RecurringProfile =>
     endDate: row.end_date ?? undefined,
     amount: toNumber(row.amount),
     items: parseJson(row.items_json, []),
+    taxMode: row.tax_mode ?? 'standard_vat',
+    taxMeta: parseJson(row.tax_meta_json, undefined),
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
   });
@@ -587,10 +607,10 @@ export const createPostgresClientRepository = (db: PostgresQueryable): ClientRep
       `
         INSERT INTO clients (
           id, tenant_id, customer_number, company, contact_person, email, phone, address, status, avatar,
-          tags_json, notes, addresses_json, emails_json, projects_json, activities_json, created_at, updated_at
+          tags_json, notes, addresses_json, emails_json, projects_json, activities_json, tax_profile_json, created_at, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          $11, $12, $13, $14, $15, $16, $17, $18
+          $11, $12, $13, $14, $15, $16, $17, $18, $19
         )
         ON CONFLICT (id) DO UPDATE SET
           tenant_id = EXCLUDED.tenant_id,
@@ -608,6 +628,7 @@ export const createPostgresClientRepository = (db: PostgresQueryable): ClientRep
           emails_json = EXCLUDED.emails_json,
           projects_json = EXCLUDED.projects_json,
           activities_json = EXCLUDED.activities_json,
+          tax_profile_json = EXCLUDED.tax_profile_json,
           updated_at = EXCLUDED.updated_at
       `,
       [
@@ -627,6 +648,7 @@ export const createPostgresClientRepository = (db: PostgresQueryable): ClientRep
         toJson(nextClient.emails ?? []),
         toJson(nextClient.projects ?? []),
         toJson(nextClient.activities ?? []),
+        nextClient.taxProfile ? toJson(nextClient.taxProfile) : null,
         nextClient.createdAt ?? null,
         nextClient.updatedAt ?? null,
       ],
@@ -662,11 +684,11 @@ export const createPostgresInvoiceRepository = (db: PostgresQueryable): InvoiceR
         INSERT INTO invoices (
           id, tenant_id, client_id, client_number, project_id, number, client, client_email, client_address,
           billing_address_json, shipping_address_json, date, due_date, service_period, amount, status,
-          dunning_level, items_json, payments_json, history_json, created_at, updated_at
+          dunning_level, items_json, payments_json, history_json, tax_mode, tax_meta_json, tax_snapshot_json, created_at, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22
+          $17, $18, $19, $20, $21, $22, $23, $24, $25
         )
         ON CONFLICT (id) DO UPDATE SET
           tenant_id = EXCLUDED.tenant_id,
@@ -688,6 +710,9 @@ export const createPostgresInvoiceRepository = (db: PostgresQueryable): InvoiceR
           items_json = EXCLUDED.items_json,
           payments_json = EXCLUDED.payments_json,
           history_json = EXCLUDED.history_json,
+          tax_mode = EXCLUDED.tax_mode,
+          tax_meta_json = EXCLUDED.tax_meta_json,
+          tax_snapshot_json = EXCLUDED.tax_snapshot_json,
           updated_at = EXCLUDED.updated_at
       `,
       [
@@ -711,6 +736,9 @@ export const createPostgresInvoiceRepository = (db: PostgresQueryable): InvoiceR
         toJson(nextInvoice.items ?? []),
         toJson(nextInvoice.payments ?? []),
         toJson(nextInvoice.history ?? []),
+        nextInvoice.taxMode ?? 'standard_vat',
+        nextInvoice.taxMeta ? toJson(nextInvoice.taxMeta) : null,
+        nextInvoice.taxSnapshot ? toJson(nextInvoice.taxSnapshot) : null,
         nextInvoice.createdAt ?? null,
         nextInvoice.updatedAt ?? null,
       ],
@@ -746,11 +774,11 @@ export const createPostgresOfferRepository = (db: PostgresQueryable): OfferRepos
         INSERT INTO offers (
           id, tenant_id, client_id, client_number, project_id, number, client, client_email, client_address,
           billing_address_json, shipping_address_json, date, valid_until, amount, status, share_json,
-          history_json, created_at, updated_at
+          history_json, items_json, tax_mode, tax_meta_json, tax_snapshot_json, created_at, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19
+          $17, $18, $19, $20, $21, $22, $23
         )
         ON CONFLICT (id) DO UPDATE SET
           tenant_id = EXCLUDED.tenant_id,
@@ -769,6 +797,10 @@ export const createPostgresOfferRepository = (db: PostgresQueryable): OfferRepos
           status = EXCLUDED.status,
           share_json = EXCLUDED.share_json,
           history_json = EXCLUDED.history_json,
+          items_json = EXCLUDED.items_json,
+          tax_mode = EXCLUDED.tax_mode,
+          tax_meta_json = EXCLUDED.tax_meta_json,
+          tax_snapshot_json = EXCLUDED.tax_snapshot_json,
           updated_at = EXCLUDED.updated_at
       `,
       [
@@ -789,6 +821,10 @@ export const createPostgresOfferRepository = (db: PostgresQueryable): OfferRepos
         nextOffer.status,
         nextOffer.share ? toJson(nextOffer.share) : null,
         toJson(nextOffer.history ?? []),
+        toJson(nextOffer.items ?? []),
+        nextOffer.taxMode ?? 'standard_vat',
+        nextOffer.taxMeta ? toJson(nextOffer.taxMeta) : null,
+        nextOffer.taxSnapshot ? toJson(nextOffer.taxSnapshot) : null,
         nextOffer.createdAt ?? null,
         nextOffer.updatedAt ?? null,
       ],
@@ -826,10 +862,10 @@ export const createPostgresRecurringProfileRepository = (db: PostgresQueryable):
       `
         INSERT INTO recurring_profiles (
           id, tenant_id, client_id, active, name, interval, next_run, last_run, end_date,
-          amount, items_json, created_at, updated_at
+          amount, items_json, tax_mode, tax_meta_json, created_at, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13
+          $10, $11, $12, $13, $14, $15
         )
         ON CONFLICT (id) DO UPDATE SET
           tenant_id = EXCLUDED.tenant_id,
@@ -842,6 +878,8 @@ export const createPostgresRecurringProfileRepository = (db: PostgresQueryable):
           end_date = EXCLUDED.end_date,
           amount = EXCLUDED.amount,
           items_json = EXCLUDED.items_json,
+          tax_mode = EXCLUDED.tax_mode,
+          tax_meta_json = EXCLUDED.tax_meta_json,
           updated_at = EXCLUDED.updated_at
       `,
       [
@@ -856,6 +894,8 @@ export const createPostgresRecurringProfileRepository = (db: PostgresQueryable):
         nextProfile.endDate ?? null,
         nextProfile.amount,
         toJson(nextProfile.items ?? []),
+        nextProfile.taxMode ?? 'standard_vat',
+        nextProfile.taxMeta ? toJson(nextProfile.taxMeta) : null,
         nextProfile.createdAt ?? null,
         nextProfile.updatedAt ?? null,
       ],

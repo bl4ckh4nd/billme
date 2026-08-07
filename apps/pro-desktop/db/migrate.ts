@@ -66,6 +66,7 @@ export const runMigrations = (db: Database.Database): void => {
     tryAddColumn(db, 'invoices', 'client_number', 'TEXT');
     tryAddColumn(db, 'offers', 'client_number', 'TEXT');
     tryAddColumn(db, 'clients', 'customer_number', 'TEXT');
+    tryAddColumn(db, 'clients', 'tax_profile_json', 'TEXT');
 
     // Projects: code + archive metadata
   tryAddColumn(db, 'client_projects', 'code', 'TEXT');
@@ -86,6 +87,10 @@ export const runMigrations = (db: Database.Database): void => {
   addColumnIfMissing(db, 'offers', 'tax_mode', 'TEXT');
   addColumnIfMissing(db, 'offers', 'tax_meta_json', 'TEXT');
   addColumnIfMissing(db, 'offers', 'tax_snapshot_json', 'TEXT');
+
+  // Recurring profiles: preserve the confirmed tax rule.
+  addColumnIfMissing(db, 'recurring_profiles', 'tax_mode', 'TEXT');
+  addColumnIfMissing(db, 'recurring_profiles', 'tax_meta_json', 'TEXT');
 
   // Offers: portal publication + decision fields
   addColumnIfMissing(db, 'offers', 'share_token', 'TEXT');

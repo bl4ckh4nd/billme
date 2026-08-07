@@ -7,8 +7,10 @@ import { getPreviewElements } from '@billme/desktop-utils/documentPreview';
 import { formatAddressMultiline } from '@billme/desktop-utils';
 import {
   calculateInvoiceTaxSnapshot,
+  getDachVatRates,
   getInvoiceTaxModeDefinition,
   INVOICE_TAX_MODE_DEFINITIONS,
+  recommendInvoiceTaxMode,
   resolveInvoiceTaxMode,
 } from '@billme/server-core/services';
 import { Combobox, DatePicker } from '@billme/ui';
@@ -25,6 +27,7 @@ export interface DocumentEditorProps {
   projects: ProjectLike[];
   settings: SettingsLike;
   templateElements: unknown[];
+  onValidateVatId?: (args: { countryCode: string; vatNumber: string }) => Promise<{ status: 'valid' | 'invalid' | 'unavailable'; normalizedVatId: string; checkedAt: string }>;
   onSelectedClientChange?: (clientId: string) => void;
   onSave: (document: DocumentDraft) => void;
   onCancel: () => void;
@@ -35,6 +38,7 @@ interface FieldErrors {
   date?: string;
   client?: string;
   buyerVatId?: string;
+  taxRule?: string;
   items: Record<number, string>;
 }
 
@@ -107,6 +111,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   projects,
   settings: effectiveSettings,
   templateElements,
+  onValidateVatId,
   onSelectedClientChange,
   onSave,
   onCancel,
@@ -117,6 +122,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const [selectedClientId, setSelectedClientId] = useState(document.clientId ?? '');
   const [isNumberLocked, setIsNumberLocked] = useState(mode === 'edit');
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [vatValidationPending, setVatValidationPending] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({ items: {} });
   const [view, setView] = useState<'edit' | 'preview'>('edit');
   const projectTouchedRef = useRef(false);
@@ -164,6 +170,48 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const defaultCategory = (effectiveSettings.catalog?.categories?.[0]?.name ?? '').trim() || 'Sonstiges';
   const resolvedTaxMode = resolveInvoiceTaxMode(formData.taxMode, effectiveSettings);
   const requiresBuyerVatId = getInvoiceTaxModeDefinition(resolvedTaxMode).requiresBuyerVatId;
+  const sellerCountryCode = effectiveSettings.legal.countryCode ?? 'DE';
+  const buyerCountryCode = normalizeCountry(
+    formData.billingAddressJson && typeof formData.billingAddressJson === 'object'
+      ? (formData.billingAddressJson as { country?: string }).country
+      : undefined,
+  );
+  const validateBuyerVatId = useCallback(async () => {
+    const vatNumber = formData.taxMeta?.buyerVatId?.trim();
+    if (!onValidateVatId || !vatNumber || !buyerCountryCode) return;
+    setVatValidationPending(true);
+    try {
+      const result = await onValidateVatId({ countryCode: buyerCountryCode, vatNumber });
+      setFormData((previous) => ({
+        ...previous,
+        taxMeta: {
+          ...previous.taxMeta,
+          buyerVatId: result.normalizedVatId,
+          vatIdValidation: result.status,
+          vatIdValidationAt: result.checkedAt,
+        },
+      }));
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setVatValidationPending(false);
+    }
+  }, [buyerCountryCode, formData.taxMeta?.buyerVatId, onValidateVatId, setFormData]);
+  const taxRateOptions = useMemo(
+    () => getDachVatRates(sellerCountryCode, effectiveSettings.legal.defaultVatRate),
+    [effectiveSettings.legal.defaultVatRate, sellerCountryCode],
+  );
+  const taxRecommendation = useMemo(
+    () => recommendInvoiceTaxMode({
+      sellerCountryCode,
+      buyerCountryCode,
+      buyerType: formData.taxMeta?.buyerType,
+      buyerVatId: formData.taxMeta?.buyerVatId,
+      sellerVatId: formData.taxMeta?.sellerVatId ?? effectiveSettings.finance.vatId,
+      supplyType: 'service',
+    }),
+    [buyerCountryCode, effectiveSettings.finance.vatId, formData.taxMeta?.buyerType, formData.taxMeta?.buyerVatId, formData.taxMeta?.sellerVatId, sellerCountryCode],
+  );
 
   useEffect(() => {
     if (mode !== 'create' || formData.dueDate) return;
@@ -188,11 +236,22 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
       clientAddress: billingAddress ? formatDocumentAddress(billingAddress) : client.address ?? previous.clientAddress,
       billingAddressJson: billingAddress ?? previous.billingAddressJson,
       shippingAddressJson: shippingAddress ?? previous.shippingAddressJson,
+      taxMeta: {
+        ...previous.taxMeta,
+        buyerCountryCode: normalizeCountry(billingAddress?.country),
+        buyerType: client.taxProfile?.type ?? previous.taxMeta?.buyerType ?? 'business',
+        buyerVatId: client.taxProfile?.vatId ?? previous.taxMeta?.buyerVatId,
+        vatIdValidation: client.taxProfile?.vatIdValidation,
+        vatIdValidationAt: client.taxProfile?.vatIdValidationAt,
+        sellerCountryCode,
+        sellerVatId: previous.taxMeta?.sellerVatId ?? effectiveSettings.finance.vatId,
+        taxRuleConfirmed: false,
+      },
     }));
     setSelectedClientId(client.id);
     onSelectedClientChange?.(client.id);
     projectTouchedRef.current = false;
-  }, [onSelectedClientChange, setFormData]);
+  }, [effectiveSettings.finance.vatId, onSelectedClientChange, sellerCountryCode, setFormData]);
 
   const updateClientName = useCallback((client: string) => {
     setFormData((previous) => ({
@@ -224,9 +283,15 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     if (getInvoiceTaxModeDefinition(resolveInvoiceTaxMode(formData.taxMode, effectiveSettings)).requiresBuyerVatId && !formData.taxMeta?.buyerVatId?.trim()) {
       errors.buyerVatId = 'USt-IdNr. des Kunden ist erforderlich.';
     }
+    if (buyerCountryCode && buyerCountryCode !== sellerCountryCode && !formData.taxMeta?.taxRuleConfirmed) {
+      errors.taxRule = 'Bitte bestätige das Umsatzsteuer-Modell für diese grenzüberschreitende Rechnung.';
+    }
+    if (requiresBuyerVatId && formData.taxMeta?.vatIdValidation === 'invalid') {
+      errors.buyerVatId = 'Die Käufer-USt-IdNr. wurde als ungültig gemeldet.';
+    }
     setFieldErrors(errors);
     return errors;
-  }, [effectiveSettings, formData]);
+  }, [buyerCountryCode, effectiveSettings, formData, requiresBuyerVatId, sellerCountryCode]);
 
   const focusValidationError = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -238,7 +303,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
 
   const handleSave = useCallback(() => {
     const errors = validate();
-    if (errors.number || errors.date || errors.client || errors.buyerVatId || Object.keys(errors.items).length > 0) {
+    if (errors.number || errors.date || errors.client || errors.buyerVatId || errors.taxRule || Object.keys(errors.items).length > 0) {
       setSaveError('Bitte korrigiere die markierten Pflichtfelder.');
       setView('edit');
       focusValidationError();
@@ -333,12 +398,13 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
             </section>
 
             <section className="mb-8 grid gap-4 border-b border-border pb-6 sm:grid-cols-2" aria-label="Steuerdaten">
-              <div><label className={labelClass}>Steuer-Modell</label><select value={formData.taxMode ?? resolvedTaxMode} onChange={(event) => setFormData((previous) => ({ ...previous, taxMode: event.target.value as DocumentDraft['taxMode'] }))} className={inputClass} aria-label="Steuer-Modell">{INVOICE_TAX_MODE_DEFINITIONS.map((definition) => <option key={definition.mode} value={definition.mode}>{definition.label}</option>)}</select></div>
-              {requiresBuyerVatId ? <div data-field-error={fieldErrors.buyerVatId ? true : undefined}><label className={labelClass}>USt-IdNr. des Kunden</label><input value={formData.taxMeta?.buyerVatId ?? ''} onChange={(event) => setFormData((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, buyerVatId: event.target.value } }), { coalesce: true })} className={inputClass} aria-label="USt-IdNr. des Kunden" />{fieldErrors.buyerVatId ? <p className="mt-1 text-xs text-error">{fieldErrors.buyerVatId}</p> : null}</div> : null}
+              <div><label className={labelClass}>Steuer-Modell</label><select value={formData.taxMode ?? resolvedTaxMode} onChange={(event) => setFormData((previous) => ({ ...previous, taxMode: event.target.value as DocumentDraft['taxMode'], taxMeta: { ...previous.taxMeta, taxRuleConfirmed: true } }))} className={inputClass} aria-label="Steuer-Modell">{INVOICE_TAX_MODE_DEFINITIONS.map((definition) => <option key={definition.mode} value={definition.mode}>{definition.label}</option>)}</select>{buyerCountryCode && buyerCountryCode !== sellerCountryCode && taxRecommendation.mode !== resolvedTaxMode ? <p className="mt-1 text-xs text-muted">Vorschlag: <button type="button" className="font-bold text-accent underline" onClick={() => setFormData((previous) => ({ ...previous, taxMode: taxRecommendation.mode, taxMeta: { ...previous.taxMeta, taxRuleConfirmed: true } }))}>{getInvoiceTaxModeDefinition(taxRecommendation.mode).label}</button> <span>({taxRecommendation.reason})</span></p> : null}{fieldErrors.taxRule ? <p className="mt-1 text-xs text-error">{fieldErrors.taxRule}</p> : null}</div>
+              <div><label className={labelClass}>Standardsatz %</label><div className="flex gap-2"><select value={formData.taxMeta?.defaultVatRate ?? effectiveSettings.legal.defaultVatRate} onChange={(event) => setFormData((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, defaultVatRate: Number(event.target.value), taxRuleConfirmed: true } }))} className={inputClass} aria-label="Standardsatz">{taxRateOptions.map((rate) => <option key={rate} value={rate}>{rate}%</option>)}<option value={0}>0%</option></select><input type="number" min="0" max="100" step="0.1" value={formData.taxMeta?.defaultVatRate ?? effectiveSettings.legal.defaultVatRate} onChange={(event) => setFormData((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, defaultVatRate: Number(event.target.value), taxRuleConfirmed: true } }))} className={`${inputClass} max-w-24`} aria-label="Eigener Standardsatz" /></div><button type="button" className="mt-1 text-xs font-semibold text-accent underline" onClick={() => setFormData((previous) => ({ ...previous, items: previous.items.map((item) => ({ ...item, taxRate: undefined })) }))}>Auf alle Positionen anwenden</button></div>
+              {requiresBuyerVatId ? <div data-field-error={fieldErrors.buyerVatId ? true : undefined}><label className={labelClass}>USt-IdNr. des Kunden</label><div className="flex gap-2"><input value={formData.taxMeta?.buyerVatId ?? ''} onChange={(event) => setFormData((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, buyerVatId: event.target.value, buyerType: 'business', vatIdValidation: undefined, vatIdValidationAt: undefined } }), { coalesce: true })} className={inputClass} aria-label="USt-IdNr. des Kunden" />{onValidateVatId ? <button type="button" onClick={() => void validateBuyerVatId()} disabled={vatValidationPending || !formData.taxMeta?.buyerVatId || !buyerCountryCode} className="shrink-0 rounded-lg border border-border px-2 text-xs font-bold text-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50">{vatValidationPending ? 'Prüfe…' : 'VIES prüfen'}</button> : null}</div>{formData.taxMeta?.vatIdValidation ? <p className="mt-1 text-xs text-muted">VIES: {formData.taxMeta.vatIdValidation}</p> : null}{fieldErrors.buyerVatId ? <p className="mt-1 text-xs text-error">{fieldErrors.buyerVatId}</p> : null}</div> : null}
               <div><label className={labelClass}>{templateType === 'offer' ? 'Leistungsdatum / Zeitraum' : 'Leistungsdatum'}</label><DatePicker value={formData.servicePeriod ?? ''} onChange={(servicePeriod) => setFormData((previous) => ({ ...previous, servicePeriod }), { coalesce: true })} placeholder="Optional" aria-label="Leistungsdatum" /></div>
             </section>
 
-            <section aria-label="Positionen" className="mb-8"><ItemsEditor items={formData.items} articles={articles} categoryOptions={categoryOptions} defaultCategory={defaultCategory} formatCurrency={formatCurrency} itemErrors={fieldErrors.items} onItemsChange={(items, options) => setFormData((previous) => ({ ...previous, items }), options)} /></section>
+            <section aria-label="Positionen" className="mb-8"><ItemsEditor items={formData.items} articles={articles} categoryOptions={categoryOptions} defaultCategory={defaultCategory} formatCurrency={formatCurrency} taxRateOptions={taxRateOptions} itemErrors={fieldErrors.items} onItemsChange={(items, options) => setFormData((previous) => ({ ...previous, items }), options)} /></section>
             <section className="ml-auto max-w-xs space-y-2 border-t border-border pt-4" aria-label="Summen"><div className="flex justify-between text-sm text-muted"><span>Netto</span><span className="tabular-nums">{formatCurrency(totals.net)}</span></div>{(taxSnapshot.vatBreakdown?.length ? taxSnapshot.vatBreakdown : [{ rate: taxSnapshot.vatRateApplied, vatAmount: taxSnapshot.vatAmount }]).map((entry) => <div key={entry.rate} className="flex justify-between text-sm text-muted"><span>{taxSnapshot.label ?? 'USt'} ({entry.rate}%)</span><span className="tabular-nums">{formatCurrency(entry.vatAmount)}</span></div>)}<div className="flex justify-between border-t border-border pt-2 text-base font-black"><span>Gesamtbetrag</span><span className="tabular-nums">{formatCurrency(totals.gross)}</span></div></section>
           </div>
         )}

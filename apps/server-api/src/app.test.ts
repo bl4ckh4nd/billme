@@ -178,3 +178,29 @@ test('typed validation rejects invalid bootstrap payloads', async () => {
     assert.match(response.body, /Invalid email|String must contain at least/i);
   });
 });
+
+test('VAT validation requires auth and keeps Swiss IDs out of VIES', async () => {
+  await withServerApi(async (app) => {
+    const unauthorized = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/tax/validate-vat-id',
+      payload: { countryCode: 'CH', vatNumber: 'CHE123456789MWST' },
+    });
+    assert.equal(unauthorized.statusCode, 401);
+
+    const session = await bootstrap(app, 'lite');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/tax/validate-vat-id',
+      headers: { authorization: `Bearer ${session.token}` },
+      payload: { countryCode: 'CH', vatNumber: 'CHE 123 456 789 MWST' },
+    });
+    assert.equal(response.statusCode, 200);
+    const body = response.json() as { status: string; normalizedVatId: string; checkedAt: string };
+    assert.deepEqual(body, {
+      status: 'unavailable',
+      normalizedVatId: 'CHE123456789MWST',
+      checkedAt: body.checkedAt,
+    });
+  });
+});

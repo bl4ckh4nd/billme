@@ -14,6 +14,7 @@ import { useClientsQuery } from '../hooks/useClients';
 import { useProjectsQuery } from '../hooks/useProjects';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { useActiveTemplateQuery } from '../hooks/useTemplates';
+import { getRendererRuntime } from '../runtime-api';
 import type { Invoice } from '@billme/desktop-core/types';
 
 interface InvoiceDocumentEditorProps {
@@ -42,6 +43,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
   const { data: projects = [] } = useProjectsQuery(
     selectedClientId ? { clientId: selectedClientId, includeArchived: false } : undefined,
   );
+  const runtime = getRendererRuntime();
   return (
     <DocumentEditor
       document={invoice as unknown as DocumentDraft}
@@ -52,6 +54,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
       projects={projects as unknown as ProjectLike[]}
       settings={(settings ?? MOCK_SETTINGS) as unknown as SettingsLike}
       templateElements={activeTemplate?.elements ?? (templateType === 'offer' ? INITIAL_OFFER_TEMPLATE : INITIAL_INVOICE_TEMPLATE)}
+      onValidateVatId={runtime.validateVatId}
       onSelectedClientChange={setSelectedClientId}
       onSave={(document) => onSave(document as unknown as Invoice)}
       onCancel={onCancel}

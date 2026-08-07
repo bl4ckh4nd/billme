@@ -68,6 +68,7 @@ export interface AppSettings {
   legal: {
     smallBusinessRule: boolean; // Kleinunternehmer §19
     defaultVatRate: number;
+    countryCode?: 'DE' | 'AT' | 'CH';
     taxAccountingMethod: 'soll' | 'ist'; // Soll-/Ist-Versteuerung (default: soll)
     paymentTermsDays: number;
     defaultIntroText: string;
@@ -149,6 +150,13 @@ export interface InvoiceTaxMeta {
   exemptionReasonOverride?: string;
   buyerVatId?: string;
   sellerVatId?: string;
+  defaultVatRate?: number;
+  buyerCountryCode?: string;
+  sellerCountryCode?: string;
+  buyerType?: 'business' | 'consumer';
+  vatIdValidation?: 'valid' | 'invalid' | 'unavailable' | 'manual_override';
+  vatIdValidationAt?: string;
+  taxRuleConfirmed?: boolean;
 }
 
 export interface InvoiceTaxSnapshot {
@@ -156,7 +164,9 @@ export interface InvoiceTaxSnapshot {
   vatAmount: number;
   netAmount: number;
   grossAmount: number;
-  einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O';
+  einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O' | 'K' | 'G';
+  taxNotice?: string;
+  taxRuleConfirmed?: boolean;
   label?: string;
   vatBreakdown?: Array<{ rate: number; netAmount: number; vatAmount: number }>;
 }
@@ -166,7 +176,7 @@ export interface InvoiceTaxModeDefinition {
   label: string;
   description: string;
   legalReference?: string;
-  einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O';
+  einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O' | 'K' | 'G';
   requiresBuyerVatId?: boolean;
   requiresExemptionReason?: boolean;
   forceZeroVat?: boolean;
@@ -294,6 +304,13 @@ export interface Client {
   activities: Activity[];
   addresses?: ClientAddress[];
   emails?: ClientEmail[];
+  taxProfile?: {
+    type: 'business' | 'consumer';
+    countryCode?: string;
+    vatId?: string;
+    vatIdValidation?: 'valid' | 'invalid' | 'unavailable' | 'manual_override';
+    vatIdValidationAt?: string;
+  };
 }
 
 // --- Article/Product Types ---

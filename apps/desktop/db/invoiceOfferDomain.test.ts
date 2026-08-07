@@ -1,8 +1,10 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import type { Invoice } from '../types';
+import type { Client, Invoice, RecurringProfile } from '../types';
 import { bootstrapSql } from './bootstrap';
-import { createInvoiceFromOffer, getInvoice } from './invoicesRepo';
+import { createInvoiceFromOffer, getInvoice, upsertInvoice } from './invoicesRepo';
+import { getClient, upsertClient } from './clientsRepo';
+import { listRecurringProfiles, upsertRecurringProfile } from './recurringRepo';
 import {
   applyOfferDecision,
   getOffer,
@@ -129,6 +131,49 @@ const baseOffer: Invoice = {
 };
 
 describe.skipIf(!canRunNativeSqlite)('invoice/offer shared domain wrappers', () => {
+  it('round-trips client tax profiles and invoice/offer/recurring tax snapshots', () => {
+    const db = createDb();
+    const client: Client = {
+      id: 'client-tax-1',
+      customerNumber: 'KD-0010',
+      company: 'Alpen GmbH',
+      contactPerson: 'Ada',
+      email: 'billing@alpen.example',
+      phone: '',
+      address: 'Ringstraße 1, 1010 Wien, AT',
+      status: 'active',
+      tags: [],
+      notes: '',
+      projects: [],
+      activities: [],
+      taxProfile: {
+        type: 'business',
+        countryCode: 'AT',
+        vatId: 'ATU12345678',
+        vatIdValidation: 'valid',
+        vatIdValidationAt: '2026-08-06T12:00:00.000Z',
+      },
+      addresses: [{ id: 'tax-address', clientId: 'client-tax-1', label: 'Rechnung', kind: 'billing', street: 'Ringstraße 1', zip: '1010', city: 'Wien', country: 'AT', isDefaultBilling: true, isDefaultShipping: true }],
+      emails: [{ id: 'tax-email', clientId: 'client-tax-1', label: 'Buchhaltung', kind: 'billing', email: 'billing@alpen.example', isDefaultBilling: true, isDefaultGeneral: true }],
+    };
+    upsertClient(db, client);
+    expect(getClient(db, client.id)?.taxProfile).toEqual(client.taxProfile);
+
+    const taxMeta = { sellerCountryCode: 'DE', buyerCountryCode: 'AT', buyerVatId: 'ATU12345678', taxRuleConfirmed: true };
+    const taxSnapshot = { netAmount: 100, vatAmount: 0, grossAmount: 100, vatRateApplied: 0, einvoiceCategoryCode: 'AE' as const, label: 'EU-Leistung Reverse Charge', taxNotice: 'Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)' };
+    const invoice = { ...baseOffer, id: 'tax-invoice-1', number: 'RE-2025-010', status: 'draft' as Invoice['status'], taxMode: 'intra_eu_service_reverse_charge' as const, taxMeta, taxSnapshot };
+    upsertInvoice(db, invoice, 'tax roundtrip');
+    expect(getInvoice(db, invoice.id)).toMatchObject({ taxMode: invoice.taxMode, taxMeta, taxSnapshot });
+
+    const offer = { ...baseOffer, taxMode: 'export_third_country' as const, taxMeta: { sellerCountryCode: 'DE', buyerCountryCode: 'CH', taxRuleConfirmed: true }, taxSnapshot: { ...taxSnapshot, einvoiceCategoryCode: 'G' as const, taxNotice: 'Steuerfreie Ausfuhrlieferung' } };
+    upsertOffer(db, offer, 'offer tax roundtrip');
+    expect(getOffer(db, offer.id)).toMatchObject({ taxMode: offer.taxMode, taxMeta: offer.taxMeta, taxSnapshot: offer.taxSnapshot });
+
+    const recurring = { ...({ id: 'tax-profile-1', clientId: client.id, active: true, name: 'EU-Service', interval: 'monthly', nextRun: '2026-09-01', amount: 100, items: baseOffer.items } as RecurringProfile), taxMode: 'intra_eu_service_reverse_charge' };
+    upsertRecurringProfile(db, recurring);
+    expect((listRecurringProfiles(db)[0] as unknown as { taxMode?: string }).taxMode).toBe('intra_eu_service_reverse_charge');
+  });
+
   it('publishes offers, tracks pending sync, and applies portal decisions with audit history', () => {
     const db = createDb();
 

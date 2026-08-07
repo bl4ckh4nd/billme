@@ -1361,6 +1361,18 @@ export const SettingsView: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-2 gap-6">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Sitzland des Verkäufers</label>
+                <select
+                  value={settings.legal.countryCode ?? 'DE'}
+                  onChange={(e) => updateNested('legal', 'countryCode', e.target.value)}
+                  className="w-full bg-gray-50 border-gray-200 rounded-xl p-4 font-bold text-gray-900 focus:ring-2 focus:ring-accent outline-none transition-shadow"
+                >
+                  <option value="DE">Deutschland</option>
+                  <option value="AT">Österreich</option>
+                  <option value="CH">Schweiz</option>
+                </select>
+              </div>
               <div className={settings.legal.smallBusinessRule ? 'opacity-30 pointer-events-none' : ''}>
                 <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Standard Umsatzsteuer (%)</label>
                 <input

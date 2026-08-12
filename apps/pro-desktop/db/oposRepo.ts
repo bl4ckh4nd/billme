@@ -733,13 +733,14 @@ const outgoingBackfillSourceVersion = (row: InvoiceRow, lines: RawLine[], reserv
 
 const backfillCandidateVersion = (db: Database.Database, candidate: AccountingBackfillPreview['candidates'][number], scope: TenantScope): { sourceVersion: string; snapshot?: unknown; status: 'ready' | 'unresolved'; reason?: string } => {
   if (candidate.sourceType === 'outgoing_invoice') {
-    const preview = previewOutgoingInvoice(db, scope, candidate.sourceId);
     const row = invoiceRow(db, 'default', candidate.sourceId);
-    const lines = row ? invoiceLines(db, candidate.sourceId) : [];
+    if (!row) return { sourceVersion: sha256({ missing: candidate.sourceId }), status: 'unresolved', reason: 'Invoice not found.' };
+    const preview = previewOutgoingInvoice(db, scope, candidate.sourceId);
+    const lines = invoiceLines(db, candidate.sourceId);
     const reservation = finalizedInvoiceReservation(db, row);
-    const eligible = Boolean(row && row.status !== 'draft' && reservation && row.accounting_status !== 'posted');
+    const eligible = Boolean(row.status !== 'draft' && reservation && row.accounting_status !== 'posted');
     return {
-      sourceVersion: row ? outgoingBackfillSourceVersion(row, lines, reservation) : sha256({ missing: candidate.sourceId }),
+      sourceVersion: outgoingBackfillSourceVersion(row, lines, reservation),
       snapshot: stableSnapshot(preview.snapshot),
       status: eligible ? preview.status : 'unresolved',
       reason: eligible ? preview.issues[0]?.message : 'Outgoing invoice is not finalized for accounting backfill.',

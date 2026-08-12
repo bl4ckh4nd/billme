@@ -369,6 +369,7 @@ export interface ReportRangeOptions {
 export interface SusaReport {
   from?: string;
   to?: string;
+  chart?: 'SKR03' | 'SKR04';
   asOfDate: string;
   rows: LedgerBalance[];
   totals: {
@@ -387,13 +388,16 @@ export interface GuvReport {
     positionKey: string;
     positionLabel: string;
     amount: number;
+    accountRefs?: string[];
   }>;
+  chart?: 'SKR03' | 'SKR04';
   netResult: number;
   unmappedAccounts?: ReportUnmappedAccount[];
   blocking?: boolean;
 }
 
 export interface BilanzReport {
+  chart?: 'SKR03' | 'SKR04';
   asOfDate: string;
   assets: Array<{
     accountNumber: string;

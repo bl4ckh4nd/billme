@@ -617,6 +617,7 @@ const proGetSusaReportArgsSchema = z.object({
 const proGetSusaReportResultSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
   asOfDate: z.string(),
   rows: z.array(ledgerBalanceRowSchema),
   totals: z.object({
@@ -641,8 +642,10 @@ const proGetGuvReportResultSchema = z.object({
       positionKey: z.string(),
       positionLabel: z.string(),
       amount: z.number(),
+      accountRefs: z.array(z.string()).optional(),
     }),
   ),
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
   netResult: z.number(),
   unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
   blocking: z.boolean().optional(),
@@ -653,6 +656,7 @@ const proGetBilanzReportArgsSchema = z.object({
 });
 
 const proGetBilanzReportResultSchema = z.object({
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
   asOfDate: z.string(),
   assets: z.array(
     z.object({

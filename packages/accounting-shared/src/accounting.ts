@@ -64,6 +64,7 @@ export type JournalSourceType =
   | 'outgoing_invoice'
   | 'incoming_invoice'
   | 'payment'
+  | 'payment_vat'
   | 'legacy_transaction';
 
 export interface LedgerBalance {

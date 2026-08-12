@@ -99,7 +99,10 @@ describe.skipIf(!canRunNativeSqlite)('auditable Pro reports', () => {
     expect(susa.blocking).toBe(false);
 
     const guv = getGuvReport(db, { from: '2026-03-01', to: '2026-03-31' }, scope);
-    expect(guv.rows).toEqual([{ positionKey: 'expense', positionLabel: 'Aufwendungen', amount: -50 }, { positionKey: 'revenue', positionLabel: 'Umsatzerlöse', amount: 0 }]);
+    expect(guv.rows).toEqual([
+      { positionKey: 'expense', positionLabel: 'Aufwendungen', amount: -50, accountRefs: ['4900'] },
+      { positionKey: 'revenue', positionLabel: 'Umsatzerlöse', amount: 0, accountRefs: ['8400'] },
+    ]);
     expect(guv.netResult).toBe(-50);
     expect(guv.unmappedAccounts).toEqual([]);
 
@@ -119,6 +122,25 @@ describe.skipIf(!canRunNativeSqlite)('auditable Pro reports', () => {
 
     const health = getAccountingHealth(db, scope);
     expect(health).toMatchObject({ unmappedAccountCount: 0, unmappedAccounts: [], blocking: false });
+  });
+
+  it('seeds OPOS 7% VAT accounts for both active charts', () => {
+    for (const [chart, debitAccount, creditAccount] of [
+      ['SKR03', '1571', '1771'],
+      ['SKR04', '1401', '3801'],
+    ] as const) {
+      const db = createDb();
+      db.prepare(`INSERT OR REPLACE INTO accounting_policies (tenant_id, active_chart, vat_method, period_policy, updated_at)
+        VALUES ('default', ?, 'soll', 'calendar_month', '2026-03-01T00:00:00.000Z')`).run(chart);
+      insertEntry(db, `vat-7-${chart}`, '2026-03-21', [
+        { account: debitAccount, debit: 7 },
+        { account: creditAccount, credit: 7 },
+      ]);
+      const scope = createProTenantScope('default');
+      expect(getSusaReport(db, { asOfDate: '2026-03-31' }, scope).unmappedAccounts).toEqual([]);
+      expect(getBilanzReport(db, { asOfDate: '2026-03-31' }, scope).unmappedAccounts).toEqual([]);
+      expect(getAccountingHealth(db, scope)).toMatchObject({ unmappedAccountCount: 0, blocking: false });
+    }
   });
 
   it('exposes unknown accounts and never matches a mapping from another chart or tenant', () => {

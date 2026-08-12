@@ -6,9 +6,9 @@ import {
   mapSusaReport,
 } from './reportAdapters';
 
-const account = (accountNumber: string, name: string) => ({
-  id: accountNumber,
-  chart: 'SKR03' as const,
+const account = (accountNumber: string, name: string, chart: 'SKR03' | 'SKR04' = 'SKR03') => ({
+  id: `${chart}-${accountNumber}`,
+  chart,
   accountNumber,
   name,
   source: 'test',
@@ -21,6 +21,7 @@ describe('reportAdapters', () => {
     const report = mapSusaReport(
       {
         asOfDate: '2026-12-31',
+        chart: 'SKR03',
         rows: [
           {
             accountNumber: '8400',
@@ -39,7 +40,7 @@ describe('reportAdapters', () => {
         ],
         totals: { debit: 10, credit: 100, balance: -110 },
       },
-      [account('8400', 'Erlöse 19 % USt')],
+      [account('8400', 'Erlöse 19 % USt'), account('8400', 'Falscher SKR04 Name', 'SKR04')],
     );
 
     expect(report.rows[0]).toMatchObject({
@@ -58,9 +59,11 @@ describe('reportAdapters', () => {
 
   it('adds the GuV net result as a subtotal', () => {
     const report = mapGuvReport({
-      rows: [{ positionKey: 'revenue', positionLabel: 'Umsatzerlöse', amount: 125 }],
+      rows: [{ positionKey: 'revenue', positionLabel: 'Umsatzerlöse', amount: 125, accountRefs: ['8400'] }],
       netResult: 75,
     });
+
+    expect(report.lines[0]?.accountRefs).toEqual(['8400']);
 
     expect(report.lines.at(-1)).toMatchObject({
       id: 'net-result',
@@ -90,26 +93,33 @@ describe('reportAdapters', () => {
       {
         id: 'payment-entry', tenantId: 'default', entryNumber: 1, postingDate: '2026-03-01',
         bookingText: 'Kundenzahlung', period: '2026-03', fiscalYear: 2026, status: 'posted' as const,
-        sourceType: 'payment' as const, createdAt: '2026-03-01T00:00:00.000Z',
+        sourceType: 'payment' as const, sourceKey: 'payment:bank_transaction:bank-42', createdAt: '2026-03-01T00:00:00.000Z',
         lines: [{ id: 'payment-line', accountNumber: '1200', debitAmount: 100, creditAmount: 0 }],
       },
       {
         id: 'incoming-entry', tenantId: 'default', entryNumber: 2, postingDate: '2026-03-02',
         bookingText: 'Eingangsrechnung', period: '2026-03', fiscalYear: 2026, status: 'posted' as const,
-        sourceType: 'incoming_invoice' as const, createdAt: '2026-03-02T00:00:00.000Z',
+        sourceType: 'incoming_invoice' as const, sourceKey: 'incoming-invoice:invoice-7', createdAt: '2026-03-02T00:00:00.000Z',
         lines: [{ id: 'incoming-line', accountNumber: '4900', debitAmount: 50, creditAmount: 0 }],
       },
       {
         id: 'outgoing-entry', tenantId: 'default', entryNumber: 3, postingDate: '2026-03-03',
         bookingText: 'Ausgangsrechnung', period: '2026-03', fiscalYear: 2026, status: 'posted' as const,
-        sourceType: 'outgoing_invoice' as const, createdAt: '2026-03-03T00:00:00.000Z',
+        sourceType: 'outgoing_invoice' as const, sourceKey: 'outgoing-invoice:invoice-8', createdAt: '2026-03-03T00:00:00.000Z',
         lines: [{ id: 'outgoing-line', accountNumber: '8400', debitAmount: 0, creditAmount: 100 }],
+      },
+      {
+        id: 'payment-vat-entry', tenantId: 'default', entryNumber: 4, postingDate: '2026-03-04',
+        bookingText: 'USt Vereinnahmung', period: '2026-03', fiscalYear: 2026, status: 'posted' as const,
+        sourceType: 'payment_vat' as const, sourceKey: 'payment-vat:payment-9:allocation-1', createdAt: '2026-03-04T00:00:00.000Z',
+        lines: [{ id: 'payment-vat-line', accountNumber: '1776', debitAmount: 0, creditAmount: 19 }],
       },
     ];
     const result = mapReportDrilldownEntries(entries, {
-      reportType: 'susa', targetId: '1200', targetLabel: 'Bank', accountNumbers: ['1200', '4900', '8400'],
-    });
-    expect(result.map((entry) => entry.source)).toEqual(['Abgleich', 'Inbox', 'Abgleich']);
+      reportType: 'susa', targetId: '1200', targetLabel: 'Bank', accountNumbers: ['1200', '4900', '8400', '1776'],
+    }, { from: '2026-03-02', to: '2026-03-04' });
+    expect(result.map((entry) => entry.source)).toEqual(['Inbox', 'Abgleich', 'Abgleich']);
+    expect(result.map((entry) => entry.transactionId)).toEqual(['invoice-7', 'invoice-8', 'payment-9']);
   });
 
   it('maps empty report and drilldown results', () => {

@@ -1227,12 +1227,12 @@ export const registerIpcHandlers = (
     return getProAccountingService().listJournalEntries({ from, to, accountNumbers, limit, offset });
   });
 
-  register(ipcMain, 'pro:getLedgerBalances', ({ asOfDate }) => {
-    return getProAccountingService().getLedgerBalances({ asOfDate });
+  register(ipcMain, 'pro:getLedgerBalances', ({ asOfDate, from, to }) => {
+    return getProAccountingService().getLedgerBalances({ asOfDate, from, to });
   });
 
-  register(ipcMain, 'pro:getSusaReport', ({ asOfDate }) => {
-    return getProAccountingService().getSusaReport({ asOfDate });
+  register(ipcMain, 'pro:getSusaReport', ({ asOfDate, from, to }) => {
+    return getProAccountingService().getSusaReport({ asOfDate, from, to });
   });
 
   register(ipcMain, 'pro:getGuvReport', ({ from, to }) => {

@@ -11,8 +11,8 @@ type LedgerAccount = IpcResult<'pro:listLedgerAccounts'>[number];
 
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
-const accountNameMap = (accounts: LedgerAccount[]): Map<string, string> =>
-  new Map(accounts.map((account) => [account.accountNumber, account.name]));
+const accountNameMap = (accounts: LedgerAccount[], chart?: 'SKR03' | 'SKR04'): Map<string, string> =>
+  new Map(accounts.filter((account) => !chart || account.chart === chart).map((account) => [account.accountNumber, account.name]));
 
 const isCreditNormal = (accountNumber: string): boolean =>
   ['2', '3', '8', '9'].includes(accountNumber[0] ?? '');
@@ -21,7 +21,7 @@ export const mapSusaReport = (
   report: IpcResult<'pro:getSusaReport'>,
   accounts: LedgerAccount[],
 ): SusaReport => {
-  const names = accountNameMap(accounts);
+  const names = accountNameMap(accounts, report.chart);
   const rows = report.rows.map((row) => ({
     ...row,
     accountName: names.get(row.accountNumber) ?? `Konto ${row.accountNumber}`,
@@ -73,6 +73,7 @@ export const mapGuvReport = (report: IpcResult<'pro:getGuvReport'>): GuvReport =
         label: row.positionLabel,
         level: 0,
         amountCurrent: row.amount,
+        accountRefs: row.accountRefs,
       })),
       {
         id: 'net-result',
@@ -97,7 +98,7 @@ export const mapBalanceSheetPreview = (
   report: IpcResult<'pro:getBilanzReport'>,
   accounts: LedgerAccount[],
 ): BalanceSheetPreview => {
-  const names = accountNameMap(accounts);
+  const names = accountNameMap(accounts, report.chart);
   const mapLines = (
     rows: Array<{ accountNumber: string; amount: number }>,
     side: 'aktiva' | 'passiva',
@@ -133,34 +134,53 @@ export const mapBalanceSheetPreview = (
   };
 };
 
+const sourceIdFromEntry = (entry: IpcResult<'pro:listJournalEntries'>[number]): string | undefined => {
+  if (entry.sourceDraftId) return entry.sourceDraftId;
+  const key = entry.sourceKey;
+  if (!key) return undefined;
+  if (entry.sourceType === 'outgoing_invoice') return key.replace(/^outgoing-invoice:/, '');
+  if (entry.sourceType === 'incoming_invoice') return key.replace(/^incoming-invoice:/, '');
+  if (entry.sourceType === 'payment') return key.replace(/^payment:[^:]+:/, '');
+  if (entry.sourceType === 'payment_vat') return key.replace(/^payment-vat:/, '').split(':')[0];
+  if (entry.sourceType === 'reversal') return key.replace(/^reversal:/, '');
+  return key;
+};
+
+const sourceLabel = (entry: IpcResult<'pro:listJournalEntries'>[number]): ReportDrilldownEntry['source'] =>
+  /afa|abschreibung/i.test(entry.bookingText) || entry.sourceType === 'depreciation'
+    ? 'AfA'
+    : entry.sourceType === 'payment' || entry.sourceType === 'payment_vat'
+      ? 'Abgleich'
+      : entry.sourceType === 'incoming_invoice' || entry.sourceType === 'booking_draft' || entry.sourceDraftId
+        ? 'Inbox'
+        : entry.sourceType === 'outgoing_invoice'
+          ? 'Abgleich'
+          : 'Manuell';
+
 export const mapReportDrilldownEntries = (
   entries: IpcResult<'pro:listJournalEntries'>,
   selection: ReportDrilldownSelection,
+  range: { from?: string; to?: string } = {},
 ): ReportDrilldownEntry[] => {
   const accounts = new Set(selection.accountNumbers);
   if (!accounts.size) return [];
 
-  return entries.flatMap((entry) =>
-    entry.lines
-      .filter((line) => accounts.has(line.accountNumber))
-      .map((line) => ({
-        id: line.id,
-        date: entry.postingDate,
-        bookingText: entry.bookingText,
-        reference: entry.reference,
-        accountNumber: line.accountNumber,
-        debit: line.debitAmount,
-        credit: line.creditAmount,
-        amount: round2(line.debitAmount - line.creditAmount),
-        source: /afa|abschreibung/i.test(entry.bookingText) || entry.sourceType === 'depreciation'
-          ? 'AfA' as const
-          : entry.sourceType === 'payment'
-            ? 'Abgleich' as const
-            : entry.sourceType === 'incoming_invoice' || entry.sourceType === 'booking_draft' || entry.sourceDraftId
-              ? 'Inbox' as const
-              : entry.sourceType === 'outgoing_invoice'
-                ? 'Abgleich' as const
-                : 'Manuell' as const,
-      })),
-  );
+  return entries
+    .filter((entry) => (!range.from || entry.postingDate >= range.from) && (!range.to || entry.postingDate <= range.to))
+    .flatMap((entry) =>
+      entry.lines
+        .filter((line) => accounts.has(line.accountNumber))
+        .map((line) => ({
+          id: line.id,
+          date: entry.postingDate,
+          bookingText: entry.bookingText,
+          reference: entry.reference,
+          transactionId: sourceIdFromEntry(entry),
+          accountNumber: line.accountNumber,
+          debit: line.debitAmount,
+          credit: line.creditAmount,
+          amount: round2(line.debitAmount - line.creditAmount),
+          source: sourceLabel(entry),
+        })),
+    );
 };

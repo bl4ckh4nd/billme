@@ -4,6 +4,7 @@ import { Settings2 } from 'lucide-react';
 import { Button } from '@billme/ui';
 import {
   ProAccountingWorkspace,
+  type ReportFilterState,
   type ProAccountingDataAdapter,
   type ProAccountingSeed,
   type Transaction as ProUiTransaction,
@@ -20,6 +21,11 @@ import {
   mapReportDrilldownEntries,
   mapSusaReport,
 } from './reportAdapters';
+
+const reportPeriodRange = (filters: ReportFilterState): { from?: string; to?: string } => ({
+  from: filters.periodFrom ? `${filters.periodFrom}-01` : undefined,
+  to: filters.periodTo ? `${filters.periodTo}-31` : filters.asOfDate,
+});
 
 const inferAccountType = (accountNumber: string): ProUiAccount['type'] => {
   const first = accountNumber[0];
@@ -236,6 +242,7 @@ export const ProAccountingPage: React.FC = () => {
   }, [queryClient]);
 
   const dataAdapter = React.useMemo<ProAccountingDataAdapter>(() => {
+    let activeReportFilters: ReportFilterState | undefined;
     const setTxWorkflowStatus = (transactionId: string, workflowStatus: ProUiTransaction['workflowStatus']) => {
       const idx = adapterTransactionsRef.current.findIndex((tx) => tx.id === transactionId);
       if (idx === -1) return;
@@ -395,34 +402,41 @@ export const ProAccountingPage: React.FC = () => {
         return structuredClone(next);
       },
       async getSusaReport(filters) {
-        const [report, accounts] = await Promise.all([
-          ipc.pro.getSusaReport({ asOfDate: filters.asOfDate }),
-          ipc.pro.listLedgerAccounts({ chart: filters.chart, limit: 10_000 }),
-        ]);
+        activeReportFilters = filters;
+        const range = reportPeriodRange(filters);
+        const report = await ipc.pro.getSusaReport({
+          asOfDate: filters.asOfDate,
+          from: range.from,
+          to: range.to,
+        });
+        const accounts = await ipc.pro.listLedgerAccounts({ chart: report.chart ?? filters.chart, limit: 10_000 });
         return mapSusaReport(report, accounts);
       },
       async getGuvReport(filters) {
-        const report = await ipc.pro.getGuvReport({
-          from: filters.periodFrom ? `${filters.periodFrom}-01` : undefined,
-          to: filters.periodTo ? `${filters.periodTo}-31` : undefined,
-        });
+        activeReportFilters = filters;
+        const range = reportPeriodRange(filters);
+        const report = await ipc.pro.getGuvReport(range);
         return mapGuvReport(report);
       },
       async getBalanceSheetPreview(filters) {
-        const [report, accounts] = await Promise.all([
-          ipc.pro.getBilanzReport({ asOfDate: filters.asOfDate }),
-          ipc.pro.listLedgerAccounts({ chart: filters.chart, limit: 10_000 }),
-        ]);
+        activeReportFilters = filters;
+        const report = await ipc.pro.getBilanzReport({ asOfDate: filters.asOfDate });
+        const accounts = await ipc.pro.listLedgerAccounts({ chart: report.chart ?? filters.chart, limit: 10_000 });
         return mapBalanceSheetPreview(report, accounts);
       },
       async getReportDrilldownEntries(selection) {
         if (!selection.accountNumbers.length) return [];
+        const filters = activeReportFilters;
+        const range = selection.reportType === 'bilanz'
+          ? { to: filters?.asOfDate }
+          : filters ? reportPeriodRange(filters) : {};
         const entries = await ipc.pro.listJournalEntries({
+          ...range,
           accountNumbers: selection.accountNumbers,
           limit: 5000,
           offset: 0,
         });
-        return mapReportDrilldownEntries(entries, selection);
+        return mapReportDrilldownEntries(entries, selection, range);
       },
       listAssets() {
         return ipc.pro.listAssets();

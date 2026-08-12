@@ -648,7 +648,7 @@ export const journalEntryEntitySchema = z.object({
   fiscalYear: z.number().int(),
   status: z.enum(['posted', 'reversed']),
   sourceDraftId: z.string().optional(),
-  sourceType: z.enum(['booking_draft', 'reversal', 'depreciation', 'manual', 'outgoing_invoice', 'incoming_invoice', 'payment', 'legacy_transaction']).optional(),
+  sourceType: z.enum(['booking_draft', 'reversal', 'depreciation', 'manual', 'outgoing_invoice', 'incoming_invoice', 'payment', 'payment_vat', 'legacy_transaction']).optional(),
   sourceKey: z.string().optional(),
   reversedEntryId: z.string().optional(),
   createdAt: z.string(),

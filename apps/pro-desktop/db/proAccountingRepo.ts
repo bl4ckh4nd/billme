@@ -133,7 +133,7 @@ export interface JournalEntryEntity {
   fiscalYear: number;
   status: JournalEntryStatus;
   sourceDraftId?: string;
-  sourceType?: 'booking_draft' | 'reversal' | 'depreciation' | 'manual' | 'outgoing_invoice' | 'incoming_invoice' | 'payment' | 'legacy_transaction';
+  sourceType?: 'booking_draft' | 'reversal' | 'depreciation' | 'manual' | 'outgoing_invoice' | 'incoming_invoice' | 'payment' | 'payment_vat' | 'legacy_transaction';
   sourceKey?: string;
   reversedEntryId?: string;
   createdAt: string;
@@ -1535,10 +1535,14 @@ const defaultHgbMappings: Record<'SKR03' | 'SKR04', Array<{
     { accountNumber: '4900', statementType: 'guv', positionKey: 'expense', positionLabel: 'Aufwendungen' },
     { accountNumber: '1200', statementType: 'bilanz', positionKey: 'bank', positionLabel: 'Bank', balanceSide: 'asset' },
     { accountNumber: '1400', statementType: 'bilanz', positionKey: 'receivables', positionLabel: 'Forderungen', balanceSide: 'asset' },
-    { accountNumber: '1576', statementType: 'bilanz', positionKey: 'input_vat', positionLabel: 'Vorsteuer', balanceSide: 'asset' },
+    { accountNumber: '1576', statementType: 'bilanz', positionKey: 'input_vat', positionLabel: 'Vorsteuer 19 %', balanceSide: 'asset' },
+    { accountNumber: '1571', statementType: 'bilanz', positionKey: 'input_vat_7', positionLabel: 'Vorsteuer 7 %', balanceSide: 'asset' },
+    { accountNumber: '1574', statementType: 'bilanz', positionKey: 'input_vat_rc', positionLabel: 'Vorsteuer Reverse Charge', balanceSide: 'asset' },
     { accountNumber: '0480', statementType: 'bilanz', positionKey: 'fixed_assets', positionLabel: 'Sachanlagen', balanceSide: 'asset' },
     { accountNumber: '1600', statementType: 'bilanz', positionKey: 'payables', positionLabel: 'Verbindlichkeiten', balanceSide: 'liability' },
-    { accountNumber: '1776', statementType: 'bilanz', positionKey: 'output_vat', positionLabel: 'Umsatzsteuer', balanceSide: 'liability' },
+    { accountNumber: '1776', statementType: 'bilanz', positionKey: 'output_vat', positionLabel: 'Umsatzsteuer 19 %', balanceSide: 'liability' },
+    { accountNumber: '1771', statementType: 'bilanz', positionKey: 'output_vat_7', positionLabel: 'Umsatzsteuer 7 %', balanceSide: 'liability' },
+    { accountNumber: '1774', statementType: 'bilanz', positionKey: 'output_vat_rc', positionLabel: 'Umsatzsteuer Reverse Charge', balanceSide: 'liability' },
     { accountNumber: '1780', statementType: 'bilanz', positionKey: 'output_vat_deferred', positionLabel: 'Umsatzsteuer nicht fällig', balanceSide: 'liability' },
     { accountNumber: '9000', statementType: 'bilanz', positionKey: 'equity', positionLabel: 'Eigenkapital', balanceSide: 'liability' },
   ],
@@ -1547,10 +1551,14 @@ const defaultHgbMappings: Record<'SKR03' | 'SKR04', Array<{
     { accountNumber: '6300', statementType: 'guv', positionKey: 'expense', positionLabel: 'Aufwendungen' },
     { accountNumber: '1800', statementType: 'bilanz', positionKey: 'bank', positionLabel: 'Bank', balanceSide: 'asset' },
     { accountNumber: '1200', statementType: 'bilanz', positionKey: 'receivables', positionLabel: 'Forderungen', balanceSide: 'asset' },
-    { accountNumber: '1406', statementType: 'bilanz', positionKey: 'input_vat', positionLabel: 'Vorsteuer', balanceSide: 'asset' },
+    { accountNumber: '1406', statementType: 'bilanz', positionKey: 'input_vat', positionLabel: 'Vorsteuer 19 %', balanceSide: 'asset' },
+    { accountNumber: '1401', statementType: 'bilanz', positionKey: 'input_vat_7', positionLabel: 'Vorsteuer 7 %', balanceSide: 'asset' },
+    { accountNumber: '1404', statementType: 'bilanz', positionKey: 'input_vat_rc', positionLabel: 'Vorsteuer Reverse Charge', balanceSide: 'asset' },
     { accountNumber: '0670', statementType: 'bilanz', positionKey: 'fixed_assets', positionLabel: 'Sachanlagen', balanceSide: 'asset' },
     { accountNumber: '3300', statementType: 'bilanz', positionKey: 'payables', positionLabel: 'Verbindlichkeiten', balanceSide: 'liability' },
-    { accountNumber: '3806', statementType: 'bilanz', positionKey: 'output_vat', positionLabel: 'Umsatzsteuer', balanceSide: 'liability' },
+    { accountNumber: '3806', statementType: 'bilanz', positionKey: 'output_vat', positionLabel: 'Umsatzsteuer 19 %', balanceSide: 'liability' },
+    { accountNumber: '3801', statementType: 'bilanz', positionKey: 'output_vat_7', positionLabel: 'Umsatzsteuer 7 %', balanceSide: 'liability' },
+    { accountNumber: '3804', statementType: 'bilanz', positionKey: 'output_vat_rc', positionLabel: 'Umsatzsteuer Reverse Charge', balanceSide: 'liability' },
     { accountNumber: '3810', statementType: 'bilanz', positionKey: 'output_vat_deferred', positionLabel: 'Umsatzsteuer nicht fällig', balanceSide: 'liability' },
     { accountNumber: '2900', statementType: 'bilanz', positionKey: 'equity', positionLabel: 'Eigenkapital', balanceSide: 'liability' },
   ],
@@ -1626,6 +1634,7 @@ export const getSusaReport = (
 ): {
   from?: string;
   to?: string;
+  chart: 'SKR03' | 'SKR04';
   asOfDate: string;
   rows: LedgerBalanceRow[];
   totals: { debit: number; credit: number; balance: number };
@@ -1653,6 +1662,7 @@ export const getSusaReport = (
   return {
     from: args.from,
     to: upperDate,
+    chart,
     asOfDate: upperDate ?? new Date().toISOString().slice(0, 10),
     rows,
     totals: {
@@ -1672,7 +1682,8 @@ export const getGuvReport = (
 ): {
   from?: string;
   to?: string;
-  rows: Array<{ positionKey: string; positionLabel: string; amount: number }>;
+  chart: 'SKR03' | 'SKR04';
+  rows: Array<{ positionKey: string; positionLabel: string; amount: number; accountRefs: string[] }>;
   netResult: number;
   unmappedAccounts: Array<{ accountNumber: string; amount: number }>;
   blocking: boolean;
@@ -1685,23 +1696,27 @@ export const getGuvReport = (
   const guvMappings = new Map(mappings.filter((mapping) => mapping.statement_type === 'guv').map((mapping) => [mapping.account_number, mapping]));
   const knownAccounts = new Set(mappings.map((mapping) => mapping.account_number));
   const unmappedAccounts = aggregateUnmapped(sourceRows, knownAccounts, (row) => centsForReport(row.credit_amount) - centsForReport(row.debit_amount));
-  const grouped = new Map<string, { positionKey: string; positionLabel: string; amount: number }>();
+  const grouped = new Map<string, { positionKey: string; positionLabel: string; amount: number; accountRefs: Set<string> }>();
   for (const row of sourceRows) {
     const mapping = guvMappings.get(row.account_number);
     if (!mapping) continue;
-    const current = grouped.get(mapping.position_key) ?? { positionKey: mapping.position_key, positionLabel: mapping.position_label, amount: 0 };
+    const current = grouped.get(mapping.position_key) ?? { positionKey: mapping.position_key, positionLabel: mapping.position_label, amount: 0, accountRefs: new Set<string>() };
     current.amount += centsForReport(row.credit_amount) - centsForReport(row.debit_amount);
+    current.accountRefs.add(row.account_number);
     grouped.set(mapping.position_key, current);
   }
   const rows = [...grouped.values()].sort((left, right) => left.positionKey.localeCompare(right.positionKey)).map((row) => ({
-    ...row,
+    positionKey: row.positionKey,
+    positionLabel: row.positionLabel,
     amount: amountForReport(row.amount),
+    accountRefs: [...row.accountRefs].sort(),
   }));
   const revenue = rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + centsForReport(row.amount), 0);
   const expenses = rows.filter((row) => row.positionKey === 'expense').reduce((sum, row) => sum + centsForReport(row.amount), 0);
   return {
     from: args.from,
     to: args.to,
+    chart,
     rows,
     netResult: amountForReport(revenue + expenses),
     unmappedAccounts,
@@ -1714,6 +1729,7 @@ export const getBilanzReport = (
   args: { asOfDate?: string; to?: string } = {},
   scope: TenantScope,
 ): {
+  chart: 'SKR03' | 'SKR04';
   asOfDate: string;
   assets: Array<{ accountNumber: string; amount: number }>;
   liabilities: Array<{ accountNumber: string; amount: number }>;
@@ -1747,6 +1763,7 @@ export const getBilanzReport = (
   const totalAssets = assets.reduce((sum, row) => sum + centsForReport(row.amount), 0);
   const totalLiabilities = liabilities.reduce((sum, row) => sum + centsForReport(row.amount), 0);
   return {
+    chart,
     asOfDate: upperDate ?? new Date().toISOString().slice(0, 10),
     assets,
     liabilities,

@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import Database from 'better-sqlite3';
+import { createSingleTenantScope } from '@billme/server-core';
+import { createPostgresPool } from './connection.js';
+import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
 import { tenantCoreRowCountTables } from './billing.js';
 import {
   desktopSqliteIgnoredTables,
   desktopSqliteImportedTables,
   detectUnsupportedSqliteTables,
+  importDesktopSqliteToPostgres,
 } from './importDesktop.js';
 
 const rootUrl = new URL('../../../../', import.meta.url);
@@ -103,7 +112,7 @@ test('Drizzle migration journal contains incremental migrations', async () => {
   const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ tag: string }> };
   assert.deepEqual(journal.entries.map((entry) => entry.tag), [
     '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
-    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes',
+    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at',
   ]);
 });
 
@@ -116,4 +125,52 @@ test('tax columns are present in both incremental migration files', async () => 
   assert.match(sql, /tax_mode/);
   assert.match(sql, /tax_meta_json/);
   assert.match(sql, /tax_snapshot_json/);
+});
+
+test('SQLite import preserves posted outgoing/incoming accounting metadata and line ordering', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tenantId = `import-accounting-${randomUUID()}`;
+  const outgoingId = `outgoing-${randomUUID()}`;
+  const incomingId = `incoming-${randomUUID()}`;
+  const vendorId = `vendor-${randomUUID()}`;
+  const now = new Date().toISOString();
+  const outgoingSnapshot = JSON.stringify({ sourceVersion: 'sqlite-outgoing-posted', grossAmount: 119 });
+  const incomingSnapshot = JSON.stringify({ sourceVersion: 'sqlite-incoming-posted', grossAmount: 119 });
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  try {
+    sqlite.exec(`
+      CREATE TABLE invoices (id TEXT PRIMARY KEY, client_id TEXT, client_number TEXT, project_id TEXT, number TEXT, client TEXT, client_email TEXT, client_address TEXT, billing_address_json TEXT, shipping_address_json TEXT, tax_mode TEXT, tax_meta_json TEXT, tax_snapshot_json TEXT, accounting_status TEXT, accounting_snapshot_json TEXT, accounting_journal_entry_id TEXT, accounting_posted_at TEXT, date TEXT, due_date TEXT, service_period TEXT, amount REAL, status TEXT, dunning_level INTEGER, created_at TEXT, updated_at TEXT);
+      CREATE TABLE invoice_items (invoice_id TEXT, position INTEGER, description TEXT, article_id TEXT, category TEXT, tax_rate REAL, quantity REAL, price REAL, total REAL, line_meta_json TEXT);
+      CREATE TABLE invoice_payments (id TEXT, invoice_id TEXT, date TEXT, amount REAL, method TEXT);
+      CREATE TABLE vendors (id TEXT PRIMARY KEY, tenant_id TEXT, vendor_number TEXT, name TEXT, email TEXT, address TEXT, vat_id TEXT, iban TEXT, default_expense_account TEXT, created_at TEXT, updated_at TEXT);
+      CREATE TABLE incoming_invoices (id TEXT PRIMARY KEY, tenant_id TEXT, vendor_id TEXT, number TEXT, invoice_date TEXT, due_date TEXT, service_period TEXT, net_amount REAL, tax_amount REAL, gross_amount REAL, status TEXT, tax_rate REAL, tax_case_key TEXT, notes TEXT, accounting_status TEXT, accounting_snapshot_json TEXT, accounting_journal_entry_id TEXT, accounting_posted_at TEXT, created_at TEXT, updated_at TEXT);
+      CREATE TABLE incoming_invoice_lines (id TEXT PRIMARY KEY, tenant_id TEXT, incoming_invoice_id TEXT, position INTEGER, description TEXT, quantity REAL, unit_price REAL, net_amount REAL, tax_rate REAL, tax_amount REAL, gross_amount REAL, account_number TEXT, asset_account_number TEXT);
+    `);
+    sqlite.prepare(`INSERT INTO invoices (id,number,client,client_email,tax_mode,accounting_status,accounting_snapshot_json,accounting_journal_entry_id,accounting_posted_at,date,due_date,amount,status,dunning_level,created_at,updated_at) VALUES (?,?,?,?,?,'posted',?,?,?,'2026-08-12','2026-08-31',119,'open',0,?,?)`).run(outgoingId, 'RE-IMPORT-OUT', 'Imported customer', 'customer@example.test', 'standard_vat', outgoingSnapshot, 'outgoing-journal', '2026-08-12T12:00:00.000Z', now, now);
+    sqlite.prepare(`INSERT INTO invoice_items VALUES (?,?,?,?,?,?,?,?,?,?)`).run(outgoingId, 0, 'Service', null, null, 19, 1, 100, 119, null);
+    sqlite.prepare(`INSERT INTO vendors VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(vendorId, 'source-tenant', 'V-IMPORT', 'Imported vendor', 'vendor@example.test', null, null, null, null, now, now);
+    sqlite.prepare(`INSERT INTO incoming_invoices VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(incomingId, 'source-tenant', vendorId, 'ER-IMPORT-IN', '2026-08-12', '2026-08-31', null, 100, 19, 119, 'open', 19, null, null, 'posted', incomingSnapshot, 'incoming-journal', '2026-08-12T13:00:00.000Z', now, now);
+    sqlite.prepare(`INSERT INTO incoming_invoice_lines VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('incoming-line-1', 'source-tenant', incomingId, 0, 'Service', 1, 100, 100, 19, 19, 119, '8400', null);
+    sqlite.close();
+
+    const result = await importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: tenantId, slug: tenantId, displayName: 'Import accounting test' } });
+    assert.equal(result.counts.invoices, 1);
+    assert.equal(result.counts.incomingInvoices, 1);
+    const outgoing = (await pool.query('SELECT accounting_status,accounting_snapshot_json,accounting_journal_entry_id,accounting_posted_at FROM invoices WHERE tenant_id=$1 AND id=$2', [tenantId, outgoingId])).rows[0];
+    const incoming = (await pool.query('SELECT accounting_status,accounting_snapshot_json,accounting_journal_entry_id,accounting_posted_at FROM incoming_invoices WHERE tenant_id=$1 AND id=$2', [tenantId, incomingId])).rows[0];
+    assert.deepEqual(outgoing, { accounting_status: 'posted', accounting_snapshot_json: outgoingSnapshot, accounting_journal_entry_id: 'outgoing-journal', accounting_posted_at: '2026-08-12T12:00:00.000Z' });
+    assert.deepEqual(incoming, { accounting_status: 'posted', accounting_snapshot_json: incomingSnapshot, accounting_journal_entry_id: 'incoming-journal', accounting_posted_at: '2026-08-12T13:00:00.000Z' });
+    assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2', [tenantId, incomingId])).rows[0].count, 1);
+    const repository = createPostgresProAccountingRepository(pool);
+    const scope = createSingleTenantScope(tenantId, 'pro');
+    assert.equal((await repository.postOutgoingInvoice(scope, outgoingId)).snapshot?.sourceVersion, 'sqlite-outgoing-posted');
+    assert.equal((await repository.postIncomingInvoice(scope, incomingId)).snapshot?.sourceVersion, 'sqlite-incoming-posted');
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

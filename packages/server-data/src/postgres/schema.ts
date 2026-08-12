@@ -124,6 +124,10 @@ export const invoices = pgTable("invoices", {
   taxMode: text("tax_mode"),
   taxMetaJson: text("tax_meta_json"),
   taxSnapshotJson: text("tax_snapshot_json"),
+  accountingStatus: text("accounting_status"),
+  accountingSnapshotJson: text("accounting_snapshot_json"),
+  accountingJournalEntryId: text("accounting_journal_entry_id"),
+  accountingPostedAt: text("accounting_posted_at"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
@@ -513,6 +517,7 @@ export const taxCases = pgTable("tax_cases", {
 
 export const taxCaseAccountMappings = pgTable("tax_case_account_mappings", {
   id: text("id"),
+  tenantId: text("tenant_id"),
   chart: text("chart"),
   taxCaseKey: text("tax_case_key"),
   role: text("role"),

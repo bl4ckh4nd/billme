@@ -71,6 +71,20 @@
       "when": 1786527693001,
       "tag": "0009_server_data_datev_export_bytes",
       "breakpoints": false
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786527693002,
+      "tag": "0010_server_data_invoice_accounting_posted_at",
+      "breakpoints": false
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786527693003,
+      "tag": "0011_server_data_tax_case_mapping_tenancy",
+      "breakpoints": false
     }
   ]
 }

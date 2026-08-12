@@ -6,8 +6,10 @@ export const importRawTenantRows = async (
   sourceRows: Array<Record<string, unknown>>,
   tenantId: string,
   columns: string[],
+  insertedIds?: string[],
 ): Promise<number> => {
   const parentKeys: Record<string, Array<[string, string]>> = {
+    invoices: [['client_id', 'clients']],
     incoming_invoices: [['vendor_id', 'vendors']],
     incoming_invoice_lines: [['incoming_invoice_id', 'incoming_invoices']],
     open_item_allocations: [['payment_id', 'open_item_payments'], ['open_item_id', 'open_items']],
@@ -66,6 +68,20 @@ export const importRawTenantRows = async (
     const placeholders = values.map((_, index) => `$${index + 1}`).join(',');
     await client.query(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${placeholders})`, values);
     inserted += 1;
+    insertedIds?.push(String(row.id));
   }
   return inserted;
+};
+
+export const restoreIncomingInvoiceAccountingRows = async (
+  client: PostgresTransactionClient,
+  sourceRows: Array<Record<string, unknown>>,
+  tenantId: string,
+): Promise<void> => {
+  for (const row of sourceRows) {
+    await client.query(
+      'UPDATE incoming_invoices SET accounting_status=$1,accounting_snapshot_json=$2,accounting_journal_entry_id=$3,accounting_posted_at=$4 WHERE tenant_id=$5 AND id=$6',
+      [row.accounting_status ?? 'unposted', row.accounting_snapshot_json ?? null, row.accounting_journal_entry_id ?? null, row.accounting_posted_at ?? null, tenantId, row.id],
+    );
+  }
 };

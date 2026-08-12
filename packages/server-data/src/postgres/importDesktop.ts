@@ -17,7 +17,7 @@ import {
 import { withPostgresTransaction } from './connection.js';
 import { createDrizzle, schema } from './drizzle.js';
 import { runPostgresMigrations } from './migrations.js';
-import { importRawTenantRows } from './oposImport.js';
+import { importRawTenantRows, restoreIncomingInvoiceAccountingRows } from './oposImport.js';
 import {
   saveServerAccountKeyword,
   saveServerAccountMappingHgb,
@@ -44,6 +44,7 @@ import {
   saveServerReportSnapshot,
   saveServerTaxCase,
   saveServerTaxCaseAccountMapping,
+  saveServerTaxCaseAccountMappingForTenant,
   saveServerTemplate,
   saveServerVatEvidence,
   type ServerAccountKeywordRecord,
@@ -80,7 +81,7 @@ type SqliteClientAddressRow = { id: string; client_id: string; label: string; ki
 type SqliteClientEmailRow = { id: string; client_id: string; label: string; kind: 'general' | 'billing' | 'shipping' | 'other'; email: string; is_default_general: number; is_default_billing: number };
 type SqliteClientProjectRow = { id: string; client_id: string; code: string | null; name: string; status: string; budget: number; start_date: string; end_date: string | null; description: string | null; archived_at: string | null; created_at: string | null; updated_at: string | null };
 type SqliteClientActivityRow = { id: string; client_id: string; type: 'note' | 'email' | 'call' | 'meeting'; content: string; date: string; author: string };
-type SqliteInvoiceRow = { id: string; client_id: string | null; client_number: string | null; project_id: string | null; number: string; client: string; client_email: string; client_address: string | null; billing_address_json: string | null; shipping_address_json: string | null; tax_mode?: Invoice['taxMode'] | null; tax_meta_json?: string | null; tax_snapshot_json?: string | null; date: string; due_date: string; service_period: string | null; amount: number; status: Invoice['status']; dunning_level: number; created_at: string; updated_at: string };
+type SqliteInvoiceRow = { id: string; client_id: string | null; client_number: string | null; project_id: string | null; number: string; client: string; client_email: string; client_address: string | null; billing_address_json: string | null; shipping_address_json: string | null; tax_mode?: Invoice['taxMode'] | null; tax_meta_json?: string | null; tax_snapshot_json?: string | null; accounting_status?: string | null; accounting_snapshot_json?: string | null; accounting_journal_entry_id?: string | null; accounting_posted_at?: string | null; date: string; due_date: string; service_period: string | null; amount: number; status: Invoice['status']; dunning_level: number; created_at: string; updated_at: string };
 type SqliteInvoiceItemRow = { invoice_id: string; position: number; description: string; article_id: string | null; category: string | null; tax_rate?: number | null; quantity: number; price: number; total: number; line_meta_json?: string | null };
 type SqliteInvoicePaymentRow = { id: string; invoice_id: string; date: string; amount: number; method: string };
 type SqliteOfferRow = { id: string; client_id: string | null; client_number: string | null; project_id: string | null; number: string; client: string; client_email: string; client_address: string | null; billing_address_json: string | null; shipping_address_json: string | null; tax_mode?: Offer['taxMode'] | null; tax_meta_json?: string | null; tax_snapshot_json?: string | null; date: string; valid_until: string; amount: number; status: Offer['status']; share_token: string | null; share_published_at: string | null; accepted_at: string | null; accepted_by: string | null; accepted_email: string | null; accepted_user_agent: string | null; decision: string | null; decision_text_version: string | null; created_at: string; updated_at: string };
@@ -119,6 +120,7 @@ type SqliteAccountSuggestionRuleRow = { id: string; chart: 'SKR03' | 'SKR04'; pr
 type SqliteImportBatchRow = { id: string; account_id: string; profile: string; file_name: string; file_sha256: string; mapping_json: string; imported_count: number; skipped_count: number; error_count: number; created_at: string; rolled_back_at: string | null; rollback_reason: string | null };
 type SqliteTemplateRow = { id: string; kind: string; name: string; elements_json: string; created_at: string; updated_at: string };
 type SqliteActiveTemplateRow = { id: number; invoice_template_id: string | null; offer_template_id: string | null };
+type LoadedInvoice = { invoice: Invoice; accountingStatus: string; accountingSnapshotJson: string | null; accountingJournalEntryId: string | null; accountingPostedAt: string | null };
 
 export interface DesktopSqliteImportOptions {
   pool: Pool;
@@ -278,7 +280,7 @@ const loadClients = (db: SqliteDatabaseType, tenantId: string): Client[] => {
   return clientRows.map((row) => ({ id: row.id, tenantId, customerNumber: row.customer_number ?? undefined, company: row.company, contactPerson: row.contact_person, email: row.email, phone: row.phone, address: row.address, status: row.status, avatar: row.avatar ?? undefined, tags: parseJson(row.tags_json, []), notes: row.notes, taxProfile: parseJson(row.tax_profile_json ?? null, undefined), addresses: (addressesByClient.get(row.id) ?? []).map((address) => ({ id: address.id, clientId: address.client_id, label: address.label, kind: address.kind, company: address.company ?? undefined, contactPerson: address.contact_person ?? undefined, street: address.street, line2: address.line2 ?? undefined, zip: address.zip, city: address.city, country: address.country, isDefaultBilling: Boolean(address.is_default_billing), isDefaultShipping: Boolean(address.is_default_shipping) })), emails: (emailsByClient.get(row.id) ?? []).map((email) => ({ id: email.id, clientId: email.client_id, label: email.label, kind: email.kind, email: email.email, isDefaultGeneral: Boolean(email.is_default_general), isDefaultBilling: Boolean(email.is_default_billing) })), projects: (projectsByClient.get(row.id) ?? []).map((project) => ({ id: project.id, clientId: project.client_id, code: project.code ?? undefined, name: project.name, status: project.status as Client['projects'][number]['status'], budget: project.budget, startDate: project.start_date, endDate: project.end_date ?? undefined, description: project.description ?? undefined, archivedAt: project.archived_at ?? undefined, createdAt: project.created_at ?? undefined, updatedAt: project.updated_at ?? undefined })), activities: (activitiesByClient.get(row.id) ?? []).map((activity) => ({ id: activity.id, clientId: activity.client_id, type: activity.type, content: activity.content, date: activity.date, author: activity.author })) }));
 };
 
-const loadInvoices = (db: SqliteDatabaseType, tenantId: string): Invoice[] => {
+const loadInvoices = (db: SqliteDatabaseType, tenantId: string): LoadedInvoice[] => {
   if (!tableExists(db, 'invoices')) return [];
   const rows = db.prepare('SELECT * FROM invoices ORDER BY date DESC, created_at DESC').all() as SqliteInvoiceRow[];
   const itemRows = tableExists(db, 'invoice_items') ? (db.prepare('SELECT * FROM invoice_items ORDER BY invoice_id, position ASC').all() as SqliteInvoiceItemRow[]) : [];
@@ -287,7 +289,31 @@ const loadInvoices = (db: SqliteDatabaseType, tenantId: string): Invoice[] => {
   const paymentsByInvoice = new Map<string, SqliteInvoicePaymentRow[]>();
   for (const row of itemRows) { const list = itemsByInvoice.get(row.invoice_id) ?? []; list.push(row); itemsByInvoice.set(row.invoice_id, list); }
   for (const row of paymentRows) { const list = paymentsByInvoice.get(row.invoice_id) ?? []; list.push(row); paymentsByInvoice.set(row.invoice_id, list); }
-  return rows.map((row) => ({ kind: 'invoice', id: row.id, tenantId, clientId: row.client_id ?? undefined, clientNumber: row.client_number ?? undefined, projectId: row.project_id ?? undefined, number: row.number, client: row.client, clientEmail: row.client_email, clientAddress: row.client_address ?? undefined, billingAddress: parseJson(row.billing_address_json, undefined), shippingAddress: parseJson(row.shipping_address_json, undefined), taxMode: row.tax_mode ?? DEFAULT_TAX_MODE, taxMeta: parseJson(row.tax_meta_json ?? null, undefined), taxSnapshot: parseJson(row.tax_snapshot_json ?? null, undefined), date: row.date, dueDate: row.due_date, servicePeriod: row.service_period ?? undefined, amount: row.amount, status: row.status, dunningLevel: row.dunning_level, items: (itemsByInvoice.get(row.id) ?? []).map((item) => billingLineItemSchema.parse({ description: item.description, quantity: item.quantity, price: item.price, total: item.total, articleId: item.article_id ?? undefined, category: item.category ?? undefined, taxRate: item.tax_rate ?? undefined, ...parseJson(item.line_meta_json ?? null, {}) })), payments: (paymentsByInvoice.get(row.id) ?? []).map((payment) => ({ id: payment.id, date: payment.date, amount: payment.amount, method: payment.method })), history: [], createdAt: row.created_at, updatedAt: row.updated_at }));
+  return rows.map((row) => ({
+    invoice: { kind: 'invoice', id: row.id, tenantId, clientId: row.client_id ?? undefined, clientNumber: row.client_number ?? undefined, projectId: row.project_id ?? undefined, number: row.number, client: row.client, clientEmail: row.client_email, clientAddress: row.client_address ?? undefined, billingAddress: parseJson(row.billing_address_json, undefined), shippingAddress: parseJson(row.shipping_address_json, undefined), taxMode: row.tax_mode ?? DEFAULT_TAX_MODE, taxMeta: parseJson(row.tax_meta_json ?? null, undefined), taxSnapshot: parseJson(row.tax_snapshot_json ?? null, undefined), date: row.date, dueDate: row.due_date, servicePeriod: row.service_period ?? undefined, amount: row.amount, status: row.status, dunningLevel: row.dunning_level, items: (itemsByInvoice.get(row.id) ?? []).map((item) => billingLineItemSchema.parse({ description: item.description, quantity: item.quantity, price: item.price, total: item.total, articleId: item.article_id ?? undefined, category: item.category ?? undefined, taxRate: item.tax_rate ?? undefined, ...parseJson(item.line_meta_json ?? null, {}) })), payments: (paymentsByInvoice.get(row.id) ?? []).map((payment) => ({ id: payment.id, date: payment.date, amount: payment.amount, method: payment.method })), history: [], createdAt: row.created_at, updatedAt: row.updated_at },
+    accountingStatus: row.accounting_status ?? 'unposted', accountingSnapshotJson: row.accounting_snapshot_json ?? null, accountingJournalEntryId: row.accounting_journal_entry_id ?? null, accountingPostedAt: row.accounting_posted_at ?? null,
+  }));
+};
+
+const outgoingInvoiceColumns = ['id', 'tenant_id', 'client_id', 'client_number', 'project_id', 'number', 'client', 'client_email', 'client_address', 'billing_address_json', 'shipping_address_json', 'date', 'due_date', 'service_period', 'amount', 'status', 'dunning_level', 'items_json', 'payments_json', 'history_json', 'tax_mode', 'tax_meta_json', 'tax_snapshot_json', 'accounting_status', 'accounting_snapshot_json', 'accounting_journal_entry_id', 'accounting_posted_at', 'created_at', 'updated_at'];
+
+const importOutgoingInvoices = async (client: Parameters<typeof importRawTenantRows>[0], invoices: LoadedInvoice[], tenantId: string): Promise<number> => importRawTenantRows(client, 'invoices', invoices.map(({ invoice, accountingStatus, accountingSnapshotJson, accountingJournalEntryId, accountingPostedAt }) => ({
+  id: invoice.id, tenant_id: tenantId, client_id: invoice.clientId ?? null, client_number: invoice.clientNumber ?? null, project_id: invoice.projectId ?? null,
+  number: invoice.number, client: invoice.client, client_email: invoice.clientEmail, client_address: invoice.clientAddress ?? null,
+  billing_address_json: invoice.billingAddress ? JSON.stringify(invoice.billingAddress) : null, shipping_address_json: invoice.shippingAddress ? JSON.stringify(invoice.shippingAddress) : null,
+  date: invoice.date, due_date: invoice.dueDate, service_period: invoice.servicePeriod ?? null, amount: invoice.amount, status: invoice.status, dunning_level: invoice.dunningLevel ?? 0,
+  items_json: JSON.stringify(invoice.items ?? []), payments_json: JSON.stringify(invoice.payments ?? []), history_json: JSON.stringify(invoice.history ?? []),
+  tax_mode: invoice.taxMode ?? DEFAULT_TAX_MODE, tax_meta_json: invoice.taxMeta ? JSON.stringify(invoice.taxMeta) : null, tax_snapshot_json: invoice.taxSnapshot ? JSON.stringify(invoice.taxSnapshot) : null,
+  accounting_status: accountingStatus, accounting_snapshot_json: accountingSnapshotJson, accounting_journal_entry_id: accountingJournalEntryId, accounting_posted_at: accountingPostedAt,
+  created_at: invoice.createdAt ?? null, updated_at: invoice.updatedAt ?? null,
+})), tenantId, outgoingInvoiceColumns);
+
+const incomingInvoiceColumns = ['id', 'tenant_id', 'vendor_id', 'number', 'invoice_date', 'due_date', 'service_period', 'net_amount', 'tax_amount', 'gross_amount', 'status', 'tax_rate', 'tax_case_key', 'notes', 'accounting_status', 'accounting_snapshot_json', 'accounting_journal_entry_id', 'accounting_posted_at', 'created_at', 'updated_at'];
+const importIncomingInvoices = async (client: Parameters<typeof importRawTenantRows>[0], sourceRows: Array<Record<string, unknown>>, tenantId: string): Promise<{ count: number; insertedIds: string[] }> => {
+  const stagedRows = sourceRows.map((row) => ({ ...row, accounting_status: 'unposted', accounting_snapshot_json: null, accounting_journal_entry_id: null, accounting_posted_at: null }));
+  const insertedIds: string[] = [];
+  const count = await importRawTenantRows(client, 'incoming_invoices', stagedRows, tenantId, incomingInvoiceColumns, insertedIds);
+  return { count, insertedIds };
 };
 
 const loadOffers = (db: SqliteDatabaseType, tenantId: string): Offer[] => {
@@ -435,17 +461,20 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         const activeTemplates = loadActiveTemplates(sqliteDb, tenantId);
         if (activeTemplates) { await saveServerActiveTemplates(client, activeTemplates); counts.activeTemplates += 1; }
         for (const clientRecord of loadClients(sqliteDb, tenantId)) { await dependencies.clientRepo.save(scope, clientRecord); counts.clients += 1; }
-        for (const invoice of loadInvoices(sqliteDb, tenantId)) { await dependencies.invoiceRepo.save(scope, invoice); counts.invoices += 1; }
+        counts.invoices += await importOutgoingInvoices(client, loadInvoices(sqliteDb, tenantId), tenantId);
         for (const offer of loadOffers(sqliteDb, tenantId)) { await dependencies.offerRepo.save(scope, offer); counts.offers += 1; }
         for (const profile of loadRecurringProfiles(sqliteDb, tenantId)) { await dependencies.recurringProfileRepo.save(scope, profile); counts.recurringProfiles += 1; }
         for (const ledgerAccount of loadLedgerAccounts(sqliteDb)) { await saveServerLedgerAccount(client, { id: ledgerAccount.id, chart: ledgerAccount.chart, accountNumber: ledgerAccount.account_number, name: ledgerAccount.name, source: ledgerAccount.source, createdAt: ledgerAccount.created_at, updatedAt: ledgerAccount.updated_at }); counts.ledgerAccounts += 1; }
         for (const taxCase of loadTaxCases(sqliteDb)) { await saveServerTaxCase(client, taxCase); counts.taxCases += 1; }
-        for (const mapping of loadTaxCaseAccountMappings(sqliteDb)) { await saveServerTaxCaseAccountMapping(client, mapping); counts.taxCaseAccountMappings += 1; }
+        for (const mapping of loadTaxCaseAccountMappings(sqliteDb)) { await saveServerTaxCaseAccountMappingForTenant(client, mapping, tenantId); counts.taxCaseAccountMappings += 1; }
         if (tableExists(sqliteDb, 'accounting_policies')) counts.accountingPolicies += await importRawTenantRows(client, 'accounting_policies', sqliteDb.prepare('SELECT * FROM accounting_policies').all() as Array<Record<string, unknown>>, tenantId, ['tenant_id', 'active_chart', 'vat_method', 'period_policy', 'updated_at']);
         if (tableExists(sqliteDb, 'accounting_account_mappings')) counts.accountingAccountMappings += await importRawTenantRows(client, 'accounting_account_mappings', sqliteDb.prepare('SELECT * FROM accounting_account_mappings').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'chart', 'role', 'account_number', 'updated_at']);
         if (tableExists(sqliteDb, 'vendors')) counts.vendors += await importRawTenantRows(client, 'vendors', sqliteDb.prepare('SELECT * FROM vendors').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'vendor_number', 'name', 'email', 'address', 'vat_id', 'iban', 'default_expense_account', 'created_at', 'updated_at']);
-        if (tableExists(sqliteDb, 'incoming_invoices')) counts.incomingInvoices += await importRawTenantRows(client, 'incoming_invoices', sqliteDb.prepare('SELECT * FROM incoming_invoices').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'vendor_id', 'number', 'invoice_date', 'due_date', 'service_period', 'net_amount', 'tax_amount', 'gross_amount', 'status', 'tax_rate', 'tax_case_key', 'notes', 'accounting_status', 'accounting_snapshot_json', 'accounting_journal_entry_id', 'accounting_posted_at', 'created_at', 'updated_at']);
+        const incomingInvoiceRows = tableExists(sqliteDb, 'incoming_invoices') ? sqliteDb.prepare('SELECT * FROM incoming_invoices').all() as Array<Record<string, unknown>> : [];
+        const incomingImport = incomingInvoiceRows.length ? await importIncomingInvoices(client, incomingInvoiceRows, tenantId) : { count: 0, insertedIds: [] };
+        counts.incomingInvoices += incomingImport.count;
         if (tableExists(sqliteDb, 'incoming_invoice_lines')) counts.incomingInvoiceLines += await importRawTenantRows(client, 'incoming_invoice_lines', sqliteDb.prepare('SELECT * FROM incoming_invoice_lines').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'incoming_invoice_id', 'position', 'description', 'quantity', 'unit_price', 'net_amount', 'tax_rate', 'tax_amount', 'gross_amount', 'account_number', 'asset_account_number']);
+        if (incomingImport.insertedIds.length) await restoreIncomingInvoiceAccountingRows(client, incomingInvoiceRows.filter((row) => incomingImport.insertedIds.includes(String(row.id))), tenantId);
         if (tableExists(sqliteDb, 'accounting_backfill_runs')) counts.accountingBackfillRuns += await importRawTenantRows(client, 'accounting_backfill_runs', sqliteDb.prepare('SELECT * FROM accounting_backfill_runs').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'status', 'candidates_json', 'confirmation_hash', 'result_json', 'confirmed_at', 'completed_at', 'created_at', 'config_json']);
         for (const eurLine of loadEurLines(sqliteDb)) { await saveServerEurLine(client, eurLine); counts.eurLines += 1; }
         for (const eurRule of loadEurRules(sqliteDb, tenantId)) { await saveServerEurRule(client, eurRule); counts.eurRules += 1; }

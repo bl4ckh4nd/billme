@@ -17,6 +17,7 @@ import {
 import { withPostgresTransaction } from './connection.js';
 import { createDrizzle, schema } from './drizzle.js';
 import { runPostgresMigrations } from './migrations.js';
+import { importRawTenantRows } from './oposImport.js';
 import {
   saveServerAccountKeyword,
   saveServerAccountMappingHgb,
@@ -166,6 +167,15 @@ export interface DesktopSqliteImportCounts {
   dunningHistory: number;
   auditLog: number;
   numberReservations: number;
+  accountingPolicies: number;
+  accountingAccountMappings: number;
+  vendors: number;
+  incomingInvoices: number;
+  incomingInvoiceLines: number;
+  openItems: number;
+  openItemPayments: number;
+  openItemAllocations: number;
+  accountingBackfillRuns: number;
 }
 
 export interface DesktopSqliteImportResult {
@@ -374,6 +384,15 @@ const emptyCounts = (): DesktopSqliteImportCounts => ({
   dunningHistory: 0,
   auditLog: 0,
   numberReservations: 0,
+  accountingPolicies: 0,
+  accountingAccountMappings: 0,
+  vendors: 0,
+  incomingInvoices: 0,
+  incomingInvoiceLines: 0,
+  openItems: 0,
+  openItemPayments: 0,
+  openItemAllocations: 0,
+  accountingBackfillRuns: 0,
 });
 
 export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImportOptions): Promise<DesktopSqliteImportResult> => {
@@ -422,6 +441,15 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         for (const ledgerAccount of loadLedgerAccounts(sqliteDb)) { await saveServerLedgerAccount(client, { id: ledgerAccount.id, chart: ledgerAccount.chart, accountNumber: ledgerAccount.account_number, name: ledgerAccount.name, source: ledgerAccount.source, createdAt: ledgerAccount.created_at, updatedAt: ledgerAccount.updated_at }); counts.ledgerAccounts += 1; }
         for (const taxCase of loadTaxCases(sqliteDb)) { await saveServerTaxCase(client, taxCase); counts.taxCases += 1; }
         for (const mapping of loadTaxCaseAccountMappings(sqliteDb)) { await saveServerTaxCaseAccountMapping(client, mapping); counts.taxCaseAccountMappings += 1; }
+        if (tableExists(sqliteDb, 'accounting_policies')) counts.accountingPolicies += await importRawTenantRows(client, 'accounting_policies', sqliteDb.prepare('SELECT * FROM accounting_policies').all() as Array<Record<string, unknown>>, tenantId, ['tenant_id', 'active_chart', 'vat_method', 'period_policy', 'updated_at']);
+        if (tableExists(sqliteDb, 'accounting_account_mappings')) counts.accountingAccountMappings += await importRawTenantRows(client, 'accounting_account_mappings', sqliteDb.prepare('SELECT * FROM accounting_account_mappings').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'chart', 'role', 'account_number', 'updated_at']);
+        if (tableExists(sqliteDb, 'vendors')) counts.vendors += await importRawTenantRows(client, 'vendors', sqliteDb.prepare('SELECT * FROM vendors').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'vendor_number', 'name', 'email', 'address', 'vat_id', 'iban', 'default_expense_account', 'created_at', 'updated_at']);
+        if (tableExists(sqliteDb, 'incoming_invoices')) counts.incomingInvoices += await importRawTenantRows(client, 'incoming_invoices', sqliteDb.prepare('SELECT * FROM incoming_invoices').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'vendor_id', 'number', 'invoice_date', 'due_date', 'service_period', 'net_amount', 'tax_amount', 'gross_amount', 'status', 'tax_rate', 'tax_case_key', 'notes', 'accounting_status', 'accounting_snapshot_json', 'accounting_journal_entry_id', 'accounting_posted_at', 'created_at', 'updated_at']);
+        if (tableExists(sqliteDb, 'incoming_invoice_lines')) counts.incomingInvoiceLines += await importRawTenantRows(client, 'incoming_invoice_lines', sqliteDb.prepare('SELECT * FROM incoming_invoice_lines').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'incoming_invoice_id', 'position', 'description', 'quantity', 'unit_price', 'net_amount', 'tax_rate', 'tax_amount', 'gross_amount', 'account_number', 'asset_account_number']);
+        if (tableExists(sqliteDb, 'open_items')) counts.openItems += await importRawTenantRows(client, 'open_items', sqliteDb.prepare('SELECT * FROM open_items').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'party_type', 'party_id', 'source_type', 'source_id', 'document_number', 'document_date', 'due_date', 'original_amount', 'allocated_amount', 'residual_amount', 'status', 'journal_entry_id', 'created_at', 'updated_at']);
+        if (tableExists(sqliteDb, 'open_item_payments')) counts.openItemPayments += await importRawTenantRows(client, 'open_item_payments', sqliteDb.prepare('SELECT * FROM open_item_payments').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'party_type', 'party_id', 'payment_date', 'amount', 'bank_account_number', 'method', 'source_type', 'source_id', 'allocated_amount', 'residual_amount', 'status', 'journal_entry_id', 'created_at']);
+        if (tableExists(sqliteDb, 'open_item_allocations')) counts.openItemAllocations += await importRawTenantRows(client, 'open_item_allocations', sqliteDb.prepare('SELECT * FROM open_item_allocations').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'payment_id', 'open_item_id', 'amount', 'created_at']);
+        if (tableExists(sqliteDb, 'accounting_backfill_runs')) counts.accountingBackfillRuns += await importRawTenantRows(client, 'accounting_backfill_runs', sqliteDb.prepare('SELECT * FROM accounting_backfill_runs').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'status', 'candidates_json', 'confirmation_hash', 'result_json', 'confirmed_at', 'completed_at', 'created_at', 'config_json']);
         for (const eurLine of loadEurLines(sqliteDb)) { await saveServerEurLine(client, eurLine); counts.eurLines += 1; }
         for (const eurRule of loadEurRules(sqliteDb, tenantId)) { await saveServerEurRule(client, eurRule); counts.eurRules += 1; }
         for (const keyword of loadAccountKeywords(sqliteDb, tenantId)) { await saveServerAccountKeyword(client, keyword); counts.accountKeywords += 1; }

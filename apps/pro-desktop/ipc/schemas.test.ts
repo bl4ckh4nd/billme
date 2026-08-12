@@ -772,6 +772,7 @@ describe('Settings Schema', () => {
       expect(parsed.businessReportingProfile?.chart).toBe('SKR04');
       expect(parsed.legal.taxAccountingMethod).toBe('ist');
       expect(() => businessReportingProfileSchema.parse({ ...settings.businessReportingProfile, profitDetermination: 'eur', fiscalYearStart: '04-01' })).toThrow();
+      expect(() => businessReportingProfileSchema.parse({ ...settings.businessReportingProfile, fiscalYearStart: '02-31' })).toThrow();
     });
 
     it('should apply defaults for optional sections', () => {

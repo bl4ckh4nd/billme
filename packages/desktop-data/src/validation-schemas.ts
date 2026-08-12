@@ -305,13 +305,20 @@ const DashboardSettingsSchema = z.object({
   topClientsLimit: z.number().int().min(1).max(20).default(5),
 });
 
+const isValidMonthDay = (value: string): boolean => {
+  const [month, day] = value.split('-').map(Number);
+  return day <= [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+};
+
 export const BusinessReportingProfileSchema = z
   .object({
     jurisdiction: z.literal('DE'),
     legalForm: z.enum(['sole_proprietor', 'gmbh']),
     profitDetermination: z.enum(['eur', 'double_entry']),
     hgbSizeClass: z.enum(['micro', 'small']).optional(),
-    fiscalYearStart: z.string().regex(/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/, 'Expected MM-DD'),
+    fiscalYearStart: z.string()
+      .regex(/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/, 'Expected MM-DD')
+      .refine(isValidMonthDay, 'Expected a valid MM-DD date'),
     chart: z.enum(['SKR03', 'SKR04']).optional(),
     vatMethod: z.enum(['soll', 'ist']),
   })

@@ -38,3 +38,13 @@ test('EÜR is restricted to the calendar year', () => {
     vatMethod: 'soll',
   }));
 });
+
+test('rejects impossible month-day values', () => {
+  assert.throws(() => businessReportingProfileSchema.parse({
+    jurisdiction: 'DE',
+    legalForm: 'sole_proprietor',
+    profitDetermination: 'double_entry',
+    fiscalYearStart: '02-31',
+    vatMethod: 'soll',
+  }));
+});

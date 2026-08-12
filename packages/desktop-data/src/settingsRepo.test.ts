@@ -224,6 +224,16 @@ describe("settingsRepo", () => {
     })).toThrow();
   });
 
+  it('rejects impossible month-day values', () => {
+    expect(() => BusinessReportingProfileSchema.parse({
+      jurisdiction: 'DE',
+      legalForm: 'sole_proprietor',
+      profitDetermination: 'double_entry',
+      fiscalYearStart: '02-31',
+      vatMethod: 'soll',
+    })).toThrow();
+  });
+
   it('requires HGB profile fields for GmbH', () => {
     expect(() => BusinessReportingProfileSchema.parse({
       jurisdiction: 'DE',

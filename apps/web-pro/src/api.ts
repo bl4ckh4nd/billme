@@ -97,6 +97,15 @@ const guvReportSchema = z.object({
   unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
   blocking: z.boolean().optional(),
 });
+const bwa01ReportSchema = z.object({
+  kind: z.literal('bwa01'),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  rows: z.array(z.object({ position: z.string(), label: z.string(), amount: z.number(), accountNumbers: z.array(z.string()) })),
+  totals: z.object({ revenue: z.number(), expenses: z.number(), operatingResult: z.number() }),
+  unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })),
+  mappingHealth: z.object({ mappedAccounts: z.number(), inferredAccounts: z.number(), unmappedAccounts: z.array(z.string()), warnings: z.array(z.string()), blocking: z.boolean() }),
+});
 const assetDepreciationResultSchema = z.object({
   asset: assetSchema,
   scheduleEntry: assetDepreciationScheduleEntrySchema,
@@ -439,19 +448,25 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/guv');
     },
     getBwa01Report(query?: unknown) {
-      return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/bwa01');
+      return requestJson({ parser: bwa01ReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/bwa01');
+    },
+    getManagementGuvReport(query?: unknown) {
+      return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/management-guv');
+    },
+    getHgbGuvReport(query?: unknown) {
+      return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/hgb-guv');
     },
     getBilanzReport(asOfDate?: string | { asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }) {
       const query = typeof asOfDate === 'string' ? { asOfDate } : asOfDate;
       return requestJson({ parser: bilanzReportSchema, query }, '/api/v1/pro/accounting/reports/bilanz');
     },
-    listReportSnapshots(reportType?: 'susa' | 'guv' | 'bilanz' | 'bwa01') {
+    listReportSnapshots(reportType?: 'susa' | 'guv' | 'management-guv' | 'hgb-guv' | 'bilanz' | 'hgb-bilanz' | 'bwa01') {
       return requestJson({ parser: (input) => input, query: reportType ? { reportType } : undefined }, '/api/v1/pro/accounting/reports/snapshots');
     },
     getReportSnapshot(id: string) {
       return requestJson({ parser: (input) => input }, `/api/v1/pro/accounting/reports/snapshots/${encodeURIComponent(id)}`);
     },
-    createReportSnapshot(input: { reportType: 'susa' | 'guv' | 'bilanz' | 'bwa01'; from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string; reason: string }) {
+    createReportSnapshot(input: { reportType: 'susa' | 'guv' | 'management-guv' | 'hgb-guv' | 'bilanz' | 'hgb-bilanz' | 'bwa01'; from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string; reason: string }) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/snapshots');
     },
     getAccountMappingHealth(chart?: 'SKR03' | 'SKR04') {

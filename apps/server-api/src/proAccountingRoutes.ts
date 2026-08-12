@@ -49,9 +49,9 @@ const idParams = z.object({ id: z.string().min(1) });
 const transactionParams = z.object({ transactionId: z.string().min(1) });
 const draftParams = z.object({ draftId: z.string().min(1) });
 const reportRange = z.object({ from: z.string().optional(), to: z.string().optional(), chart: z.enum(['SKR03', 'SKR04']).optional(), profile: z.string().trim().min(1).optional() });
-export const reportSnapshotQuerySchema = z.object({ reportType: z.enum(['susa', 'guv', 'bilanz', 'bwa01']).optional() });
+export const reportSnapshotQuerySchema = z.object({ reportType: z.enum(['susa', 'guv', 'management-guv', 'hgb-guv', 'bilanz', 'hgb-bilanz', 'bwa01']).optional() });
 export const reportSnapshotBodySchema = z.object({
-  reportType: z.enum(['susa', 'guv', 'bilanz', 'bwa01']),
+  reportType: z.enum(['susa', 'guv', 'management-guv', 'hgb-guv', 'bilanz', 'hgb-bilanz', 'bwa01']),
   from: z.string().optional(),
   to: z.string().optional(),
   asOfDate: z.string().optional(),
@@ -399,8 +399,29 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     query: reportRange,
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
-      // BWA 01 uses the same server-side, explicitly mapped turnover rows as GuV.
-      return serviceFor(app).getGuvReport(session.scope, query);
+      return serviceFor(app).repository.getBwa01Report(session.scope, query);
+    },
+  });
+
+  for (const reportPath of ['management-guv', 'hgb-guv'] as const) {
+    typedRoute(app, {
+      method: 'GET',
+      url: `${prefix}/reports/${reportPath}`,
+      query: reportRange,
+      async handler({ request, query }) {
+        const session = await requireProSession(app, request.headers.authorization);
+        return serviceFor(app).getGuvReport(session.scope, query);
+      },
+    });
+  }
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/reports/hgb-bilanz`,
+    query: asOfDate,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return serviceFor(app).getBilanzReport(session.scope, query);
     },
   });
 
@@ -444,9 +465,11 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       const service = serviceFor(app);
       const payload = body.reportType === 'susa'
         ? await service.getSusaReport(session.scope, { ...args, fromDate: body.from, asOfDate: body.to ?? body.asOfDate })
-        : body.reportType === 'bilanz'
+        : body.reportType === 'bilanz' || body.reportType === 'hgb-bilanz'
           ? await service.getBilanzReport(session.scope, { asOfDate: body.asOfDate })
-          : await service.getGuvReport(session.scope, { from: body.from, to: body.to });
+          : body.reportType === 'bwa01'
+            ? await service.repository.getBwa01Report(session.scope, { from: body.from, to: body.to, chart: body.chart, profile: body.profile })
+            : await service.getGuvReport(session.scope, { from: body.from, to: body.to });
       return service.repository.saveReportSnapshot(session.scope, {
         reportType: body.reportType,
         args,

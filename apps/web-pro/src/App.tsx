@@ -1109,16 +1109,42 @@ export default function App() {
           quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
         };
       },
+      async getEurReport(filters: ReportFilterState): Promise<GuvReport> {
+        // Server mode exposes the canonical ledger report; keep EÜR explicit rather
+        // than silently substituting the local mock service when the adapter exists.
+        const report = await client.getGuvReport(reportFilter(filters));
+        return {
+          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount, accountRefs: row.accountRefs })),
+          totals: { revenue: report.rows.filter((row) => row.amount > 0).reduce((sum, row) => sum + row.amount, 0), expenses: report.rows.filter((row) => row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0), result: report.netResult },
+          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
+      async getManagementGuvReport(filters: ReportFilterState): Promise<GuvReport> {
+        const report = await client.getManagementGuvReport(reportFilter(filters));
+        return {
+          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount, accountRefs: row.accountRefs })),
+          totals: { revenue: report.rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + row.amount, 0), expenses: report.rows.filter((row) => row.positionKey !== 'revenue' && row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0), result: report.netResult },
+          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
+      async getHgbGuvReport(filters: ReportFilterState): Promise<GuvReport> {
+        const report = await client.getHgbGuvReport(reportFilter(filters));
+        return {
+          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount, accountRefs: row.accountRefs })),
+          totals: { revenue: report.rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + row.amount, 0), expenses: report.rows.filter((row) => row.positionKey !== 'revenue' && row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0), result: report.netResult },
+          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
       async getBwaReport(filters: ReportFilterState): Promise<GuvReport> {
         const report = await client.getBwa01Report(reportFilter(filters));
         return {
-          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount, accountRefs: row.accountRefs })),
+          lines: report.rows.map((row) => ({ id: row.position, code: row.position, label: row.label, level: 0, amountCurrent: row.amount, accountRefs: row.accountNumbers })),
           totals: {
-            revenue: report.rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + row.amount, 0),
-            expenses: report.rows.filter((row) => row.positionKey === 'expense').reduce((sum, row) => sum + Math.abs(row.amount), 0),
-            result: report.netResult,
+            revenue: report.totals.revenue,
+            expenses: report.totals.expenses,
+            result: report.totals.operatingResult,
           },
-          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
+          quality: { unmappedAccounts: report.unmappedAccounts, warnings: report.mappingHealth.warnings.length, generatedAt: new Date().toISOString(), source: 'live' },
         };
       },
       async getBalanceSheetPreview(filters: ReportFilterState): Promise<BalanceSheetPreview> {

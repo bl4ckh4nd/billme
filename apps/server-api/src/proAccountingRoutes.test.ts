@@ -58,6 +58,11 @@ test('report snapshots require a typed report and mutation reason', () => {
   assert.equal(reportSnapshotQuerySchema.parse({ reportType: 'guv' }).reportType, 'guv');
 });
 
+test('report snapshots accept distinct canonical report profiles', () => {
+  assert.equal(reportSnapshotQuerySchema.parse({ reportType: 'management-guv' }).reportType, 'management-guv');
+  assert.equal(reportSnapshotBodySchema.parse({ reportType: 'hgb-bilanz', asOfDate: '2026-12-31', reason: 'Jahresabschluss' }).reportType, 'hgb-bilanz');
+});
+
 test('mapping overrides require an explicit reason and never accept arbitrary statement types', () => {
   assert.throws(() => mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz' }));
   assert.equal(mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }).balanceSide, undefined);

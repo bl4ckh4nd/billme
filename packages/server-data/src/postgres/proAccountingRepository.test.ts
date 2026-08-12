@@ -7,7 +7,7 @@ import { createSingleTenantScope } from '@billme/server-core';
 import type { PostgresQueryable, PostgresTransactionClient } from './connection.js';
 import { createPostgresPool } from './connection.js';
 import { runDrizzleMigrations } from './migrations.js';
-import { createPostgresProAccountingRepository, insertJournalPostingPair, normalizeDatevBuKey } from './proAccountingRepository.js';
+import { createPostgresProAccountingRepository, fiscalYearForPostingDate, insertJournalPostingPair, normalizeDatevBuKey } from './proAccountingRepository.js';
 import { importRawTenantRows } from './oposImport.js';
 
 test('journal posting-pair insert binds every persisted column', async () => {
@@ -77,6 +77,61 @@ test('GuV report preserves account references and surfaces unmapped accounts', a
   assert.deepEqual(report.unmappedAccounts, [{ accountNumber: '9999', amount: -20 }]);
   assert.equal(report.blocking, true);
   assert.match(calls[1]?.text ?? '', /ARRAY_AGG\(DISTINCT jl\.account_number/);
+});
+
+test('BWA01 uses explicit mapped positions, catalog order, and blocking unmapped accounts', async () => {
+  let call = 0;
+  const db = {
+    query: async () => {
+      call += 1;
+      if (call === 1) return { rows: [{ active_chart: 'SKR04', vat_method: 'soll', updated_at: '2026-12-01' }] };
+      return {
+        rows: [
+          { position_key: 'revenue', position_label: 'Umsatz', account_number: '4400', amount: '100' },
+          { position_key: 'material-expense', position_label: 'Material', account_number: '5400', amount: '-30' },
+          { position_key: null, position_label: null, account_number: '9999', amount: '-5' },
+        ],
+      };
+    },
+  } as unknown as PostgresQueryable;
+  const report = await createPostgresProAccountingRepository(db).getBwa01Report(createSingleTenantScope('bwa-test', 'pro'), { from: '2026-12-01', to: '2026-12-31' });
+  assert.equal(report.kind, 'bwa01');
+  assert.deepEqual(report.rows.slice(0, 6).map((row) => row.position), ['revenue', 'inventory-change', 'capitalized-work', 'total-output', 'material-expense', 'gross-profit']);
+  assert.equal(report.rows.find((row) => row.position === 'total-output')?.amount, 100);
+  assert.equal(report.rows.find((row) => row.position === 'gross-profit')?.amount, 70);
+  assert.equal(report.totals.operatingResult, 70);
+  assert.deepEqual(report.unmappedAccounts, [{ accountNumber: '9999', amount: -5 }]);
+  assert.equal(report.mappingHealth.blocking, true);
+});
+
+test('double-entry fiscal year honors a non-calendar 04-15 boundary', () => {
+  assert.equal(fiscalYearForPostingDate('2026-04-14', '04-15'), 2025);
+  assert.equal(fiscalYearForPostingDate('2026-04-15', '04-15'), 2026);
+  assert.equal(fiscalYearForPostingDate('2026-12-31', '04-15'), 2026);
+});
+
+test('Postgres draft normalization persists the 04-15 fiscal-year boundary', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tenantId = `fiscal-boundary-${suffix}`;
+  const accountId = `fiscal-bank-${suffix}`;
+  const transactionId = `fiscal-transaction-${suffix}`;
+  const now = new Date().toISOString();
+  const scope = createSingleTenantScope(tenantId, 'pro');
+  try {
+    await runDrizzleMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'Fiscal boundary test', now]);
+    await pool.query(`INSERT INTO server_settings (tenant_id,settings_json,created_at,updated_at) VALUES ($1,$2,$3,$3)`, [tenantId, JSON.stringify({ businessReportingProfile: { profitDetermination: 'double_entry', fiscalYearStart: '04-15' } }), now]);
+    await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
+    await pool.query(`INSERT INTO accounts (id,tenant_id,name,iban,balance,default_skr_account_number,type,color) VALUES ($1,$2,'Fiscal bank','DE00000000000000000000','0','1200','bank','#000000')`, [accountId, tenantId]);
+    await pool.query(`INSERT INTO bank_transactions (id,tenant_id,account_id,date,amount,type,counterparty,purpose,status,created_at,updated_at) VALUES ($1,$2,$3,'2026-04-15',20,'income','Boundary payer','Boundary','pending',$4,$4)`, [transactionId, tenantId, accountId, now]);
+    const draft = await createPostgresProAccountingRepository(pool).getDraftByTransactionId(scope, transactionId);
+    assert.equal(draft?.fiscalYear, 2026);
+    assert.equal((await pool.query(`SELECT fiscal_year FROM accounting_periods WHERE tenant_id=$1 AND period='2026-04'`, [tenantId])).rows[0]?.fiscal_year, 2026);
+  } finally {
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]);
+    await pool.end();
+  }
 });
 
 test('OPOS import is tenant-safe and idempotent without global conflict drops', async () => {

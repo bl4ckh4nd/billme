@@ -13,7 +13,9 @@ import {
   ReportFilterState,
   ReportProfile,
   ReportTabId,
+  BusinessReportingProfile,
   reportTabsForProfile,
+  reportTabsForBusinessProfile,
   SusaReport,
   SusaRow,
 } from '../domain/reportTypes';
@@ -21,7 +23,6 @@ import {
   getBalanceSheetPreview,
   getBwaReport,
   getEurReport,
-  getGuvReport,
   getHgbGuvReport,
   getReportDrilldownEntries,
   getManagementGuvReport,
@@ -36,36 +37,13 @@ import GuvView from './reports/GuvView';
 import BalanceSheetPreviewView from './reports/BalanceSheetPreviewView';
 import ReportDrilldownPanel from './reports/ReportDrilldownPanel';
 import DatevExportPanel from './reports/DatevExportPanel';
-import { reportDateRange } from '../domain/reportDates';
+import { defaultReportFilters, reportDateRange, reportFiscalYearRange } from '../domain/reportDates';
 import ReportStatusBadge, { MappingHealthBlock, reportIsMappingBlocked } from './reports/ReportStatusBadge';
-
-const BILANZ_ACCOUNT_MAP: Record<string, string[]> = {
-  'a-1-1': ['0440', '0480'],
-  'a-1-2': ['0670'],
-  'a-2-1': ['1000', '1200'],
-  'a-2-2': ['1576'],
-  'p-1-2': ['9000', '4400', '4930'],
-  'p-2-1': ['1600'],
-  'p-2-2': ['1740', '1800'],
-};
-
-function buildDefaultFilters(chart: 'SKR03' | 'SKR04' = 'SKR03'): ReportFilterState {
-  const now = new Date();
-  return {
-    chart,
-    mandantId: 'demo-gmbh',
-    asOfDate: now.toISOString().slice(0, 10),
-    periodFrom: `${now.getFullYear()}-01`,
-    periodTo: `${now.getFullYear()}-12`,
-    compareMode: 'none',
-    includeDrafts: false,
-    periodPreset: 'current',
-  };
-}
 
 interface ReportsViewProps {
   dataAdapter?: ProAccountingDataAdapter;
   chartFramework?: 'SKR03' | 'SKR04';
+  businessReportingProfile?: BusinessReportingProfile;
   profile?: ReportProfile;
   availableTabs?: ReportTabId[];
   role?: UserRole;
@@ -75,17 +53,28 @@ interface ReportsViewProps {
   onOpenJournalEntry?: (journalEntryId: string) => void;
 }
 
-export default function ReportsView({ dataAdapter, chartFramework, profile = 'all', availableTabs, role = 'admin', onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
-  const visibleTabs = availableTabs ?? reportTabsForProfile(profile);
+export default function ReportsView({ dataAdapter, chartFramework, businessReportingProfile, profile = 'all', availableTabs, role = 'admin', onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
+  const visibleTabs = useMemo(() => {
+    if (availableTabs) return availableTabs;
+    if (businessReportingProfile) return reportTabsForBusinessProfile(businessReportingProfile);
+    if (profile !== 'all') return reportTabsForProfile(profile);
+    return ['susa'] as ReportTabId[];
+  }, [availableTabs, businessReportingProfile, profile]);
   const [activeTab, setActiveTab] = useState<ReportTabId>(() => visibleTabs.includes('susa') ? 'susa' : visibleTabs[0] ?? 'susa');
-  const [filters, setFilters] = useState<ReportFilterState>(() => buildDefaultFilters(chartFramework));
+  const [filters, setFilters] = useState<ReportFilterState>(() => defaultReportFilters(chartFramework ?? businessReportingProfile?.chart, businessReportingProfile));
 
   useEffect(() => {
-    if (!chartFramework) return;
-    setFilters((current) => (current.chart === chartFramework ? current : { ...current, chart: chartFramework }));
-  }, [chartFramework]);
+    if (!chartFramework && !businessReportingProfile) return;
+    setFilters((current) => {
+      const profileChanged = current.businessReportingProfile?.legalForm !== businessReportingProfile?.legalForm
+        || current.businessReportingProfile?.profitDetermination !== businessReportingProfile?.profitDetermination
+        || current.businessReportingProfile?.fiscalYearStart !== businessReportingProfile?.fiscalYearStart
+        || current.businessReportingProfile?.chart !== businessReportingProfile?.chart;
+      if ((!chartFramework || current.chart === chartFramework) && !profileChanged) return current;
+      return defaultReportFilters(chartFramework ?? businessReportingProfile?.chart ?? current.chart, businessReportingProfile, current.asOfDate);
+    });
+  }, [businessReportingProfile?.chart, businessReportingProfile?.fiscalYearStart, businessReportingProfile?.legalForm, businessReportingProfile?.profitDetermination, chartFramework]);
   const [susaReport, setSusaReport] = useState<SusaReport | null>(null);
-  const [guvReport, setGuvReport] = useState<GuvReport | null>(null);
   const [balanceSheetPreview, setBalanceSheetPreview] = useState<BalanceSheetPreview | null>(null);
   const [eurReport, setEurReport] = useState<GuvReport | null>(null);
   const [bwaReport, setBwaReport] = useState<GuvReport | null>(null);
@@ -101,6 +90,15 @@ export default function ReportsView({ dataAdapter, chartFramework, profile = 'al
   const [drilldownError, setDrilldownError] = useState<string | null>(null);
   const [drilldownRetryKey, setDrilldownRetryKey] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [freezing, setFreezing] = useState(false);
+  const [freezeReason, setFreezeReason] = useState('');
+
+  const profileSetupError = businessReportingProfile
+    && businessReportingProfile.legalForm === 'gmbh'
+    && businessReportingProfile.profitDetermination === 'double_entry'
+    && !reportFiscalYearRange(filters.asOfDate, businessReportingProfile)
+    ? 'Der Wirtschaftsjahresbeginn ist nicht eingerichtet. Bitte hinterlegen Sie in den Einstellungen ein gültiges Datum (MM-TT), bevor Sie Berichte öffnen.'
+    : null;
 
   useEffect(() => {
     if (!visibleTabs.includes(activeTab)) setActiveTab(visibleTabs[0] ?? 'susa');
@@ -111,23 +109,34 @@ export default function ReportsView({ dataAdapter, chartFramework, profile = 'al
     setReportsLoading(true);
     setReportsError(null);
 
-    const load = <T,>(method: ((value: ReportFilterState) => Promise<T>) | undefined, fallback: (value: ReportFilterState) => Promise<T>) =>
-      method ? method(filters) : fallback(filters);
+    if (profileSetupError) {
+      setReportsError(profileSetupError);
+      setReportsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const missingReportMethod = <T,>(tab: ReportTabId): Promise<T> => Promise.reject(new Error(
+      `${tab === 'bwa01' ? 'BWA01' : tab === 'management_guv' ? 'Management-GuV' : tab === 'hgb_guv' ? 'HGB-GuV' : tab === 'bilanz' ? 'Bilanz' : tab === 'eur' ? 'EÜR' : 'SuSa'} ist für diese Verbindung nicht verfügbar. Bitte Reporting-Profil und Adapter-Konfiguration prüfen.`,
+    ));
+    const load = <T,>(tab: ReportTabId, method: ((value: ReportFilterState) => Promise<T>) | undefined, fallback: (value: ReportFilterState) => Promise<T>) => {
+      if (!dataAdapter) return fallback(filters);
+      return method ? method(filters) : missingReportMethod<T>(tab);
+    };
     const loadReports = Promise.all([
-      load(dataAdapter?.getSusaReport, getSusaReport),
-      load(dataAdapter?.getGuvReport, getGuvReport),
-      load(dataAdapter?.getBalanceSheetPreview, getBalanceSheetPreview),
-      load(dataAdapter?.getEurReport, getEurReport),
-      load(dataAdapter?.getBwaReport, getBwaReport),
-      load(dataAdapter?.getManagementGuvReport, getManagementGuvReport),
-      load(dataAdapter?.getHgbGuvReport, getHgbGuvReport),
+      visibleTabs.includes('susa') ? load('susa', dataAdapter?.getSusaReport, getSusaReport) : Promise.resolve(null),
+      visibleTabs.includes('bilanz') ? load('bilanz', dataAdapter?.getBalanceSheetPreview, getBalanceSheetPreview) : Promise.resolve(null),
+      visibleTabs.includes('eur') ? load('eur', dataAdapter?.getEurReport, getEurReport) : Promise.resolve(null),
+      visibleTabs.includes('bwa01') ? load('bwa01', dataAdapter?.getBwaReport, getBwaReport) : Promise.resolve(null),
+      visibleTabs.includes('management_guv') ? load('management_guv', dataAdapter?.getManagementGuvReport, getManagementGuvReport) : Promise.resolve(null),
+      visibleTabs.includes('hgb_guv') ? load('hgb_guv', dataAdapter?.getHgbGuvReport, getHgbGuvReport) : Promise.resolve(null),
     ]);
 
     loadReports
-      .then(([susa, guv, bilanz, eur, bwa, management, hgb]) => {
+      .then(([susa, bilanz, eur, bwa, management, hgb]) => {
         if (cancelled) return;
         setSusaReport(susa);
-        setGuvReport(guv);
         setBalanceSheetPreview(bilanz);
         setEurReport(eur);
         setBwaReport(bwa);
@@ -145,12 +154,11 @@ export default function ReportsView({ dataAdapter, chartFramework, profile = 'al
     return () => {
       cancelled = true;
     };
-  }, [dataAdapter, filters, reportsRetryKey]);
+  }, [dataAdapter, filters, profileSetupError, reportsRetryKey, visibleTabs]);
 
   useEffect(() => {
     if (!drilldownSelection) {
       setDrilldownEntries([]);
-      setDrilldownError(null);
       return;
     }
 
@@ -219,6 +227,36 @@ export default function ReportsView({ dataAdapter, chartFramework, profile = 'al
     }
   };
 
+  const freezeCurrentReport = async () => {
+    if (!dataAdapter?.saveReportSnapshot || !activeReport || activeTab !== 'eur') return;
+    const range = reportDateRange(filters);
+    if (!range.from?.startsWith('2025-') || !range.to?.startsWith('2025-')) {
+      setReportsError('Für das Filing-Center kann nur ein vollständiger EÜR-2025-Zeitraum eingefroren werden.');
+      return;
+    }
+    const reason = freezeReason.trim();
+    if (!reason) {
+      setReportsError('Bitte geben Sie einen Audit-Grund für das Einfrieren des EÜR-Snapshots an.');
+      return;
+    }
+    setFreezing(true);
+    setReportsError(null);
+    try {
+      await dataAdapter.saveReportSnapshot({
+        reportType: activeTab,
+        args: filters,
+        payload: activeReport,
+        reason,
+      });
+      setFreezeReason('');
+      setReportsError('EÜR-Snapshot eingefroren und im Audit protokolliert.');
+    } catch (error) {
+      setReportsError(error instanceof Error ? error.message : 'Snapshot konnte nicht eingefroren werden.');
+    } finally {
+      setFreezing(false);
+    }
+  };
+
   const handleSusaSelect = (row: SusaRow) => {
     const range = reportDateRange(filters);
     setDrilldownSelection({
@@ -242,11 +280,18 @@ export default function ReportsView({ dataAdapter, chartFramework, profile = 'al
   };
 
   const handleBilanzSelect = (line: BalanceSheetPreviewLine) => {
+    if (!line.accountRefs?.length) {
+      setDrilldownSelection(null);
+      setDrilldownEntries([]);
+      setDrilldownError('Für diese Bilanzposition ist kein Konten-Mapping verfügbar. Bitte richten Sie das Mapping ein, bevor Sie den Drilldown öffnen.');
+      return;
+    }
+    setDrilldownError(null);
     setDrilldownSelection({
       reportType: 'bilanz',
       targetId: line.id,
       targetLabel: `${line.code} · ${line.label}`,
-      accountNumbers: BILANZ_ACCOUNT_MAP[line.id] ?? [line.code],
+      accountNumbers: line.accountRefs,
       to: filters.asOfDate,
     });
   };
@@ -270,6 +315,24 @@ export default function ReportsView({ dataAdapter, chartFramework, profile = 'al
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
         <ReportToolbar filters={filters} onChange={setFilters} activeTab={activeTab} onExport={dataAdapter ? exportReport : undefined} exporting={exporting} />
+        {activeTab === 'eur' && dataAdapter?.saveReportSnapshot ? (
+          <div className="flex flex-wrap items-end gap-2 rounded-xl border border-border bg-surface p-3">
+            <label className="flex min-w-64 flex-1 flex-col gap-1 text-xs font-semibold text-foreground" htmlFor="report-freeze-reason">
+              Audit-Grund für EÜR-Snapshot
+              <input
+                id="report-freeze-reason"
+                className="rounded-lg border border-border bg-surface px-3 py-2 text-sm font-normal"
+                value={freezeReason}
+                onChange={(event) => setFreezeReason(event.target.value)}
+                placeholder="z. B. Abschlussprüfung EÜR 2025"
+                maxLength={500}
+              />
+            </label>
+            <Button type="button" variant="secondary" onClick={() => void freezeCurrentReport()} disabled={freezing || !activeReport || !freezeReason.trim()} aria-busy={freezing}>
+              {freezing ? 'Friere ein…' : 'Snapshot einfrieren'}
+            </Button>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between gap-3">
           <ReportTabSwitch activeTab={activeTab} onChange={setActiveTab} tabs={visibleTabs} />
           <div className="text-xs text-muted flex items-center gap-2">
@@ -319,7 +382,10 @@ export default function ReportsView({ dataAdapter, chartFramework, profile = 'al
                     selection={drilldownSelection}
                     entries={drilldownEntries}
                     loading={drilldownLoading}
-                    onClose={() => setDrilldownSelection(null)}
+                    onClose={() => {
+                      setDrilldownSelection(null);
+                      setDrilldownError(null);
+                    }}
                     onOpenTransaction={onOpenTransaction}
                     onOpenInvoice={onOpenInvoice}
                     onOpenIncomingInvoice={onOpenIncomingInvoice}
@@ -342,8 +408,11 @@ export default function ReportsView({ dataAdapter, chartFramework, profile = 'al
                   ) : null}
                 </div>
               ) : (
-                <div className="hidden xl:flex h-full items-center justify-center rounded-2xl border border-dashed border-border bg-surface/70 text-sm text-muted px-6 text-center">
-                  Konto- oder Reportzeile anklicken, um Drilldown zu sehen.
+                <div className="space-y-3">
+                  <div className="hidden xl:flex h-full items-center justify-center rounded-2xl border border-dashed border-border bg-surface/70 text-sm text-muted px-6 text-center">
+                    Konto- oder Reportzeile anklicken, um Drilldown zu sehen.
+                  </div>
+                  {drilldownError ? <div className="rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert">{drilldownError}</div> : null}
                 </div>
               )}
             </div>

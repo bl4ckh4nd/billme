@@ -26,8 +26,12 @@ function SideColumn({
         {lines.map((line) => (
           <button
             key={line.id}
+            type="button"
             onClick={() => onSelectLine(line)}
-            className={`w-full text-left px-4 py-3 hover:bg-surface-muted transition-colors ${line.isSubtotal ? 'bg-surface-muted/70' : ''}`}
+            disabled={!line.accountRefs?.length}
+            title={line.accountRefs?.length ? 'Konten-Drilldown öffnen' : 'Kein Konten-Mapping verfügbar'}
+            aria-label={`${line.code} ${line.label}${line.accountRefs?.length ? '' : ' (kein Konten-Mapping verfügbar)'}`}
+            className={`w-full text-left px-4 py-3 transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${line.accountRefs?.length ? 'hover:bg-surface-muted' : ''} ${line.isSubtotal ? 'bg-surface-muted/70' : ''}`}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0" style={{ paddingLeft: `${line.level * 14}px` }}>

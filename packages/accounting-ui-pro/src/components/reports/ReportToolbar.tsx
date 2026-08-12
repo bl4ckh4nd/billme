@@ -1,6 +1,7 @@
 import { FileDown, FileText, RotateCcw } from 'lucide-react';
 import { Button } from '@billme/ui';
 import { ReportFilterState, ReportTabId } from '../../domain/reportTypes';
+import { defaultReportFilters, reportPeriodRangeForPreset } from '../../domain/reportDates';
 
 interface ReportToolbarProps {
   filters: ReportFilterState;
@@ -11,15 +12,31 @@ interface ReportToolbarProps {
 }
 
 export default function ReportToolbar({ filters, onChange, activeTab, onExport, exporting = false }: ReportToolbarProps) {
-  const set = <K extends keyof ReportFilterState>(key: K, value: ReportFilterState[K]) =>
-    onChange({ ...filters, [key]: value });
   const setPreset = (periodPreset: ReportFilterState['periodPreset']) => {
-    const year = Number(filters.asOfDate.slice(0, 4));
-    const month = filters.asOfDate.slice(5, 7);
-    const currentMonth = `${year}-${month}`;
-    if (periodPreset === 'ytd') onChange({ ...filters, periodPreset, periodFrom: `${year}-01`, periodTo: currentMonth, compareMode: 'none' });
-    else if (periodPreset === 'prev_year') onChange({ ...filters, periodPreset, periodFrom: `${year - 1}-01`, periodTo: `${year - 1}-12`, compareMode: 'prev_year' });
-    else onChange({ ...filters, periodPreset: 'current', periodFrom: currentMonth, periodTo: currentMonth, compareMode: 'none' });
+    const nextPreset = periodPreset ?? 'current';
+    const range = reportPeriodRangeForPreset(filters.asOfDate, filters.businessReportingProfile, nextPreset);
+    onChange({
+      ...filters,
+      periodPreset: nextPreset,
+      periodFrom: range?.from.slice(0, 7) ?? filters.periodFrom,
+      periodTo: range?.to.slice(0, 7) ?? filters.periodTo,
+      periodFromDate: range?.from,
+      periodToDate: range?.to,
+      compareMode: nextPreset === 'prev_year' ? 'prev_year' : 'none',
+    });
+  };
+  const setAsOfDate = (asOfDate: string) => {
+    const range = filters.periodPreset
+      ? reportPeriodRangeForPreset(asOfDate, filters.businessReportingProfile, filters.periodPreset)
+      : undefined;
+    onChange({
+      ...filters,
+      asOfDate,
+      periodFrom: range?.from.slice(0, 7) ?? filters.periodFrom,
+      periodTo: range?.to.slice(0, 7) ?? filters.periodTo,
+      periodFromDate: range?.from ?? filters.periodFromDate,
+      periodToDate: range?.to ?? filters.periodToDate,
+    });
   };
 
   return (
@@ -43,7 +60,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
           <input
             type="date"
             value={filters.asOfDate}
-            onChange={(e) => set('asOfDate', e.target.value)}
+            onChange={(e) => setAsOfDate(e.target.value)}
             className="mt-0.5 h-8 w-full rounded-lg border border-border px-2 text-sm"
           />
         </label>
@@ -53,7 +70,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
           <input
             type="month"
             value={filters.periodFrom}
-            onChange={(e) => set('periodFrom', e.target.value)}
+            onChange={(e) => onChange({ ...filters, periodFrom: e.target.value, periodFromDate: undefined, periodPreset: undefined })}
             className="mt-0.5 h-8 w-full rounded-lg border border-border px-2 text-sm"
           />
         </label>
@@ -63,7 +80,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
           <input
             type="month"
             value={filters.periodTo}
-            onChange={(e) => set('periodTo', e.target.value)}
+            onChange={(e) => onChange({ ...filters, periodTo: e.target.value, periodToDate: undefined, periodPreset: undefined })}
             className="mt-0.5 h-8 w-full rounded-lg border border-border px-2 text-sm"
           />
         </label>
@@ -75,16 +92,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
           <button
             type="button"
             onClick={() =>
-              onChange({
-                chart: filters.chart,
-                mandantId: 'demo-gmbh',
-                asOfDate: new Date().toISOString().slice(0, 10),
-                periodFrom: `${new Date().getFullYear()}-01`,
-                periodTo: `${new Date().getFullYear()}-12`,
-                compareMode: 'none',
-                includeDrafts: false,
-                periodPreset: 'current',
-              })
+              onChange(defaultReportFilters(filters.chart, filters.businessReportingProfile))
             }
             className="h-7 px-2.5 rounded-full border border-border text-xs font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1 transition-colors"
           >

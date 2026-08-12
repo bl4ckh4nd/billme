@@ -14,7 +14,14 @@ export type {
   ReportDrilldownSourceType,
   SusaReport,
 } from './domain/reportTypes';
-export { monthToFirstDay, monthToLastDay, reportDateRange } from './domain/reportDates';
+export {
+  defaultReportFilters,
+  monthToFirstDay,
+  monthToLastDay,
+  reportDateRange,
+  reportFiscalYearRange,
+  reportPeriodRangeForPreset,
+} from './domain/reportDates';
 export type {
   AssetDepreciationScheduleEntry,
   AssetItem,

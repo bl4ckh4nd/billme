@@ -3,6 +3,48 @@ import { describe, expect, it, vi } from 'vitest';
 import ReportsView from './ReportsView';
 
 describe('ReportsView drilldown ranges', () => {
+  const liveSusaReport = {
+    rows: [{ accountNumber: '8400', accountName: 'Erlöse', openingBalance: 0, debitTurnover: 0, creditTurnover: 100, closingBalance: 100, normalBalance: 'credit' as const }],
+    totals: { openingDebit: 0, openingCredit: 0, turnoverDebit: 0, turnoverCredit: 100, closingDebit: 0, closingCredit: 100 },
+    quality: { unmappedAccounts: 0, warnings: 0, generatedAt: '2026-12-31T00:00:00.000Z', source: 'live' as const },
+  };
+
+  it('loads only visible reports and does not require hidden adapter methods', async () => {
+    const getSusaReport = vi.fn(async () => liveSusaReport);
+    render(<ReportsView dataAdapter={{ getSusaReport }} availableTabs={['susa']} />);
+
+    expect(await screen.findByRole('button', { name: '8400' })).toBeTruthy();
+    expect(getSusaReport).toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('fails closed instead of returning a mock when a visible adapter method is missing', async () => {
+    render(<ReportsView dataAdapter={{ getSusaReport: vi.fn(async () => liveSusaReport) }} availableTabs={['bwa01']} />);
+
+    expect((await screen.findByRole('alert')).textContent).toContain('BWA01 ist für diese Verbindung nicht verfügbar');
+    expect(screen.queryByText('BWA01-Auswertung')).toBeNull();
+  });
+
+  it('uses authoritative balance-sheet account references and disables unmapped drilldown', async () => {
+    const getReportDrilldownEntries = vi.fn(async () => []);
+    const getBalanceSheetPreview = vi.fn(async () => ({
+      aktiva: [
+        { id: 'asset-1', code: '1000', label: 'Bank', amount: 100, level: 0, side: 'aktiva' as const, accountRefs: ['1000'] },
+        { id: 'asset-2', code: 'unmapped', label: 'Nicht zugeordnet', amount: 0, level: 0, side: 'aktiva' as const },
+      ],
+      passiva: [],
+      totals: { aktiva: 100, passiva: 100, difference: 0 },
+      quality: { status: 'ok' as const, notes: [], generatedAt: '2026-12-31T00:00:00.000Z', source: 'live' as const },
+    }));
+    render(<ReportsView dataAdapter={{ getBalanceSheetPreview, getReportDrilldownEntries }} availableTabs={['bilanz']} />);
+
+    const mappedLine = await screen.findByRole('button', { name: /1000 Bank/ });
+    const unmappedLine = screen.getByRole('button', { name: /unmapped Nicht zugeordnet/ });
+    expect((unmappedLine as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(mappedLine);
+    await waitFor(() => expect(getReportDrilldownEntries).toHaveBeenCalledWith(expect.objectContaining({ accountNumbers: ['1000'] })));
+  });
+
   it('renders profile tabs and routes report exports through the adapter', async () => {
     const exportReport = vi.fn(async () => ({ format: 'csv' as const, path: '/tmp/report.csv' }));
     const dataAdapter = {

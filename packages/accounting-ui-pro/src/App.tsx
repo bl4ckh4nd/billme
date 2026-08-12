@@ -165,6 +165,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
             <ReportsView
               dataAdapter={dataAdapter}
               chartFramework={seed?.chartFramework}
+              businessReportingProfile={seed?.businessReportingProfile}
               availableTabs={reportTabsForBusinessProfile(seed?.businessReportingProfile)}
               role={role}
               onOpenTransaction={handleOpenTransaction}

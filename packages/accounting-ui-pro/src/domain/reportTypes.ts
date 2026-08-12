@@ -15,10 +15,14 @@ export interface ReportFilterState {
   asOfDate: string;
   periodFrom?: string;
   periodTo?: string;
+  /** Exact boundaries are used for fiscal years that do not start on the first day of a month. */
+  periodFromDate?: string;
+  periodToDate?: string;
   compareMode: 'none' | 'prev_period' | 'prev_year';
   includeDrafts: boolean;
-  /** Convenience period selector; explicit periodFrom/periodTo remain authoritative. */
+  /** Convenience period selector; explicit date/month boundaries remain authoritative. */
   periodPreset?: ReportPeriodPreset;
+  businessReportingProfile?: BusinessReportingProfile;
 }
 
 export interface ReportQuality {
@@ -108,6 +112,8 @@ export interface BalanceSheetPreviewLine {
   amount: number;
   level: number;
   side: 'aktiva' | 'passiva';
+  /** Authoritative account references supplied by the report adapter. */
+  accountRefs?: string[];
   isSubtotal?: boolean;
 }
 

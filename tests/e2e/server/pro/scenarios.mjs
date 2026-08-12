@@ -6,6 +6,7 @@ import {
   ensureHarnessSession,
   openProShell,
   requestJson,
+  requestText,
   seedHarnessProTenant,
 } from './helpers.mjs';
 
@@ -256,6 +257,300 @@ export const runProAccountingScenario = async (page) => {
       return workflowRules.some((rule) => rule.value === ruleNeedle);
     })
     .toBe(false);
+
+  const transactions = await requestJson(state, session, '/api/v1/pro/accounting/transactions');
+  const workflowTransaction = transactions.find((transaction) => transaction.counterparty === 'Hosting Partner GmbH');
+  expect(workflowTransaction).toBeTruthy();
+  const transactionId = workflowTransaction?.id;
+  if (!transactionId) {
+    throw new Error('Seeded Pro accounting transaction was not persisted.');
+  }
+
+  const draftBefore = await requestJson(
+    state,
+    session,
+    `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}`,
+  );
+  expect(draftBefore?.id).toBeTruthy();
+  const draftId = draftBefore?.id;
+  if (!draftId) {
+    throw new Error('Seeded Pro accounting draft was not persisted.');
+  }
+
+  const draftSaved = await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/drafts',
+    undefined,
+    {
+      method: 'POST',
+      body: {
+        reason: 'Playwright canonical draft save',
+        draft: {
+          ...draftBefore,
+          workflowStatus: 'ready_for_review',
+          bookingText: 'Playwright canonical persisted booking',
+          lines: [
+            { id: `${draftId}-expense`, accountNumber: '3125', debitAmount: 119, creditAmount: 0 },
+            { id: `${draftId}-bank`, accountNumber: '1200', debitAmount: 0, creditAmount: 119 },
+          ],
+        },
+      },
+    },
+  );
+  expect(draftSaved.workflowStatus).toBe('incomplete');
+
+  const draftRefetched = await requestJson(
+    state,
+    session,
+    `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}`,
+  );
+  expect(draftRefetched).toMatchObject({
+    id: draftId,
+    transactionId,
+    bookingText: 'Playwright canonical persisted booking',
+    workflowStatus: 'incomplete',
+  });
+  expect(draftRefetched.lines).toEqual([
+    expect.objectContaining({ accountNumber: '3125', debitAmount: 119, creditAmount: 0 }),
+    expect.objectContaining({ accountNumber: '1200', debitAmount: 0, creditAmount: 119 }),
+  ]);
+
+  const submitForReview = await requestJson(
+    state,
+    session,
+    `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}/action`,
+    undefined,
+    { method: 'POST', body: { reason: 'Playwright submit canonical draft', action: 'submit_for_review' } },
+  );
+  expect(submitForReview.workflowStatus).toBe('pending_approval');
+
+  const approvedDraft = await requestJson(
+    state,
+    session,
+    `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}/action`,
+    undefined,
+    { method: 'POST', body: { reason: 'Playwright approve canonical draft', action: 'approve' } },
+  );
+  expect(approvedDraft.workflowStatus).toBe('approved');
+
+  const postedDraft = await requestJson(
+    state,
+    session,
+    `/api/v1/pro/accounting/drafts/${encodeURIComponent(draftId)}/post`,
+    undefined,
+    {
+      method: 'POST',
+      body: {
+        reason: 'Playwright post canonical draft',
+        postingDate: '2026-03-05',
+        idempotencyKey: `playwright-draft-${Date.now()}`,
+      },
+    },
+  );
+  expect(postedDraft.issues).toEqual([]);
+  expect(postedDraft.entry).toMatchObject({ id: expect.any(String), status: 'posted', sourceDraftId: draftId });
+
+  const guvReport = await requestJson(state, session, '/api/v1/pro/accounting/reports/guv', {
+    from: '2026-03-05',
+    to: '2026-03-05',
+  });
+  expect(Array.isArray(guvReport.rows)).toBe(true);
+  expect(Number.isFinite(guvReport.netResult)).toBe(true);
+
+  const datevExport = await requestText(state, session, '/api/v1/pro/accounting/datev/export.csv', {
+    from: '2026-03-05',
+    to: '2026-03-05',
+    reason: 'Playwright immutable DATEV export',
+  });
+  expect(datevExport.body).toContain('date;belegfeld1;buchungstext;konto;gegenkonto');
+  expect(datevExport.body).toContain('Playwright canonical persisted booking');
+  const datevExportId = datevExport.headers.get('x-billme-datev-export-id');
+  const datevContentHash = datevExport.headers.get('x-billme-datev-content-sha256');
+  expect(datevExportId).toBeTruthy();
+  expect(datevContentHash).toMatch(/^[a-f0-9]{64}$/);
+
+  const datevExports = await requestJson(state, session, '/api/v1/pro/accounting/datev/exports');
+  expect(datevExports).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: datevExportId, contentSha256: datevContentHash }),
+    ]),
+  );
+  const datevRefetched = await requestText(
+    state,
+    session,
+    `/api/v1/pro/accounting/datev/exports/${encodeURIComponent(datevExportId)}`,
+  );
+  expect(datevRefetched.body).toBe(datevExport.body);
+  expect(datevRefetched.headers.get('x-billme-datev-content-sha256')).toBe(datevContentHash);
+
+  const mappingRequests = [
+    ['accounts_payable', '1200'],
+    ['input_vat', '3125'],
+  ];
+  for (const [role, accountNumber] of mappingRequests) {
+    const mapping = await requestJson(
+      state,
+      session,
+      '/api/v1/pro/accounting/mappings',
+      undefined,
+      {
+        method: 'POST',
+        body: {
+          reason: `Playwright prepare incoming invoice ${role}`,
+          chart: 'SKR03',
+          role,
+          accountNumber,
+        },
+      },
+    );
+    expect(mapping).toMatchObject({ chart: 'SKR03', role, accountNumber });
+  }
+
+  const suffix = `${Date.now()}`;
+  const vendorId = `playwright-vendor-${suffix}`;
+  const vendor = await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/vendors',
+    undefined,
+    {
+      method: 'POST',
+      body: {
+        reason: 'Playwright persist vendor',
+        vendor: {
+          id: vendorId,
+          vendorNumber: `V-${suffix}`,
+          name: 'Playwright Hosting Vendor',
+          email: `vendor-${suffix}@billme-e2e.local`,
+          defaultExpenseAccount: '3125',
+        },
+      },
+    },
+  );
+  expect(vendor).toMatchObject({ id: vendorId, name: 'Playwright Hosting Vendor' });
+  const vendorsRefetched = await requestJson(state, session, '/api/v1/pro/accounting/vendors');
+  expect(vendorsRefetched).toEqual(expect.arrayContaining([expect.objectContaining({ id: vendorId })]));
+
+  const incomingInvoiceId = `playwright-incoming-${suffix}`;
+  const incomingInvoice = await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/incoming-invoices',
+    undefined,
+    {
+      method: 'POST',
+      body: {
+        reason: 'Playwright persist incoming invoice',
+        invoice: {
+          id: incomingInvoiceId,
+          vendorId,
+          number: `ER-${suffix}`,
+          invoiceDate: '2026-03-06',
+          dueDate: '2026-03-20',
+          netAmount: 100,
+          taxAmount: 19,
+          grossAmount: 119,
+          status: 'open',
+          taxRate: 19,
+          taxCaseKey: 'DE_STD_19',
+          notes: 'Playwright incoming invoice persistence',
+          accountingStatus: 'unposted',
+          lines: [
+            {
+              id: `${incomingInvoiceId}-line-1`,
+              incomingInvoiceId,
+              position: 0,
+              description: 'Managed hosting',
+              quantity: 1,
+              unitPrice: 100,
+              netAmount: 100,
+              taxRate: 19,
+              taxAmount: 19,
+              grossAmount: 119,
+              accountNumber: '3125',
+            },
+          ],
+        },
+      },
+    },
+  );
+  expect(incomingInvoice).toMatchObject({ id: incomingInvoiceId, accountingStatus: 'unposted' });
+  const incomingInvoicesRefetched = await requestJson(state, session, '/api/v1/pro/accounting/incoming-invoices');
+  expect(incomingInvoicesRefetched).toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: incomingInvoiceId, vendorId })]),
+  );
+
+  const incomingPreview = await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/incoming-invoices/preview',
+    undefined,
+    {
+      method: 'POST',
+      body: { reason: 'Playwright preview incoming invoice', invoiceId: incomingInvoiceId },
+    },
+  );
+  expect(incomingPreview).toMatchObject({ sourceType: 'incoming_invoice', sourceId: incomingInvoiceId, status: 'ready' });
+
+  const incomingPosted = await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/incoming-invoices/post',
+    undefined,
+    {
+      method: 'POST',
+      body: { reason: 'Playwright post incoming invoice', invoiceId: incomingInvoiceId },
+    },
+  );
+  expect(incomingPosted).toMatchObject({ sourceType: 'incoming_invoice', sourceId: incomingInvoiceId, status: 'ready' });
+  const incomingAfterPost = await requestJson(state, session, '/api/v1/pro/accounting/incoming-invoices');
+  expect(incomingAfterPost).toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: incomingInvoiceId, accountingStatus: 'posted' })]),
+  );
+
+  const openItems = await requestJson(state, session, '/api/v1/pro/accounting/open-items');
+  const incomingOpenItem = openItems.find((item) => item.sourceType === 'incoming_invoice' && item.sourceId === incomingInvoiceId);
+  expect(incomingOpenItem).toMatchObject({ partyType: 'creditor', originalAmount: 119, status: 'open' });
+  const openItemId = incomingOpenItem?.id;
+  if (!openItemId) {
+    throw new Error('Posted incoming invoice did not persist an open item.');
+  }
+
+  const allocationEventId = `playwright-allocation-${suffix}`;
+  const paymentBody = {
+    reason: 'Playwright allocate OPOS payment',
+    payment: {
+      paymentId: `playwright-payment-${suffix}`,
+      sourceType: 'manual',
+      sourceId: `playwright-payment-source-${suffix}`,
+      partyType: 'creditor',
+      partyId: vendorId,
+      paymentDate: '2026-03-07',
+      amount: 119,
+      bankAccountNumber: '1200',
+      method: 'Bank',
+      allocations: [{ openItemId, amount: 119 }],
+      allocationEventId,
+    },
+  };
+  const payment = await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/open-items/payments',
+    undefined,
+    { method: 'POST', body: paymentBody },
+  );
+  expect(payment).toMatchObject({ amount: 119, allocatedAmount: 119, residualAmount: 0, status: 'allocated' });
+
+  const paymentRetry = await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/open-items/payments',
+    undefined,
+    { method: 'POST', body: paymentBody },
+  );
+  expect(paymentRetry).toMatchObject({ id: payment.id, amount: 119, allocatedAmount: 119, residualAmount: 0, status: 'allocated' });
 };
 
 export const runProRouteGuardScenario = async (page) => {

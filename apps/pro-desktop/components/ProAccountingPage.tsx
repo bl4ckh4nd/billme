@@ -4,6 +4,7 @@ import { Settings2 } from 'lucide-react';
 import { Button } from '@billme/ui';
 import {
   ProAccountingWorkspace,
+  reportDateRange,
   type ReportFilterState,
   type ProAccountingDataAdapter,
   type ProAccountingSeed,
@@ -13,22 +14,56 @@ import {
 } from '@billme/accounting-ui-pro';
 import { ipc } from '../ipc/client';
 import { useAccountsQuery } from '../hooks/useAccounts';
+import { useSettingsQuery } from '../hooks/useSettings';
 import { useImportSkrMutation, useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
 import type { IpcArgs, IpcResult } from '../ipc/contract';
-import type { IncomingInvoiceEntity, OpenItemPaymentInput } from '@billme/accounting-shared';
+import type {
+  Bwa01Report,
+  HgbGuvReport,
+  IncomingInvoiceEntity,
+  ManagementGuvReport,
+  OpenItemPaymentInput,
+  ReportKind,
+  ReportResult,
+} from '@billme/accounting-shared';
 import type { OposBankTransaction } from '@billme/accounting-ui-pro';
 import { ProAccountRulesModal } from './ProAccountRulesModal';
 import {
   mapBalanceSheetPreview,
+  mapBwa01Report,
+  mapEurReport,
   mapGuvReport,
+  mapHgbGuvReport,
+  mapManagementGuvReport,
   mapReportDrilldownEntries,
   mapSusaReport,
 } from './reportAdapters';
 
-const reportPeriodRange = (filters: ReportFilterState): { from?: string; to?: string } => ({
-  from: filters.periodFrom ? `${filters.periodFrom}-01` : undefined,
-  to: filters.periodTo ? `${filters.periodTo}-31` : filters.asOfDate,
-});
+const reportPeriodRange = (filters: ReportFilterState): { from?: string; to?: string } =>
+  reportDateRange(filters);
+
+type ReportingIpc = {
+  getReportingReport?: (args: {
+    kind: ReportKind;
+    from?: string;
+    to?: string;
+    asOfDate?: string;
+  }) => Promise<ReportResult<object>>;
+};
+
+/**
+ * Reporting tabs must consume the shared, report-specific engine route. Do
+ * not fall back to getGuvReport here: that would make BWA01, management GuV,
+ * and HGB GuV appear identical while hiding their mapping health.
+ */
+const runReportingReport = async (
+  kind: Extract<ReportKind, 'bwa01' | 'management-guv' | 'hgb-guv'>,
+  range: { from?: string; to?: string },
+): Promise<ReportResult<object>> => {
+  const route = (ipc.pro as unknown as ReportingIpc).getReportingReport;
+  if (!route) throw new Error('PRO_REPORTING_ROUTE_UNAVAILABLE');
+  return route({ kind, ...range });
+};
 
 type DatevExportArgs = {
   from: string;
@@ -204,12 +239,23 @@ const mapUiDraftToEntityDraft = (
 
 export const ProAccountingPage: React.FC = () => {
   const queryClient = useQueryClient();
+  const { data: settings } = useSettingsQuery();
   const { data: ledgerStats, isError: ledgerStatsError, error: ledgerStatsLoadError } = useProLedgerStatsQuery();
   const policyQuery = useQuery({
     queryKey: ['pro-accounting', 'policy'],
     queryFn: () => ipc.pro.getAccountingPolicy(),
   });
   const activeChart = policyQuery.data?.activeChart ?? 'SKR03';
+  const businessReportingProfile = React.useMemo(() => {
+    const profile = settings?.businessReportingProfile;
+    if (!profile) return undefined;
+    return {
+      legalForm: profile.legalForm,
+      profitDetermination: profile.profitDetermination,
+      fiscalYearStart: profile.fiscalYearStart,
+      chart: profile.chart,
+    };
+  }, [settings?.businessReportingProfile]);
   const { data: ledgerAccounts = [], isError: ledgerAccountsError, error: ledgerAccountsLoadError } = useProLedgerAccountsQuery({
     chart: activeChart,
     limit: 10_000,
@@ -277,13 +323,14 @@ export const ProAccountingPage: React.FC = () => {
       accounts: mapLedgerAccounts(activeLedgerAccounts),
       drafts: Array.from(draftMap.values()),
       chartFramework: activeChart,
+      businessReportingProfile,
       bankAccountNumber: Object.values(bankAccountNumberByTransactionId).length === 1
         ? Object.values(bankAccountNumberByTransactionId)[0]
         : undefined,
       bankAccountNumberByTransactionId,
-      seedVersion: `${txQuery.data?.length ?? 0}:${draftRows.length}:${ledgerAccounts.length}:${activeChart}:${Object.values(bankAccountNumberByTransactionId).join(',')}`,
+      seedVersion: `${txQuery.data?.length ?? 0}:${draftRows.length}:${ledgerAccounts.length}:${activeChart}:${businessReportingProfile?.legalForm ?? 'unknown'}:${businessReportingProfile?.profitDetermination ?? 'unknown'}:${businessReportingProfile?.fiscalYearStart ?? 'unknown'}:${Object.values(bankAccountNumberByTransactionId).join(',')}`,
     };
-  }, [txQuery.data, draftQuery.data, ledgerAccounts, activeChart, bankAccounts]);
+  }, [txQuery.data, draftQuery.data, ledgerAccounts, activeChart, bankAccounts, businessReportingProfile]);
 
   const accountNames = React.useMemo(
     () => mapLedgerAccountNames(ledgerAccounts.filter((row) => !row.chart || row.chart === activeChart)),
@@ -445,6 +492,41 @@ export const ProAccountingPage: React.FC = () => {
         const range = reportPeriodRange(filters);
         const report = await ipc.pro.getGuvReport(range);
         return mapGuvReport(report);
+      },
+      async getEurReport(filters) {
+        const range = reportPeriodRange(filters);
+        const taxYear = Number((range.to ?? filters.asOfDate).slice(0, 4));
+        const report = await ipc.eur.getReport({ taxYear, from: range.from, to: range.to });
+        return mapEurReport(report);
+      },
+      listReportSnapshots(reportType) {
+        return ipc.pro.listReportSnapshots({ reportType }).then((rows) => rows.map((row) => ({
+          ...row,
+          args: row.args ?? {},
+          payload: row.payload ?? null,
+        })));
+      },
+      saveReportSnapshot(input) {
+        return runMutation(() => ipc.pro.saveReportSnapshot(input)).then((row) => ({
+          ...row,
+          args: row.args ?? {},
+          payload: row.payload ?? null,
+        }));
+      },
+      async getBwaReport(filters) {
+        activeReportFilters = filters;
+        const report = await runReportingReport('bwa01', reportPeriodRange(filters));
+        return mapBwa01Report(report as ReportResult<Bwa01Report>);
+      },
+      async getManagementGuvReport(filters) {
+        activeReportFilters = filters;
+        const report = await runReportingReport('management-guv', reportPeriodRange(filters));
+        return mapManagementGuvReport(report as ReportResult<ManagementGuvReport>);
+      },
+      async getHgbGuvReport(filters) {
+        activeReportFilters = filters;
+        const report = await runReportingReport('hgb-guv', reportPeriodRange(filters));
+        return mapHgbGuvReport(report as ReportResult<HgbGuvReport>);
       },
       async getBalanceSheetPreview(filters) {
         activeReportFilters = filters;

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   mapBalanceSheetPreview,
+  mapBwa01Report,
   mapGuvReport,
+  mapHgbGuvReport,
   mapReportDrilldownEntries,
   mapSusaReport,
 } from './reportAdapters';
@@ -121,6 +123,45 @@ describe('reportAdapters', () => {
     expect(report.aktiva[0]).toMatchObject({ label: 'Maschinen', side: 'aktiva' });
     expect(report.passiva[0]).toMatchObject({ label: 'Verbindlichkeiten', side: 'passiva' });
     expect(report.totals.difference).toBe(50);
+    expect(report.aktiva[0]?.accountRefs).toEqual(['0440']);
+    expect(report.passiva[0]?.accountRefs).toEqual(['1600']);
+  });
+
+  it('keeps report-specific engine rows and blocks incomplete mapping health', () => {
+    const report = mapBwa01Report({
+      kind: 'bwa01',
+      rows: [{ position: 'revenue', label: 'Umsatzerlöse', amount: 100, accountNumbers: ['8400'] }],
+      totals: { revenue: 100, expenses: 0, operatingResult: 100 },
+      snapshot: {
+        fiscalYear: 2026,
+        fiscalYearStart: '01-01',
+        businessSize: 'small',
+        ledgerEntryCount: 1,
+        ledgerAccountCount: 1,
+        cashEntryCount: 0,
+      },
+      mappingHealth: {
+        mappedAccounts: 1,
+        inferredAccounts: 0,
+        unmappedAccounts: ['9999'],
+        warnings: ['9999 fehlt im BWA01-Katalog'],
+        blocking: true,
+      },
+    });
+
+    expect(report.lines[0]).toMatchObject({ id: 'revenue', accountRefs: ['8400'] });
+    expect(report.quality).toMatchObject({
+      mappingStatus: 'blocked',
+      unmappedAccounts: [{ accountNumber: '9999', amount: 0 }],
+      mappingNotes: ['9999 fehlt im BWA01-Katalog'],
+    });
+
+    const raw = mapHgbGuvReport({
+      method: 'gkv',
+      rows: [],
+      netResult: 0,
+    });
+    expect(raw.quality).toMatchObject({ mappingStatus: 'blocked', warnings: 1 });
   });
 
   it('preserves OPOS source identity in drilldowns', () => {

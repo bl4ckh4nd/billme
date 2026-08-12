@@ -12,6 +12,9 @@ import {
   ensureProAccountingSeedData,
   getAccountingHealth,
   getBilanzReport,
+  getReportingReport as runReportingReport,
+  getReportMappingHealth as readReportMappingHealth,
+  getReportSnapshot as readReportSnapshot,
   getDraftByTransactionId,
   getGuvReport,
   getLedgerBalances,
@@ -23,8 +26,15 @@ import {
   listJournalEntries,
   postDraft,
   reverseJournalEntry,
+  listReportSnapshots as readReportSnapshots,
+  saveReportSnapshot as persistReportSnapshot,
   saveDraft,
+  upsertReportMappingOverride as persistReportMappingOverride,
   validateTaxCompliance,
+} from './proAccountingRepo';
+import type {
+  DesktopReportSnapshotRecord,
+  ReportMappingOverrideInput,
 } from './proAccountingRepo';
 import { listProWorkflowEntries, upsertProWorkflowEntry } from './proWorkflowRepo';
 import { getLedgerAccountStats, listLedgerAccounts } from './ledgerAccountsRepo';
@@ -56,7 +66,50 @@ import {
 } from './oposRepo';
 import type { ProAccountingOposRepository } from '@billme/accounting-engine';
 
-export const createSqliteProAccountingRepository = (db: Database.Database): ProAccountingRepository & ProAccountingOposRepository => ({
+type LocalReportingReport = (
+  db: Database.Database,
+  args: Parameters<typeof runReportingReport>[1],
+  scope: TenantScope,
+) => ReturnType<typeof runReportingReport>;
+
+// The accounting-engine repository contract has a scope-first method with the
+// same name. Keep the local SQLite implementation's database-first seam
+// explicit rather than weakening the whole port object with `any`.
+const runLocalReportingReport = runReportingReport as unknown as LocalReportingReport;
+const readLocalReportSnapshot = readReportSnapshot as unknown as (
+  db: Database.Database,
+  snapshotId: string,
+  scope: TenantScope,
+) => DesktopReportSnapshotRecord | null;
+const readLocalReportSnapshots = readReportSnapshots as unknown as (
+  db: Database.Database,
+  scope: TenantScope,
+  reportType?: string,
+) => DesktopReportSnapshotRecord[];
+const persistLocalReportSnapshot = persistReportSnapshot as unknown as (
+  db: Database.Database,
+  input: { reportType: string; args?: unknown; payload: unknown; id?: string; reason?: string },
+  scope: TenantScope,
+) => DesktopReportSnapshotRecord;
+const readLocalReportMappingHealth = readReportMappingHealth as unknown as (
+  db: Database.Database,
+  scope: TenantScope,
+  args?: { chart?: 'SKR03' | 'SKR04'; statement?: string },
+) => import('@billme/accounting-shared').MappingHealth;
+const persistLocalReportMappingOverride = persistReportMappingOverride as unknown as (
+  db: Database.Database,
+  input: ReportMappingOverrideInput,
+  scope: TenantScope,
+) => import('@billme/accounting-shared').ReportingMapping;
+
+export const createSqliteProAccountingRepository = (db: Database.Database): ProAccountingRepository & ProAccountingOposRepository & {
+  getReportSnapshot: typeof readReportSnapshot;
+  listReportSnapshots: typeof readReportSnapshots;
+  saveReportSnapshot: typeof persistReportSnapshot;
+  getReportMappingHealth: typeof readReportMappingHealth;
+  getReportingReport: typeof runReportingReport;
+  upsertReportMappingOverride: typeof persistReportMappingOverride;
+} => ({
   listBankTransactions: async (scope) => listBankTransactions(db, scope),
   getDraftByTransactionId: async (scope, transactionId) => getDraftByTransactionId(db, transactionId, scope),
   saveDraft: async (scope, draft) => saveDraft(db, draft, scope),
@@ -69,6 +122,12 @@ export const createSqliteProAccountingRepository = (db: Database.Database): ProA
   getSusaReport: async (scope, args) => getSusaReport(db, args, scope),
   getGuvReport: async (scope, args) => getGuvReport(db, args, scope),
   getBilanzReport: async (scope, args) => getBilanzReport(db, args, scope),
+  getReportingReport: (scope, args) => Reflect.apply(runLocalReportingReport, null, [db, args, scope]),
+  getReportSnapshot: (scope, id) => Reflect.apply(readLocalReportSnapshot, null, [db, id, scope]),
+  listReportSnapshots: (scope, reportType) => Reflect.apply(readLocalReportSnapshots, null, [db, scope, reportType]),
+  saveReportSnapshot: (scope, input) => Reflect.apply(persistLocalReportSnapshot, null, [db, input, scope]),
+  getReportMappingHealth: (scope, args) => Reflect.apply(readLocalReportMappingHealth, null, [db, scope, args]),
+  upsertReportMappingOverride: (scope, input) => Reflect.apply(persistLocalReportMappingOverride, null, [db, input, scope]),
   listDatevExports: async (scope) => listDatevExports(db, scope),
   insertDatevExport: async (scope, args) => insertDatevExport(db, args, scope),
   getAccountingHealth: async (scope) => getAccountingHealth(db, scope),

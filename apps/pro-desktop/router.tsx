@@ -35,7 +35,7 @@ import { ShortcutsModal } from './components/ShortcutsModal';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { ProAccountingPage } from './components/ProAccountingPage';
 import { FinanceHubView } from './components/FinanceHubView';
-import { TaxFilingCenter } from './components/TaxFilingCenter';
+import { EurView } from './components/EurView';
 import { shouldShowBusinessOnboarding } from '@billme/ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { MOCK_SETTINGS } from './data/mockData';
@@ -53,7 +53,7 @@ const RootLayout: React.FC = () => {
       pathname.startsWith('/finance')
       || pathname.startsWith('/accounts')
       || pathname.startsWith('/accounting')
-      || pathname.startsWith('/tax-filing')
+      || pathname.startsWith('/eur')
     )
       return 'finance';
     if (pathname.startsWith('/templates') || pathname.startsWith('/recurring')) return 'documents';
@@ -120,7 +120,7 @@ const DashboardPage: React.FC = () => {
 
 const AccountsPage: React.FC = () => <AccountsView />;
 const FinancePage: React.FC = () => <FinanceHubView />;
-const TaxFilingPage: React.FC = () => <TaxFilingCenter />;
+const EurPage: React.FC = () => <EurView />;
 const ClientsPage: React.FC = () => <ClientsView />;
 const ProjectsPage: React.FC = () => <ProjectsView />;
 const ArticlesPage: React.FC = () => <ArticlesView />;
@@ -416,10 +416,10 @@ const accountingRoute = createRoute({
   component: ProAccountingPage,
 });
 
-const taxFilingRoute = createRoute({
+const eurRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/tax-filing',
-  component: TaxFilingPage,
+  path: '/eur',
+  component: EurPage,
 });
 
 const templatesRoute = createRoute({
@@ -491,7 +491,7 @@ const routeTree = rootRoute.addChildren([
   accountsRoute,
   financeRoute,
   accountingRoute,
-  taxFilingRoute,
+  eurRoute,
   templatesRoute,
   templateEditorRoute,
   documentsRoute,

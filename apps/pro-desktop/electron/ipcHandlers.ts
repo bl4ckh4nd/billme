@@ -92,6 +92,7 @@ import {
   createSqliteProAccountingRepository,
   createSqliteProWorkflowRepository,
 } from '../db/proAccountingPorts';
+import { assertReportSnapshotFreezable, getReportSnapshot, listReportSnapshots, saveReportSnapshot } from '../db/proAccountingRepo';
 import { buildDatevBuchungsstapelCsv } from '../services/datevExport';
 import { buildTaxAuditExportPackage } from '../services/auditExportPackage';
 import { seedAccountKeywords } from '../services/accountKeywordSeed';
@@ -181,7 +182,7 @@ export const registerIpcHandlers = (
   const requireDb = deps.requireDb;
   const getUserDataPath = deps.getUserDataPath;
   const getMainWindow = deps.getMainWindow;
-  registerTaxFilingIpcHandlers(ipcMain, { getUserDataPath, resourcesPath: process.resourcesPath, binaryPath: process.env.BILLME_ERIC_BINARY, adapter: createProTaxFilingAdapter(getUserDataPath) });
+  registerTaxFilingIpcHandlers(ipcMain, { getUserDataPath, resourcesPath: process.resourcesPath, binaryPath: process.env.BILLME_ERIC_BINARY, adapter: createProTaxFilingAdapter(getUserDataPath, requireDb) });
   const getProScope = () => resolveRuntimeProTenantScope();
   const getProAccountingService = () =>
     bindProAccountingScope(
@@ -1244,6 +1245,16 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'pro:getBilanzReport', ({ asOfDate }) => {
     return getProAccountingService().getBilanzReport({ asOfDate });
+  });
+
+  register(ipcMain, 'pro:listReportSnapshots', ({ reportType }) => {
+    return listReportSnapshots(requireDb(), getProScope(), reportType);
+  });
+
+  register(ipcMain, 'pro:saveReportSnapshot', ({ reportType, args, payload, reason }) => {
+    assertLocalOwner('pro:saveReportSnapshot');
+    assertReportSnapshotFreezable({ reportType, payload });
+    return saveReportSnapshot(requireDb(), { reportType, args, payload, reason }, getProScope());
   });
 
   register(ipcMain, 'pro:listAssets', () => {

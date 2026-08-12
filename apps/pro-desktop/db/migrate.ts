@@ -90,6 +90,35 @@ const repairDuplicateJournalSourceDrafts = (db: Database.Database): number => {
   return repaired;
 };
 
+/** Expand legacy HGB mappings to the explicit report catalog namespaces. */
+const ensureReportMappingStatementSchema = (db: Database.Database): void => {
+  const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'account_mappings_hgb'").get() as { sql?: string } | undefined;
+  if (!table?.sql || table.sql.includes("'bwa01'")) return;
+  db.exec(`
+    BEGIN;
+    DROP INDEX IF EXISTS idx_account_mappings_unique;
+    ALTER TABLE account_mappings_hgb RENAME TO account_mappings_hgb_legacy;
+    CREATE TABLE account_mappings_hgb (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      chart TEXT NOT NULL,
+      account_number TEXT NOT NULL,
+      statement_type TEXT NOT NULL CHECK (statement_type IN ('bwa01', 'management-guv', 'hgb-guv', 'hgb-gkv', 'hgb-bilanz', 'hgb-balance', 'eur', 'guv', 'bilanz')),
+      position_key TEXT NOT NULL,
+      position_label TEXT NOT NULL,
+      balance_side TEXT CHECK (balance_side IN ('asset', 'liability')),
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO account_mappings_hgb (id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at)
+      SELECT id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at
+      FROM account_mappings_hgb_legacy;
+    DROP TABLE account_mappings_hgb_legacy;
+    CREATE UNIQUE INDEX idx_account_mappings_unique
+      ON account_mappings_hgb(tenant_id, chart, account_number, statement_type);
+    COMMIT;
+  `);
+};
+
 export const runMigrations = (db: Database.Database): void => {
   // Create migration log table first
   db.exec(`
@@ -129,6 +158,7 @@ export const runMigrations = (db: Database.Database): void => {
     tryAddColumn(db, 'datev_exports', 'manifest_json', 'TEXT');
     tryAddColumn(db, 'datev_exports', 'status', 'TEXT');
     tryAddColumn(db, 'datev_exports', 'validation_json', 'TEXT');
+    tryAddColumn(db, 'report_snapshots', 'source_hash', 'TEXT');
 
     // Documents: project assignment
     tryAddColumn(db, 'invoices', 'project_id', 'TEXT');
@@ -564,11 +594,26 @@ export const runMigrations = (db: Database.Database): void => {
       report_type TEXT NOT NULL,
       args_json TEXT NOT NULL,
       payload_json TEXT NOT NULL,
+      source_hash TEXT,
       created_at TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_report_snapshots_tenant_type
       ON report_snapshots(tenant_id, report_type, created_at DESC);
+
+    CREATE TRIGGER IF NOT EXISTS report_snapshots_no_update
+    BEFORE UPDATE ON report_snapshots
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'report_snapshots are immutable');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS report_snapshots_no_delete
+    BEFORE DELETE ON report_snapshots
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'report_snapshots are immutable');
+    END;
 
     CREATE TABLE IF NOT EXISTS datev_exports (
       id TEXT PRIMARY KEY,
@@ -1792,6 +1837,7 @@ export const runMigrations = (db: Database.Database): void => {
     `);
 
   // Import batches: rollback support
+  ensureReportMappingStatementSchema(db);
   tryAddColumn(db, 'import_batches', 'rolled_back_at', 'TEXT');
   tryAddColumn(db, 'import_batches', 'rollback_reason', 'TEXT');
   tryAddColumn(db, 'eur_classifications', 'vat_rate', 'REAL');

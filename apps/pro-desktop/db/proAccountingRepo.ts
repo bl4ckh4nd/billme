@@ -3,8 +3,21 @@ import type Database from 'better-sqlite3';
 import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, max, or, sum } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
+import { sourceHash as taxFilingSourceHash } from '@billme/desktop-core/electron/tax-filing/adapter';
+import type { TaxFilingSnapshot } from '@billme/desktop-core/electron/tax-filing/types';
 import type { TenantScope } from '@billme/server-core';
+import type {
+  MappingHealth,
+  ReportKind,
+  ReportResult,
+  ReportingCalculationProfile,
+  ReportingMapping,
+  ReportingStatement,
+} from '@billme/accounting-shared';
+import { calculateReport } from '@billme/accounting-engine';
+import { fiscalYearForDate } from '@billme/accounting-shared';
 import { appendAuditLog } from './audit';
+import { getSettings } from './settingsRepo';
 import { listAccountSuggestionRules } from './accountSuggestionRulesRepo';
 import {
   buildAccountSuggestionContext,
@@ -157,6 +170,23 @@ export interface LedgerBalanceRow {
   closingBalance: number;
 }
 
+export interface DesktopReportSnapshotRecord {
+  id: string;
+  reportType: string;
+  args: unknown;
+  payload: unknown;
+  createdAt: string;
+  sourceHash: string;
+}
+
+export interface ReportMappingOverrideInput extends ReportingMapping {
+  chart: 'SKR03' | 'SKR04';
+  /** Mapping overrides are scoped to one explicit report catalog. */
+  statement: ReportingStatement;
+  position: string;
+  label?: string;
+}
+
 export interface DatevExportResult {
   id: string;
   filePath: string;
@@ -193,6 +223,10 @@ const isIsoDate = (value: unknown): value is string => {
 };
 
 const periodForDate = (date: string): string => date.slice(0, 7);
+
+/** Fiscal-year policy is persisted in settings.settings_json, never copied to accounting policy. */
+export const fiscalYearForPostingDate = (db: Database.Database, date: string): number =>
+  fiscalYearForDate(date, getSettings(db)?.businessReportingProfile?.fiscalYearStart ?? '01-01');
 
 const isPeriod = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
 
@@ -324,11 +358,12 @@ const defaultDraftFromBankTx = (
   tx: ProBankTransaction,
   suggestedAccountNumber?: string,
   bankLedgerAccountNumber?: string,
+  configuredFiscalYear?: number,
 ): BookingDraftEntity => {
   const absAmount = round2(Math.abs(tx.amount));
   const draftId = `draft-${tx.id}`;
   const period = (tx.date || new Date().toISOString().slice(0, 10)).slice(0, 7);
-  const fiscalYear = Number(period.slice(0, 4));
+  const fiscalYear = configuredFiscalYear ?? Number(period.slice(0, 4));
   const suggested = suggestedAccountNumber?.trim();
   const expenseAccount = suggested || '6000';
   const incomeAccount = suggested || '8400';
@@ -504,7 +539,7 @@ const rejectPostedDraftMutationUnlessReplay = (
     if (!txRow) throw new PostedDraftImmutableError();
     const tx = toBankTransaction(txRow);
     const suggestion = buildSuggestionsByTransaction(db, [tx], scope).get(tx.id);
-    const canonical = defaultDraftFromBankTx(tx, suggestion?.accountNumber, resolveBankLedgerAccountForTransaction(db, tx));
+    const canonical = defaultDraftFromBankTx(tx, suggestion?.accountNumber, resolveBankLedgerAccountForTransaction(db, tx), fiscalYearForPostingDate(db, tx.date));
     if (canonicalDraftSnapshot(canonical, tenantId) !== canonicalDraftSnapshot(draft, tenantId)) {
       throw new PostedDraftImmutableError();
     }
@@ -569,13 +604,13 @@ const validateDraft = (
 
   if (draft.postingDate === undefined || !isIsoDate(draft.postingDate)) {
     issues.push({ id: randomUUID(), code: 'INVALID_POSTING_DATE', severity: 'error', message: 'Buchungsdatum muss ein gültiges Datum (YYYY-MM-DD) sein.', fieldPath: 'postingDate', blocking: true, source: 'system' });
-  } else if (draft.period !== periodForDate(draft.postingDate) || draft.fiscalYear !== Number(draft.postingDate.slice(0, 4))) {
+  } else if (draft.period !== periodForDate(draft.postingDate) || draft.fiscalYear !== fiscalYearForPostingDate(db, draft.postingDate)) {
     issues.push({ id: randomUUID(), code: 'POSTING_PERIOD_MISMATCH', severity: 'error', message: 'Periode und Geschäftsjahr müssen aus dem Buchungsdatum abgeleitet werden.', fieldPath: 'period', blocking: true, source: 'system' });
   }
   if (draft.documentDate !== undefined && !isIsoDate(draft.documentDate)) {
     issues.push({ id: randomUUID(), code: 'INVALID_DOCUMENT_DATE', severity: 'error', message: 'Belegdatum muss ein gültiges Datum (YYYY-MM-DD) sein.', fieldPath: 'documentDate', blocking: true, source: 'system' });
   }
-  if (!isPeriod(draft.period) || draft.fiscalYear !== Number(draft.period.slice(0, 4))) {
+  if (!isPeriod(draft.period) || (draft.postingDate && isIsoDate(draft.postingDate) && draft.fiscalYear !== fiscalYearForPostingDate(db, draft.postingDate))) {
     issues.push({ id: randomUUID(), code: 'INVALID_PERIOD', severity: 'error', message: 'Periode oder Geschäftsjahr ist ungültig.', fieldPath: 'period', blocking: true, source: 'system' });
   }
 
@@ -974,7 +1009,7 @@ export const getDraftByTransactionId = (
   const tx = toBankTransaction(txRow);
   const suggestion = buildSuggestionsByTransaction(db, [tx], scope).get(tx.id);
   const bankLedgerAccount = resolveBankLedgerAccountForTransaction(db, tx);
-  const draft = defaultDraftFromBankTx(tx, suggestion?.accountNumber, bankLedgerAccount);
+  const draft = defaultDraftFromBankTx(tx, suggestion?.accountNumber, bankLedgerAccount, fiscalYearForPostingDate(db, tx.date));
   const postedSourceDraft = createDrizzle(db).select({ id: schema.journalEntries.id })
     .from(schema.journalEntries)
     .where(and(
@@ -1029,7 +1064,7 @@ export const saveDraft = (
     }),
     validationIssues: draft.validationIssues ?? [],
     period: draft.period || (draft.postingDate || now.slice(0, 10)).slice(0, 7),
-    fiscalYear: draft.fiscalYear || Number((draft.period || now.slice(0, 7)).slice(0, 4)),
+    fiscalYear: draft.fiscalYear || (draft.postingDate && isIsoDate(draft.postingDate) ? fiscalYearForPostingDate(db, draft.postingDate) : Number((draft.period || now.slice(0, 7)).slice(0, 4))),
     updatedAt: now,
   };
 
@@ -1278,7 +1313,7 @@ export const postDraft = (
   const draft = safeJsonParse<BookingDraftEntity>(row.draft_json, null as never);
   const postingDate = options.postingDate || draft.postingDate;
   const period = postingDate && isIsoDate(postingDate) ? periodForDate(postingDate) : draft.period;
-  const fiscalYear = isPeriod(period) ? Number(period.slice(0, 4)) : draft.fiscalYear;
+  const fiscalYear = postingDate && isIsoDate(postingDate) ? fiscalYearForPostingDate(db, postingDate) : draft.fiscalYear;
   if (!postingDate || !isIsoDate(postingDate)) {
     return { entry: emptyJournalEntry(tenantId, postingDate || '', period, fiscalYear), issues: [{ id: randomUUID(), code: 'INVALID_POSTING_DATE', severity: 'error', message: 'Buchungsdatum muss ein gültiges Datum (YYYY-MM-DD) sein.', fieldPath: 'postingDate', blocking: true, source: 'system' }] };
   }
@@ -1433,7 +1468,7 @@ const reverseJournalEntryInternal = (
   const postingDate = options.postingDate || new Date().toISOString().slice(0, 10);
   if (!isIsoDate(postingDate)) throw new Error('Invalid reversal posting date');
   const period = periodForDate(postingDate);
-  const fiscalYear = Number(postingDate.slice(0, 4));
+  const fiscalYear = fiscalYearForPostingDate(db, postingDate);
   ensurePeriodExists(db, period, fiscalYear, tenantId);
   const periodStatus = loadPeriodStatus(db, period, tenantId);
   if (periodStatus === 'closed') throw new Error('Reversal posting period is closed');
@@ -1748,40 +1783,11 @@ type ReportJournalLineRow = {
 
 type HgbMappingRow = {
   account_number: string;
-  statement_type: 'guv' | 'bilanz';
+  /** Persisted rows may use legacy names or one of the report-specific catalog scopes. */
+  statement_type: string;
   position_key: string;
   position_label: string;
   balance_side: 'asset' | 'liability' | null;
-};
-
-type AccountingMappingRole =
-  | 'accounts_receivable'
-  | 'accounts_payable'
-  | 'bank'
-  | 'revenue'
-  | 'expense'
-  | 'asset'
-  | 'output_vat'
-  | 'output_vat_deferred'
-  | 'input_vat';
-
-type HgbRoleDefaults = {
-  statementType: 'guv' | 'bilanz';
-  positionKey: string;
-  positionLabel: string;
-  balanceSide?: 'asset' | 'liability';
-};
-
-const hgbRoleDefaults: Record<AccountingMappingRole, HgbRoleDefaults> = {
-  accounts_receivable: { statementType: 'bilanz', positionKey: 'receivables', positionLabel: 'Forderungen', balanceSide: 'asset' },
-  accounts_payable: { statementType: 'bilanz', positionKey: 'payables', positionLabel: 'Verbindlichkeiten', balanceSide: 'liability' },
-  bank: { statementType: 'bilanz', positionKey: 'bank', positionLabel: 'Bank', balanceSide: 'asset' },
-  revenue: { statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatzerlöse' },
-  expense: { statementType: 'guv', positionKey: 'expense', positionLabel: 'Aufwendungen' },
-  asset: { statementType: 'bilanz', positionKey: 'fixed_assets', positionLabel: 'Sachanlagen', balanceSide: 'asset' },
-  output_vat: { statementType: 'bilanz', positionKey: 'output_vat', positionLabel: 'Umsatzsteuer', balanceSide: 'liability' },
-  output_vat_deferred: { statementType: 'bilanz', positionKey: 'output_vat_deferred', positionLabel: 'Umsatzsteuer nicht fällig', balanceSide: 'liability' },
-  input_vat: { statementType: 'bilanz', positionKey: 'input_vat', positionLabel: 'Vorsteuer', balanceSide: 'asset' },
 };
 
 const centsForReport = (value: unknown): number => Math.round(Number(value || 0) * 100);
@@ -1825,112 +1831,6 @@ const loadHgbMappings = (
     position_label: schema.accountMappingsHgb.positionLabel,
     balance_side: schema.accountMappingsHgb.balanceSide,
   }).from(schema.accountMappingsHgb).where(and(...conditions)).all() as HgbMappingRow[];
-};
-
-const defaultHgbMappings: Record<'SKR03' | 'SKR04', Array<{
-  accountNumber: string;
-  statementType: 'guv' | 'bilanz';
-  positionKey: string;
-  positionLabel: string;
-  balanceSide?: 'asset' | 'liability';
-}>> = {
-  SKR03: [
-    { accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatzerlöse' },
-    { accountNumber: '4900', statementType: 'guv', positionKey: 'expense', positionLabel: 'Aufwendungen' },
-    { accountNumber: '1200', statementType: 'bilanz', positionKey: 'bank', positionLabel: 'Bank', balanceSide: 'asset' },
-    { accountNumber: '1400', statementType: 'bilanz', positionKey: 'receivables', positionLabel: 'Forderungen', balanceSide: 'asset' },
-    { accountNumber: '1576', statementType: 'bilanz', positionKey: 'input_vat', positionLabel: 'Vorsteuer 19 %', balanceSide: 'asset' },
-    { accountNumber: '1571', statementType: 'bilanz', positionKey: 'input_vat_7', positionLabel: 'Vorsteuer 7 %', balanceSide: 'asset' },
-    { accountNumber: '1574', statementType: 'bilanz', positionKey: 'input_vat_rc', positionLabel: 'Vorsteuer Reverse Charge', balanceSide: 'asset' },
-    { accountNumber: '0480', statementType: 'bilanz', positionKey: 'fixed_assets', positionLabel: 'Sachanlagen', balanceSide: 'asset' },
-    { accountNumber: '1600', statementType: 'bilanz', positionKey: 'payables', positionLabel: 'Verbindlichkeiten', balanceSide: 'liability' },
-    { accountNumber: '1776', statementType: 'bilanz', positionKey: 'output_vat', positionLabel: 'Umsatzsteuer 19 %', balanceSide: 'liability' },
-    { accountNumber: '1771', statementType: 'bilanz', positionKey: 'output_vat_7', positionLabel: 'Umsatzsteuer 7 %', balanceSide: 'liability' },
-    { accountNumber: '1774', statementType: 'bilanz', positionKey: 'output_vat_rc', positionLabel: 'Umsatzsteuer Reverse Charge', balanceSide: 'liability' },
-    { accountNumber: '1780', statementType: 'bilanz', positionKey: 'output_vat_deferred', positionLabel: 'Umsatzsteuer nicht fällig', balanceSide: 'liability' },
-    { accountNumber: '9000', statementType: 'bilanz', positionKey: 'equity', positionLabel: 'Eigenkapital', balanceSide: 'liability' },
-  ],
-  SKR04: [
-    { accountNumber: '4400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatzerlöse' },
-    { accountNumber: '6300', statementType: 'guv', positionKey: 'expense', positionLabel: 'Aufwendungen' },
-    { accountNumber: '1800', statementType: 'bilanz', positionKey: 'bank', positionLabel: 'Bank', balanceSide: 'asset' },
-    { accountNumber: '1200', statementType: 'bilanz', positionKey: 'receivables', positionLabel: 'Forderungen', balanceSide: 'asset' },
-    { accountNumber: '1406', statementType: 'bilanz', positionKey: 'input_vat', positionLabel: 'Vorsteuer 19 %', balanceSide: 'asset' },
-    { accountNumber: '1401', statementType: 'bilanz', positionKey: 'input_vat_7', positionLabel: 'Vorsteuer 7 %', balanceSide: 'asset' },
-    { accountNumber: '1404', statementType: 'bilanz', positionKey: 'input_vat_rc', positionLabel: 'Vorsteuer Reverse Charge', balanceSide: 'asset' },
-    { accountNumber: '0670', statementType: 'bilanz', positionKey: 'fixed_assets', positionLabel: 'Sachanlagen', balanceSide: 'asset' },
-    { accountNumber: '3300', statementType: 'bilanz', positionKey: 'payables', positionLabel: 'Verbindlichkeiten', balanceSide: 'liability' },
-    { accountNumber: '3806', statementType: 'bilanz', positionKey: 'output_vat', positionLabel: 'Umsatzsteuer 19 %', balanceSide: 'liability' },
-    { accountNumber: '3801', statementType: 'bilanz', positionKey: 'output_vat_7', positionLabel: 'Umsatzsteuer 7 %', balanceSide: 'liability' },
-    { accountNumber: '3804', statementType: 'bilanz', positionKey: 'output_vat_rc', positionLabel: 'Umsatzsteuer Reverse Charge', balanceSide: 'liability' },
-    { accountNumber: '3810', statementType: 'bilanz', positionKey: 'output_vat_deferred', positionLabel: 'Umsatzsteuer nicht fällig', balanceSide: 'liability' },
-    { accountNumber: '2900', statementType: 'bilanz', positionKey: 'equity', positionLabel: 'Eigenkapital', balanceSide: 'liability' },
-  ],
-};
-
-/**
- * OPOS account mappings are tenant/chart policy, while HGB mappings are the
- * report classification.  Keep the built-in HGB seed intentionally small,
- * but reconcile every explicitly configured OPOS role into that classification
- * so a custom account (for example deferred VAT 1790) is never silently lost.
- * Existing HGB rows win; this is additive and does not overwrite a deliberate
- * user classification.
- */
-const reconcileAccountingRoleMappings = (
-  db: Database.Database,
-  tenantId: string,
-  chart: 'SKR03' | 'SKR04',
-): void => {
-  const drizzle = createDrizzle(db);
-  const roleRows = drizzle.select({
-    account_number: schema.accountingAccountMappings.accountNumber,
-    role: schema.accountingAccountMappings.role,
-  }).from(schema.accountingAccountMappings).where(and(
-    eq(schema.accountingAccountMappings.tenantId, tenantId),
-    eq(schema.accountingAccountMappings.chart, chart),
-  )).all() as Array<{ account_number: string; role: string }>;
-  const now = new Date().toISOString();
-  for (const row of roleRows) {
-    const definition = hgbRoleDefaults[row.role as AccountingMappingRole];
-    if (!definition) continue;
-    const existing = drizzle.select({ id: schema.accountMappingsHgb.id })
-      .from(schema.accountMappingsHgb)
-      .where(and(
-        eq(schema.accountMappingsHgb.tenantId, tenantId),
-        eq(schema.accountMappingsHgb.chart, chart),
-        eq(schema.accountMappingsHgb.accountNumber, row.account_number),
-      ))
-      .get();
-    if (existing) continue;
-    drizzle.insert(schema.accountMappingsHgb).values({
-      id: `accounting-role:${tenantId}:${chart}:${row.role}:${row.account_number}`,
-      tenantId,
-      chart,
-      accountNumber: row.account_number,
-      statementType: definition.statementType,
-      positionKey: definition.positionKey,
-      positionLabel: definition.positionLabel,
-      balanceSide: definition.balanceSide ?? null,
-      updatedAt: now,
-    }).onConflictDoNothing().run();
-  }
-};
-
-const ensureDefaultMappings = (
-  db: Database.Database,
-  tenantId: string,
-  chart = getAccountingPolicy(db, tenantId).activeChart,
-): void => {
-  const drizzle = createDrizzle(db);
-  const now = new Date().toISOString();
-  for (const mapping of defaultHgbMappings[chart]) {
-    drizzle.insert(schema.accountMappingsHgb).values({
-      id: randomUUID(), tenantId, chart, accountNumber: mapping.accountNumber,
-      statementType: mapping.statementType, positionKey: mapping.positionKey,
-      positionLabel: mapping.positionLabel, balanceSide: mapping.balanceSide ?? null, updatedAt: now,
-    }).onConflictDoNothing().run();
-  }
-  reconcileAccountingRoleMappings(db, tenantId, chart);
 };
 
 const aggregateUnmapped = (
@@ -1996,7 +1896,6 @@ export const getSusaReport = (
 } => {
   const tenantId = getTenantId(scope);
   const chart = getAccountingPolicy(db, tenantId).activeChart;
-  ensureDefaultMappings(db, tenantId, chart);
   const upperDate = args.to ?? args.asOfDate;
   const rows = getLedgerBalances(db, args, scope);
   const allRows = loadReportJournalLines(db, tenantId, upperDate ? { to: upperDate } : {});
@@ -2051,7 +1950,6 @@ export const getGuvReport = (
 } => {
   const tenantId = getTenantId(scope);
   const chart = getAccountingPolicy(db, tenantId).activeChart;
-  ensureDefaultMappings(db, tenantId, chart);
   const sourceRows = loadReportJournalLines(db, tenantId, args);
   const mappings = loadHgbMappings(db, tenantId, chart);
   const guvMappings = new Map(mappings.filter((mapping) => mapping.statement_type === 'guv').map((mapping) => [mapping.account_number, mapping]));
@@ -2100,7 +1998,6 @@ export const getBilanzReport = (
 } => {
   const tenantId = getTenantId(scope);
   const chart = getAccountingPolicy(db, tenantId).activeChart;
-  ensureDefaultMappings(db, tenantId, chart);
   const upperDate = args.to ?? args.asOfDate;
   const sourceRows = loadReportJournalLines(db, tenantId, upperDate ? { to: upperDate } : {});
   const mappings = loadHgbMappings(db, tenantId, chart);
@@ -2135,6 +2032,367 @@ export const getBilanzReport = (
     },
     unmappedAccounts,
     blocking: unmappedAccounts.length > 0,
+  };
+};
+
+/**
+ * Run every double-entry report through the shared calculation engine.  The
+ * local repository only supplies immutable ledger balances and explicit HGB
+ * mappings; it must not invent report categories from account prefixes.
+ */
+export const getReportingReport = (
+  db: Database.Database,
+  args: { kind: ReportKind; from?: string; to?: string; asOfDate?: string },
+  scope: TenantScope,
+): ReportResult<object> => {
+  const tenantId = getTenantId(scope);
+  const policy = getAccountingPolicy(db, tenantId);
+  const profile = getSettings(db)?.businessReportingProfile;
+  const calculationProfile: ReportingCalculationProfile = {
+    size: profile?.hgbSizeClass ?? 'small',
+    fiscalYearStart: profile?.fiscalYearStart ?? '01-01',
+    chart: profile?.chart ?? policy.activeChart,
+    currency: 'EUR',
+    hgbGuvMethod: 'gkv',
+  };
+  const mappings = loadHgbMappings(db, tenantId, policy.activeChart).map((mapping) => ({
+    accountNumber: mapping.account_number,
+    // Legacy rows are kept readable, but are scoped to their one historical
+    // catalog. They must never silently become BWA, GuV, and EÜR mappings at
+    // once. New overrides persist the report-specific statement directly.
+    statement: mapping.statement_type === 'guv'
+      ? 'hgb-guv'
+      : mapping.statement_type === 'bilanz'
+        ? 'hgb-bilanz'
+        : mapping.statement_type as ReportingStatement,
+    position: mapping.position_key,
+    label: mapping.position_label,
+    ...(mapping.balance_side ? { side: mapping.balance_side } : {}),
+  }));
+  const balances = getLedgerBalances(db, { from: args.from, to: args.to ?? args.asOfDate }, scope);
+  return calculateReport({
+    kind: args.kind,
+    profile: calculationProfile,
+    ledger: { balances: balances.map((balance) => ({
+      accountNumber: balance.accountNumber,
+      openingBalance: balance.openingBalance,
+      debitTurnover: balance.debitTurnover,
+      creditTurnover: balance.creditTurnover,
+      closingBalance: balance.closingBalance,
+    })) },
+    mappings,
+    from: args.from,
+    to: args.to ?? args.asOfDate,
+    asOfDate: args.asOfDate ?? args.to,
+  });
+};
+
+const parseJson = <T>(value: string | null | undefined, fallback: T): T => {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+};
+
+type SnapshotDateArgs = {
+  periodFromDate?: unknown;
+  periodToDate?: unknown;
+  periodFrom?: unknown;
+  periodTo?: unknown;
+  from?: unknown;
+  to?: unknown;
+};
+
+const snapshotDate = (args: unknown, key: keyof SnapshotDateArgs): string | undefined => {
+  const value = args && typeof args === 'object' ? (args as SnapshotDateArgs)[key] : undefined;
+  if (typeof value !== 'string') return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return undefined;
+  if (key.toLowerCase().includes('to')) {
+    const [year, month] = value.split('-').map(Number);
+    return `${value}-${String(new Date(Date.UTC(year!, month!, 0)).getUTCDate()).padStart(2, '0')}`;
+  }
+  return `${value}-01`;
+};
+
+const filingKindForReport = (reportType: string): TaxFilingSnapshot['kind'] =>
+  reportType === 'eur' ? 'euer' : reportType === 'e_bilanz' ? 'e_bilanz' : 'unternehmensregister';
+
+const sourceSnapshotForReport = (record: {
+  id: string;
+  reportType: string;
+  args: unknown;
+  payload: unknown;
+}): TaxFilingSnapshot => ({
+  id: record.id,
+  kind: filingKindForReport(record.reportType),
+  periodStart: snapshotDate(record.args, 'periodFromDate')
+    ?? snapshotDate(record.args, 'periodFrom')
+    ?? snapshotDate(record.args, 'from')
+    ?? '',
+  periodEnd: snapshotDate(record.args, 'periodToDate')
+    ?? snapshotDate(record.args, 'periodTo')
+    ?? snapshotDate(record.args, 'to')
+    ?? '',
+  payload: { reportType: record.reportType, args: record.args, payload: record.payload },
+  sourceHash: '',
+  status: 'frozen',
+});
+
+const sourceHashForReport = (record: {
+  id: string;
+  reportType: string;
+  args: unknown;
+  payload: unknown;
+}): string => taxFilingSourceHash(sourceSnapshotForReport(record));
+
+const reportQuality = (payload: unknown): Record<string, unknown> | null => {
+  if (!payload || typeof payload !== 'object') return null;
+  const quality = (payload as Record<string, unknown>).quality;
+  return quality && typeof quality === 'object' ? quality as Record<string, unknown> : null;
+};
+
+const countIncompleteAccounts = (value: unknown): number => {
+  if (Array.isArray(value)) return value.length;
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
+};
+
+const hasEurCatalogProvenance = (payload: Record<string, unknown>): boolean => {
+  const filing = payload.filing;
+  if (!filing || typeof filing !== 'object') return false;
+  const provenance = filing as Record<string, unknown>;
+  const catalog = provenance.catalog;
+  if (!catalog || typeof catalog !== 'object') return false;
+  const catalogRecord = catalog as Record<string, unknown>;
+  if (provenance.kind !== 'euer' || provenance.taxYear !== 2025) return false;
+  if (typeof catalogRecord.id !== 'string' || !catalogRecord.id.trim()) return false;
+  if (typeof catalogRecord.version !== 'string' || !catalogRecord.version.trim()) return false;
+  if (typeof catalogRecord.sourceHash !== 'string' || !/^[a-f0-9]{64}$/i.test(catalogRecord.sourceHash)) return false;
+  if (catalogRecord.delivery !== 'print-form-only' && catalogRecord.delivery !== 'elster-ready') return false;
+  if (typeof catalogRecord.elsterReady !== 'boolean') return false;
+  const lineProvenance = provenance.lineProvenance;
+  if (!Array.isArray(lineProvenance) || lineProvenance.length === 0) return false;
+  return lineProvenance.every((line) => {
+    if (!line || typeof line !== 'object') return false;
+    const row = line as Record<string, unknown>;
+    if (typeof row.lineId !== 'string' || row.lineId.trim().length === 0 || typeof row.exportable !== 'boolean') return false;
+    if (!row.exportable) return true;
+    return typeof row.kennziffer === 'string'
+      && row.kennziffer.trim().length > 0
+      && typeof row.providerPath === 'string'
+      && row.providerPath.trim().length > 0;
+  });
+};
+
+/**
+ * EÜR snapshots are filing inputs, not a best-effort report cache.  Keep the
+ * check here (in addition to the UI) because IPC callers are untrusted.
+ */
+export const assertReportSnapshotFreezable = (input: {
+  reportType: string;
+  payload: unknown;
+}): void => {
+  if (input.reportType !== 'eur') return;
+  const payload = input.payload && typeof input.payload === 'object' ? input.payload as Record<string, unknown> : {};
+  const quality = reportQuality(input.payload);
+  const unmappedAccounts = countIncompleteAccounts(quality?.unmappedAccounts ?? payload.unmappedAccounts);
+  const warnings = typeof quality?.warnings === 'number' && Number.isFinite(quality.warnings) ? quality.warnings : 0;
+  const unclassifiedCount = typeof quality?.unclassifiedCount === 'number' && Number.isFinite(quality.unclassifiedCount)
+    ? quality.unclassifiedCount
+    : typeof payload.unclassifiedCount === 'number' && Number.isFinite(payload.unclassifiedCount)
+      ? payload.unclassifiedCount
+      : 0;
+  const incomplete = quality?.incomplete === true
+    || quality?.mappingStatus === 'blocked'
+    || quality?.mappingStatus === 'warning'
+    || payload.blocking === true
+    || payload.complete === false
+    || unmappedAccounts > 0
+    || warnings > 0
+    || unclassifiedCount > 0;
+  if (incomplete) throw new Error('REPORT_SNAPSHOT_BLOCKED_INCOMPLETE_MAPPING');
+  if (quality && quality.source !== 'live') throw new Error('REPORT_SNAPSHOT_LIVE_SOURCE_REQUIRED');
+  if (!hasEurCatalogProvenance(payload)) throw new Error('REPORT_SNAPSHOT_EUR_PROVENANCE_REQUIRED');
+};
+
+const reportSnapshotFromRow = (row: {
+  id: string;
+  report_type: string;
+  args_json: string;
+  payload_json: string;
+  created_at: string;
+  source_hash: string | null;
+}): DesktopReportSnapshotRecord => ({
+  id: row.id,
+  reportType: row.report_type,
+  args: parseJson(row.args_json, {}),
+  payload: parseJson(row.payload_json, null),
+  createdAt: row.created_at,
+  sourceHash: row.source_hash ?? sourceHashForReport({
+    id: row.id,
+    reportType: row.report_type,
+    args: parseJson(row.args_json, {}),
+    payload: parseJson(row.payload_json, null),
+  }),
+});
+
+/** Immutable report payloads make an exported view reproducible and auditable. */
+export const saveReportSnapshot = (
+  db: Database.Database,
+  input: { reportType: string; args?: unknown; payload: unknown; id?: string; reason?: string },
+  scope: TenantScope,
+): DesktopReportSnapshotRecord => {
+  const tenantId = getTenantId(scope);
+  const reportType = input.reportType.trim();
+  if (!reportType) throw new Error('REPORT_SNAPSHOT_TYPE_REQUIRED');
+  assertReportSnapshotFreezable({ reportType, payload: input.payload });
+  const id = input.id ?? randomUUID();
+  const createdAt = new Date().toISOString();
+  const args = input.args ?? {};
+  const sourceHash = sourceHashForReport({ id, reportType, args, payload: input.payload });
+  createDrizzle(db).insert(schema.reportSnapshots).values({
+    id,
+    tenantId,
+    reportType,
+    argsJson: JSON.stringify(args),
+    payloadJson: JSON.stringify(input.payload),
+    createdAt,
+    sourceHash,
+  }).run();
+  const result = { id, reportType, args, payload: input.payload, createdAt, sourceHash };
+  appendAuditLog(db, {
+    entityType: 'report_snapshot',
+    entityId: id,
+    action: 'freeze',
+    reason: input.reason ?? 'Report snapshot frozen',
+    before: null,
+    after: result,
+    actor: 'pro',
+    ts: createdAt,
+  });
+  return result;
+};
+
+export const listReportSnapshots = (
+  db: Database.Database,
+  scope: TenantScope,
+  reportType?: string,
+): DesktopReportSnapshotRecord[] => {
+  const tenantId = getTenantId(scope);
+  const rows = createDrizzle(db).select({
+    id: schema.reportSnapshots.id,
+    report_type: schema.reportSnapshots.reportType,
+    args_json: schema.reportSnapshots.argsJson,
+    payload_json: schema.reportSnapshots.payloadJson,
+    created_at: schema.reportSnapshots.createdAt,
+    source_hash: schema.reportSnapshots.sourceHash,
+  }).from(schema.reportSnapshots).where(and(
+    eq(schema.reportSnapshots.tenantId, tenantId),
+    ...(reportType ? [eq(schema.reportSnapshots.reportType, reportType)] : []),
+  )).orderBy(desc(schema.reportSnapshots.createdAt), desc(schema.reportSnapshots.id)).all() as Array<{
+    id: string;
+    report_type: string;
+    args_json: string;
+    payload_json: string;
+    created_at: string;
+    source_hash: string | null;
+  }>;
+  return rows.map(reportSnapshotFromRow);
+};
+
+export const getReportSnapshot = (
+  db: Database.Database,
+  snapshotId: string,
+  scope: TenantScope,
+): DesktopReportSnapshotRecord | null => {
+  const tenantId = getTenantId(scope);
+  const row = createDrizzle(db).select({
+    id: schema.reportSnapshots.id,
+    report_type: schema.reportSnapshots.reportType,
+    args_json: schema.reportSnapshots.argsJson,
+    payload_json: schema.reportSnapshots.payloadJson,
+    created_at: schema.reportSnapshots.createdAt,
+    source_hash: schema.reportSnapshots.sourceHash,
+  }).from(schema.reportSnapshots).where(and(
+    eq(schema.reportSnapshots.tenantId, tenantId),
+    eq(schema.reportSnapshots.id, snapshotId),
+  )).get() as {
+    id: string;
+    report_type: string;
+    args_json: string;
+    payload_json: string;
+    created_at: string;
+    source_hash: string | null;
+  } | undefined;
+  return row ? reportSnapshotFromRow(row) : null;
+};
+
+export const getReportMappingHealth = (
+  db: Database.Database,
+  scope: TenantScope,
+  args: { chart?: 'SKR03' | 'SKR04'; statement?: ReportingStatement } = {},
+): MappingHealth => {
+  const tenantId = getTenantId(scope);
+  const chart = args.chart ?? getAccountingPolicy(db, tenantId).activeChart;
+  const mappings = loadHgbMappings(db, tenantId, chart).filter((row) => !args.statement || row.statement_type === args.statement);
+  const mappedAccounts = new Set(mappings.map((row) => row.account_number));
+  const rows = loadReportJournalLines(db, tenantId);
+  const seenAccounts = new Set(rows.map((row) => row.account_number));
+  const unmappedAccounts = [...seenAccounts].filter((accountNumber) => !mappedAccounts.has(accountNumber)).sort();
+  const warnings = unmappedAccounts.map((accountNumber) => `Konto ${accountNumber} ist keinem Report zugeordnet.`);
+  return {
+    mappedAccounts: seenAccounts.size - unmappedAccounts.length,
+    inferredAccounts: 0,
+    unmappedAccounts,
+    warnings,
+    blocking: unmappedAccounts.length > 0,
+  };
+};
+
+export const upsertReportMappingOverride = (
+  db: Database.Database,
+  input: ReportMappingOverrideInput,
+  scope: TenantScope,
+): ReportingMapping => {
+  const tenantId = getTenantId(scope);
+  const accountNumber = input.accountNumber.trim();
+  const position = input.position.trim();
+  if (!accountNumber || !position) throw new Error('REPORT_MAPPING_REQUIRED');
+  const reportSpecificStatements: ReportingStatement[] = [
+    'bwa01', 'management-guv', 'hgb-guv', 'hgb-gkv', 'hgb-bilanz', 'hgb-balance', 'eur',
+  ];
+  if (!reportSpecificStatements.includes(input.statement)) {
+    throw new Error('REPORT_MAPPING_STATEMENT_REQUIRED');
+  }
+  const definition = {
+    id: `report-override:${tenantId}:${input.chart}:${accountNumber}:${input.statement}`,
+    tenantId,
+    chart: input.chart,
+    accountNumber,
+    statementType: input.statement,
+    positionKey: position,
+    positionLabel: input.label?.trim() || position,
+    balanceSide: input.side ?? null,
+    updatedAt: new Date().toISOString(),
+  } as const;
+  createDrizzle(db).insert(schema.accountMappingsHgb).values(definition)
+    .onConflictDoUpdate({
+      target: [schema.accountMappingsHgb.tenantId, schema.accountMappingsHgb.chart, schema.accountMappingsHgb.accountNumber, schema.accountMappingsHgb.statementType],
+      set: {
+        positionKey: definition.positionKey,
+        positionLabel: definition.positionLabel,
+        balanceSide: definition.balanceSide,
+        updatedAt: definition.updatedAt,
+      },
+    }).run();
+  return {
+    accountNumber,
+    statement: input.statement,
+    position,
+    label: definition.positionLabel,
+    ...(input.side ? { side: input.side } : {}),
   };
 };
 
@@ -2262,7 +2520,6 @@ export const getAccountingHealth = (
   const unbalancedDraftCount = Number(drizzle.select({ c: count() }).from(schema.draftValidationIssues)
     .where(and(eq(schema.draftValidationIssues.tenantId, tenantId), eq(schema.draftValidationIssues.code, 'UNBALANCED_ENTRY'))).get()?.c ?? 0);
   const activeChart = getAccountingPolicy(db, tenantId).activeChart;
-  ensureDefaultMappings(db, tenantId, activeChart);
   const lineAccounts = new Set(loadReportJournalLines(db, tenantId).map((row) => row.account_number));
   const mappedAccounts = new Set(loadHgbMappings(db, tenantId, activeChart).map((row) => row.account_number));
   const unmappedAccounts = [...lineAccounts].filter((accountNumber) => !mappedAccounts.has(accountNumber)).sort();
@@ -2557,5 +2814,4 @@ export const ensureProAccountingSeedData = (db: Database.Database, scope: Tenant
   }
 
   seedAccountKeywords(db, scope);
-  ensureDefaultMappings(db, tenantId);
 };

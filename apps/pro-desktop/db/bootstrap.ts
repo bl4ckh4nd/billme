@@ -603,7 +603,7 @@ CREATE TABLE IF NOT EXISTS account_mappings_hgb (
   tenant_id TEXT NOT NULL DEFAULT 'default',
   chart TEXT NOT NULL,
   account_number TEXT NOT NULL,
-  statement_type TEXT NOT NULL CHECK (statement_type IN ('guv', 'bilanz')),
+  statement_type TEXT NOT NULL CHECK (statement_type IN ('bwa01', 'management-guv', 'hgb-guv', 'hgb-gkv', 'hgb-bilanz', 'hgb-balance', 'eur', 'guv', 'bilanz')),
   position_key TEXT NOT NULL,
   position_label TEXT NOT NULL,
   balance_side TEXT CHECK (balance_side IN ('asset', 'liability')),
@@ -619,11 +619,26 @@ CREATE TABLE IF NOT EXISTS report_snapshots (
   report_type TEXT NOT NULL,
   args_json TEXT NOT NULL,
   payload_json TEXT NOT NULL,
+  source_hash TEXT,
   created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_report_snapshots_tenant_type
   ON report_snapshots(tenant_id, report_type, created_at DESC);
+
+CREATE TRIGGER IF NOT EXISTS report_snapshots_no_update
+BEFORE UPDATE ON report_snapshots
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'report_snapshots are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS report_snapshots_no_delete
+BEFORE DELETE ON report_snapshots
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'report_snapshots are immutable');
+END;
 
 CREATE TABLE IF NOT EXISTS datev_exports (
   id TEXT PRIMARY KEY,
@@ -748,20 +763,22 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE TABLE IF NOT EXISTS eur_lines (
   id TEXT PRIMARY KEY,
   tax_year INTEGER NOT NULL,
+  provider_path TEXT NOT NULL DEFAULT 'main',
   kennziffer TEXT,
   label TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('income', 'expense', 'computed')),
   exportable INTEGER NOT NULL DEFAULT 1 CHECK (exportable IN (0, 1)),
   sort_order INTEGER NOT NULL,
   computed_from_json TEXT,
+  computed_terms_json TEXT,
   source_version TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_eur_lines_year_sort ON eur_lines(tax_year, sort_order);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_kennziffer
-  ON eur_lines(tax_year, kennziffer)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_provider_kennziffer
+  ON eur_lines(tax_year, provider_path, kennziffer)
   WHERE kennziffer IS NOT NULL AND TRIM(kennziffer) <> '';
 
 CREATE TABLE IF NOT EXISTS eur_classifications (

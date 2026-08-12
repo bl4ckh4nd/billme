@@ -7,6 +7,12 @@ import type {
   ReportDrilldownSelection,
   SusaReport,
 } from '@billme/accounting-ui-pro';
+import type {
+  Bwa01Report,
+  HgbGuvReport,
+  ManagementGuvReport,
+  ReportResult,
+} from '@billme/accounting-shared';
 import type { IpcResult } from '../ipc/contract';
 
 type LedgerAccount = IpcResult<'pro:listLedgerAccounts'>[number];
@@ -99,6 +105,114 @@ export const mapGuvReport = (report: IpcResult<'pro:getGuvReport'>): GuvReport =
   };
 };
 
+/**
+ * The reporting engine emits neutral position lines.  Keep the renderer
+ * contract deliberately boring: all report flavours use the same line view,
+ * while the engine remains the source of the amounts and account references.
+ */
+type EngineReport =
+  | ReportResult<Bwa01Report>
+  | ReportResult<ManagementGuvReport>
+  | ReportResult<HgbGuvReport>;
+
+type EngineReportPayload =
+  | Bwa01Report
+  | ManagementGuvReport
+  | HgbGuvReport;
+
+export const mapEngineReport = (report: EngineReport | EngineReportPayload): GuvReport => {
+  const mappingHealth = 'mappingHealth' in report
+    ? report.mappingHealth
+    : {
+      // A raw payload has no trustworthy completeness metadata. Never present
+      // it as a healthy live report; callers must use the engine envelope.
+      mappedAccounts: 0,
+      inferredAccounts: 0,
+      unmappedAccounts: [],
+      warnings: ['REPORT_MAPPING_HEALTH_UNAVAILABLE'],
+      blocking: true,
+    };
+  const rows = report.rows.map((row) => ({
+    id: row.position,
+    code: row.position,
+    label: row.label,
+    level: 0,
+    amountCurrent: row.amount,
+    accountRefs: row.accountNumbers,
+  }));
+  const totals = 'totals' in report && 'revenue' in report.totals
+    ? {
+      revenue: report.totals.revenue,
+      expenses: report.totals.expenses,
+      result: report.totals.operatingResult,
+    }
+    : {
+      revenue: rows.filter((row) => row.amountCurrent > 0).reduce((sum, row) => sum + row.amountCurrent, 0),
+      expenses: Math.abs(rows.filter((row) => row.amountCurrent < 0).reduce((sum, row) => sum + row.amountCurrent, 0)),
+      result: 'netResult' in report ? report.netResult : rows.reduce((sum, row) => sum + row.amountCurrent, 0),
+    };
+  const result = 'netResult' in report ? report.netResult : totals.result;
+  return {
+    lines: [
+      ...rows,
+      {
+        id: 'net-result',
+        code: '=',
+        label: 'Jahresergebnis',
+        level: 0,
+        amountCurrent: result,
+        isSubtotal: true,
+      },
+    ],
+    totals: { ...totals, result },
+    quality: {
+      unmappedAccounts: mappingHealth.unmappedAccounts.map((accountNumber) => ({ accountNumber, amount: 0 })),
+      warnings: mappingHealth.warnings.length,
+      generatedAt: new Date().toISOString(),
+      source: 'live',
+      mappingStatus: mappingHealth.blocking ? 'blocked' : mappingHealth.warnings.length ? 'warning' : 'healthy',
+      mappingNotes: mappingHealth.warnings,
+    },
+  };
+};
+
+export const mapBwa01Report = mapEngineReport;
+export const mapManagementGuvReport = mapEngineReport;
+export const mapHgbGuvReport = mapEngineReport;
+
+export const mapEurReport = (report: IpcResult<'eur:getReport'>): GuvReport => {
+  const lines = report.rows.map((row) => ({
+    id: row.lineId,
+    code: row.kennziffer ?? row.lineId,
+    label: row.label,
+    level: 0,
+    amountCurrent: row.kind === 'expense' ? -Math.abs(row.total) : row.total,
+    isSubtotal: row.kind === 'computed',
+  }));
+  return {
+    lines,
+    totals: {
+      revenue: report.summary.incomeTotal,
+      expenses: report.summary.expenseTotal,
+      result: report.summary.surplus,
+    },
+    quality: {
+      unmappedAccounts: [],
+      warnings: report.warnings.length + report.unclassifiedCount,
+      generatedAt: new Date().toISOString(),
+      source: 'live',
+      mappingStatus: report.unclassifiedCount > 0 ? 'blocked' : 'healthy',
+      mappingNotes: report.warnings,
+    },
+    filing: {
+      kind: 'euer',
+      taxYear: report.taxYear,
+      catalog: report.catalog,
+      lineProvenance: report.rows.map((row) => ({ lineId: row.lineId, kennziffer: row.kennziffer, providerPath: row.providerPath, exportable: row.exportable })),
+    },
+  };
+};
+
 export const mapBalanceSheetPreview = (
   report: IpcResult<'pro:getBilanzReport'>,
   accounts: LedgerAccount[],
@@ -114,6 +228,9 @@ export const mapBalanceSheetPreview = (
     amount: row.amount,
     level: 0,
     side,
+    // Keep account references from the authoritative report rows. The UI can
+    // drill down without reconstructing mappings from account prefixes.
+    accountRefs: (row as typeof row & { accountRefs?: string[] }).accountRefs ?? [row.accountNumber],
   }));
 
   const missingNames = [...report.assets, ...report.liabilities]

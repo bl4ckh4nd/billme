@@ -802,6 +802,9 @@ export const businessReportingProfileSchema = z
     if (profile.profitDetermination === 'eur' && profile.fiscalYearStart !== '01-01') {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fiscalYearStart'], message: 'EÜR requires a calendar-year start (01-01)' });
     }
+    if (profile.legalForm === 'sole_proprietor' && profile.profitDetermination !== 'eur') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profitDetermination'], message: 'Sole proprietors require EÜR (cash-basis accounting)' });
+    }
     if (profile.legalForm !== 'gmbh') return;
     if (profile.profitDetermination !== 'double_entry') {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profitDetermination'], message: 'GmbH requires double-entry accounting' });

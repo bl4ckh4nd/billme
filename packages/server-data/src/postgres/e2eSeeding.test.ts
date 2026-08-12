@@ -51,6 +51,21 @@ test('buildServerModeProTenantSeed adds accounting fixtures', () => {
   assert.equal(seed.activeTemplates.invoiceTemplateId, 'pro-smoke-template-invoice');
 });
 
+test('buildServerModeProTenantSeed can add deterministic 2025 EÜR cash fixtures', () => {
+  const seed = buildServerModeProTenantSeed({
+    tenantId: 'tenant-pro-eur',
+    namespace: 'pro-eur-smoke',
+    now: '2026-03-20T09:00:00.000Z',
+    includeEurCashFixtures: true,
+  });
+
+  assert.equal(seed.bankTransactions.length, 4);
+  assert.deepEqual(seed.bankTransactions.slice(2).map(({ id, date, amount, type }) => ({ id, date, amount, type })), [
+    { id: 'pro-eur-smoke-transaction-eur-income', date: '2025-03-01', amount: 119, type: 'income' },
+    { id: 'pro-eur-smoke-transaction-eur-expense', date: '2025-03-02', amount: -59.5, type: 'expense' },
+  ]);
+});
+
 test('applyServerModeLiteTenantSeed persists settings and billing fixtures', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const db = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
   await runDrizzleMigrations(db);

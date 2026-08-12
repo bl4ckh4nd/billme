@@ -126,6 +126,7 @@ export interface ServerModeSeedOptions {
   tenantId: string;
   namespace?: string;
   now?: string;
+  includeEurCashFixtures?: boolean;
 }
 
 export interface ServerModeBillingSeed {
@@ -640,6 +641,34 @@ export const buildServerModeProTenantSeed = (options: ServerModeSeedOptions): Se
         createdAt: now,
         updatedAt: now,
       },
+      ...(options.includeEurCashFixtures ? [
+        {
+          id: seedId(namespace, 'transaction', 'eur-income'),
+          tenantId: options.tenantId,
+          accountId: bankAccountId,
+          date: '2025-03-01',
+          amount: 119,
+          type: 'income' as const,
+          counterparty: 'EÜR Testkunde',
+          purpose: 'EÜR Testzahlung Umsatz',
+          status: 'booked' as const,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: seedId(namespace, 'transaction', 'eur-expense'),
+          tenantId: options.tenantId,
+          accountId: bankAccountId,
+          date: '2025-03-02',
+          amount: -59.5,
+          type: 'expense' as const,
+          counterparty: 'EÜR Hostinganbieter',
+          purpose: 'EÜR Testzahlung Aufwand',
+          status: 'booked' as const,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ] : []),
     ],
     templates: [
       {

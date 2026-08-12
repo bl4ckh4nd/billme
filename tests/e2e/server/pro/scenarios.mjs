@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { expect } from '@playwright/test';
 import { readServerHarnessState } from '../harness.mjs';
 import {
@@ -12,6 +13,19 @@ import {
 
 const proOwner = createOwnerCredentials('pro');
 const liteOwner = createOwnerCredentials('lite');
+
+const viewerTokenFor = (state, ownerToken) => {
+  const [payload] = ownerToken.split('.');
+  if (!payload || !state.env?.BILLME_SESSION_SECRET) throw new Error('Harness session secret is unavailable.');
+  const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  const viewerPayload = Buffer.from(JSON.stringify({
+    ...session,
+    role: 'viewer',
+    user: { ...session.user, role: 'viewer' },
+  })).toString('base64url');
+  const signature = createHmac('sha256', state.env.BILLME_SESSION_SECRET).update(viewerPayload).digest('base64url');
+  return `${viewerPayload}.${signature}`;
+};
 
 const sectionByTitle = (page, title) =>
   page.locator('section.section-card').filter({
@@ -185,6 +199,23 @@ export const runProAccountingScenario = async (page) => {
   await seedHarnessProTenant(state, {
     tenantId: session.tenantId,
     namespace: 'accounting-regression',
+    includeEurCashFixtures: true,
+  });
+
+  const gmbhProfile = {
+    jurisdiction: 'DE',
+    legalForm: 'gmbh',
+    profitDetermination: 'double_entry',
+    hgbSizeClass: 'micro',
+    fiscalYearStart: '01-01',
+    chart: 'SKR03',
+    vatMethod: 'soll',
+  };
+  const settings = await requestJson(state, session, '/api/v1/pro/settings');
+  const settingsWithGmbhProfile = { ...settings, businessReportingProfile: gmbhProfile };
+  await requestJson(state, session, '/api/v1/pro/settings', undefined, {
+    method: 'PUT',
+    body: { settings: settingsWithGmbhProfile },
   });
 
   await openProShell(page, state, {
@@ -361,6 +392,24 @@ export const runProAccountingScenario = async (page) => {
   expect(postedDraft.issues).toEqual([]);
   expect(postedDraft.entry).toMatchObject({ id: expect.any(String), status: 'posted', sourceDraftId: draftId });
 
+  const reportMappingFixtures = [
+    { statementType: 'bwa01', accountNumber: '8400', positionKey: 'revenue', positionLabel: 'Umsatzerlöse' },
+    { statementType: 'bwa01', accountNumber: '3125', positionKey: 'material-expense', positionLabel: 'Material/Wareneinkauf' },
+    { statementType: 'management-guv', accountNumber: '8400', positionKey: 'revenue', positionLabel: 'Betriebliche Erlöse' },
+    { statementType: 'management-guv', accountNumber: '3125', positionKey: 'variable-costs', positionLabel: 'Variable Kosten' },
+    { statementType: 'hgb-guv', accountNumber: '8400', positionKey: 'revenue', positionLabel: '1. Umsatzerlöse' },
+    { statementType: 'hgb-guv', accountNumber: '3125', positionKey: 'material.services', positionLabel: 'b) Aufwendungen für bezogene Leistungen' },
+    { statementType: 'hgb-bilanz', accountNumber: '1200', positionKey: 'assets.current.cash', positionLabel: 'IV. Kassenbestand und Guthaben bei Kreditinstituten', balanceSide: 'asset' },
+    { statementType: 'hgb-bilanz', accountNumber: '1776', positionKey: 'liabilities', positionLabel: 'C. Verbindlichkeiten', balanceSide: 'liability' },
+  ];
+  for (const mapping of reportMappingFixtures) {
+    const savedMapping = await requestJson(state, session, '/api/v1/pro/accounting/mappings/overrides', undefined, {
+      method: 'PUT',
+      body: { reason: `Playwright explicit ${mapping.statementType} mapping`, chart: 'SKR03', ...mapping },
+    });
+    expect(savedMapping).toMatchObject({ reportType: mapping.statementType, chart: 'SKR03', accountNumber: mapping.accountNumber, positionKey: expect.any(String) });
+  }
+
   const guvReport = await requestJson(state, session, '/api/v1/pro/accounting/reports/guv', {
     from: '2026-03-05',
     to: '2026-03-05',
@@ -401,6 +450,86 @@ export const runProAccountingScenario = async (page) => {
   expect(datevRefetched.body).toBe(datevExport.body);
   expect(datevRefetched.headers.get('x-billme-datev-content-sha256')).toBe(datevContentHash);
   expect(datevRefetched.headers.get('content-type')).toContain('charset=utf-8');
+
+  const eurProfile = {
+    jurisdiction: 'DE',
+    legalForm: 'sole_proprietor',
+    profitDetermination: 'eur',
+    fiscalYearStart: '01-01',
+    vatMethod: 'soll',
+  };
+  await requestJson(state, session, '/api/v1/pro/settings', undefined, {
+    method: 'PUT',
+    body: { settings: { ...settingsWithGmbhProfile, businessReportingProfile: eurProfile } },
+  });
+
+  const eurFrom = '2025-01-01';
+  const eurTo = '2025-12-31';
+  const eurItems = await requestJson(state, session, '/api/v1/pro/accounting/reports/eur/items', { from: eurFrom, to: eurTo });
+  expect(eurItems).toEqual(expect.arrayContaining([
+    expect.objectContaining({ sourceType: 'transaction', date: '2025-03-01', flowType: 'income', amountGross: 119 }),
+    expect.objectContaining({ sourceType: 'transaction', date: '2025-03-02', flowType: 'expense', amountGross: 59.5 }),
+  ]));
+  for (const item of eurItems) {
+    const lineId = item.flowType === 'income' ? 'E2025_KZ112' : 'E2025_KZ280';
+    const classification = await requestJson(state, session, '/api/v1/pro/accounting/reports/eur/classifications', undefined, {
+      method: 'PUT',
+      body: {
+        sourceType: item.sourceType,
+        sourceId: item.sourceId,
+        taxYear: 2025,
+        eurLineId: lineId,
+        vatMode: 'default',
+        vatRate: 19,
+        note: `Playwright reasoned EÜR classification ${item.flowType}`,
+        reason: `Playwright EÜR Belegprüfung ${item.flowType}`,
+      },
+    });
+    expect(classification).toMatchObject({ sourceType: item.sourceType, sourceId: item.sourceId, taxYear: 2025, eurLineId: lineId });
+  }
+  const eurItemsRefetched = await requestJson(state, session, '/api/v1/pro/accounting/reports/eur/items', { from: eurFrom, to: eurTo });
+  expect(eurItemsRefetched).toEqual(expect.arrayContaining([
+    expect.objectContaining({ sourceId: expect.any(String), classification: expect.objectContaining({ eurLineId: 'E2025_KZ112', note: expect.stringContaining('reasoned EÜR') }) }),
+    expect.objectContaining({ sourceId: expect.any(String), classification: expect.objectContaining({ eurLineId: 'E2025_KZ280', note: expect.stringContaining('reasoned EÜR') }) }),
+  ]));
+
+  const eurReport = await requestJson(state, session, '/api/v1/pro/accounting/reports/eur', { from: eurFrom, to: eurTo });
+  expect(eurReport).toMatchObject({
+    taxYear: 2025,
+    from: eurFrom,
+    to: eurTo,
+    summary: { incomeTotal: 100, expenseTotal: 50, surplus: 50 },
+    unclassifiedCount: 0,
+    catalog: { id: expect.any(String), version: expect.any(String), sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/), delivery: 'print-form-only', elsterReady: false },
+  });
+  expect(eurReport.rows).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'E2025_KZ112', total: 100, providerPath: expect.any(String) }),
+    expect.objectContaining({ id: 'E2025_KZ280', total: 50, providerPath: expect.any(String) }),
+    expect.objectContaining({ id: 'E2025_KZ290', total: 50 }),
+  ]));
+
+  const eurSnapshot = await requestJson(state, session, '/api/v1/pro/accounting/reports/snapshots', undefined, {
+    method: 'POST',
+    body: { reportType: 'eur', from: eurFrom, to: eurTo, reason: 'Playwright save signed EÜR result' },
+  });
+  expect(eurSnapshot).toMatchObject({ id: expect.any(String), reportType: 'eur', sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  const eurSnapshotsRefetched = await requestJson(state, session, '/api/v1/pro/accounting/reports/snapshots', { reportType: 'eur' });
+  const eurSnapshotRefetched = eurSnapshotsRefetched.find((snapshot) => snapshot.id === eurSnapshot.id);
+  expect(eurSnapshotRefetched).toMatchObject({ id: eurSnapshot.id, reportType: 'eur', sourceHash: eurSnapshot.sourceHash });
+  expect(JSON.parse(eurSnapshotRefetched?.payloadJson ?? '{}')).toMatchObject({ taxYear: 2025, summary: { surplus: 50 }, catalog: { sourceHash: eurReport.catalog.sourceHash } });
+
+  const viewerToken = viewerTokenFor(state, session.token);
+  const viewerMutation = await fetch(`${state.urls.api}/api/v1/pro/accounting/reports/eur/classifications`, {
+    method: 'PUT',
+    headers: { accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${viewerToken}` },
+    body: JSON.stringify({ sourceType: eurItems[0]?.sourceType, sourceId: eurItems[0]?.sourceId, taxYear: 2025, eurLineId: 'E2025_KZ112', reason: 'Viewer must not mutate EÜR' }),
+  });
+  expect(viewerMutation.status).toBe(403);
+
+  await requestJson(state, session, '/api/v1/pro/settings', undefined, {
+    method: 'PUT',
+    body: { settings: settingsWithGmbhProfile },
+  });
 
   const mappingRequests = [
     ['accounts_receivable', '1200'],
@@ -803,6 +932,26 @@ export const runProAccountingScenario = async (page) => {
   expect(Number.isFinite(bilanzReport.totals.assets)).toBe(true);
   expect(Number.isFinite(bilanzReport.totals.liabilities)).toBe(true);
   expect(Number.isFinite(bilanzReport.totals.delta)).toBe(true);
+
+  const reportAssertions = [
+    { reportType: 'bwa01', path: '/api/v1/pro/accounting/reports/bwa01', query: { from: '2026-03-01', to: '2026-03-31' }, keys: ['revenue', 'material-expense', 'operating-result'] },
+    { reportType: 'hgb-guv', path: '/api/v1/pro/accounting/reports/hgb-guv', query: { from: '2026-03-01', to: '2026-03-31' }, keys: ['revenue', 'material', 'annual-result'] },
+    { reportType: 'hgb-bilanz', path: '/api/v1/pro/accounting/reports/hgb-bilanz', query: { asOfDate: '2026-03-31' }, keys: ['assets.current.cash', 'equity', 'liabilities'] },
+  ];
+  for (const reportAssertion of reportAssertions) {
+    const mappingHealth = await requestJson(state, session, '/api/v1/pro/accounting/mappings/health', {
+      chart: 'SKR03',
+      reportType: reportAssertion.reportType,
+      asOfDate: '2026-03-31',
+    });
+    expect(mappingHealth).toMatchObject({ chart: 'SKR03', reportType: reportAssertion.reportType, unmapped: [] });
+    const reportPositions = await requestJson(state, session, '/api/v1/pro/accounting/mappings/positions', { reportType: reportAssertion.reportType });
+    for (const key of reportAssertion.keys) expect(reportPositions).toEqual(expect.arrayContaining([expect.objectContaining({ key })]));
+
+    const report = await requestJson(state, session, reportAssertion.path, reportAssertion.query);
+    expect(report.mappingHealth).toMatchObject({ unmappedAccounts: [], blocking: false });
+    for (const key of reportAssertion.keys) expect(report.rows ?? [...(report.assets ?? []), ...(report.liabilities ?? [])]).toEqual(expect.arrayContaining([expect.objectContaining({ position: key })]));
+  }
 };
 
 export const runProRouteGuardScenario = async (page) => {

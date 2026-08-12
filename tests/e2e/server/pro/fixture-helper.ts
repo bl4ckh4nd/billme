@@ -114,6 +114,7 @@ export const applyHarnessProSeed = async (options: {
   stateFile: string;
   tenantId: string;
   namespace: string;
+  includeEurCashFixtures?: boolean;
 }) => {
   const state = await readHarnessState(options.stateFile);
   const env = await readHarnessEnv(state);
@@ -123,6 +124,7 @@ export const applyHarnessProSeed = async (options: {
     const seed = await seedServerModeProTenant(pool, {
       tenantId: options.tenantId,
       namespace: options.namespace,
+      includeEurCashFixtures: options.includeEurCashFixtures,
     });
 
     return {
@@ -169,6 +171,7 @@ const runCli = async () => {
       stateFile,
       tenantId: requireFlag(flags, 'tenant-id'),
       namespace: requireFlag(flags, 'namespace'),
+      includeEurCashFixtures: flags.get('include-eur-cash-fixtures') === 'true',
     });
     process.stdout.write(`${JSON.stringify(seed)}\n`);
     return;

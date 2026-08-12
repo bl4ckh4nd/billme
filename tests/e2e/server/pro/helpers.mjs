@@ -78,8 +78,8 @@ export const ensureHarnessSession = async (state, { product, email, password, fu
   ]);
 };
 
-export const seedHarnessProTenant = async (state, { tenantId, namespace }) => {
-  return runFixtureHelper([
+export const seedHarnessProTenant = async (state, { tenantId, namespace, includeEurCashFixtures = false }) => {
+  const args = [
     'seed-pro',
     '--state-file',
     state.stateFile,
@@ -87,7 +87,9 @@ export const seedHarnessProTenant = async (state, { tenantId, namespace }) => {
     tenantId,
     '--namespace',
     namespace,
-  ]);
+  ];
+  if (includeEurCashFixtures) args.push('--include-eur-cash-fixtures', 'true');
+  return runFixtureHelper(args);
 };
 
 export const installProSession = async (page, state, session) => {

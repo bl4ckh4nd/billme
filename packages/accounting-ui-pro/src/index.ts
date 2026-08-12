@@ -5,6 +5,7 @@ export type { OposBankTransaction } from './services/mockBookingStore';
 export { permissionContextForRole } from './mocks/users';
 export type {
   BalanceSheetPreview,
+  EurCashItem,
   GuvReport,
   ReportDrilldownEntry,
   ReportDrilldownSource,

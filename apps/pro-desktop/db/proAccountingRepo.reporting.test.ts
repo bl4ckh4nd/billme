@@ -5,6 +5,7 @@ import { bootstrapSql } from './bootstrap';
 import {
   fiscalYearForPostingDate,
   getGuvReport,
+  getReportingReport,
   getReportSnapshot,
   listReportSnapshots,
   saveReportSnapshot,
@@ -28,7 +29,48 @@ const insertPostedEntry = (db: Database.Database): void => {
            ('line-2', 'default', 'entry-1', 2, '1200', 0, 10)`).run();
 };
 
+const insertGmbhSettings = (db: Database.Database, chart: 'SKR03' | 'SKR04' = 'SKR03'): void => {
+  const settings = structuredClone(MOCK_SETTINGS);
+  settings.businessReportingProfile = {
+    jurisdiction: 'DE',
+    legalForm: 'gmbh',
+    profitDetermination: 'double_entry',
+    hgbSizeClass: 'small',
+    fiscalYearStart: '01-01',
+    chart,
+    vatMethod: 'soll',
+  };
+  db.prepare(`INSERT INTO settings (id, settings_json) VALUES (1, ?)`)
+    .run(JSON.stringify(settings));
+};
+
 describe('Pro reporting repository invariants', () => {
+  it('fails closed when the authoritative double-entry reporting profile is missing', () => {
+    const db = createDb();
+    expect(() => getReportingReport(db, { kind: 'hgb-guv', from: '2026-03-01', to: '2026-03-31' }, createProTenantScope('default')))
+      .toThrow('REPORTING_PROFILE_REQUIRED');
+  });
+
+  it('rejects a report when profile and accounting policy charts diverge', () => {
+    const db = createDb();
+    insertGmbhSettings(db, 'SKR04');
+    expect(() => getReportingReport(db, { kind: 'hgb-guv' }, createProTenantScope('default')))
+      .toThrow('REPORTING_CHART_MISMATCH');
+  });
+
+  it('keeps legacy generic mappings blocking until report-specific override', () => {
+    const db = createDb();
+    insertGmbhSettings(db);
+    insertPostedEntry(db);
+    db.prepare(`INSERT INTO account_mappings_hgb
+      (id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at)
+      VALUES ('legacy-guv', 'default', 'SKR03', '9999', 'guv', 'revenue', 'Umsatz', NULL, '2026-03-01T00:00:00.000Z')`).run();
+
+    const report = getReportingReport(db, { kind: 'hgb-guv', from: '2026-03-01', to: '2026-03-31' }, createProTenantScope('default'));
+    expect(report.mappingHealth.blocking).toBe(true);
+    expect(report.mappingHealth.unmappedAccounts).toContain('9999');
+  });
+
   it('does not create guessed report mappings while reading a report', () => {
     const db = createDb();
     insertPostedEntry(db);

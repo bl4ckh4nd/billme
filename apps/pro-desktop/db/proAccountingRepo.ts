@@ -2048,27 +2048,33 @@ export const getReportingReport = (
   const tenantId = getTenantId(scope);
   const policy = getAccountingPolicy(db, tenantId);
   const profile = getSettings(db)?.businessReportingProfile;
+  if (!profile || profile.legalForm !== 'gmbh' || profile.profitDetermination !== 'double_entry' || !profile.chart) {
+    throw new Error('REPORTING_PROFILE_REQUIRED');
+  }
+  if (profile.chart !== policy.activeChart) {
+    throw new Error('REPORTING_CHART_MISMATCH');
+  }
   const calculationProfile: ReportingCalculationProfile = {
-    size: profile?.hgbSizeClass ?? 'small',
-    fiscalYearStart: profile?.fiscalYearStart ?? '01-01',
-    chart: profile?.chart ?? policy.activeChart,
+    size: profile.hgbSizeClass ?? 'small',
+    fiscalYearStart: profile.fiscalYearStart,
+    chart: profile.chart,
     currency: 'EUR',
     hgbGuvMethod: 'gkv',
   };
-  const mappings = loadHgbMappings(db, tenantId, policy.activeChart).map((mapping) => ({
-    accountNumber: mapping.account_number,
-    // Legacy rows are kept readable, but are scoped to their one historical
-    // catalog. They must never silently become BWA, GuV, and EÜR mappings at
-    // once. New overrides persist the report-specific statement directly.
-    statement: mapping.statement_type === 'guv'
-      ? 'hgb-guv'
-      : mapping.statement_type === 'bilanz'
-        ? 'hgb-bilanz'
-        : mapping.statement_type as ReportingStatement,
-    position: mapping.position_key,
-    label: mapping.position_label,
-    ...(mapping.balance_side ? { side: mapping.balance_side } : {}),
-  }));
+  const reportSpecificStatements: ReportingStatement[] = [
+    'bwa01', 'management-guv', 'hgb-guv', 'hgb-gkv', 'hgb-bilanz', 'hgb-balance', 'eur',
+  ];
+  const mappings = loadHgbMappings(db, tenantId, policy.activeChart)
+    // Generic guv/bilanz rows predate the licensed report catalogs. Excluding
+    // them makes legacy-only accounts visible as blocking until overridden.
+    .filter((mapping) => reportSpecificStatements.includes(mapping.statement_type as ReportingStatement))
+    .map((mapping) => ({
+      accountNumber: mapping.account_number,
+      statement: mapping.statement_type as ReportingStatement,
+      position: mapping.position_key,
+      label: mapping.position_label,
+      ...(mapping.balance_side ? { side: mapping.balance_side } : {}),
+    }));
   const balances = getLedgerBalances(db, { from: args.from, to: args.to ?? args.asOfDate }, scope);
   return calculateReport({
     kind: args.kind,

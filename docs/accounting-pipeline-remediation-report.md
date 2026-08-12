@@ -1,8 +1,8 @@
 # Abschlussreport Buchungspipeline
 
 **Stand:** 12.08.2026 · **Codebasis:** Branch
-`fix/accounting-pipeline-hardening`, Codebaseline `6a5c427` (danach nur diese
-Report-Aktualisierung)
+`fix/accounting-pipeline-hardening`, Codebaseline `2e829e1` (danach folgt nur
+diese Report-Aktualisierung)
 
 Dieser Report bewertet den technischen Stand der Pro-Buchungspipeline nach der
 Umsetzung. Er ist keine steuerliche oder rechtliche Beratung und keine GoBD-,
@@ -18,9 +18,12 @@ Buchführung, OPOS und Teilzahlungen, Ist-USt, Storno, Anlagen/AfA/Abgang,
 SuSa/GuV/Bilanz, DATEV sowie SQLite-zu-Postgres-Import.
 
 Der abschließende Full-Pro-E2E lief gegen einen frisch migrierten Postgres-Stack
-grün. Alle sieben Szenarien bestanden. Damit ist die technische Pipeline
-releasefähig; die fachliche Steuerprüfung, ein Kanzlei-DATEV-Import und ein
-Produktivdeployment bleiben externe Gates.
+grün. Alle sieben Szenarien bestanden; das Artefakt liegt unter
+`test-results/server-mode/billme-e2e-msq2ya38-1tlad`. Das EU-B2B-Szenario
+`EU_B2B_SERVICE_RC` prüft dabei unbedingt die Persistenz und den DATEV-Export
+der Felder 40/41/43. Damit ist die technische Pipeline releasefähig; die
+fachliche Steuerprüfung, ein Kanzlei-DATEV-Import und ein Produktivdeployment
+bleiben externe Gates.
 
 ## State Ownership und Invarianten
 
@@ -123,8 +126,9 @@ Die Kerninvarianten sind damit explizit:
   gezählt.
 - Die additive Postgres-Migrationskette ist vollständig:
   `0006` OPOS, `0007` OPOS-Härtung, `0008` Anlagenbuchhaltung,
-  `0009` DATEV-Bytes, `0010` Ausgangsrechnungs-Postingmetadaten und
-  `0011` tenant-scoped Steuerkonten-Mappings mit globalem Fallback.
+  `0009` DATEV-Bytes, `0010` Ausgangsrechnungs-Postingmetadaten,
+  `0011` tenant-scoped Steuerkonten-Mappings mit globalem Fallback,
+  `0012` Asset-Guard, `0013` Asset-Härtung und `0014` DATEV-Steuer-Evidenz.
 
 ## UI/UX-Stand
 
@@ -175,16 +179,17 @@ Diese Punkte sind keine offenen Integritätsfehler:
 
 | Scope | Ergebnis |
 |---|---:|
-| Full Pro Server E2E gegen frisch migrierten Postgres-Stack | **7/7 Szenarien bestanden** |
+| Full Pro Server E2E gegen frisch migrierten Postgres-Stack (`test-results/server-mode/billme-e2e-msq2ya38-1tlad`) | **7/7 Szenarien bestanden**, inklusive unbedingter `EU_B2B_SERVICE_RC`-Persistenz-/DATEV-Felder-40/41/43-Prüfung |
 | Pro Desktop | **286/286 Tests**, Typecheck und Build bestanden |
-| Accounting UI Pro | **29/29 Tests bestanden** |
+| Accounting UI Pro | **30/30 Tests bestanden** |
 | Accounting Engine | **5/5 Tests bestanden** |
 | Desktop Data | **50/50 Tests bestanden** |
-| Server API | **25/25 Tests**, Typecheck bestanden |
-| Server Data am finalen HEAD ohne DB-URL | **30 bestanden, 11 erwartete DB-Skips**, Typecheck bestanden |
+| Server API | **26/26 Tests**, Typecheck bestanden |
+| Server Data am finalen HEAD ohne DB-URL | **33 bestanden, 13 erwartete DB-Skips**, Typecheck bestanden |
 | SQLite-Import-Paritätsfixture gegen frisches Postgres | **bestanden** |
-| Web Pro | **9/9 direkte Tests**, Typecheck und Build bestanden |
+| Web Pro | **10/10 direkte Tests**, Typecheck und Build bestanden |
 | Server Core | **23/23 Tests**, Typecheck bestanden |
+| DATEV-Repository-Test gegen echtes Postgres | **1/1 bestanden** |
 
 Der Full-Pro-E2E deckt Stack-Smoke, Pro-Smoke, Session-Wiederherstellung,
 Katalog, kanonischen Entwurf/Post, Ausgangs- und Eingangsrechnung, OPOS mit

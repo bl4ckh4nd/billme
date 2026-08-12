@@ -20,6 +20,7 @@ export type VatValidationClient = (args: {
 }) => Promise<VatValidationResult>;
 
 export type RendererRuntime = {
+  product?: RendererProduct;
   validateVatId?: VatValidationClient;
 };
 
@@ -34,6 +35,9 @@ const getExternalApi = (): RendererApi | undefined =>
 
 export const getRendererRuntime = (): RendererRuntime =>
   (globalThis as { billmeRuntime?: RendererRuntime }).billmeRuntime ?? {};
+
+export const getRendererProduct = (): RendererProduct =>
+  (globalThis as { billmeRuntime?: RendererRuntime }).billmeRuntime?.product ?? fallbackProduct;
 
 const getFallbackApi = (product: RendererProduct): RendererApi => {
   if (product === 'pro') {

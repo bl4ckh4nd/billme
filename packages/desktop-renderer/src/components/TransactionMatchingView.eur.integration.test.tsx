@@ -4,7 +4,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-const { mockIpc } = vi.hoisted(() => ({
+const { mockIpc, mockProduct } = vi.hoisted(() => ({
+  mockProduct: vi.fn(() => 'pro' as 'lite' | 'pro'),
   mockIpc: {
   transactions: {
     list: vi.fn<(...args: any[]) => Promise<any[]>>(async () => []),
@@ -49,6 +50,7 @@ const { mockIpc } = vi.hoisted(() => ({
 
 vi.mock('../runtime-api', () => ({
   ipc: mockIpc,
+  getRendererProduct: mockProduct,
 }));
 
 import { TransactionMatchingView } from './TransactionMatchingView';
@@ -71,6 +73,7 @@ const renderView = (initialTab: 'matching' | 'eur' = 'eur') => {
 describe('TransactionMatchingView EÜR integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProduct.mockReturnValue('pro');
   });
 
   it('saves single inline EÜR classification from transaction tab', async () => {
@@ -159,5 +162,37 @@ describe('TransactionMatchingView EÜR integration', () => {
     expect(mockIpc.eur.upsertClassification).toHaveBeenCalledWith(
       expect.objectContaining({ sourceId: 'tx-2', eurLineId: 'E2025_KZ280', excluded: false }),
     );
+  });
+
+  it('persists Pro VAT rate but keeps the rate control out of Lite', async () => {
+    mockIpc.eur.listItems.mockResolvedValueOnce([{
+      sourceType: 'transaction',
+      sourceId: 'tx-vat',
+      date: '2025-01-05',
+      amountGross: 119,
+      amountNet: 100,
+      flowType: 'expense',
+      counterparty: 'Vendor',
+      purpose: 'Service',
+      classification: {
+        excluded: false, vatMode: 'default', vatRate: 19, updatedAt: '2025-01-01T00:00:00.000Z',
+      },
+    }]);
+    const rendered = renderView('eur');
+    await userEvent.click(await screen.findByRole('button', { name: /Vendor/i }));
+    expect(screen.getByText('USt.-Satz (%)')).toBeTruthy();
+    await userEvent.click(await screen.findByRole('button', { name: /Klassifizierung speichern/i }));
+    await waitFor(() => expect(mockIpc.eur.upsertClassification).toHaveBeenCalledWith(expect.objectContaining({ vatRate: 19 })));
+
+    rendered.unmount();
+    mockProduct.mockReturnValue('lite');
+    mockIpc.eur.listItems.mockResolvedValueOnce([{
+      sourceType: 'transaction', sourceId: 'tx-lite', date: '2025-01-05', amountGross: 119, amountNet: 100,
+      flowType: 'expense', counterparty: 'Lite Vendor', purpose: 'Service',
+      classification: { excluded: false, vatMode: 'default', vatRate: 19, updatedAt: '2025-01-01T00:00:00.000Z' },
+    }]);
+    renderView('eur');
+    await userEvent.click(await screen.findByRole('button', { name: /Lite Vendor/i }));
+    expect(screen.queryByText('USt.-Satz (%)')).toBeNull();
   });
 });

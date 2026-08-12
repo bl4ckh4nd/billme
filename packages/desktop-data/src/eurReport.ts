@@ -89,8 +89,8 @@ export const listEurItems = (db: Database.Database, params: EurListItemsParams):
   let items = rawItems.map((item) => {
     const classification = classifications.get(`${item.sourceType}:${item.sourceId}`)
       ?? (item.classificationFallbackId ? classifications.get(`invoice:${item.classificationFallbackId}`) : undefined)
-      ?? (item.legacyPaymentSourceId ? classifications.get(`transaction:${item.legacyPaymentSourceId}`) : undefined);
-    const { sourceNet: _sourceNet, classificationFallbackId: _classificationFallbackId, legacyPaymentSourceId: _legacyPaymentSourceId, ...publicItem } = item;
+      ?? (item.legacyPaymentSourceIds ?? []).map((sourceId) => classifications.get(`transaction:${sourceId}`)).find(Boolean);
+    const { sourceNet: _sourceNet, classificationFallbackId: _classificationFallbackId, legacyPaymentSourceIds: _legacyPaymentSourceIds, ...publicItem } = item;
     const line = classification?.eurLineId ? linesById.get(classification.eurLineId) : undefined;
     const suggestion = classifyItem(pipelineCtx, {
       flowType: item.flowType,
@@ -324,7 +324,7 @@ const listRawEurItems = (
   purpose: string;
   sourceNet?: number;
   classificationFallbackId?: string;
-  legacyPaymentSourceId?: string;
+  legacyPaymentSourceIds?: string[];
 }> => {
   if (product === 'pro') return listProRawEurItems(db, from, to);
   const drizzle = createDrizzle(db);
@@ -450,13 +450,14 @@ const listProRawEurItems = (
     purpose: string;
     sourceNet?: number;
     classificationFallbackId?: string;
-    legacyPaymentSourceId?: string;
+    legacyPaymentSourceIds?: string[];
   }> = [];
 
   if (tableExists('open_item_payments')) {
     const payments = db.prepare(`
       SELECT p.id, p.payment_date, p.amount, p.party_type, p.source_type, p.source_id,
-             b.account_id, b.counterparty AS bank_counterparty, b.purpose AS bank_purpose
+             b.account_id, b.counterparty AS bank_counterparty, b.purpose AS bank_purpose,
+             b.source_transaction_id AS bank_source_transaction_id
       FROM open_item_payments p
       LEFT JOIN bank_transactions b ON b.id = p.source_id AND p.source_type = 'bank_transaction'
       WHERE p.payment_date >= ? AND p.payment_date <= ?
@@ -466,6 +467,13 @@ const listProRawEurItems = (
 
     for (const payment of payments) {
       const bankId = typeof payment.source_id === 'string' && payment.source_type === 'bank_transaction' ? payment.source_id : undefined;
+      const paymentSourceIds = [
+        `payment:${String(payment.id)}`,
+        ...(bankId ? [bankId] : []),
+        ...(typeof payment.bank_source_transaction_id === 'string' && payment.bank_source_transaction_id.trim()
+          ? [payment.bank_source_transaction_id]
+          : []),
+      ];
       if (bankId) representedBanks.add(bankId);
       const amountGross = Math.abs(Number(payment.amount) || 0);
       const allocations = tableExists('open_item_allocations') && tableExists('open_items')
@@ -494,7 +502,7 @@ const listProRawEurItems = (
           purpose: String(payment.bank_purpose ?? basis?.purpose ?? (invoiceId ? `OPOS ${invoiceId}` : 'OPOS Zahlung')),
           sourceNet: basis?.sourceNet,
           classificationFallbackId: invoiceId,
-          legacyPaymentSourceId: `payment:${String(payment.id)}`,
+          legacyPaymentSourceIds: paymentSourceIds,
         });
       }
       const residual = Math.max(0, amountGross - allocated);
@@ -509,7 +517,7 @@ const listProRawEurItems = (
           linkedViaInvoice: false,
           counterparty: String(payment.bank_counterparty ?? ''),
           purpose: String(payment.bank_purpose ?? 'OPOS Zahlung'),
-          legacyPaymentSourceId: `payment:${String(payment.id)}`,
+          legacyPaymentSourceIds: paymentSourceIds,
         });
       }
     }

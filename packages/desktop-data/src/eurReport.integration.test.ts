@@ -217,7 +217,7 @@ describe('eurReport integration (service boundary)', () => {
       CREATE TABLE bank_transactions (
         id TEXT PRIMARY KEY, account_id TEXT, date TEXT NOT NULL, amount REAL NOT NULL,
         type TEXT NOT NULL, counterparty TEXT, purpose TEXT, linked_invoice_id TEXT,
-        status TEXT NOT NULL, deleted_at TEXT
+        status TEXT NOT NULL, source_transaction_id TEXT, deleted_at TEXT
       );
       CREATE TABLE open_item_payments (
         id TEXT PRIMARY KEY, payment_date TEXT NOT NULL, amount REAL NOT NULL,
@@ -243,8 +243,8 @@ describe('eurReport integration (service boundary)', () => {
       );
     `);
     db.prepare(`INSERT INTO bank_transactions
-      (id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status)
-      VALUES ('bank-payment', 'bank', '2025-01-05', 219, 'income', 'Acme', 'Sammelzahlung', NULL, 'booked')`).run();
+      (id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, source_transaction_id)
+      VALUES ('bank-payment', 'bank', '2025-01-05', 219, 'income', 'Acme', 'Sammelzahlung', NULL, 'booked', 'legacy-source')`).run();
     db.prepare(`INSERT INTO open_item_payments
       (id, payment_date, amount, party_type, source_type, source_id, status)
       VALUES ('payment-1', '2025-01-05', 219, 'debtor', 'bank_transaction', 'bank-payment', 'allocated')`).run();
@@ -282,6 +282,13 @@ describe('eurReport integration (service boundary)', () => {
     }]]);
     const migratedItems = listEurItems(db, { taxYear: 2025, settings: makeSettings() as any, product: 'pro' });
     expect(migratedItems.every((item) => item.classification?.eurLineId === 'E2025_KZ112')).toBe(true);
+
+    mockClassificationMap = new Map([['transaction:legacy-source', {
+      id: 'legacy-source-classification', sourceType: 'transaction', sourceId: 'legacy-source',
+      taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z',
+    }]]);
+    const sourceFallbackItems = listEurItems(db, { taxYear: 2025, settings: makeSettings() as any, product: 'pro' });
+    expect(sourceFallbackItems.every((item) => item.classification?.eurLineId === 'E2025_KZ112')).toBe(true);
   });
 
   it('requires an explicit Pro VAT rate for standalone bank classifications', () => {
@@ -290,7 +297,7 @@ describe('eurReport integration (service boundary)', () => {
       CREATE TABLE bank_transactions (
         id TEXT PRIMARY KEY, account_id TEXT, date TEXT NOT NULL, amount REAL NOT NULL,
         type TEXT NOT NULL, counterparty TEXT, purpose TEXT, linked_invoice_id TEXT,
-        status TEXT NOT NULL, deleted_at TEXT
+        status TEXT NOT NULL, source_transaction_id TEXT, deleted_at TEXT
       );
       CREATE TABLE transactions (id TEXT PRIMARY KEY, counterparty TEXT NOT NULL, purpose TEXT NOT NULL);
       CREATE TABLE invoices (id TEXT PRIMARY KEY, client TEXT NOT NULL, number TEXT NOT NULL);

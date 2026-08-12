@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { bootstrapSql } from './bootstrap';
 import { runMigrations } from './migrate';
-import { commitProImport, rollbackProImportBatch } from './financeImportRepo';
+import { commitProImport, getProImportBatchDetails, rollbackProImportBatch } from './financeImportRepo';
 
 const openDb = () => {
   const db = new Database(':memory:');
@@ -76,5 +76,43 @@ describe('Pro finance import', () => {
     runMigrations(db);
     expect(db.prepare('SELECT COUNT(*) AS count FROM transactions').get()).toEqual({ count: firstCount });
     expect(db.prepare('SELECT COUNT(*) AS count FROM bank_transactions WHERE source_transaction_id IS NOT NULL').get()).toEqual({ count: 2 });
+  });
+
+  it('normalizes legacy id/dedup pairs and blocks rollback on the resolved bank draft', () => {
+    const db = new Database(':memory:');
+    db.exec(bootstrapSql);
+    db.prepare("INSERT INTO accounts (id, name, iban, balance, type, color) VALUES ('bank', 'Bank', '', 0, 'bank', '')").run();
+    db.prepare(`INSERT INTO import_batches
+      (id, account_id, profile, file_name, file_sha256, mapping_json, imported_count, skipped_count, error_count, created_at)
+      VALUES ('legacy-batch', 'bank', 'generic', 'legacy.csv', 'sha', '{}', 1, 0, 0, datetime('now'))`).run();
+    db.prepare(`INSERT INTO transactions
+      (id, account_id, date, amount, type, counterparty, purpose, status, dedup_hash, import_batch_id)
+      VALUES ('legacy-bank-id', 'bank', '2025-01-03', 10, 'income', 'Acme', 'Legacy', 'booked', 'stable-source', 'legacy-batch')`).run();
+    db.prepare(`INSERT INTO bank_transactions
+      (id, tenant_id, account_id, date, amount, type, counterparty, purpose, status, source_transaction_id, created_at, updated_at)
+      VALUES ('legacy-bank-id', 'default', 'bank', '2025-01-03', 10, 'income', 'Acme', 'Legacy', 'booked', NULL, datetime('now'), datetime('now'))`).run();
+
+    runMigrations(db);
+    expect(db.prepare('SELECT source_transaction_id FROM bank_transactions WHERE id = ?').get('legacy-bank-id')).toEqual({ source_transaction_id: 'stable-source' });
+    db.prepare(`INSERT INTO booking_drafts
+      (id, tenant_id, transaction_id, workflow_status, draft_json, updated_at)
+      VALUES ('legacy-draft', 'default', 'legacy-bank-id', 'draft', '{}', datetime('now'))`).run();
+
+    expect(getProImportBatchDetails(db, 'legacy-batch').canRollback).toBe(false);
+    expect(() => rollbackProImportBatch(db, 'legacy-batch', 'wrong legacy import')).toThrow('ROLLBACK_REQUIRES_CORRECTION');
+    expect(db.prepare('SELECT deleted_at FROM bank_transactions WHERE id = ?').get('legacy-bank-id')).toEqual({ deleted_at: null });
+
+    db.prepare('DELETE FROM booking_drafts WHERE id = ?').run('legacy-draft');
+    expect(rollbackProImportBatch(db, 'legacy-batch', 'legacy correction')).toEqual({ success: true, deletedCount: 2 });
+    expect(db.prepare('SELECT deleted_at FROM bank_transactions WHERE id = ?').get('legacy-bank-id')).not.toEqual({ deleted_at: null });
+  });
+
+  it('marks closed-period imports as non-rollbackable in batch details', () => {
+    const db = openDb();
+    const imported = commitProImport(db, { accountId: 'bank', profile: 'generic', fileName: 'x.csv', fileSha256: 'sha', mappingJson: {}, rows: [row], errorCount: 0 });
+    db.prepare("INSERT OR IGNORE INTO accounting_periods (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at) VALUES ('period-2025-01', 'default', '2025-01', 2025, 'open', '2025-01-01', '2025-01-31', datetime('now'), datetime('now'))").run();
+    db.prepare("UPDATE accounting_periods SET status = 'closed' WHERE tenant_id = 'default' AND period = '2025-01'").run();
+    expect(getProImportBatchDetails(db, imported.batchId).canRollback).toBe(false);
+    expect(() => rollbackProImportBatch(db, imported.batchId, 'closed period')).toThrow('CLOSED_PERIOD_CORRECTION_REQUIRED');
   });
 });

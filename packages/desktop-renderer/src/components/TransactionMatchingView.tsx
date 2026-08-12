@@ -19,7 +19,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ipc } from '../runtime-api';
+import { getRendererProduct, ipc } from '../runtime-api';
 import { Toast } from '@billme/desktop-ui/components/Toast';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
 import type { Transaction, Invoice as InvoiceType } from '@billme/desktop-core/types';
@@ -79,6 +79,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
   onBack,
   initialTab = 'matching',
 }) => {
+  const isProProduct = getRendererProduct() === 'pro';
   const [activeTab, setActiveTab] = useState<MatchingTab>(initialTab);
 
   useEffect(() => {
@@ -303,7 +304,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
         eurLineId: eurLineId || undefined,
         excluded: eurExcluded,
         vatMode: eurVatMode,
-        vatRate: eurVatRate,
+        vatRate: isProProduct ? eurVatRate : undefined,
       });
       setEurUndo({ label: 'Einzelklassifizierung', changes: [change] });
       await invalidateEur();
@@ -337,14 +338,16 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
     setEurPending(true);
     try {
       await Promise.all(
-        selectedEurItems.map((item) =>
-          eurUpsert.mutateAsync({
+        selectedEurItems.map((item) => {
+          const resolved = resolver(item);
+          return eurUpsert.mutateAsync({
             sourceType: item.sourceType,
             sourceId: item.sourceId,
             taxYear,
-            ...resolver(item),
-          }),
-        ),
+            ...resolved,
+            vatRate: isProProduct ? resolved.vatRate : undefined,
+          });
+        }),
       );
       setEurUndo({ label, changes });
       setEurSelected(new Set());
@@ -368,7 +371,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
             eurLineId: item.prevLineId,
             excluded: item.prevExcluded,
             vatMode: item.prevVatMode,
-            vatRate: item.prevVatRate,
+            vatRate: isProProduct ? item.prevVatRate : undefined,
           }),
         ),
       );
@@ -910,7 +913,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                     </select>
                   </div>
 
-                  {eurVatMode === 'default' && (
+                  {isProProduct && eurVatMode === 'default' && (
                     <div>
                       <label className="text-xs font-semibold text-gray-600">USt.-Satz (%)</label>
                       <input

@@ -21,7 +21,7 @@ import {
   Tags,
   Settings2,
 } from 'lucide-react';
-import { ipc } from '../runtime-api';
+import { getRendererProduct, ipc } from '../runtime-api';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
 import { Toast } from '@billme/desktop-ui/components/Toast';
 import { EurRulesModal } from './EurRulesModal';
@@ -106,6 +106,7 @@ const itemKey = (item: { sourceType: SourceType; sourceId: string }): string =>
   `${item.sourceType}:${item.sourceId}`;
 
 export const EurView: React.FC = () => {
+  const isProProduct = getRendererProduct() === 'pro';
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [taxYear, setTaxYear] = React.useState<number>(DEFAULT_YEAR);
@@ -267,14 +268,16 @@ export const EurView: React.FC = () => {
     setIsApplying(true);
     try {
       await Promise.all(
-        selectedItems.map((item) =>
-          upsertClassification.mutateAsync({
+        selectedItems.map((item) => {
+          const resolved = resolver(item);
+          return upsertClassification.mutateAsync({
             sourceType: item.sourceType,
             sourceId: item.sourceId,
             taxYear,
-            ...resolver(item),
-          }),
-        ),
+            ...resolved,
+            vatRate: isProProduct ? resolved.vatRate : undefined,
+          });
+        }),
       );
       setLastUndo({ label, changes });
       setSelectedKeys(new Set());
@@ -296,6 +299,7 @@ export const EurView: React.FC = () => {
         prevLineId: activeItem.classification?.eurLineId,
         prevExcluded: activeItem.classification?.excluded ?? false,
         prevVatMode: activeItem.classification?.vatMode ?? 'none',
+        prevVatRate: activeItem.classification?.vatRate,
       },
     ];
 
@@ -308,7 +312,7 @@ export const EurView: React.FC = () => {
         eurLineId: selectedLineId || undefined,
         excluded,
         vatMode,
-        vatRate,
+        vatRate: isProProduct ? vatRate : undefined,
       });
       setLastUndo({ label: 'Einzelklassifizierung', changes });
       await invalidateEur();
@@ -331,7 +335,7 @@ export const EurView: React.FC = () => {
             eurLineId: change.prevLineId,
             excluded: change.prevExcluded,
             vatMode: change.prevVatMode,
-            vatRate: change.prevVatRate,
+            vatRate: isProProduct ? change.prevVatRate : undefined,
           }),
         ),
       );
@@ -731,7 +735,7 @@ export const EurView: React.FC = () => {
                 </select>
               </div>
 
-              {vatMode === 'default' && (
+              {isProProduct && vatMode === 'default' && (
                 <div>
                   <label className="block text-xs font-bold text-gray-700">USt.-Satz (%)</label>
                   <input

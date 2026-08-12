@@ -599,28 +599,70 @@ export const runMigrations = (db: Database.Database): void => {
     END;
   `);
 
-  // Pro import identity/rollback metadata. Existing bank rows remain intact;
-  // only missing source links are filled from their immutable row id.
+  // Pro import identity/rollback metadata. Normalize legacy rows to the same
+  // source identity used by imports (`dedup_hash` when available). Existing
+  // mismatches are repaired only when the identity is unambiguous; conflicts
+  // get a deterministic quarantine identity and an audit entry.
   tryAddColumn(db, 'bank_transactions', 'deleted_at', 'TEXT');
   tryAddColumn(db, 'bank_transactions', 'rollback_reason', 'TEXT');
-  db.exec(`UPDATE bank_transactions SET source_transaction_id = id WHERE source_transaction_id IS NULL OR TRIM(source_transaction_id) = '';`);
-  const sourceConflicts = db.prepare(`
-    SELECT tenant_id, source_transaction_id
-    FROM bank_transactions
-    WHERE source_transaction_id IS NOT NULL
-    GROUP BY tenant_id, source_transaction_id
-    HAVING COUNT(*) > 1
-  `).all() as Array<{ tenant_id: string; source_transaction_id: string }>;
-  for (const conflict of sourceConflicts) {
-    const rows = db.prepare(`SELECT id FROM bank_transactions WHERE tenant_id = ? AND source_transaction_id = ? ORDER BY created_at, id`).all(conflict.tenant_id, conflict.source_transaction_id) as Array<{ id: string }>;
-    for (const duplicate of rows.slice(1)) {
-      const repairedSource = `legacy-conflict:${conflict.source_transaction_id}:${duplicate.id}`;
-      db.prepare('UPDATE bank_transactions SET source_transaction_id = ? WHERE tenant_id = ? AND id = ?').run(repairedSource, conflict.tenant_id, duplicate.id);
-      appendAuditLog(db, {
-        entityType: 'bank_transaction', entityId: duplicate.id, action: 'source_identity_conflict',
-        reason: 'Legacy duplicate source_transaction_id repaired without overwrite',
-        before: { sourceTransactionId: conflict.source_transaction_id }, after: { sourceTransactionId: repairedSource }, actor: 'migration',
-      });
+  const bankRows = db.prepare(`
+    SELECT tenant_id, id, account_id, source_transaction_id
+    FROM bank_transactions ORDER BY tenant_id, created_at, id
+  `).all() as Array<{ tenant_id: string; id: string; account_id: string; source_transaction_id: string | null }>;
+  const seenSources = new Map<string, string>();
+  const hasIdentityAudit = (entityId: string, action: string): boolean => Boolean(db.prepare(
+    'SELECT 1 FROM audit_log WHERE entity_type = ? AND entity_id = ? AND action = ? LIMIT 1',
+  ).get('bank_transaction', entityId, action));
+  const auditIdentity = (
+    bank: { id: string; source_transaction_id: string | null },
+    action: 'source_identity_repair' | 'source_identity_conflict',
+    reason: string,
+    after: string,
+  ): void => {
+    if (hasIdentityAudit(bank.id, action)) return;
+    appendAuditLog(db, {
+      entityType: 'bank_transaction', entityId: bank.id, action, reason,
+      before: { sourceTransactionId: bank.source_transaction_id },
+      after: { sourceTransactionId: after }, actor: 'migration',
+    });
+  };
+
+  for (const bank of bankRows) {
+    const txById = db.prepare(
+      'SELECT id, dedup_hash FROM transactions WHERE id = ? AND account_id = ? LIMIT 1',
+    ).get(bank.id, bank.account_id) as { id: string; dedup_hash: string | null } | undefined;
+    const txBySource = bank.source_transaction_id
+      ? db.prepare(
+        'SELECT id, dedup_hash FROM transactions WHERE account_id = ? AND dedup_hash = ? LIMIT 1',
+      ).get(bank.account_id, bank.source_transaction_id.trim()) as { id: string; dedup_hash: string | null } | undefined
+      : undefined;
+    const normalized = (txById?.dedup_hash?.trim() || txBySource?.dedup_hash?.trim() || bank.source_transaction_id?.trim() || bank.id);
+    const sourceKey = `${bank.tenant_id}:${normalized}`;
+    let resolvedSource = normalized;
+    const previousBankId = seenSources.get(sourceKey);
+    if (previousBankId && previousBankId !== bank.id) {
+      resolvedSource = `legacy-conflict:${normalized}:${bank.id}`;
+      while (seenSources.has(`${bank.tenant_id}:${resolvedSource}`)) resolvedSource += '-1';
+      auditIdentity(bank, 'source_identity_conflict', 'Legacy duplicate source identity quarantined without overwrite', resolvedSource);
+    }
+    seenSources.set(`${bank.tenant_id}:${resolvedSource}`, bank.id);
+
+    if (bank.source_transaction_id !== resolvedSource) {
+      db.prepare('UPDATE bank_transactions SET source_transaction_id = ? WHERE tenant_id = ? AND id = ?')
+        .run(resolvedSource, bank.tenant_id, bank.id);
+      if (!previousBankId) {
+        auditIdentity(bank, 'source_identity_repair', 'Legacy bank source normalized to transaction dedup identity', resolvedSource);
+      }
+    }
+
+    // A legacy transaction can have the bank row id but a durable dedup hash.
+    // Fill only a missing hash; never overwrite another transaction's hash.
+    if (txById && (!txById.dedup_hash || !txById.dedup_hash.trim()) && resolvedSource === normalized) {
+      const owner = db.prepare(
+        'SELECT id FROM transactions WHERE account_id = ? AND dedup_hash = ? AND id <> ? LIMIT 1',
+      ).get(bank.account_id, resolvedSource, txById.id) as { id: string } | undefined;
+      if (!owner) db.prepare('UPDATE transactions SET dedup_hash = ? WHERE id = ?').run(resolvedSource, txById.id);
+      else auditIdentity(bank, 'source_identity_conflict', 'Legacy transaction dedup identity already belongs to another row', resolvedSource);
     }
   }
   db.exec(`
@@ -631,39 +673,40 @@ export const runMigrations = (db: Database.Database): void => {
 
   // Legacy Pro installs can contain a bank row without its Lite compatibility
   // mirror. Recreate only missing rows; never overwrite an existing transaction.
-  db.exec(`
+  const normalizedBanks = db.prepare(`
+    SELECT tenant_id, id, account_id, date, amount, type, counterparty, purpose,
+      linked_invoice_id, status, source_transaction_id, deleted_at
+    FROM bank_transactions WHERE source_transaction_id IS NOT NULL
+  `).all() as Array<{
+    tenant_id: string; id: string; account_id: string; date: string; amount: number; type: string;
+    counterparty: string; purpose: string; linked_invoice_id: string | null; status: string;
+    source_transaction_id: string; deleted_at: string | null;
+  }>;
+  const insertLegacyMirror = db.prepare(`
     INSERT OR IGNORE INTO transactions
       (id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, dedup_hash, import_batch_id, deleted_at)
-    SELECT b.source_transaction_id, b.account_id, b.date, b.amount, b.type, b.counterparty, b.purpose,
-      b.linked_invoice_id, b.status, b.source_transaction_id, NULL, b.deleted_at
-    FROM bank_transactions b
-    WHERE b.source_transaction_id IS NOT NULL
-      AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = b.account_id)
-      AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.account_id = b.account_id AND t.dedup_hash = b.source_transaction_id);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
   `);
-  db.exec(`
-    UPDATE transactions
-    SET dedup_hash = (
-      SELECT b.source_transaction_id FROM bank_transactions b WHERE b.id = transactions.id LIMIT 1
-    )
-    WHERE (dedup_hash IS NULL OR TRIM(dedup_hash) = '')
-      AND EXISTS (SELECT 1 FROM bank_transactions b WHERE b.id = transactions.id AND b.source_transaction_id IS NOT NULL);
-  `);
-  const identityConflicts = db.prepare(`
-    SELECT t.id AS transaction_id, b.id AS bank_id, b.source_transaction_id
-    FROM transactions t JOIN bank_transactions b
-      ON b.tenant_id = 'default' AND b.source_transaction_id = t.dedup_hash
-    WHERE t.id <> b.source_transaction_id
-  `).all() as Array<{ transaction_id: string; bank_id: string; source_transaction_id: string }>;
-  for (const conflict of identityConflicts) {
-    if (db.prepare("SELECT 1 FROM audit_log WHERE entity_type = 'finance_import' AND entity_id = ? AND action = 'source_identity_conflict' LIMIT 1").get(conflict.source_transaction_id)) continue;
-    appendAuditLog(db, {
-      entityType: 'finance_import', entityId: conflict.source_transaction_id, action: 'source_identity_conflict',
-      reason: 'Legacy transaction and bank rows share a source hash but differ in durable ids',
-      before: conflict, after: null, actor: 'migration',
-    });
+  for (const bank of normalizedBanks) {
+    if (!db.prepare('SELECT 1 FROM accounts WHERE id = ? LIMIT 1').get(bank.account_id)) continue;
+    const existing = db.prepare(
+      'SELECT id FROM transactions WHERE account_id = ? AND dedup_hash = ? LIMIT 1',
+    ).get(bank.account_id, bank.source_transaction_id) as { id: string } | undefined;
+    if (!existing) {
+      const result = insertLegacyMirror.run(
+        bank.source_transaction_id, bank.account_id, bank.date, bank.amount, bank.type,
+        bank.counterparty, bank.purpose, bank.linked_invoice_id, bank.status,
+        bank.source_transaction_id, bank.deleted_at,
+      );
+      if (result.changes === 0 && !hasIdentityAudit(bank.id, 'source_identity_conflict')) {
+        appendAuditLog(db, {
+          entityType: 'bank_transaction', entityId: bank.id, action: 'source_identity_conflict',
+          reason: 'Legacy mirror could not be backfilled without overwriting an existing transaction',
+          before: { sourceTransactionId: bank.source_transaction_id }, after: null, actor: 'migration',
+        });
+      }
+    }
   }
-
   tryAddColumn(db, 'assets', 'disposal_date', 'TEXT');
   tryAddColumn(db, 'assets', 'disposal_proceeds', 'REAL');
 

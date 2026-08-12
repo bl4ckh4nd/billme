@@ -181,14 +181,27 @@ const taxSnapshot = (row: any, incoming = false, sourceLines: any[] = []): { net
 };
 const sourceVersion = (row: any, lines: unknown): string => hash({ id: row.id, tenantId: row.tenant_id, number: row.number, date: row.date ?? row.invoice_date, dueDate: row.due_date, amount: row.amount ?? row.gross_amount, net: row.net_amount, tax: row.tax_amount, gross: row.gross_amount, taxMode: row.tax_mode, taxMeta: parse(row.tax_meta_json, null), taxSnapshot: parse(row.tax_snapshot_json, null), lines });
 const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: any, type: 'outgoing_invoice'|'incoming_invoice'): Promise<AccountingPostingPreview> => {
-  const t = tenant(scope); const p = await policy(db, t); const m = await mappings(db, t, p.activeChart); const incomingLines = type === 'incoming_invoice' ? (row.__incomingLines ?? await q<any>(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, row.id])) : []; const tax = taxSnapshot(row, type === 'incoming_invoice', incomingLines); const id = row.id;
+  const t = tenant(scope); const p = await policy(db, t); const m = await mappings(db, t, p.activeChart); const category = parse<any>(row.tax_snapshot_json ?? row.accounting_snapshot_json, null)?.einvoiceCategoryCode ?? parse<any>(row.tax_meta_json, null)?.einvoiceCategoryCode; const incomingLines = type === 'incoming_invoice' ? (row.__incomingLines ?? await q<any>(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, row.id])) : []; const tax = taxSnapshot(row, type === 'incoming_invoice', incomingLines); const id = row.id;
   if (!tax) return { sourceType: type, sourceId: id, status: 'unresolved', reason: 'AMBIGUOUS_TAX_SNAPSHOT', issues: [{ code: 'AMBIGUOUS_TAX_SNAPSHOT', message: 'Netto, Steuer und Brutto konnten nicht sicher ermittelt werden.', blocking: true }] };
   const lines: AccountingSnapshot['lines'] = [{ accountNumber: type === 'outgoing_invoice' ? m.accounts_receivable : (incomingLines[0]?.account_number ?? incomingLines[0]?.asset_account_number ?? m.expense), debitAmount: type === 'outgoing_invoice' ? tax.gross : tax.net, creditAmount: 0 }];
   if (type === 'outgoing_invoice') {
     for (const entry of tax.breakdown) { lines.push({ accountNumber: m.revenue, debitAmount: 0, creditAmount: entry.net, taxCaseKey: entry.taxCaseKey, netAmount: entry.net, taxAmount: entry.tax, grossAmount: entry.gross }); if (entry.tax > 0) lines.push({ accountNumber: p.vatMethod === 'ist' ? m.output_vat_deferred : m.output_vat, debitAmount: 0, creditAmount: entry.tax, memo: `USt ${entry.taxCaseKey}` }); }
   } else {
-    lines[0].taxCaseKey = tax.breakdown[0]?.taxCaseKey; lines[0].netAmount = tax.net; lines[0].taxAmount = tax.tax; lines[0].grossAmount = tax.gross;
-    for (const entry of tax.breakdown) { if (entry !== tax.breakdown[0]) lines.push({ accountNumber: (incomingLines.find((line: any) => Number(line.tax_rate) === entry.rate)?.account_number ?? incomingLines.find((line: any) => Number(line.tax_rate) === entry.rate)?.asset_account_number ?? m.expense), debitAmount: entry.net, creditAmount: 0, taxCaseKey: entry.taxCaseKey, netAmount: entry.net, taxAmount: entry.tax, grossAmount: entry.gross }); if (entry.tax > 0) lines.push({ accountNumber: m.input_vat, debitAmount: entry.tax, creditAmount: 0, memo: `Vorsteuer ${entry.taxCaseKey}` }); }
+    // Incoming expense/asset lines are independent debit bases.  The first
+    // line must not absorb the whole invoice: doing so double-counts mixed
+    // rates (e.g. 100@19% + 100@7%) and leaves the journal unbalanced.
+    const expenseLines = incomingLines.length
+      ? incomingLines.map((line: any) => {
+        const rate = Number(line.tax_rate ?? 0);
+        const gross = Number(line.gross_amount ?? 0);
+        const net = Number(line.net_amount ?? (gross > 0 ? gross / (1 + rate / 100) : 0));
+        const taxAmount = Number(line.tax_amount ?? (gross - net));
+        const entry = tax.breakdown.find((candidate) => Math.abs(candidate.rate - rate) < .01);
+        return { accountNumber: line.account_number ?? line.asset_account_number ?? m.expense, debitAmount: round(net), creditAmount: 0, taxCaseKey: entry?.taxCaseKey ?? taxCaseFor(row, rate, category), netAmount: round(net), taxRate: rate, taxAmount: round(taxAmount), grossAmount: round(gross || net + taxAmount), memo: line.description };
+      })
+      : tax.breakdown.map((entry) => ({ accountNumber: m.expense, debitAmount: entry.net, creditAmount: 0, taxCaseKey: entry.taxCaseKey, netAmount: entry.net, taxRate: entry.rate, taxAmount: entry.tax, grossAmount: entry.gross }));
+    lines.splice(0, lines.length, ...expenseLines);
+    for (const entry of tax.breakdown) if (entry.tax > 0) lines.push({ accountNumber: m.input_vat, debitAmount: entry.tax, creditAmount: 0, taxCaseKey: entry.taxCaseKey, taxAmount: entry.tax, memo: `Vorsteuer ${entry.taxCaseKey}` });
     lines.push({ accountNumber: m.accounts_payable, debitAmount: 0, creditAmount: tax.gross });
   }
   const snapshot: AccountingSnapshot = { sourceType: type, sourceId: id, sourceVersion: sourceVersion(row, type === 'incoming_invoice' ? incomingLines : invoiceLines(row)), chart: p.activeChart, vatMethod: p.vatMethod, netAmount: tax.net, taxAmount: tax.tax, grossAmount: tax.gross, lines, capturedAt: now() };
@@ -261,7 +274,49 @@ const postDocument = async (db: PostgresQueryable, scope: TenantScope, type: 'ou
 };
 
 const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity> => {
-  const t = tenant(scope); const stamp = now(); const duplicate = (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 FOR UPDATE`, [t, input.sourceType, input.sourceId]))[0]; if (duplicate) { const requestedTotal = round(input.allocations.reduce((sum, allocation) => sum + Number(allocation.amount), 0)); if (requestedTotal > Number(duplicate.residual_amount) + .01) throw new Error('PAYMENT_ALLOCATION_EXCEEDS_RESIDUAL'); if (!input.paymentId || input.paymentId !== duplicate.id) return rowPayment(duplicate); for (const allocation of input.allocations) { const item = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, allocation.openItemId]))[0]; if (!item) throw new Error('OPEN_ITEM_NOT_FOUND'); if (item.party_type !== input.partyType || (input.partyId && item.party_id !== input.partyId)) throw new Error('PAYMENT_PARTY_MISMATCH'); const amount = round(allocation.amount); if (amount <= 0 || amount > Number(item.residual_amount) + .01) throw new Error('OPEN_ITEM_ALLOCATION_EXCEEDS_RESIDUAL'); const prior = (await q<any>(db, `SELECT * FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2 AND open_item_id=$3`, [t, duplicate.id, item.id]))[0]; if (prior) await q(db, `UPDATE open_item_allocations SET amount=amount+$1 WHERE tenant_id=$2 AND id=$3`, [amount, t, prior.id]); else await q(db, `INSERT INTO open_item_allocations (id,tenant_id,payment_id,open_item_id,amount,created_at) VALUES ($1,$2,$3,$4,$5,$6)`, [randomUUID(), t, duplicate.id, item.id, amount, stamp]); const allocated = round(Number(item.allocated_amount) + amount); const residual = round(Number(item.original_amount) - allocated); await q(db, `UPDATE open_items SET allocated_amount=$1,residual_amount=$2,status=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [allocated, residual, residual <= .01 ? 'paid' : 'partially_paid', stamp, t, item.id]); if (item.source_type === 'outgoing_invoice') await q(db, `UPDATE invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [residual <= .01 ? 'paid' : 'open', stamp, t, item.source_id]); if (item.source_type === 'incoming_invoice') await q(db, `UPDATE incoming_invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [residual <= .01 ? 'paid' : 'open', stamp, t, item.source_id]); } const totals = (await q<any>(db, `SELECT COALESCE(SUM(amount),0) allocated FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2`, [t, duplicate.id]))[0]; const allocatedTotal = round(totals.allocated); const residualTotal = round(Number(duplicate.amount) - allocatedTotal); await q(db, `UPDATE open_item_payments SET allocated_amount=$1,residual_amount=$2,status=$3 WHERE tenant_id=$4 AND id=$5`, [allocatedTotal, residualTotal, residualTotal > .01 ? 'partially_allocated' : 'allocated', t, duplicate.id]); await audit(db as PostgresTransactionClient, scope, 'open_item_payment', duplicate.id, 'allocate', 'Payment allocation', null, input); return rowPayment((await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND id=$2`, [t, duplicate.id]))[0]); }
+  const t = tenant(scope);
+  const stamp = now();
+  const duplicate = (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 FOR UPDATE`, [t, input.sourceType, input.sourceId]))[0];
+  if (duplicate) {
+    const requestedTotal = round(input.allocations.reduce((sum, allocation) => sum + Number(allocation.amount), 0));
+    if (requestedTotal > Number(duplicate.residual_amount) + .01) throw new Error('PAYMENT_ALLOCATION_EXCEEDS_RESIDUAL');
+    if (!input.paymentId || input.paymentId !== duplicate.id) return rowPayment(duplicate);
+
+    // Group repeated allocations before changing any row.  Otherwise two
+    // allocations of 80 against a 100 item each read the original residual
+    // and can leave allocation rows at 160 while the item says 80.
+    const requestedByItem = new Map<string, number>();
+    for (const allocation of input.allocations) {
+      const amount = round(allocation.amount);
+      if (amount <= 0) throw new Error('INVALID_PAYMENT_ALLOCATION');
+      requestedByItem.set(allocation.openItemId, round((requestedByItem.get(allocation.openItemId) ?? 0) + amount));
+    }
+    const items = new Map<string, any>();
+    for (const [itemId, amount] of requestedByItem) {
+      const item = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, itemId]))[0];
+      if (!item) throw new Error('OPEN_ITEM_NOT_FOUND');
+      if (item.party_type !== input.partyType || (input.partyId && item.party_id !== input.partyId)) throw new Error('PAYMENT_PARTY_MISMATCH');
+      if (amount > Number(item.residual_amount) + .01) throw new Error('OPEN_ITEM_ALLOCATION_EXCEEDS_RESIDUAL');
+      items.set(itemId, { item, amount });
+    }
+    for (const { item, amount } of items.values()) {
+      const prior = (await q<any>(db, `SELECT * FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2 AND open_item_id=$3`, [t, duplicate.id, item.id]))[0];
+      if (prior) await q(db, `UPDATE open_item_allocations SET amount=amount+$1 WHERE tenant_id=$2 AND id=$3`, [amount, t, prior.id]);
+      else await q(db, `INSERT INTO open_item_allocations (id,tenant_id,payment_id,open_item_id,amount,created_at) VALUES ($1,$2,$3,$4,$5,$6)`, [randomUUID(), t, duplicate.id, item.id, amount, stamp]);
+      const allocated = round(Number(item.allocated_amount) + amount);
+      const residual = round(Number(item.original_amount) - allocated);
+      await q(db, `UPDATE open_items SET allocated_amount=$1,residual_amount=$2,status=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [allocated, residual, residual <= .01 ? 'paid' : 'partially_paid', stamp, t, item.id]);
+      if (item.source_type === 'outgoing_invoice') await q(db, `UPDATE invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [residual <= .01 ? 'paid' : 'open', stamp, t, item.source_id]);
+      if (item.source_type === 'incoming_invoice') await q(db, `UPDATE incoming_invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [residual <= .01 ? 'paid' : 'open', stamp, t, item.source_id]);
+    }
+    const totals = (await q<any>(db, `SELECT COALESCE(SUM(amount),0) allocated FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2`, [t, duplicate.id]))[0];
+    const allocatedTotal = round(totals.allocated);
+    const residualTotal = round(Number(duplicate.amount) - allocatedTotal);
+    await q(db, `UPDATE open_item_payments SET allocated_amount=$1,residual_amount=$2,status=$3 WHERE tenant_id=$4 AND id=$5`, [allocatedTotal, residualTotal, residualTotal > .01 ? 'partially_allocated' : 'allocated', t, duplicate.id]);
+    await audit(db as PostgresTransactionClient, scope, 'open_item_payment', duplicate.id, 'allocate', 'Payment allocation', null, input);
+    return rowPayment((await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND id=$2`, [t, duplicate.id]))[0]);
+  }
+
   if (!isoDate(input.paymentDate) || !Number.isFinite(Number(input.amount)) || Number(input.amount) <= 0) throw new Error('INVALID_PAYMENT'); const total = round(input.amount); const allocTotal = round(input.allocations.reduce((sum, a) => sum + Number(a.amount), 0)); if (allocTotal > total + .01) throw new Error('PAYMENT_ALLOCATION_EXCEEDS_PAYMENT');
   if (input.sourceType === 'bank_transaction') { const source = (await q<any>(db, `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [t, input.sourceId]))[0]; if (!source) throw new Error('PAYMENT_SOURCE_NOT_FOUND'); }
   const items: any[] = []; for (const allocation of input.allocations) { const item = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, allocation.openItemId]))[0]; if (!item) throw new Error('OPEN_ITEM_NOT_FOUND'); if (item.party_type !== input.partyType || (input.partyId && item.party_id !== input.partyId)) throw new Error('PAYMENT_PARTY_MISMATCH'); if (Number(allocation.amount) <= 0 || Number(allocation.amount) > Number(item.residual_amount) + .01) throw new Error('OPEN_ITEM_ALLOCATION_EXCEEDS_RESIDUAL'); items.push({ item, amount: round(allocation.amount) }); }

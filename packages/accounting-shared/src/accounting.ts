@@ -80,6 +80,18 @@ export interface ReportUnmappedAccount {
   amount: number;
 }
 
+/**
+ * Stable source identity used by report drilldowns.  A journal entry is not a
+ * bank transaction: callers must use journalEntryId for the former and only
+ * route transactionId for the latter.
+ */
+export type ReportDrilldownSourceType = 'bank_transaction' | 'invoice' | 'receipt' | 'payment' | 'journal_entry';
+
+export interface ReportDrilldownSource {
+  sourceType: ReportDrilldownSourceType;
+  sourceId: string;
+}
+
 export interface ReportGenerationContext {
   mandantId: string;
   chart: 'SKR03' | 'SKR04';

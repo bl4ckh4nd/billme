@@ -619,7 +619,10 @@ const proGetSusaReportResultSchema = z.object({
   to: z.string().optional(),
   chart: z.enum(['SKR03', 'SKR04']).optional(),
   asOfDate: z.string(),
-  rows: z.array(ledgerBalanceRowSchema),
+  rows: z.array(ledgerBalanceRowSchema.extend({
+    mappedTo: z.string().optional(),
+    hasWarnings: z.boolean().optional(),
+  })),
   totals: z.object({
     debit: z.number(),
     credit: z.number(),

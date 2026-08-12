@@ -5,6 +5,9 @@ import type {
   ReportDrilldownSelection,
   SusaReport,
 } from '@billme/accounting-ui-pro';
+import type {
+  ReportDrilldownSource,
+} from '@billme/accounting-shared';
 import type { IpcResult } from '../ipc/contract';
 
 type LedgerAccount = IpcResult<'pro:listLedgerAccounts'>[number];
@@ -27,6 +30,8 @@ export const mapSusaReport = (
     accountName: names.get(row.accountNumber) ?? `Konto ${row.accountNumber}`,
     normalBalance: isCreditNormal(row.accountNumber) ? 'credit' as const : 'debit' as const,
   }));
+  const unmappedAccounts = report.unmappedAccounts;
+  const hasMappingMetadata = report.rows.some((row) => row.mappedTo !== undefined || row.hasWarnings !== undefined);
 
   return {
     rows,
@@ -50,8 +55,8 @@ export const mapSusaReport = (
       },
     ),
     quality: {
-      unmappedAccounts: report.unmappedAccounts?.length ?? rows.filter((row) => !names.has(row.accountNumber)).length,
-      warnings: report.blocking ? report.unmappedAccounts?.length ?? 0 : 0,
+      unmappedAccounts: unmappedAccounts?.length ?? (hasMappingMetadata ? rows.filter((row) => !row.mappedTo).length : rows.filter((row) => !names.has(row.accountNumber)).length),
+      warnings: report.blocking ? unmappedAccounts?.length ?? rows.filter((row) => row.hasWarnings).length : 0,
       generatedAt: new Date().toISOString(),
       source: 'live',
     },
@@ -134,16 +139,38 @@ export const mapBalanceSheetPreview = (
   };
 };
 
-const sourceIdFromEntry = (entry: IpcResult<'pro:listJournalEntries'>[number]): string | undefined => {
-  if (entry.sourceDraftId) return entry.sourceDraftId;
+type AuditableReportDrilldownEntry = ReportDrilldownEntry & ReportDrilldownSource & {
+  journalEntryId: string;
+};
+
+const reportSourceFromEntry = (
+  entry: IpcResult<'pro:listJournalEntries'>[number],
+): ReportDrilldownSource & { transactionId?: string } => {
   const key = entry.sourceKey;
-  if (!key) return undefined;
-  if (entry.sourceType === 'outgoing_invoice') return key.replace(/^outgoing-invoice:/, '');
-  if (entry.sourceType === 'incoming_invoice') return key.replace(/^incoming-invoice:/, '');
-  if (entry.sourceType === 'payment') return key.replace(/^payment:[^:]+:/, '');
-  if (entry.sourceType === 'payment_vat') return key.replace(/^payment-vat:/, '').split(':')[0];
-  if (entry.sourceType === 'reversal') return key.replace(/^reversal:/, '');
-  return key;
+  if (entry.sourceType === 'outgoing_invoice' && key?.startsWith('outgoing-invoice:') && key.length > 'outgoing-invoice:'.length) {
+    return { sourceType: 'invoice', sourceId: key.slice('outgoing-invoice:'.length) };
+  }
+  if (entry.sourceType === 'incoming_invoice' && key?.startsWith('incoming-invoice:') && key.length > 'incoming-invoice:'.length) {
+    return { sourceType: 'receipt', sourceId: key.slice('incoming-invoice:'.length) };
+  }
+  if (entry.sourceType === 'payment') {
+    const match = key?.match(/^payment:([^:]+):(.+)$/);
+    if (!match) return { sourceType: 'journal_entry', sourceId: entry.id };
+    const sourceId = match[2];
+    if (match?.[1] === 'bank_transaction') {
+      // The desktop shell has a transaction handler; never pass invoice or
+      // journal source identifiers through this legacy callback.
+      return { sourceType: 'bank_transaction', sourceId, transactionId: sourceId };
+    }
+    return { sourceType: 'payment', sourceId };
+  }
+  if (entry.sourceType === 'payment_vat' && key?.startsWith('payment-vat:')) {
+    return { sourceType: 'payment', sourceId: key.slice('payment-vat:'.length).split(':')[0] || entry.id };
+  }
+  return {
+    sourceType: 'journal_entry',
+    sourceId: entry.id,
+  };
 };
 
 const sourceLabel = (entry: IpcResult<'pro:listJournalEntries'>[number]): ReportDrilldownEntry['source'] =>
@@ -161,7 +188,7 @@ export const mapReportDrilldownEntries = (
   entries: IpcResult<'pro:listJournalEntries'>,
   selection: ReportDrilldownSelection,
   range: { from?: string; to?: string } = {},
-): ReportDrilldownEntry[] => {
+): AuditableReportDrilldownEntry[] => {
   const accounts = new Set(selection.accountNumbers);
   if (!accounts.size) return [];
 
@@ -170,17 +197,23 @@ export const mapReportDrilldownEntries = (
     .flatMap((entry) =>
       entry.lines
         .filter((line) => accounts.has(line.accountNumber))
-        .map((line) => ({
-          id: line.id,
-          date: entry.postingDate,
-          bookingText: entry.bookingText,
-          reference: entry.reference,
-          transactionId: sourceIdFromEntry(entry),
-          accountNumber: line.accountNumber,
-          debit: line.debitAmount,
-          credit: line.creditAmount,
-          amount: round2(line.debitAmount - line.creditAmount),
-          source: sourceLabel(entry),
-        })),
+        .map((line) => {
+          const source = reportSourceFromEntry(entry);
+          return {
+            id: `${entry.id}:${line.id}`,
+            date: entry.postingDate,
+            bookingText: entry.bookingText,
+            reference: entry.reference,
+            journalEntryId: entry.id,
+            sourceType: source.sourceType,
+            sourceId: source.sourceId,
+            ...(source.transactionId ? { transactionId: source.transactionId } : {}),
+            accountNumber: line.accountNumber,
+            debit: line.debitAmount,
+            credit: line.creditAmount,
+            amount: round2(line.debitAmount - line.creditAmount),
+            source: sourceLabel(entry),
+          };
+        }),
     );
 };

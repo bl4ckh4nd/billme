@@ -1480,6 +1480,36 @@ type HgbMappingRow = {
   balance_side: 'asset' | 'liability' | null;
 };
 
+type AccountingMappingRole =
+  | 'accounts_receivable'
+  | 'accounts_payable'
+  | 'bank'
+  | 'revenue'
+  | 'expense'
+  | 'asset'
+  | 'output_vat'
+  | 'output_vat_deferred'
+  | 'input_vat';
+
+type HgbRoleDefaults = {
+  statementType: 'guv' | 'bilanz';
+  positionKey: string;
+  positionLabel: string;
+  balanceSide?: 'asset' | 'liability';
+};
+
+const hgbRoleDefaults: Record<AccountingMappingRole, HgbRoleDefaults> = {
+  accounts_receivable: { statementType: 'bilanz', positionKey: 'receivables', positionLabel: 'Forderungen', balanceSide: 'asset' },
+  accounts_payable: { statementType: 'bilanz', positionKey: 'payables', positionLabel: 'Verbindlichkeiten', balanceSide: 'liability' },
+  bank: { statementType: 'bilanz', positionKey: 'bank', positionLabel: 'Bank', balanceSide: 'asset' },
+  revenue: { statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatzerlöse' },
+  expense: { statementType: 'guv', positionKey: 'expense', positionLabel: 'Aufwendungen' },
+  asset: { statementType: 'bilanz', positionKey: 'fixed_assets', positionLabel: 'Sachanlagen', balanceSide: 'asset' },
+  output_vat: { statementType: 'bilanz', positionKey: 'output_vat', positionLabel: 'Umsatzsteuer', balanceSide: 'liability' },
+  output_vat_deferred: { statementType: 'bilanz', positionKey: 'output_vat_deferred', positionLabel: 'Umsatzsteuer nicht fällig', balanceSide: 'liability' },
+  input_vat: { statementType: 'bilanz', positionKey: 'input_vat', positionLabel: 'Vorsteuer', balanceSide: 'asset' },
+};
+
 const centsForReport = (value: unknown): number => Math.round(Number(value || 0) * 100);
 const amountForReport = (cents: number): number => cents === 0 ? 0 : cents / 100;
 
@@ -1564,6 +1594,54 @@ const defaultHgbMappings: Record<'SKR03' | 'SKR04', Array<{
   ],
 };
 
+/**
+ * OPOS account mappings are tenant/chart policy, while HGB mappings are the
+ * report classification.  Keep the built-in HGB seed intentionally small,
+ * but reconcile every explicitly configured OPOS role into that classification
+ * so a custom account (for example deferred VAT 1790) is never silently lost.
+ * Existing HGB rows win; this is additive and does not overwrite a deliberate
+ * user classification.
+ */
+const reconcileAccountingRoleMappings = (
+  db: Database.Database,
+  tenantId: string,
+  chart: 'SKR03' | 'SKR04',
+): void => {
+  const drizzle = createDrizzle(db);
+  const roleRows = drizzle.select({
+    account_number: schema.accountingAccountMappings.accountNumber,
+    role: schema.accountingAccountMappings.role,
+  }).from(schema.accountingAccountMappings).where(and(
+    eq(schema.accountingAccountMappings.tenantId, tenantId),
+    eq(schema.accountingAccountMappings.chart, chart),
+  )).all() as Array<{ account_number: string; role: string }>;
+  const now = new Date().toISOString();
+  for (const row of roleRows) {
+    const definition = hgbRoleDefaults[row.role as AccountingMappingRole];
+    if (!definition) continue;
+    const existing = drizzle.select({ id: schema.accountMappingsHgb.id })
+      .from(schema.accountMappingsHgb)
+      .where(and(
+        eq(schema.accountMappingsHgb.tenantId, tenantId),
+        eq(schema.accountMappingsHgb.chart, chart),
+        eq(schema.accountMappingsHgb.accountNumber, row.account_number),
+      ))
+      .get();
+    if (existing) continue;
+    drizzle.insert(schema.accountMappingsHgb).values({
+      id: `accounting-role:${tenantId}:${chart}:${row.role}:${row.account_number}`,
+      tenantId,
+      chart,
+      accountNumber: row.account_number,
+      statementType: definition.statementType,
+      positionKey: definition.positionKey,
+      positionLabel: definition.positionLabel,
+      balanceSide: definition.balanceSide ?? null,
+      updatedAt: now,
+    }).onConflictDoNothing().run();
+  }
+};
+
 const ensureDefaultMappings = (
   db: Database.Database,
   tenantId: string,
@@ -1578,6 +1656,7 @@ const ensureDefaultMappings = (
       positionLabel: mapping.positionLabel, balanceSide: mapping.balanceSide ?? null, updatedAt: now,
     }).onConflictDoNothing().run();
   }
+  reconcileAccountingRoleMappings(db, tenantId, chart);
 };
 
 const aggregateUnmapped = (
@@ -1636,7 +1715,7 @@ export const getSusaReport = (
   to?: string;
   chart: 'SKR03' | 'SKR04';
   asOfDate: string;
-  rows: LedgerBalanceRow[];
+  rows: Array<LedgerBalanceRow & { mappedTo?: string; hasWarnings?: boolean }>;
   totals: { debit: number; credit: number; balance: number };
   unmappedAccounts: Array<{ accountNumber: string; amount: number }>;
   blocking: boolean;
@@ -1648,6 +1727,7 @@ export const getSusaReport = (
   const rows = getLedgerBalances(db, args, scope);
   const allRows = loadReportJournalLines(db, tenantId, upperDate ? { to: upperDate } : {});
   const mappings = loadHgbMappings(db, tenantId, chart);
+  const mappingByAccount = new Map(mappings.map((mapping) => [mapping.account_number, mapping]));
   const knownAccounts = new Set(mappings.map((mapping) => mapping.account_number));
   const unmappedAccounts = aggregateUnmapped(allRows, knownAccounts, (row) => centsForReport(row.debit_amount) - centsForReport(row.credit_amount));
   const totals = rows.reduce(
@@ -1664,7 +1744,14 @@ export const getSusaReport = (
     to: upperDate,
     chart,
     asOfDate: upperDate ?? new Date().toISOString().slice(0, 10),
-    rows,
+    rows: rows.map((row) => {
+      const mapping = mappingByAccount.get(row.accountNumber);
+      return {
+        ...row,
+        mappedTo: mapping?.position_key,
+        hasWarnings: !mapping,
+      };
+    }),
     totals: {
       debit: amountForReport(totals.debit),
       credit: amountForReport(totals.credit),

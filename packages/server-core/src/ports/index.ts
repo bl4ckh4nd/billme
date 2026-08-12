@@ -371,7 +371,7 @@ export interface SusaReport {
   to?: string;
   chart?: 'SKR03' | 'SKR04';
   asOfDate: string;
-  rows: LedgerBalance[];
+  rows: Array<LedgerBalance & { mappedTo?: string; hasWarnings?: boolean }>;
   totals: {
     debit: number;
     credit: number;

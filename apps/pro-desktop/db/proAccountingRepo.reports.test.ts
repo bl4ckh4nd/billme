@@ -143,6 +143,39 @@ describe.skipIf(!canRunNativeSqlite)('auditable Pro reports', () => {
     }
   });
 
+  it('reconciles a custom deferred VAT account into HGB reports', () => {
+    const db = createDb();
+    db.prepare(`INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at)
+      VALUES ('skr03-vat-deferred-custom', 'SKR03', '1790', 'USt nicht fällig (custom)', 'test', datetime('now'), datetime('now'))`).run();
+    db.prepare(`INSERT INTO accounting_account_mappings
+      (id, tenant_id, chart, role, account_number, updated_at)
+      VALUES ('default-SKR03-output_vat_deferred', 'default', 'SKR03', 'output_vat_deferred', '1790', '2026-03-01T00:00:00.000Z')
+      ON CONFLICT(tenant_id, chart, role) DO UPDATE SET account_number = excluded.account_number, updated_at = excluded.updated_at`).run();
+    insertEntry(db, 'payment-vat-custom', '2026-03-21', [
+      { account: '1790', debit: 19 },
+      { account: '1776', credit: 19 },
+    ], 'default', 'payment_vat');
+    const scope = createProTenantScope('default');
+
+    const susa = getSusaReport(db, { asOfDate: '2026-03-31' }, scope);
+    expect(susa.unmappedAccounts).toEqual([]);
+    expect(susa.blocking).toBe(false);
+    expect(susa.rows.find((row) => row.accountNumber === '1790')).toMatchObject({
+      mappedTo: 'output_vat_deferred',
+      hasWarnings: false,
+    });
+    expect(db.prepare(`SELECT position_key, statement_type, balance_side
+      FROM account_mappings_hgb WHERE tenant_id = 'default' AND chart = 'SKR03' AND account_number = '1790'`).get()).toEqual({
+      position_key: 'output_vat_deferred', statement_type: 'bilanz', balance_side: 'liability',
+    });
+    db.prepare(`UPDATE account_mappings_hgb SET position_label = 'Explizite Sonderzuordnung'
+      WHERE tenant_id = 'default' AND chart = 'SKR03' AND account_number = '1790'`).run();
+    expect(getSusaReport(db, { asOfDate: '2026-03-31' }, scope).rows.find((row) => row.accountNumber === '1790')?.mappedTo)
+      .toBe('output_vat_deferred');
+    expect(getBilanzReport(db, { asOfDate: '2026-03-31' }, scope).unmappedAccounts).toEqual([]);
+    expect(getAccountingHealth(db, scope)).toMatchObject({ unmappedAccountCount: 0, blocking: false });
+  });
+
   it('exposes unknown accounts and never matches a mapping from another chart or tenant', () => {
     const db = createDb();
     insertEntry(db, 'unknown', '2026-03-21', [

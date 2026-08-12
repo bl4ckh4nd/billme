@@ -57,6 +57,29 @@ describe('reportAdapters', () => {
     });
   });
 
+  it('does not infer a mapped account as unmapped when its chart name is unavailable', () => {
+    const report = mapSusaReport(
+      {
+        asOfDate: '2026-12-31',
+        chart: 'SKR03',
+        rows: [{
+          accountNumber: '1200',
+          openingBalance: 0,
+          debitTurnover: 100,
+          creditTurnover: 0,
+          closingBalance: 100,
+          mappedTo: 'bank',
+          hasWarnings: false,
+        }],
+        totals: { debit: 100, credit: 0, balance: 100 },
+      },
+      [],
+    );
+
+    expect(report.rows[0]).toMatchObject({ mappedTo: 'bank', hasWarnings: false });
+    expect(report.quality).toMatchObject({ unmappedAccounts: 0, warnings: 0 });
+  });
+
   it('adds the GuV net result as a subtotal', () => {
     const report = mapGuvReport({
       rows: [{ positionKey: 'revenue', positionLabel: 'Umsatzerlöse', amount: 125, accountRefs: ['8400'] }],
@@ -119,7 +142,20 @@ describe('reportAdapters', () => {
       reportType: 'susa', targetId: '1200', targetLabel: 'Bank', accountNumbers: ['1200', '4900', '8400', '1776'],
     }, { from: '2026-03-02', to: '2026-03-04' });
     expect(result.map((entry) => entry.source)).toEqual(['Inbox', 'Abgleich', 'Abgleich']);
-    expect(result.map((entry) => entry.transactionId)).toEqual(['invoice-7', 'invoice-8', 'payment-9']);
+    expect(result.map((entry) => entry.sourceType)).toEqual(['receipt', 'invoice', 'payment']);
+    expect(result.map((entry) => entry.sourceId)).toEqual(['invoice-7', 'invoice-8', 'payment-9']);
+    expect(result.map((entry) => entry.journalEntryId)).toEqual(['incoming-entry', 'outgoing-entry', 'payment-vat-entry']);
+    expect(result.every((entry) => entry.transactionId === undefined)).toBe(true);
+
+    const bank = mapReportDrilldownEntries(entries, {
+      reportType: 'susa', targetId: '1200', targetLabel: 'Bank', accountNumbers: ['1200'],
+    });
+    expect(bank[0]).toMatchObject({
+      journalEntryId: 'payment-entry',
+      sourceType: 'bank_transaction',
+      sourceId: 'bank-42',
+      transactionId: 'bank-42',
+    });
   });
 
   it('maps empty report and drilldown results', () => {

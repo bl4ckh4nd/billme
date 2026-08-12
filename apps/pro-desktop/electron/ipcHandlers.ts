@@ -51,6 +51,7 @@ import {
   getImportBatchDetails,
   rollbackImportBatch,
   commitProImport,
+  getProImportBatchDetails,
   rollbackProImportBatch,
 } from '../db/financeImportRepo';
 import type { AppSettings } from '../types';
@@ -1127,7 +1128,9 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'finance:getImportBatchDetails', ({ batchId }) => {
     const db = requireDb();
-    return getImportBatchDetails(db, batchId);
+    return PRODUCT_PROFILE.appId === 'com.billme.pro'
+      ? getProImportBatchDetails(db, batchId)
+      : getImportBatchDetails(db, batchId);
   });
 
   register(ipcMain, 'finance:rollbackImportBatch', ({ batchId, reason }) => {

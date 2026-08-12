@@ -44,6 +44,7 @@ type EurItem = {
   flowType: 'income' | 'expense';
   counterparty: string;
   purpose: string;
+  vatWarning?: string;
   suggestedLineId?: string;
   suggestionReason?: string;
   suggestionLayer?: SuggestionLayer;
@@ -51,6 +52,7 @@ type EurItem = {
     eurLineId?: string;
     excluded: boolean;
     vatMode: VatMode;
+    vatRate?: number;
     updatedAt: string;
   };
   line?: {
@@ -82,6 +84,7 @@ type UndoChange = {
   prevLineId?: string;
   prevExcluded: boolean;
   prevVatMode: VatMode;
+  prevVatRate?: number;
 };
 
 const formatCurrency = (amount: number): string =>
@@ -109,6 +112,7 @@ export const EurView: React.FC = () => {
   const [activeSource, setActiveSource] = React.useState<{ sourceType: SourceType; sourceId: string } | null>(null);
   const [selectedLineId, setSelectedLineId] = React.useState<string>('');
   const [vatMode, setVatMode] = React.useState<VatMode>('none');
+  const [vatRate, setVatRate] = React.useState<number | undefined>(undefined);
   const [excluded, setExcluded] = React.useState<boolean>(false);
 
   const [query, setQuery] = React.useState('');
@@ -148,6 +152,7 @@ export const EurView: React.FC = () => {
       eurLineId?: string;
       excluded?: boolean;
       vatMode?: VatMode;
+      vatRate?: number;
     }) => ipc.eur.upsertClassification(payload),
   });
 
@@ -239,12 +244,13 @@ export const EurView: React.FC = () => {
     if (!activeItem) return;
     setSelectedLineId(activeItem.classification?.eurLineId ?? activeItem.suggestedLineId ?? '');
     setVatMode(activeItem.classification?.vatMode ?? 'none');
+    setVatRate(activeItem.classification?.vatRate);
     setExcluded(activeItem.classification?.excluded ?? false);
   }, [activeItem]);
 
   const applyBulk = async (
     label: string,
-    resolver: (item: EurItem) => { eurLineId?: string; excluded?: boolean; vatMode?: VatMode },
+    resolver: (item: EurItem) => { eurLineId?: string; excluded?: boolean; vatMode?: VatMode; vatRate?: number },
   ) => {
     if (selectedItems.length === 0) return;
 
@@ -255,6 +261,7 @@ export const EurView: React.FC = () => {
       prevLineId: item.classification?.eurLineId,
       prevExcluded: item.classification?.excluded ?? false,
       prevVatMode: item.classification?.vatMode ?? 'none',
+      prevVatRate: item.classification?.vatRate,
     }));
 
     setIsApplying(true);
@@ -301,6 +308,7 @@ export const EurView: React.FC = () => {
         eurLineId: selectedLineId || undefined,
         excluded,
         vatMode,
+        vatRate,
       });
       setLastUndo({ label: 'Einzelklassifizierung', changes });
       await invalidateEur();
@@ -323,6 +331,7 @@ export const EurView: React.FC = () => {
             eurLineId: change.prevLineId,
             excluded: change.prevExcluded,
             vatMode: change.prevVatMode,
+            vatRate: change.prevVatRate,
           }),
         ),
       );
@@ -492,6 +501,7 @@ export const EurView: React.FC = () => {
                     eurLineId: item.suggestedLineId,
                     excluded: false,
                     vatMode: item.classification?.vatMode ?? 'none',
+                    vatRate: item.classification?.vatRate,
                   }))
                 }
                 disabled={selectedItems.length === 0 || isApplying}
@@ -506,6 +516,7 @@ export const EurView: React.FC = () => {
                     eurLineId: undefined,
                     excluded: true,
                     vatMode: 'none',
+                    vatRate: undefined,
                   }))
                 }
                 disabled={selectedItems.length === 0 || isApplying}
@@ -520,6 +531,7 @@ export const EurView: React.FC = () => {
                     eurLineId: undefined,
                     excluded: false,
                     vatMode: 'none',
+                    vatRate: undefined,
                   }))
                 }
                 disabled={selectedItems.length === 0 || isApplying}
@@ -718,6 +730,23 @@ export const EurView: React.FC = () => {
                   <option value="default">Default USt. (Netto)</option>
                 </select>
               </div>
+
+              {vatMode === 'default' && (
+                <div>
+                  <label className="block text-xs font-bold text-gray-700">USt.-Satz (%)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={vatRate ?? ''}
+                    onChange={(e) => setVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
+                    className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
+                    placeholder="z. B. 19"
+                  />
+                  {activeItem.vatWarning && <p className="mt-1 text-xs text-amber-700">{activeItem.vatWarning}</p>}
+                </div>
+              )}
 
               {/* Excluded Checkbox */}
               <label className="flex items-center gap-2 text-sm text-gray-700">

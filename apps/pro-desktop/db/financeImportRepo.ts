@@ -113,12 +113,35 @@ export const getProImportBatchDetails = (db: Database.Database, batchId: string)
   const batch = listImportBatches(db).find((item: ImportBatch) => item.id === batchId);
   if (!batch) throw new Error('Import batch not found');
   const rows = db.prepare(`
-    SELECT t.id, t.linked_invoice_id, t.status, b.id AS bank_id, b.linked_invoice_id AS bank_linked_invoice_id
-    FROM transactions t LEFT JOIN bank_transactions b ON b.source_transaction_id = t.dedup_hash AND b.tenant_id = 'default'
+    SELECT t.id, t.date, t.amount, t.type, t.counterparty, t.purpose, t.linked_invoice_id, t.linked_payment_id, t.status,
+      b.id AS bank_id, b.linked_invoice_id AS bank_linked_invoice_id
+    FROM transactions t LEFT JOIN bank_transactions b
+      ON b.tenant_id = 'default' AND (b.source_transaction_id = t.dedup_hash OR b.id = t.dedup_hash)
     WHERE t.import_batch_id = ? AND (t.deleted_at IS NULL OR t.deleted_at = '')
   `).all(batchId) as Array<Record<string, unknown>>;
+  const transactions = rows.map((row) => ({
+    id: String(row.id),
+    date: String(row.date),
+    amount: Number(row.amount),
+    type: String(row.type),
+    counterparty: String(row.counterparty),
+    purpose: String(row.purpose),
+    linkedInvoiceId: row.linked_invoice_id ? String(row.linked_invoice_id) : undefined,
+    status: String(row.status),
+  }));
   const linkedInvoiceCount = rows.filter((row) => row.linked_invoice_id || row.bank_linked_invoice_id).length;
-  return { batch, transactions: rows, canRollback: linkedInvoiceCount === 0 && !batch.rolledBackAt, linkedInvoiceCount };
+  const hasAccountingBlocker = rows.some((row) => {
+    if (row.linked_payment_id) return true;
+    const bankId = row.bank_id;
+    if (!bankId) return false;
+    return Boolean(
+      db.prepare("SELECT 1 FROM booking_drafts WHERE tenant_id = 'default' AND transaction_id = ? LIMIT 1").get(bankId)
+      || db.prepare("SELECT 1 FROM pro_workflow_entries WHERE tenant_id = 'default' AND transaction_id = ? LIMIT 1").get(bankId)
+      || db.prepare("SELECT 1 FROM open_item_payments WHERE tenant_id = 'default' AND source_type = 'bank_transaction' AND source_id = ? LIMIT 1").get(bankId)
+      || db.prepare("SELECT 1 FROM journal_entries WHERE tenant_id = 'default' AND (source_key = ? OR source_key LIKE ?) LIMIT 1").get(bankId, `%${bankId}%`),
+    );
+  });
+  return { batch, transactions, canRollback: linkedInvoiceCount === 0 && !hasAccountingBlocker && !batch.rolledBackAt, linkedInvoiceCount };
 };
 
 export const rollbackProImportBatch = (db: Database.Database, batchId: string, reason: string): { success: true; deletedCount: number } => {
@@ -127,13 +150,15 @@ export const rollbackProImportBatch = (db: Database.Database, batchId: string, r
     const details = getProImportBatchDetails(db, batchId);
     if (details.batch.rolledBackAt) throw new Error('Batch has already been rolled back');
     if (details.linkedInvoiceCount > 0) throw new Error('ROLLBACK_REQUIRES_CORRECTION: linked invoice payment');
-    const sourceIds = db.prepare('SELECT dedup_hash FROM transactions WHERE import_batch_id = ?').all(batchId) as Array<{ dedup_hash: string | null }>;
+    const sourceIds = db.prepare('SELECT dedup_hash, linked_payment_id FROM transactions WHERE import_batch_id = ?').all(batchId) as Array<{ dedup_hash: string | null; linked_payment_id: string | null }>;
     for (const source of sourceIds) {
+      if (source.linked_payment_id) throw new Error('ROLLBACK_REQUIRES_CORRECTION: linked invoice payment');
       if (!source.dedup_hash) continue;
-      const bank = db.prepare('SELECT id, linked_invoice_id FROM bank_transactions WHERE tenant_id = ? AND source_transaction_id = ?').get('default', source.dedup_hash) as { id: string; linked_invoice_id: string | null } | undefined;
+      const bank = db.prepare('SELECT id, linked_invoice_id FROM bank_transactions WHERE tenant_id = ? AND (source_transaction_id = ? OR id = ?) ORDER BY CASE WHEN source_transaction_id = ? THEN 0 ELSE 1 END LIMIT 1').get('default', source.dedup_hash, source.dedup_hash, source.dedup_hash) as { id: string; linked_invoice_id: string | null } | undefined;
       if (bank?.linked_invoice_id) throw new Error('ROLLBACK_REQUIRES_CORRECTION: linked invoice payment');
       if (bank && db.prepare("SELECT 1 FROM accounting_periods WHERE tenant_id = 'default' AND period = (SELECT substr(date, 1, 7) FROM bank_transactions WHERE id = ?) AND status = 'closed' LIMIT 1").get(bank.id)) throw new Error('CLOSED_PERIOD_CORRECTION_REQUIRED');
-      if (bank && db.prepare("SELECT 1 FROM booking_drafts WHERE tenant_id = 'default' AND transaction_id = ? AND workflow_status IN ('approved', 'posted') LIMIT 1").get(bank.id)) throw new Error('ROLLBACK_REQUIRES_CORRECTION: booking draft or posted accounting effect');
+      if (bank && db.prepare("SELECT 1 FROM booking_drafts WHERE tenant_id = 'default' AND transaction_id = ? LIMIT 1").get(bank.id)) throw new Error('ROLLBACK_REQUIRES_CORRECTION: booking draft or posted accounting effect');
+      if (bank && db.prepare("SELECT 1 FROM pro_workflow_entries WHERE tenant_id = 'default' AND transaction_id = ? LIMIT 1").get(bank.id)) throw new Error('ROLLBACK_REQUIRES_CORRECTION: Pro workflow entry');
       if (bank && db.prepare("SELECT 1 FROM open_item_payments WHERE tenant_id = 'default' AND source_type = 'bank_transaction' AND source_id = ? LIMIT 1").get(bank.id)) throw new Error('ROLLBACK_REQUIRES_CORRECTION: open-item payment');
       if (bank && db.prepare("SELECT 1 FROM journal_entries WHERE tenant_id = 'default' AND (source_key = ? OR source_key LIKE ?) LIMIT 1").get(bank.id, `%${bank.id}%`)) throw new Error('ROLLBACK_REQUIRES_CORRECTION: posted journal');
     }

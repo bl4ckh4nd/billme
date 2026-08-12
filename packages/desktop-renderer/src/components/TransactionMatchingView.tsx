@@ -50,12 +50,14 @@ type EurTxItem = {
   linkedViaInvoice?: boolean;
   counterparty: string;
   purpose: string;
+  vatWarning?: string;
   suggestedLineId?: string;
   suggestionReason?: string;
   classification?: {
     eurLineId?: string;
     excluded: boolean;
     vatMode: 'none' | 'default';
+    vatRate?: number;
     updatedAt: string;
   };
 };
@@ -67,6 +69,7 @@ type EurUndo = {
   prevLineId?: string;
   prevExcluded: boolean;
   prevVatMode: 'none' | 'default';
+  prevVatRate?: number;
 };
 
 const keyOf = (item: { sourceType: 'transaction' | 'invoice'; sourceId: string }): string =>
@@ -182,6 +185,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
   const [eurActive, setEurActive] = useState<EurTxItem | null>(null);
   const [eurLineId, setEurLineId] = useState('');
   const [eurVatMode, setEurVatMode] = useState<'none' | 'default'>('none');
+  const [eurVatRate, setEurVatRate] = useState<number | undefined>(undefined);
   const [eurExcluded, setEurExcluded] = useState(false);
   const [eurUndo, setEurUndo] = useState<{ label: string; changes: EurUndo[] } | null>(null);
   const [eurPending, setEurPending] = useState(false);
@@ -212,6 +216,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
       eurLineId?: string;
       excluded?: boolean;
       vatMode?: 'none' | 'default';
+      vatRate?: number;
     }) => ipc.eur.upsertClassification(payload),
   });
 
@@ -273,6 +278,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
     if (!eurActive) return;
     setEurLineId(eurActive.classification?.eurLineId ?? eurActive.suggestedLineId ?? '');
     setEurVatMode(eurActive.classification?.vatMode ?? 'none');
+    setEurVatRate(eurActive.classification?.vatRate);
     setEurExcluded(eurActive.classification?.excluded ?? false);
   }, [eurActive]);
 
@@ -285,6 +291,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
       prevLineId: eurActive.classification?.eurLineId,
       prevExcluded: eurActive.classification?.excluded ?? false,
       prevVatMode: eurActive.classification?.vatMode ?? 'none',
+      prevVatRate: eurActive.classification?.vatRate,
     };
 
     setEurPending(true);
@@ -296,6 +303,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
         eurLineId: eurLineId || undefined,
         excluded: eurExcluded,
         vatMode: eurVatMode,
+        vatRate: eurVatRate,
       });
       setEurUndo({ label: 'Einzelklassifizierung', changes: [change] });
       await invalidateEur();
@@ -312,7 +320,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
 
   const applyEurBulk = async (
     label: string,
-    resolver: (item: EurTxItem) => { eurLineId?: string; excluded?: boolean; vatMode?: 'none' | 'default' },
+    resolver: (item: EurTxItem) => { eurLineId?: string; excluded?: boolean; vatMode?: 'none' | 'default'; vatRate?: number },
   ) => {
     if (selectedEurItems.length === 0) return;
 
@@ -323,6 +331,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
       prevLineId: item.classification?.eurLineId,
       prevExcluded: item.classification?.excluded ?? false,
       prevVatMode: item.classification?.vatMode ?? 'none',
+      prevVatRate: item.classification?.vatRate,
     }));
 
     setEurPending(true);
@@ -359,6 +368,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
             eurLineId: item.prevLineId,
             excluded: item.prevExcluded,
             vatMode: item.prevVatMode,
+            vatRate: item.prevVatRate,
           }),
         ),
       );
@@ -734,6 +744,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                         eurLineId: item.suggestedLineId,
                         excluded: false,
                         vatMode: item.classification?.vatMode ?? 'none',
+                        vatRate: item.classification?.vatRate,
                       }))
                     }
                     disabled={eurSelected.size === 0 || eurPending}
@@ -748,6 +759,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                         eurLineId: undefined,
                         excluded: true,
                         vatMode: 'none',
+                        vatRate: undefined,
                       }))
                     }
                     disabled={eurSelected.size === 0 || eurPending}
@@ -898,6 +910,23 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                     </select>
                   </div>
 
+                  {eurVatMode === 'default' && (
+                    <div>
+                      <label className="text-xs font-semibold text-gray-600">USt.-Satz (%)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        value={eurVatRate ?? ''}
+                        onChange={(e) => setEurVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
+                        className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
+                        placeholder="z. B. 19"
+                      />
+                      {eurActive.vatWarning && <p className="mt-1 text-xs text-amber-700">{eurActive.vatWarning}</p>}
+                    </div>
+                  )}
+
                   <label className="flex items-center gap-2 text-sm text-gray-700">
                     <input
                       type="checkbox"
@@ -917,6 +946,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                         setEurLineId('');
                         setEurExcluded(false);
                         setEurVatMode('none');
+                        setEurVatRate(undefined);
                       }}
                     >
                       Zurücksetzen

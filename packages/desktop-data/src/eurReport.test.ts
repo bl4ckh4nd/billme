@@ -26,6 +26,10 @@ describe('eurCatalog validation', () => {
     expect(lines.length).toBeGreaterThan(0);
     expect(lines.some((line) => line.id === 'E2025_KZ111')).toBe(true);
   });
+
+  it('reports unsupported catalog years explicitly', () => {
+    expect(() => getCatalogForYear(2026)).toThrow('EUR_CATALOG_UNAVAILABLE:2026');
+  });
 });
 
 describe('eurReport CSV export', () => {

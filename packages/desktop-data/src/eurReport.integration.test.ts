@@ -210,4 +210,113 @@ describe('eurReport integration (service boundary)', () => {
     expect(expense?.total).toBe(50);
     expect(report.unclassifiedCount).toBe(0);
   });
+
+  it('keeps each OPOS allocation tax snapshot and emits residual separately', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE bank_transactions (
+        id TEXT PRIMARY KEY, account_id TEXT, date TEXT NOT NULL, amount REAL NOT NULL,
+        type TEXT NOT NULL, counterparty TEXT, purpose TEXT, linked_invoice_id TEXT,
+        status TEXT NOT NULL, deleted_at TEXT
+      );
+      CREATE TABLE open_item_payments (
+        id TEXT PRIMARY KEY, payment_date TEXT NOT NULL, amount REAL NOT NULL,
+        party_type TEXT NOT NULL, source_type TEXT NOT NULL, source_id TEXT,
+        status TEXT NOT NULL
+      );
+      CREATE TABLE open_items (id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL);
+      CREATE TABLE open_item_allocations (
+        id TEXT PRIMARY KEY, payment_id TEXT NOT NULL, open_item_id TEXT NOT NULL,
+        amount REAL NOT NULL, created_at TEXT NOT NULL
+      );
+      CREATE TABLE invoices (
+        id TEXT PRIMARY KEY, client TEXT NOT NULL, number TEXT NOT NULL,
+        amount REAL NOT NULL, tax_snapshot_json TEXT
+      );
+      CREATE TABLE transactions (
+        id TEXT PRIMARY KEY, counterparty TEXT NOT NULL, purpose TEXT NOT NULL
+      );
+      CREATE TABLE eur_classifications (
+        id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL,
+        tax_year INTEGER NOT NULL, eur_line_id TEXT, excluded INTEGER NOT NULL,
+        vat_mode TEXT NOT NULL, note TEXT, updated_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(`INSERT INTO bank_transactions
+      (id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status)
+      VALUES ('bank-payment', 'bank', '2025-01-05', 219, 'income', 'Acme', 'Sammelzahlung', NULL, 'booked')`).run();
+    db.prepare(`INSERT INTO open_item_payments
+      (id, payment_date, amount, party_type, source_type, source_id, status)
+      VALUES ('payment-1', '2025-01-05', 219, 'debtor', 'bank_transaction', 'bank-payment', 'allocated')`).run();
+    db.prepare(`INSERT INTO invoices (id, client, number, amount, tax_snapshot_json) VALUES
+      ('invoice-vat', 'Acme', 'RE-19', 119, ?),
+      ('invoice-exempt', 'Acme', 'RE-EXEMPT', 100, ?)`)
+      .run(JSON.stringify({ grossAmount: 119, netAmount: 100, vatAmount: 19 }), JSON.stringify({ grossAmount: 100, netAmount: 100, vatAmount: 0 }));
+    db.prepare(`INSERT INTO open_items (id, source_type, source_id) VALUES
+      ('item-vat', 'outgoing_invoice', 'invoice-vat'),
+      ('item-exempt', 'outgoing_invoice', 'invoice-exempt')`).run();
+    db.prepare(`INSERT INTO open_item_allocations (id, payment_id, open_item_id, amount, created_at) VALUES
+      ('allocation-vat', 'payment-1', 'item-vat', 119, '2025-01-05T09:00:00Z'),
+      ('allocation-exempt', 'payment-1', 'item-exempt', 100, '2025-01-05T09:01:00Z')`).run();
+
+    mockClassificationMap = new Map([
+      ['transaction:payment:payment-1:allocation:allocation-vat', {
+        id: 'classification-vat', sourceType: 'transaction', sourceId: 'payment:payment-1:allocation:allocation-vat',
+        taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z',
+      }],
+      ['transaction:payment:payment-1:allocation:allocation-exempt', {
+        id: 'classification-exempt', sourceType: 'transaction', sourceId: 'payment:payment-1:allocation:allocation-exempt',
+        taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z',
+      }],
+    ]);
+
+    const items = listEurItems(db, { taxYear: 2025, settings: makeSettings() as any, product: 'pro' });
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item.amountGross).sort((a, b) => a - b)).toEqual([100, 119]);
+    expect(items.reduce((sum, item) => sum + item.amountNet, 0)).toBe(200);
+    expect(items.every((item) => item.sourceId.includes(':allocation:'))).toBe(true);
+
+    mockClassificationMap = new Map([['transaction:payment:payment-1', {
+      id: 'legacy-classification', sourceType: 'transaction', sourceId: 'payment:payment-1',
+      taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z',
+    }]]);
+    const migratedItems = listEurItems(db, { taxYear: 2025, settings: makeSettings() as any, product: 'pro' });
+    expect(migratedItems.every((item) => item.classification?.eurLineId === 'E2025_KZ112')).toBe(true);
+  });
+
+  it('requires an explicit Pro VAT rate for standalone bank classifications', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE bank_transactions (
+        id TEXT PRIMARY KEY, account_id TEXT, date TEXT NOT NULL, amount REAL NOT NULL,
+        type TEXT NOT NULL, counterparty TEXT, purpose TEXT, linked_invoice_id TEXT,
+        status TEXT NOT NULL, deleted_at TEXT
+      );
+      CREATE TABLE transactions (id TEXT PRIMARY KEY, counterparty TEXT NOT NULL, purpose TEXT NOT NULL);
+      CREATE TABLE invoices (id TEXT PRIMARY KEY, client TEXT NOT NULL, number TEXT NOT NULL);
+      CREATE TABLE eur_classifications (
+        id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL,
+        tax_year INTEGER NOT NULL, eur_line_id TEXT, excluded INTEGER NOT NULL,
+        vat_mode TEXT NOT NULL, note TEXT, updated_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(`INSERT INTO bank_transactions
+      (id, account_id, date, amount, type, counterparty, purpose, status)
+      VALUES ('bank-manual', 'bank',  '2025-01-06', 119, 'income', 'Manual', 'Bank', 'booked')`).run();
+
+    const classification = (vatRate?: number) => ({
+      id: 'classification-manual', sourceType: 'transaction' as const, sourceId: 'bank-manual',
+      taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'default' as const,
+      vatRate, updatedAt: '2025-01-01T00:00:00.000Z',
+    });
+    mockClassificationMap = new Map([['transaction:bank-manual', classification(19)]]);
+    const settings = makeSettings() as any;
+    let items = listEurItems(db, { taxYear: 2025, settings, product: 'pro' });
+    expect(items[0]).toMatchObject({ amountGross: 119, amountNet: 100 });
+    expect(items[0]?.vatWarning).toBeUndefined();
+
+    mockClassificationMap = new Map([['transaction:bank-manual', classification(undefined)]]);
+    items = listEurItems(db, { taxYear: 2025, settings, product: 'pro' });
+    expect(items[0]).toMatchObject({ amountGross: 119, amountNet: 119, vatWarning: 'VAT_RATE_REQUIRED:bank-manual' });
+  });
 });

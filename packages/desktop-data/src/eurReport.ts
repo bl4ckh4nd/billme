@@ -88,8 +88,9 @@ export const listEurItems = (db: Database.Database, params: EurListItemsParams):
 
   let items = rawItems.map((item) => {
     const classification = classifications.get(`${item.sourceType}:${item.sourceId}`)
-      ?? (item.classificationFallbackId ? classifications.get(`invoice:${item.classificationFallbackId}`) : undefined);
-    const { sourceNet: _sourceNet, classificationFallbackId: _classificationFallbackId, ...publicItem } = item;
+      ?? (item.classificationFallbackId ? classifications.get(`invoice:${item.classificationFallbackId}`) : undefined)
+      ?? (item.legacyPaymentSourceId ? classifications.get(`transaction:${item.legacyPaymentSourceId}`) : undefined);
+    const { sourceNet: _sourceNet, classificationFallbackId: _classificationFallbackId, legacyPaymentSourceId: _legacyPaymentSourceId, ...publicItem } = item;
     const line = classification?.eurLineId ? linesById.get(classification.eurLineId) : undefined;
     const suggestion = classifyItem(pipelineCtx, {
       flowType: item.flowType,
@@ -302,7 +303,7 @@ const toNet = (
     const legacyRate = Number(settings.legal.defaultVatRate) || 0;
     return { amountNet: legacyRate > 0 ? round2(amountGross / (1 + legacyRate / 100)) : round2(amountGross) };
   }
-  if (Number.isFinite(rate) && rate > 0) return { amountNet: round2(amountGross / (1 + rate / 100)) };
+  if (Number.isFinite(rate) && rate >= 0) return { amountNet: round2(amountGross / (1 + rate / 100)) };
   return { amountNet: round2(amountGross), vatWarning: `VAT_RATE_REQUIRED:${raw.sourceId}` };
 };
 
@@ -323,6 +324,7 @@ const listRawEurItems = (
   purpose: string;
   sourceNet?: number;
   classificationFallbackId?: string;
+  legacyPaymentSourceId?: string;
 }> => {
   if (product === 'pro') return listProRawEurItems(db, from, to);
   const drizzle = createDrizzle(db);
@@ -448,55 +450,68 @@ const listProRawEurItems = (
     purpose: string;
     sourceNet?: number;
     classificationFallbackId?: string;
+    legacyPaymentSourceId?: string;
   }> = [];
 
   if (tableExists('open_item_payments')) {
     const payments = db.prepare(`
       SELECT p.id, p.payment_date, p.amount, p.party_type, p.source_type, p.source_id,
-             b.account_id, b.counterparty AS bank_counterparty, b.purpose AS bank_purpose,
-             MAX(CASE WHEN oi.source_type IN ('outgoing_invoice', 'incoming_invoice') THEN oi.source_type END) AS item_source_type,
-             MAX(CASE WHEN oi.source_type IN ('outgoing_invoice', 'incoming_invoice') THEN oi.source_id END) AS item_source_id,
-             COALESCE(SUM(oa.amount), 0) AS allocated_amount
+             b.account_id, b.counterparty AS bank_counterparty, b.purpose AS bank_purpose
       FROM open_item_payments p
       LEFT JOIN bank_transactions b ON b.id = p.source_id AND p.source_type = 'bank_transaction'
-      LEFT JOIN open_item_allocations oa ON oa.payment_id = p.id
-      LEFT JOIN open_items oi ON oi.id = oa.open_item_id
       WHERE p.payment_date >= ? AND p.payment_date <= ?
-        AND (p.source_type <> 'bank_transaction' OR b.status = 'booked')
-      GROUP BY p.id, p.payment_date, p.amount, p.party_type, p.source_type, p.source_id,
-               b.account_id, b.counterparty, b.purpose
+        AND (p.source_type <> 'bank_transaction' OR b.status = 'booked') ${bankDeleted}
       ORDER BY p.payment_date DESC, p.id
     `).all(from, to) as Array<Record<string, unknown>>;
 
     for (const payment of payments) {
       const bankId = typeof payment.source_id === 'string' && payment.source_type === 'bank_transaction' ? payment.source_id : undefined;
       if (bankId) representedBanks.add(bankId);
-      const invoiceId = typeof payment.item_source_id === 'string'
-        && (payment.item_source_type === 'outgoing_invoice' || payment.item_source_type === 'incoming_invoice')
-        ? payment.item_source_id : undefined;
       const amountGross = Math.abs(Number(payment.amount) || 0);
-      const allocated = Math.min(amountGross, Math.max(0, Number(payment.allocated_amount) || 0));
-      let sourceNet: number | undefined;
-      if (invoiceId && tableExists('invoices') && payment.item_source_type === 'outgoing_invoice') {
-        const invoice = db.prepare('SELECT amount, tax_snapshot_json FROM invoices WHERE id = ?').get(invoiceId) as { amount?: number; tax_snapshot_json?: string | null } | undefined;
-        const snapshot = parseJsonObject(invoice?.tax_snapshot_json);
-        const gross = Number(snapshot?.grossAmount ?? invoice?.amount) || 0;
-        const net = Number(snapshot?.netAmount);
-        if (gross > 0 && Number.isFinite(net)) sourceNet = allocated * net / gross + Math.max(0, amountGross - allocated);
+      const allocations = tableExists('open_item_allocations') && tableExists('open_items')
+        ? db.prepare(`
+            SELECT oa.id, oa.amount, oi.source_type, oi.source_id
+            FROM open_item_allocations oa JOIN open_items oi ON oi.id = oa.open_item_id
+            WHERE oa.payment_id = ? ORDER BY oa.created_at, oa.id
+          `).all(payment.id) as Array<{ id: string; amount: number; source_type: string; source_id: string }>
+        : [];
+      let allocated = 0;
+      for (const allocation of allocations) {
+        const gross = Math.max(0, Math.min(amountGross - allocated, Number(allocation.amount) || 0));
+        if (gross <= 0) continue;
+        allocated += gross;
+        const invoiceId = allocation.source_type === 'outgoing_invoice' || allocation.source_type === 'incoming_invoice' ? allocation.source_id : undefined;
+        const basis = invoiceId ? invoiceCashBasis(db, allocation.source_type, invoiceId, gross) : undefined;
+        result.push({
+          sourceType: 'transaction',
+          sourceId: `payment:${String(payment.id)}:allocation:${allocation.id}`,
+          date: String(payment.payment_date),
+          amountGross: gross,
+          flowType: payment.party_type === 'creditor' ? 'expense' : 'income',
+          accountId: typeof payment.account_id === 'string' ? payment.account_id : undefined,
+          linkedViaInvoice: Boolean(invoiceId),
+          counterparty: String(payment.bank_counterparty ?? basis?.counterparty ?? invoiceId ?? ''),
+          purpose: String(payment.bank_purpose ?? basis?.purpose ?? (invoiceId ? `OPOS ${invoiceId}` : 'OPOS Zahlung')),
+          sourceNet: basis?.sourceNet,
+          classificationFallbackId: invoiceId,
+          legacyPaymentSourceId: `payment:${String(payment.id)}`,
+        });
       }
-      result.push({
-        sourceType: 'transaction',
-        sourceId: `payment:${String(payment.id)}`,
-        date: String(payment.payment_date),
-        amountGross,
-        flowType: payment.party_type === 'creditor' ? 'expense' : 'income',
-        accountId: typeof payment.account_id === 'string' ? payment.account_id : undefined,
-        linkedViaInvoice: Boolean(invoiceId),
-        counterparty: String(payment.bank_counterparty ?? invoiceId ?? ''),
-        purpose: String(payment.bank_purpose ?? (invoiceId ? `OPOS ${invoiceId}` : 'OPOS Zahlung')),
-        sourceNet,
-        classificationFallbackId: invoiceId,
-      });
+      const residual = Math.max(0, amountGross - allocated);
+      if (!allocations.length || residual > 0.005) {
+        result.push({
+          sourceType: 'transaction',
+          sourceId: allocations.length ? `payment:${String(payment.id)}:residual` : `payment:${String(payment.id)}`,
+          date: String(payment.payment_date),
+          amountGross: allocations.length ? residual : amountGross,
+          flowType: payment.party_type === 'creditor' ? 'expense' : 'income',
+          accountId: typeof payment.account_id === 'string' ? payment.account_id : undefined,
+          linkedViaInvoice: false,
+          counterparty: String(payment.bank_counterparty ?? ''),
+          purpose: String(payment.bank_purpose ?? 'OPOS Zahlung'),
+          legacyPaymentSourceId: `payment:${String(payment.id)}`,
+        });
+      }
     }
   }
 
@@ -519,6 +534,9 @@ const listProRawEurItems = (
       linkedViaInvoice: Boolean(bank.linked_invoice_id),
       counterparty: String(bank.counterparty ?? ''),
       purpose: String(bank.purpose ?? ''),
+      sourceNet: typeof bank.linked_invoice_id === 'string' && tableExists('invoices')
+        ? invoiceCashBasis(db, 'outgoing_invoice', bank.linked_invoice_id, Math.abs(Number(bank.amount) || 0)).sourceNet
+        : undefined,
       classificationFallbackId: typeof bank.linked_invoice_id === 'string' ? bank.linked_invoice_id : undefined,
     });
   }
@@ -543,12 +561,45 @@ const listProRawEurItems = (
         linkedViaInvoice: true,
         counterparty: String(payment.client ?? ''),
         purpose: `Rechnung ${String(payment.number ?? invoiceId)}`,
+        sourceNet: invoiceCashBasis(db, 'outgoing_invoice', invoiceId, Math.abs(Number(payment.amount) || 0)).sourceNet,
         classificationFallbackId: invoiceId,
       });
     }
   }
 
   return result.sort((a, b) => a.date === b.date ? a.sourceId.localeCompare(b.sourceId) : (a.date > b.date ? -1 : 1));
+};
+
+const invoiceCashBasis = (
+  db: Database.Database,
+  sourceType: string,
+  sourceId: string,
+  allocatedGross: number,
+): { sourceNet?: number; counterparty?: string; purpose?: string } => {
+  if (sourceType === 'outgoing_invoice') {
+    const row = db.prepare('SELECT client, number, amount, tax_snapshot_json FROM invoices WHERE id = ?').get(sourceId) as { client?: string; number?: string; amount?: number; tax_snapshot_json?: string | null } | undefined;
+    const snapshot = parseJsonObject(row?.tax_snapshot_json);
+    const gross = Number(snapshot?.grossAmount);
+    const net = Number(snapshot?.netAmount);
+    return {
+      sourceNet: gross > 0 && Number.isFinite(net) ? allocatedGross * net / gross : undefined,
+      counterparty: row?.client,
+      purpose: row?.number ? `Rechnung ${row.number}` : undefined,
+    };
+  }
+  const row = db.prepare(`
+    SELECT i.number, i.gross_amount, i.net_amount, i.accounting_snapshot_json, v.name
+    FROM incoming_invoices i LEFT JOIN vendors v ON v.id = i.vendor_id
+    WHERE i.id = ?
+  `).get(sourceId) as { number?: string; gross_amount?: number; net_amount?: number; accounting_snapshot_json?: string | null; name?: string } | undefined;
+  const snapshot = parseJsonObject(row?.accounting_snapshot_json);
+  const gross = Number(snapshot?.grossAmount ?? row?.gross_amount);
+  const net = Number(snapshot?.netAmount ?? row?.net_amount);
+  return {
+    sourceNet: gross > 0 && Number.isFinite(net) ? allocatedGross * net / gross : undefined,
+    counterparty: row?.name,
+    purpose: row?.number ? `Eingangsrechnung ${row.number}` : undefined,
+  };
 };
 
 const parseJsonObject = (value: string | null | undefined): Record<string, unknown> | undefined => {

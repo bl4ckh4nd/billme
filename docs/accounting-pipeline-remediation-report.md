@@ -2,7 +2,8 @@
 
 **Stand:** 12.08.2026 · **Codebasis:** Branch
 `fix/accounting-pipeline-hardening`, funktionale Accounting-Baseline `f089e6e`,
-Report `6314c18`, anschließender CI-Hygiene-Fix `caa2843`
+Report `6314c18`, abschließender CI-Hygiene-Stand mit Fix `caa2843` und
+Guard-Härtung `9d2b8ac`
 
 Dieser Report bewertet den technischen Stand der Pro-Buchungspipeline nach der
 Umsetzung. Er ist keine steuerliche oder rechtliche Beratung und keine GoBD-,

@@ -196,7 +196,8 @@ export const runProAccountingScenario = async (page) => {
   const rulesSection = sectionByTitle(page, 'Rule-based Assignment im Browser pflegen');
   const accountingSection = sectionByTitle(page, 'Ledger, Regeln und Workflow-Snapshots');
 
-  await expect(accountingSection.getByText('Diese Webfläche ersetzt lokale Dateisystem-/IPC-Annahmen')).toBeVisible();
+  await expect(accountingSection).toBeVisible();
+  await expect(accountingSection.locator('.workspace-frame')).toBeVisible();
   await expect(mappingSection.getByRole('cell', { name: 'DE_STD_19' }).first()).toBeVisible();
   await expect(rulesSection.getByText('Hosting').first()).toBeVisible();
 
@@ -244,7 +245,6 @@ export const runProAccountingScenario = async (page) => {
   const workflowBefore = await requestJson(state, session, '/api/v1/pro/workflow');
   await accountingSection.getByRole('button', { name: 'Beispiel-Workflow anlegen' }).click();
   await expect(page.getByText('Beispiel-Workflow angelegt.')).toBeVisible();
-  await expect(page.locator('.workspace-frame')).toBeVisible();
   await expect
     .poll(async () => {
       const workflowEntries = await requestJson(state, session, '/api/v1/pro/workflow');

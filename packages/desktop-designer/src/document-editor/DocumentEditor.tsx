@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { InvoiceElement } from '../types';
-import { DocumentPages } from '../DocumentPages';
-import { A4_HEIGHT_PX, A4_WIDTH_PX } from '../constants';
-import { ArrowLeft, Eye, FileText, LockKeyhole, Redo2, Save, Undo2, UnlockKeyhole } from 'lucide-react';
+import { DocumentCanvasEditor, type DocumentCanvasDocumentFields } from './DocumentCanvasEditor';
+import { ArrowLeft, Eye, Redo2, Save, Undo2 } from 'lucide-react';
 import { getPreviewElements } from '@billme/desktop-utils/documentPreview';
 import { formatAddressMultiline } from '@billme/desktop-utils';
 import {
@@ -13,8 +12,6 @@ import {
   recommendInvoiceTaxMode,
   resolveInvoiceTaxMode,
 } from '@billme/server-core/services';
-import { Combobox, DatePicker } from '@billme/ui';
-import { ItemsEditor } from './ItemsEditor';
 import { useHistory } from '../hooks/useHistory';
 import type { ArticleLike, ClientLike, DocumentDraft, ProjectLike, SettingsLike } from './types';
 
@@ -27,6 +24,8 @@ export interface DocumentEditorProps {
   projects: ProjectLike[];
   settings: SettingsLike;
   templateElements: unknown[];
+  /** Existing template persistence seam for inline authored text. */
+  onTemplateElementsChange?: (elements: InvoiceElement[]) => void;
   onValidateVatId?: (args: { countryCode: string; vatNumber: string }) => Promise<{ status: 'valid' | 'invalid' | 'unavailable'; normalizedVatId: string; checkedAt: string }>;
   onSelectedClientChange?: (clientId: string) => void;
   onSave: (document: DocumentDraft) => void;
@@ -41,26 +40,6 @@ interface FieldErrors {
   taxRule?: string;
   items: Record<number, string>;
 }
-
-const inputClass = 'w-full rounded-lg border border-border bg-surface-muted px-2.5 py-2 text-sm text-foreground outline-none focus:border-accent focus:ring-2 focus:ring-accent/30';
-const labelClass = 'mb-1 block text-[11px] font-bold uppercase tracking-wide text-muted';
-
-const clientSearchText = (client: ClientLike) => [
-  client.company,
-  client.customerNumber,
-  client.email,
-  client.address,
-  ...(client.emails ?? []).flatMap((email) => [email.email]),
-  ...(client.addresses ?? []).flatMap((address) => [
-    address.company,
-    address.contactPerson,
-    address.street,
-    address.line2,
-    address.zip,
-    address.city,
-    address.country,
-  ]),
-].filter(Boolean).join(' ');
 
 const normalizeCountry = (country: string | undefined) => {
   const normalized = country?.trim();
@@ -111,6 +90,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   projects,
   settings: effectiveSettings,
   templateElements,
+  onTemplateElementsChange,
   onValidateVatId,
   onSelectedClientChange,
   onSave,
@@ -146,7 +126,16 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const formData = history.state;
   const setFormData = history.set;
   const dirty = formData !== baseline;
-  const effectiveTemplate = templateElements as InvoiceElement[];
+  const [editableTemplate, setEditableTemplate] = useState(templateElements as InvoiceElement[]);
+  useEffect(() => setEditableTemplate(templateElements as InvoiceElement[]), [templateElements]);
+  const effectiveTemplate = editableTemplate;
+  const handleTemplateTextChange = useCallback((id: string, content: string) => {
+    setEditableTemplate((previous) => {
+      const next = previous.map((element) => element.id === id ? { ...element, content } : element);
+      onTemplateElementsChange?.(next);
+      return next;
+    });
+  }, [onTemplateElementsChange]);
   const taxSnapshot = useMemo(
     () => calculateInvoiceTaxSnapshot({ items: formData.items, taxMode: formData.taxMode, taxMeta: formData.taxMeta }, effectiveSettings),
     [effectiveSettings, formData.items, formData.taxMeta, formData.taxMode],
@@ -162,12 +151,6 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     return project ? `${project.code ? `${project.code} – ` : ''}${project.name}` : '';
   }, [formData.projectId, projects]);
   const selectedClientLabel = clients.find((client) => client.id === selectedClientId)?.company ?? formData.client;
-  const categoryOptions = useMemo(() => {
-    const fromSettings = (effectiveSettings.catalog?.categories ?? []).map((category) => category.name).filter(Boolean);
-    const fromArticles = articles.map((article) => article.category).filter(Boolean);
-    return Array.from(new Set([...fromSettings, ...fromArticles].map((value) => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'de-DE'));
-  }, [articles, effectiveSettings]);
-  const defaultCategory = (effectiveSettings.catalog?.categories?.[0]?.name ?? '').trim() || 'Sonstiges';
   const resolvedTaxMode = resolveInvoiceTaxMode(formData.taxMode, effectiveSettings);
   const requiresBuyerVatId = getInvoiceTaxModeDefinition(resolvedTaxMode).requiresBuyerVatId;
   const sellerCountryCode = effectiveSettings.legal.countryCode ?? 'DE';
@@ -344,8 +327,75 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [dirty]);
 
-  const totals = { net: taxSnapshot.netAmount, vat: taxSnapshot.vatAmount, gross: taxSnapshot.grossAmount };
   const title = templateType === 'offer' ? 'Angebot' : 'Rechnung';
+  const unlockNumber = useCallback(() => {
+    if (isNumberLocked) {
+      if (window.confirm('Achtung: Die manuelle Änderung der Nummer kann die GoBD-konforme Nummerierung gefährden.\n\nNur fortfahren, wenn Sie sicher sind.')) setIsNumberLocked(false);
+    } else {
+      setIsNumberLocked(true);
+    }
+  }, [isNumberLocked]);
+  const selectProject = useCallback((project: ProjectLike) => {
+    projectTouchedRef.current = true;
+    setFormData((previous) => ({ ...previous, projectId: project.id }));
+  }, [setFormData]);
+  const documentFields = useMemo<DocumentCanvasDocumentFields>(() => ({
+    document: formData,
+    templateElements: effectiveTemplate,
+    templateType,
+    clients,
+    projects,
+    selectedClientId,
+    selectedClientLabel,
+    selectedProjectLabel,
+    onChange: setFormData,
+    onClientNameChange: updateClientName,
+    onAddressChange: (value) => setFormData((previous) => ({ ...previous, clientAddress: value, billingAddressJson: parseAddressText(value, previous.client, previous.billingAddressJson) }), { coalesce: true }),
+    onSelectClient: applyClientToDocument,
+    onSelectProject: selectProject,
+    onUnlockNumber: unlockNumber,
+    isNumberLocked,
+    fieldErrors,
+    taxModeOptions: INVOICE_TAX_MODE_DEFINITIONS.map((definition) => ({ value: definition.mode, label: definition.label })),
+    taxRateOptions,
+    resolvedTaxMode,
+    taxRecommendation,
+    taxRecommendationLabel: getInvoiceTaxModeDefinition(taxRecommendation.mode).label,
+    buyerCountryCode,
+    sellerCountryCode,
+    requiresBuyerVatId,
+    vatValidationPending,
+    onValidateBuyerVatId: onValidateVatId ? () => void validateBuyerVatId() : undefined,
+    onTemplateTextChange: onTemplateElementsChange ? handleTemplateTextChange : undefined,
+    onTemplateElementsChange,
+  }), [
+    applyClientToDocument,
+    buyerCountryCode,
+    clients,
+    fieldErrors,
+    formData,
+    effectiveTemplate,
+    handleTemplateTextChange,
+    isNumberLocked,
+    onValidateVatId,
+    onTemplateElementsChange,
+    projects,
+    requiresBuyerVatId,
+    resolvedTaxMode,
+    selectedClientId,
+    selectedClientLabel,
+    selectedProjectLabel,
+    selectProject,
+    sellerCountryCode,
+    setFormData,
+    taxRecommendation,
+    taxRateOptions,
+    templateType,
+    unlockNumber,
+    updateClientName,
+    validateBuyerVatId,
+    vatValidationPending,
+  ]);
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-canvas">
@@ -372,40 +422,19 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
       <main className="flex-1 overflow-auto bg-editor-viewport p-4 sm:p-8">
         {view === 'preview' ? (
           <div className="mx-auto w-fit min-w-[min(100%,794px)]" data-document-preview data-testid="document-preview">
-            <DocumentPages elements={previewElements} pageWidth={A4_WIDTH_PX} pageHeight={A4_HEIGHT_PX} pageClassName="bg-white shadow-2xl" pageGap={24} />
+            <DocumentCanvasEditor elements={previewElements} />
           </div>
         ) : (
-          <div ref={editorSurfaceRef} data-document-editor data-testid="document-editor" className="mx-auto min-h-[1123px] w-full max-w-[794px] bg-white px-5 py-6 text-foreground shadow-2xl sm:px-12 sm:py-10">
-            <div className="mb-8 flex items-start justify-between gap-6 border-b border-border pb-5">
-              <div className="min-w-0">
-                <div className="mb-2 flex items-center gap-2 text-muted"><FileText size={17} /><span className="text-xs font-bold uppercase tracking-[0.2em]">{title}</span></div>
-                <h2 className="text-2xl font-black text-foreground">{effectiveSettings.company.name}</h2>
-                <p className="mt-1 text-sm text-muted">{effectiveSettings.company.street}, {effectiveSettings.company.zip} {effectiveSettings.company.city}</p>
-              </div>
-              <div className="w-44 shrink-0 space-y-2">
-                <div data-field-error={fieldErrors.number ? true : undefined}><label className={labelClass}>{templateType === 'offer' ? 'Angebots-Nr.' : 'Rechnungs-Nr.'}</label><div className="relative"><input value={formData.number} readOnly={isNumberLocked} onChange={(event) => setFormData((previous) => ({ ...previous, number: event.target.value }), { coalesce: true })} className={`${inputClass} ${isNumberLocked ? 'cursor-not-allowed pr-9 text-muted' : ''}`} aria-label={templateType === 'offer' ? 'Angebots-Nr.' : 'Rechnungs-Nr.'} />{mode === 'edit' ? <button type="button" onClick={() => { if (isNumberLocked) { if (window.confirm('Achtung: Die manuelle Änderung der Nummer kann die GoBD-konforme Nummerierung gefährden.\n\nNur fortfahren, wenn Sie sicher sind.')) setIsNumberLocked(false); } else setIsNumberLocked(true); }} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-muted hover:text-foreground" aria-label={isNumberLocked ? 'Nummer entsperren' : 'Nummer sperren'} title="Nummer bearbeiten (GoBD-Warnung)">{isNumberLocked ? <LockKeyhole size={14} /> : <UnlockKeyhole size={14} />}</button> : null}</div>{fieldErrors.number ? <p className="mt-1 text-xs text-error">{fieldErrors.number}</p> : null}</div>
-                <div data-field-error={fieldErrors.date ? true : undefined}><label className={labelClass}>Datum</label><DatePicker value={formData.date} onChange={(date) => setFormData((previous) => ({ ...previous, date }), { coalesce: true })} aria-label="Datum" />{fieldErrors.date ? <p className="mt-1 text-xs text-error">{fieldErrors.date}</p> : null}</div>
-                <div><label className={labelClass}>{templateType === 'offer' ? 'Gültig bis' : 'Fälligkeit'}</label><DatePicker value={formData.dueDate ?? ''} onChange={(dueDate) => setFormData((previous) => ({ ...previous, dueDate }), { coalesce: true })} placeholder="Optional" aria-label={templateType === 'offer' ? 'Gültig bis' : 'Fälligkeit'} /></div>
-              </div>
-            </div>
-
-            <section className="mb-8 grid gap-5 border-b border-border pb-6 sm:grid-cols-[1.3fr_1fr]" aria-label="Empfänger">
-              <div><label className={labelClass}>Kunde suchen</label><Combobox items={clients} value={selectedClientLabel} onSelect={applyClientToDocument} getLabel={(client) => client.company} getSublabel={(client) => client.customerNumber} getSearchText={clientSearchText} placeholder="Kunde suchen..." aria-label="Kunde auswählen" inputClassName={inputClass} /></div>
-              <div><label className={labelClass}>Projekt</label><Combobox items={projects} value={selectedProjectLabel} disabled={!selectedClientId} onSelect={(project) => { projectTouchedRef.current = true; setFormData((previous) => ({ ...previous, projectId: project.id })); }} getLabel={(project) => `${project.code ? `${project.code} – ` : ''}${project.name}`} getSearchText={(project) => `${project.code ?? ''} ${project.name}`} placeholder={selectedClientId ? 'Projekt suchen...' : 'Bitte Kunde auswählen'} aria-label="Projekt auswählen" inputClassName={inputClass} /></div>
-              <div data-field-error={fieldErrors.client ? true : undefined}><label className={labelClass}>Empfängername</label><input value={formData.client} onChange={(event) => updateClientName(event.target.value)} className={inputClass} aria-label="Empfängername" />{fieldErrors.client ? <p className="mt-1 text-xs text-error">{fieldErrors.client}</p> : null}</div>
-              <div><label className={labelClass}>E-Mail</label><input type="email" value={formData.clientEmail} onChange={(event) => setFormData((previous) => ({ ...previous, clientEmail: event.target.value }), { coalesce: true })} className={inputClass} aria-label="E-Mail" /></div>
-              <div className="sm:col-span-2"><label className={labelClass}>Rechnungsadresse</label><textarea rows={3} value={formData.clientAddress ?? ''} onChange={(event) => setFormData((previous) => ({ ...previous, clientAddress: event.target.value, billingAddressJson: parseAddressText(event.target.value, previous.client, previous.billingAddressJson) }), { coalesce: true })} className={`${inputClass} resize-y`} aria-label="Rechnungsadresse" /></div>
-            </section>
-
-            <section className="mb-8 grid gap-4 border-b border-border pb-6 sm:grid-cols-2" aria-label="Steuerdaten">
-              <div><label className={labelClass}>Steuer-Modell</label><select value={formData.taxMode ?? resolvedTaxMode} onChange={(event) => setFormData((previous) => ({ ...previous, taxMode: event.target.value as DocumentDraft['taxMode'], taxMeta: { ...previous.taxMeta, taxRuleConfirmed: true } }))} className={inputClass} aria-label="Steuer-Modell">{INVOICE_TAX_MODE_DEFINITIONS.map((definition) => <option key={definition.mode} value={definition.mode}>{definition.label}</option>)}</select>{buyerCountryCode && buyerCountryCode !== sellerCountryCode && taxRecommendation.mode !== resolvedTaxMode ? <p className="mt-1 text-xs text-muted">Vorschlag: <button type="button" className="font-bold text-accent underline" onClick={() => setFormData((previous) => ({ ...previous, taxMode: taxRecommendation.mode, taxMeta: { ...previous.taxMeta, taxRuleConfirmed: true } }))}>{getInvoiceTaxModeDefinition(taxRecommendation.mode).label}</button> <span>({taxRecommendation.reason})</span></p> : null}{fieldErrors.taxRule ? <p className="mt-1 text-xs text-error">{fieldErrors.taxRule}</p> : null}</div>
-              <div><label className={labelClass}>Standardsatz %</label><div className="flex gap-2"><select value={formData.taxMeta?.defaultVatRate ?? effectiveSettings.legal.defaultVatRate} onChange={(event) => setFormData((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, defaultVatRate: Number(event.target.value), taxRuleConfirmed: true } }))} className={inputClass} aria-label="Standardsatz">{taxRateOptions.map((rate) => <option key={rate} value={rate}>{rate}%</option>)}<option value={0}>0%</option></select><input type="number" min="0" max="100" step="0.1" value={formData.taxMeta?.defaultVatRate ?? effectiveSettings.legal.defaultVatRate} onChange={(event) => setFormData((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, defaultVatRate: Number(event.target.value), taxRuleConfirmed: true } }))} className={`${inputClass} max-w-24`} aria-label="Eigener Standardsatz" /></div><button type="button" className="mt-1 text-xs font-semibold text-accent underline" onClick={() => setFormData((previous) => ({ ...previous, items: previous.items.map((item) => ({ ...item, taxRate: undefined })) }))}>Auf alle Positionen anwenden</button></div>
-              {requiresBuyerVatId ? <div data-field-error={fieldErrors.buyerVatId ? true : undefined}><label className={labelClass}>USt-IdNr. des Kunden</label><div className="flex gap-2"><input value={formData.taxMeta?.buyerVatId ?? ''} onChange={(event) => setFormData((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, buyerVatId: event.target.value, buyerType: 'business', vatIdValidation: undefined, vatIdValidationAt: undefined } }), { coalesce: true })} className={inputClass} aria-label="USt-IdNr. des Kunden" />{onValidateVatId ? <button type="button" onClick={() => void validateBuyerVatId()} disabled={vatValidationPending || !formData.taxMeta?.buyerVatId || !buyerCountryCode} className="shrink-0 rounded-lg border border-border px-2 text-xs font-bold text-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50">{vatValidationPending ? 'Prüfe…' : 'VIES prüfen'}</button> : null}</div>{formData.taxMeta?.vatIdValidation ? <p className="mt-1 text-xs text-muted">VIES: {formData.taxMeta.vatIdValidation}</p> : null}{fieldErrors.buyerVatId ? <p className="mt-1 text-xs text-error">{fieldErrors.buyerVatId}</p> : null}</div> : null}
-              <div><label className={labelClass}>{templateType === 'offer' ? 'Leistungsdatum / Zeitraum' : 'Leistungsdatum'}</label><DatePicker value={formData.servicePeriod ?? ''} onChange={(servicePeriod) => setFormData((previous) => ({ ...previous, servicePeriod }), { coalesce: true })} placeholder="Optional" aria-label="Leistungsdatum" /></div>
-            </section>
-
-            <section aria-label="Positionen" className="mb-8"><ItemsEditor items={formData.items} articles={articles} categoryOptions={categoryOptions} defaultCategory={defaultCategory} formatCurrency={formatCurrency} taxRateOptions={taxRateOptions} itemErrors={fieldErrors.items} onItemsChange={(items, options) => setFormData((previous) => ({ ...previous, items }), options)} /></section>
-            <section className="ml-auto max-w-xs space-y-2 border-t border-border pt-4" aria-label="Summen"><div className="flex justify-between text-sm text-muted"><span>Netto</span><span className="tabular-nums">{formatCurrency(totals.net)}</span></div>{(taxSnapshot.vatBreakdown?.length ? taxSnapshot.vatBreakdown : [{ rate: taxSnapshot.vatRateApplied, vatAmount: taxSnapshot.vatAmount }]).map((entry) => <div key={entry.rate} className="flex justify-between text-sm text-muted"><span>{taxSnapshot.label ?? 'USt'} ({entry.rate}%)</span><span className="tabular-nums">{formatCurrency(entry.vatAmount)}</span></div>)}<div className="flex justify-between border-t border-border pt-2 text-base font-black"><span>Gesamtbetrag</span><span className="tabular-nums">{formatCurrency(totals.gross)}</span></div></section>
+          <div ref={editorSurfaceRef} data-document-editor data-testid="document-editor" className="mx-auto w-fit min-w-[min(100%,794px)]">
+            <DocumentCanvasEditor
+              elements={previewElements}
+              items={formData.items}
+              articles={articles}
+              formatCurrency={formatCurrency}
+              taxRateOptions={taxRateOptions}
+              documentFields={documentFields}
+              onItemsChange={(items, options) => setFormData((previous) => ({ ...previous, items }), options)}
+            />
           </div>
         )}
       </main>

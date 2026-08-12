@@ -13,6 +13,7 @@
     "dev:web": "pnpm -C apps/web dev",
     "dev:web-pro": "pnpm -C apps/web-pro dev",
     "dev:renderer": "pnpm -C apps/desktop dev:renderer",
+    "dev:editor": "vite --config packages/desktop-designer/playground/vite.config.ts --host 127.0.0.1 --port 4177",
     "build": "pnpm -C apps/desktop build",
     "build:demo": "pnpm -C apps/demo build",
     "build:landing": "pnpm -C apps/landing-page build",

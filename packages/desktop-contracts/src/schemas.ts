@@ -14,6 +14,7 @@ const isAllowedPortalBaseUrl = (value: string): boolean => {
 };
 
 export const invoiceItemSchema = z.object({
+  kind: z.enum(['item', 'time', 'optional', 'text', 'group', 'summary']).optional(),
   description: z.string(),
   quantity: z.number(),
   price: z.number(),
@@ -23,6 +24,14 @@ export const invoiceItemSchema = z.object({
   unit: z.string().optional(),
   discountPercent: z.number().min(0).max(100).optional(),
   taxRate: z.number().min(0).optional(),
+  note: z.string().optional(),
+  optionNote: z.string().optional(),
+  date: z.string().optional(),
+  durationMinutes: z.number().nonnegative().optional(),
+  groupId: z.string().optional(),
+  summaryScope: z.enum(['running', 'group']).optional(),
+  summaryMetric: z.enum(['amount', 'quantity']).optional(),
+  summaryUnit: z.string().optional(),
 });
 
 export const paymentSchema = z.object({

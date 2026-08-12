@@ -85,7 +85,7 @@ describe('document-first invoice editor', () => {
 
     expect(screen.getByTestId('document-editor')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('Pflichtfelder');
-    expect(screen.getByRole('textbox', { name: 'Empfängername' })).toHaveFocus();
+    expect(screen.getByRole('combobox', { name: 'Kunde auswählen' })).toHaveFocus();
   });
 
   it('persists later recipient and structured billing-address corrections consistently', async () => {
@@ -98,7 +98,7 @@ describe('document-first invoice editor', () => {
       billingAddressJson: { company: 'Nord GmbH', street: 'Hafenstraße 4', zip: '20095', city: 'Hamburg', country: 'DE' },
     }), onSave);
 
-    const name = screen.getByRole('textbox', { name: 'Empfängername' });
+    const name = screen.getByRole('combobox', { name: 'Kunde auswählen' });
     await user.clear(name);
     await user.type(name, 'Nord Tochter GmbH');
     const address = screen.getByRole('textbox', { name: 'Rechnungsadresse' });
@@ -158,11 +158,11 @@ describe('document-first invoice editor', () => {
     const second = documentFixture({ id: 'invoice-2', number: 'RE-2026-002', client: 'Zweiter Kunde', clientId: undefined });
     const view = renderEditor(first, onSave);
 
-    await user.clear(screen.getByRole('textbox', { name: 'Empfängername' }));
-    await user.type(screen.getByRole('textbox', { name: 'Empfängername' }), 'Lokale Änderung');
+    await user.clear(screen.getByRole('combobox', { name: 'Kunde auswählen' }));
+    await user.type(screen.getByRole('combobox', { name: 'Kunde auswählen' }), 'Lokale Änderung');
     view.rerender(editor(second, onSave));
 
-    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Empfängername' })).toHaveValue('Zweiter Kunde'));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Kunde auswählen' })).toHaveValue('Zweiter Kunde'));
     expect(screen.queryByText('Ungespeichert')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Speichern' }));
     expect(onSave.mock.calls[0]![0]).toMatchObject({ id: 'invoice-2', number: 'RE-2026-002', client: 'Zweiter Kunde' });
@@ -171,7 +171,7 @@ describe('document-first invoice editor', () => {
   it('uses offer-specific labels without introducing a second editor', () => {
     renderEditor(documentFixture({ number: 'AN-2026-001' }), vi.fn(), 'offer');
     expect(screen.getByRole('heading', { name: 'Angebot bearbeiten' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Gültig bis' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Gültig bis')).toHaveAttribute('type', 'date');
   });
 
   it('blocks a cross-border save until the VAT rule is confirmed, then saves after selection', async () => {
@@ -236,6 +236,7 @@ describe('document-first invoice editor', () => {
     expect(screen.getByRole('combobox', { name: 'Standardsatz' })).toHaveValue('20');
     expect(screen.getByRole('combobox', { name: 'Umsatzsteuer Position 1' })).toHaveValue('10');
     await user.selectOptions(screen.getByRole('combobox', { name: 'Standardsatz' }), '13');
+    await user.click(screen.getByRole('combobox', { name: 'Beschreibung Position 1' }));
     await user.selectOptions(screen.getByRole('combobox', { name: 'Umsatzsteuer Position 1' }), '4.9');
     await user.click(screen.getByRole('button', { name: 'Speichern' }));
 

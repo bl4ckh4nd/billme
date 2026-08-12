@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createSingleTenantScope, type Invoice, type Offer } from '@billme/server-core';
+import { billingLineItemSchema, createSingleTenantScope, type Invoice, type Offer } from '@billme/server-core';
 import {
   createPostgresInvoiceRepository,
   createPostgresOfferRepository,
@@ -24,7 +24,7 @@ const invoice: Invoice = {
   amount: 100,
   status: 'draft',
   dunningLevel: 0,
-  items: [{ description: 'Beratung', quantity: 1, price: 100, total: 100 }],
+  items: [billingLineItemSchema.parse({ description: 'Beratung', quantity: 1, price: 100, total: 100 })],
   payments: [],
   history: [],
   taxMode: 'intra_eu_service_reverse_charge',
@@ -43,7 +43,7 @@ const offer: Offer = {
   validUntil: '2026-08-20',
   amount: 100,
   status: 'draft',
-  items: [{ description: 'Export', quantity: 1, price: 100, total: 100 }],
+  items: [billingLineItemSchema.parse({ description: 'Export', quantity: 1, price: 100, total: 100 })],
   history: [],
   taxMode: 'export_third_country',
   taxMeta: { sellerCountryCode: 'DE', buyerCountryCode: 'CH', taxRuleConfirmed: true },

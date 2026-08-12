@@ -66,6 +66,8 @@ keep double-entry books.
 - **Document-first invoice and offer editor** — centered A4 editing surface with inline customer,
   address, dates, tax, line-item, and live-total fields; preview uses the active template pagination
   and the same editor is shared by Lite, Pro, desktop, and browser shells
+- **Structured document lines** — billable items and time entries, optional zero-value lines, text
+  notes, sections/groups, and running or group subtotals; legacy lines remain billable automatically.
 - **Visual document designer** — drag-and-drop canvas, element rail, inspector, layers panel, rulers,
   snapping, undo/redo, and reusable templates for invoices and offers
 - **Unified documents dashboard** — search, status filters, portal sync state, offer-to-invoice conversion
@@ -331,6 +333,16 @@ These are described in internal design docs but are not on `main`; do not expect
 ---
 
 ## Development
+
+To inspect A4 pagination and structured invoice lines without starting Electron, run
+`pnpm dev:editor` and open `http://127.0.0.1:4177`. Fixtures are selected with
+`?fixture=construction|page-break|all-line-types|long-text|mixed-vat`.
+The playground uses the public `DocumentCanvasEditor`: document metadata and
+recipient fields are inline A4 overlays, rows support article/category context,
+section/summary kinds, margin actions and live reflow. Edit controls are
+zero-flow and therefore hidden from print/PDF; the diagnostics bar reports page
+count, totals and table/footer overflow. Rows are sortable from their `dnd-kit`
+handle; `Cmd/Ctrl+K` opens article and customer search.
 
 ### Prerequisites
 

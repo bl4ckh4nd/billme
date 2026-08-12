@@ -213,6 +213,7 @@ const buildInvoiceItems = (profile: RecurringProfile): Invoice['items'] => {
     const quantity = Number(item.quantity) || 0;
     const price = Number(item.price) || 0;
     return {
+      ...item,
       description: item.description,
       quantity,
       price,

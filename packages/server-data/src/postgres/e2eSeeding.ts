@@ -3,7 +3,7 @@ import type {
   LedgerAccount,
   TaxCaseAccountMapping,
 } from '@billme/accounting-shared';
-import { createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile } from '@billme/server-core';
+import { billingLineItemSchema, createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile } from '@billme/server-core';
 import {
   createPostgresClientRepository,
   createPostgresInvoiceRepository,
@@ -390,7 +390,7 @@ const buildBillingSeed = (
       amount: 1250,
       status: 'paid',
       dunningLevel: 0,
-      items: [{ description: 'Implementierung Sprint 1', quantity: 10, price: 125, total: 1250 }],
+      items: [billingLineItemSchema.parse({ description: 'Implementierung Sprint 1', quantity: 10, price: 125, total: 1250 })],
       payments: [{ id: seedId(namespace, 'payment', 'paid'), date: '2026-01-20', amount: 1250, method: 'Bank' }],
       history: [{ date: '2026-01-15', action: 'Rechnung erstellt' }],
       createdAt: now,
@@ -413,7 +413,7 @@ const buildBillingSeed = (
       amount: 1890,
       status: 'open',
       dunningLevel: 0,
-      items: [{ description: 'Monatliche Betreuung', quantity: 1, price: 1890, total: 1890 }],
+      items: [billingLineItemSchema.parse({ description: 'Monatliche Betreuung', quantity: 1, price: 1890, total: 1890 })],
       payments: [],
       history: [{ date: '2026-02-10', action: 'Rechnung erstellt' }],
       createdAt: now,
@@ -437,7 +437,7 @@ const buildBillingSeed = (
       validUntil: '2026-03-15',
       amount: 990,
       status: 'open',
-      items: [{ description: 'UX Audit', quantity: 1, price: 990, total: 990 }],
+      items: [billingLineItemSchema.parse({ description: 'UX Audit', quantity: 1, price: 990, total: 990 })],
       history: [{ date: '2026-03-01', action: 'Angebot erstellt' }],
       createdAt: now,
       updatedAt: now,
@@ -455,7 +455,7 @@ const buildBillingSeed = (
       nextRun: '2026-04-01',
       amount: 150,
       taxMode: 'standard_vat',
-      items: [{ description: 'Monatliche Wartung', quantity: 1, price: 150, total: 150 }],
+      items: [billingLineItemSchema.parse({ description: 'Monatliche Wartung', quantity: 1, price: 150, total: 150 })],
       createdAt: now,
       updatedAt: now,
     },

@@ -7,3 +7,5 @@ export { DocumentPages } from './DocumentPages';
 export type { DocumentPagesProps } from './DocumentPages';
 export { TemplateDesigner } from './TemplateDesigner';
 export type { TemplateDesignerProps } from './TemplateDesigner';
+export { DocumentCanvasEditor } from './document-editor/DocumentCanvasEditor';
+export type { DocumentCanvasDocumentFields, DocumentCanvasEditorProps, DocumentDraftUpdater } from './document-editor/DocumentCanvasEditor';

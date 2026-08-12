@@ -1,10 +1,11 @@
 import type {
-  BillingLineItem,
   InvoiceTaxModeDefinition,
   InvoiceTaxMeta,
   InvoiceTaxMode,
   InvoiceTaxSnapshot,
+  BillingLineInput,
 } from '../domain/foundations.js';
+import { getBillingLineAmount, isBillableLine } from '../domain/foundations.js';
 
 export type TaxSettingsShape = {
   legal: {
@@ -15,7 +16,7 @@ export type TaxSettingsShape = {
 };
 
 export type TaxableDocumentInput = {
-  items?: BillingLineItem[];
+  items?: BillingLineInput[];
   taxMode?: InvoiceTaxMode;
   taxMeta?: InvoiceTaxMeta;
 };
@@ -225,12 +226,13 @@ export const calculateInvoiceTaxSnapshot = (
     : Math.max(0, toFiniteNumber(input.taxMeta?.defaultVatRate ?? getDefaultTaxRate(settings)));
   const netByRate = new Map<number, number>();
   for (const item of input.items ?? []) {
+    if (!isBillableLine(item)) continue;
     const rate = definition.forceZeroVat
       ? 0
       : item.taxRate === undefined || item.taxRate === null
         ? defaultRate
         : Math.max(0, toFiniteNumber(item.taxRate));
-    netByRate.set(rate, (netByRate.get(rate) ?? 0) + toFiniteNumber(item.total));
+    netByRate.set(rate, (netByRate.get(rate) ?? 0) + getBillingLineAmount(item));
   }
   const vatBreakdown = [...netByRate.entries()].map(([rate, net]) => ({
     rate,

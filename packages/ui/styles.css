@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @source "./src/**/*.{ts,tsx}";
+@source "../desktop-designer/src/**/*.{ts,tsx}";
 @source "../../apps/desktop/**/*.{ts,tsx,html}";
 @source "../../apps/pro-desktop/**/*.{ts,tsx,html}";
 @source "../../apps/web/**/*.{ts,tsx,html}";

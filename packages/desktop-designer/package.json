@@ -7,8 +7,11 @@
     "@billme/desktop-core": "workspace:*",
     "@billme/desktop-ui": "workspace:*",
     "@billme/desktop-utils": "workspace:*",
-    "@billme/ui": "workspace:*",
     "@billme/server-core": "workspace:*",
+    "@billme/ui": "workspace:*",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "lucide-react": "^0.562.0",
     "react-moveable": "^0.56.0",
     "react-selecto": "^1.26.3",
@@ -46,6 +49,10 @@
     "./document-editor": {
       "types": "./src/document-editor/index.ts",
       "default": "./src/document-editor/index.ts"
+    },
+    "./DocumentCanvasEditor": {
+      "types": "./src/document-editor/DocumentCanvasEditor.tsx",
+      "default": "./src/document-editor/DocumentCanvasEditor.tsx"
     },
     "./legacy/CanvasElement": {
       "types": "./src/legacy/CanvasElement.tsx",

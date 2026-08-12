@@ -34,7 +34,16 @@ export type PaginationElement = {
     textAlign?: 'left' | 'center' | 'right';
     padding?: number;
   };
-  tableData?: { columns?: unknown; rows?: unknown[] };
+  tableData?: { columns?: unknown; rows?: PaginationTableRow[] };
+};
+
+export type PaginationTableRow = {
+  id: string;
+  cells?: string[];
+  kind?: 'item' | 'time' | 'optional' | 'text' | 'group' | 'summary' | 'group-continuation' | 'row-continuation';
+  groupId?: string;
+  groupLabel?: string;
+  [key: string]: unknown;
 };
 
 export type PaginationMetrics = {
@@ -71,7 +80,7 @@ export const paginateDocumentElements = (
   options: PaginateOptions,
 ): PaginationElement[][] => {
   const table = elements.find(isTable);
-  const rows = (table?.tableData?.rows ?? []) as unknown[];
+  const rows = (table?.tableData?.rows ?? []) as PaginationTableRow[];
   if (!table || rows.length === 0) return [elements];
 
   const footerZoneTop = options.pageHeight * FOOTER_ZONE_RATIO;
@@ -87,39 +96,105 @@ export const paginateDocumentElements = (
   const tailTop = tail.length ? Math.min(...tail.map((el) => el.y)) : 0;
   const tailHeight = tail.length ? Math.max(...tail.map(bottomOf)) - tailTop : 0;
 
-  const rowHeight = (index: number) => options.rowHeights[index] || FALLBACK_ROW_HEIGHT;
+  const originalRowHeight = (index: number) => options.rowHeights[index] || FALLBACK_ROW_HEIGHT;
   const topOfPage = (pageIndex: number) => (pageIndex === 0 ? table.y : CONTINUATION_TOP);
+
+  // Split a measured oversized row into continuation rows before pagination.
+  // The renderer keeps the same cells and only breaks the long description;
+  // every generated chunk is then measured with the same conservative height.
+  const preparedRows: Array<{ row: PaginationTableRow; height: number; sourceIndex: number }> = [];
+  const firstPageLimit = Math.max(FALLBACK_ROW_HEIGHT, contentBottom - table.y - options.tableHeaderHeight);
+  rows.forEach((row, sourceIndex) => {
+    const height = originalRowHeight(sourceIndex);
+    if (height <= firstPageLimit || row.kind === 'group' || row.kind === 'summary') {
+      preparedRows.push({ row, height, sourceIndex });
+      return;
+    }
+    const chunks = Math.max(2, Math.ceil(height / firstPageLimit));
+    const cells = [...(row.cells ?? [])];
+    const description = cells[1] ?? cells[0] ?? '';
+    const descriptionChunks = Array.from({ length: chunks }, (_, chunkIndex) => description.slice(
+      Math.floor(description.length * chunkIndex / chunks),
+      Math.floor(description.length * (chunkIndex + 1) / chunks),
+    ).trim()).filter(Boolean);
+    for (let chunkIndex = 0; chunkIndex < chunks; chunkIndex += 1) {
+      const nextCells = [...cells];
+      if (cells.length > 1) nextCells[1] = descriptionChunks[chunkIndex] ?? '';
+      else nextCells[0] = descriptionChunks[chunkIndex] ?? '';
+      preparedRows.push({
+        row: { ...row, id: `${row.id}__continuation_${chunkIndex + 1}`, kind: chunkIndex === 0 ? row.kind : 'row-continuation', cells: nextCells },
+        height: Math.max(FALLBACK_ROW_HEIGHT, height / chunks),
+        sourceIndex,
+      });
+    }
+  });
+  const preparedRowHeight = (index: number) => preparedRows[index]?.height ?? FALLBACK_ROW_HEIGHT;
+  const prepared = preparedRows.map(({ row }) => row);
+  const continuationLabel = (index: number): string | undefined => {
+    const groupId = preparedRows[index]?.row.groupId;
+    if (!groupId || preparedRows[index]?.row.kind === 'group') return undefined;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const candidate = preparedRows[cursor]?.row;
+      if (candidate?.groupId === groupId && candidate.kind === 'group') return candidate.groupLabel ?? candidate.cells?.[1] ?? candidate.cells?.[0];
+    }
+    return undefined;
+  };
 
   // Slice rows into pages. The page that ends up carrying the remaining rows
   // also has to fit the totals/payment block, so rows are pushed to a further
   // page when they would collide with it.
   const slices: number[][] = [];
   let cursor = 0;
-  while (cursor < rows.length) {
+  while (cursor < prepared.length) {
     const top = topOfPage(slices.length);
-    const limit = contentBottom - top - options.tableHeaderHeight;
+    const hasContinuation = slices.length > 0 && Boolean(continuationLabel(cursor));
+    const limit = contentBottom - top - options.tableHeaderHeight - (hasContinuation ? FALLBACK_ROW_HEIGHT : 0);
     const slice: number[] = [];
     let used = 0;
-    while (cursor < rows.length) {
-      const height = rowHeight(cursor);
+    while (cursor < prepared.length) {
+      const height = preparedRowHeight(cursor);
       if (slice.length > 0 && used + height > limit) break;
       slice.push(cursor);
       used += height;
       cursor += 1;
     }
-    if (cursor >= rows.length && tail.length > 0) {
+    if (cursor >= prepared.length && tail.length > 0) {
       // Last page: give the tail block room by moving rows to the next page.
       const tailBaseline = slices.length === 0 ? tailTop : 0;
       while (
         slice.length > 1 &&
         Math.max(tailBaseline, top + options.tableHeaderHeight + used + BLOCK_GAP) + tailHeight > contentBottom
       ) {
-        used -= rowHeight(slice[slice.length - 1]);
+        used -= preparedRowHeight(slice[slice.length - 1]);
         slice.pop();
         cursor -= 1;
       }
     }
     slices.push(slice);
+  }
+
+  // Keep a section subtotal visually attached to the last row of the section.
+  // Moving one row is preferable to printing a subtotal alone at the top.
+  for (let pageIndex = 1; pageIndex < slices.length; pageIndex += 1) {
+    const first = prepared[slices[pageIndex][0]];
+    if (first?.kind !== 'summary' || slices[pageIndex - 1]!.length === 0) continue;
+    const previous = slices[pageIndex - 1]!;
+    const moved = previous.pop();
+    if (moved !== undefined) slices[pageIndex]!.unshift(moved);
+  }
+  // A section heading never remains alone at the bottom of a page.
+  for (let pageIndex = 0; pageIndex < slices.length - 1; pageIndex += 1) {
+    const current = slices[pageIndex]!;
+    const next = slices[pageIndex + 1]!;
+    const last = prepared[current[current.length - 1]];
+    const firstNext = prepared[next[0]];
+    if (last?.kind === 'group' && firstNext?.groupId === last.groupId && next.length > 0) {
+      current.pop();
+      next.unshift(preparedRows.findIndex(({ row }) => row === last));
+    }
+  }
+  for (let pageIndex = slices.length - 2; pageIndex >= 0; pageIndex -= 1) {
+    if (slices[pageIndex]!.length === 0) slices.splice(pageIndex, 1);
   }
 
   // Place the tail block on the last page, or on an extra page if even a single
@@ -129,7 +204,7 @@ export const paginateDocumentElements = (
   let tailPage = slices.length - 1;
   const lastTop = topOfPage(tailPage);
   const lastTableBottom =
-    lastTop + options.tableHeaderHeight + slices[tailPage].reduce((sum, index) => sum + rowHeight(index), 0);
+    lastTop + options.tableHeaderHeight + slices[tailPage].reduce((sum, index) => sum + preparedRowHeight(index), 0);
   let tailY = tailPage === 0 ? Math.max(tailTop, lastTableBottom + BLOCK_GAP) : lastTableBottom + BLOCK_GAP;
   if (tail.length > 0 && tailY + tailHeight > contentBottom) {
     tailPage = slices.length;
@@ -148,7 +223,15 @@ export const paginateDocumentElements = (
       pageElements.push({
         ...table,
         y: topOfPage(pageIndex),
-        tableData: { columns, rows: slice.map((index) => rows[index]) },
+        tableData: {
+          columns,
+          rows: [
+            ...(pageIndex > 0 && continuationLabel(slice[0])
+              ? [{ id: `__group_continuation_${pageIndex}`, kind: 'group-continuation' as const, cells: ['', `Fortsetzung: ${continuationLabel(slice[0]) ?? ''}`, '', '', ''] }]
+              : []),
+            ...slice.map((index) => prepared[index]),
+          ],
+        },
       });
     }
     if (pageIndex === tailPage) {

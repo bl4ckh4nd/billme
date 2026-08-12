@@ -1,7 +1,7 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../hooks/useSettings', () => ({ useSettingsQuery: () => ({ data: null }) }));
@@ -27,5 +27,22 @@ describe('PrintDocument readiness gate', () => {
     expect((globalThis as { __PDF_READY__?: boolean }).__PDF_READY__).toBe(false);
     await user.click(screen.getByRole('button', { name: 'layout ready' }));
     expect((globalThis as { __PDF_READY__?: boolean }).__PDF_READY__).toBe(true);
+  });
+
+  it('waits for fonts before marking the stable layout ready', async () => {
+    let resolveFonts!: () => void;
+    const fontsReady = new Promise<void>((resolve) => { resolveFonts = resolve; });
+    const previousFonts = document.fonts;
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { ready: fontsReady } });
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1; });
+    (globalThis as { __PDF_READY__?: boolean }).__PDF_READY__ = undefined;
+
+    const user = userEvent.setup();
+    render(<PrintDocument kind="invoice" id="invoice-1" />);
+    await user.click(screen.getByRole('button', { name: 'layout ready' }));
+    expect((globalThis as { __PDF_READY__?: boolean }).__PDF_READY__).toBe(false);
+    resolveFonts();
+    await waitFor(() => expect((globalThis as { __PDF_READY__?: boolean }).__PDF_READY__).toBe(true));
+    Object.defineProperty(document, 'fonts', { configurable: true, value: previousFonts });
   });
 });

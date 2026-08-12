@@ -1,5 +1,7 @@
 import React, { forwardRef } from 'react';
-import { ElementType, type InvoiceElement, type RenderText } from './types';
+import { ElementType, type InvoiceElement, type RenderText, type TableColumn, type TableRow } from './types';
+
+export type TableRowRenderer = (row: TableRow, columns: TableColumn[]) => React.ReactNode;
 
 export interface ElementRendererProps {
   element: InvoiceElement;
@@ -19,6 +21,12 @@ export interface ElementRendererProps {
   style?: React.CSSProperties;
   onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
   onDoubleClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
+  /** Inline table editor hook. Omitted for preview/print. */
+  renderTableRow?: TableRowRenderer;
+  /** Zero-flow footer controls rendered below the table in edit mode. */
+  tableFooter?: React.ReactNode;
+  /** Zero-flow controls anchored to the table header in edit mode. */
+  tableHeaderOverlay?: React.ReactNode;
 }
 
 /**
@@ -31,7 +39,7 @@ export interface ElementRendererProps {
  * in the stage operate on this node via the forwarded ref.
  */
 export const ElementRenderer = forwardRef<HTMLDivElement, ElementRendererProps>(function ElementRenderer(
-  { element, renderText, readOnly = false, selected = false, editing = false, onTextCommit, className, style, onPointerDown, onDoubleClick },
+  { element, renderText, readOnly = false, selected = false, editing = false, onTextCommit, className, style, onPointerDown, onDoubleClick, renderTableRow, tableFooter, tableHeaderOverlay },
   ref,
 ) {
   if (element.hidden) return null;
@@ -74,12 +82,13 @@ export const ElementRenderer = forwardRef<HTMLDivElement, ElementRendererProps>(
     <div
       ref={ref}
       data-element-id={element.id}
+      data-element-label={element.label}
       className={className}
       style={{ ...rootStyle, ...style }}
       onPointerDown={onPointerDown}
       onDoubleClick={onDoubleClick}
     >
-      {renderContent(element, renderText, editing, onTextCommit, readOnly)}
+      {renderContent(element, renderText, editing, onTextCommit, readOnly, renderTableRow, tableFooter, tableHeaderOverlay)}
     </div>
   );
 });
@@ -90,6 +99,9 @@ function renderContent(
   editing: boolean,
   onTextCommit: ((id: string, content: string) => void) | undefined,
   readOnly: boolean,
+  renderTableRow: TableRowRenderer | undefined,
+  tableFooter: React.ReactNode,
+  tableHeaderOverlay: React.ReactNode,
 ): React.ReactNode {
   switch (element.type) {
     case ElementType.TEXT:
@@ -192,17 +204,24 @@ function renderContent(
                   <th
                     key={col.id}
                     style={{ width: `${col.width}px`, textAlign: col.align || 'left' }}
-                    className="border-b-2 border-black/10 p-2 bg-gray-50 text-xs font-bold uppercase tracking-wide text-gray-500 truncate"
+                    className="relative border-b-2 border-black/10 p-2 bg-gray-50 text-xs font-bold uppercase tracking-wide text-gray-500 truncate"
                   >
-                    {col.label}
+                    <span>{col.label}</span>
+                    {tableHeaderOverlay && columns.find((candidate) => candidate.visible)?.id === col.id ? (
+                      <span className="absolute right-0 top-0 z-30 print:hidden">{tableHeaderOverlay}</span>
+                    ) : null}
                   </th>
                 );
               })}
             </tr>
           </thead>
           <tbody>
-            {element.tableData?.rows.map((row) => (
-              <tr key={row.id} className="border-b border-gray-100">
+            {element.tableData?.rows.map((row) => renderTableRow?.(row, columns) ?? (
+              <tr
+                key={row.id}
+                data-line-kind={row.kind}
+                className={`border-b border-gray-100 ${row.kind === 'group' || row.kind === 'group-continuation' ? 'bg-accent/10 font-bold' : ''} ${row.kind === 'summary' ? 'border-t border-black/10 font-bold' : ''} ${row.kind === 'text' ? 'italic text-gray-500' : ''} ${row.kind === 'optional' ? 'text-gray-500' : ''}`}
+              >
                 {columns.map((col, i) => {
                   if (!col.visible) return null;
                   return (
@@ -214,6 +233,7 @@ function renderContent(
               </tr>
             ))}
           </tbody>
+          {tableFooter ? <tfoot><tr style={{ height: 0 }}><td colSpan={columns.filter((column) => column.visible).length} style={{ height: 0, padding: 0, border: 0 }}><div className="relative h-0"><div className="absolute left-0 top-1 z-10">{tableFooter}</div></div></td></tr></tfoot> : null}
         </table>
       );
     }

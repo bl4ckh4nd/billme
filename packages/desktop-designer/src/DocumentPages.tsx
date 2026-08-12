@@ -2,7 +2,7 @@ import React from 'react';
 import { renderTextWithPlaceholders } from '@billme/desktop-utils/placeholders';
 import { paginateDocumentElements } from '@billme/desktop-utils/documentPagination';
 import { A4_HEIGHT_PX, A4_WIDTH_PX } from './constants';
-import { ElementRenderer } from './ElementRenderer';
+import { ElementRenderer, type TableRowRenderer } from './ElementRenderer';
 import type { InvoiceElement } from './types';
 
 export interface DocumentPagesProps {
@@ -16,6 +16,14 @@ export interface DocumentPagesProps {
   pageGap?: number;
   /** Fired once pages are laid out (used to gate printToPDF). */
   onReady?: () => void;
+  /** Optional inline row renderer used only by the edit canvas. */
+  renderTableRow?: TableRowRenderer;
+  /** Optional zero-flow controls immediately below the final table page. */
+  tableFooter?: React.ReactNode;
+  /** Optional zero-flow controls anchored to the first visible table header. */
+  tableHeaderOverlay?: React.ReactNode;
+  /** Optional controls over the page surface; edit-only overlays stay out of flow. */
+  pageOverlay?: (pageIndex: number) => React.ReactNode;
 }
 
 type Metrics = { tableHeaderHeight: number; rowHeights: number[] };
@@ -37,6 +45,10 @@ export const DocumentPages: React.FC<DocumentPagesProps> = ({
   pageClassName,
   pageGap = 0,
   onReady,
+  renderTableRow,
+  tableFooter,
+  tableHeaderOverlay,
+  pageOverlay,
 }) => {
   const [metrics, setMetrics] = React.useState<Metrics>({ tableHeaderHeight: 0, rowHeights: [] });
   const [measured, setMeasured] = React.useState(false);
@@ -105,8 +117,17 @@ export const DocumentPages: React.FC<DocumentPagesProps> = ({
           }}
         >
           {(pageElements as unknown as InvoiceElement[]).map((el) => (
-            <ElementRenderer key={el.id} element={el} renderText={renderTextWithPlaceholders} readOnly />
+            <ElementRenderer
+              key={el.id}
+              element={el}
+              renderText={renderTextWithPlaceholders}
+              readOnly={!renderTableRow || el.type !== 'TABLE'}
+              renderTableRow={renderTableRow}
+              tableFooter={index === pages.length - 1 && el.type === 'TABLE' ? tableFooter : undefined}
+              tableHeaderOverlay={index === 0 && el.type === 'TABLE' ? tableHeaderOverlay : undefined}
+            />
           ))}
+          {pageOverlay?.(index)}
         </div>
       ))}
     </>

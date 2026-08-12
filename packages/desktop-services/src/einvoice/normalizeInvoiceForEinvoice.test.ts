@@ -141,4 +141,19 @@ describe('normalizeInvoiceForEinvoice', () => {
     expect(normalized.buyerVatId).toBe('ATU12345678');
     expect(normalized.totals.taxTotal).toBe(0);
   });
+
+  it('keeps optional rows as zero-value notices and omits structural rows', () => {
+    const normalized = normalizeInvoiceForEinvoice({
+      ...makeInvoice(),
+      items: [
+        { kind: 'group', description: 'Bauabschnitt 1', quantity: 0, price: 0, total: 0 },
+        { kind: 'optional', description: 'Premium Support', optionNote: 'nur bei Beauftragung', quantity: 1, price: 190, total: 190 },
+        { kind: 'text', description: 'Hinweis', quantity: 0, price: 0, total: 0 },
+        { description: 'Leistung B', quantity: 1, price: 25, total: 25 },
+      ],
+    }, makeSettings(false));
+    expect(normalized.lines.map((line) => line.name)).toEqual(['Premium Support (Optional: nur bei Beauftragung)', 'Leistung B']);
+    expect(normalized.lines[0]?.netLineTotal).toBe(0);
+    expect(normalized.totals.lineNetTotal).toBe(25);
+  });
 });

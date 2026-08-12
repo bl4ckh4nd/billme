@@ -65,6 +65,10 @@ für doppelte Buchhaltung.
 
 ### Dokumente und Abrechnung — Lite und Pro
 
+- **Strukturierte Rechnungszeilen** — abrechenbare Positionen und Zeiten, optionale Nullzeilen,
+  Textnotizen, Abschnitte/Bauabschnitte sowie laufende oder Abschnitts-Zwischensummen; alte
+  Positionen bleiben automatisch abrechenbar.
+
 - **Visueller Dokumentdesigner** — Drag-and-drop-Zeichenfläche, Elementleiste, Inspektor, Ebenenpanel,
   Lineale, Einrasten, Rückgängig/Wiederholen und wiederverwendbare Vorlagen für Rechnungen und Angebote
 - **Einheitliche Dokumentübersicht** — Suche, Statusfilter, Portal-Synchronisierungsstatus und Umwandlung
@@ -348,6 +352,16 @@ dem Klonen sind sie daher nicht vorhanden.
 ---
 
 ## Entwicklung
+
+Für eine schnelle Prüfung von A4-Seitenumbruch und Rechnungszeilen ohne Electron:
+`pnpm dev:editor` starten und `http://127.0.0.1:4177` öffnen. Fixtures können über
+`?fixture=construction|page-break|all-line-types|long-text|mixed-vat` gewählt werden.
+Der Playground verwendet dabei den öffentlichen `DocumentCanvasEditor`: Kopf- und
+Empfängerfelder liegen direkt als Inline-Overlays auf A4, Zeilen bieten Artikel- und
+Kategorie-Kontext sowie Randaktionen, und Änderungen paginieren live neu. Die
+Steuerelemente sind aus dem Druckfluss genommen und die Diagnoseleiste zeigt
+Seitenzahl, Summen und Tabellen-/Fußüberlauf. Positionen lassen sich am Griff per
+`dnd-kit` sortieren; `Cmd/Ctrl+K` öffnet die Suche nach Artikeln und Kunden.
 
 ### Voraussetzungen
 

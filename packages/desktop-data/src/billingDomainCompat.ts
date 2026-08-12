@@ -1,8 +1,10 @@
 import type Database from "better-sqlite3";
 import { and, asc, desc, eq } from "drizzle-orm";
+import { z } from "zod";
 import { createDrizzle, schema } from "./drizzle";
 import {
   createSingleTenantScope,
+  billingLineItemSchema,
   type AuditActor,
   type AuditEntry,
   type AuditEntryDraft,
@@ -47,6 +49,7 @@ type InvoiceItemRow = {
   invoice_id: string;
   position: number;
   description: string;
+  line_meta_json: string | null;
   article_id: string | null;
   category: string | null;
   unit: string | null;
@@ -99,6 +102,7 @@ type OfferItemRow = {
   offer_id: string;
   position: number;
   description: string;
+  line_meta_json: string | null;
   article_id: string | null;
   category: string | null;
   unit: string | null;
@@ -133,6 +137,15 @@ export interface LegacyInvoiceItem {
   unit?: string;
   discountPercent?: number;
   taxRate?: number;
+  kind?: 'item' | 'time' | 'optional' | 'text' | 'group' | 'summary';
+  note?: string;
+  optionNote?: string;
+  date?: string;
+  durationMinutes?: number;
+  groupId?: string;
+  summaryScope?: 'running' | 'group';
+  summaryMetric?: 'amount' | 'quantity';
+  summaryUnit?: string;
 }
 
 export interface LegacyPayment {
@@ -207,6 +220,52 @@ const parseJson = <T>(value: string | null, fallback: T): T => {
   }
 };
 
+const StoredLineMetaSchema = z.object({
+  kind: z.enum(['item', 'time', 'optional', 'text', 'group', 'summary']).optional(),
+  note: z.string().optional(),
+  optionNote: z.string().optional(),
+  date: z.string().optional(),
+  durationMinutes: z.number().nonnegative().optional(),
+  groupId: z.string().optional(),
+  summaryScope: z.enum(['running', 'group']).optional(),
+  summaryMetric: z.enum(['amount', 'quantity']).optional(),
+  summaryUnit: z.string().optional(),
+});
+type StoredLineMeta = z.infer<typeof StoredLineMetaSchema>;
+const parseLineMeta = (value: string | null): StoredLineMeta => {
+  if (!value) return {};
+  return safeJsonParse(value, StoredLineMetaSchema, {}, 'Billing line metadata');
+};
+
+const normalizeLine = (value: LegacyInvoiceItem) => billingLineItemSchema.parse({
+  ...value,
+  ...(value.kind ? { kind: value.kind } : {}),
+});
+
+const extractLineMeta = (item: Invoice['items'][number]): StoredLineMeta => {
+  const common: StoredLineMeta = { kind: item.kind, note: item.note };
+  switch (item.kind) {
+    case 'optional': return { ...common, optionNote: item.optionNote };
+    case 'time': return { ...common, date: item.date, durationMinutes: item.durationMinutes };
+    case 'group': return { ...common, groupId: item.groupId };
+    case 'summary': return { ...common, summaryScope: item.summaryScope, summaryMetric: item.summaryMetric, summaryUnit: item.summaryUnit };
+    default: return common;
+  }
+};
+
+const toLegacyLine = (item: Invoice['items'][number]): LegacyInvoiceItem => ({
+  description: item.description,
+  quantity: item.quantity,
+  price: item.price,
+  total: item.total,
+  articleId: item.articleId,
+  category: item.category,
+  unit: item.unit,
+  discountPercent: item.discountPercent,
+  taxRate: item.taxRate,
+  ...extractLineMeta(item),
+});
+
 const normalizeBillingAddress = (
   value: unknown,
 ): BillingAddress | undefined => {
@@ -262,7 +321,7 @@ export const toDomainInvoice = (
     amount: invoice.amount,
     status: invoice.status as Invoice["status"],
     dunningLevel: invoice.dunningLevel,
-    items: (invoice.items ?? []).map((item) => ({
+    items: (invoice.items ?? []).map((item) => normalizeLine({
       description: item.description,
       quantity: item.quantity,
       price: item.price,
@@ -272,6 +331,15 @@ export const toDomainInvoice = (
       unit: item.unit,
       discountPercent: item.discountPercent,
       taxRate: item.taxRate,
+      kind: item.kind,
+      note: item.note,
+      optionNote: item.optionNote,
+      date: item.date,
+      durationMinutes: item.durationMinutes,
+      groupId: item.groupId,
+      summaryScope: item.summaryScope,
+      summaryMetric: item.summaryMetric,
+      summaryUnit: item.summaryUnit,
     })),
     payments: (invoice.payments ?? []).map((payment) => ({
       id: payment.id,
@@ -329,7 +397,7 @@ export const toDomainOffer = (
     amount: offer.amount,
     status: offer.status as Offer["status"],
     share,
-    items: (offer.items ?? []).map((item) => ({
+    items: (offer.items ?? []).map((item) => normalizeLine({
       description: item.description,
       quantity: item.quantity,
       price: item.price,
@@ -339,6 +407,15 @@ export const toDomainOffer = (
       unit: item.unit,
       discountPercent: item.discountPercent,
       taxRate: item.taxRate,
+      kind: item.kind,
+      note: item.note,
+      optionNote: item.optionNote,
+      date: item.date,
+      durationMinutes: item.durationMinutes,
+      groupId: item.groupId,
+      summaryScope: item.summaryScope,
+      summaryMetric: item.summaryMetric,
+      summaryUnit: item.summaryUnit,
     })),
     history: offer.history ?? [],
   };
@@ -365,17 +442,7 @@ export const toLegacyInvoice = (invoice: Invoice): LegacyInvoiceDocument => {
     amount: invoice.amount,
     status: invoice.status,
     dunningLevel: invoice.dunningLevel,
-    items: invoice.items.map((item) => ({
-      description: item.description,
-      quantity: item.quantity,
-      price: item.price,
-      total: item.total,
-      articleId: item.articleId,
-      category: item.category,
-      unit: item.unit,
-      discountPercent: item.discountPercent,
-      taxRate: item.taxRate,
-    })),
+    items: invoice.items.map(toLegacyLine),
     payments: invoice.payments.map((payment) => ({
       id: payment.id,
       date: payment.date,
@@ -413,17 +480,7 @@ export const toLegacyOffer = (offer: Offer): LegacyInvoiceDocument => {
     dueDate: offer.validUntil,
     amount: offer.amount,
     status: offer.status,
-    items: offer.items.map((item) => ({
-      description: item.description,
-      quantity: item.quantity,
-      price: item.price,
-      total: item.total,
-      articleId: item.articleId,
-      category: item.category,
-      unit: item.unit,
-      discountPercent: item.discountPercent,
-      taxRate: item.taxRate,
-    })),
+    items: offer.items.map(toLegacyLine),
     payments: [],
     history: offer.history ?? [],
   };
@@ -465,7 +522,7 @@ const rowToInvoice = (
     dunningLevel: row.dunning_level,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    items: itemRows.map((item) => ({
+    items: itemRows.map((item) => normalizeLine({
       description: item.description,
       quantity: item.quantity,
       price: item.price,
@@ -475,6 +532,7 @@ const rowToInvoice = (
       unit: item.unit ?? undefined,
       discountPercent: item.discount_percent ?? undefined,
       taxRate: item.tax_rate ?? undefined,
+      ...parseLineMeta(item.line_meta_json),
     })),
     payments: paymentRows.map((payment) => ({
       id: payment.id,
@@ -541,7 +599,7 @@ const rowToOffer = (
     share,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    items: itemRows.map((item) => ({
+    items: itemRows.map((item) => normalizeLine({
       description: item.description,
       quantity: item.quantity,
       price: item.price,
@@ -551,6 +609,7 @@ const rowToOffer = (
       unit: item.unit ?? undefined,
       discountPercent: item.discount_percent ?? undefined,
       taxRate: item.tax_rate ?? undefined,
+      ...parseLineMeta(item.line_meta_json),
     })),
     history: [],
   };
@@ -611,6 +670,7 @@ const invoiceItemSelect = {
   invoice_id: schema.invoiceItems.invoiceId,
   position: schema.invoiceItems.position,
   description: schema.invoiceItems.description,
+  line_meta_json: schema.invoiceItems.lineMetaJson,
   article_id: schema.invoiceItems.articleId,
   category: schema.invoiceItems.category,
   unit: schema.invoiceItems.unit,
@@ -660,6 +720,7 @@ const offerItemSelect = {
   offer_id: schema.offerItems.offerId,
   position: schema.offerItems.position,
   description: schema.offerItems.description,
+  line_meta_json: schema.offerItems.lineMetaJson,
   article_id: schema.offerItems.articleId,
   category: schema.offerItems.category,
   unit: schema.offerItems.unit,
@@ -699,6 +760,22 @@ const invoiceValues = (invoice: Invoice, now: string) => ({
   createdAt: now,
   updatedAt: now,
 });
+
+const serializeLineMeta = (item: LegacyInvoiceItem): string | null => {
+  const meta: StoredLineMeta = {
+    kind: item.kind,
+    note: item.note,
+    optionNote: item.optionNote,
+    date: item.date,
+    durationMinutes: item.durationMinutes,
+    groupId: item.groupId,
+    summaryScope: item.summaryScope,
+    summaryMetric: item.summaryMetric,
+    summaryUnit: item.summaryUnit,
+  };
+  const compact = Object.fromEntries(Object.entries(meta).filter(([, value]) => value !== undefined));
+  return Object.keys(compact).length ? JSON.stringify(compact) : null;
+};
 
 const offerValues = (offer: Offer, now: string) => ({
   id: offer.id,
@@ -827,6 +904,7 @@ export const createSqliteInvoiceRepository = (
               invoiceId: invoice.id,
               position,
               description: item.description,
+              lineMetaJson: serializeLineMeta(item),
               articleId: item.articleId ?? null,
               category: item.category ?? null,
               unit: item.unit ?? null,
@@ -943,6 +1021,7 @@ export const createSqliteOfferRepository = (
               offerId: offer.id,
               position,
               description: item.description,
+              lineMetaJson: serializeLineMeta(item),
               articleId: item.articleId ?? null,
               category: item.category ?? null,
               unit: item.unit ?? null,

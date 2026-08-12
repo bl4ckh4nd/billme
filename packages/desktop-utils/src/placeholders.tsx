@@ -1,6 +1,8 @@
 import { calculateInvoiceTaxSnapshot } from '@billme/server-core/services';
+import type { BillingDocumentLine } from '@billme/server-core/domain';
 
 type InvoiceItemLike = {
+  kind?: BillingDocumentLine['kind'];
   description?: string;
   quantity?: number;
   price?: number;
@@ -8,6 +10,8 @@ type InvoiceItemLike = {
   unit?: string;
   discountPercent?: number;
   taxRate?: number;
+  optionNote?: string;
+  summaryMetric?: 'amount' | 'quantity';
 };
 
 export type InvoiceLike = {
@@ -155,6 +159,7 @@ const toFiniteNumber = (value: unknown): number | null => {
 };
 
 export const calculateInvoiceItemTotal = (item: InvoiceItemLike): number => {
+  if (item.kind && item.kind !== 'item' && item.kind !== 'time') return 0;
   const quantity = toFiniteNumber(item.quantity);
   const price = toFiniteNumber(item.price);
   if (quantity !== null && price !== null) {
@@ -188,6 +193,7 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
         taxMode: settings.legal.smallBusinessRule ? 'small_business_19_ustg' : invoice.taxMode,
         taxMeta: invoice.taxMeta,
         items: invoice.items.map((item) => ({
+          kind: item.kind ?? 'item',
           description: item.description ?? '',
           quantity: item.quantity ?? 1,
           price: item.price ?? item.total ?? 0,

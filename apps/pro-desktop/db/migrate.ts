@@ -108,11 +108,13 @@ export const runMigrations = (db: Database.Database): void => {
   addColumnIfMissing(db, 'invoice_items', 'unit', 'TEXT');
   addColumnIfMissing(db, 'invoice_items', 'discount_percent', 'REAL');
   addColumnIfMissing(db, 'invoice_items', 'tax_rate', 'REAL');
+  addColumnIfMissing(db, 'invoice_items', 'line_meta_json', 'TEXT');
   addColumnIfMissing(db, 'offer_items', 'article_id', 'TEXT');
   addColumnIfMissing(db, 'offer_items', 'category', 'TEXT');
   addColumnIfMissing(db, 'offer_items', 'unit', 'TEXT');
   addColumnIfMissing(db, 'offer_items', 'discount_percent', 'REAL');
   addColumnIfMissing(db, 'offer_items', 'tax_rate', 'REAL');
+  addColumnIfMissing(db, 'offer_items', 'line_meta_json', 'TEXT');
 
   // Finance: transaction import support (non-audit-locked)
   tryAddColumn(db, 'accounts', 'default_skr_account_number', "TEXT NOT NULL DEFAULT '1200'");

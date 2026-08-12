@@ -98,4 +98,46 @@ describe('paginateDocumentElements', () => {
       rowHeights: [],
     })).toEqual([elements]);
   });
+
+  it('adds a continuation heading when a group crosses a page', () => {
+    const elements = template(0);
+    const table = elements.find((element) => element.label === 'items_table')!;
+    table.tableData = {
+      columns: [{ id: 'pos' }],
+      rows: Array.from({ length: 30 }, (_, index) => ({
+        id: `g${index}`,
+        kind: index === 0 ? 'group' : 'item',
+        groupId: 'section-1',
+        groupLabel: 'Bauabschnitt 1',
+        cells: [String(index + 1), index === 0 ? 'Bauabschnitt 1' : `Leistung ${index + 1}`],
+      })),
+    };
+    const pages = paginateDocumentElements(elements, { pageWidth: PAGE_WIDTH, pageHeight: PAGE_HEIGHT, tableHeaderHeight: HEADER_HEIGHT, rowHeights: Array.from({ length: 30 }, () => ROW_HEIGHT) });
+    expect(pages.some((page) => ((tableOf(page)?.tableData?.rows ?? []) as Array<{ kind?: string }>).some((row) => row.kind === 'group-continuation'))).toBe(true);
+  });
+
+  it('keeps a group summary with the preceding row and splits an oversized row', () => {
+    const elements = template(0);
+    const table = elements.find((element) => element.label === 'items_table')!;
+    table.tableData = {
+      columns: [{ id: 'pos' }],
+      rows: [
+        { id: 'group', kind: 'group', groupId: 'section-1', cells: ['', 'Bauabschnitt 1'] },
+        { id: 'long', kind: 'item', groupId: 'section-1', cells: ['1', 'Sehr langer Beschreibungstext'] },
+        { id: 'summary', kind: 'summary', groupId: 'section-1', cells: ['', 'Zwischensumme'] },
+      ],
+    };
+    const pages = paginateDocumentElements(elements, { pageWidth: PAGE_WIDTH, pageHeight: PAGE_HEIGHT, tableHeaderHeight: HEADER_HEIGHT, rowHeights: [ROW_HEIGHT, 900, ROW_HEIGHT] });
+    const rows = pages.flatMap((page) => (tableOf(page)?.tableData?.rows ?? []) as Array<{ id: string }>);
+    expect(rows.some((row) => row.id.includes('__continuation_'))).toBe(true);
+    const groupPage = pages.findIndex((page) => rowsOf(page).some((row) => row.id === 'group'));
+    expect(rowsOf(pages[groupPage]!).some((row) => row.id === 'long__continuation_1')).toBe(true);
+    const summaryPage = pages.findIndex((page) => rowsOf(page).some((row) => row.id === 'summary'));
+    expect(summaryPage).toBeGreaterThanOrEqual(0);
+    const summaryRows = rowsOf(pages[summaryPage]!);
+    expect(summaryRows.findIndex((row) => row.id === 'summary')).toBeGreaterThan(0);
+    expect(summaryRows[summaryRows.findIndex((row) => row.id === 'summary') - 1]?.id).toContain('long');
+  });
 });
+
+const rowsOf = (page: PaginationElement[]) => (tableOf(page)?.tableData?.rows ?? []) as Array<{ id: string }>;

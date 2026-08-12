@@ -1,5 +1,16 @@
 import { z } from 'zod';
 import { deploymentModeSchema, serverProductSchema, serverRoleSchema, type ServerProduct } from '../shared/runtime-profile.js';
+import { billingLineItemSchema } from './billing-lines.js';
+
+export {
+  billingLineItemSchema,
+  billingLineKinds,
+  getBillingLineAmount,
+  isBillableLine,
+  isOptionalLine,
+  resolveBillingDocumentLines,
+} from './billing-lines.js';
+export type { BillingDocumentLine, BillingLineItem, BillingLineInput, BillingLineKind, BillingDocumentResolution, BillingLineSummary, BillingDocumentSubtotal } from './billing-lines.js';
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
@@ -251,19 +262,6 @@ export const clientSchema = z.object({
   updatedAt: isoDateTimeSchema.optional(),
 });
 export type Client = z.infer<typeof clientSchema>;
-
-export const billingLineItemSchema = z.object({
-  description: nonEmptyStringSchema,
-  quantity: z.number(),
-  price: z.number(),
-  total: z.number(),
-  articleId: z.string().optional(),
-  category: z.string().optional(),
-  unit: z.string().optional(),
-  discountPercent: z.number().min(0).max(100).optional(),
-  taxRate: z.number().min(0).optional(),
-});
-export type BillingLineItem = z.infer<typeof billingLineItemSchema>;
 
 export const paymentSchema = z.object({
   id: entityIdSchema,

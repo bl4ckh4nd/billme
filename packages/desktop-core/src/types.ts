@@ -117,6 +117,8 @@ export interface AppSettings {
 export type InvoiceStatus = 'paid' | 'open' | 'overdue' | 'draft' | 'cancelled';
 
 export interface InvoiceItem {
+  /** Missing on legacy rows, which are treated as billable `item` rows. */
+  kind?: 'item' | 'time' | 'optional' | 'text' | 'group' | 'summary';
   description: string;
   quantity: number;
   price: number;
@@ -126,6 +128,14 @@ export interface InvoiceItem {
   unit?: string;
   discountPercent?: number;
   taxRate?: number;
+  note?: string;
+  optionNote?: string;
+  date?: string;
+  durationMinutes?: number;
+  groupId?: string;
+  summaryScope?: 'running' | 'group';
+  summaryMetric?: 'amount' | 'quantity';
+  summaryUnit?: string;
 }
 
 export interface Payment {

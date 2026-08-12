@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { asc, desc, eq } from 'drizzle-orm';
 import {
   createSingleTenantScope,
+  billingLineItemSchema,
   type BillingAddress,
   type Client as DomainClient,
   type ClientProject,
@@ -32,12 +33,24 @@ const parseOptionalJson = <T>(value: string | null | undefined): T | undefined =
 };
 
 export interface LegacyRecurringItem {
+  kind?: 'item' | 'time' | 'optional' | 'text' | 'group' | 'summary';
   description: string;
   quantity?: number | string;
   price?: number | string;
   total?: number | string;
   articleId?: string;
   category?: string;
+  unit?: string;
+  discountPercent?: number;
+  taxRate?: number;
+  note?: string;
+  optionNote?: string;
+  date?: string;
+  durationMinutes?: number;
+  groupId?: string;
+  summaryScope?: 'running' | 'group';
+  summaryMetric?: 'amount' | 'quantity';
+  summaryUnit?: string;
 }
 
 export interface LegacyRecurringProfile {
@@ -188,14 +201,15 @@ const normalizeRecurringItems = (items: LegacyRecurringItem[] = []): DomainInvoi
     const quantity = Number(item.quantity) || 0;
     const price = Number(item.price) || 0;
     const total = Number(item.total);
-    return {
+    return billingLineItemSchema.parse({
+      ...item,
       description: item.description,
       quantity,
       price,
       total: Number.isNaN(total) ? quantity * price : total,
       articleId: item.articleId,
       category: item.category,
-    };
+    });
   });
 };
 
@@ -249,7 +263,9 @@ const rowToDomainRecurringProfile = (
   amount: row.amount,
   taxMode: row.tax_mode ?? 'standard_vat',
   taxMeta: parseOptionalJson(row.tax_meta_json),
-  items: safeJsonParse(row.items_json, InvoiceItemsSchema, [], `Recurring profile ${row.id} items`),
+  items: normalizeRecurringItems(
+    safeJsonParse(row.items_json, InvoiceItemsSchema, [], `Recurring profile ${row.id} items`),
+  ),
 });
 
 const toLegacyRecurringProfile = (profile: DomainRecurringProfile): LegacyRecurringProfile => ({

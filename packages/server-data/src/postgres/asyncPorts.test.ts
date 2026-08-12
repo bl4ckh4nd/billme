@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createSingleTenantScope,
+  billingLineItemSchema,
   type Client,
   type ClientProject,
   type Invoice,
@@ -103,12 +104,12 @@ const createProfile = (): RecurringProfile => ({
   amount: 119,
   taxMode: 'standard_vat',
   items: [
-    {
+    billingLineItemSchema.parse({
       description: 'Hosting',
       quantity: 1,
       price: 100,
       total: 100,
-    },
+    }),
   ],
 });
 

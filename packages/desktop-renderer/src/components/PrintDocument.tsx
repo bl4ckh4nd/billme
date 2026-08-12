@@ -33,9 +33,12 @@ export const PrintDocument: React.FC<{ kind: 'invoice' | 'offer'; id: string }> 
 
   // Ensure layout has painted before printToPDF.
   const handleReady = React.useCallback(() => {
-    requestAnimationFrame(() => {
+    const fontsReady = typeof document !== 'undefined' && document.fonts ? document.fonts.ready : Promise.resolve();
+    Promise.resolve(fontsReady).catch(() => undefined).then(() => {
       requestAnimationFrame(() => {
-        (globalThis as any).__PDF_READY__ = true;
+        requestAnimationFrame(() => {
+          (globalThis as any).__PDF_READY__ = true;
+        });
       });
     });
   }, []);

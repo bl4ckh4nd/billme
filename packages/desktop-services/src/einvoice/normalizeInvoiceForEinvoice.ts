@@ -6,6 +6,7 @@ import {
   resolveInvoiceTaxMode,
   calculateInvoiceTaxSnapshot,
 } from '@billme/server-core/services';
+import { getBillingLineAmount, isBillableLine, isOptionalLine } from '@billme/server-core/domain';
 
 type NormalizedAddress = {
   name: string;
@@ -36,6 +37,7 @@ export type NormalizedEinvoice = {
     taxRate: number;
     taxCategoryCode: 'S' | 'E' | 'AE' | 'O' | 'K' | 'G';
     taxExemptionReason?: string;
+    lineKind: 'item' | 'time' | 'optional';
   }>;
   totals: {
     lineNetTotal: number;
@@ -160,14 +162,15 @@ export const normalizeInvoiceForEinvoice = (
   assertRequired('Käufer PLZ', buyer.postalCode);
   assertRequired('Käufer Ort', buyer.city);
 
-  const lines = (invoice.items ?? []).map((item, idx) => {
+  const lines = (invoice.items ?? []).filter((item) => isBillableLine(item) || isOptionalLine(item)).map((item, idx) => {
+    const optional = isOptionalLine(item);
     const quantity = toAmount(item.quantity) || 1;
-    const netLineTotal = round2(toAmount(item.total));
+    const netLineTotal = optional ? 0 : round2(getBillingLineAmount(item));
     const netUnitPrice = round2(quantity === 0 ? 0 : netLineTotal / quantity);
     const taxRate = isZeroVatMode ? 0 : item.taxRate ?? (invoice.taxMeta?.defaultVatRate ?? defaultTaxRate);
     return {
       lineId: String(idx + 1),
-      name: (item.description || `Position ${idx + 1}`).trim(),
+      name: `${(item.description || `Position ${idx + 1}`).trim()}${optional ? ` (Optional${item.optionNote ? `: ${item.optionNote.trim()}` : ''})` : ''}`,
       quantity,
       unitCode: 'C62', // piece
       netUnitPrice,
@@ -175,6 +178,7 @@ export const normalizeInvoiceForEinvoice = (
       taxRate,
       taxCategoryCode: definition.einvoiceCategoryCode,
       taxExemptionReason,
+      lineKind: (optional ? 'optional' : item.kind === 'time' ? 'time' : 'item') as 'item' | 'time' | 'optional',
     };
   });
 

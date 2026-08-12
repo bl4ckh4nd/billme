@@ -113,3 +113,6 @@ export const getEurAnnexCatalogsForYear = (year: number): EurAnnexCatalog[] => {
   if (year !== 2025) throw new Error(`EUR_ANNEX_CATALOG_UNAVAILABLE:${year}`);
   return (['AVEÜR', 'SZ'] as const).map((annex) => getEurAnnexCatalog(year, annex));
 };
+
+export const getAnnexCatalogForYear = getEurAnnexCatalog;
+export const listEurAnnexCatalogs = getEurAnnexCatalogsForYear;

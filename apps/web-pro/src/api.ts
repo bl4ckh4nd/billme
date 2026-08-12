@@ -79,17 +79,23 @@ export type ProOpenItemPaymentInput = {
 
 const PRO_PRODUCT_QUERY = { product: 'pro' as const };
 const susaReportSchema = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
   asOfDate: z.string(),
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
   rows: z.array(ledgerBalanceRowSchema),
   totals: z.object({ debit: z.number(), credit: z.number(), balance: z.number() }),
   unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
+  blocking: z.boolean().optional(),
 });
 const guvReportSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
-  rows: z.array(z.object({ positionKey: z.string(), positionLabel: z.string(), amount: z.number() })),
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
+  rows: z.array(z.object({ positionKey: z.string(), positionLabel: z.string(), amount: z.number(), accountRefs: z.array(z.string()).optional() })),
   netResult: z.number(),
   unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
+  blocking: z.boolean().optional(),
 });
 const assetDepreciationResultSchema = z.object({
   asset: assetSchema,
@@ -104,10 +110,12 @@ const assetDisposalResultSchema = z.object({
 });
 const bilanzReportSchema = z.object({
   asOfDate: z.string(),
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
   assets: z.array(z.object({ accountNumber: z.string(), amount: z.number() })),
   liabilities: z.array(z.object({ accountNumber: z.string(), amount: z.number() })),
   totals: z.object({ assets: z.number(), liabilities: z.number(), delta: z.number() }),
   unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
+  blocking: z.boolean().optional(),
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
@@ -424,14 +432,33 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     getVatSummary(query?: unknown) {
       return requestJson({ parser: (input) => input, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/vat/summary');
     },
-    getSusaReport(query?: { from?: string; to?: string; asOfDate?: string }) {
+    getSusaReport(query?: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }) {
       return requestJson({ parser: susaReportSchema, query }, '/api/v1/pro/accounting/reports/susa');
     },
     getGuvReport(query?: unknown) {
       return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/guv');
     },
-    getBilanzReport(asOfDate?: string) {
-      return requestJson({ parser: bilanzReportSchema, query: { asOfDate } }, '/api/v1/pro/accounting/reports/bilanz');
+    getBwa01Report(query?: unknown) {
+      return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/bwa01');
+    },
+    getBilanzReport(asOfDate?: string | { asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }) {
+      const query = typeof asOfDate === 'string' ? { asOfDate } : asOfDate;
+      return requestJson({ parser: bilanzReportSchema, query }, '/api/v1/pro/accounting/reports/bilanz');
+    },
+    listReportSnapshots(reportType?: 'susa' | 'guv' | 'bilanz' | 'bwa01') {
+      return requestJson({ parser: (input) => input, query: reportType ? { reportType } : undefined }, '/api/v1/pro/accounting/reports/snapshots');
+    },
+    getReportSnapshot(id: string) {
+      return requestJson({ parser: (input) => input }, `/api/v1/pro/accounting/reports/snapshots/${encodeURIComponent(id)}`);
+    },
+    createReportSnapshot(input: { reportType: 'susa' | 'guv' | 'bilanz' | 'bwa01'; from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string; reason: string }) {
+      return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/snapshots');
+    },
+    getAccountMappingHealth(chart?: 'SKR03' | 'SKR04') {
+      return requestJson({ parser: (input) => input, query: chart ? { chart } : undefined }, '/api/v1/pro/accounting/mappings/health');
+    },
+    saveAccountMappingOverride(input: { chart: 'SKR03' | 'SKR04'; accountNumber: string; statementType: 'guv' | 'bilanz'; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; reason: string }) {
+      return requestJson({ method: 'PUT', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/mappings/overrides');
     },
     getAccountingPolicy() {
       return requestJson({ parser: accountingPolicySchema }, '/api/v1/pro/accounting/policy');

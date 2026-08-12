@@ -34,17 +34,45 @@ import { z } from 'zod';
 import { ApiError, typedRoute } from './http.js';
 import { requirePool, requireSession } from './app.js';
 
-const serviceFor = (app: FastifyInstance) => {
+const repositoryFor = (app: FastifyInstance): ReturnType<typeof createPostgresProAccountingRepository> => {
   const pool = requirePool(app);
-  const repository = createPostgresProAccountingRepository(pool);
-  return { ...createProAccountingService(repository), ...createProAccountingAssetService(repository) };
+  return createPostgresProAccountingRepository(pool);
+};
+
+const serviceFor = (app: FastifyInstance) => {
+  const repository = repositoryFor(app);
+  return { ...createProAccountingService(repository), ...createProAccountingAssetService(repository), repository };
 };
 
 const reasonSchema = z.string().trim().min(1, 'reason is required');
 const idParams = z.object({ id: z.string().min(1) });
 const transactionParams = z.object({ transactionId: z.string().min(1) });
 const draftParams = z.object({ draftId: z.string().min(1) });
-const reportRange = z.object({ from: z.string().optional(), to: z.string().optional() });
+const reportRange = z.object({ from: z.string().optional(), to: z.string().optional(), chart: z.enum(['SKR03', 'SKR04']).optional(), profile: z.string().trim().min(1).optional() });
+export const reportSnapshotQuerySchema = z.object({ reportType: z.enum(['susa', 'guv', 'bilanz', 'bwa01']).optional() });
+export const reportSnapshotBodySchema = z.object({
+  reportType: z.enum(['susa', 'guv', 'bilanz', 'bwa01']),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  asOfDate: z.string().optional(),
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
+  profile: z.string().trim().min(1).optional(),
+  reason: reasonSchema,
+});
+export const mappingHealthQuerySchema = z.object({ chart: z.enum(['SKR03', 'SKR04']).optional() });
+export const mappingOverrideBodySchema = z.object({
+  reason: reasonSchema,
+  chart: z.enum(['SKR03', 'SKR04']),
+  accountNumber: z.string().trim().min(1),
+  statementType: z.enum(['guv', 'bilanz']),
+  positionKey: z.string().trim().min(1),
+  positionLabel: z.string().trim().min(1),
+  balanceSide: z.enum(['asset', 'liability']).optional(),
+});
+const reportSnapshotQuery = reportSnapshotQuerySchema;
+const reportSnapshotBody = reportSnapshotBodySchema;
+const mappingHealthQuery = mappingHealthQuerySchema;
+const mappingOverrideBody = mappingOverrideBodySchema;
 export const susaReportQuerySchema = reportRange.extend({ asOfDate: z.string().optional() });
 export const datevExportQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -57,7 +85,7 @@ export const datevExportQuerySchema = z.object({
   encoding: z.enum(['cp1252', 'utf8-bom']).default('cp1252'),
 });
 const datevExportQuery = datevExportQuerySchema;
-const asOfDate = z.object({ asOfDate: z.string().optional() });
+const asOfDate = z.object({ asOfDate: z.string().optional(), chart: z.enum(['SKR03', 'SKR04']).optional(), profile: z.string().trim().min(1).optional() });
 export const csvEscape = (value: unknown): string => {
   const text = String(value ?? '');
   return /[;",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -367,11 +395,64 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
 
   typedRoute(app, {
     method: 'GET',
+    url: `${prefix}/reports/bwa01`,
+    query: reportRange,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      // BWA 01 uses the same server-side, explicitly mapped turnover rows as GuV.
+      return serviceFor(app).getGuvReport(session.scope, query);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
     url: `${prefix}/reports/bilanz`,
     query: asOfDate,
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
       return serviceFor(app).getBilanzReport(session.scope, query);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/reports/snapshots`,
+    query: reportSnapshotQuery,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return repositoryFor(app).listReportSnapshots(session.scope, query.reportType);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/reports/snapshots/:id`,
+    params: idParams,
+    async handler({ request, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return repositoryFor(app).getReportSnapshot(session.scope, params.id);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/reports/snapshots`,
+    body: reportSnapshotBody,
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      const args = { from: body.from, to: body.to, asOfDate: body.asOfDate, chart: body.chart, profile: body.profile };
+      const service = serviceFor(app);
+      const payload = body.reportType === 'susa'
+        ? await service.getSusaReport(session.scope, { ...args, fromDate: body.from, asOfDate: body.to ?? body.asOfDate })
+        : body.reportType === 'bilanz'
+          ? await service.getBilanzReport(session.scope, { asOfDate: body.asOfDate })
+          : await service.getGuvReport(session.scope, { from: body.from, to: body.to });
+      return service.repository.saveReportSnapshot(session.scope, {
+        reportType: body.reportType,
+        args,
+        payload,
+        mutation: mutationFor(session, body.reason),
+      });
     },
   });
 
@@ -554,6 +635,16 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
   });
 
   typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/mappings/health`,
+    query: mappingHealthQuery,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return repositoryFor(app).getAccountMappingHealth(session.scope, query.chart);
+    },
+  });
+
+  typedRoute(app, {
     method: 'POST',
     url: `${prefix}/mappings`,
     body: mappingBody,
@@ -569,6 +660,24 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       };
       const mapping = await serviceFor(app).upsertAccountingAccountMapping(session.scope, input);
       return mapping;
+    },
+  });
+
+  typedRoute(app, {
+    method: 'PUT',
+    url: `${prefix}/mappings/overrides`,
+    body: mappingOverrideBody,
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return repositoryFor(app).upsertAccountMappingOverride(session.scope, {
+        chart: body.chart,
+        accountNumber: body.accountNumber,
+        statementType: body.statementType,
+        positionKey: body.positionKey,
+        positionLabel: body.positionLabel,
+        balanceSide: body.balanceSide,
+        mutation: mutationFor(session, body.reason),
+      });
     },
   });
 

@@ -900,7 +900,7 @@ export default function App() {
     const readOnly = (operation: string): never => {
       throw new Error(`${operation} is unavailable in the legacy snapshot fallback. Reload canonical accounting data.`);
     };
-    const reportFilter = (filters: ReportFilterState) => reportDateRange(filters);
+    const reportFilter = (filters: ReportFilterState) => ({ ...reportDateRange(filters), chart: filters.chart });
     return {
       hydrate(seed: ProAccountingSeed) {
         transactions = structuredClone(seed.transactions ?? []);
@@ -1074,8 +1074,10 @@ export default function App() {
         });
       },
       async getSusaReport(filters: ReportFilterState): Promise<SusaReport> {
-        const report = await client.getSusaReport(reportDateRange(filters));
+        const report = await client.getSusaReport(reportFilter(filters));
         const names = new Map(data.ledgerAccounts.map((account) => [account.accountNumber, account.name]));
+        const openingBalance = report.rows.reduce((sum, row) => sum + row.openingBalance, 0);
+        const warnings = report.rows.filter((row) => Boolean((row as { hasWarnings?: boolean }).hasWarnings)).length;
         return {
           rows: report.rows.map((row) => ({
             ...row,
@@ -1083,35 +1085,48 @@ export default function App() {
             normalBalance: row.closingBalance >= 0 ? 'debit' : 'credit',
           })),
           totals: {
-            openingDebit: 0,
-            openingCredit: 0,
+            openingDebit: Math.max(0, openingBalance),
+            openingCredit: Math.max(0, -openingBalance),
             turnoverDebit: report.totals.debit,
             turnoverCredit: report.totals.credit,
             closingDebit: Math.max(0, report.totals.balance),
             closingCredit: Math.max(0, -report.totals.balance),
           },
-          quality: { unmappedAccounts: report.unmappedAccounts?.length ?? 0, warnings: 0, generatedAt: new Date().toISOString(), source: 'live' },
+          quality: { unmappedAccounts: report.unmappedAccounts?.length ?? 0, warnings, generatedAt: new Date().toISOString(), source: 'live' },
         };
       },
       async getGuvReport(filters: ReportFilterState): Promise<GuvReport> {
         const report = await client.getGuvReport(reportFilter(filters));
         return {
-          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount })),
+          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount, accountRefs: row.accountRefs })),
           totals: {
             revenue: report.rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + row.amount, 0),
             expenses: report.rows.filter((row) => row.positionKey === 'expense').reduce((sum, row) => sum + Math.abs(row.amount), 0),
             result: report.netResult,
           },
-          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: 0, generatedAt: new Date().toISOString(), source: 'live' },
+          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
+      async getBwaReport(filters: ReportFilterState): Promise<GuvReport> {
+        const report = await client.getBwa01Report(reportFilter(filters));
+        return {
+          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount, accountRefs: row.accountRefs })),
+          totals: {
+            revenue: report.rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + row.amount, 0),
+            expenses: report.rows.filter((row) => row.positionKey === 'expense').reduce((sum, row) => sum + Math.abs(row.amount), 0),
+            result: report.netResult,
+          },
+          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
         };
       },
       async getBalanceSheetPreview(filters: ReportFilterState): Promise<BalanceSheetPreview> {
-        const report = await client.getBilanzReport(filters.asOfDate);
+        const report = await client.getBilanzReport({ asOfDate: filters.asOfDate, chart: filters.chart });
+        const unmappedNotes = (report.unmappedAccounts ?? []).map((row) => `Konto ${row.accountNumber} ist nicht zugeordnet (${row.amount.toFixed(2)} €).`);
         return {
           aktiva: report.assets.map((row) => ({ id: row.accountNumber, code: row.accountNumber, label: row.accountNumber, amount: row.amount, level: 0, side: 'aktiva' })),
           passiva: report.liabilities.map((row) => ({ id: row.accountNumber, code: row.accountNumber, label: row.accountNumber, amount: row.amount, level: 0, side: 'passiva' })),
           totals: { aktiva: report.totals.assets, passiva: report.totals.liabilities, difference: report.totals.delta },
-          quality: { status: Math.abs(report.totals.delta) < 0.01 ? 'ok' : 'warning', notes: [], generatedAt: new Date().toISOString(), source: 'live' },
+          quality: { status: Math.abs(report.totals.delta) < 0.01 && unmappedNotes.length === 0 ? 'ok' : 'warning', notes: unmappedNotes, generatedAt: new Date().toISOString(), source: 'live' },
         };
       },
       async getReportDrilldownEntries(selection: ReportDrilldownSelection): Promise<ReportDrilldownEntry[]> {

@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { csvEscape, datevExportQuerySchema, susaReportQuerySchema } from './proAccountingRoutes.js';
+import {
+  csvEscape,
+  datevExportQuerySchema,
+  mappingOverrideBodySchema,
+  reportSnapshotBodySchema,
+  reportSnapshotQuerySchema,
+  susaReportQuerySchema,
+} from './proAccountingRoutes.js';
 
 test('DATEV CSV escaping protects semicolons, quotes, and line breaks', () => {
   assert.equal(csvEscape('plain'), 'plain');
@@ -38,4 +45,20 @@ test('SuSa route accepts inclusive range bounds alongside legacy asOfDate', () =
     to: '2026-12-31',
   });
   assert.equal(susaReportQuerySchema.parse({ asOfDate: '2026-12-31' }).asOfDate, '2026-12-31');
+});
+
+test('report snapshots require a typed report and mutation reason', () => {
+  assert.throws(() => reportSnapshotBodySchema.parse({ reportType: 'bwa01' }));
+  assert.deepEqual(reportSnapshotBodySchema.parse({ reportType: 'bwa01', from: '2026-12-01', to: '2026-12-31', reason: 'Monatsabschluss' }), {
+    reportType: 'bwa01',
+    from: '2026-12-01',
+    to: '2026-12-31',
+    reason: 'Monatsabschluss',
+  });
+  assert.equal(reportSnapshotQuerySchema.parse({ reportType: 'guv' }).reportType, 'guv');
+});
+
+test('mapping overrides require an explicit reason and never accept arbitrary statement types', () => {
+  assert.throws(() => mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz' }));
+  assert.equal(mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }).balanceSide, undefined);
 });

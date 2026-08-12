@@ -54,6 +54,31 @@ test('SuSa report maps inclusive from/to bounds into ledger opening and turnover
   assert.equal(report.asOfDate, '2026-12-31');
 });
 
+test('GuV report preserves account references and surfaces unmapped accounts', async () => {
+  const calls: Array<{ text: string; values: unknown[] }> = [];
+  const db = {
+    query: async (text: string, values?: unknown[]) => {
+      calls.push({ text, values: values ?? [] });
+      if (calls.length === 1) return { rows: [{ active_chart: 'SKR04', vat_method: 'soll', updated_at: '2026-12-01' }] };
+      return {
+        rows: [
+          { position_key: 'revenue', position_label: 'Umsatz', amount: '100', account_refs: ['8400', '8401'] },
+          { position_key: 'unmapped:9999', position_label: 'Nicht zugeordnet (9999)', amount: '-20', account_refs: ['9999'] },
+        ],
+      };
+    },
+  } as unknown as PostgresQueryable;
+  const report = await createPostgresProAccountingRepository(db).getGuvReport(createSingleTenantScope('guv-report-test', 'pro'), {
+    from: '2026-12-01',
+    to: '2026-12-31',
+  });
+
+  assert.deepEqual(report.rows[0]?.accountRefs, ['8400', '8401']);
+  assert.deepEqual(report.unmappedAccounts, [{ accountNumber: '9999', amount: -20 }]);
+  assert.equal(report.blocking, true);
+  assert.match(calls[1]?.text ?? '', /ARRAY_AGG\(DISTINCT jl\.account_number/);
+});
+
 test('OPOS import is tenant-safe and idempotent without global conflict drops', async () => {
   const rows = new Map<string, Record<string, unknown>>();
   const client = {

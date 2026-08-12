@@ -99,6 +99,13 @@
       "when": 1786538400001,
       "tag": "0013_server_data_asset_ownership_hardening",
       "breakpoints": false
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786538400002,
+      "tag": "0014_server_data_datev_tax_evidence",
+      "breakpoints": false
     }
   ]
 }

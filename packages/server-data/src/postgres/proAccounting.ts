@@ -112,6 +112,7 @@ export interface ServerBookingDraftLineRecord {
   counterpartyVatId?: string;
   evidenceType?: string;
   evidenceReference?: string;
+  datevSachverhaltLl?: string;
   costCenter?: string;
   memo?: string;
 }
@@ -178,6 +179,7 @@ export interface ServerJournalLineRecord {
   counterpartyVatId?: string;
   evidenceType?: string;
   evidenceReference?: string;
+  datevSachverhaltLl?: string;
   costCenter?: string;
   memo?: string;
 }
@@ -510,8 +512,8 @@ export const saveServerBookingDraft = async (db: PostgresQueryable, record: Serv
   return record;
 };
 export const saveServerBookingDraftLine = async (db: PostgresQueryable, record: ServerBookingDraftLineRecord): Promise<ServerBookingDraftLineRecord> => {
-  await upsert(db, schema.bookingDraftLines, { id: record.id, tenantId: record.tenantId, draftId: record.draftId, lineNo: record.lineNo, accountNumber: record.accountNumber, debitAmount: record.debitAmount, creditAmount: record.creditAmount, taxCode: record.taxCode ?? null, taxCaseKey: record.taxCaseKey ?? null, taxRate: record.taxRate ?? null, netAmount: record.netAmount ?? null, taxAmount: record.taxAmount ?? null, grossAmount: record.grossAmount ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, costCenter: record.costCenter ?? null, memo: record.memo ?? null }, schema.bookingDraftLines.id,
-    { tenantId: record.tenantId, draftId: record.draftId, lineNo: record.lineNo, accountNumber: record.accountNumber, debitAmount: record.debitAmount, creditAmount: record.creditAmount, taxCode: record.taxCode ?? null, taxCaseKey: record.taxCaseKey ?? null, taxRate: record.taxRate ?? null, netAmount: record.netAmount ?? null, grossAmount: record.grossAmount ?? null, taxAmount: record.taxAmount ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, costCenter: record.costCenter ?? null, memo: record.memo ?? null });
+  await upsert(db, schema.bookingDraftLines, { id: record.id, tenantId: record.tenantId, draftId: record.draftId, lineNo: record.lineNo, accountNumber: record.accountNumber, debitAmount: record.debitAmount, creditAmount: record.creditAmount, taxCode: record.taxCode ?? null, taxCaseKey: record.taxCaseKey ?? null, taxRate: record.taxRate ?? null, netAmount: record.netAmount ?? null, taxAmount: record.taxAmount ?? null, grossAmount: record.grossAmount ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, datevSachverhaltLl: record.datevSachverhaltLl ?? null, costCenter: record.costCenter ?? null, memo: record.memo ?? null }, schema.bookingDraftLines.id,
+    { tenantId: record.tenantId, draftId: record.draftId, lineNo: record.lineNo, accountNumber: record.accountNumber, debitAmount: record.debitAmount, creditAmount: record.creditAmount, taxCode: record.taxCode ?? null, taxCaseKey: record.taxCaseKey ?? null, taxRate: record.taxRate ?? null, netAmount: record.netAmount ?? null, grossAmount: record.grossAmount ?? null, taxAmount: record.taxAmount ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, datevSachverhaltLl: record.datevSachverhaltLl ?? null, costCenter: record.costCenter ?? null, memo: record.memo ?? null });
   return record;
 };
 export const saveServerDraftValidationIssue = async (db: PostgresQueryable, record: ServerDraftValidationIssueRecord): Promise<ServerDraftValidationIssueRecord> => {
@@ -530,7 +532,7 @@ export const saveServerJournalEntry = async (db: PostgresQueryable, record: Serv
   return record;
 };
 export const saveServerJournalLine = async (db: PostgresQueryable, record: ServerJournalLineRecord): Promise<ServerJournalLineRecord> => {
-  const values = { id: record.id, tenantId: record.tenantId, entryId: record.entryId, lineNo: record.lineNo, accountNumber: record.accountNumber, debitAmount: record.debitAmount, creditAmount: record.creditAmount, taxCode: record.taxCode ?? null, taxCaseKey: record.taxCaseKey ?? null, taxRate: record.taxRate ?? null, netAmount: record.netAmount ?? null, taxAmount: record.taxAmount ?? null, grossAmount: record.grossAmount ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, costCenter: record.costCenter ?? null, memo: record.memo ?? null };
+  const values = { id: record.id, tenantId: record.tenantId, entryId: record.entryId, lineNo: record.lineNo, accountNumber: record.accountNumber, debitAmount: record.debitAmount, creditAmount: record.creditAmount, taxCode: record.taxCode ?? null, taxCaseKey: record.taxCaseKey ?? null, taxRate: record.taxRate ?? null, netAmount: record.netAmount ?? null, taxAmount: record.taxAmount ?? null, grossAmount: record.grossAmount ?? null, countryCode: record.countryCode ?? null, counterpartyVatId: record.counterpartyVatId ?? null, evidenceType: record.evidenceType ?? null, evidenceReference: record.evidenceReference ?? null, datevSachverhaltLl: record.datevSachverhaltLl ?? null, costCenter: record.costCenter ?? null, memo: record.memo ?? null };
   await upsert(db, schema.journalLines, values, schema.journalLines.id, values);
   return record;
 };

@@ -346,6 +346,7 @@ export const bookingDraftLines = pgTable("booking_draft_lines", {
   counterpartyVatId: text("counterparty_vat_id"),
   evidenceType: text("evidence_type"),
   evidenceReference: text("evidence_reference"),
+  datevSachverhaltLl: text("datev_sachverhalt_ll"),
   costCenter: text("cost_center"),
   memo: text("memo"),
 });
@@ -466,6 +467,7 @@ export const journalLines = pgTable("journal_lines", {
   counterpartyVatId: text("counterparty_vat_id"),
   evidenceType: text("evidence_type"),
   evidenceReference: text("evidence_reference"),
+  datevSachverhaltLl: text("datev_sachverhalt_ll"),
   costCenter: text("cost_center"),
   memo: text("memo"),
 });

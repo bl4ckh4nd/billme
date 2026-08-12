@@ -91,6 +91,53 @@ test('DATEV byte snapshot migration is additive and immutable', async () => {
   assert.match(migration, /CREATE TRIGGER datev_exports_immutable BEFORE UPDATE OR DELETE/);
 });
 
+test('real Postgres carries EU DATEV evidence through posting, export, and reversal', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tenantId = `datev-tax-${suffix}`;
+  const invoiceId = `datev-tax-invoice-${suffix}`;
+  const reservationId = `datev-tax-reservation-${suffix}`;
+  const number = `EU-${suffix}`;
+  const now = new Date().toISOString();
+  const scope = createSingleTenantScope(tenantId, 'pro');
+  try {
+    await runDrizzleMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'DATEV tax evidence test', now]);
+    await pool.query(`INSERT INTO tax_cases (key,label,mechanism,default_rate,requires_counterparty_vat_id,requires_country,requires_evidence,active,updated_at) VALUES ('EU_B2B_SERVICE_RC','EU service reverse charge','reverse_charge',0,TRUE,TRUE,TRUE,TRUE,$1) ON CONFLICT (key) DO UPDATE SET requires_counterparty_vat_id=TRUE,requires_country=TRUE,requires_evidence=TRUE,active=TRUE,updated_at=EXCLUDED.updated_at`, [now]);
+    const metadata = { buyerCountryCode: 'AT', buyerVatId: 'ATU12345678', destinationVatRate: 20, datevSachverhaltLl: '13', datevEvidenceType: 'reverse_charge', datevEvidenceReference: 'invoice-proof-1' };
+    const snapshot = { netAmount: 100, taxAmount: 0, grossAmount: 100, vatBreakdown: [{ rate: 0, netAmount: 100, vatAmount: 0, taxCaseKey: 'EU_B2B_SERVICE_RC' }] };
+    await pool.query(`INSERT INTO invoices (id,tenant_id,number,client,client_email,date,due_date,amount,status,dunning_level,items_json,payments_json,history_json,tax_mode,tax_meta_json,tax_snapshot_json,created_at,updated_at,accounting_status) VALUES ($1,$2,$3,'AT Client','test@example.test','2026-08-12','2026-08-31',100,'open',0,$4,'[]','[]','intra_eu_service_reverse_charge',$5,$6,$7,$7,'unposted')`, [invoiceId, tenantId, number, JSON.stringify([{ description: 'EU service', total: 100, taxRate: 0 }]), JSON.stringify(metadata), JSON.stringify(snapshot), now]);
+    await pool.query(`INSERT INTO number_reservations (id,tenant_id,kind,number,counter_value,status,document_id,created_at,updated_at) VALUES ($1,$2,'invoice',$3,1,'finalized',$4,$5,$5)`, [reservationId, tenantId, number, invoiceId, now]);
+    const repository = createPostgresProAccountingRepository(pool);
+    const preview = await repository.previewOutgoingInvoice(scope, invoiceId);
+    assert.equal(preview.status, 'ready', JSON.stringify(preview));
+    assert.equal(preview.snapshot?.lines.find((line) => line.taxCaseKey === 'EU_B2B_SERVICE_RC')?.datevSachverhaltLl, '13');
+    const posted = await repository.postOutgoingInvoice(scope, invoiceId, { reservationId });
+    assert.equal(posted.status, 'ready');
+    const postedEntryId = (await pool.query(`SELECT accounting_journal_entry_id FROM invoices WHERE tenant_id=$1 AND id=$2`, [tenantId, invoiceId])).rows[0].accounting_journal_entry_id as string;
+    const sourceLine = (await pool.query(`SELECT country_code,counterparty_vat_id,evidence_type,evidence_reference,datev_sachverhalt_ll FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 AND tax_case_key='EU_B2B_SERVICE_RC'`, [tenantId, postedEntryId])).rows[0];
+    assert.deepEqual(sourceLine, { country_code: 'AT', counterparty_vat_id: 'ATU12345678', evidence_type: 'reverse_charge', evidence_reference: 'invoice-proof-1', datev_sachverhalt_ll: '13' });
+    const rows = await repository.buildDatevRows(scope, { from: '2026-08-12', to: '2026-08-12' });
+    const exported = rows.find((row) => row.sachverhaltLl === '13');
+    assert.equal(exported?.euLandUstId, 'ATU12345678');
+    assert.equal(exported?.euSteuersatz, 20);
+    const reversal = await repository.reverseDocumentAccounting(scope, { documentType: 'outgoing_invoice', documentId: invoiceId, reason: 'DATEV evidence reversal' });
+    const reversalLine = (await pool.query(`SELECT evidence_reference,datev_sachverhalt_ll FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 AND tax_case_key='EU_B2B_SERVICE_RC'`, [tenantId, reversal.reversalEntryId])).rows[0];
+    assert.deepEqual(reversalLine, { evidence_reference: 'invoice-proof-1', datev_sachverhalt_ll: '13' });
+  } finally {
+    await pool.query('ALTER TABLE invoices DISABLE TRIGGER invoices_posted_immutable').catch(() => undefined);
+    await pool.query('ALTER TABLE journal_entries DISABLE TRIGGER journal_entries_immutable').catch(() => undefined);
+    await pool.query('ALTER TABLE journal_lines DISABLE TRIGGER journal_lines_immutable').catch(() => undefined);
+    await pool.query('ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete').catch(() => undefined);
+    await pool.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]).catch(() => undefined);
+    await pool.query('ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete').catch(() => undefined);
+    await pool.query('ALTER TABLE journal_lines ENABLE TRIGGER journal_lines_immutable').catch(() => undefined);
+    await pool.query('ALTER TABLE journal_entries ENABLE TRIGGER journal_entries_immutable').catch(() => undefined);
+    await pool.query('ALTER TABLE invoices ENABLE TRIGGER invoices_posted_immutable').catch(() => undefined);
+    await pool.end();
+  }
+});
+
 test('real Postgres unposted incoming invoices omit empty accounting snapshots for the typed API response', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;

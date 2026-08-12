@@ -10,8 +10,9 @@ import type {
   AccountingAccountMapping, AccountingBackfillConfirmation, AccountingBackfillPreview, AccountingBackfillResult,
   AccountingDocumentSource, AccountingPostingPreview, AccountingSnapshot, IncomingInvoiceEntity,
   IncomingInvoiceLineEntity, OpenItemEntity, OpenItemPaymentEntity, OpenItemPaymentInput, VendorEntity,
-  BookingDraftEntity, JournalEntryEntity, JournalLineEntity, LedgerBalance, ValidationIssue, AccountingMutationContext, DatevExportContent, DatevExportSourceSnapshot,
+  BookingDraftEntity, JournalEntryEntity, JournalLineEntity, LedgerBalance, ValidationIssue, AccountingMutationContext, DatevExportContent, DatevExportSourceSnapshot, DatevTaxEvidence, TaxCaseDefinition, TaxCaseKey,
 } from '@billme/accounting-shared';
+import { datevDestinationCases, datevSachverhaltCases, normalizeDatevTaxEvidence, validateDatevTaxEvidence } from '@billme/accounting-shared';
 import type {
   TenantScope, ProAccountingAssetRepository, ProAccountingRepository, PostDraftOptions, ProDraftActionRequest, ReverseJournalEntryOptions,
   AssetDepreciationInput, AssetDepreciationResult, AssetDepreciationScheduleEntry, AssetDisposalInput, AssetDisposalResult,
@@ -53,7 +54,7 @@ const mapLine = (row: any): JournalLineEntity => ({
   taxCode: row.tax_code ?? undefined, taxCaseKey: row.tax_case_key ?? undefined, taxRate: row.tax_rate == null ? undefined : Number(row.tax_rate),
   netAmount: row.net_amount == null ? undefined : Number(row.net_amount), taxAmount: row.tax_amount == null ? undefined : Number(row.tax_amount), grossAmount: row.gross_amount == null ? undefined : Number(row.gross_amount),
   countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined,
-  evidenceReference: row.evidence_reference ?? undefined, costCenter: row.cost_center ?? undefined, memo: row.memo ?? undefined,
+  evidenceReference: row.evidence_reference ?? undefined, datevSachverhaltLl: row.datev_sachverhalt_ll ?? undefined, costCenter: row.cost_center ?? undefined, memo: row.memo ?? undefined,
 });
 const loadEntry = async (db: PostgresQueryable, scope: TenantScope, id: string): Promise<JournalEntryEntity | null> => {
   const rows = await q<any>(db, `SELECT * FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), id]);
@@ -68,7 +69,7 @@ const draftFromRows = (row: any, lines: any[], issues: any[], scope: TenantScope
     id: row.id, tenantId: tenant(scope), transactionId: row.transaction_id, workflowStatus: row.workflow_status,
     postingDate: value.postingDate, documentDate: value.documentDate, bookingText: value.bookingText ?? '', reference: value.reference,
     period: value.period ?? period(value.postingDate ?? now().slice(0, 10)), fiscalYear: Number(value.fiscalYear ?? new Date().getUTCFullYear()),
-    lines: lines.map((line) => ({ id: line.id, accountNumber: line.account_number, debitAmount: Number(line.debit_amount || 0), creditAmount: Number(line.credit_amount || 0), taxCode: line.tax_code ?? undefined, taxCaseKey: line.tax_case_key ?? undefined, taxRate: line.tax_rate == null ? undefined : Number(line.tax_rate), netAmount: line.net_amount == null ? undefined : Number(line.net_amount), taxAmount: line.tax_amount == null ? undefined : Number(line.tax_amount), grossAmount: line.gross_amount == null ? undefined : Number(line.gross_amount), countryCode: line.country_code ?? undefined, counterpartyVatId: line.counterparty_vat_id ?? undefined, evidenceType: line.evidence_type ?? undefined, evidenceReference: line.evidence_reference ?? undefined, costCenter: line.cost_center ?? undefined, memo: line.memo ?? undefined })),
+    lines: lines.map((line) => ({ id: line.id, accountNumber: line.account_number, debitAmount: Number(line.debit_amount || 0), creditAmount: Number(line.credit_amount || 0), taxCode: line.tax_code ?? undefined, taxCaseKey: line.tax_case_key ?? undefined, taxRate: line.tax_rate == null ? undefined : Number(line.tax_rate), netAmount: line.net_amount == null ? undefined : Number(line.net_amount), taxAmount: line.tax_amount == null ? undefined : Number(line.tax_amount), grossAmount: line.gross_amount == null ? undefined : Number(line.gross_amount), countryCode: line.country_code ?? undefined, counterpartyVatId: line.counterparty_vat_id ?? undefined, evidenceType: line.evidence_type ?? undefined, evidenceReference: line.evidence_reference ?? undefined, datevSachverhaltLl: line.datev_sachverhalt_ll ?? undefined, costCenter: line.cost_center ?? undefined, memo: line.memo ?? undefined })),
     validationIssues: issues.map((item) => parse<ValidationIssue>(item.issue_json, { id: item.id, code: item.code, severity: item.severity, message: item.message, fieldPath: item.field_path ?? undefined, blocking: Boolean(item.blocking), source: item.source })), updatedAt: row.updated_at,
   };
 };
@@ -135,6 +136,7 @@ const validateDraft = async (db: PostgresQueryable, scope: TenantScope, draft: B
     if (line.accountNumber && !(await accountExists(db, chart, line.accountNumber))) out.push(issue('UNKNOWN_ACCOUNT', `Sachkonto ${line.accountNumber} ist im Kontenrahmen nicht vorhanden.`, `lines[${index}].accountNumber`));
   }
   if (periodStatus === 'closed') out.push(issue('POSTING_DATE_IN_CLOSED_PERIOD', 'Periode ist geschlossen.'));
+  out.push(...await validateJournalLineDatevEvidence(db, draft.lines));
   return out;
 };
 const saveDraftTarget = async (db: PostgresQueryable, scope: TenantScope, draft: BookingDraftEntity, mutation?: AccountingMutationContext): Promise<BookingDraftEntity> => {
@@ -144,7 +146,7 @@ const saveDraftTarget = async (db: PostgresQueryable, scope: TenantScope, draft:
   const periodStatus = await ensurePeriod(db, t, normalized.period); normalized.validationIssues = await validateDraft(db, scope, normalized, periodStatus, p.activeChart); normalized.workflowStatus = normalized.validationIssues.some((x) => x.blocking) ? periodStatus === 'closed' ? 'period_locked' : 'incomplete' : normalized.workflowStatus;
   await q(db, `INSERT INTO booking_drafts (id,tenant_id,transaction_id,workflow_status,draft_json,updated_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO UPDATE SET transaction_id=EXCLUDED.transaction_id,workflow_status=EXCLUDED.workflow_status,draft_json=EXCLUDED.draft_json,updated_at=EXCLUDED.updated_at`, [normalized.id, t, normalized.transactionId, normalized.workflowStatus, JSON.stringify(normalized), normalized.updatedAt]);
   await q(db, `DELETE FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2`, [t, normalized.id]); await q(db, `DELETE FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [t, normalized.id]);
-  for (const [index, line] of normalized.lines.entries()) await q(db, `INSERT INTO booking_draft_lines (id,tenant_id,draft_id,line_no,account_number,debit_amount,credit_amount,tax_code,tax_case_key,tax_rate,net_amount,tax_amount,gross_amount,country_code,counterparty_vat_id,evidence_type,evidence_reference,cost_center,memo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, [line.id, t, normalized.id, index + 1, line.accountNumber, line.debitAmount, line.creditAmount, line.taxCode ?? null, line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, line.evidenceType ?? null, line.evidenceReference ?? null, line.costCenter ?? null, line.memo ?? null]);
+  for (const [index, line] of normalized.lines.entries()) await q(db, `INSERT INTO booking_draft_lines (id,tenant_id,draft_id,line_no,account_number,debit_amount,credit_amount,tax_code,tax_case_key,tax_rate,net_amount,tax_amount,gross_amount,country_code,counterparty_vat_id,evidence_type,evidence_reference,datev_sachverhalt_ll,cost_center,memo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, [line.id, t, normalized.id, index + 1, line.accountNumber, line.debitAmount, line.creditAmount, line.taxCode ?? null, line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, line.evidenceType ?? null, line.evidenceReference ?? null, line.datevSachverhaltLl ?? null, line.costCenter ?? null, line.memo ?? null]);
   for (const item of normalized.validationIssues) await q(db, `INSERT INTO draft_validation_issues (id,tenant_id,draft_id,code,severity,message,field_path,blocking,source,issue_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [item.id, t, normalized.id, item.code, item.severity, item.message, item.fieldPath ?? null, item.blocking, item.source, JSON.stringify(item), normalized.updatedAt]);
   await audit(db as PostgresTransactionClient, scope, 'booking_draft', normalized.id, 'save', 'Booking draft changed', null, { transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus }, draftMutation);
   return normalized;
@@ -162,10 +164,10 @@ const insertEntry = async (db: PostgresQueryable, scope: TenantScope, sourceType
   for (const line of lines) { if (!line.accountNumber || (cents(line.debitAmount) ?? -1) < 0 || (cents(line.creditAmount) ?? -1) < 0 || (Number(line.debitAmount) > 0 && Number(line.creditAmount) > 0)) throw new Error(`INVALID_JOURNAL_LINE:${line.accountNumber}`); }
   await q(db, `SELECT pg_advisory_xact_lock(hashtext($1))`, [`billme:entry-number:${t}`]); const nr = await q<any>(db, `SELECT COALESCE(MAX(entry_number),0)+1 AS n FROM journal_entries WHERE tenant_id=$1`, [t]); const entryNumber = Number(nr[0].n); const id = randomUUID(); const stamp = now();
   await q(db, `INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_draft_id,source_type,source_key,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'posted',$10,$11,$12,$13)`, [id, t, entryNumber, postingDate, options.documentDate ?? postingDate, bookingText, options.reference ?? null, period(postingDate), Number(postingDate.slice(0, 4)), options.sourceDraftId ?? null, sourceType, sourceKey, stamp]);
-  for (const [index, line] of lines.entries()) await q(db, `INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount,tax_code,tax_case_key,tax_rate,net_amount,tax_amount,gross_amount,evidence_type,evidence_reference,memo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, [line.id || randomUUID(), t, id, index + 1, line.accountNumber, round(line.debitAmount), round(line.creditAmount), line.taxCode ?? null, line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, line.evidenceType ?? null, line.evidenceReference ?? null, line.memo ?? null]);
+  for (const [index, line] of lines.entries()) await q(db, `INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount,tax_code,tax_case_key,tax_rate,net_amount,tax_amount,gross_amount,country_code,counterparty_vat_id,evidence_type,evidence_reference,datev_sachverhalt_ll,memo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, [line.id || randomUUID(), t, id, index + 1, line.accountNumber, round(line.debitAmount), round(line.creditAmount), line.taxCode ?? null, line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, line.evidenceType ?? null, line.evidenceReference ?? null, line.datevSachverhaltLl ?? null, line.memo ?? null]);
   const dbLines = await q<any>(db, `SELECT * FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [t, id]); const byId = new Map(dbLines.map((line) => [line.id, line]));
   for (const [pairIndex, pair] of pairLines(lines).entries()) { const debit = byId.get(pair.debit.id); const credit = byId.get(pair.credit.id); if (debit && credit) { const mapping = options.datevBuKeys?.[pairIndex]; const configured = mapping === undefined ? (await q<any>(db, `SELECT datev_bu_key FROM tax_case_account_mappings WHERE (tenant_id=$1 OR tenant_id IS NULL) AND chart=COALESCE((SELECT active_chart FROM accounting_policies WHERE tenant_id=$1),'SKR03') AND tax_case_key=$2 AND role='datev_bu' AND (valid_from IS NULL OR valid_from <= $3) AND (valid_to IS NULL OR valid_to >= $3) ORDER BY (tenant_id IS NULL),valid_from DESC NULLS LAST,updated_at DESC LIMIT 1`, [t, pair.taxCaseKey ?? '', postingDate]))[0]?.datev_bu_key ?? null : mapping; await insertJournalPostingPair(db, [randomUUID(), t, id, debit.id, credit.id, pair.amount, pair.taxCaseKey ?? null, configured, stamp]); } }
-  for (const line of lines.filter((l) => Number(l.taxAmount || 0) > 0 || l.evidenceType || l.evidenceReference)) await q(db, `INSERT INTO vat_evidence (id,tenant_id,entry_id,line_id,tax_case_key,evidence_type,evidence_reference,captured_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [randomUUID(), t, id, line.id, line.taxCaseKey ?? 'standard_vat', line.evidenceType ?? null, line.evidenceReference ?? null, stamp]);
+  for (const line of lines.filter((l) => Number(l.taxAmount || 0) > 0 || l.evidenceType || l.evidenceReference || l.countryCode || l.counterpartyVatId || l.datevSachverhaltLl)) await q(db, `INSERT INTO vat_evidence (id,tenant_id,entry_id,line_id,tax_case_key,evidence_type,evidence_reference,country_code,counterparty_vat_id,captured_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [randomUUID(), t, id, line.id, line.taxCaseKey ?? 'standard_vat', line.evidenceType ?? null, line.evidenceReference ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, stamp]);
   await audit(db as PostgresTransactionClient, scope, 'pro_journal_entry', id, 'post', options.overrideReason?.trim() || 'Accounting posting', null, { sourceType, sourceKey, entryNumber, postingDate }, options.mutation); return id;
 };
 
@@ -208,6 +210,60 @@ const taxSnapshot = (row: any, incoming = false, sourceLines: any[] = []): { net
   if (Math.abs(round(breakdown.reduce((sum: number, entry: TaxBreakdown) => sum + entry.net, 0)) - net) > .02 || Math.abs(round(breakdown.reduce((sum: number, entry: TaxBreakdown) => sum + entry.tax, 0)) - tax) > .02) return null;
   return { net: round(net), tax: round(tax), gross: round(gross), rate: breakdown[0]?.rate ?? 0, breakdown };
 };
+type DatevPostingEvidence = Pick<JournalLineEntity, 'countryCode' | 'counterpartyVatId' | 'evidenceType' | 'evidenceReference' | 'datevSachverhaltLl'> & { taxRate?: number };
+const datevTaxCaseDefinition = async (db: PostgresQueryable, taxCaseKey: string, rate: number): Promise<{ definition?: TaxCaseDefinition; special: boolean; issues: ValidationIssue[] }> => {
+  const definitionRows = await q<any>(db, `SELECT key,label,mechanism,default_rate,requires_counterparty_vat_id,requires_country,requires_evidence,active FROM tax_cases WHERE key=$1 LIMIT 1`, [taxCaseKey]);
+  const definitionRow = definitionRows[0];
+  const special = datevDestinationCases.has(taxCaseKey as TaxCaseKey) || datevSachverhaltCases.has(taxCaseKey as TaxCaseKey);
+  if (!definitionRow && special) return { special, issues: [issue('TAX_CASE_DEFINITION_REQUIRED', `Steuerfall ${taxCaseKey} ist serverseitig nicht eingerichtet.`)] };
+  const definition: TaxCaseDefinition = definitionRow ? {
+    key: taxCaseKey as TaxCaseKey, label: String(definitionRow.label ?? taxCaseKey), mechanism: definitionRow.mechanism,
+    defaultRate: Number(definitionRow.default_rate ?? rate), requiresCounterpartyVatId: Boolean(definitionRow.requires_counterparty_vat_id),
+    requiresCountry: Boolean(definitionRow.requires_country), requiresEvidence: Boolean(definitionRow.requires_evidence), active: Boolean(definitionRow.active),
+  } : { key: taxCaseKey as TaxCaseKey, label: taxCaseKey, mechanism: 'standard_vat', defaultRate: rate, requiresCounterpartyVatId: false, requiresCountry: false, requiresEvidence: false, active: true };
+  if (!definition.active) return { special, issues: [issue('TAX_CASE_INACTIVE', `Steuerfall ${taxCaseKey} ist nicht aktiv.`)] };
+  return { definition, special, issues: [] };
+};
+const validateDatevEvidenceForCase = async (db: PostgresQueryable, taxCaseKey: string, evidence: DatevTaxEvidence, rate: number, incoming = false): Promise<{ normalized: DatevTaxEvidence; special: boolean; issues: ValidationIssue[] }> => {
+  const resolved = await datevTaxCaseDefinition(db, taxCaseKey, rate);
+  if (!resolved.definition) return { normalized: normalizeDatevTaxEvidence(evidence), special: resolved.special, issues: resolved.issues };
+  const normalized = normalizeDatevTaxEvidence(evidence);
+  const validation = validateDatevTaxEvidence(resolved.definition, normalized);
+  if (validation.length) return { normalized, special: resolved.special, issues: validation.map((item) => issue(item.code, item.message)) };
+  if (incoming && resolved.special) return { normalized, special: resolved.special, issues: [issue('INCOMING_TAX_EVIDENCE_REQUIRED', `Eingangsbeleg für Steuerfall ${taxCaseKey} benötigt DATEV-Steuernachweis.`)] };
+  return { normalized, special: resolved.special, issues: [] };
+};
+const validateJournalLineDatevEvidence = async (db: PostgresQueryable, lines: Array<Pick<JournalLineEntity, 'taxCaseKey' | 'taxRate' | 'countryCode' | 'counterpartyVatId' | 'evidenceType' | 'evidenceReference' | 'datevSachverhaltLl'>>): Promise<ValidationIssue[]> => {
+  const issues: ValidationIssue[] = [];
+  for (const line of lines) {
+    if (!line.taxCaseKey) continue;
+    const checked = await validateDatevEvidenceForCase(db, line.taxCaseKey, {
+      buyerCountryCode: line.countryCode, buyerVatId: line.counterpartyVatId, destinationVatRate: line.taxRate,
+      datevEvidenceType: line.evidenceType, datevEvidenceReference: line.evidenceReference, datevSachverhaltLl: line.datevSachverhaltLl,
+    }, line.taxRate ?? 0);
+    issues.push(...checked.issues);
+  }
+  return issues;
+};
+const datevPostingEvidence = async (db: PostgresQueryable, taxCaseKey: string, row: any, incoming: boolean, rate: number): Promise<{ evidence?: DatevPostingEvidence; issues: ValidationIssue[] }> => {
+  const checked = await validateDatevEvidenceForCase(db, taxCaseKey, parse<DatevTaxEvidence>(row.tax_meta_json, {}), rate, incoming);
+  if (checked.issues.length) return { issues: checked.issues };
+  const normalized = checked.normalized;
+  const destinationId = normalized.buyerVatId
+    ? (/^[A-Z]{2}/.test(normalized.buyerVatId) ? normalized.buyerVatId : `${normalized.buyerCountryCode ?? ''}${normalized.buyerVatId}`)
+    : normalized.buyerCountryCode;
+  return {
+    evidence: {
+      countryCode: normalized.buyerCountryCode,
+      counterpartyVatId: normalized.buyerVatId,
+      evidenceType: normalized.datevEvidenceType,
+      evidenceReference: normalized.datevEvidenceReference,
+      datevSachverhaltLl: normalized.datevSachverhaltLl,
+      taxRate: datevDestinationCases.has(taxCaseKey as TaxCaseKey) ? normalized.destinationVatRate : rate,
+      ...(datevDestinationCases.has(taxCaseKey as TaxCaseKey) && destinationId ? { counterpartyVatId: destinationId } : {}),
+    }, issues: [],
+  };
+};
 const sourceVersion = (row: any, lines: unknown): string => hash({ id: row.id, tenantId: row.tenant_id, number: row.number, date: row.date ?? row.invoice_date, dueDate: row.due_date, amount: row.amount ?? row.gross_amount, net: row.net_amount, tax: row.tax_amount, gross: row.gross_amount, taxMode: row.tax_mode, taxMeta: parse(row.tax_meta_json, null), taxSnapshot: parse(row.tax_snapshot_json, null), lines });
 type FinalizedInvoiceReservation = { id: string; kind: string; number: string; status: string; document_id: string };
 const finalizedInvoiceReservation = async (db: PostgresQueryable, t: string, row: any): Promise<FinalizedInvoiceReservation | null> =>
@@ -219,6 +275,13 @@ const incomingBackfillSourceVersion = (row: any, documentVersion: string): strin
 const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: any, type: 'outgoing_invoice'|'incoming_invoice'): Promise<AccountingPostingPreview> => {
   const t = tenant(scope); const p = await policy(db, t); const m = await mappings(db, t, p.activeChart); const category = parse<any>(row.tax_snapshot_json ?? row.accounting_snapshot_json, null)?.einvoiceCategoryCode ?? parse<any>(row.tax_meta_json, null)?.einvoiceCategoryCode; const incomingLines = type === 'incoming_invoice' ? (row.__incomingLines ?? await q<any>(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, row.id])) : []; const tax = taxSnapshot(row, type === 'incoming_invoice', incomingLines); const id = row.id;
   if (!tax) return { sourceType: type, sourceId: id, status: 'unresolved', reason: 'AMBIGUOUS_TAX_SNAPSHOT', issues: [{ code: 'AMBIGUOUS_TAX_SNAPSHOT', message: 'Netto, Steuer und Brutto konnten nicht sicher ermittelt werden.', blocking: true }] };
+  const evidenceByCase = new Map<string, DatevPostingEvidence>();
+  for (const entry of tax.breakdown) {
+    const resolved = await datevPostingEvidence(db, entry.taxCaseKey, row, type === 'incoming_invoice', entry.rate);
+    if (resolved.issues.length) return { sourceType: type, sourceId: id, status: 'unresolved', reason: resolved.issues[0].code, issues: resolved.issues };
+    if (resolved.evidence) evidenceByCase.set(entry.taxCaseKey, resolved.evidence);
+  }
+  const basisEvidence = (entry: TaxBreakdown): DatevPostingEvidence | undefined => evidenceByCase.get(entry.taxCaseKey);
   const lines: AccountingSnapshot['lines'] = [{ accountNumber: type === 'outgoing_invoice' ? m.accounts_receivable : (incomingLines[0]?.account_number ?? incomingLines[0]?.asset_account_number ?? m.expense), debitAmount: type === 'outgoing_invoice' ? tax.gross : tax.net, creditAmount: 0 }];
   if (type === 'outgoing_invoice') {
     for (const entry of tax.breakdown) {
@@ -226,9 +289,10 @@ const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: an
       // Ist VAT is deferred and must not appear in the initial VAT report.
       // Preserve the case only in the stable basis memo for payment-time
       // recognition; the control line itself remains unkeyed.
+      const evidence = basisEvidence(entry);
       lines.push(p.vatMethod === 'ist'
-        ? { accountNumber: m.revenue, debitAmount: 0, creditAmount: entry.net, memo: `UStBasis ${entry.taxCaseKey}` }
-        : { accountNumber: m.revenue, debitAmount: 0, creditAmount: entry.net, taxCaseKey: entry.taxCaseKey, netAmount: entry.net, taxAmount: entry.tax, grossAmount: entry.gross });
+        ? { accountNumber: m.revenue, debitAmount: 0, creditAmount: entry.net, taxCaseKey: entry.taxCaseKey, taxRate: evidence?.taxRate, countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl, memo: `UStBasis ${entry.taxCaseKey}` }
+        : { accountNumber: m.revenue, debitAmount: 0, creditAmount: entry.net, taxCaseKey: entry.taxCaseKey, taxRate: evidence?.taxRate ?? entry.rate, netAmount: entry.net, taxAmount: entry.tax, grossAmount: entry.gross, countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl });
       if (entry.tax > 0) lines.push({ accountNumber: outputAccount, debitAmount: 0, creditAmount: entry.tax, memo: `USt ${entry.taxCaseKey}` });
     }
   } else {
@@ -242,9 +306,10 @@ const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: an
         const net = Number(line.net_amount ?? (gross > 0 ? gross / (1 + rate / 100) : 0));
         const taxAmount = Number(line.tax_amount ?? (gross - net));
         const entry = tax.breakdown.find((candidate) => Math.abs(candidate.rate - rate) < .01);
-        return { accountNumber: line.asset_account_number ?? line.account_number ?? m.expense, debitAmount: round(net), creditAmount: 0, taxCaseKey: entry?.taxCaseKey ?? taxCaseFor(row, rate, category), netAmount: round(net), taxRate: rate, taxAmount: round(taxAmount), grossAmount: round(gross || net + taxAmount), memo: line.description };
+        const taxCaseKey = entry?.taxCaseKey ?? taxCaseFor(row, rate, category); const evidence = evidenceByCase.get(taxCaseKey);
+        return { accountNumber: line.asset_account_number ?? line.account_number ?? m.expense, debitAmount: round(net), creditAmount: 0, taxCaseKey, netAmount: round(net), taxRate: evidence?.taxRate ?? rate, taxAmount: round(taxAmount), grossAmount: round(gross || net + taxAmount), countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl, memo: line.description };
       })
-      : tax.breakdown.map((entry) => ({ accountNumber: m.expense, debitAmount: entry.net, creditAmount: 0, taxCaseKey: entry.taxCaseKey, netAmount: entry.net, taxRate: entry.rate, taxAmount: entry.tax, grossAmount: entry.gross }));
+      : tax.breakdown.map((entry) => { const evidence = basisEvidence(entry); return { accountNumber: m.expense, debitAmount: entry.net, creditAmount: 0, taxCaseKey: entry.taxCaseKey, netAmount: entry.net, taxRate: evidence?.taxRate ?? entry.rate, taxAmount: entry.tax, grossAmount: entry.gross, countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl }; });
     lines.splice(0, lines.length, ...expenseLines);
     for (const entry of tax.breakdown) if (entry.tax > 0) lines.push({ accountNumber: await taxCaseAccount(db, t, p.activeChart, entry.taxCaseKey, 'input_tax', m.input_vat, row.invoice_date), debitAmount: entry.tax, creditAmount: 0, memo: `Vorsteuer ${entry.taxCaseKey}` });
     lines.push({ accountNumber: m.accounts_payable, debitAmount: 0, creditAmount: tax.gross });
@@ -363,9 +428,17 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
     const entries = await q<any>(db, `SELECT * FROM journal_entries WHERE tenant_id=$1 AND status IN ('posted','reversed')${date.length ? ` AND ${date.join(' AND ')}` : ''} ORDER BY posting_date,entry_number`, values);
     const result: any[] = [];
     for (const entry of entries) {
-      const persisted = await q<any>(db, `SELECT jp.amount,jp.tax_case_key,jp.datev_bu_key,dl.account_number konto,cl.account_number gegenkonto FROM journal_posting_pairs jp JOIN journal_lines dl ON dl.id=jp.debit_line_id AND dl.tenant_id=jp.tenant_id JOIN journal_lines cl ON cl.id=jp.credit_line_id AND cl.tenant_id=jp.tenant_id WHERE jp.tenant_id=$1 AND jp.entry_id=$2 ORDER BY jp.id`, [tenant(scope), entry.id]);
-      const pairs = persisted.length ? persisted.map((pair) => ({ amount: Number(pair.amount), debit: pair.konto, credit: pair.gegenkonto, bu: pair.datev_bu_key })) : pairLines((await q<any>(db, `SELECT * FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [tenant(scope), entry.id])).map(mapLine)).map((pair) => ({ amount: pair.amount, debit: pair.debit.accountNumber, credit: pair.credit.accountNumber, bu: undefined }));
-      for (const pair of pairs) result.push({ date: entry.posting_date, belegfeld1: String(entry.entry_number), buchungstext: entry.booking_text, konto: pair.debit, gegenkonto: pair.credit, sollHabenKennzeichen: 'S', buSchluessel: pair.bu ?? undefined, umsatz: round(pair.amount) });
+      const persisted = await q<any>(db, `SELECT jp.amount,jp.tax_case_key,jp.datev_bu_key,dl.account_number konto,cl.account_number gegenkonto,
+        COALESCE(dl.country_code,cl.country_code) country_code,
+        COALESCE(dl.counterparty_vat_id,cl.counterparty_vat_id) counterparty_vat_id,
+        COALESCE(dl.tax_rate,cl.tax_rate) tax_rate,
+        COALESCE(dl.datev_sachverhalt_ll,cl.datev_sachverhalt_ll) datev_sachverhalt_ll
+        FROM journal_posting_pairs jp
+        JOIN journal_lines dl ON dl.id=jp.debit_line_id AND dl.tenant_id=jp.tenant_id
+        JOIN journal_lines cl ON cl.id=jp.credit_line_id AND cl.tenant_id=jp.tenant_id
+        WHERE jp.tenant_id=$1 AND jp.entry_id=$2 ORDER BY jp.id`, [tenant(scope), entry.id]);
+      const pairs = persisted.length ? persisted.map((pair) => ({ amount: Number(pair.amount), debit: pair.konto, credit: pair.gegenkonto, bu: pair.datev_bu_key, euLandUstId: datevDestinationCases.has(pair.tax_case_key as TaxCaseKey) ? pair.counterparty_vat_id ?? pair.country_code : undefined, euSteuersatz: pair.tax_rate == null ? undefined : Number(pair.tax_rate), sachverhaltLl: pair.datev_sachverhalt_ll ?? undefined })) : pairLines((await q<any>(db, `SELECT * FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [tenant(scope), entry.id])).map(mapLine)).map((pair) => ({ amount: pair.amount, debit: pair.debit.accountNumber, credit: pair.credit.accountNumber, bu: undefined, euLandUstId: datevDestinationCases.has(pair.taxCaseKey as TaxCaseKey) ? pair.debit.counterpartyVatId ?? pair.credit.counterpartyVatId ?? pair.debit.countryCode ?? pair.credit.countryCode : undefined, euSteuersatz: pair.debit.taxRate ?? pair.credit.taxRate, sachverhaltLl: pair.debit.datevSachverhaltLl ?? pair.credit.datevSachverhaltLl }));
+      for (const pair of pairs) result.push({ date: entry.posting_date, belegfeld1: String(entry.entry_number), buchungstext: entry.booking_text, konto: pair.debit, gegenkonto: pair.credit, sollHabenKennzeichen: 'S', buSchluessel: pair.bu ?? undefined, euLandUstId: pair.euLandUstId, euSteuersatz: pair.euLandUstId === undefined ? undefined : pair.euSteuersatz, sachverhaltLl: pair.sachverhaltLl, umsatz: round(pair.amount) });
     }
     return result;
   },

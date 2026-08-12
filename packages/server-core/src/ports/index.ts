@@ -457,6 +457,9 @@ export interface DatevPostingRow {
   gegenkonto: string;
   sollHabenKennzeichen: 'S' | 'H';
   buSchluessel?: string;
+  euLandUstId?: string;
+  euSteuersatz?: number;
+  sachverhaltLl?: string;
   umsatz: number;
 }
 

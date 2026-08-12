@@ -11,15 +11,17 @@ import { EUR_SOURCE_VERSION_2025, getCatalogForYear } from '@billme/desktop-serv
 import { createPostgresPool } from './connection.js';
 import { runPostgresMigrations } from './migrations.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
+import { saveServerReportAccountMapping } from './proAccounting.js';
 import { tenantCoreRowCountTables } from './billing.js';
 import {
   desktopSqliteIgnoredTables,
   desktopSqliteImportedTables,
   detectUnsupportedSqliteTables,
   importDesktopSqliteToPostgres,
+  loadAccountMappingsHgb,
   validateCanonicalEurLines,
 } from './importDesktop.js';
-import type { ServerEurLineRecord } from './proAccounting.js';
+import type { ServerEurLineRecord, ServerReportAccountMappingRecord } from './proAccounting.js';
 
 const rootUrl = new URL('../../../../', import.meta.url);
 const liteDesktopSchemaUrl = new URL('apps/desktop/db/schema.ts', rootUrl);
@@ -124,6 +126,56 @@ test('SQLite import rejects tenant-owned mutations of the global EÜR catalog', 
   validateCanonicalEurLines(rows);
   rows[0].label = 'tampered';
   assert.throws(() => validateCanonicalEurLines(rows), /does not match canonical 2025 catalog/);
+});
+
+test('Desktop reporting mappings preserve effective-date history and legacy SQLite schemas', () => {
+  const current = new Database(':memory:');
+  current.exec(`CREATE TABLE account_mappings_hgb (id TEXT PRIMARY KEY, tenant_id TEXT, chart TEXT, account_number TEXT, statement_type TEXT, position_key TEXT, position_label TEXT, balance_side TEXT, valid_from TEXT, updated_at TEXT)`);
+  const insert = current.prepare('INSERT INTO account_mappings_hgb VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  insert.run('map-2025', 'desktop', 'SKR03', '8400', 'hgb-guv', 'revenue', 'Umsatz', null, '2025-01-01', '2025-01-01T00:00:00.000Z');
+  insert.run('map-2026', 'desktop', 'SKR03', '8400', 'hgb-guv', 'material.services', 'Material', null, '2026-01-01', '2026-01-01T00:00:00.000Z');
+  const first = loadAccountMappingsHgb(current, 'tenant-import');
+  const second = loadAccountMappingsHgb(current, 'tenant-import');
+  assert.deepEqual(first.map((row) => ({ validFrom: row.validFrom, positionKey: row.positionKey, version: row.version })), [
+    { validFrom: '2025-01-01', positionKey: 'revenue', version: 20250101 },
+    { validFrom: '2026-01-01', positionKey: 'material.services', version: 20260101 },
+  ]);
+  assert.deepEqual(first.map((row) => [row.id, row.sourceHash]), second.map((row) => [row.id, row.sourceHash]));
+  current.close();
+
+  const legacy = new Database(':memory:');
+  legacy.exec(`CREATE TABLE account_mappings_hgb (id TEXT PRIMARY KEY, tenant_id TEXT, chart TEXT, account_number TEXT, statement_type TEXT, position_key TEXT, position_label TEXT, balance_side TEXT, updated_at TEXT)`);
+  legacy.prepare('INSERT INTO account_mappings_hgb VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('legacy', 'desktop', 'SKR03', '1200', 'guv', 'cash', 'Bank', 'asset', '2024-01-01T00:00:00.000Z');
+  const legacyRows = loadAccountMappingsHgb(legacy, 'tenant-import');
+  assert.deepEqual(legacyRows[0], { id: legacyRows[0]?.id, tenantId: 'tenant-import', reportType: 'management-guv', chart: 'SKR03', accountNumber: '1200', positionKey: 'asset:cash', positionLabel: 'Bank', validFrom: undefined, validTo: undefined, version: 1, source: 'desktop-import', sourceHash: legacyRows[0]?.sourceHash, createdAt: '2024-01-01T00:00:00.000Z' });
+  legacy.close();
+});
+
+test('Postgres report mapping persistence keeps 2025 and 2026 imported overrides idempotent', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const suffix = randomUUID();
+  const tenantId = `report-import-${suffix}`;
+  let createdTable = false;
+  try {
+    createdTable = !(await pool.query(`SELECT to_regclass('public.report_account_mappings') AS name`)).rows[0]?.name;
+    if (createdTable) await pool.query(`CREATE TABLE report_account_mappings (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, report_type TEXT NOT NULL, chart TEXT NOT NULL, account_number TEXT NOT NULL, position_key TEXT NOT NULL, position_label TEXT NOT NULL, valid_from TEXT, valid_to TEXT, version INTEGER NOT NULL, source TEXT NOT NULL, source_hash TEXT NOT NULL, created_by TEXT, created_at TEXT NOT NULL)`);
+    const rows: ServerReportAccountMappingRecord[] = [
+      { id: `import-${suffix}-2025`, tenantId, reportType: 'hgb-guv', chart: 'SKR03', accountNumber: '8400', positionKey: 'revenue', positionLabel: 'Umsatz', validFrom: '2025-01-01', version: 20250101, source: 'desktop-import', sourceHash: `hash-${suffix}-2025`, createdAt: '2025-01-01T00:00:00.000Z' },
+      { id: `import-${suffix}-2026`, tenantId, reportType: 'hgb-guv', chart: 'SKR03', accountNumber: '8400', positionKey: 'material.services', positionLabel: 'Material', validFrom: '2026-01-01', version: 20260101, source: 'desktop-import', sourceHash: `hash-${suffix}-2026`, createdAt: '2026-01-01T00:00:00.000Z' },
+    ];
+    for (const row of rows) {
+      await saveServerReportAccountMapping(pool, row);
+      await saveServerReportAccountMapping(pool, row);
+    }
+    const effective = async (date: string) => (await pool.query(`SELECT DISTINCT ON (account_number,report_type) position_key FROM report_account_mappings WHERE tenant_id=$1 AND chart='SKR03' AND report_type='hgb-guv' AND account_number='8400' AND valid_from <= $2 ORDER BY account_number,report_type,valid_from DESC,version DESC`, [tenantId, date])).rows[0]?.position_key;
+    assert.equal(await effective('2025-12-31'), 'revenue');
+    assert.equal(await effective('2026-12-31'), 'material.services');
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM report_account_mappings WHERE tenant_id=$1', [tenantId])).rows[0].count), 2);
+  } finally {
+    if (createdTable) await pool.query('DROP TABLE report_account_mappings').catch(() => undefined);
+    else await pool.query('DELETE FROM report_account_mappings WHERE tenant_id=$1', [tenantId]).catch(() => undefined);
+    await pool.end();
+  }
 });
 
 test('tenant-scoped postgres tables stay covered by import overwrite guards', async () => {

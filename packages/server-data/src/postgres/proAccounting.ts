@@ -196,6 +196,22 @@ export interface ServerAccountMappingHgbRecord {
   updatedAt: string;
 }
 
+export interface ServerReportAccountMappingRecord {
+  id: string;
+  tenantId: string;
+  reportType: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz';
+  chart: 'SKR03' | 'SKR04';
+  accountNumber: string;
+  positionKey: string;
+  positionLabel: string;
+  validFrom?: string;
+  validTo?: string;
+  version: number;
+  source: string;
+  sourceHash: string;
+  createdAt: string;
+}
+
 export interface ServerReportSnapshotRecord {
   id: string;
   tenantId: string;
@@ -542,6 +558,38 @@ export const saveServerJournalLine = async (db: PostgresQueryable, record: Serve
 export const saveServerAccountMappingHgb = async (db: PostgresQueryable, record: ServerAccountMappingHgbRecord): Promise<ServerAccountMappingHgbRecord> => {
   await upsert(db, schema.accountMappingsHgb, { id: record.id, tenantId: record.tenantId, chart: record.chart, accountNumber: record.accountNumber, statementType: record.statementType, positionKey: record.positionKey, positionLabel: record.positionLabel, balanceSide: record.balanceSide ?? null, updatedAt: record.updatedAt },
     [schema.accountMappingsHgb.tenantId, schema.accountMappingsHgb.chart, schema.accountMappingsHgb.accountNumber, schema.accountMappingsHgb.statementType], { positionKey: record.positionKey, positionLabel: record.positionLabel, balanceSide: record.balanceSide ?? null, updatedAt: record.updatedAt });
+  return record;
+};
+export const saveServerReportAccountMapping = async (db: PostgresQueryable, record: ServerReportAccountMappingRecord): Promise<ServerReportAccountMappingRecord> => {
+  await upsert(db, schema.reportAccountMappings, {
+    id: record.id,
+    tenantId: record.tenantId,
+    reportType: record.reportType,
+    chart: record.chart,
+    accountNumber: record.accountNumber,
+    positionKey: record.positionKey,
+    positionLabel: record.positionLabel,
+    validFrom: record.validFrom ?? null,
+    validTo: record.validTo ?? null,
+    version: record.version,
+    source: record.source,
+    sourceHash: record.sourceHash,
+    createdBy: null,
+    createdAt: record.createdAt,
+  }, schema.reportAccountMappings.id, {
+    tenantId: record.tenantId,
+    reportType: record.reportType,
+    chart: record.chart,
+    accountNumber: record.accountNumber,
+    positionKey: record.positionKey,
+    positionLabel: record.positionLabel,
+    validFrom: record.validFrom ?? null,
+    validTo: record.validTo ?? null,
+    version: record.version,
+    source: record.source,
+    sourceHash: record.sourceHash,
+    createdAt: record.createdAt,
+  });
   return record;
 };
 export const saveServerReportSnapshot = async (db: PostgresQueryable, record: ServerReportSnapshotRecord): Promise<ServerReportSnapshotRecord> => {

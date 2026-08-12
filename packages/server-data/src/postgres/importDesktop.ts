@@ -21,7 +21,6 @@ import { runPostgresMigrations } from './migrations.js';
 import { importRawTenantRows, restoreIncomingInvoiceAccountingRows } from './oposImport.js';
 import {
   saveServerAccountKeyword,
-  saveServerAccountMappingHgb,
   saveServerAccountSuggestionRule,
   saveServerAccountingPeriod,
   saveServerActiveTemplates,
@@ -42,13 +41,13 @@ import {
   saveServerLedgerAccount,
   saveServerProWorkflowEntry,
   saveServerReportSnapshot,
+  saveServerReportAccountMapping,
   saveServerTaxCase,
   saveServerTaxCaseAccountMapping,
   saveServerTaxCaseAccountMappingForTenant,
   saveServerTemplate,
   saveServerVatEvidence,
   type ServerAccountKeywordRecord,
-  type ServerAccountMappingHgbRecord,
   type ServerAccountingPeriodRecord,
   type ServerActiveTemplatesRecord,
   type ServerArticleRecord,
@@ -68,6 +67,7 @@ import {
   type ServerJournalPostingPairRecord,
   type ServerProWorkflowRecord,
   type ServerReportSnapshotRecord,
+  type ServerReportAccountMappingRecord,
   type ServerTaxCaseRecord,
   type ServerTemplateRecord,
   type ServerVatEvidenceRecord,
@@ -104,7 +104,7 @@ type SqliteJournalLineRow = { id: string; entry_id: string; line_no: number; acc
 type SqliteAssetRow = { id: string; asset_number: string; name: string; asset_class: string; status: string; activation_date: string; acquisition_cost: number; useful_life_years: number | null; depreciation_method: string; cost_center: string; location: string; receipt_linked: number; supplier: string | null; invoice_ref: string | null; asset_account_number: string; disposal_date: string | null; disposal_proceeds: number | null; acquisition_offset_account_number?: string | null; source_incoming_invoice_id?: string | null; activation_journal_entry_id?: string | null; accounting_repair_required?: number | boolean | null; accounting_repair_reason?: string | null; created_at: string; updated_at: string };
 type SqliteAssetScheduleRow = { id: string; asset_id: string; year: number; amount: number; months: number; status: string; journal_entry_id: string | null; source_type?: string | null; source_key?: string | null; posted_at: string | null };
 type SqliteAssetMovementRow = { id: string; asset_id: string; type: string; movement_date: string; amount: number; proceeds: number | null; gain_loss: number | null; journal_entry_id?: string | null; source_type?: string | null; source_key?: string | null; reason: string; created_at: string };
-type SqliteAccountMappingHgbRow = { id: string; chart: string; account_number: string; statement_type: string; position_key: string; position_label: string; balance_side: string | null; updated_at: string };
+type SqliteAccountMappingHgbRow = { id: string; chart: string; account_number: string; statement_type: string; position_key: string; position_label: string; balance_side: string | null; valid_from?: string | null; valid_to?: string | null; updated_at: string };
 type SqliteReportSnapshotRow = { id: string; report_type: string; args_json: string; payload_json: string; created_at: string };
 type SqliteDatevExportRow = { id: string; file_path: string; record_count: number; from_date: string | null; to_date: string | null; created_at: string; meta_json: string };
 type SqliteTaxCaseRow = { key: ServerTaxCaseRecord['key']; label: string; mechanism: ServerTaxCaseRecord['mechanism']; default_rate: number; requires_counterparty_vat_id: number; requires_country: number; requires_evidence: number; active: number; updated_at: string };
@@ -255,6 +255,7 @@ const parseJson = <T>(value: string | null, fallback: T): T => { if (!value) ret
 const loadSqliteModule = async (): Promise<SqliteDatabaseCtor> => { const module = await import('better-sqlite3'); return module.default as unknown as SqliteDatabaseCtor; };
 const sha256File = async (targetPath: string): Promise<string> => createHash('sha256').update(await readFile(targetPath)).digest('hex');
 const tableExists = (db: SqliteDatabaseType, table: string): boolean => Boolean((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { name?: string } | undefined)?.name);
+const tableColumns = (db: SqliteDatabaseType, table: string): Set<string> => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
 const listTables = (db: SqliteDatabaseType): string[] => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as SqliteTableRow[]).map((row) => row.name).filter(Boolean);
 const countTable = (db: SqliteDatabaseType, table: string): number => Number(((db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count) ?? 0);
 
@@ -349,7 +350,66 @@ const loadJournalLines = (db: SqliteDatabaseType, tenantId: string): ServerJourn
 const loadAssets = (db: SqliteDatabaseType): SqliteAssetRow[] => tableExists(db, 'assets') ? db.prepare('SELECT * FROM assets ORDER BY asset_number ASC').all() as SqliteAssetRow[] : [];
 const loadAssetSchedule = (db: SqliteDatabaseType): SqliteAssetScheduleRow[] => tableExists(db, 'asset_depreciation_schedule') ? db.prepare('SELECT * FROM asset_depreciation_schedule ORDER BY asset_id, year').all() as SqliteAssetScheduleRow[] : [];
 const loadAssetMovements = (db: SqliteDatabaseType): SqliteAssetMovementRow[] => tableExists(db, 'asset_movements') ? db.prepare('SELECT * FROM asset_movements ORDER BY movement_date, id').all() as SqliteAssetMovementRow[] : [];
-const loadAccountMappingsHgb = (db: SqliteDatabaseType, tenantId: string): ServerAccountMappingHgbRecord[] => tableExists(db, 'account_mappings_hgb') ? (db.prepare('SELECT * FROM account_mappings_hgb ORDER BY chart ASC, account_number ASC').all() as SqliteAccountMappingHgbRow[]).map((row) => ({ id: row.id, tenantId, chart: row.chart, accountNumber: row.account_number, statementType: row.statement_type, positionKey: row.position_key, positionLabel: row.position_label, balanceSide: row.balance_side ?? undefined, updatedAt: row.updated_at })) : [];
+const importedReportTypes = new Set<ServerReportAccountMappingRecord['reportType']>(['bwa01', 'management-guv', 'hgb-guv', 'hgb-bilanz']);
+const legacyReportTypeAliases: Record<string, ServerReportAccountMappingRecord['reportType']> = {
+  guv: 'management-guv',
+  bilanz: 'hgb-bilanz',
+  'hgb-balance': 'hgb-bilanz',
+};
+const normalizeImportedReportType = (value: string): ServerReportAccountMappingRecord['reportType'] => {
+  const normalized = value.trim().toLowerCase();
+  const reportType = importedReportTypes.has(normalized as ServerReportAccountMappingRecord['reportType'])
+    ? normalized as ServerReportAccountMappingRecord['reportType']
+    : legacyReportTypeAliases[normalized];
+  if (!reportType) throw new Error(`REPORT_MAPPING_TYPE_UNSUPPORTED:${value}`);
+  return reportType;
+};
+const normalizeImportedEffectiveDate = (value: string | null | undefined): string | undefined => {
+  if (!value) return undefined;
+  const date = value.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`REPORT_MAPPING_DATE_INVALID:${value}`);
+  return date;
+};
+const importedMappingVersion = (validFrom: string | undefined): number => validFrom ? Number(validFrom.replaceAll('-', '')) : 1;
+export const loadAccountMappingsHgb = (db: SqliteDatabaseType, tenantId: string): ServerReportAccountMappingRecord[] => {
+  if (!tableExists(db, 'account_mappings_hgb')) return [];
+  const columns = tableColumns(db, 'account_mappings_hgb');
+  const validFrom = columns.has('valid_from') ? 'valid_from' : 'NULL AS valid_from';
+  const validTo = columns.has('valid_to') ? 'valid_to' : 'NULL AS valid_to';
+  const orderValidFrom = columns.has('valid_from') ? 'valid_from' : 'NULL';
+  const rows = db.prepare(`SELECT id,chart,account_number,statement_type,position_key,position_label,balance_side,${validFrom},${validTo},updated_at FROM account_mappings_hgb ORDER BY chart ASC, account_number ASC, statement_type ASC, ${orderValidFrom} ASC, id ASC`).all() as SqliteAccountMappingHgbRow[];
+  const seen = new Set<string>();
+  return rows.map((row) => {
+    const chart = row.chart.trim().toUpperCase();
+    if (chart !== 'SKR03' && chart !== 'SKR04') throw new Error(`REPORT_MAPPING_CHART_UNSUPPORTED:${row.chart}`);
+    const reportType = normalizeImportedReportType(row.statement_type);
+    const accountNumber = row.account_number.trim();
+    const positionKey = row.position_key.trim();
+    const positionLabel = row.position_label.trim();
+    if (!accountNumber || !positionKey || !positionLabel) throw new Error(`REPORT_MAPPING_REQUIRED:${row.id}`);
+    const validFrom = normalizeImportedEffectiveDate(row.valid_from);
+    const identity = `${tenantId}:${reportType}:${chart}:${accountNumber}:${validFrom ?? 'baseline'}`;
+    if (seen.has(identity)) throw new Error(`REPORT_MAPPING_COLLISION:${identity}`);
+    seen.add(identity);
+    const source = { chart, reportType, accountNumber, positionKey, positionLabel, balanceSide: row.balance_side ?? null, validFrom, validTo: normalizeImportedEffectiveDate(row.valid_to) };
+    const sourceHash = createHash('sha256').update(JSON.stringify(source)).digest('hex');
+    return {
+      id: `report-import:${sourceHash}`,
+      tenantId,
+      reportType,
+      chart,
+      accountNumber,
+      positionKey: row.balance_side ? `${row.balance_side}:${positionKey}` : positionKey,
+      positionLabel,
+      validFrom,
+      validTo: source.validTo,
+      version: importedMappingVersion(validFrom),
+      source: 'desktop-import',
+      sourceHash,
+      createdAt: row.updated_at,
+    };
+  });
+};
 const loadReportSnapshots = (db: SqliteDatabaseType, tenantId: string): ServerReportSnapshotRecord[] => tableExists(db, 'report_snapshots') ? (db.prepare('SELECT * FROM report_snapshots ORDER BY created_at ASC, id ASC').all() as SqliteReportSnapshotRow[]).map((row) => ({ id: row.id, tenantId, reportType: row.report_type, argsJson: row.args_json, payloadJson: row.payload_json, createdAt: row.created_at })) : [];
 const loadDatevExports = (db: SqliteDatabaseType, tenantId: string): ServerDatevExportRecord[] => tableExists(db, 'datev_exports') ? (db.prepare('SELECT * FROM datev_exports ORDER BY created_at ASC, id ASC').all() as SqliteDatevExportRow[]).map((row) => ({ id: row.id, tenantId, filePath: row.file_path, recordCount: row.record_count, fromDate: row.from_date ?? undefined, toDate: row.to_date ?? undefined, createdAt: row.created_at, metaJson: row.meta_json })) : [];
 const loadTaxCases = (db: SqliteDatabaseType): ServerTaxCaseRecord[] => tableExists(db, 'tax_cases') ? (db.prepare('SELECT * FROM tax_cases ORDER BY key ASC').all() as SqliteTaxCaseRow[]).map((row) => ({ key: row.key, label: row.label, mechanism: row.mechanism, defaultRate: row.default_rate, requiresCounterpartyVatId: Boolean(row.requires_counterparty_vat_id), requiresCountry: Boolean(row.requires_country), requiresEvidence: Boolean(row.requires_evidence), active: Boolean(row.active), updatedAt: row.updated_at })) : [];
@@ -553,7 +613,7 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
             reason: row.reason, createdAt: row.created_at } as any);
           counts.assetMovements += 1;
         }
-        for (const row of loadAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerAccountMappingHgb(client, row); counts.accountMappingsHgb += 1; }
+        for (const row of loadAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerReportAccountMapping(client, row); counts.accountMappingsHgb += 1; }
         for (const row of loadReportSnapshots(sqliteDb, tenantId)) { await saveServerReportSnapshot(client, row); counts.reportSnapshots += 1; }
         for (const row of loadDatevExports(sqliteDb, tenantId)) { await saveServerDatevExport(client, row); counts.datevExports += 1; }
         for (const row of loadVatEvidence(sqliteDb, tenantId)) { await saveServerVatEvidence(client, row); counts.vatEvidence += 1; }

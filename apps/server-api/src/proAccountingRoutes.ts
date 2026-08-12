@@ -514,8 +514,6 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       const repository = service.repository;
       const payload = body.reportType === 'susa'
         ? await service.getSusaReport(session.scope, { ...args, fromDate: body.from, asOfDate: body.to ?? body.asOfDate })
-        : body.reportType === 'eur'
-          ? await repository.getEurReport(session.scope, args)
         : body.reportType === 'bilanz' || body.reportType === 'hgb-bilanz'
           ? await repository.getBilanzReport(session.scope, { asOfDate: body.asOfDate, chart: body.chart })
           : body.reportType === 'bwa01'

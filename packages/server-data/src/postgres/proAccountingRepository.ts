@@ -113,7 +113,16 @@ type DatabaseReportFor<T extends DatabaseReportType> = T extends 'bwa01'
 
 const reportKindFor = (reportType: DatabaseReportType): ReportKind => reportType === 'guv' ? 'management-guv' : reportType;
 
-const reportStatementFor = (reportType: string): ReportingMapping['statement'] => reportType === 'guv' ? 'management-guv' : reportType as ReportingMapping['statement'];
+const reportStatementFor = (reportType: string): ReportingMapping['statement'] | undefined => {
+  switch (reportType) {
+    case 'bwa01': return 'bwa01';
+    case 'guv':
+    case 'management-guv': return 'management-guv';
+    case 'hgb-guv': return 'hgb-guv';
+    case 'hgb-bilanz': return 'hgb-bilanz';
+    default: return undefined;
+  }
+};
 
 const reportProfile = async (db: PostgresQueryable, t: string, activeChart: 'SKR03' | 'SKR04'): Promise<ReportingCalculationProfile> => {
   const rows = await q<any>(db, `SELECT settings_json FROM server_settings WHERE tenant_id=$1 LIMIT 1`, [t]);
@@ -126,21 +135,24 @@ const reportProfile = async (db: PostgresQueryable, t: string, activeChart: 'SKR
 
 const reportMappings = async (db: PostgresQueryable, scope: TenantScope, chart: 'SKR03' | 'SKR04', asOfDate?: string): Promise<ReportingMapping[]> => {
   const rows = await q<any>(db, `SELECT DISTINCT ON (account_number,report_type) account_number,report_type,position_key,position_label FROM report_account_mappings WHERE tenant_id=$1 AND chart=$2 AND (valid_from IS NULL OR valid_from <= COALESCE($3,CURRENT_DATE::text)) AND (valid_to IS NULL OR valid_to >= COALESCE($3,CURRENT_DATE::text)) ORDER BY account_number,report_type,version DESC`, [tenant(scope), chart, asOfDate ?? null]);
-  return rows.map((row) => {
+  return rows.map((row): ReportingMapping | null => {
     const rawPosition = String(row.position_key);
     const explicitSide = rawPosition.match(/^(asset|liability):(.+)$/);
     const reportType = String(row.report_type);
-    const catalogSide = reportType === 'hgb-bilanz' || reportType === 'bilanz'
+    const statement = reportStatementFor(reportType);
+    if (!statement) return null;
+    const catalogSide: ReportingMapping['side'] = reportType === 'hgb-bilanz'
       ? rawPosition.startsWith('assets.') ? 'asset' : /^(equity|provisions|liabilities|deferred-income)(?:\.|$)/.test(rawPosition) ? 'liability' : undefined
       : undefined;
+    const side: ReportingMapping['side'] = explicitSide?.[1] === 'asset' || explicitSide?.[1] === 'liability' ? explicitSide[1] : catalogSide;
     return {
       accountNumber: String(row.account_number),
-      statement: reportStatementFor(reportType),
+      statement,
       position: explicitSide?.[2] ?? rawPosition,
       label: String(row.position_label ?? row.position_key),
-      ...((reportType === 'hgb-bilanz' || reportType === 'bilanz') && (explicitSide?.[1] ?? catalogSide) ? { side: (explicitSide?.[1] ?? catalogSide) as 'asset' | 'liability' } : {}),
+      ...(reportType === 'hgb-bilanz' && side ? { side } : {}),
     };
-  });
+  }).filter((mapping): mapping is ReportingMapping => mapping !== null);
 };
 
 const calculateDatabaseReport = async <T extends DatabaseReportType>(db: PostgresQueryable, scope: TenantScope, reportType: T, args: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<DatabaseReportFor<T>> => {
@@ -541,6 +553,7 @@ export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGu
   getBwa01Report(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }): Promise<ReportResult<Bwa01Report>>;
   getGuvReport(scope: TenantScope, args?: { from?: string; to?: string; profile?: 'guv' | 'management-guv' | 'hgb-guv' }): Promise<ReportResult<ManagementGuvReport | HgbGuvReport>>;
   getBilanzReport(scope: TenantScope, args?: { asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<ReportResult<HgbBilanzReport>>;
+  getReportingReport(scope: TenantScope, args: { kind: ReportKind; from?: string; to?: string; asOfDate?: string }): Promise<ReportResult<object>>;
   getEurReport(scope: TenantScope, args?: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<never>;
   listReportSnapshots(scope: TenantScope, reportType?: string): Promise<ReportSnapshotRecord[]>;
   getReportSnapshot(scope: TenantScope, id: string): Promise<ReportSnapshotRecord>;
@@ -571,6 +584,14 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   },
   async getEurReport() {
     throw new Error('EUR_SERVER_REPORT_UNAVAILABLE');
+  },
+  async getReportingReport(scope, args) {
+    const kind = args.kind.replaceAll('_', '-');
+    if (kind === 'bwa01') return calculateDatabaseReport(db, scope, 'bwa01', args);
+    if (kind === 'management-guv') return calculateDatabaseReport(db, scope, 'management-guv', args);
+    if (kind === 'hgb-guv') return calculateDatabaseReport(db, scope, 'hgb-guv', args);
+    if (kind === 'hgb-bilanz') return calculateDatabaseReport(db, scope, 'hgb-bilanz', args);
+    throw new Error(`REPORT_KIND_UNAVAILABLE:${args.kind}`);
   },
   async listReportSnapshots(scope, reportType) { return listReportSnapshots(db, scope, reportType); },
   async getReportSnapshot(scope, id) { const snapshot = await getReportSnapshot(db, scope, id); if (!snapshot) throw new Error('REPORT_SNAPSHOT_NOT_FOUND'); return snapshot; },

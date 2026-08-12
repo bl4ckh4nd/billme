@@ -83,7 +83,9 @@ test('BWA01, HGB GKV and HGB Bilanz are derived from the same neutral ledger', (
   assert.equal(calculateBwa01(input).totals.operatingResult, 600);
   assert.equal(calculateHgbGuv(input).rows.find((row) => row.position === 'revenue')?.amount, 1000);
   assert.equal(calculateHgbGuv(input).netResult, 600);
-  assert.deepEqual(calculateHgbBilanz(input).totals, { assets: 1600, liabilities: 1000, delta: 600 });
+  const balance = calculateHgbBilanz(input);
+  assert.deepEqual(balance.totals, { assets: 1600, liabilities: 1600, delta: 0 });
+  assert.equal(balance.liabilities.find((row) => row.position === 'equity.result')?.amount, 600);
 });
 
 test('EÜR reconciliation is calendar-year-only and compares cash with ledger', () => {
@@ -164,4 +166,43 @@ test('micro and small balance output follows the committed statutory hierarchy',
     );
     assert.equal(report.assets.find((row) => row.position === 'assets.current')?.amount, 100);
   }
+});
+
+test('closed equity result is authoritative and is not double-counted', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 1600, creditTurnover: 0 },
+      { accountNumber: '3000', openingBalance: -1000, debitTurnover: 0, creditTurnover: 0 },
+      { accountNumber: '3100', openingBalance: -600, debitTurnover: 0, creditTurnover: 0 },
+      { accountNumber: '4000', openingBalance: 0, debitTurnover: 400, creditTurnover: 0 },
+      { accountNumber: '8000', openingBalance: 0, debitTurnover: 0, creditTurnover: 1000 },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' },
+      { accountNumber: '3000', statement: 'hgb-bilanz', position: 'equity', side: 'liability' },
+      { accountNumber: '3100', statement: 'hgb-bilanz', position: 'equity.result', side: 'liability' },
+      { accountNumber: '4000', statement: 'hgb-guv', position: 'material' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.mappingHealth.blocking, false);
+  assert.deepEqual(report.totals, { assets: 1600, liabilities: 1600, delta: 0 });
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 600);
+});
+
+test('HGB balance blocks when the current HGB GuV mapping is missing', () => {
+  const report = calculateHgbBilanz(request({
+    ledger: { entries: [{ postingDate: '2025-07-10', lines: [
+      { accountNumber: '1000', debit: 1000, credit: 0 },
+      { accountNumber: '8000', debit: 0, credit: 1000 },
+    ] }] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' },
+      { accountNumber: '8000', statement: 'bwa01', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.mappingHealth.blocking, true);
+  assert.deepEqual(report.assets, []);
+  assert.ok(report.mappingHealth.warnings.some((warning) => warning.includes('HGB-GuV')));
 });

@@ -508,11 +508,11 @@ function childKeys(catalog: PublicReportCatalog, key: string): string[] {
 function balancePositionValue(catalog: PublicReportCatalog, values: Map<string, PositionValue>, key: string): PositionValue {
   const direct = values.get(key);
   const children = childKeys(catalog, key);
-  if (!children.length || direct) return direct ?? { amount: 0, accounts: new Set<string>() };
+  if (!children.length) return direct ?? { amount: 0, accounts: new Set<string>() };
   const nested = children.map((child) => balancePositionValue(catalog, values, child));
   return {
-    amount: nested.reduce((sum, value) => sum + value.amount, 0),
-    accounts: new Set(nested.flatMap((value) => [...value.accounts])),
+    amount: (direct?.amount ?? 0) + nested.reduce((sum, value) => sum + value.amount, 0),
+    accounts: new Set([...(direct?.accounts ?? []), ...nested.flatMap((value) => [...value.accounts])]),
   };
 }
 
@@ -520,7 +520,27 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
   const context = makeContext(request);
   const catalog = catalogFor('bilanz', context.profile.size);
   const prepared = balanceValues(context, catalog);
-  if (prepared.hardBlock) return envelope(context, 'hgb-bilanz', { assets: [], liabilities: [], totals: { assets: 0, liabilities: 0, delta: 0 } }, prepared.mappingHealth);
+  const hasClosedResult = prepared.values.has('equity.result');
+  let mappingHealth = prepared.mappingHealth;
+  if (!hasClosedResult) {
+    const guv = calculateHgbGuv(request);
+    if (guv.mappingHealth.blocking) {
+      mappingHealth = {
+        mappedAccounts: Math.min(mappingHealth.mappedAccounts, guv.mappingHealth.mappedAccounts),
+        inferredAccounts: 0,
+        unmappedAccounts: [...new Set([...mappingHealth.unmappedAccounts, ...guv.mappingHealth.unmappedAccounts])].sort(),
+        warnings: [...new Set([...mappingHealth.warnings, ...guv.mappingHealth.warnings, 'HGB-Bilanz benötigt eine vollständige aktuelle HGB-GuV-Zuordnung für den Jahresüberschuss/Jahresfehlbetrag'])],
+        blocking: true,
+      };
+    } else {
+      const resultPosition = catalog.positions.find((position) => position.key === 'equity.result');
+      if (resultPosition) {
+        const accountNumbers = guv.rows.flatMap((row) => row.accountNumbers);
+        prepared.values.set('equity.result', { amount: cents(guv.netResult), accounts: new Set(accountNumbers) });
+      }
+    }
+  }
+  if (prepared.hardBlock || mappingHealth.blocking) return envelope(context, 'hgb-bilanz', { assets: [], liabilities: [], totals: { assets: 0, liabilities: 0, delta: 0 } }, mappingHealth);
   const makeRows = (side: 'asset' | 'liability'): ReportingLine[] => catalog.positions
     .filter((position) => side === 'asset' ? position.key.startsWith('assets.') : !position.key.startsWith('assets.'))
     .sort((left, right) => left.order - right.order)
@@ -541,7 +561,7 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
     assets,
     liabilities,
     totals: { assets: amount(totalAssets), liabilities: amount(totalLiabilities), delta: amount(totalAssets - totalLiabilities) },
-  }, prepared.mappingHealth);
+  }, mappingHealth);
 }
 
 const eurPositions = new Set(['income', 'expense', 'tax', 'transfer', 'private', 'other']);

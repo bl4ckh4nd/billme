@@ -16,6 +16,7 @@ import {
   saveDraft,
 } from '../services/mockBookingStore';
 import AccountCombobox from './AccountCombobox';
+import { getBankAccountNumber } from './ReconciliationWorkbench';
 import { Account, BookingAction, BookingDraft, Transaction, UserRole } from '../types';
 import InboxQueueTabs from './InboxQueueTabs';
 import IssueBadges from './IssueBadges';
@@ -73,7 +74,8 @@ export default function InboxView({
 
   const previewTx = previewId ? filtered.find((tx) => tx.id === previewId) ?? null : null;
   const previewDraft = previewTx ? getBookingDraftByTransactionId(previewTx.id) : undefined;
-  const previewCounterLine = previewDraft?.lines.find((line) => line.accountId !== '1200') ?? previewDraft?.lines[0];
+  const previewBankAccountNumber = previewDraft ? getBankAccountNumber(previewDraft, accountOptions) : undefined;
+  const previewCounterLine = previewDraft?.lines.find((line) => line.accountId !== previewBankAccountNumber) ?? previewDraft?.lines[0];
   const previewAccountEditable = !!previewDraft && !['posted', 'reversed'].includes(previewDraft.workflowStatus);
 
   const selectedSet = new Set(selectedIds);
@@ -126,9 +128,9 @@ export default function InboxView({
 
     for (const id of ids) {
       const draft = getBookingDraftByTransactionId(id);
-      if (!draft) { skipped += 1; return; }
+      if (!draft) { skipped += 1; continue; }
       const allowed = getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues);
-      if (!allowed.includes(preferredAction)) { skipped += 1; return; }
+      if (!allowed.includes(preferredAction)) { skipped += 1; continue; }
       try {
         await dispatchBookingAction(id, preferredAction, { role, actorName: role });
         success += 1;
@@ -158,13 +160,14 @@ export default function InboxView({
     let skipped = 0;
     for (const id of ids) {
       const draft = getBookingDraftByTransactionId(id);
-      if (!draft || ['posted', 'reversed'].includes(draft.workflowStatus)) { skipped += 1; return; }
+      if (!draft || ['posted', 'reversed'].includes(draft.workflowStatus)) { skipped += 1; continue; }
       try {
         const nextLines = [...draft.lines];
-        const targetIndex = nextLines.findIndex((line) => line.accountId !== '1200');
+        const bankAccountNumber = getBankAccountNumber(draft, accountOptions);
+        const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
         const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
         const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
-        if (index < 0) { skipped += 1; return; }
+        if (index < 0) { skipped += 1; continue; }
         nextLines[index] = {
           ...nextLines[index],
           accountId: account.number,
@@ -200,7 +203,8 @@ export default function InboxView({
     const draft = getBookingDraftByTransactionId(txId);
     if (!draft) return;
     const nextLines = [...draft.lines];
-    const targetIndex = nextLines.findIndex((line) => line.accountId !== '1200');
+    const bankAccountNumber = getBankAccountNumber(draft, accountOptions);
+    const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
     const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
     if (index < 0) return;
@@ -222,7 +226,8 @@ export default function InboxView({
     const draft = getBookingDraftByTransactionId(txId);
     if (!draft) return;
     const nextLines = [...draft.lines];
-    const targetIndex = nextLines.findIndex((line) => line.accountId !== '1200');
+    const bankAccountNumber = getBankAccountNumber(draft, accountOptions);
+    const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
     const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
     if (index < 0) return;
@@ -394,17 +399,7 @@ export default function InboxView({
                 return (
                   <tr
                     key={tx.id}
-                    onClick={() => setPreviewId((current) => (current === tx.id ? null : tx.id))}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        setPreviewId((current) => (current === tx.id ? null : tx.id));
-                      }
-                    }}
-                    tabIndex={0}
-                    role="button"
-                    aria-selected={isSelectedPreview}
-                    className={`hover:bg-gray-50/60 transition-colors cursor-pointer ${
+                    className={`hover:bg-gray-50/60 transition-colors ${
                       isSelectedPreview ? 'bg-gray-50/90 border-l-2 border-dark-1' : ''
                     } ${blockerCount > 0 ? 'border-l-2 border-error-border' : ''}`}
                   >
@@ -426,8 +421,16 @@ export default function InboxView({
                       {new Date(tx.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
                     </td>
                     <td className="px-3 py-4 align-top">
-                      <div className="font-bold text-gray-900 text-sm">{tx.payee}</div>
-                      <div className="text-xs text-gray-500 mt-0.5 line-clamp-1">{tx.description}</div>
+                      <button
+                        type="button"
+                        onClick={() => setPreviewId((current) => (current === tx.id ? null : tx.id))}
+                        aria-label={`${tx.payee} öffnen`}
+                        aria-pressed={isSelectedPreview}
+                        className="w-full text-left rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
+                      >
+                        <div className="font-bold text-gray-900 text-sm">{tx.payee}</div>
+                        <div className="text-xs text-gray-500 mt-0.5 line-clamp-1">{tx.description}</div>
+                      </button>
                     </td>
                     <td className="px-3 py-4 text-right align-top">
                       <div className="flex flex-col items-end gap-1">

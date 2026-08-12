@@ -102,18 +102,23 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
               {rows.map((row) => (
                 <tr
                   key={row.accountNumber}
-                  className="hover:bg-gray-50 cursor-pointer"
-                  onClick={() => onSelectRow(row)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      onSelectRow(row);
-                    }
-                  }}
-                  tabIndex={0}
-                  role="button"
+                  className="hover:bg-gray-50"
                 >
-                  <td className="px-3 py-2.5 font-bold text-gray-800 whitespace-nowrap">{row.accountNumber}</td>
+                  <td className="px-3 py-2.5 font-bold text-gray-800 whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => onSelectRow(row)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          onSelectRow(row);
+                        }
+                      }}
+                      className="rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
+                    >
+                      {row.accountNumber}
+                    </button>
+                  </td>
                   <td className="px-3 py-2.5 text-gray-700">{row.accountName}</td>
                   <td className="px-3 py-2.5 text-right font-medium text-gray-700">{euro(row.openingBalance)}</td>
                   <td className="px-3 py-2.5 text-right font-medium text-gray-700">{euro(row.debitTurnover)}</td>

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { GuvLine, GuvReport, ReportFilterState } from '../../domain/reportTypes';
+import { GuvLine, GuvReport } from '../../domain/reportTypes';
 import ReportSummaryCards from './ReportSummaryCards';
 
 function euro(value: number) {
@@ -9,7 +9,6 @@ function euro(value: number) {
 
 interface GuvViewProps {
   report: GuvReport | null;
-  compareMode: ReportFilterState['compareMode'];
   onSelectLine: (line: GuvLine) => void;
 }
 
@@ -33,7 +32,7 @@ function flattenVisible(lines: GuvLine[], expanded: Set<string>, level = 0): Fla
   });
 }
 
-export default function GuvView({ report, compareMode, onSelectLine }: GuvViewProps) {
+export default function GuvView({ report, onSelectLine }: GuvViewProps) {
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
 
   const defaultExpanded = useMemo<string[]>(() => (report ? collectExpandable(report.lines) : []), [report]);
@@ -89,36 +88,20 @@ export default function GuvView({ report, compareMode, onSelectLine }: GuvViewPr
             <colgroup>
               <col className="w-[55%]" />
               <col className="w-[15%]" />
-              {compareMode !== 'none' ? <col className="w-[15%]" /> : null}
-              {compareMode !== 'none' ? <col className="w-[15%]" /> : null}
             </colgroup>
             <thead className="sticky top-0 bg-gray-50 z-10">
               <tr className="text-xs uppercase tracking-wide text-gray-500">
                 <th scope="col" className="px-3 py-3 text-left font-bold">Position</th>
                 <th scope="col" className="px-3 py-3 text-right font-bold">Aktuell</th>
-                {compareMode !== 'none' && <th scope="col" className="px-3 py-3 text-right font-bold">Vergleich</th>}
-                {compareMode !== 'none' && <th scope="col" className="px-3 py-3 text-right font-bold">Delta</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {visibleLines.map(({ line, level }) => {
                 const hasChildren = Boolean(line.children?.length);
-                const delta = (line.amountCompare ?? 0) !== undefined && line.amountCompare !== undefined
-                  ? line.amountCurrent - line.amountCompare
-                  : undefined;
                 return (
                   <tr
                     key={line.id}
-                    className={`cursor-pointer hover:bg-gray-50 ${line.isSubtotal ? 'bg-gray-50/70' : ''}`}
-                    onClick={() => onSelectLine(line)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        onSelectLine(line);
-                      }
-                    }}
-                    tabIndex={0}
-                    role="button"
+                    className={`hover:bg-gray-50 ${line.isSubtotal ? 'bg-gray-50/70' : ''}`}
                   >
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-2" style={{ paddingLeft: `${level * 16}px` }}>
@@ -137,7 +120,17 @@ export default function GuvView({ report, compareMode, onSelectLine }: GuvViewPr
                         ) : (
                           <span className="w-6 h-6" />
                         )}
-                        <div className="min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => onSelectLine(line)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              onSelectLine(line);
+                            }
+                          }}
+                          className="min-w-0 text-left rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
+                        >
                           <div className={`font-medium ${line.isSubtotal ? 'font-bold text-gray-900' : 'text-gray-800'}`}>
                             <span className="text-gray-400 mr-2">{line.code}</span>
                             {line.label}
@@ -145,22 +138,12 @@ export default function GuvView({ report, compareMode, onSelectLine }: GuvViewPr
                           {line.accountRefs?.length ? (
                             <div className="text-xs text-gray-500">Konten: {line.accountRefs.join(', ')}</div>
                           ) : null}
-                        </div>
+                        </button>
                       </div>
                     </td>
                     <td className={`px-3 py-2.5 text-right font-bold ${line.amountCurrent < 0 ? 'text-red-700' : 'text-gray-900'}`}>
                       {euro(line.amountCurrent)}
                     </td>
-                    {compareMode !== 'none' && (
-                      <td className={`px-3 py-2.5 text-right font-medium ${(line.amountCompare ?? 0) < 0 ? 'text-red-700' : 'text-gray-700'}`}>
-                        {line.amountCompare !== undefined ? euro(line.amountCompare) : '—'}
-                      </td>
-                    )}
-                    {compareMode !== 'none' && (
-                      <td className={`px-3 py-2.5 text-right font-medium ${delta !== undefined && delta < 0 ? 'text-red-700' : 'text-emerald-700'}`}>
-                        {delta !== undefined ? euro(delta) : '—'}
-                      </td>
-                    )}
                   </tr>
                 );
               })}

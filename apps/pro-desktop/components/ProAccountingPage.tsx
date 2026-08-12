@@ -199,6 +199,8 @@ export const ProAccountingPage: React.FC = () => {
   });
   const importSkr = useImportSkrMutation();
   const [showRulesModal, setShowRulesModal] = React.useState(false);
+  const [importMessage, setImportMessage] = React.useState<string | null>(null);
+  const [importFailed, setImportFailed] = React.useState(false);
   const [adapterBusy, setAdapterBusy] = React.useState(false);
   const [adapterError, setAdapterError] = React.useState<string | null>(null);
 
@@ -255,6 +257,18 @@ export const ProAccountingPage: React.FC = () => {
     }
   }, [invalidateProQueries]);
 
+  const handleImportSkr = async () => {
+    setImportMessage(null);
+    setImportFailed(false);
+    try {
+      await importSkr.mutateAsync({ preferredSource: 'auto' });
+      setImportMessage('Kontenrahmen erfolgreich importiert.');
+    } catch (error) {
+      setImportFailed(true);
+      setImportMessage(error instanceof Error ? error.message : 'Kontenrahmen konnte nicht importiert werden.');
+    }
+  };
+
   const dataAdapter = React.useMemo<ProAccountingDataAdapter>(() => {
     const setTxWorkflowStatus = (transactionId: string, workflowStatus: ProUiTransaction['workflowStatus']) => {
       const idx = adapterTransactionsRef.current.findIndex((tx) => tx.id === transactionId);
@@ -264,25 +278,6 @@ export const ProAccountingPage: React.FC = () => {
         workflowStatus,
       };
     };
-    const patchExceptionCase = (
-      transactionId: string,
-      patch: Partial<NonNullable<ProUiTransaction['exceptionCase']>>,
-    ): ProUiTransaction => {
-      const idx = adapterTransactionsRef.current.findIndex((tx) => tx.id === transactionId);
-      if (idx === -1) throw new Error('Transaction not found');
-      const tx = adapterTransactionsRef.current[idx];
-      const next = {
-        ...tx,
-        exceptionCase: {
-          state: 'open' as const,
-          ...(tx.exceptionCase ?? {}),
-          ...patch,
-        },
-      };
-      adapterTransactionsRef.current[idx] = next;
-      return structuredClone(next);
-    };
-
     return {
       hydrate(seedData) {
         adapterTransactionsRef.current = structuredClone(seedData.transactions ?? []);
@@ -367,39 +362,6 @@ export const ProAccountingPage: React.FC = () => {
         const draft = adapterDraftsRef.current.get(transactionId);
         return structuredClone(draft?.activity ?? []);
       },
-      updateExceptionCase(transactionId, patch) {
-        return patchExceptionCase(transactionId, patch);
-      },
-      assignExceptionOwner(transactionId, owner) {
-        return patchExceptionCase(transactionId, { owner, state: 'open' });
-      },
-      snoozeException(transactionId, snoozedUntil, _actorName, note) {
-        return patchExceptionCase(transactionId, { state: 'snoozed', snoozedUntil, resolutionNote: note });
-      },
-      resolveException(transactionId, resolutionNote, actorName) {
-        return patchExceptionCase(
-          transactionId,
-          {
-            state: 'resolved',
-            resolutionNote,
-            resolvedAt: new Date().toISOString(),
-            resolvedBy: actorName,
-          },
-        );
-      },
-      reopenException(transactionId) {
-        return patchExceptionCase(
-          transactionId,
-          { state: 'open', snoozedUntil: undefined, resolvedAt: undefined, resolvedBy: undefined },
-        );
-      },
-      setTransactionReceiptStatus(transactionId, hasReceipt) {
-        const idx = adapterTransactionsRef.current.findIndex((tx) => tx.id === transactionId);
-        if (idx === -1) throw new Error('Transaction not found');
-        const next = { ...adapterTransactionsRef.current[idx], hasReceipt };
-        adapterTransactionsRef.current[idx] = next;
-        return structuredClone(next);
-      },
       async getSusaReport(filters) {
         const [report, accounts] = await Promise.all([
           ipc.pro.getSusaReport({ asOfDate: filters.asOfDate }),
@@ -471,9 +433,11 @@ export const ProAccountingPage: React.FC = () => {
         <p className="mt-2 text-sm text-gray-600">
           Bitte laden Sie zuerst den SKR03/04 Kontenrahmen für die Pro-Buchhaltung.
         </p>
+        {importMessage && <div className={`mt-3 text-sm ${importFailed ? 'text-error' : 'text-success'}`} role={importFailed ? 'alert' : 'status'} aria-live={importFailed ? 'assertive' : 'polite'}>{importMessage}</div>}
         <button
-          onClick={() => void importSkr.mutateAsync({ preferredSource: 'auto' })}
+          onClick={() => void handleImportSkr()}
           disabled={importSkr.isPending}
+          aria-busy={importSkr.isPending}
           className="mt-5 px-5 py-2.5 rounded-xl bg-black text-white text-sm font-semibold disabled:opacity-60"
         >
           {importSkr.isPending ? 'Import läuft…' : 'SKR03/04 importieren'}

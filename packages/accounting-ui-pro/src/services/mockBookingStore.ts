@@ -49,12 +49,11 @@ export interface ProAccountingDataAdapter {
     transactionId: string,
     patch: Partial<NonNullable<Transaction['exceptionCase']>>,
     actorName: string,
-  ) => Transaction;
-  assignExceptionOwner?: (transactionId: string, owner: string, actorName: string) => Transaction;
-  snoozeException?: (transactionId: string, snoozedUntil: string, actorName: string, note?: string) => Transaction;
-  resolveException?: (transactionId: string, resolutionNote: string, actorName: string) => Transaction;
-  reopenException?: (transactionId: string, actorName: string) => Transaction;
-  setTransactionReceiptStatus?: (transactionId: string, hasReceipt: boolean, actorName: string) => Transaction;
+  ) => MaybePromise<Transaction>;
+  assignExceptionOwner?: (transactionId: string, owner: string, actorName: string) => MaybePromise<Transaction>;
+  snoozeException?: (transactionId: string, snoozedUntil: string, actorName: string, note?: string) => MaybePromise<Transaction>;
+  resolveException?: (transactionId: string, resolutionNote: string, actorName: string) => MaybePromise<Transaction>;
+  reopenException?: (transactionId: string, actorName: string) => MaybePromise<Transaction>;
   getSusaReport?: (filters: ReportFilterState) => Promise<SusaReport>;
   getGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   getBalanceSheetPreview?: (filters: ReportFilterState) => Promise<BalanceSheetPreview>;
@@ -92,18 +91,16 @@ function getTxIndexById(id: string) {
   return transactions.findIndex((tx) => tx.id === id);
 }
 
-function persistPair(transactionId: string) {
+async function persistPair(transactionId: string) {
   const tx = transactions.find((item) => item.id === transactionId);
   const draft = drafts.find((item) => item.transactionId === transactionId);
   if (!tx || !draft || !persistenceHooks.onPersistEntry) return;
-  void Promise.resolve(
+  await Promise.resolve(
     persistenceHooks.onPersistEntry({
       transaction: clone(tx),
       draft: clone(draft),
     }),
-  ).catch((error) => {
-    console.warn('[accounting-ui-pro] persist hook failed', error);
-  });
+  );
 }
 
 export function configureStorePersistence(hooks: StorePersistenceHooks) {
@@ -195,35 +192,44 @@ export function getBookingDraftByTransactionId(transactionId: string): BookingDr
   return draft ? clone(draft) : undefined;
 }
 
-export function saveDraft(draft: BookingDraft, actorName = 'Mara Buchhaltung'): BookingDraft | Promise<BookingDraft> {
+export async function saveDraft(draft: BookingDraft, actorName = 'Mara Buchhaltung'): Promise<BookingDraft> {
   if (dataAdapter?.saveDraft) {
-    const saved = dataAdapter.saveDraft(clone(draft), actorName);
-    return saved instanceof Promise ? saved.then(clone) : clone(saved);
+    return clone(await dataAdapter.saveDraft(clone(draft), actorName));
   }
   const index = getDraftIndexById(draft.id);
   if (index === -1) throw new Error('Draft not found');
-  drafts[index] = clone(draft);
-  drafts[index].activity.unshift({
-    id: `save-${Date.now()}`,
-    at: new Date().toISOString(),
-    actorId: 'local-user',
-    actorName,
-    type: 'field_changed',
-    label: 'Entwurf gespeichert',
-  });
-  revalidateDraftAndSyncTransaction(drafts[index]);
-  persistPair(drafts[index].transactionId);
-  return clone(drafts[index]);
+  const previousDraft = clone(drafts[index]);
+  const previousTransaction = transactions.find((tx) => tx.id === draft.transactionId);
+  try {
+    drafts[index] = clone(draft);
+    drafts[index].activity.unshift({
+      id: `save-${Date.now()}`,
+      at: new Date().toISOString(),
+      actorId: 'local-user',
+      actorName,
+      type: 'field_changed',
+      label: 'Entwurf gespeichert',
+    });
+    revalidateDraftAndSyncTransaction(drafts[index]);
+    await persistPair(drafts[index].transactionId);
+    return clone(drafts[index]);
+  } catch (error) {
+    drafts[index] = previousDraft;
+    if (previousTransaction) {
+      const txIndex = getTxIndexById(previousTransaction.id);
+      if (txIndex !== -1) transactions[txIndex] = previousTransaction;
+    }
+    throw error;
+  }
 }
 
-export function dispatchBookingAction(
+export async function dispatchBookingAction(
   transactionId: string,
   action: BookingAction,
   options: { role: UserRole; actorName?: string; rejectReason?: string } = { role: 'bookkeeper' },
-): BookingDraft | Promise<BookingDraft> {
+): Promise<BookingDraft> {
   if (dataAdapter?.dispatchBookingAction) {
-    const dispatched = dataAdapter.dispatchBookingAction(transactionId, action, options);
-    return dispatched instanceof Promise ? dispatched.then(clone) : clone(dispatched);
+    return clone(await dataAdapter.dispatchBookingAction(transactionId, action, options));
   }
   const draft = getBookingDraftByTransactionId(transactionId);
   const tx = getTransactionById(transactionId);
@@ -247,10 +253,21 @@ export function dispatchBookingAction(
   });
 
   const draftIndex = getDraftIndexById(transitioned.id);
-  drafts[draftIndex] = transitioned;
-  revalidateDraftAndSyncTransaction(drafts[draftIndex]);
-  persistPair(transactionId);
-  return clone(drafts[draftIndex]);
+  const previousDraft = clone(drafts[draftIndex]);
+  const previousTransaction = transactions.find((item) => item.id === transactionId);
+  try {
+    drafts[draftIndex] = transitioned;
+    revalidateDraftAndSyncTransaction(drafts[draftIndex]);
+    await persistPair(transactionId);
+    return clone(drafts[draftIndex]);
+  } catch (error) {
+    drafts[draftIndex] = previousDraft;
+    if (previousTransaction) {
+      const txIndex = getTxIndexById(previousTransaction.id);
+      if (txIndex !== -1) transactions[txIndex] = previousTransaction;
+    }
+    throw error;
+  }
 }
 
 export function listActivity(transactionId: string) {
@@ -299,7 +316,7 @@ const buildSeedDraft = (
   const amount = Math.abs(Number(tx.amount) || 0);
   const suggestedAccount = deriveAccountSuggestion(tx, accounts);
   const clearingAccount =
-    accounts.find((account) => account.number === '1200') ??
+    accounts.find((account) => /bank|giro|konto/i.test(`${account.name} ${account.keywords?.join(' ') ?? ''}`)) ??
     accounts.find((account) => account.type === 'Asset') ??
     accounts[0];
   const fallbackText = tx.amount >= 0 ? 'Einnahme' : 'Ausgabe';
@@ -384,17 +401,19 @@ export function hydrateMockStore(seed: MockStoreSeed) {
   }
 }
 
-export function updateExceptionCase(
+export async function updateExceptionCase(
   transactionId: string,
   patch: Partial<NonNullable<Transaction['exceptionCase']>>,
   actorName: string,
 ) {
   if (dataAdapter?.updateExceptionCase) {
-    return clone(dataAdapter.updateExceptionCase(transactionId, patch, actorName));
+    return clone(await dataAdapter.updateExceptionCase(transactionId, patch, actorName));
   }
+  if (dataAdapter) throw new Error('Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.');
   const txIndex = getTxIndexById(transactionId);
   if (txIndex === -1) throw new Error('Transaction not found');
   const tx = transactions[txIndex];
+  const previousTransaction = clone(tx);
   const nextCase = {
     state: 'open' as const,
     ...(tx.exceptionCase ?? {}),
@@ -406,6 +425,7 @@ export function updateExceptionCase(
   };
 
   const draftIndex = drafts.findIndex((draft) => draft.transactionId === transactionId);
+  const previousDraft = draftIndex === -1 ? undefined : clone(drafts[draftIndex]);
   if (draftIndex !== -1) {
     drafts[draftIndex].activity.unshift({
       id: `exc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -418,23 +438,26 @@ export function updateExceptionCase(
     });
   }
 
-  if (draftIndex !== -1) {
-    persistPair(transactionId);
+  try {
+    if (draftIndex !== -1) await persistPair(transactionId);
+    return clone(transactions[txIndex]);
+  } catch (error) {
+    transactions[txIndex] = previousTransaction;
+    if (draftIndex !== -1 && previousDraft) drafts[draftIndex] = previousDraft;
+    throw error;
   }
-
-  return clone(transactions[txIndex]);
 }
 
-export function assignExceptionOwner(transactionId: string, owner: string, actorName: string) {
+export async function assignExceptionOwner(transactionId: string, owner: string, actorName: string) {
   if (dataAdapter?.assignExceptionOwner) {
-    return clone(dataAdapter.assignExceptionOwner(transactionId, owner, actorName));
+    return clone(await dataAdapter.assignExceptionOwner(transactionId, owner, actorName));
   }
   return updateExceptionCase(transactionId, { owner, state: 'open' }, actorName);
 }
 
-export function snoozeException(transactionId: string, snoozedUntil: string, actorName: string, note?: string) {
+export async function snoozeException(transactionId: string, snoozedUntil: string, actorName: string, note?: string) {
   if (dataAdapter?.snoozeException) {
-    return clone(dataAdapter.snoozeException(transactionId, snoozedUntil, actorName, note));
+    return clone(await dataAdapter.snoozeException(transactionId, snoozedUntil, actorName, note));
   }
   return updateExceptionCase(
     transactionId,
@@ -443,9 +466,9 @@ export function snoozeException(transactionId: string, snoozedUntil: string, act
   );
 }
 
-export function resolveException(transactionId: string, resolutionNote: string, actorName: string) {
+export async function resolveException(transactionId: string, resolutionNote: string, actorName: string) {
   if (dataAdapter?.resolveException) {
-    return clone(dataAdapter.resolveException(transactionId, resolutionNote, actorName));
+    return clone(await dataAdapter.resolveException(transactionId, resolutionNote, actorName));
   }
   return updateExceptionCase(transactionId, {
     state: 'resolved',
@@ -455,41 +478,13 @@ export function resolveException(transactionId: string, resolutionNote: string, 
   }, actorName);
 }
 
-export function reopenException(transactionId: string, actorName: string) {
+export async function reopenException(transactionId: string, actorName: string) {
   if (dataAdapter?.reopenException) {
-    return clone(dataAdapter.reopenException(transactionId, actorName));
+    return clone(await dataAdapter.reopenException(transactionId, actorName));
   }
   return updateExceptionCase(
     transactionId,
     { state: 'open', snoozedUntil: undefined, resolvedAt: undefined, resolvedBy: undefined },
     actorName,
   );
-}
-
-export function setTransactionReceiptStatus(transactionId: string, hasReceipt: boolean, actorName: string) {
-  if (dataAdapter?.setTransactionReceiptStatus) {
-    return clone(dataAdapter.setTransactionReceiptStatus(transactionId, hasReceipt, actorName));
-  }
-  const txIndex = getTxIndexById(transactionId);
-  if (txIndex === -1) throw new Error('Transaction not found');
-  transactions[txIndex] = {
-    ...transactions[txIndex],
-    hasReceipt,
-  };
-
-  const draftIndex = drafts.findIndex((draft) => draft.transactionId === transactionId);
-  if (draftIndex !== -1) {
-    drafts[draftIndex].activity.unshift({
-      id: `receipt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      at: new Date().toISOString(),
-      actorId: 'local-user',
-      actorName,
-      type: 'field_changed',
-      label: hasReceipt ? 'Beleg hinzugefügt (Inbox)' : 'Beleg entfernt (Inbox)',
-    });
-    revalidateDraftAndSyncTransaction(drafts[draftIndex]);
-    persistPair(transactionId);
-  }
-
-  return clone(transactions[txIndex]);
 }

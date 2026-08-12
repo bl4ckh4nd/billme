@@ -15,6 +15,7 @@ type ExceptionFilter = 'all' | 'open' | 'snoozed' | 'resolved' | 'errors' | 'war
 
 interface ExceptionCenterProps {
   role: UserRole;
+  canMutateExceptions?: boolean;
   transactions: Transaction[];
   onOpenTransaction: (transactionId: string) => void;
   onRefresh: () => void;
@@ -57,12 +58,13 @@ function matchesFilter(tx: Transaction, filter: ExceptionFilter) {
   }
 }
 
-export default function ExceptionCenter({ role, transactions, onOpenTransaction, onRefresh }: ExceptionCenterProps) {
+export default function ExceptionCenter({ role, canMutateExceptions = true, transactions, onOpenTransaction, onRefresh }: ExceptionCenterProps) {
   const [filter, setFilter] = useState<ExceptionFilter>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [ownerDraft, setOwnerDraft] = useState('Mara Buchhaltung');
   const [snoozeUntil, setSnoozeUntil] = useState('');
   const [resolutionNote, setResolutionNote] = useState('');
+  const [mutationError, setMutationError] = useState<string | null>(null);
 
   const items = useMemo(() => transactions.filter((tx) => matchesFilter(tx, filter)), [transactions, filter]);
   const selectedTx = items.find((tx) => tx.id === selectedId) ?? items[0] ?? null;
@@ -225,12 +227,15 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                   </button>
                   <button
                     onClick={() => {
-                      try {
-                        dispatchBookingAction(selectedTx.id, 'request_receipt', { role, actorName: role });
-                        onRefresh();
-                      } catch {
-                        onOpenTransaction(selectedTx.id);
-                      }
+                      void (async () => {
+                        setMutationError(null);
+                        try {
+                          await dispatchBookingAction(selectedTx.id, 'request_receipt', { role, actorName: role });
+                          onRefresh();
+                        } catch (error) {
+                          setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
+                        }
+                      })();
                     }}
                     className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50"
                   >
@@ -247,6 +252,9 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
 
               <div className="border border-gray-200 rounded-2xl bg-white p-5">
                 <div className="text-sm font-bold text-gray-900 mb-3">Exception Resolution Flow</div>
+                {!canMutateExceptions && <div className="mb-3 text-sm text-gray-500" role="status">Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.</div>}
+                {mutationError && <div className="mb-3 text-sm text-error" role="alert" aria-live="assertive">{mutationError}</div>}
+                <fieldset disabled={!canMutateExceptions} className="space-y-3">
                 <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wide text-gray-500 mb-1">
@@ -261,10 +269,15 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                         placeholder="Owner"
                       />
                       <button
-                        onClick={() => {
-                          assignExceptionOwner(selectedTx.id, ownerDraft || role, role);
-                          onRefresh();
-                        }}
+                        onClick={() => void (async () => {
+                          setMutationError(null);
+                          try {
+                            await assignExceptionOwner(selectedTx.id, ownerDraft || role, role);
+                            onRefresh();
+                          } catch (error) {
+                            setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                          }
+                        })()}
                         className="px-3 py-2 rounded-xl border border-gray-200 text-sm font-bold text-gray-700 hover:bg-gray-50"
                       >
                         Zuweisen
@@ -284,11 +297,16 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                         className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm"
                       />
                       <button
-                        onClick={() => {
+                        onClick={() => void (async () => {
                           if (!snoozeUntil) return;
-                          snoozeException(selectedTx.id, snoozeUntil, role, resolutionNote || 'Pausiert aus dem Ausnahmebereich');
-                          onRefresh();
-                        }}
+                          setMutationError(null);
+                          try {
+                            await snoozeException(selectedTx.id, snoozeUntil, role, resolutionNote || 'Pausiert aus dem Ausnahmebereich');
+                            onRefresh();
+                          } catch (error) {
+                            setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                          }
+                        })()}
                         className="px-3 py-2 rounded-xl border border-gray-200 text-sm font-bold text-gray-700 hover:bg-gray-50"
                       >
                       Pausieren
@@ -310,25 +328,36 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
 
                   <div className="flex flex-wrap gap-2">
                     <button
-                      onClick={() => {
-                        resolveException(selectedTx.id, resolutionNote || 'Manuell als gelöst markiert', role);
-                        onRefresh();
-                      }}
+                      onClick={() => void (async () => {
+                        setMutationError(null);
+                        try {
+                          await resolveException(selectedTx.id, resolutionNote || 'Manuell als gelöst markiert', role);
+                          onRefresh();
+                        } catch (error) {
+                          setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                        }
+                      })()}
                       className="px-4 py-2 rounded-full bg-black text-white text-sm font-bold hover:bg-gray-900"
                     >
                       Als gelöst markieren
                     </button>
                     <button
-                      onClick={() => {
-                        reopenException(selectedTx.id, role);
-                        onRefresh();
-                      }}
+                      onClick={() => void (async () => {
+                        setMutationError(null);
+                        try {
+                          await reopenException(selectedTx.id, role);
+                          onRefresh();
+                        } catch (error) {
+                          setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                        }
+                      })()}
                       className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50"
                     >
                       Wieder öffnen
                     </button>
                   </div>
                 </div>
+                </fieldset>
               </div>
 
               <div className="border border-gray-200 rounded-2xl bg-white p-5">

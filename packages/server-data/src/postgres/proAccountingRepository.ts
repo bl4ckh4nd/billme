@@ -38,6 +38,10 @@ const isoDate = (value: unknown): value is string => {
 const period = (date: string): string => date.slice(0, 7);
 const parse = <T>(value: unknown, fallback: T): T => { if (value == null) return fallback; try { return typeof value === 'string' ? JSON.parse(value) as T : (value as T); } catch { return fallback; } };
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export const normalizeDatevBuKey = (value: unknown): string | undefined => {
+  const normalized = String(value ?? '').trim();
+  return normalized ? normalized.padStart(4, '0') : undefined;
+};
 const issue = (code: string, message: string, fieldPath?: string): ValidationIssue => ({ id: randomUUID(), code, severity: 'error', message, fieldPath, blocking: true, source: 'system' });
 const defaultActor = { type: 'service' as const, displayName: 'server-accounting' };
 
@@ -437,7 +441,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
         JOIN journal_lines dl ON dl.id=jp.debit_line_id AND dl.tenant_id=jp.tenant_id
         JOIN journal_lines cl ON cl.id=jp.credit_line_id AND cl.tenant_id=jp.tenant_id
         WHERE jp.tenant_id=$1 AND jp.entry_id=$2 ORDER BY jp.id`, [tenant(scope), entry.id]);
-      const pairs = persisted.length ? persisted.map((pair) => ({ amount: Number(pair.amount), debit: pair.konto, credit: pair.gegenkonto, bu: pair.datev_bu_key, euLandUstId: datevDestinationCases.has(pair.tax_case_key as TaxCaseKey) ? pair.counterparty_vat_id ?? pair.country_code : undefined, euSteuersatz: pair.tax_rate == null ? undefined : Number(pair.tax_rate), sachverhaltLl: pair.datev_sachverhalt_ll ?? undefined })) : pairLines((await q<any>(db, `SELECT * FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [tenant(scope), entry.id])).map(mapLine)).map((pair) => ({ amount: pair.amount, debit: pair.debit.accountNumber, credit: pair.credit.accountNumber, bu: undefined, euLandUstId: datevDestinationCases.has(pair.taxCaseKey as TaxCaseKey) ? pair.debit.counterpartyVatId ?? pair.credit.counterpartyVatId ?? pair.debit.countryCode ?? pair.credit.countryCode : undefined, euSteuersatz: pair.debit.taxRate ?? pair.credit.taxRate, sachverhaltLl: pair.debit.datevSachverhaltLl ?? pair.credit.datevSachverhaltLl }));
+      const pairs = persisted.length ? persisted.map((pair) => ({ amount: Number(pair.amount), debit: pair.konto, credit: pair.gegenkonto, bu: normalizeDatevBuKey(pair.datev_bu_key), euLandUstId: datevDestinationCases.has(pair.tax_case_key as TaxCaseKey) ? pair.counterparty_vat_id ?? pair.country_code : undefined, euSteuersatz: pair.tax_rate == null ? undefined : Number(pair.tax_rate), sachverhaltLl: pair.datev_sachverhalt_ll ?? undefined })) : pairLines((await q<any>(db, `SELECT * FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [tenant(scope), entry.id])).map(mapLine)).map((pair) => ({ amount: pair.amount, debit: pair.debit.accountNumber, credit: pair.credit.accountNumber, bu: undefined, euLandUstId: datevDestinationCases.has(pair.taxCaseKey as TaxCaseKey) ? pair.debit.counterpartyVatId ?? pair.credit.counterpartyVatId ?? pair.debit.countryCode ?? pair.credit.countryCode : undefined, euSteuersatz: pair.debit.taxRate ?? pair.credit.taxRate, sachverhaltLl: pair.debit.datevSachverhaltLl ?? pair.credit.datevSachverhaltLl }));
       for (const pair of pairs) result.push({ date: entry.posting_date, belegfeld1: String(entry.entry_number), buchungstext: entry.booking_text, konto: pair.debit, gegenkonto: pair.credit, sollHabenKennzeichen: 'S', buSchluessel: pair.bu ?? undefined, euLandUstId: pair.euLandUstId, euSteuersatz: pair.euLandUstId === undefined ? undefined : pair.euSteuersatz, sachverhaltLl: pair.sachverhaltLl, umsatz: round(pair.amount) });
     }
     return result;

@@ -7,7 +7,7 @@ import { createSingleTenantScope } from '@billme/server-core';
 import type { PostgresQueryable, PostgresTransactionClient } from './connection.js';
 import { createPostgresPool } from './connection.js';
 import { runDrizzleMigrations } from './migrations.js';
-import { createPostgresProAccountingRepository, insertJournalPostingPair } from './proAccountingRepository.js';
+import { createPostgresProAccountingRepository, insertJournalPostingPair, normalizeDatevBuKey } from './proAccountingRepository.js';
 import { importRawTenantRows } from './oposImport.js';
 
 test('journal posting-pair insert binds every persisted column', async () => {
@@ -23,6 +23,12 @@ test('journal posting-pair insert binds every persisted column', async () => {
   assert.match(captured.text, /datev_bu_key/);
   assert.equal((captured.text.match(/\$\d+/g) ?? []).length, 9);
   assert.equal(captured.values.length, 9);
+});
+
+test('server DATEV export pads legacy numeric BU keys to canonical four digits', () => {
+  assert.equal(normalizeDatevBuKey('94'), '0094');
+  assert.equal(normalizeDatevBuKey('0094'), '0094');
+  assert.equal(normalizeDatevBuKey(undefined), undefined);
 });
 
 test('SuSa report maps inclusive from/to bounds into ledger opening and turnover dates', async () => {

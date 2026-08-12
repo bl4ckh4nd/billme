@@ -46,6 +46,7 @@ test('buildServerModeProTenantSeed adds accounting fixtures', () => {
   assert.equal(seed.templates.length, 2);
   assert.equal(seed.workflowEntries.length, 1);
   assert.equal(seed.taxCaseAccountMappings.length, 3);
+  assert.equal(seed.taxCaseAccountMappings.find((mapping) => mapping.taxCaseKey === 'EU_B2B_SERVICE_RC')?.datevBuKey, '94');
   assert.equal(seed.accountSuggestionRules.length, 1);
   assert.equal(seed.activeTemplates.invoiceTemplateId, 'pro-smoke-template-invoice');
 });

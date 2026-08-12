@@ -481,4 +481,14 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     expect(reversalPairs.every((pair) => reversalLineIds.has(pair.debit_line_id) && reversalLineIds.has(pair.credit_line_id))).toBe(true);
     expect(reversalPairs).toEqual(expect.arrayContaining([expect.objectContaining({ tax_case_key: 'DE_STD_19', datev_bu_key: '1' })]));
   });
+
+  it('rejects generic reversal of asset-owned journals', () => {
+    const db = createDb();
+    const entryId = 'asset-owned-journal';
+    db.prepare(`INSERT INTO journal_entries
+      (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, source_type, source_key, reversed_entry_id, created_at)
+      VALUES (?, 'default', 1, '2026-03-01', '2026-03-01', 'Aktivierung', NULL, '2026-03', 2026, 'posted', NULL, 'asset_activation', 'asset_activation:asset-1', NULL, datetime('now'))`).run(entryId);
+    expect(() => reverseJournalEntry(db, entryId, 'generic asset reversal', createProTenantScope('default'))).toThrow('ASSET_REVERSAL_REQUIRED');
+    expect((db.prepare('SELECT COUNT(*) AS c FROM journal_entries WHERE id = ? AND status = \'posted\'').get(entryId) as { c: number }).c).toBe(1);
+  });
 });

@@ -20,8 +20,8 @@ import type {
 import type { TenantScope } from '@billme/server-core';
 import { appendAuditLog } from './audit';
 import { getTenantId } from '../tenantScope';
-import { getAccountingPolicy, reverseJournalEntry } from './proAccountingRepo';
-import { getTaxCaseByKey, resolveDatevBuKeyForTaxCase, resolveTaxAccountsForCase } from './taxCasesRepo';
+import { getAccountingPolicy, reverseDocumentJournalEntry } from './proAccountingRepo';
+import { getTaxCaseByKey, listTaxCaseAccountMappings, resolveTaxAccountsForCase, type TaxCaseKey } from './taxCasesRepo';
 
 export type AccountingRole = AccountingAccountMapping['role'];
 export type AccountingChart = 'SKR03' | 'SKR04';
@@ -91,6 +91,15 @@ const taxCaseForRate = (rate: number, taxMode?: string | null, einvoiceCategoryC
   return Math.abs(rate - 7) < 0.01 ? 'DE_STD_7' : 'DE_STD_19';
 };
 const outputTaxAccount = (db: Database.Database, chart: AccountingChart, taxCaseKey: string, fallback: string): string => resolveTaxAccountsForCase(db, chart, taxCaseKey).outputTaxAccount ?? fallback;
+
+const resolvePostingBuKey = (db: Database.Database, chart: AccountingChart, taxCaseKey: string | undefined, postingDate: string): string | undefined => {
+  if (!taxCaseKey) return undefined;
+  const mapping = listTaxCaseAccountMappings(db, { chart, taxCaseKey: taxCaseKey as TaxCaseKey })
+    .filter((candidate) => candidate.role === 'datev_bu')
+    .filter((candidate) => (!candidate.validFrom || candidate.validFrom <= postingDate) && (!candidate.validTo || candidate.validTo >= postingDate))
+    .sort((a, b) => (b.validFrom ?? '').localeCompare(a.validFrom ?? '') || b.updatedAt.localeCompare(a.updatedAt))[0];
+  return mapping?.datevBuKey;
+};
 
 const defaultMappings: Record<AccountingChart, Record<AccountingRole, string>> = {
   SKR03: {
@@ -206,7 +215,7 @@ const insertJournal = (
       if (creditLine.remaining <= 0.0001) { creditCursor += 1; continue; }
       const pairAmount = amount(Math.min(debitLine.remaining, creditLine.remaining));
       const taxCaseKey = debitLine.taxCaseKey ?? creditLine.taxCaseKey;
-      insertPair.run(randomUUID(), tenantId, id, debitLine.id, creditLine.id, pairAmount, taxCaseKey ?? null, resolveDatevBuKeyForTaxCase(db, options.chart, taxCaseKey) ?? null, timestamp);
+      insertPair.run(randomUUID(), tenantId, id, debitLine.id, creditLine.id, pairAmount, taxCaseKey ?? null, resolvePostingBuKey(db, options.chart, taxCaseKey, postingDate) ?? null, timestamp);
       debitLine.remaining = amount(debitLine.remaining - pairAmount);
       creditLine.remaining = amount(creditLine.remaining - pairAmount);
     }
@@ -706,12 +715,35 @@ export const allocateRemainingOpenItemPayment = (db: Database.Database, scope: T
   return paymentFromRow(db.prepare('SELECT * FROM open_item_payments WHERE tenant_id = ? AND id = ?').get(tenantId, paymentId) as Record<string, any>);
 };
 
+type FinalizedInvoiceReservation = { id: string; kind: string; number: string; status: string; document_id: string };
+
+const finalizedInvoiceReservation = (db: Database.Database, row: InvoiceRow | null): FinalizedInvoiceReservation | null => row ? (db.prepare(`SELECT id, kind, number, status, document_id
+  FROM number_reservations
+  WHERE kind = 'invoice' AND status = 'finalized' AND document_id = ? AND number = ?
+  LIMIT 1`).get(row.id, row.number) as FinalizedInvoiceReservation | undefined) ?? null : null;
+
+const outgoingBackfillSourceVersion = (row: InvoiceRow, lines: RawLine[], reservation: FinalizedInvoiceReservation | null): string => sha256({
+  documentVersion: outgoingSourceVersion(row, lines),
+  eligibility: {
+    status: row.status,
+    accountingStatus: row.accounting_status,
+    reservation: reservation ? { id: reservation.id, kind: reservation.kind, number: reservation.number, status: reservation.status, documentId: reservation.document_id } : null,
+  },
+});
+
 const backfillCandidateVersion = (db: Database.Database, candidate: AccountingBackfillPreview['candidates'][number], scope: TenantScope): { sourceVersion: string; snapshot?: unknown; status: 'ready' | 'unresolved'; reason?: string } => {
   if (candidate.sourceType === 'outgoing_invoice') {
     const preview = previewOutgoingInvoice(db, scope, candidate.sourceId);
     const row = invoiceRow(db, 'default', candidate.sourceId);
     const lines = row ? invoiceLines(db, candidate.sourceId) : [];
-    return { sourceVersion: preview.snapshot?.sourceVersion ?? (row ? outgoingSourceVersion(row, lines) : sha256({ missing: candidate.sourceId })), snapshot: stableSnapshot(preview.snapshot), status: preview.status, reason: preview.issues[0]?.message };
+    const reservation = finalizedInvoiceReservation(db, row);
+    const eligible = Boolean(row && row.status !== 'draft' && reservation && row.accounting_status !== 'posted');
+    return {
+      sourceVersion: row ? outgoingBackfillSourceVersion(row, lines, reservation) : sha256({ missing: candidate.sourceId }),
+      snapshot: stableSnapshot(preview.snapshot),
+      status: eligible ? preview.status : 'unresolved',
+      reason: eligible ? preview.issues[0]?.message : 'Outgoing invoice is not finalized for accounting backfill.',
+    };
   }
   if (candidate.sourceType === 'incoming_invoice') {
     const preview = previewIncomingInvoice(db, scope, candidate.sourceId);
@@ -727,8 +759,18 @@ const backfillCandidateVersion = (db: Database.Database, candidate: AccountingBa
 export const previewAccountingBackfill = (db: Database.Database, scope: TenantScope): AccountingBackfillPreview => {
   const tenantId = assertDesktopTenant(scope); const policy = getAccountingPolicyForPro(db, scope); ensureMappingDefaults(db, tenantId);
   const candidates: AccountingBackfillPreview['candidates'] = [];
-  const invoices = db.prepare("SELECT id FROM invoices WHERE accounting_status <> 'posted' OR accounting_status IS NULL ORDER BY id").all() as Array<{ id: string }>;
-  for (const row of invoices) { const preview = previewOutgoingInvoice(db, scope, row.id); const source = invoiceRow(db, tenantId, row.id); const lines = source ? invoiceLines(db, row.id) : []; candidates.push({ sourceType: 'outgoing_invoice', sourceId: row.id, status: preview.status, reason: preview.issues[0]?.message, sourceVersion: preview.snapshot?.sourceVersion ?? (source ? outgoingSourceVersion(source, lines) : sha256({ missing: row.id })), snapshot: stableSnapshot(preview.snapshot) }); }
+  const invoices = db.prepare(`SELECT i.id
+    FROM invoices i
+    JOIN number_reservations nr ON nr.kind = 'invoice' AND nr.status = 'finalized' AND nr.document_id = i.id AND nr.number = i.number
+    WHERE i.status <> 'draft' AND (i.accounting_status <> 'posted' OR i.accounting_status IS NULL)
+    ORDER BY i.id`).all() as Array<{ id: string }>;
+  for (const row of invoices) {
+    const preview = previewOutgoingInvoice(db, scope, row.id);
+    const source = invoiceRow(db, tenantId, row.id);
+    const lines = source ? invoiceLines(db, row.id) : [];
+    const reservation = finalizedInvoiceReservation(db, source);
+    candidates.push({ sourceType: 'outgoing_invoice', sourceId: row.id, status: preview.status, reason: preview.issues[0]?.message, sourceVersion: source ? outgoingBackfillSourceVersion(source, lines, reservation) : sha256({ missing: row.id }), snapshot: stableSnapshot(preview.snapshot) });
+  }
   const incoming = db.prepare("SELECT id FROM incoming_invoices WHERE tenant_id = ? AND (accounting_status <> 'posted' OR accounting_status IS NULL) ORDER BY id").all(tenantId) as Array<{ id: string }>;
   for (const row of incoming) { const preview = previewIncomingInvoice(db, scope, row.id); const source = db.prepare('SELECT * FROM incoming_invoices WHERE tenant_id = ? AND id = ?').get(tenantId, row.id) as Record<string, any> | undefined; const invoice = source ? incomingFromRow(db, source) : undefined; candidates.push({ sourceType: 'incoming_invoice', sourceId: row.id, status: preview.status, reason: preview.issues[0]?.message, sourceVersion: preview.snapshot?.sourceVersion ?? (invoice ? incomingSourceVersion(invoice) : sha256({ missing: row.id })), snapshot: stableSnapshot(preview.snapshot) }); }
   const legacyTransactions = db.prepare('SELECT id, date, amount, type, counterparty, purpose, linked_invoice_id, status, account_id FROM transactions ORDER BY id').all() as Array<Record<string, any>>;
@@ -757,7 +799,9 @@ export const confirmAccountingBackfill = (db: Database.Database, scope: TenantSc
   const result = db.transaction(() => {
     for (const candidate of candidates) {
       if (candidate.status !== 'ready') { unresolvedCount += 1; continue; }
-      const posted = candidate.sourceType === 'outgoing_invoice' ? postOutgoingInvoice(db, scope, candidate.sourceId) : postIncomingInvoice(db, scope, candidate.sourceId, { mutation: { reason: input.reason, actor: { type: 'system', displayName: 'accounting backfill' } } });
+      const posted = candidate.sourceType === 'outgoing_invoice'
+        ? postOutgoingInvoice(db, scope, candidate.sourceId, { requireFinalizedReservation: true, reservationId: finalizedInvoiceReservation(db, invoiceRow(db, tenantId, candidate.sourceId))?.id })
+        : postIncomingInvoice(db, scope, candidate.sourceId, { mutation: { reason: input.reason, actor: { type: 'system', displayName: 'accounting backfill' } } });
       if (posted.status === 'ready') postedCount += 1; else unresolvedCount += 1;
     }
     const output: AccountingBackfillResult = { runId: input.runId, postedCount, unresolvedCount, status: 'completed' };
@@ -776,9 +820,14 @@ export const reverseDocumentAccounting = (db: Database.Database, scope: TenantSc
     const table = input.documentType === 'outgoing_invoice' ? 'invoices' : 'incoming_invoices';
     const row = db.prepare(`SELECT accounting_status, accounting_journal_entry_id FROM ${table} WHERE id = ? ${table === 'incoming_invoices' ? 'AND tenant_id = ?' : ''}`).get(...(table === 'incoming_invoices' ? [input.documentId, tenantId] : [input.documentId])) as { accounting_status: string; accounting_journal_entry_id: string | null } | undefined;
     if (!row || row.accounting_status !== 'posted' || !row.accounting_journal_entry_id) throw new Error('DOCUMENT_NOT_POSTED');
+    if (input.documentType === 'incoming_invoice' && db.prepare(`SELECT 1 FROM assets
+      WHERE tenant_id = ? AND (activation_journal_entry_id = ? OR source_incoming_invoice_id = ?)
+      LIMIT 1`).get(tenantId, row.accounting_journal_entry_id, input.documentId)) {
+      throw new Error('ASSET_CORRECTION_REQUIRED: correct linked asset before reversing its source document');
+    }
     const item = db.prepare('SELECT id FROM open_items WHERE tenant_id = ? AND source_type = ? AND source_id = ?').get(tenantId, input.documentType, input.documentId) as { id: string } | undefined;
     if (item && Number((db.prepare('SELECT COUNT(*) AS c FROM open_item_allocations WHERE tenant_id = ? AND open_item_id = ?').get(tenantId, item.id) as { c: number }).c) > 0) throw new Error('DOCUMENT_HAS_ALLOCATIONS');
-    const reversal = reverseJournalEntry(db, row.accounting_journal_entry_id, input.reason, scope, { postingDate: input.postingDate, softLockOverride: input.softLockOverride, overrideReason: input.softLockOverride ? input.overrideReason : undefined });
+    const reversal = reverseDocumentJournalEntry(db, row.accounting_journal_entry_id, input.reason, scope, { postingDate: input.postingDate, softLockOverride: input.softLockOverride, overrideReason: input.softLockOverride ? input.overrideReason : undefined });
     if (item) db.prepare("UPDATE open_items SET status = 'unresolved', residual_amount = 0, updated_at = ? WHERE tenant_id = ? AND id = ?").run(now(), tenantId, item.id);
     if (table === 'invoices') db.prepare("UPDATE invoices SET accounting_status = 'reversed', status = 'cancelled' WHERE id = ?").run(input.documentId);
     else db.prepare("UPDATE incoming_invoices SET accounting_status = 'reversed', status = 'cancelled' WHERE tenant_id = ? AND id = ?").run(tenantId, input.documentId);

@@ -18,7 +18,7 @@ import {
   upsertIncomingInvoice,
   upsertVendor,
 } from './oposRepo';
-import { buildDatevRows, getVatSummary } from './proAccountingRepo';
+import { buildDatevRows, getVatSummary, reverseJournalEntry } from './proAccountingRepo';
 import { finalizeOutgoingInvoice, upsertInvoice, getInvoice } from './invoicesRepo';
 
 const scope = createProTenantScope('default');
@@ -180,13 +180,29 @@ describe('OPOS accounting', () => {
     invoiceDb.close();
   });
 
-  it('keeps ambiguous legacy records unresolved in dry-run backfill', () => {
+  it('excludes draft and unfinalized outgoing invoices from accounting backfill', () => {
     const db = createDb();
-    db.prepare(`INSERT INTO invoices (id, number, client, client_email, date, due_date, amount, status, created_at, updated_at) VALUES ('legacy-1', 'LEG-1', 'Unknown', '', '2026-08-01', '2026-08-31', 119, 'open', datetime('now'), datetime('now'))`).run();
+    db.prepare(`INSERT INTO invoices (id, number, client, client_email, date, due_date, amount, status, created_at, updated_at) VALUES
+      ('draft-backfill', 'DRAFT-1', 'Unknown', '', '2026-08-01', '2026-08-31', 119, 'draft', datetime('now'), datetime('now')),
+      ('unfinalized-backfill', 'OPEN-1', 'Unknown', '', '2026-08-01', '2026-08-31', 119, 'open', datetime('now'), datetime('now'))`).run();
     const preview = previewAccountingBackfill(db, scope);
     expect(preview.readyCount).toBe(0);
-    expect(preview.unresolvedCount).toBe(1);
-    expect(preview.candidates[0]?.status).toBe('unresolved');
+    expect(preview.candidates.filter((candidate) => candidate.sourceType === 'outgoing_invoice')).toHaveLength(0);
+    expect((db.prepare("SELECT COUNT(*) AS c FROM journal_entries WHERE source_type = 'outgoing_invoice'").get() as { c: number }).c).toBe(0);
+    db.close();
+  });
+
+  it('rejects a backfill when finalization disappears after preview without writing', () => {
+    const db = createDb();
+    db.prepare(`INSERT INTO invoices (id, client_id, number, client, client_email, date, due_date, amount, status, tax_snapshot_json, created_at, updated_at) VALUES ('inv-backfill-finalized', 'client-backfill', 'RE-BACKFILL', 'Acme', '', '2026-08-01', '2026-08-31', 119, 'open', ?, datetime('now'), datetime('now'))`).run(JSON.stringify({ netAmount: 100, vatAmount: 19, grossAmount: 119 }));
+    db.prepare(`INSERT INTO invoice_items (invoice_id, position, description, quantity, price, total, tax_rate) VALUES ('inv-backfill-finalized', 0, 'Service', 1, 119, 119, 19)`);
+    db.prepare("INSERT INTO number_reservations (id, kind, number, counter_value, status, document_id, created_at, updated_at) VALUES ('reservation-backfill', 'invoice', 'RE-BACKFILL', 1, 'finalized', 'inv-backfill-finalized', datetime('now'), datetime('now'))").run();
+    const preview = previewAccountingBackfill(db, scope);
+    expect(preview.readyCount).toBe(1);
+    db.prepare("UPDATE number_reservations SET status = 'released' WHERE id = 'reservation-backfill'").run();
+    expect(() => confirmAccountingBackfill(db, scope, { runId: preview.runId, confirmationHash: preview.confirmationHash, reason: 'backfill review' })).toThrow('BACKFILL_STALE_PREVIEW');
+    expect((db.prepare("SELECT COUNT(*) AS c FROM journal_entries WHERE source_type = 'outgoing_invoice'").get() as { c: number }).c).toBe(0);
+    expect((db.prepare("SELECT accounting_status FROM invoices WHERE id = 'inv-backfill-finalized'").get() as { accounting_status: string }).accounting_status).toBe('unposted');
     db.close();
   });
 
@@ -316,6 +332,7 @@ describe('OPOS accounting', () => {
     db.prepare(`INSERT INTO invoices (id, client_id, number, client, client_email, date, due_date, amount, status, tax_snapshot_json, created_at, updated_at) VALUES ('inv-rev', 'client-rev', 'RE-R', 'Acme', '', '2026-08-01', '2026-08-31', 119, 'open', ?, datetime('now'), datetime('now'))`).run(JSON.stringify({ netAmount: 100, vatAmount: 19, grossAmount: 119 }));
     db.prepare(`INSERT INTO invoice_items (invoice_id, position, description, quantity, price, total, tax_rate) VALUES ('inv-rev', 0, 'Service', 1, 119, 119, 19)`);
     postOutgoingInvoice(db, scope, 'inv-rev');
+    expect(() => reverseJournalEntry(db, (db.prepare("SELECT accounting_journal_entry_id FROM invoices WHERE id = 'inv-rev'").get() as { accounting_journal_entry_id: string }).accounting_journal_entry_id, 'generic reversal', scope)).toThrow('DOCUMENT_REVERSAL_REQUIRED');
     expect(() => db.prepare("UPDATE invoices SET number = 'MUTATED' WHERE id = 'inv-rev'").run()).toThrow('immutable');
     expect(() => db.prepare("DELETE FROM invoices WHERE id = 'inv-rev'").run()).toThrow('cannot be deleted');
     db.prepare("INSERT INTO accounting_periods (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at) VALUES ('period-reversal-lock', 'default', '2026-08', 2026, 'soft_locked', '2026-08-01', '2026-08-31', datetime('now'), datetime('now'))").run();
@@ -333,9 +350,31 @@ describe('OPOS accounting', () => {
     const incoming = upsertIncomingInvoice(db, scope, { id: 'in-rev', tenantId: 'default', vendorId: vendor.id, number: 'ER-R', invoiceDate: '2026-08-02', dueDate: '2026-08-31', netAmount: 100, taxAmount: 19, grossAmount: 119, taxRate: 19, status: 'draft', accountingStatus: 'unposted', lines: [{ id: 'line-rev', incomingInvoiceId: 'in-rev', position: 0, description: 'Hosting', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119 }], createdAt: '', updatedAt: '', mutation: { reason: 'test' } });
     postIncomingInvoice(db, scope, incoming.id, { mutation: { reason: 'test post' } });
     expect(() => db.prepare("UPDATE incoming_invoices SET accounting_status = 'reversed' WHERE id = 'in-rev'").run()).toThrow('immutable');
+    db.prepare(`INSERT INTO assets (id, tenant_id, asset_number, name, asset_class, status, activation_date, acquisition_cost, useful_life_years, depreciation_method, cost_center, location, source_incoming_invoice_id, asset_account_number, created_at, updated_at)
+      VALUES ('asset-linked-incoming', 'default', 'AN-1', 'Linked asset', 'other', 'aktiv', '2026-08-02', 100, 5, 'linear', 'IT', 'Berlin', 'in-rev', '0480', datetime('now'), datetime('now'))`).run();
+    expect(() => reverseDocumentAccounting(db, scope, { documentType: 'incoming_invoice', documentId: 'in-rev', reason: 'Korrektur' })).toThrow('ASSET_CORRECTION_REQUIRED');
+    db.prepare("DELETE FROM assets WHERE id = 'asset-linked-incoming'").run();
     expect(reverseDocumentAccounting(db, scope, { documentType: 'incoming_invoice', documentId: 'in-rev', reason: 'Korrektur' }).ok).toBe(true);
     expect(() => db.prepare("DELETE FROM incoming_invoices WHERE id = 'in-rev'").run()).toThrow('cannot be deleted');
     expect(() => db.prepare("INSERT INTO incoming_invoice_lines (id, tenant_id, incoming_invoice_id, position, description, quantity, unit_price, net_amount, tax_rate, tax_amount, gross_amount) VALUES ('line-locked', 'default', 'in-rev', 1, 'Locked', 1, 1, 1, 19, .19, 1.19)").run()).toThrow('immutable');
+    db.close();
+  });
+
+  it('uses the posting-date BU mapping and preserves it through document reversal/export', () => {
+    const db = createDb();
+    db.exec('DROP INDEX idx_tax_case_account_mappings_unique');
+    db.prepare("UPDATE tax_case_account_mappings SET valid_to = '2026-06-30' WHERE chart = 'SKR03' AND tax_case_key = 'DE_STD_19' AND role = 'datev_bu'").run();
+    db.prepare(`INSERT INTO tax_case_account_mappings (id, chart, tax_case_key, role, account_number, datev_bu_key, valid_from, valid_to, updated_at)
+      VALUES ('dated-de-std-19', 'SKR03', 'DE_STD_19', 'datev_bu', '1776', '9', '2026-07-01', NULL, datetime('now'))`).run();
+    db.prepare(`INSERT INTO invoices (id, client_id, number, client, client_email, date, due_date, amount, status, tax_snapshot_json, created_at, updated_at) VALUES ('inv-dated-bu', 'client-dated', 'RE-DATED', 'Acme', '', '2026-08-01', '2026-08-31', 119, 'open', ?, datetime('now'), datetime('now'))`).run(JSON.stringify({ netAmount: 100, vatAmount: 19, grossAmount: 119 }));
+    db.prepare(`INSERT INTO invoice_items (invoice_id, position, description, quantity, price, total, tax_rate) VALUES ('inv-dated-bu', 0, 'Service', 1, 119, 119, 19)`);
+    postOutgoingInvoice(db, scope, 'inv-dated-bu');
+    const originalId = (db.prepare("SELECT accounting_journal_entry_id FROM invoices WHERE id = 'inv-dated-bu'").get() as { accounting_journal_entry_id: string }).accounting_journal_entry_id;
+    expect(db.prepare('SELECT datev_bu_key FROM journal_posting_pairs WHERE entry_id = ? AND tax_case_key = ?').get(originalId, 'DE_STD_19')).toEqual({ datev_bu_key: '9' });
+    db.prepare("UPDATE tax_case_account_mappings SET datev_bu_key = '7' WHERE id = 'dated-de-std-19'").run();
+    const reversal = reverseDocumentAccounting(db, scope, { documentType: 'outgoing_invoice', documentId: 'inv-dated-bu', reason: 'Korrektur', postingDate: '2026-08-20' });
+    expect(db.prepare('SELECT datev_bu_key FROM journal_posting_pairs WHERE entry_id = ? AND tax_case_key = ?').get(reversal.reversalEntryId, 'DE_STD_19')).toEqual({ datev_bu_key: '9' });
+    expect(buildDatevRows(db, { from: '2026-08-01', to: '2026-08-31' }, scope).filter((row) => row.buSchluessel).every((row) => row.buSchluessel === '0009')).toBe(true);
     db.close();
   });
 
@@ -358,6 +397,7 @@ describe('OPOS accounting', () => {
     const item = listOpenItems(db, scope)[0]!;
     const payment = allocateOpenItemPayment(db, scope, { sourceType: 'bank_transaction', sourceId: 'bank-1', partyType: 'debtor', partyId: 'client-bank', paymentDate: '2026-08-15', amount: 119, bankAccountNumber: '1200', reason: 'test allocation', allocationEventId: 'test-event', allocations: [{ openItemId: item.id, amount: 119 }] });
     expect(payment.journalEntryId).toBeTruthy();
+    expect(() => reverseJournalEntry(db, payment.journalEntryId!, 'generic payment reversal', scope)).toThrow('PAYMENT_REVERSAL_REQUIRED');
     expect((db.prepare("SELECT status, linked_invoice_id FROM bank_transactions WHERE id = 'bank-1'").get() as { status: string; linked_invoice_id: string })).toEqual({ status: 'booked', linked_invoice_id: 'inv-bank' });
     expect(allocateOpenItemPayment(db, scope, { sourceType: 'bank_transaction', sourceId: 'bank-1', partyType: 'debtor', partyId: 'client-bank', paymentDate: '2026-08-15', amount: 119, bankAccountNumber: '1200', reason: 'test allocation', allocationEventId: 'test-event', allocations: [] }).id).toBe(payment.id);
     db.close();

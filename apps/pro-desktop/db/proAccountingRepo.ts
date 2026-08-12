@@ -20,7 +20,6 @@ import {
   listTaxCaseAccountMappings,
   normalizeTaxCaseKey,
   resolveTaxAccountsForCase,
-  resolveDatevBuKeyForTaxCase,
   type TaxCaseDefinition,
   type TaxCaseKey,
 } from './taxCasesRepo';
@@ -1366,7 +1365,7 @@ export const postDraft = (
       txDrizzle.insert(schema.vatEvidence).values({ id: randomUUID(), tenantId, draftId: validated.id, entryId, lineId: line.id, taxCaseKey: taxCase.key, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, capturedAt: createdAt }).run();
     }
     for (const pair of buildPostingPairs(postingLines)) {
-      txDrizzle.insert(schema.journalPostingPairs).values({ id: randomUUID(), tenantId, entryId, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: round2(pair.amount), taxCaseKey: pair.taxCaseKey ?? null, datevBuKey: resolveDatevBuKeyForTaxCase(db, chart, pair.taxCaseKey) ?? null, createdAt }).run();
+      txDrizzle.insert(schema.journalPostingPairs).values({ id: randomUUID(), tenantId, entryId, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: round2(pair.amount), taxCaseKey: pair.taxCaseKey ?? null, datevBuKey: resolveDatevBuKeyForPosting(db, chart, pair.taxCaseKey, postingDate) ?? null, createdAt }).run();
     }
     txDrizzle.update(schema.bookingDrafts).set({ workflowStatus: 'posted', draftJson: JSON.stringify({ ...validated, workflowStatus: 'posted', updatedAt: createdAt }), updatedAt: createdAt }).where(and(eq(schema.bookingDrafts.id, validated.id), eq(schema.bookingDrafts.tenantId, tenantId))).run();
     txDrizzle.update(schema.bankTransactions).set({ status: 'booked', updatedAt: createdAt }).where(and(eq(schema.bankTransactions.id, validated.transactionId), eq(schema.bankTransactions.tenantId, tenantId))).run();
@@ -1384,12 +1383,13 @@ export const postDraft = (
 
 const emptyJournalEntry = (tenantId: string, postingDate: string, period: string, fiscalYear: number): JournalEntryEntity => ({ id: '', tenantId, entryNumber: 0, postingDate, bookingText: '', period, fiscalYear, status: 'posted', createdAt: new Date().toISOString(), lines: [] });
 
-export const reverseJournalEntry = (
+const reverseJournalEntryInternal = (
   db: Database.Database,
   entryId: string,
   reason: string,
   scope: TenantScope,
   options: { postingDate?: string; softLockOverride?: boolean; overrideReason?: string } = {},
+  allowOwnedSource = false,
 ): { ok: true; reversalEntryId: string } => {
   const tenantId = getTenantId(scope);
   const cleanReason = reason.trim();
@@ -1408,6 +1408,26 @@ export const reverseJournalEntry = (
   if (!entry) throw new Error('Journal entry not found');
   if (entry.status === 'reversed' || entry.reversed_entry_id || entry.source_type === 'reversal') {
     throw new Error('Journal entry cannot be reversed again');
+  }
+  if (!allowOwnedSource && (entry.source_type === 'outgoing_invoice' || entry.source_type === 'incoming_invoice')) {
+    throw new Error('DOCUMENT_REVERSAL_REQUIRED: reverseDocumentAccounting must be used for document-owned entries');
+  }
+  if (entry.source_type === 'asset_activation' || entry.source_type === 'asset_depreciation' || entry.source_type === 'asset_disposal') {
+    throw new Error('ASSET_REVERSAL_REQUIRED: use the asset-specific correction flow');
+  }
+  if (entry.source_type === 'payment' || entry.source_type === 'payment_vat') {
+    throw new Error('PAYMENT_REVERSAL_REQUIRED: use payment-specific reversal with allocation reversal');
+  }
+  if (!allowOwnedSource) {
+    const ownership = db.prepare(`SELECT
+      EXISTS (SELECT 1 FROM invoices WHERE accounting_journal_entry_id = ?) AS outgoing_document,
+      EXISTS (SELECT 1 FROM incoming_invoices WHERE accounting_journal_entry_id = ?) AS incoming_document,
+      EXISTS (SELECT 1 FROM open_items WHERE tenant_id = ? AND journal_entry_id = ?) AS open_item,
+      EXISTS (SELECT 1 FROM open_item_payments WHERE tenant_id = ? AND journal_entry_id = ?) AS payment
+    `).get(entryId, entryId, tenantId, entryId, tenantId, entryId) as { outgoing_document: number; incoming_document: number; open_item: number; payment: number };
+    if (ownership.outgoing_document || ownership.incoming_document || ownership.open_item || ownership.payment) {
+      throw new Error('DOCUMENT_REVERSAL_REQUIRED: use the document-specific reversal flow');
+    }
   }
 
   const postingDate = options.postingDate || new Date().toISOString().slice(0, 10);
@@ -1442,6 +1462,17 @@ export const reverseJournalEntry = (
     }>;
   if (!lines.length) throw new Error('Journal entry has no lines');
 
+  const originalPairs = drizzle.select({
+    debit_line_id: schema.journalPostingPairs.debitLineId,
+    credit_line_id: schema.journalPostingPairs.creditLineId,
+    amount: schema.journalPostingPairs.amount,
+    tax_case_key: schema.journalPostingPairs.taxCaseKey,
+    datev_bu_key: schema.journalPostingPairs.datevBuKey,
+  }).from(schema.journalPostingPairs)
+    .where(and(eq(schema.journalPostingPairs.tenantId, tenantId), eq(schema.journalPostingPairs.entryId, entryId))).all() as Array<{
+      debit_line_id: string; credit_line_id: string; amount: number; tax_case_key: TaxCaseKey | null; datev_bu_key: string | null;
+    }>;
+
   const reversalEntryId = randomUUID();
   const auditReason = overrideReason ? `${cleanReason} (soft-lock override: ${overrideReason})` : cleanReason;
   const sourceKey = `reversal:${entryId}`;
@@ -1473,8 +1504,17 @@ export const reverseJournalEntry = (
       txDrizzle.insert(schema.journalLines).values({ id: line.id, tenantId, entryId: reversalEntryId, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: line.debitAmount, creditAmount: line.creditAmount, taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, datevSachverhaltLl: line.datevSachverhaltLl ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
     });
     const chart = getActiveChart(db, tenantId);
-    for (const pair of buildPostingPairs(reversalLines)) {
-      txDrizzle.insert(schema.journalPostingPairs).values({ id: randomUUID(), tenantId, entryId: reversalEntryId, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: pair.amount, taxCaseKey: pair.taxCaseKey ?? null, datevBuKey: resolveDatevBuKeyForTaxCase(db, chart, pair.taxCaseKey) ?? null, createdAt: now }).run();
+    const reversalLineId = new Map(lines.map((line, index) => [line.id, reversalLines[index]!.id]));
+    const reversalPairs = originalPairs.length
+      ? originalPairs.map((pair) => {
+        const debitLineId = reversalLineId.get(pair.credit_line_id);
+        const creditLineId = reversalLineId.get(pair.debit_line_id);
+        if (!debitLineId || !creditLineId) throw new Error('JOURNAL_POSTING_PAIRS_INVALID');
+        return { debitLineId, creditLineId, amount: Number(pair.amount), taxCaseKey: pair.tax_case_key ?? undefined, datevBuKey: pair.datev_bu_key ?? undefined };
+      })
+      : buildPostingPairs(reversalLines).map((pair) => ({ ...pair, datevBuKey: resolveDatevBuKeyForPosting(db, chart, pair.taxCaseKey, entry.posting_date) }));
+    for (const pair of reversalPairs) {
+      txDrizzle.insert(schema.journalPostingPairs).values({ id: randomUUID(), tenantId, entryId: reversalEntryId, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: pair.amount, taxCaseKey: pair.taxCaseKey ?? null, datevBuKey: pair.datevBuKey ?? null, createdAt: now }).run();
     }
     txDrizzle.update(schema.journalEntries).set({ status: 'reversed', reversedEntryId: reversalEntryId })
       .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.id, entryId))).run();
@@ -1483,6 +1523,23 @@ export const reverseJournalEntry = (
   })();
   return { ok: true, reversalEntryId };
 };
+
+export const reverseJournalEntry = (
+  db: Database.Database,
+  entryId: string,
+  reason: string,
+  scope: TenantScope,
+  options: { postingDate?: string; softLockOverride?: boolean; overrideReason?: string } = {},
+): { ok: true; reversalEntryId: string } => reverseJournalEntryInternal(db, entryId, reason, scope, options);
+
+/** Document/OPOS callers own the surrounding state transition and may reverse their journal atomically. */
+export const reverseDocumentJournalEntry = (
+  db: Database.Database,
+  entryId: string,
+  reason: string,
+  scope: TenantScope,
+  options: { postingDate?: string; softLockOverride?: boolean; overrideReason?: string } = {},
+): { ok: true; reversalEntryId: string } => reverseJournalEntryInternal(db, entryId, reason, scope, options, true);
 
 export const listJournalEntries = (
   db: Database.Database,
@@ -2296,7 +2353,7 @@ const resolveDatevBuKeyForPosting = (
     throw new Error(`DATEV BU-Schlüssel fehlt für Steuerfall ${normalized} am ${postingDate}.`);
   }
   if (key !== undefined && !/^\d{1,4}$/.test(key)) throw new Error(`DATEV BU-Schlüssel ist ungültig für Steuerfall ${normalized}.`);
-  return key?.padStart(4, '0');
+  return key;
 };
 
 interface DatevTaxDetails {
@@ -2448,8 +2505,10 @@ export const buildDatevRows = (
       const persistedBuKey = pair.datev_bu_key;
       if (persistedBuKey !== null && !/^\d{1,4}$/.test(persistedBuKey)) throw new Error(`DATEV BU-Schlüssel ist ungültig für Buchung ${entry.entryNumber}.`);
       const taxCaseKey = pair.tax_case_key ?? debit.taxCaseKey ?? credit.taxCaseKey ?? debit.taxCode ?? credit.taxCode;
-      const buKey = resolveDatevBuKeyForPosting(db, chart, taxCaseKey, entry.postingDate)
-        ?? persistedBuKey?.padStart(4, '0');
+      // A posted pair is immutable evidence.  Only legacy pairs without a
+      // persisted BU key may be resolved from the posting-date mapping.
+      const buKey = persistedBuKey?.padStart(4, '0')
+        ?? resolveDatevBuKeyForPosting(db, chart, taxCaseKey, entry.postingDate)?.padStart(4, '0');
       const debitTaxCase = normalizeTaxCaseKey(debit.taxCaseKey ?? debit.taxCode);
       const taxLine = debitTaxCase === normalizeTaxCaseKey(taxCaseKey) ? debit : credit;
       const taxDetails = resolveDatevTaxDetails(db, taxLine, taxCaseKey);

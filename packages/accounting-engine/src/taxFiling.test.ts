@@ -31,10 +31,16 @@ const filing = () => createTaxFilingRecord({
   now: '2026-01-01T00:00:00.000Z',
 });
 
+const validatedFiling = () => ({
+  ...filing(),
+  status: 'validated' as const,
+  validatedByActorId: 'user-1',
+  validatedAt: '2026-01-01T00:00:00.000Z',
+});
+
 test('tax filing state machine reaches approved only after a second actor', () => {
-  let current = filing();
+  let current = validatedFiling();
   const actions = [
-    ['validate', 'user-1'],
     ['freeze', 'user-1'],
     ['request_second_approval', 'user-1'],
     ['approve', 'user-2'],
@@ -58,8 +64,7 @@ test('tax filing state machine reaches approved only after a second actor', () =
 });
 
 test('creator cannot self approve and invalid transitions fail closed', () => {
-  let current = filing();
-  current = transitionTaxFiling(current, 'validate', { actorId: 'user-1', reason: 'validate', idempotencyKey: 'v' }).record;
+  let current = validatedFiling();
   current = transitionTaxFiling(current, 'freeze', { actorId: 'user-1', reason: 'freeze', idempotencyKey: 'f' }).record;
   current = transitionTaxFiling(current, 'request_second_approval', { actorId: 'user-1', reason: 'submit', idempotencyKey: 's' }).record;
   assert.throws(
@@ -74,8 +79,7 @@ test('creator cannot self approve and invalid transitions fail closed', () => {
 
 test('the approval requester cannot approve, while an independent approver can', () => {
   const frozen = () => {
-    let current = filing();
-    current = transitionTaxFiling(current, 'validate', { actorId: 'user-1', reason: 'validate', idempotencyKey: 'approval-validate' }).record;
+    let current = validatedFiling();
     current = transitionTaxFiling(current, 'freeze', { actorId: 'user-1', reason: 'freeze', idempotencyKey: 'approval-freeze' }).record;
     return current;
   };
@@ -107,12 +111,12 @@ test('the approval requester cannot approve, while an independent approver can',
 });
 
 test('same action/key is an idempotent replay while key reuse for another action is rejected', () => {
-  const current = transitionTaxFiling(filing(), 'validate', {
+  const current = transitionTaxFiling(validatedFiling(), 'freeze', {
     actorId: 'user-1',
-    reason: 'validate',
+    reason: 'freeze',
     idempotencyKey: 'same-key',
   }).record;
-  const replay = transitionTaxFiling(current, 'validate', {
+  const replay = transitionTaxFiling(current, 'freeze', {
     actorId: 'other-actor',
     reason: 'retry request',
     idempotencyKey: 'same-key',
@@ -120,8 +124,15 @@ test('same action/key is an idempotent replay while key reuse for another action
   assert.equal(replay.replayed, true);
   assert.equal(replay.record, current);
   assert.throws(
-    () => transitionTaxFiling(current, 'freeze', { actorId: 'user-1', reason: 'wrong reuse', idempotencyKey: 'same-key' }),
+    () => transitionTaxFiling(current, 'queue', { actorId: 'user-1', reason: 'wrong reuse', idempotencyKey: 'same-key' }),
     (error: unknown) => error instanceof TaxFilingError && error.code === 'IDEMPOTENCY_CONFLICT',
+  );
+});
+
+test('an unvalidated arbitrary draft cannot be queued', () => {
+  assert.throws(
+    () => transitionTaxFiling(filing(), 'queue', { actorId: 'user-1', reason: 'queue draft', idempotencyKey: 'queue-draft' }),
+    (error: unknown) => error instanceof TaxFilingError && error.code === 'INVALID_TRANSITION',
   );
 });
 
@@ -217,5 +228,39 @@ test('EÜR validation remains unavailable while only print-form catalog is bundl
   assert.throws(
     () => transitionTaxFiling(record, 'validate', { actorId: 'user-1', reason: 'validate', idempotencyKey: 'euer-validate' }),
     (error: unknown) => error instanceof TaxFilingError && error.code === 'EUR_ELSTER_CATALOG_UNAVAILABLE',
+  );
+});
+
+test('E-Bilanz validation remains unavailable without a verified taxonomy catalog/provider', () => {
+  assert.throws(
+    () => transitionTaxFiling(filing(), 'validate', { actorId: 'user-1', reason: 'validate', idempotencyKey: 'eb-validate' }),
+    (error: unknown) => error instanceof TaxFilingError && error.code === 'E_BILANZ_TAXONOMY_CATALOG_UNAVAILABLE',
+  );
+});
+
+test('Unternehmensregister validation remains unavailable without an official provider contract', () => {
+  const record = createTaxFilingRecord({
+    id: 'register-filing',
+    tenantId: 'tenant-1',
+    provider: 'unternehmensregister',
+    snapshot: {
+      kind: 'unternehmensregister',
+      periodStart: '2025-01-01',
+      periodEnd: '2025-12-31',
+      payload: {
+        taxYear: 2025,
+        reportSnapshotId: 'report-1',
+        sourceSnapshotHash: 'a'.repeat(64),
+        companyName: 'Example GmbH',
+        registerNumber: 'HRB 12345',
+      },
+    },
+    idempotencyKey: 'register-create',
+    actorId: 'user-1',
+    now: '2026-01-01T00:00:00.000Z',
+  });
+  assert.throws(
+    () => transitionTaxFiling(record, 'validate', { actorId: 'user-1', reason: 'validate', idempotencyKey: 'register-validate' }),
+    (error: unknown) => error instanceof TaxFilingError && error.code === 'UNTERNEHMENSREGISTER_PROVIDER_CONTRACT_UNAVAILABLE',
   );
 });

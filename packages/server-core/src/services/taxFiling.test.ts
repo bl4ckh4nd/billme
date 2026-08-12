@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createTaxFilingService } from './taxFiling.js';
+import { createTaxFilingService, TaxFilingServiceError } from './taxFiling.js';
 import type { TaxFilingAction, TaxFilingRecord } from '@billme/accounting-shared';
 import type { TaxFilingRepository } from '../ports/index.js';
 
@@ -87,6 +87,30 @@ test('tax filing service scopes idempotency and reads to the tenant', async () =
   });
   assert.equal(replay.id, created.id);
   assert.equal(memory.records.size, 1);
+});
+
+test('service refuses to queue an unvalidated legacy draft', async () => {
+  const memory = memoryRepository();
+  const service = createTaxFilingService({ repository: memory.repository, stateMachine });
+  const created = await service.create(scope, {
+    id: 'filing-unvalidated-draft',
+    kind: 'euer',
+    periodStart: snapshot.periodStart,
+    periodEnd: snapshot.periodEnd,
+    payload: { arbitrary: 'legacy payload' },
+    idempotencyKey: 'create-unvalidated-draft',
+    actorId: 'user-a',
+    reason: 'legacy import',
+  });
+  await assert.rejects(
+    () => service.transition(scope, created.id, 'queue', {
+      actorId: 'user-a',
+      reason: 'queue legacy draft',
+      idempotencyKey: 'queue-unvalidated-draft',
+    }),
+    (error: unknown) => error instanceof TaxFilingServiceError && error.code === 'INVALID_TRANSITION',
+  );
+  assert.equal(memory.records.get(created.id)?.status, 'draft');
 });
 
 test('provider-unavailable submission never reports success and can be retried', async () => {

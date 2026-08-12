@@ -18,7 +18,9 @@ export type TaxFilingErrorCode =
   | 'IDEMPOTENCY_CONFLICT'
   | 'CONCURRENT_UPDATE'
   | 'REASON_REQUIRED'
-  | 'EUR_ELSTER_CATALOG_UNAVAILABLE';
+  | 'EUR_ELSTER_CATALOG_UNAVAILABLE'
+  | 'E_BILANZ_TAXONOMY_CATALOG_UNAVAILABLE'
+  | 'UNTERNEHMENSREGISTER_PROVIDER_CONTRACT_UNAVAILABLE';
 
 export class TaxFilingError extends Error {
   readonly code: TaxFilingErrorCode;
@@ -80,13 +82,17 @@ export const validateTaxFilingSnapshot = (snapshot: TaxFilingSnapshot): void => 
     if (payload.taxonomy !== '6.9' || !Array.isArray(payload.facts)) {
       throw new TaxFilingError('VALIDATION_FAILED', 'E-Bilanz requires taxonomy 6.9 facts');
     }
-  } else if (
-    typeof payload.companyName !== 'string' ||
-    !payload.companyName.trim() ||
-    typeof payload.registerNumber !== 'string' ||
-    !payload.registerNumber.trim()
-  ) {
-    throw new TaxFilingError('VALIDATION_FAILED', 'Unternehmensregister requires company and register identity');
+    throw new TaxFilingError('E_BILANZ_TAXONOMY_CATALOG_UNAVAILABLE', 'E-Bilanz taxonomy 6.9 catalog/provider contract is unavailable');
+  } else {
+    if (
+      typeof payload.companyName !== 'string' ||
+      !payload.companyName.trim() ||
+      typeof payload.registerNumber !== 'string' ||
+      !payload.registerNumber.trim()
+    ) {
+      throw new TaxFilingError('VALIDATION_FAILED', 'Unternehmensregister requires company and register identity');
+    }
+    throw new TaxFilingError('UNTERNEHMENSREGISTER_PROVIDER_CONTRACT_UNAVAILABLE', 'Unternehmensregister provider contract is unavailable');
   }
 };
 

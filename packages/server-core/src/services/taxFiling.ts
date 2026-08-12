@@ -194,6 +194,9 @@ export const createTaxFilingService = (dependencies: TaxFilingServiceDependencie
         throw new TaxFilingServiceError('VALIDATION_FAILED', 'Tax filing report snapshot is missing or has changed');
       }
     }
+    if (action === 'queue' && current.status !== 'approved') {
+      throw new TaxFilingServiceError('INVALID_TRANSITION', 'Only an approved tax filing can be queued');
+    }
     const result = dependencies.stateMachine.transition(current, action, input);
     if (result.replayed) return result.record;
     let saved: TaxFilingRecord;

@@ -57,6 +57,13 @@
       "when": 1786092000002,
       "tag": "0007_server_data_opos_hardening",
       "breakpoints": false
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786527693000,
+      "tag": "0008_server_data_asset_accounting",
+      "breakpoints": false
     }
   ]
 }

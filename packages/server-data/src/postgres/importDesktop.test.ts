@@ -20,6 +20,7 @@ const postgresMigrationUrls = [
   new URL('../../drizzle/0005_server_data_audit_heads.sql', import.meta.url),
   new URL('../../drizzle/0006_server_data_opos.sql', import.meta.url),
   new URL('../../drizzle/0007_server_data_opos_hardening.sql', import.meta.url),
+  new URL('../../drizzle/0008_server_data_asset_accounting.sql', import.meta.url),
 ];
 
 const extractSqliteTableNames = async (schemaUrl: URL): Promise<string[]> => {
@@ -102,7 +103,7 @@ test('Drizzle migration journal contains incremental migrations', async () => {
   const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ tag: string }> };
   assert.deepEqual(journal.entries.map((entry) => entry.tag), [
     '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
-    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening',
+    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting',
   ]);
 });
 

@@ -144,6 +144,7 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
           ) : currentView === 'exceptions' ? (
             <ExceptionCenter
               role={role}
+              canMutateExceptions={!dataAdapter}
               transactions={transactions}
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}

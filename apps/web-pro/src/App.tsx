@@ -989,6 +989,7 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setNotice(createNotice('danger', message));
+      throw error;
     }
   };
 

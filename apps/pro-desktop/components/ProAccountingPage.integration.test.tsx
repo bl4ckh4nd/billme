@@ -189,6 +189,19 @@ describe('ProAccountingPage integration', () => {
     });
   });
 
+  it('exposes a failed SKR import without leaving a pending action', async () => {
+    mockUseProLedgerStatsQuery.mockReturnValue({
+      data: { total: 0, byChart: { SKR03: 0, SKR04: 0 } },
+    });
+    mockImportSkrMutateAsync.mockRejectedValueOnce(new Error('Kontenrahmen-Backend nicht erreichbar'));
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+
+    await userEvent.click(await screen.findByRole('button', { name: /SKR03\/04 importieren/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Kontenrahmen-Backend nicht erreichbar');
+    expect(screen.getByRole('button', { name: /SKR03\/04 importieren/i })).not.toHaveAttribute('aria-busy', 'true');
+  });
+
   it('maps pro bookkeeping data into workspace seed and persists entries via IPC', async () => {
     mockIpc.pro.listBankTransactions.mockResolvedValueOnce([
       {

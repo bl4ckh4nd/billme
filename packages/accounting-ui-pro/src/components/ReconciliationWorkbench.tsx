@@ -16,6 +16,7 @@ export interface ReconciliationTotals {
   counterpart: number;
   difference: number;
   bankLineCount: number;
+  bankAccountNumber?: string;
 }
 
 const amountValue = (amount: number | string) => {
@@ -23,9 +24,26 @@ const amountValue = (amount: number | string) => {
   return Number.isFinite(value) ? Math.abs(value) : 0;
 };
 
-export function calculateReconciliationTotals(draft: BookingDraft, transactionAmount: number): ReconciliationTotals {
-  const bankLines = draft.lines.filter((line) => line.accountId === '1200');
-  const counterpartLines = draft.lines.filter((line) => line.accountId !== '1200');
+export function getBankAccountNumber(draft: BookingDraft, accounts: Account[] = []): string | undefined {
+  const bankAccounts = new Set(
+    accounts
+      .filter((account) => /bank|giro|konto/i.test(`${account.name} ${account.keywords?.join(' ') ?? ''}`))
+      .map((account) => account.number),
+  );
+  return draft.lines.find((line) => bankAccounts.has(line.accountId))?.accountId
+    ?? draft.lines.find((line) => /bank|giro|konto/i.test(line.accountName))?.accountId;
+}
+
+export function calculateReconciliationTotals(
+  draft: BookingDraft,
+  transactionAmount: number,
+  accounts: Account[] = [],
+): ReconciliationTotals {
+  const bankAccountNumber = getBankAccountNumber(draft, accounts);
+  const bankLines = bankAccountNumber ? draft.lines.filter((line) => line.accountId === bankAccountNumber) : [];
+  const counterpartLines = bankAccountNumber
+    ? draft.lines.filter((line) => line.accountId !== bankAccountNumber)
+    : draft.lines;
   const target = Math.abs(transactionAmount);
   const bank = bankLines.reduce((sum, line) => sum + amountValue(line.amount), 0);
   const counterpart = counterpartLines.reduce((sum, line) => sum + amountValue(line.amount), 0);
@@ -35,6 +53,7 @@ export function calculateReconciliationTotals(draft: BookingDraft, transactionAm
     counterpart,
     difference: Math.abs(counterpart - target),
     bankLineCount: bankLines.length,
+    bankAccountNumber,
   };
 }
 
@@ -101,13 +120,16 @@ export default function ReconciliationWorkbench({
   const draft = localDraft ?? storeDraft;
   const allowed = draft ? getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues) : [];
   const primary = getPrimaryAction(allowed);
-  const totals = draft && selectedTx ? calculateReconciliationTotals(draft, selectedTx.amount) : null;
+  const bankAccountNumber = draft ? getBankAccountNumber(draft, accountOptions) : undefined;
+  const totals = draft && selectedTx ? calculateReconciliationTotals(draft, selectedTx.amount, accountOptions) : null;
   const targetTotal = totals?.target ?? 0;
   const splitDifference = totals?.difference ?? 0;
   const expectedBankType = selectedTx ? (selectedTx.amount >= 0 ? 'Soll' : 'Haben') : null;
   const expectedCounterType = expectedBankType === 'Soll' ? 'Haben' : expectedBankType === 'Haben' ? 'Soll' : null;
-  const bankLines = draft ? draft.lines.filter((line) => line.accountId === '1200') : [];
-  const nonBankLines = draft ? draft.lines.filter((line) => line.accountId !== '1200') : [];
+  const bankLines = draft && bankAccountNumber ? draft.lines.filter((line) => line.accountId === bankAccountNumber) : [];
+  const nonBankLines = draft && bankAccountNumber
+    ? draft.lines.filter((line) => line.accountId !== bankAccountNumber)
+    : draft?.lines ?? [];
   const bankLine = bankLines[0];
   const bankLineAmount = bankLine ? amountValue(bankLine.amount) : NaN;
   const nonBankSameDirectionViolation = nonBankLines.some(
@@ -120,7 +142,7 @@ export default function ReconciliationWorkbench({
   const directionErrors: string[] = [];
   if (draft && expectedBankType) {
     if (bankLines.length !== 1) {
-      directionErrors.push('Es muss genau eine Bankzeile (Konto 1200) vorhanden sein.');
+      directionErrors.push(`Es muss genau eine Bankzeile (${bankAccountNumber ?? 'Bankkonto'}) vorhanden sein.`);
     }
     if (bankLine && bankLine.type !== expectedBankType) {
       directionErrors.push(
@@ -292,11 +314,11 @@ export default function ReconciliationWorkbench({
                   <div className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-1">Gegenkonto</div>
                   <AccountCombobox
                     accounts={accountOptions}
-                    valueAccountId={draft.lines.find((line) => line.accountId !== '1200')?.accountId ?? ''}
-                    valueAccountName={draft.lines.find((line) => line.accountId !== '1200')?.accountName ?? ''}
+                    valueAccountId={draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountId ?? ''}
+                    valueAccountName={draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountName ?? ''}
                     placeholder="Gegenkonto wählen..."
                     onSelect={(account) => {
-                      const line = draft.lines.find((item) => item.accountId !== '1200');
+                      const line = draft.lines.find((item) => item.accountId !== bankAccountNumber);
                       if (!line) return;
                       updateLine(line.id, (cur) => ({
                         ...cur,

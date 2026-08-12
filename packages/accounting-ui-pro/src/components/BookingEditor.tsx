@@ -57,6 +57,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
   const [busy, setBusy] = useState(false);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
   const shortcutCloseRef = useRef<HTMLButtonElement>(null);
+  const shortcutPreviousFocusRef = useRef<HTMLElement | null>(null);
   const [announceMessage, setAnnounceMessage] = useState('');
 
   useEffect(() => {
@@ -66,7 +67,13 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
   }, [transactionId]);
 
   useEffect(() => {
-    if (showShortcutHelp) shortcutCloseRef.current?.focus();
+    if (showShortcutHelp) {
+      shortcutPreviousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      shortcutCloseRef.current?.focus();
+    } else {
+      shortcutPreviousFocusRef.current?.focus();
+      shortcutPreviousFocusRef.current = null;
+    }
   }, [showShortcutHelp]);
 
   const permissionCtx = permissionContextForRole(role);
@@ -82,6 +89,13 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (showShortcutHelp) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setShowShortcutHelp(false);
+        }
+        return;
+      }
       if (e.key === '?') {
         e.preventDefault();
         setShowShortcutHelp((v) => !v);
@@ -100,7 +114,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [allowedActions, draft, transaction, role]);
+  }, [allowedActions, draft, transaction, role, showShortcutHelp]);
 
   if (!transactionId || !transaction || !draft) {
     return (

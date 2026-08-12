@@ -228,7 +228,7 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenInvo
               ) : activeTab === 'susa' ? (
                 <SusaTable report={susaReport} onSelectRow={handleSusaSelect} />
               ) : activeTab === 'guv' ? (
-                <GuvView report={guvReport} compareMode={filters.compareMode} onSelectLine={handleGuvSelect} />
+                <GuvView report={guvReport} onSelectLine={handleGuvSelect} />
               ) : (
                 <BalanceSheetPreviewView report={balanceSheetPreview} onSelectLine={handleBilanzSelect} />
               )}

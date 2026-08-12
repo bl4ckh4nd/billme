@@ -170,7 +170,7 @@ export const mockGuvReportBase: GuvReport = {
     {
       id: 'guv-8',
       code: '8',
-      label: 'Jahresergebnis (Preview)',
+      label: 'Jahresergebnis (Beispiel)',
       level: 0,
       amountCurrent: -3510,
       amountCompare: -4510,
@@ -203,7 +203,7 @@ export const mockBalanceSheetPreviewBase: BalanceSheetPreview = {
   passiva: [
     { id: 'p-1', code: 'A', label: 'Eigenkapital', amount: 19742.5, level: 0, side: 'passiva', isSubtotal: true },
     { id: 'p-1-1', code: 'A.I', label: 'Gezeichnetes Kapital / EK', amount: 23252.5, level: 1, side: 'passiva' },
-    { id: 'p-1-2', code: 'A.II', label: 'Jahresergebnis (Preview)', amount: -3510, level: 1, side: 'passiva' },
+    { id: 'p-1-2', code: 'A.II', label: 'Jahresergebnis (Beispiel)', amount: -3510, level: 1, side: 'passiva' },
     { id: 'p-2', code: 'C', label: 'Verbindlichkeiten', amount: 29500, level: 0, side: 'passiva', isSubtotal: true },
     { id: 'p-2-1', code: 'C.1', label: 'Verbindlichkeiten aus LuL', amount: 9500, level: 1, side: 'passiva' },
     { id: 'p-2-2', code: 'C.2', label: 'Sonstige Verbindlichkeiten', amount: 20000, level: 1, side: 'passiva' },
@@ -215,7 +215,7 @@ export const mockBalanceSheetPreviewBase: BalanceSheetPreview = {
   },
   quality: {
     status: 'ok',
-    notes: ['Bilanz ist Preview (Mock). 1 Konto ist aktuell noch ungemappt.'],
+    notes: ['Bilanz ist ein Beispiel. 1 Konto ist aktuell noch ungemappt.'],
     generatedAt: new Date().toISOString(),
     source: 'mock',
   },

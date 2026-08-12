@@ -536,4 +536,30 @@ describe('ProAccountingPage integration', () => {
     }));
     await expect(adapter.listEurCashItems()).resolves.toEqual([classifiedItem]);
   });
+
+  it('fails closed when native EÜR items contain a non-2025 classification', async () => {
+    mockIpc.eur.listItems.mockResolvedValueOnce([{
+      sourceType: 'transaction',
+      sourceId: 'tx-eur-legacy',
+      date: '2025-02-14',
+      amountGross: 10,
+      amountNet: 10,
+      flowType: 'expense',
+      counterparty: 'Lieferant',
+      purpose: 'Legacy-Klassifikation',
+      classification: {
+        id: 'classification-legacy',
+        sourceType: 'transaction',
+        sourceId: 'tx-eur-legacy',
+        taxYear: 2024,
+        excluded: false,
+        vatMode: 'none',
+        updatedAt: '2025-02-14T12:00:00.000Z',
+      },
+    }]);
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await screen.findByTestId('pro-accounting-workspace');
+    await expect(workspaceState.lastProps.dataAdapter.listEurCashItems()).rejects.toThrow('EUR_UNSUPPORTED_TAX_YEAR:2024');
+  });
 });

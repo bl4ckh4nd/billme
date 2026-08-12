@@ -12,6 +12,7 @@ import {
   type Transaction as ProUiTransaction,
   type Account as ProUiAccount,
   type BookingDraft as ProUiBookingDraft,
+  type EurCashItem,
 } from '@billme/accounting-ui-pro';
 import { ipc } from '../ipc/client';
 import { useAccountsQuery } from '../hooks/useAccounts';
@@ -48,6 +49,27 @@ const requireMutationReason = (reason: string, operation: string): string => {
   const normalized = reason.trim();
   if (!normalized) throw new Error(`${operation}: Audit-Grund erforderlich.`);
   return normalized;
+};
+
+type NativeEurListItem = IpcResult<'eur:listItems'>[number];
+
+/** The native EÜR UI is deliberately limited to the verified 2025 filing. */
+const mapNativeEurCashItem = (item: NativeEurListItem): EurCashItem => {
+  if (item.classification && item.classification.taxYear !== 2025) {
+    throw new Error(`EUR_UNSUPPORTED_TAX_YEAR:${item.classification.taxYear}`);
+  }
+  return {
+    sourceType: item.sourceType,
+    sourceId: item.sourceId,
+    date: item.date,
+    amountGross: item.amountGross,
+    amountNet: item.amountNet,
+    flowType: item.flowType,
+    counterparty: item.counterparty,
+    purpose: item.purpose,
+    vatWarning: item.vatWarning,
+    classification: item.classification,
+  };
 };
 
 /**
@@ -495,7 +517,7 @@ export const ProAccountingPage: React.FC = () => {
         return mapEurReport(report);
       },
       listEurCashItems() {
-        return ipc.eur.listItems({ taxYear: 2025, ...NATIVE_EUR_2025_RANGE });
+        return ipc.eur.listItems({ taxYear: 2025, ...NATIVE_EUR_2025_RANGE }).then((items) => items.map(mapNativeEurCashItem));
       },
       upsertEurClassification(input) {
         return runMutation(() => ipc.eur.upsertClassification({

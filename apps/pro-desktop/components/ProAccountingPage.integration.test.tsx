@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ProAccountingPage } from './ProAccountingPage';
 
@@ -52,6 +52,16 @@ const {
       postDraft: vi.fn(async () => ({ issues: [] })),
       listJournalEntries: vi.fn(async () => []),
       reverseJournalEntry: vi.fn(async () => ({ ok: true })),
+      listDatevExports: vi.fn(async () => []),
+      exportDatevBuchungsstapel: vi.fn(async (args: any) => ({
+        id: 'datev-1',
+        filePath: '/exports/datev-1.CSV',
+        recordCount: 0,
+        fromDate: args.from,
+        toDate: args.to,
+        createdAt: new Date().toISOString(),
+        sha256: 'hash',
+      })),
     },
   },
 }));
@@ -398,5 +408,32 @@ describe('ProAccountingPage integration', () => {
     expect(workspaceState.lastProps.dataAdapter.getBookingDraftByTransactionId('tx-1')).toEqual(
       expect.objectContaining({ workflowStatus: 'suggested' }),
     );
+  });
+
+  it('wires DATEV export and immutable history through the productive IPC adapter', async () => {
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await screen.findByTestId('pro-accounting-workspace');
+
+    await act(async () => {
+      await workspaceState.lastProps.dataAdapter.listDatevExports(20);
+    });
+    expect(mockIpc.pro.listDatevExports).toHaveBeenCalledWith({ limit: 20 });
+
+    await act(async () => {
+      await workspaceState.lastProps.dataAdapter.exportDatevBuchungsstapel({
+        from: '2026-03-01',
+        to: '2026-03-31',
+        consultantNumber: '1001',
+        clientNumber: '1',
+        fiscalYearStart: '2026-01-01',
+        accountLength: 4,
+        encoding: 'cp1252',
+      });
+    });
+    expect(mockIpc.pro.exportDatevBuchungsstapel).toHaveBeenCalledWith(expect.objectContaining({
+      from: '2026-03-01',
+      accountLength: 4,
+      encoding: 'cp1252',
+    }));
   });
 });

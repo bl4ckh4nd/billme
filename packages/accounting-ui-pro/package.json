@@ -15,6 +15,7 @@
     "react-dom": "^19.0.0"
   },
   "dependencies": {
+    "@billme/ui": "workspace:*",
     "lucide-react": "^0.562.0",
     "tailwindcss": "^4.1.0"
   },

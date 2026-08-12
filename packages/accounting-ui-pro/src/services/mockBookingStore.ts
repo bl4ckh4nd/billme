@@ -21,6 +21,25 @@ import type {
   AssetUpsertInput,
 } from '../domain/assetTypes';
 
+export interface DatevExportResult {
+  id: string;
+  filePath: string;
+  recordCount: number;
+  fromDate?: string;
+  toDate?: string;
+  createdAt: string;
+  sha256?: string;
+  byteSize?: number;
+  encoding?: 'cp1252' | 'utf8-bom';
+  headerVersion?: number;
+  formatVersion?: number;
+  chart?: 'SKR03' | 'SKR04';
+  sourceSnapshotHash?: string;
+  manifestJson?: string;
+  status?: string;
+  validationJson?: string;
+}
+
 type MaybePromise<T> = T | Promise<T>;
 
 let drafts = structuredClone(mockBookingDrafts) as BookingDraft[];
@@ -75,6 +94,16 @@ export interface ProAccountingDataAdapter {
     reason: string;
     actorRole: UserRole;
   }) => Promise<{ asset: AssetItem; residualBookValue: number; gainLoss: number; journalEntryId?: string }>;
+  exportDatevBuchungsstapel?: (args: {
+    from: string;
+    to: string;
+    consultantNumber: string;
+    clientNumber: string;
+    fiscalYearStart: string;
+    accountLength: number;
+    encoding: 'cp1252' | 'utf8-bom';
+  }) => Promise<DatevExportResult>;
+  listDatevExports?: (limit?: number) => Promise<DatevExportResult[]>;
 }
 
 let dataAdapter: ProAccountingDataAdapter | null = null;

@@ -628,6 +628,9 @@ importers:
 
   packages/accounting-ui-pro:
     dependencies:
+      '@billme/ui':
+        specifier: workspace:*
+        version: link:../ui
       lucide-react:
         specifier: ^0.562.0
         version: 0.562.0(react@19.2.4)

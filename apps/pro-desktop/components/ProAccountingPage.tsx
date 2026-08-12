@@ -28,6 +28,16 @@ const reportPeriodRange = (filters: ReportFilterState): { from?: string; to?: st
   to: filters.periodTo ? `${filters.periodTo}-31` : filters.asOfDate,
 });
 
+type DatevExportArgs = {
+  from: string;
+  to: string;
+  consultantNumber: string;
+  clientNumber: string;
+  fiscalYearStart: string;
+  accountLength: number;
+  encoding: 'cp1252' | 'utf8-bom';
+};
+
 const inferAccountType = (accountNumber: string): ProUiAccount['type'] => {
   const first = accountNumber[0];
   if (first === '0' || first === '1') return 'Asset';
@@ -450,13 +460,32 @@ export const ProAccountingPage: React.FC = () => {
         return ipc.pro.upsertAsset({ asset, reason });
       },
       getDepreciationSchedule(assetId) {
-        return ipc.pro.getDepreciationSchedule({ assetId });
+        return ipc.pro.getDepreciationSchedule({ assetId }).then((rows) => rows
+          .filter((row) => row.status !== 'cancelled')
+          .map((row) => ({ ...row, status: row.status as 'planned' | 'posted' })));
       },
       runDepreciation(args) {
-        return ipc.pro.runDepreciation(args);
+        return ipc.pro.runDepreciation(args).then((result) => {
+          if (result.scheduleEntry.status === 'cancelled') {
+            throw new Error('Die Abschreibung wurde storniert und nicht gebucht.');
+          }
+          return {
+            ...result,
+            scheduleEntry: {
+              ...result.scheduleEntry,
+              status: result.scheduleEntry.status === 'posted' ? 'posted' : 'planned',
+            },
+          };
+        });
       },
       disposeAsset(args) {
         return ipc.pro.disposeAsset(args);
+      },
+      listDatevExports(limit?: number) {
+        return ipc.pro.listDatevExports({ limit });
+      },
+      exportDatevBuchungsstapel(args: DatevExportArgs) {
+        return runMutation(() => ipc.pro.exportDatevBuchungsstapel(args));
       },
     };
   }, [accountNames, activeChart, invalidateProQueries, runMutation]);

@@ -24,6 +24,7 @@ import SusaTable from './reports/SusaTable';
 import GuvView from './reports/GuvView';
 import BalanceSheetPreviewView from './reports/BalanceSheetPreviewView';
 import ReportDrilldownPanel from './reports/ReportDrilldownPanel';
+import DatevExportPanel from './reports/DatevExportPanel';
 
 const BILANZ_ACCOUNT_MAP: Record<string, string[]> = {
   'a-1-1': ['0440', '0480'],
@@ -258,8 +259,9 @@ export default function ReportsView({ dataAdapter, chartFramework, onOpenTransac
                 </div>
               )}
             </div>
-          </div>
         </div>
+        <DatevExportPanel dataAdapter={dataAdapter} chartFramework={filters.chart} />
       </div>
+    </div>
   );
 }

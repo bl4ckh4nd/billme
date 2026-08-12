@@ -88,7 +88,9 @@ export default function InboxView({
         accounts === undefined,
       )
     : undefined;
-  const previewCounterLine = previewDraft?.lines.find((line) => line.accountId !== previewBankAccountNumber) ?? previewDraft?.lines[0];
+  const previewCounterLine = previewDraft && previewBankAccountNumber
+    ? previewDraft.lines.find((line) => line.accountId !== previewBankAccountNumber)
+    : undefined;
   const previewAccountEditable = !!previewDraft && !['posted', 'reversed'].includes(previewDraft.workflowStatus);
 
   const selectedSet = new Set(selectedIds);
@@ -182,6 +184,7 @@ export default function InboxView({
           bankAccountNumberForTransaction(draft.transactionId),
           accounts === undefined,
         );
+        if (!bankAccountNumber) { skipped += 1; continue; }
         const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
         const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
         const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
@@ -227,6 +230,10 @@ export default function InboxView({
       bankAccountNumberForTransaction(draft.transactionId),
       accounts === undefined,
     );
+    if (!bankAccountNumber) {
+      setBatchMessage('Bankkonto ist nicht konfiguriert.');
+      return;
+    }
     const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
     const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
@@ -255,6 +262,10 @@ export default function InboxView({
       bankAccountNumberForTransaction(draft.transactionId),
       accounts === undefined,
     );
+    if (!bankAccountNumber) {
+      setBatchMessage('Bankkonto ist nicht konfiguriert.');
+      return;
+    }
     const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
     const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
@@ -551,13 +562,18 @@ export default function InboxView({
                   Schnellbuchung
                 </div>
                 <div className="space-y-3">
+                  {!previewBankAccountNumber && (
+                    <p className="text-xs text-red-700" role="alert">
+                      Bankkonto ist nicht konfiguriert. Schnellbuchung ist deaktiviert.
+                    </p>
+                  )}
                   <div>
                     <label className="block text-xs font-bold text-gray-500 mb-1">Konto</label>
                     <AccountCombobox
                       accounts={accountOptions}
                       valueAccountId={previewCounterLine?.accountId ?? ''}
                       valueAccountName={previewCounterLine?.accountName ?? ''}
-                      disabled={!previewAccountEditable}
+                      disabled={!previewAccountEditable || !previewBankAccountNumber}
                       onSelect={(account) =>
                         updateInboxAccount(previewTx.id, account.number, account.name, account.defaultTaxCode)
                       }
@@ -568,7 +584,7 @@ export default function InboxView({
                     <label className="block text-xs font-bold text-gray-500 mb-1">Steuerfall</label>
                     <select
                       value={normalizeTaxCaseKey(previewCounterLine?.taxCaseKey ?? previewCounterLine?.taxCode) ?? ''}
-                      disabled={!previewAccountEditable}
+                      disabled={!previewAccountEditable || !previewBankAccountNumber}
                       onChange={(e) => updateInboxTaxCase(previewTx.id, e.target.value)}
                       className="h-10 w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white disabled:bg-gray-50"
                     >

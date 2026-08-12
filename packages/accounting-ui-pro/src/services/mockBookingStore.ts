@@ -193,6 +193,9 @@ export function getBookingDraftByTransactionId(transactionId: string): BookingDr
 }
 
 export async function saveDraft(draft: BookingDraft, actorName = 'Mara Buchhaltung'): Promise<BookingDraft> {
+  if (dataAdapter && !dataAdapter.saveDraft && !persistenceHooks.onPersistEntry) {
+    throw new Error('READ_ONLY_ACCOUNTING_SOURCE: Entwürfe sind für diesen Adapter schreibgeschützt.');
+  }
   if (dataAdapter?.saveDraft) {
     return clone(await dataAdapter.saveDraft(clone(draft), actorName));
   }
@@ -228,6 +231,9 @@ export async function dispatchBookingAction(
   action: BookingAction,
   options: { role: UserRole; actorName?: string; rejectReason?: string } = { role: 'bookkeeper' },
 ): Promise<BookingDraft> {
+  if (dataAdapter && !dataAdapter.dispatchBookingAction && !persistenceHooks.onPersistEntry) {
+    throw new Error('READ_ONLY_ACCOUNTING_SOURCE: Workflow-Aktionen sind für diesen Adapter schreibgeschützt.');
+  }
   if (dataAdapter?.dispatchBookingAction) {
     return clone(await dataAdapter.dispatchBookingAction(transactionId, action, options));
   }
@@ -315,12 +321,14 @@ const buildSeedDraft = (
   accounts: Account[],
   chartFramework: 'SKR03' | 'SKR04',
   bankAccountNumber?: string,
+  bankAccountNumberByTransactionId?: Record<string, string>,
 ): BookingDraft => {
   const amount = Math.abs(Number(tx.amount) || 0);
   const suggestedAccount = deriveAccountSuggestion(tx, accounts);
+  const configuredBankAccountNumber = bankAccountNumberByTransactionId?.[tx.id] ?? bankAccountNumber;
   const clearingAccount =
-    (bankAccountNumber ? accounts.find((account) => account.number === bankAccountNumber) : undefined) ??
-    (bankAccountNumber ? undefined : accounts.find((account) => /bank|giro|konto/i.test(`${account.name} ${account.keywords?.join(' ') ?? ''}`))) ??
+    (configuredBankAccountNumber ? accounts.find((account) => account.number === configuredBankAccountNumber) : undefined) ??
+    (configuredBankAccountNumber ? undefined : accounts.find((account) => /bank|giro|konto/i.test(`${account.name} ${account.keywords?.join(' ') ?? ''}`))) ??
     accounts.find((account) => account.type === 'Asset') ??
     accounts[0];
   const fallbackText = tx.amount >= 0 ? 'Einnahme' : 'Ausgabe';
@@ -400,7 +408,16 @@ export function hydrateMockStore(seed: MockStoreSeed) {
   if (seed.transactions && seed.transactions.length > 0) {
     const chartFramework = seed.chartFramework ?? 'SKR03';
     const currentAccounts = seed.accounts && seed.accounts.length > 0 ? seed.accounts : [];
-    drafts = seed.transactions.map((tx, idx) => buildSeedDraft(tx, idx, currentAccounts, chartFramework, seed.bankAccountNumber));
+    drafts = seed.transactions.map((tx, idx) =>
+      buildSeedDraft(
+        tx,
+        idx,
+        currentAccounts,
+        chartFramework,
+        seed.bankAccountNumber,
+        seed.bankAccountNumberByTransactionId,
+      ),
+    );
     syncAll();
   }
 }

@@ -143,6 +143,10 @@ const mapEntityDraftToUiDraft = (
   };
 };
 
+type ProAccountingPolicy = {
+  activeChart: 'SKR03' | 'SKR04';
+};
+
 const mapUiDraftToEntityDraft = (
   draft: ProUiBookingDraft,
 ): IpcArgs<'pro:saveDraft'>['draft'] => {
@@ -191,9 +195,19 @@ const mapUiDraftToEntityDraft = (
 export const ProAccountingPage: React.FC = () => {
   const queryClient = useQueryClient();
   const { data: ledgerStats, isError: ledgerStatsError, error: ledgerStatsLoadError } = useProLedgerStatsQuery();
-  const activeChart =
-    (ledgerStats?.byChart.SKR03 ?? 0) >= (ledgerStats?.byChart.SKR04 ?? 0) ? 'SKR03' : 'SKR04';
+  const policyQuery = useQuery({
+    queryKey: ['pro-accounting', 'policy'],
+    queryFn: async (): Promise<ProAccountingPolicy> => {
+      const getAccountingPolicy = (ipc.pro as typeof ipc.pro & {
+        getAccountingPolicy?: () => Promise<ProAccountingPolicy>;
+      }).getAccountingPolicy;
+      if (!getAccountingPolicy) throw new Error('Buchhaltungspolitik ist für diese Pro-Installation nicht verfügbar.');
+      return getAccountingPolicy();
+    },
+  });
+  const activeChart = policyQuery.data?.activeChart ?? 'SKR03';
   const { data: ledgerAccounts = [], isError: ledgerAccountsError, error: ledgerAccountsLoadError } = useProLedgerAccountsQuery({
+    chart: activeChart,
     limit: 10_000,
   });
   const { data: bankAccounts = [], isError: bankAccountsError, error: bankAccountsLoadError } = useAccountsQuery();
@@ -450,7 +464,7 @@ export const ProAccountingPage: React.FC = () => {
     };
   }, [accountNames, activeChart, invalidateProQueries, runMutation]);
 
-  if (txQuery.isLoading || draftQuery.isLoading) {
+  if (txQuery.isLoading || draftQuery.isLoading || policyQuery.isLoading) {
     return (
       <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-gray-600">
         Lade Pro-Buchhaltungsdaten…
@@ -458,10 +472,10 @@ export const ProAccountingPage: React.FC = () => {
     );
   }
 
-  if (txQuery.isError || draftQuery.isError || ledgerStatsError || ledgerAccountsError || bankAccountsError) {
+  if (txQuery.isError || draftQuery.isError || policyQuery.isError || ledgerStatsError || ledgerAccountsError || bankAccountsError) {
     return (
       <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-red-700" role="alert">
-        Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error ?? ledgerStatsLoadError ?? ledgerAccountsLoadError ?? bankAccountsLoadError)}
+        Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error ?? policyQuery.error ?? ledgerStatsLoadError ?? ledgerAccountsLoadError ?? bankAccountsLoadError)}
       </div>
     );
   }

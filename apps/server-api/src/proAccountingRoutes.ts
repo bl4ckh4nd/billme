@@ -410,7 +410,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       query: reportRange,
       async handler({ request, query }) {
         const session = await requireProSession(app, request.headers.authorization);
-        return serviceFor(app).getGuvReport(session.scope, query);
+        return serviceFor(app).repository.getGuvReport(session.scope, { ...query, profile: reportPath });
       },
     });
   }
@@ -469,7 +469,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
           ? await service.getBilanzReport(session.scope, { asOfDate: body.asOfDate })
           : body.reportType === 'bwa01'
             ? await service.repository.getBwa01Report(session.scope, { from: body.from, to: body.to, chart: body.chart, profile: body.profile })
-            : await service.getGuvReport(session.scope, { from: body.from, to: body.to });
+            : await service.repository.getGuvReport(session.scope, { from: body.from, to: body.to, profile: body.reportType === 'management-guv' || body.reportType === 'hgb-guv' ? body.reportType : 'guv' });
       return service.repository.saveReportSnapshot(session.scope, {
         reportType: body.reportType,
         args,

@@ -77,6 +77,8 @@ test('GuV report preserves account references and surfaces unmapped accounts', a
   assert.deepEqual(report.unmappedAccounts, [{ accountNumber: '9999', amount: -20 }]);
   assert.equal(report.blocking, true);
   assert.match(calls[1]?.text ?? '', /ARRAY_AGG\(DISTINCT jl\.account_number/);
+  assert.match(calls[1]?.text ?? '', /report_type=\$4/);
+  assert.deepEqual(calls[1]?.values.slice(0, 4), ['guv-report-test', 'SKR04', '2026-12-31', 'guv']);
 });
 
 test('BWA01 uses explicit mapped positions, catalog order, and blocking unmapped accounts', async () => {

@@ -381,8 +381,64 @@ export const journalEntries = pgTable("journal_entries", {
   fiscalYear: integer("fiscal_year"),
   status: text("status"),
   sourceDraftId: text("source_draft_id"),
+  sourceType: text("source_type"),
+  sourceKey: text("source_key"),
   reversedEntryId: text("reversed_entry_id"),
   createdAt: text("created_at"),
+});
+
+export const accountingPolicies = pgTable("accounting_policies", {
+  tenantId: text("tenant_id"),
+  activeChart: text("active_chart"),
+  vatMethod: text("vat_method"),
+  periodPolicy: text("period_policy"),
+  updatedAt: text("updated_at"),
+});
+
+export const accountingAccountMappings = pgTable("accounting_account_mappings", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  chart: text("chart"),
+  role: text("role"),
+  accountNumber: text("account_number"),
+  updatedAt: text("updated_at"),
+});
+
+export const vendors = pgTable("vendors", {
+  id: text("id"), tenantId: text("tenant_id"), vendorNumber: text("vendor_number"), name: text("name"),
+  email: text("email"), address: text("address"), vatId: text("vat_id"), iban: text("iban"),
+  defaultExpenseAccount: text("default_expense_account"), createdAt: text("created_at"), updatedAt: text("updated_at"),
+});
+
+export const incomingInvoices = pgTable("incoming_invoices", {
+  id: text("id"), tenantId: text("tenant_id"), vendorId: text("vendor_id"), number: text("number"),
+  invoiceDate: text("invoice_date"), dueDate: text("due_date"), servicePeriod: text("service_period"),
+  netAmount: numeric("net_amount"), taxAmount: numeric("tax_amount"), grossAmount: numeric("gross_amount"),
+  status: text("status"), taxRate: numeric("tax_rate"), taxCaseKey: text("tax_case_key"), notes: text("notes"),
+  accountingStatus: text("accounting_status"), accountingSnapshotJson: text("accounting_snapshot_json"),
+  accountingJournalEntryId: text("accounting_journal_entry_id"), createdAt: text("created_at"), updatedAt: text("updated_at"),
+});
+
+export const incomingInvoiceLines = pgTable("incoming_invoice_lines", {
+  id: text("id"), tenantId: text("tenant_id"), incomingInvoiceId: text("incoming_invoice_id"), position: integer("position"),
+  description: text("description"), quantity: numeric("quantity"), unitPrice: numeric("unit_price"), netAmount: numeric("net_amount"),
+  taxRate: numeric("tax_rate"), taxAmount: numeric("tax_amount"), grossAmount: numeric("gross_amount"), accountNumber: text("account_number"), assetAccountNumber: text("asset_account_number"),
+});
+
+export const openItems = pgTable("open_items", {
+  id: text("id"), tenantId: text("tenant_id"), partyType: text("party_type"), partyId: text("party_id"), sourceType: text("source_type"), sourceId: text("source_id"), documentNumber: text("document_number"), documentDate: text("document_date"), dueDate: text("due_date"), originalAmount: numeric("original_amount"), allocatedAmount: numeric("allocated_amount"), residualAmount: numeric("residual_amount"), status: text("status"), journalEntryId: text("journal_entry_id"), createdAt: text("created_at"), updatedAt: text("updated_at"),
+});
+
+export const openItemPayments = pgTable("open_item_payments", {
+  id: text("id"), tenantId: text("tenant_id"), partyType: text("party_type"), partyId: text("party_id"), paymentDate: text("payment_date"), amount: numeric("amount"), bankAccountNumber: text("bank_account_number"), method: text("method"), sourceType: text("source_type"), sourceId: text("source_id"), allocatedAmount: numeric("allocated_amount"), residualAmount: numeric("residual_amount"), status: text("status"), journalEntryId: text("journal_entry_id"), createdAt: text("created_at"),
+});
+
+export const openItemAllocations = pgTable("open_item_allocations", {
+  id: text("id"), tenantId: text("tenant_id"), paymentId: text("payment_id"), openItemId: text("open_item_id"), amount: numeric("amount"), createdAt: text("created_at"),
+});
+
+export const accountingBackfillRuns = pgTable("accounting_backfill_runs", {
+  id: text("id"), tenantId: text("tenant_id"), status: text("status"), candidatesJson: text("candidates_json"), confirmationHash: text("confirmation_hash"), resultJson: text("result_json"), createdAt: text("created_at"), confirmedAt: text("confirmed_at"), completedAt: text("completed_at"),
 });
 
 export const journalLines = pgTable("journal_lines", {

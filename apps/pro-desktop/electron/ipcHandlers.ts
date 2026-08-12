@@ -99,6 +99,7 @@ import {
   runDepreciation,
   upsertAsset,
 } from '../db/assetsRepo';
+import { getAccountingPolicy } from '../db/proAccountingRepo';
 
 /**
  * Resolves the document's tax mode against the business settings and stores the
@@ -1117,6 +1118,11 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'pro:listLedgerAccounts', (args) => {
     return getProAccountingCatalogService().listLedgerAccounts(args);
+  });
+
+  register(ipcMain, 'pro:getAccountingPolicy', () => {
+    const db = requireDb();
+    return getAccountingPolicy(db, getProScope().tenantId);
   });
 
   register(ipcMain, 'pro:listTaxCases', ({ activeOnly }) => {

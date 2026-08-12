@@ -25,6 +25,7 @@ import {
   appSettingsSchema,
   ledgerAccountSchema,
   ledgerChartSchema,
+  accountingPolicySchema,
   taxCaseDefinitionSchema,
   taxCaseAccountMappingSchema,
   taxCaseKeySchema,
@@ -982,6 +983,11 @@ export const ipcRoutes = {
     channel: 'pro:listLedgerAccounts',
     args: proListLedgerAccountsArgsSchema,
     result: z.array(ledgerAccountSchema),
+  },
+  'pro:getAccountingPolicy': {
+    channel: 'pro:getAccountingPolicy',
+    args: z.undefined(),
+    result: accountingPolicySchema,
   },
   'pro:listTaxCases': {
     channel: 'pro:listTaxCases',

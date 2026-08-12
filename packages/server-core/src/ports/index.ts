@@ -415,10 +415,6 @@ export interface BilanzReport {
     accountNumber: string;
     amount: number;
   }>;
-  unmappedAccounts?: Array<{
-    accountNumber: string;
-    amount: number;
-  }>;
   totals: {
     assets: number;
     liabilities: number;

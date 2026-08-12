@@ -1031,7 +1031,7 @@ export const postDraft = (
     .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceDraftId, draftId))).get();
   const existingId = existingSource?.id ?? existingDraft?.id;
   if (existingId) {
-    const existing = listJournalEntries(db, { limit: 5000, offset: 0 }, scope).find((entry) => entry.id === existingId);
+    const existing = getJournalEntryById(db, existingId, scope);
     if (existing) return { entry: existing, issues: [] };
   }
 
@@ -1092,11 +1092,15 @@ export const postDraft = (
   const entryId = randomUUID();
   const createdAt = new Date().toISOString();
   let entryNumber = 0;
+  let duplicateEntryId: string | undefined;
   db.transaction(() => {
     const txDrizzle = createDrizzle(db);
     const duplicate = txDrizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
       .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, 'booking_draft'), eq(schema.journalEntries.sourceKey, sourceKey))).get();
-    if (duplicate) return;
+    if (duplicate) {
+      duplicateEntryId = duplicate.id;
+      return;
+    }
     // Allocation deliberately occurs inside the same SQLite transaction as the
     // insert; SQLite serializes writers and the unique index is the final guard.
     entryNumber = getNextEntryNumber(db, tenantId);
@@ -1119,8 +1123,8 @@ export const postDraft = (
     appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: entryId, action: 'post', reason: overrideReason || 'Draft posted', before: null, after: { entryNumber, postingDate, period, fiscalYear, sourceDraftId: validated.id, sourceKey }, actor: 'pro' });
   })();
 
-  if (entryNumber === 0) {
-    const existing = listJournalEntries(db, { limit: 5000, offset: 0 }, scope).find((entry) => entry.sourceType === 'booking_draft' && entry.sourceKey === sourceKey);
+  if (duplicateEntryId) {
+    const existing = getJournalEntryById(db, duplicateEntryId, scope);
     if (existing) return { entry: existing, issues: [] };
   }
   return { entry: { id: entryId, tenantId, entryNumber, postingDate, documentDate: validated.documentDate, bookingText: validated.bookingText, reference: validated.reference, period, fiscalYear, status: 'posted', sourceDraftId: validated.id, sourceType: 'booking_draft', sourceKey, createdAt, lines: postingLines }, issues: validated.validationIssues };
@@ -1313,6 +1317,90 @@ export const listJournalEntries = (
     })),
   }));
 };
+
+// Idempotent mutations must not depend on the paginated journal listing.
+// Keep this lookup intentionally direct so a replay remains correct after the
+// journal grows beyond the list endpoint's page cap.
+function getJournalEntryById(
+  db: Database.Database,
+  entryId: string,
+  scope: TenantScope,
+): JournalEntryEntity | null {
+  const tenantId = getTenantId(scope);
+  const drizzle = createDrizzle(db);
+  const row = drizzle.select({
+    id: schema.journalEntries.id, tenant_id: schema.journalEntries.tenantId, entry_number: schema.journalEntries.entryNumber,
+    posting_date: schema.journalEntries.postingDate, document_date: schema.journalEntries.documentDate,
+    booking_text: schema.journalEntries.bookingText, reference: schema.journalEntries.reference,
+    period: schema.journalEntries.period, fiscal_year: schema.journalEntries.fiscalYear, status: schema.journalEntries.status,
+    source_draft_id: schema.journalEntries.sourceDraftId, source_type: schema.journalEntries.sourceType,
+    source_key: schema.journalEntries.sourceKey, reversed_entry_id: schema.journalEntries.reversedEntryId,
+    created_at: schema.journalEntries.createdAt,
+  }).from(schema.journalEntries).where(and(
+    eq(schema.journalEntries.tenantId, tenantId),
+    eq(schema.journalEntries.id, entryId),
+  )).get() as {
+    id: string; tenant_id: string; entry_number: number; posting_date: string; document_date: string | null;
+    booking_text: string; reference: string | null; period: string; fiscal_year: number; status: string;
+    source_draft_id: string | null; source_type: string; source_key: string | null; reversed_entry_id: string | null; created_at: string;
+  } | undefined;
+  if (!row) return null;
+
+  const lines = drizzle.select({
+    id: schema.journalLines.id, account_number: schema.journalLines.accountNumber,
+    debit_amount: schema.journalLines.debitAmount, credit_amount: schema.journalLines.creditAmount,
+    tax_code: schema.journalLines.taxCode, tax_case_key: schema.journalLines.taxCaseKey,
+    tax_rate: schema.journalLines.taxRate, net_amount: schema.journalLines.netAmount, tax_amount: schema.journalLines.taxAmount,
+    gross_amount: schema.journalLines.grossAmount, country_code: schema.journalLines.countryCode,
+    counterparty_vat_id: schema.journalLines.counterpartyVatId, evidence_type: schema.journalLines.evidenceType,
+    evidence_reference: schema.journalLines.evidenceReference, cost_center: schema.journalLines.costCenter,
+    memo: schema.journalLines.memo,
+  }).from(schema.journalLines).where(and(
+    eq(schema.journalLines.tenantId, tenantId),
+    eq(schema.journalLines.entryId, row.id),
+  )).orderBy(asc(schema.journalLines.lineNo)).all() as Array<{
+    id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
+    tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
+    gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null;
+    evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
+  }>;
+
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    entryNumber: row.entry_number,
+    postingDate: row.posting_date,
+    documentDate: row.document_date ?? undefined,
+    bookingText: row.booking_text,
+    reference: row.reference ?? undefined,
+    period: row.period,
+    fiscalYear: row.fiscal_year,
+    status: row.status === 'reversed' ? 'reversed' : 'posted',
+    sourceDraftId: row.source_draft_id ?? undefined,
+    sourceType: row.source_type as JournalEntryEntity['sourceType'],
+    sourceKey: row.source_key ?? undefined,
+    reversedEntryId: row.reversed_entry_id ?? undefined,
+    createdAt: row.created_at,
+    lines: lines.map((line) => ({
+      id: line.id,
+      accountNumber: line.account_number,
+      debitAmount: Number(line.debit_amount || 0),
+      creditAmount: Number(line.credit_amount || 0),
+      taxCode: line.tax_code ?? undefined,
+      taxCaseKey: line.tax_case_key ?? undefined,
+      taxRate: line.tax_rate ?? undefined,
+      netAmount: line.net_amount ?? undefined,
+      taxAmount: line.tax_amount ?? undefined,
+      grossAmount: line.gross_amount ?? undefined,
+      countryCode: line.country_code ?? undefined,
+      counterpartyVatId: line.counterparty_vat_id ?? undefined,
+      evidenceType: line.evidence_type ?? undefined,
+      evidenceReference: line.evidence_reference ?? undefined,
+      costCenter: line.cost_center ?? undefined,
+      memo: line.memo ?? undefined,
+    })),
+  };
+}
 
 export const getLedgerBalances = (
   db: Database.Database,

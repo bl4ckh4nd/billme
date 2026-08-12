@@ -42,6 +42,52 @@ const logMigration = (db: Database.Database, migrationName: string, status: 'sta
   `).run(randomUUID(), migrationName, status, error ?? null, timestamp);
 };
 
+const repairDuplicateJournalSourceDrafts = (db: Database.Database): number => {
+  const groups = db.prepare(`
+    SELECT tenant_id, source_draft_id
+    FROM journal_entries
+    WHERE source_draft_id IS NOT NULL
+    GROUP BY tenant_id, source_draft_id
+    HAVING COUNT(*) > 1
+  `).all() as Array<{ tenant_id: string; source_draft_id: string }>;
+
+  let repaired = 0;
+  const findSourceKey = db.prepare(`
+    SELECT 1
+    FROM journal_entries
+    WHERE tenant_id = ? AND source_type = ? AND source_key = ?
+    LIMIT 1
+  `);
+  const updateDuplicate = db.prepare(`
+    UPDATE journal_entries
+    SET source_draft_id = NULL, source_type = 'manual', source_key = ?
+    WHERE tenant_id = ? AND id = ?
+  `);
+
+  for (const group of groups) {
+    const rows = db.prepare(`
+      SELECT id
+      FROM journal_entries
+      WHERE tenant_id = ? AND source_draft_id = ?
+      ORDER BY created_at ASC, entry_number ASC, id ASC
+    `).all(group.tenant_id, group.source_draft_id) as Array<{ id: string }>;
+
+    // Keep the earliest immutable journal as the canonical source association.
+    for (const duplicate of rows.slice(1)) {
+      let sourceKey = `legacy-source-draft:${group.source_draft_id}:${duplicate.id}`;
+      let suffix = 0;
+      while (findSourceKey.get(group.tenant_id, 'manual', sourceKey)) {
+        suffix += 1;
+        sourceKey = `legacy-source-draft:${group.source_draft_id}:${duplicate.id}:${suffix}`;
+      }
+      updateDuplicate.run(sourceKey, group.tenant_id, duplicate.id);
+      repaired += 1;
+    }
+  }
+
+  return repaired;
+};
+
 export const runMigrations = (db: Database.Database): void => {
   // Create migration log table first
   db.exec(`
@@ -340,12 +386,6 @@ export const runMigrations = (db: Database.Database): void => {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_entry_number
       ON journal_entries(tenant_id, entry_number);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source
-      ON journal_entries(tenant_id, source_type, source_key)
-      WHERE source_key IS NOT NULL;
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source_draft
-      ON journal_entries(tenant_id, source_draft_id)
-      WHERE source_draft_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_journal_entries_tenant_posting_date
       ON journal_entries(tenant_id, posting_date DESC);
 
@@ -648,6 +688,16 @@ export const runMigrations = (db: Database.Database): void => {
   // Pro schema. Keep existing installs idempotent and preserve immutable rows.
   tryAddColumn(db, 'journal_entries', 'source_type', "TEXT NOT NULL DEFAULT 'booking_draft'");
   tryAddColumn(db, 'journal_entries', 'source_key', 'TEXT');
+  // Existing installs may contain duplicate source_draft_id values from before
+  // source idempotency was enforced. Repair associations without deleting any
+  // journal: the earliest row remains canonical and later rows become uniquely
+  // identified legacy/manual sources.
+  db.exec(`
+    DROP INDEX IF EXISTS idx_journal_entries_tenant_source;
+    DROP INDEX IF EXISTS idx_journal_entries_tenant_source_draft;
+    DROP TRIGGER IF EXISTS journal_entries_protect_core_fields;
+  `);
+  const repairedJournalSources = repairDuplicateJournalSourceDrafts(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS accounting_policies (
       tenant_id TEXT PRIMARY KEY,
@@ -661,7 +711,6 @@ export const runMigrations = (db: Database.Database): void => {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source_draft
       ON journal_entries(tenant_id, source_draft_id)
       WHERE source_draft_id IS NOT NULL;
-    DROP TRIGGER IF EXISTS journal_entries_protect_core_fields;
     CREATE TRIGGER journal_entries_protect_core_fields
     BEFORE UPDATE ON journal_entries
     FOR EACH ROW
@@ -683,6 +732,9 @@ export const runMigrations = (db: Database.Database): void => {
       SELECT RAISE(ABORT, 'journal_entries core fields are immutable');
     END;
   `);
+  if (repairedJournalSources > 0) {
+    logMigration(db, 'journal_source_draft_repair', 'completed', JSON.stringify({ repaired: repairedJournalSources }));
+  }
   db.prepare(`
     INSERT OR IGNORE INTO accounting_policies (tenant_id, active_chart, period_policy, updated_at)
     VALUES ('default', 'SKR03', 'calendar_month', ?)

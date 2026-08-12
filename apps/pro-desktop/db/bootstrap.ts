@@ -336,9 +336,6 @@ CREATE TABLE IF NOT EXISTS journal_entries (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_entry_number
   ON journal_entries(tenant_id, entry_number);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source_draft
-  ON journal_entries(tenant_id, source_draft_id)
-  WHERE source_draft_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_journal_entries_tenant_posting_date
   ON journal_entries(tenant_id, posting_date DESC);
 

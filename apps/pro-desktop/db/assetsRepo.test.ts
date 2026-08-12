@@ -45,6 +45,12 @@ describe.skipIf(!canRunNativeSqlite)('asset migrations and repository', () => {
     const db = new Database(':memory:');
     db.exec(bootstrapSql);
     runMigrations(db);
+    db.exec(`
+      INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at)
+      VALUES
+        ('asset-test-4830', 'SKR03', '4830', 'Abschreibungen', 'test', datetime('now'), datetime('now')),
+        ('asset-test-0440', 'SKR03', '0440', 'Betriebsausstattung', 'test', datetime('now'), datetime('now'));
+    `);
     const scope = createProTenantScope('default');
     const asset = upsertAsset(db, {
       assetNumber: 'ANL-2026-001',

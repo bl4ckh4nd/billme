@@ -106,6 +106,13 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
       period TEXT NOT NULL, fiscal_year INTEGER NOT NULL, status TEXT NOT NULL,
       source_draft_id TEXT, reversed_entry_id TEXT, created_at TEXT NOT NULL
     );`);
+    const insertLegacy = legacy.prepare(`
+      INSERT INTO journal_entries
+        (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, reversed_entry_id, created_at)
+      VALUES (?, 'default', ?, '2026-03-01', '2026-03-01', ?, ?, '2026-03', 2026, 'posted', ?, NULL, ?)
+    `);
+    insertLegacy.run('legacy-canonical', 1, 'Legacy canonical', 'legacy-1', 'legacy-draft-1', '2026-03-01T08:00:00.000Z');
+    insertLegacy.run('legacy-duplicate', 2, 'Legacy duplicate', 'legacy-2', 'legacy-draft-1', '2026-03-01T09:00:00.000Z');
     legacy.close();
 
     const connection = createSqliteConnection({ bootstrapSql, runMigrations, defaultFileName: 'legacy.sqlite' });
@@ -113,6 +120,16 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     const columns = db.prepare('PRAGMA table_info(journal_entries)').all() as Array<{ name: string }>;
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(['source_type', 'source_key']));
     expect(() => db.prepare("SELECT source_type, source_key FROM journal_entries").get()).not.toThrow();
+    const repaired = db.prepare(`
+      SELECT id, source_draft_id, source_type, source_key
+      FROM journal_entries
+      ORDER BY entry_number
+    `).all() as Array<{ id: string; source_draft_id: string | null; source_type: string; source_key: string | null }>;
+    expect(repaired).toHaveLength(2);
+    expect(repaired[0]).toMatchObject({ id: 'legacy-canonical', source_draft_id: 'legacy-draft-1', source_type: 'booking_draft', source_key: null });
+    expect(repaired[1]).toMatchObject({ id: 'legacy-duplicate', source_draft_id: null, source_type: 'manual' });
+    expect(repaired[1]!.source_key).toMatch(/^legacy-source-draft:legacy-draft-1:legacy-duplicate/);
+    expect(db.prepare("SELECT COUNT(*) AS c FROM migration_log WHERE migration_name = 'journal_source_draft_repair' AND status = 'completed'").get()).toMatchObject({ c: 1 });
     connection.closeDb();
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -180,6 +197,24 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     const second = postDraft(db, draft.id, { postingDate: '2026-03-01' }, scope);
     expect(second.entry.id).toBe(first.entry.id);
     expect((db.prepare('SELECT COUNT(*) AS c FROM journal_entries').get() as { c: number }).c).toBe(1);
+  });
+
+  it('returns the idempotent entry directly after the journal exceeds the list page cap', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const draft = validDraft(db, 'tx-idempotent-large-1', '2026-03-01');
+    const first = postDraft(db, draft.id, { postingDate: '2026-03-01' }, scope);
+    const insert = db.prepare(`
+      INSERT INTO journal_entries
+        (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, source_type, source_key, reversed_entry_id, created_at)
+      VALUES (?, 'default', ?, '2027-01-01', '2027-01-01', 'Filler', NULL, '2027-01', 2027, 'posted', NULL, 'manual', NULL, NULL, ?)
+    `);
+    for (let index = 0; index < 5_001; index += 1) {
+      insert.run(`filler-${index}`, first.entry.entryNumber + index + 1, new Date(2027, 0, 1, 0, 0, index).toISOString());
+    }
+    const replay = postDraft(db, draft.id, { postingDate: '2026-03-01' }, scope);
+    expect(replay.entry.id).toBe(first.entry.id);
+    expect(replay.issues).toEqual([]);
   });
 
   it('accepts decimal cent values without floating-point false positives', () => {

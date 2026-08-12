@@ -374,12 +374,12 @@ export const runProAccountingScenario = async (page) => {
     consultantNumber: '1001',
     clientNumber: '7',
     fiscalYearStart: '2026-01-01',
-    accountLength: 5,
+    accountLength: 4,
     encoding: 'utf8-bom',
     reason: 'Playwright immutable DATEV export',
   });
   expect(datevExport.body).toContain('"EXTF";700;21;"Buchungsstapel";13;');
-  expect(datevExport.body).toContain(';1001;7;20260101;5;20260305;20260305;');
+  expect(datevExport.body).toContain(';1001;7;20260101;4;20260305;20260305;');
   expect(datevExport.body).toContain('Playwright canonical persisted booking');
   expect(datevExport.headers.get('content-type')).toContain('charset=utf-8');
   const datevExportId = datevExport.headers.get('x-billme-datev-export-id');

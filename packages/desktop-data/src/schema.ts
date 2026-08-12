@@ -721,6 +721,7 @@ export const reportSnapshots = sqliteTable(
     reportType: text('report_type').notNull(),
     argsJson: text('args_json').notNull(),
     payloadJson: text('payload_json').notNull(),
+    sourceHash: text('source_hash'),
     createdAt: text('created_at').notNull(),
   },
   (t) => ({

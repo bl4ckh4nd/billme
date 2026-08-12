@@ -300,7 +300,9 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     await pool.query(`UPDATE invoices SET status='open',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now, tenantId, reservationInvoiceId]);
     const postedReservation = await repository.postOutgoingInvoice(scope, reservationInvoiceId, { reservationId });
     assert.equal(postedReservation.status, 'ready', JSON.stringify(postedReservation));
-    assert.equal((await pool.query(`SELECT accounting_status FROM invoices WHERE tenant_id=$1 AND id=$2`, [tenantId, reservationInvoiceId])).rows[0].accounting_status, 'posted');
+    const postedReservationRow = (await pool.query(`SELECT accounting_status,accounting_posted_at FROM invoices WHERE tenant_id=$1 AND id=$2`, [tenantId, reservationInvoiceId])).rows[0];
+    assert.equal(postedReservationRow.accounting_status, 'posted');
+    assert.ok(postedReservationRow.accounting_posted_at);
     const legacyEntryNumber = Number((await pool.query(`SELECT COALESCE(MAX(entry_number),0)+1 AS number FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].number);
     await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,$3,'2026-08-11','2026-08-11','Legacy imported','2026-08',2026,'posted','legacy_transaction',$4,$5)`, [legacyEntryId, tenantId, legacyEntryNumber, `legacy:${suffix}`, now]);
     await pool.query(`INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount) VALUES ($1,$2,$3,1,$4,10,0),($5,$2,$3,2,$6,0,10)`, [`legacy-debit-${suffix}`, tenantId, legacyEntryId, bankAccount, `legacy-credit-${suffix}`, receivableAccount]);
@@ -343,6 +345,19 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     await assert.rejects(() => repository.confirmAccountingBackfill(scope, { runId: backfillPreview.runId, confirmationHash: backfillPreview.confirmationHash, reason: 'review backfill' }), /BACKFILL_STALE_PREVIEW/);
     assert.equal((await pool.query(`SELECT accounting_status FROM invoices WHERE tenant_id=$1 AND id=$2`, [tenantId, backfillInvoiceId])).rows[0].accounting_status, 'unposted');
     assert.equal((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1 AND source_type='outgoing_invoice' AND source_key=$2`, [tenantId, `outgoing_invoice:${backfillInvoiceId}`])).rows[0].count, 0);
+    const terminalPreview = await repository.previewAccountingBackfill(scope);
+    assert.ok(terminalPreview.candidates.some((candidate) => candidate.sourceId === backfillInvoiceId && candidate.status === 'ready'));
+    await pool.query(`UPDATE invoices SET status='cancelled',accounting_status='reversed',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now, tenantId, backfillInvoiceId]);
+    await assert.rejects(() => repository.confirmAccountingBackfill(scope, { runId: terminalPreview.runId, confirmationHash: terminalPreview.confirmationHash, reason: 'terminal backfill source' }), /BACKFILL_STALE_PREVIEW/);
+    const outgoingJournalCountBeforeTerminalPost = Number((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count);
+    await assert.rejects(() => repository.postOutgoingInvoice(scope, backfillInvoiceId, { reservationId: backfillReservationId }), /DOCUMENT_NOT_POSTABLE/);
+    assert.equal(Number((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count), outgoingJournalCountBeforeTerminalPost);
+    await repository.reverseDocumentAccounting(scope, { documentType: 'incoming_invoice', documentId: incomingInvoiceId, reason: 'terminal incoming test' });
+    const incomingTerminalPreview = await repository.previewAccountingBackfill(scope);
+    assert.equal(incomingTerminalPreview.candidates.some((candidate) => candidate.sourceId === incomingInvoiceId), false);
+    const incomingJournalCountBeforeTerminalPost = Number((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count);
+    await assert.rejects(() => repository.postIncomingInvoice(scope, incomingInvoiceId), /DOCUMENT_NOT_POSTABLE/);
+    assert.equal(Number((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count), incomingJournalCountBeforeTerminalPost);
   } finally {
     await pool.query(`ALTER TABLE invoices DISABLE TRIGGER invoices_posted_immutable`);
     await pool.query(`ALTER TABLE incoming_invoices DISABLE TRIGGER incoming_invoices_posted_immutable`);

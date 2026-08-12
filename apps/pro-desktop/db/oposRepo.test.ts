@@ -138,17 +138,17 @@ describe('OPOS accounting', () => {
   it('posts incoming invoices as expense plus input VAT against creditors', () => {
     const db = createDb();
     const vendor = upsertVendor(db, scope, { id: 'vendor-1', name: 'Supplier', mutation: { reason: 'test' } });
-    const invoice = upsertIncomingInvoice(db, scope, { id: 'in-1', tenantId: 'default', vendorId: vendor.id, number: 'ER-1', invoiceDate: '2026-08-02', dueDate: '2026-08-31', netAmount: 100, taxAmount: 19, grossAmount: 119, taxRate: 19, status: 'draft', accountingStatus: 'unposted', lines: [{ id: 'line-1', incomingInvoiceId: 'in-1', position: 0, description: 'Hosting', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119 }] , createdAt: '', updatedAt: '', mutation: { reason: 'test' } });
+    const invoice = upsertIncomingInvoice(db, scope, { id: 'in-1', tenantId: 'default', vendorId: vendor.id, number: 'ER-1', invoiceDate: '2026-08-02', dueDate: '2026-08-31', netAmount: 100, taxAmount: 19, grossAmount: 119, taxRate: 19, status: 'open', accountingStatus: 'unposted', lines: [{ id: 'line-1', incomingInvoiceId: 'in-1', position: 0, description: 'Hosting', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119 }] , createdAt: '', updatedAt: '', mutation: { reason: 'test' } });
     expect(postIncomingInvoice(db, scope, invoice.id, { mutation: { reason: 'test post' } }).status).toBe('ready');
     const rows = db.prepare("SELECT account_number, debit_amount, credit_amount FROM journal_lines WHERE entry_id IN (SELECT id FROM journal_entries WHERE source_type = 'incoming_invoice') ORDER BY line_no").all() as Array<{ account_number: string; debit_amount: number; credit_amount: number }>;
     expect(rows.map((row) => row.account_number)).toEqual(['4900', '1576', '1600']);
     expect(listOpenItems(db, scope)[0]?.partyType).toBe('creditor');
-    const invoice7 = upsertIncomingInvoice(db, scope, { id: 'in-7', tenantId: 'default', vendorId: vendor.id, number: 'ER-7', invoiceDate: '2026-08-03', dueDate: '2026-08-31', netAmount: 100, taxAmount: 7, grossAmount: 107, taxRate: 7, status: 'draft', accountingStatus: 'unposted', lines: [{ id: 'line-7', incomingInvoiceId: 'in-7', position: 0, description: 'Book', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 7, taxAmount: 7, grossAmount: 107 }], createdAt: '', updatedAt: '', mutation: { reason: 'test' } });
+    const invoice7 = upsertIncomingInvoice(db, scope, { id: 'in-7', tenantId: 'default', vendorId: vendor.id, number: 'ER-7', invoiceDate: '2026-08-03', dueDate: '2026-08-31', netAmount: 100, taxAmount: 7, grossAmount: 107, taxRate: 7, status: 'open', accountingStatus: 'unposted', lines: [{ id: 'line-7', incomingInvoiceId: 'in-7', position: 0, description: 'Book', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 7, taxAmount: 7, grossAmount: 107 }], createdAt: '', updatedAt: '', mutation: { reason: 'test' } });
     postIncomingInvoice(db, scope, invoice7.id, { mutation: { reason: 'test post' } });
     const rows7 = db.prepare("SELECT account_number FROM journal_lines WHERE entry_id = (SELECT accounting_journal_entry_id FROM incoming_invoices WHERE id = 'in-7') ORDER BY line_no").all();
     expect(rows7.map((row) => (row as { account_number: string }).account_number)).toEqual(['4900', '1571', '1600']);
     expect(db.prepare("SELECT tax_case_key, datev_bu_key FROM journal_posting_pairs WHERE entry_id = (SELECT accounting_journal_entry_id FROM incoming_invoices WHERE id = 'in-7') AND tax_case_key IS NOT NULL").all()).toEqual([{ tax_case_key: 'DE_STD_7', datev_bu_key: '2' }, { tax_case_key: 'DE_STD_7', datev_bu_key: '2' }]);
-    const incomingRc = upsertIncomingInvoice(db, scope, { id: 'in-non-eu-rc', tenantId: 'default', vendorId: vendor.id, number: 'ER-RC', invoiceDate: '2026-08-04', dueDate: '2026-08-31', netAmount: 100, taxAmount: 0, grossAmount: 100, taxRate: 0, taxCaseKey: 'NON_EU_SERVICE_RC', status: 'draft', accountingStatus: 'unposted', lines: [{ id: 'line-non-eu-rc', incomingInvoiceId: 'in-non-eu-rc', position: 0, description: 'Drittland service', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 0, taxAmount: 0, grossAmount: 100 }], createdAt: '', updatedAt: '', mutation: { reason: 'test' } });
+    const incomingRc = upsertIncomingInvoice(db, scope, { id: 'in-non-eu-rc', tenantId: 'default', vendorId: vendor.id, number: 'ER-RC', invoiceDate: '2026-08-04', dueDate: '2026-08-31', netAmount: 100, taxAmount: 0, grossAmount: 100, taxRate: 0, taxCaseKey: 'NON_EU_SERVICE_RC', status: 'open', accountingStatus: 'unposted', lines: [{ id: 'line-non-eu-rc', incomingInvoiceId: 'in-non-eu-rc', position: 0, description: 'Drittland service', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 0, taxAmount: 0, grossAmount: 100 }], createdAt: '', updatedAt: '', mutation: { reason: 'test' } });
     expect(postIncomingInvoice(db, scope, incomingRc.id, { mutation: { reason: 'test post' } }).status).toBe('unresolved');
     expect((db.prepare("SELECT COUNT(*) AS c FROM journal_entries WHERE source_key = 'incoming-invoice:in-non-eu-rc'").get() as { c: number }).c).toBe(0);
     db.close();
@@ -189,6 +189,36 @@ describe('OPOS accounting', () => {
     expect(preview.readyCount).toBe(0);
     expect(preview.candidates.filter((candidate) => candidate.sourceType === 'outgoing_invoice')).toHaveLength(0);
     expect((db.prepare("SELECT COUNT(*) AS c FROM journal_entries WHERE source_type = 'outgoing_invoice'").get() as { c: number }).c).toBe(0);
+    db.close();
+  });
+
+  it('excludes cancelled/reversed documents and rejects direct reposting without writes', () => {
+    const db = createDb();
+    db.prepare(`INSERT INTO invoices (id, client_id, number, client, client_email, date, due_date, amount, status, accounting_status, tax_snapshot_json, created_at, updated_at) VALUES ('inv-terminal', 'client-terminal', 'RE-TERM', 'Acme', '', '2026-08-01', '2026-08-31', 119, 'cancelled', 'reversed', ?, datetime('now'), datetime('now'))`).run(JSON.stringify({ netAmount: 100, vatAmount: 19, grossAmount: 119 }));
+    db.prepare("INSERT INTO number_reservations (id, kind, number, counter_value, status, document_id, created_at, updated_at) VALUES ('reservation-terminal', 'invoice', 'RE-TERM', 1, 'finalized', 'inv-terminal', datetime('now'), datetime('now'))").run();
+    const vendor = upsertVendor(db, scope, { id: 'vendor-terminal', name: 'Supplier', mutation: { reason: 'test' } });
+    upsertIncomingInvoice(db, scope, { id: 'in-terminal', tenantId: 'default', vendorId: vendor.id, number: 'ER-TERM', invoiceDate: '2026-08-02', dueDate: '2026-08-31', netAmount: 100, taxAmount: 19, grossAmount: 119, taxRate: 19, status: 'open', accountingStatus: 'unposted', lines: [{ id: 'line-terminal', incomingInvoiceId: 'in-terminal', position: 0, description: 'Hosting', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119 }], createdAt: '', updatedAt: '', mutation: { reason: 'test' } });
+    db.prepare("UPDATE incoming_invoices SET status = 'cancelled', accounting_status = 'reversed' WHERE id = 'in-terminal'").run();
+    const preview = previewAccountingBackfill(db, scope);
+    expect(preview.candidates.some((candidate) => candidate.sourceId === 'inv-terminal' || candidate.sourceId === 'in-terminal')).toBe(false);
+    expect(() => postOutgoingInvoice(db, scope, 'inv-terminal')).toThrow('DOCUMENT_NOT_POSTABLE');
+    expect(() => postIncomingInvoice(db, scope, 'in-terminal', { mutation: { reason: 'test repost' } })).toThrow('DOCUMENT_NOT_POSTABLE');
+    expect(db.prepare('SELECT COUNT(*) AS c FROM journal_entries').get()).toEqual({ c: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM open_items').get()).toEqual({ c: 0 });
+    db.close();
+  });
+
+  it('stales a backfill when an eligible outgoing document becomes terminal', () => {
+    const db = createDb();
+    db.prepare(`INSERT INTO invoices (id, client_id, number, client, client_email, date, due_date, amount, status, tax_snapshot_json, created_at, updated_at) VALUES ('inv-terminal-stale', 'client-terminal-stale', 'RE-TERM-STALE', 'Acme', '', '2026-08-01', '2026-08-31', 119, 'open', ?, datetime('now'), datetime('now'))`).run(JSON.stringify({ netAmount: 100, vatAmount: 19, grossAmount: 119 }));
+    db.prepare("INSERT INTO invoice_items (invoice_id, position, description, quantity, price, total, tax_rate) VALUES ('inv-terminal-stale', 0, 'Service', 1, 119, 119, 19)").run();
+    db.prepare("INSERT INTO number_reservations (id, kind, number, counter_value, status, document_id, created_at, updated_at) VALUES ('reservation-terminal-stale', 'invoice', 'RE-TERM-STALE', 1, 'finalized', 'inv-terminal-stale', datetime('now'), datetime('now'))").run();
+    const preview = previewAccountingBackfill(db, scope);
+    expect(preview.candidates.some((candidate) => candidate.sourceId === 'inv-terminal-stale' && candidate.status === 'ready')).toBe(true);
+    db.prepare("UPDATE invoices SET status = 'cancelled', accounting_status = 'reversed' WHERE id = 'inv-terminal-stale'").run();
+    expect(() => confirmAccountingBackfill(db, scope, { runId: preview.runId, confirmationHash: preview.confirmationHash, reason: 'terminal state changed' })).toThrow('BACKFILL_STALE_PREVIEW');
+    expect(db.prepare('SELECT COUNT(*) AS c FROM journal_entries').get()).toEqual({ c: 0 });
+    expect((db.prepare("SELECT accounting_status, status FROM invoices WHERE id = 'inv-terminal-stale'").get() as { accounting_status: string; status: string })).toEqual({ accounting_status: 'reversed', status: 'cancelled' });
     db.close();
   });
 
@@ -347,7 +377,7 @@ describe('OPOS accounting', () => {
     expect(() => db.prepare("DELETE FROM invoices WHERE id = 'inv-rev'").run()).toThrow('cannot be deleted');
     expect(() => db.prepare("INSERT INTO invoice_items (invoice_id, position, description, quantity, price, total, tax_rate) VALUES ('inv-rev', 1, 'Locked', 1, 1, 1, 19)").run()).toThrow('immutable');
     const vendor = upsertVendor(db, scope, { id: 'vendor-rev', name: 'Supplier', mutation: { reason: 'test' } });
-    const incoming = upsertIncomingInvoice(db, scope, { id: 'in-rev', tenantId: 'default', vendorId: vendor.id, number: 'ER-R', invoiceDate: '2026-08-02', dueDate: '2026-08-31', netAmount: 100, taxAmount: 19, grossAmount: 119, taxRate: 19, status: 'draft', accountingStatus: 'unposted', lines: [{ id: 'line-rev', incomingInvoiceId: 'in-rev', position: 0, description: 'Hosting', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119 }], createdAt: '', updatedAt: '', mutation: { reason: 'test' } });
+    const incoming = upsertIncomingInvoice(db, scope, { id: 'in-rev', tenantId: 'default', vendorId: vendor.id, number: 'ER-R', invoiceDate: '2026-08-02', dueDate: '2026-08-31', netAmount: 100, taxAmount: 19, grossAmount: 119, taxRate: 19, status: 'open', accountingStatus: 'unposted', lines: [{ id: 'line-rev', incomingInvoiceId: 'in-rev', position: 0, description: 'Hosting', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119 }], createdAt: '', updatedAt: '', mutation: { reason: 'test' } });
     postIncomingInvoice(db, scope, incoming.id, { mutation: { reason: 'test post' } });
     expect(() => db.prepare("UPDATE incoming_invoices SET accounting_status = 'reversed' WHERE id = 'in-rev'").run()).toThrow('immutable');
     db.prepare(`INSERT INTO assets (id, tenant_id, asset_number, name, asset_class, status, activation_date, acquisition_cost, useful_life_years, depreciation_method, cost_center, location, source_incoming_invoice_id, asset_account_number, created_at, updated_at)

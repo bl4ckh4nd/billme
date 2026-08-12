@@ -7,10 +7,12 @@ test('accounting domain errors map to stable HTTP status codes', async () => {
   const app = Fastify();
   registerErrorHandler(app);
   app.get('/conflict', async () => { throw new Error('POSTING_DATE_IN_CLOSED_PERIOD'); });
+  app.get('/document-not-postable', async () => { throw new Error('DOCUMENT_NOT_POSTABLE'); });
   app.get('/unprocessable', async () => { throw new Error('PAYMENT_SOURCE_MISMATCH'); });
   app.get('/invalid', async () => { throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED'); });
   try {
     assert.equal((await app.inject('/conflict')).statusCode, 409);
+    assert.equal((await app.inject('/document-not-postable')).statusCode, 409);
     assert.equal((await app.inject('/unprocessable')).statusCode, 422);
     assert.equal((await app.inject('/invalid')).statusCode, 400);
   } finally {

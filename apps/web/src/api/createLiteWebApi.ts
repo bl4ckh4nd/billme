@@ -142,29 +142,57 @@ const buildDraftFromClient = async (
   });
 };
 
-const buildEmptyEurReport = (args: IpcArgs<'eur:getReport'>): IpcResult<'eur:getReport'> => {
-  const from = args.from ?? `${args.taxYear}-01-01`;
-  const to = args.to ?? `${args.taxYear}-12-31`;
+const serverEurReportSchema = z.object({
+  taxYear: z.literal(2025),
+  from: z.literal('2025-01-01'),
+  to: z.literal('2025-12-31'),
+  rows: z.array(z.object({
+    id: z.string(),
+    kennziffer: z.string().optional(),
+    providerPath: z.string().optional(),
+    label: z.string(),
+    kind: z.enum(['income', 'expense', 'computed']),
+    exportable: z.boolean(),
+    sortOrder: z.number().int(),
+    computedFromIds: z.array(z.string()).optional(),
+    computedTerms: z.array(z.object({ id: z.string(), sign: z.union([z.literal(1), z.literal(-1)]) })).optional(),
+    total: z.number(),
+  })),
+  summary: z.object({ incomeTotal: z.number(), expenseTotal: z.number(), surplus: z.number() }),
+  unclassifiedCount: z.number().int().nonnegative(),
+  warnings: z.array(z.string()),
+  catalog: z.object({ id: z.string(), version: z.string(), sourceHash: z.string().regex(/^[a-f0-9]{64}$/), delivery: z.enum(['print-form-only', 'elster-ready']), elsterReady: z.boolean() }),
+});
+
+const serverEurItemSchema = z.object({
+  sourceType: z.enum(['transaction', 'invoice']),
+  sourceId: z.string(),
+  date: z.string(),
+  amountGross: z.number(),
+  amountNet: z.number(),
+  flowType: z.enum(['income', 'expense']),
+  counterparty: z.string(),
+  purpose: z.string(),
+  vatWarning: z.string().optional(),
+  classification: z.object({
+    id: z.string(), sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string(), taxYear: z.literal(2025),
+    eurLineId: z.string().optional(), excluded: z.boolean(), vatMode: z.enum(['none', 'default']), vatRate: z.number().optional(), note: z.string().optional(), updatedAt: z.string(),
+  }).optional(),
+});
+
+const mapEurReport = (input: unknown): IpcResult<'eur:getReport'> => {
+  const report = serverEurReportSchema.parse(input);
   return parseResult('eur:getReport', {
-    taxYear: args.taxYear,
-    from,
-    to,
-    rows: [],
-    summary: {
-      incomeTotal: 0,
-      expenseTotal: 0,
-      surplus: 0,
-    },
-    unclassifiedCount: 0,
-    warnings: [UNSUPPORTED_MESSAGE],
-    catalog: {
-      id: 'anlage-euer-2025',
-      version: 'BMF-2025-2025-08-29',
-      sourceHash: 'b69b5cf0a982d28cbce20644e67677a36be0bc494bed4fae2310dc08230a1599',
-      delivery: 'print-form-only',
-      elsterReady: false,
-    },
+    ...report,
+    rows: report.rows.map(({ id, ...row }) => ({ ...row, lineId: id })),
   });
+};
+
+const mapEurCsv = (report: IpcResult<'eur:getReport'>): string => {
+  const escape = (value: string): string => value.includes(';') || value.includes('"') || value.includes('\n') ? `"${value.replaceAll('"', '""')}"` : value;
+  const format = (value: number): string => (Math.round((value + Number.EPSILON) * 100) / 100).toFixed(2).replace('.', ',');
+  const rows = report.rows.filter((row) => row.exportable).map((row) => [row.kennziffer ?? '', escape(row.label), format(row.total)].join(';'));
+  return `\uFEFF${['Kennziffer;Bezeichnung;Betrag', ...rows].join('\n')}`;
 };
 
 export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onRequestClose }: LiteWebApiOptions): LiteWebBillmeApi => {
@@ -486,15 +514,40 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'finance:rollbackImportBatch':
         return unsupported();
       case 'eur:getReport':
-        return buildEmptyEurReport(args as IpcArgs<'eur:getReport'>) as IpcResult<K>;
-      case 'eur:listItems':
-        return parseResult(key, []);
-      case 'eur:upsertClassification':
+        if ((args as IpcArgs<'eur:getReport'>).taxYear !== 2025) throw new Error('EÜR unterstützt ausschließlich das Steuerjahr 2025.');
+        return mapEurReport(await requestJson('GET', `${PRODUCT_PREFIX}/reports/eur`, serverEurReportSchema, {
+          from: (args as IpcArgs<'eur:getReport'>).from ?? '2025-01-01',
+          to: (args as IpcArgs<'eur:getReport'>).to ?? '2025-12-31',
+        })) as IpcResult<K>;
+      case 'eur:listItems': {
+        const parsed = args as IpcArgs<'eur:listItems'>;
+        if (parsed.taxYear !== 2025) throw new Error('EÜR unterstützt ausschließlich das Steuerjahr 2025.');
+        const items = await requestJson('GET', `${PRODUCT_PREFIX}/reports/eur/items`, z.array(serverEurItemSchema), {
+          from: parsed.from ?? '2025-01-01',
+          to: parsed.to ?? '2025-12-31',
+        });
+        return parseResult(key, items);
+      }
+      case 'eur:upsertClassification': {
+        const parsed = args as IpcArgs<'eur:upsertClassification'>;
+        if (parsed.taxYear !== 2025) throw new Error('EÜR unterstützt ausschließlich das Steuerjahr 2025.');
+        const saved = await requestJson('PUT', `${PRODUCT_PREFIX}/reports/eur/classifications`, z.object({
+          id: z.string(), sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string(), taxYear: z.literal(2025), eurLineId: z.string().optional(), excluded: z.boolean(), vatMode: z.enum(['none', 'default']), vatRate: z.number().optional(), note: z.string().optional(), updatedAt: z.string(),
+        }), parsed);
+        return parseResult(key, saved);
+      }
       case 'eur:upsertRule':
       case 'eur:deleteRule':
-        return unsupported();
-      case 'eur:exportCsv':
-        return parseResult(key, '');
+        return unsupported('Klassifizierungsregeln sind im Lite-Web derzeit nicht verfügbar.');
+      case 'eur:exportCsv': {
+        const parsed = args as IpcArgs<'eur:exportCsv'>;
+        if (parsed.taxYear !== 2025) throw new Error('EÜR unterstützt ausschließlich das Steuerjahr 2025.');
+        const report = mapEurReport(await requestJson('GET', `${PRODUCT_PREFIX}/reports/eur`, serverEurReportSchema, {
+          from: parsed.from ?? '2025-01-01',
+          to: parsed.to ?? '2025-12-31',
+        }));
+        return parseResult(key, mapEurCsv(report));
+      }
       case 'eur:exportPdf':
         return unsupported();
       case 'eur:listRules':

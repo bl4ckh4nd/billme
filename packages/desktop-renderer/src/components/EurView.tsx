@@ -21,7 +21,7 @@ import {
   Tags,
   Settings2,
 } from 'lucide-react';
-import { getRendererProduct, ipc } from '../runtime-api';
+import { getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
 import { Toast } from '@billme/desktop-ui/components/Toast';
 import { EurRulesModal } from './EurRulesModal';
@@ -88,6 +88,8 @@ type UndoChange = {
   prevVatRate?: number;
 };
 
+type EurUndo = { label: string; reason: string; changes: UndoChange[] };
+
 const formatCurrency = (amount: number): string =>
   new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
 
@@ -108,6 +110,7 @@ const itemKey = (item: { sourceType: SourceType; sourceId: string }): string =>
 
 export const EurView: React.FC = () => {
   const isProProduct = getRendererProduct() === 'pro';
+  const isWebShell = getRendererRuntime().shell === 'web';
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [taxYear, setTaxYear] = React.useState<number>(DEFAULT_YEAR);
@@ -117,6 +120,7 @@ export const EurView: React.FC = () => {
   const [vatRate, setVatRate] = React.useState<number | undefined>(undefined);
   const [excluded, setExcluded] = React.useState<boolean>(false);
   const [taxNote, setTaxNote] = React.useState('');
+  const [auditReason, setAuditReason] = React.useState('');
 
   const [query, setQuery] = React.useState('');
   const [queueStatus, setQueueStatus] = React.useState<QueueStatus>('unclassified');
@@ -124,7 +128,7 @@ export const EurView: React.FC = () => {
   const [queueSort, setQueueSort] = React.useState<QueueSort>('date_desc');
   const [selectedKeys, setSelectedKeys] = React.useState<Set<string>>(new Set());
   const [isApplying, setIsApplying] = React.useState(false);
-  const [lastUndo, setLastUndo] = React.useState<{ label: string; changes: UndoChange[] } | null>(null);
+  const [lastUndo, setLastUndo] = React.useState<EurUndo | null>(null);
 
   const [showRulesModal, setShowRulesModal] = React.useState(false);
   const [showToast, setShowToast] = React.useState(false);
@@ -157,6 +161,7 @@ export const EurView: React.FC = () => {
       vatMode?: VatMode;
       vatRate?: number;
       note?: string;
+      reason: string;
     }) => ipc.eur.upsertClassification(payload),
   });
 
@@ -258,6 +263,11 @@ export const EurView: React.FC = () => {
     resolver: (item: EurItem) => { eurLineId?: string; excluded?: boolean; vatMode?: VatMode; vatRate?: number },
   ) => {
     if (selectedItems.length === 0) return;
+    const reason = auditReason.trim();
+    if (!reason) {
+      showNotification('Bitte eine Begründung für den Audit-Eintrag eingeben.', 'warning');
+      return;
+    }
 
     const changes: UndoChange[] = selectedItems.map((item) => ({
       sourceType: item.sourceType,
@@ -280,10 +290,11 @@ export const EurView: React.FC = () => {
             taxYear,
             ...resolved,
             vatRate: isProProduct ? resolved.vatRate : undefined,
+            reason,
           });
         }),
       );
-      setLastUndo({ label, changes });
+      setLastUndo({ label, reason, changes });
       setSelectedKeys(new Set());
       await invalidateEur();
       showNotification(`${selectedItems.length} Einträge klassifiziert`, 'success');
@@ -294,6 +305,11 @@ export const EurView: React.FC = () => {
 
   const applySingle = async () => {
     if (!activeItem) return;
+    const reason = auditReason.trim();
+    if (!reason) {
+      showNotification('Bitte eine Begründung für den Audit-Eintrag eingeben.', 'warning');
+      return;
+    }
 
     const changes: UndoChange[] = [
       {
@@ -318,8 +334,9 @@ export const EurView: React.FC = () => {
         vatMode,
         vatRate: isProProduct ? vatRate : undefined,
         note: taxNote.trim() || undefined,
+        reason,
       });
-      setLastUndo({ label: 'Einzelklassifizierung', changes });
+      setLastUndo({ label: 'Einzelklassifizierung', reason, changes });
       await invalidateEur();
       showNotification('Klassifizierung gespeichert', 'success');
     } finally {
@@ -341,6 +358,7 @@ export const EurView: React.FC = () => {
             excluded: change.prevExcluded,
             vatMode: change.prevVatMode,
             vatRate: isProProduct ? change.prevVatRate : undefined,
+            reason: `Undo: ${lastUndo.label}; ursprüngliche Begründung: ${lastUndo.reason}`,
           }),
         ),
       );
@@ -379,18 +397,22 @@ export const EurView: React.FC = () => {
           >
             <option value={2025}>2025</option>
           </select>
-          <Button variant="secondary" size="sm" onClick={() => setShowRulesModal(true)}>
-            <Settings2 size={16} />
-            Regeln
-          </Button>
+          {!isWebShell && (
+            <Button variant="secondary" size="sm" onClick={() => setShowRulesModal(true)}>
+              <Settings2 size={16} />
+              Regeln
+            </Button>
+          )}
           <Button variant="dark" size="sm" onClick={() => void exportCsv()}>
             <Download size={16} />
             CSV exportieren
           </Button>
-          <Button variant="dark" size="sm" onClick={() => void exportPdf()} disabled={isPdfExporting}>
-            <Download size={16} />
-            {isPdfExporting ? 'PDF...' : 'PDF exportieren'}
-          </Button>
+          {!isWebShell && (
+            <Button variant="dark" size="sm" onClick={() => void exportPdf()} disabled={isPdfExporting}>
+              <Download size={16} />
+              {isPdfExporting ? 'PDF...' : 'PDF exportieren'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -504,6 +526,16 @@ export const EurView: React.FC = () => {
               </button>
             </div>
             <div className="grid grid-cols-1 gap-1.5">
+              <label className="text-xs font-bold text-foreground">
+                Begründung (Audit) <span className="text-error">*</span>
+                <input
+                  aria-label="Begründung für EÜR-Änderung"
+                  value={auditReason}
+                  onChange={(event) => setAuditReason(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+                  placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
+                />
+              </label>
               <button
                 onClick={() =>
                   void applyBulk('Bulk: Vorschlag anwenden', (item) => ({
@@ -513,7 +545,7 @@ export const EurView: React.FC = () => {
                     vatRate: item.classification?.vatRate,
                   }))
                 }
-                disabled={selectedItems.length === 0 || isApplying}
+                disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
                 className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-50"
               >
                 <Sparkles size={14} className="text-blue-500 flex-shrink-0" />
@@ -528,7 +560,7 @@ export const EurView: React.FC = () => {
                     vatRate: undefined,
                   }))
                 }
-                disabled={selectedItems.length === 0 || isApplying}
+                disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
                 className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-50"
               >
                 <Ban size={14} className="text-red-500 flex-shrink-0" />
@@ -543,7 +575,7 @@ export const EurView: React.FC = () => {
                     vatRate: undefined,
                   }))
                 }
-                disabled={selectedItems.length === 0 || isApplying}
+                disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
                 className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-50"
               >
                 <RotateCcw size={14} className="text-gray-500 flex-shrink-0" />
@@ -731,6 +763,17 @@ export const EurView: React.FC = () => {
                 <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm" placeholder="z. B. privater Anteil" />
               </label>
 
+              <label className="block text-xs font-bold text-foreground">
+                Begründung (Audit) <span className="text-error">*</span>
+                <input
+                  aria-label="Begründung für EÜR-Änderung"
+                  value={auditReason}
+                  onChange={(event) => setAuditReason(event.target.value)}
+                  className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm"
+                  placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
+                />
+              </label>
+
               {/* VAT Mode Select */}
               <div>
                 <label className="block text-xs font-bold text-gray-700">USt. Modus</label>
@@ -773,7 +816,7 @@ export const EurView: React.FC = () => {
 
               {/* Action Buttons */}
               <div className="flex items-center gap-2">
-                <Button onClick={() => void applySingle()} disabled={isApplying} fullWidth>
+                <Button onClick={() => void applySingle()} disabled={isApplying || auditReason.trim().length === 0} fullWidth>
                   <Save size={16} />
                   {isApplying ? 'Speichern...' : 'Klassifizierung speichern'}
                 </Button>
@@ -860,7 +903,7 @@ export const EurView: React.FC = () => {
         </div>
       </div>
 
-      {showRulesModal && (
+      {showRulesModal && !isWebShell && (
         <EurRulesModal
           taxYear={taxYear}
           onClose={() => setShowRulesModal(false)}

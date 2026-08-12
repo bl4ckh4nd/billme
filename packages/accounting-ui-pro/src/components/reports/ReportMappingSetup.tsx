@@ -18,6 +18,7 @@ interface ReportMappingSetupProps {
   chart: 'SKR03' | 'SKR04';
   role: UserRole;
   statements?: ReportMappingStatement[];
+  asOfDate?: string;
   refreshKey?: number;
   onMappingChanged?: () => void;
 }
@@ -34,7 +35,7 @@ const normalizeHealth = (value: ReportMappingHealth): ReportMappingHealth => ({
     .map((entry) => [rowId(entry), entry] as const)).values()],
 });
 
-export default function ReportMappingSetup({ dataAdapter, chart, role, statements = DEFAULT_REPORT_MAPPING_STATEMENTS, refreshKey = 0, onMappingChanged }: ReportMappingSetupProps) {
+export default function ReportMappingSetup({ dataAdapter, chart, role, statements = DEFAULT_REPORT_MAPPING_STATEMENTS, asOfDate, refreshKey = 0, onMappingChanged }: ReportMappingSetupProps) {
   const canMutate = permissionContextForRole(role).canMutate;
   const enabled = Boolean(dataAdapter?.getReportMappingHealth && dataAdapter.listReportMappingPositions && dataAdapter.upsertReportMappingOverride);
   const [health, setHealth] = useState<ReportMappingHealth | null>(null);
@@ -52,7 +53,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
     setError(null);
     setNotice(null);
     try {
-      const healths = await Promise.all(statements.map((statement) => dataAdapter.getReportMappingHealth!({ chart, statement })));
+      const healths = await Promise.all(statements.map((statement) => dataAdapter.getReportMappingHealth!({ chart, statement, asOfDate })));
       const nextHealth = normalizeHealth({
         chart,
         unmapped: healths.flatMap((value) => value.unmapped),
@@ -75,7 +76,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
     } finally {
       setLoading(false);
     }
-  }, [chart, dataAdapter, enabled, statements]);
+  }, [asOfDate, chart, dataAdapter, enabled, statements]);
 
   useEffect(() => {
     void load();

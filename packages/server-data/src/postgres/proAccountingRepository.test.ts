@@ -152,13 +152,16 @@ test('mapping health is requested per report and ignores unrelated account famil
     createSingleTenantScope('mapping-health-test', 'pro'),
     'SKR04',
     'hgb-bilanz',
+    '2025-12-31',
   );
 
   assert.equal(health.reportType, 'hgb-bilanz');
   assert.deepEqual(health.unmapped, [{ accountNumber: '8400', statementType: 'hgb-bilanz' }]);
-  assert.deepEqual(calls[1]?.values, ['mapping-health-test', 'SKR04', 'hgb-bilanz', ['hgb-bilanz']]);
+  assert.deepEqual(calls[1]?.values, ['mapping-health-test', 'SKR04', 'hgb-bilanz', ['hgb-bilanz'], '2025-12-31']);
   assert.match(calls[1]?.text ?? '', /report_account_mappings relevant/);
   assert.match(calls[1]?.text ?? '', /current_mapping/);
+  assert.match(calls[1]?.text ?? '', /valid_from::date <= \$5::date/);
+  assert.doesNotMatch(calls[1]?.text ?? '', /CURRENT_DATE/);
 });
 
 test('double-entry fiscal year honors a non-calendar 04-15 boundary', () => {

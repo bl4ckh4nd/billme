@@ -229,8 +229,31 @@ export const upsertEurItemClassification = (
     vatMode?: 'none' | 'default';
     vatRate?: number;
     note?: string;
+    reason: string;
+    actor: string;
+    product: 'lite' | 'pro';
+    settings: AppSettings;
   },
 ): EurClassification => {
+  const source = listEurItems(db, {
+    taxYear: input.taxYear,
+    settings: input.settings,
+    sourceType: input.sourceType,
+    product: input.product,
+  }).find((item) => item.sourceId === input.sourceId);
+  if (!source) throw new Error('EUR_CLASSIFICATION_SOURCE_NOT_FOUND');
+
+  if (input.eurLineId) {
+    const line = getEurReport(db, {
+      taxYear: input.taxYear,
+      settings: input.settings,
+      product: input.product,
+    }).rows.find((row) => row.lineId === input.eurLineId);
+    if (!line) throw new Error('EUR_CLASSIFICATION_LINE_NOT_FOUND');
+    if (line.kind === 'computed') throw new Error('EUR_CLASSIFICATION_COMPUTED_LINE_FORBIDDEN');
+    if (line.kind !== source.flowType) throw new Error('EUR_CLASSIFICATION_FLOW_MISMATCH');
+  }
+
   return upsertEurClassification(db, input);
 };
 
@@ -333,6 +356,23 @@ const listRawEurItems = (
     purpose: string;
   }>;
 
+  const paymentsByInvoice = new Map<string, {
+    date: string;
+    amountGross: number;
+    client: string;
+    number: string;
+  }>();
+  for (const row of invoicePayments) {
+    const current = paymentsByInvoice.get(row.invoice_id);
+    const isLatest = !current || row.date >= current.date;
+    paymentsByInvoice.set(row.invoice_id, {
+      date: isLatest ? row.date : current.date,
+      amountGross: (current?.amountGross ?? 0) + Math.abs(Number(row.amount) || 0),
+      client: isLatest ? row.client : current.client,
+      number: isLatest ? row.number : current.number,
+    });
+  }
+
   const result: Array<{
     sourceType: EurSourceType;
     sourceId: string;
@@ -345,12 +385,12 @@ const listRawEurItems = (
     purpose: string;
   }> = [];
 
-  for (const row of invoicePayments) {
+  for (const [invoiceId, row] of paymentsByInvoice) {
     result.push({
       sourceType: 'invoice',
-      sourceId: row.invoice_id,
+      sourceId: invoiceId,
       date: row.date,
-      amountGross: Math.abs(Number(row.amount) || 0),
+      amountGross: row.amountGross,
       flowType: 'income',
       linkedViaInvoice: false,
       counterparty: row.client,

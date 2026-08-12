@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import Database from 'better-sqlite3';
 import { createSingleTenantScope } from '@billme/server-core';
+import { EUR_SOURCE_VERSION_2025, getCatalogForYear } from '@billme/desktop-services/eurCatalog';
 import { createPostgresPool } from './connection.js';
 import { runPostgresMigrations } from './migrations.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
@@ -16,7 +17,9 @@ import {
   desktopSqliteImportedTables,
   detectUnsupportedSqliteTables,
   importDesktopSqliteToPostgres,
+  validateCanonicalEurLines,
 } from './importDesktop.js';
+import type { ServerEurLineRecord } from './proAccounting.js';
 
 const rootUrl = new URL('../../../../', import.meta.url);
 const liteDesktopSchemaUrl = new URL('apps/desktop/db/schema.ts', rootUrl);
@@ -102,6 +105,27 @@ test('desktop sqlite onboarding only ignores explicit safe metadata tables', () 
   assert.deepEqual([...desktopSqliteIgnoredTables], ['migration_log']);
 });
 
+test('SQLite import rejects tenant-owned mutations of the global EÜR catalog', () => {
+  const rows = getCatalogForYear(2025).map((line, sortOrder): ServerEurLineRecord => ({
+    id: line.id,
+    taxYear: line.year,
+    kennziffer: line.kennziffer,
+    providerPath: line.providerPath,
+    label: line.label,
+    kind: line.kind,
+    exportable: line.exportable,
+    sortOrder,
+    computedFromJson: JSON.stringify(line.computedFromIds ?? []),
+    computedTermsJson: JSON.stringify(line.computedTerms ?? []),
+    sourceVersion: EUR_SOURCE_VERSION_2025,
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: '2025-01-01T00:00:00.000Z',
+  }));
+  validateCanonicalEurLines(rows);
+  rows[0].label = 'tampered';
+  assert.throws(() => validateCanonicalEurLines(rows), /does not match canonical 2025 catalog/);
+});
+
 test('tenant-scoped postgres tables stay covered by import overwrite guards', async () => {
   const tenantScopedTables = await extractTenantScopedPostgresTables(postgresMigrationUrls);
   const excludedTables = new Set(['tenant_memberships', 'sqlite_import_runs', 'audit_heads']);
@@ -114,7 +138,7 @@ test('Drizzle migration journal contains incremental migrations', async () => {
   const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ tag: string }> };
   assert.deepEqual(journal.entries.map((entry) => entry.tag), [
     '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
-    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native',
+    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog',
   ]);
 });
 

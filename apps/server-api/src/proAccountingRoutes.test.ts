@@ -4,6 +4,7 @@ import {
   csvEscape,
   datevExportQuerySchema,
   eurReportQuerySchema,
+  eurClassificationBodySchema,
   mappingOverrideBodySchema,
   mappingHealthQuerySchema,
   reportSnapshotBodySchema,
@@ -77,6 +78,19 @@ test('EÜR uses its native report endpoint and calendar-year snapshot type', () 
   });
 });
 
+test('EÜR classifications require a mutation reason and normalize safe defaults', () => {
+  assert.throws(() => eurClassificationBodySchema.parse({ sourceType: 'transaction', sourceId: 'bank-1', taxYear: 2025 }));
+  assert.deepEqual(eurClassificationBodySchema.parse({ sourceType: 'transaction', sourceId: 'bank-1', taxYear: 2025, reason: 'Beleg geprüft' }), {
+    sourceType: 'transaction',
+    sourceId: 'bank-1',
+    taxYear: 2025,
+    excluded: false,
+    vatMode: 'none',
+    reason: 'Beleg geprüft',
+  });
+  assert.throws(() => eurClassificationBodySchema.parse({ sourceType: 'transaction', sourceId: 'ghost', taxYear: 2025, reason: '   ' }));
+});
+
 test('mapping overrides require an explicit reason and never accept arbitrary statement types', () => {
   assert.throws(() => mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz' }));
   assert.throws(() => mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }));
@@ -85,6 +99,7 @@ test('mapping overrides require an explicit reason and never accept arbitrary st
 });
 
 test('mapping health can scope unmapped accounts to one canonical report', () => {
-  assert.deepEqual(mappingHealthQuerySchema.parse({ chart: 'SKR04', reportType: 'hgb-bilanz' }), { chart: 'SKR04', reportType: 'hgb-bilanz' });
+  assert.deepEqual(mappingHealthQuerySchema.parse({ chart: 'SKR04', reportType: 'hgb-bilanz', asOfDate: '2025-12-31' }), { chart: 'SKR04', reportType: 'hgb-bilanz', asOfDate: '2025-12-31' });
+  assert.throws(() => mappingHealthQuerySchema.parse({ reportType: 'hgb-bilanz', asOfDate: '2025-12-32' }));
   assert.throws(() => mappingHealthQuerySchema.parse({ reportType: 'guv' }));
 });

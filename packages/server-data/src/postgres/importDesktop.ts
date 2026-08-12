@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import { count, eq } from 'drizzle-orm';
 import { billingLineItemSchema, createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile, type ServerProduct, type Tenant } from '@billme/server-core';
 import { DEFAULT_TAX_MODE } from '@billme/server-core/services';
+import { EUR_SOURCE_VERSION_2025, getCatalogForYear, type EurLineDef } from '@billme/desktop-services/eurCatalog';
 import { verifyAuditChainRows, verifyPostgresAuditChain } from './audit.js';
 import {
   countTenantCoreRows,
@@ -32,7 +33,6 @@ import {
   saveServerDatevExport,
   saveServerDraftValidationIssue,
   saveServerEurClassification,
-  saveServerEurLine,
   saveServerEurRule,
   saveServerImportBatch,
   saveServerImportedTransaction,
@@ -371,6 +371,30 @@ const loadActiveTemplates = (db: SqliteDatabaseType, tenantId: string): ServerAc
   return { tenantId, id: row.id, invoiceTemplateId: row.invoice_template_id ?? undefined, offerTemplateId: row.offer_template_id ?? undefined };
 };
 
+const canonicalEurCatalog = getCatalogForYear(2025);
+const canonicalEurLines = new Map<string, EurLineDef>(canonicalEurCatalog.map((line) => [line.id, line]));
+
+export const validateCanonicalEurLines = (rows: ServerEurLineRecord[]): void => {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (seen.has(row.id)) throw new Error(`EÜR catalog contains duplicate line: ${row.id}`);
+    seen.add(row.id);
+    const canonical = canonicalEurLines.get(row.id);
+    const matches = canonical
+      && row.taxYear === canonical.year
+      && (row.kennziffer ?? '') === (canonical.kennziffer ?? '')
+      && (row.providerPath ?? 'main') === (canonical.providerPath ?? 'main')
+      && row.label === canonical.label
+      && row.kind === canonical.kind
+      && row.exportable === canonical.exportable
+      && row.sortOrder === canonicalEurCatalog.findIndex((line) => line.id === canonical.id)
+      && (row.computedFromJson ?? '[]') === JSON.stringify(canonical.computedFromIds ?? [])
+      && (row.computedTermsJson ?? '[]') === JSON.stringify(canonical.computedTerms ?? [])
+      && row.sourceVersion === EUR_SOURCE_VERSION_2025;
+    if (!matches) throw new Error(`EÜR catalog row does not match canonical 2025 catalog: ${row.id}`);
+  }
+};
+
 const emptyCounts = (): DesktopSqliteImportCounts => ({
   clients: 0,
   invoices: 0,
@@ -485,7 +509,9 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         if (tableExists(sqliteDb, 'incoming_invoice_lines')) counts.incomingInvoiceLines += await importRawTenantRows(client, 'incoming_invoice_lines', sqliteDb.prepare('SELECT * FROM incoming_invoice_lines').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'incoming_invoice_id', 'position', 'description', 'quantity', 'unit_price', 'net_amount', 'tax_rate', 'tax_amount', 'gross_amount', 'account_number', 'asset_account_number']);
         if (incomingImport.insertedIds.length) await restoreIncomingInvoiceAccountingRows(client, incomingInvoiceRows.filter((row) => incomingImport.insertedIds.includes(String(row.id))), tenantId);
         if (tableExists(sqliteDb, 'accounting_backfill_runs')) counts.accountingBackfillRuns += await importRawTenantRows(client, 'accounting_backfill_runs', sqliteDb.prepare('SELECT * FROM accounting_backfill_runs').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'status', 'candidates_json', 'confirmation_hash', 'result_json', 'confirmed_at', 'completed_at', 'created_at', 'config_json']);
-        for (const eurLine of loadEurLines(sqliteDb)) { await saveServerEurLine(client, eurLine); counts.eurLines += 1; }
+        const eurLines = loadEurLines(sqliteDb);
+        validateCanonicalEurLines(eurLines);
+        counts.eurLines += eurLines.length;
         for (const eurRule of loadEurRules(sqliteDb, tenantId)) { await saveServerEurRule(client, eurRule); counts.eurRules += 1; }
         for (const keyword of loadAccountKeywords(sqliteDb, tenantId)) { await saveServerAccountKeyword(client, keyword); counts.accountKeywords += 1; }
         for (const rule of loadAccountSuggestionRules(sqliteDb, tenantId)) { await saveServerAccountSuggestionRule(client, rule); counts.accountSuggestionRules += 1; }

@@ -331,6 +331,7 @@ export const eurUpsertClassificationArgsSchema = z.object({
   sourceType: z.enum(['transaction', 'invoice']),
   sourceId: z.string().min(1),
   taxYear: z.number().int().min(2025),
+  reason: z.string().trim().min(1),
   eurLineId: z.string().optional(),
   excluded: z.boolean().optional(),
   vatMode: z.enum(['none', 'default']).optional(),

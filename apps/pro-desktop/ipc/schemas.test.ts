@@ -1069,10 +1069,15 @@ describe('EÜR Schemas', () => {
         sourceType: 'invoice',
         sourceId: 'inv-1',
         taxYear: 2025,
+        reason: 'Beleg geprüft',
         eurLineId: 'E2025_KZ111',
         vatMode: 'default',
       }),
     ).not.toThrow();
+
+    expect(() => eurUpsertClassificationArgsSchema.parse({
+      sourceType: 'invoice', sourceId: 'inv-1', taxYear: 2025, reason: '   ',
+    })).toThrow();
 
     expect(() =>
       eurClassificationSchema.parse({

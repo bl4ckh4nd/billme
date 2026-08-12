@@ -22,13 +22,15 @@ function adapter(overrides: Partial<ProAccountingDataAdapter> = {}): ProAccounti
 
 describe('ReportMappingSetup', () => {
   it('shows report-specific missing accounts and only catalog positions', async () => {
-    render(<ReportMappingSetup dataAdapter={adapter()} chart="SKR03" role="admin" />);
+    const dataAdapter = adapter();
+    render(<ReportMappingSetup dataAdapter={dataAdapter} chart="SKR03" role="admin" asOfDate="2025-12-31" />);
 
     expect(await screen.findByText('8400')).toBeTruthy();
     expect(screen.getByText('1200')).toBeTruthy();
     expect(screen.getByRole('option', { name: 'Umsatzerlöse' })).toBeTruthy();
     expect(screen.queryByRole('option', { name: /freie Position/ })).toBeNull();
     expect(screen.getByText(/DATEV.*Import-Gate/)).toBeTruthy();
+    expect(dataAdapter.getReportMappingHealth).toHaveBeenCalledWith({ chart: 'SKR03', statement: 'hgb-guv', asOfDate: '2025-12-31' });
   });
 
   it('requires an audit reason and derives label/side from the selected catalog position', async () => {

@@ -120,6 +120,13 @@
       "when": 1786538400004,
       "tag": "0016_server_data_eur_native",
       "breakpoints": false
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786538400005,
+      "tag": "0017_server_data_eur_catalog",
+      "breakpoints": false
     }
   ]
 }

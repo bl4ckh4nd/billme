@@ -9,6 +9,8 @@ import { permissionContextForRole } from '../mocks/users';
 import { Account, AccountingActorRole, BookingAction, BookingDraft, Transaction, UserRole } from '../types';
 import type {
   BalanceSheetPreview,
+  EurCashItem,
+  EurCashClassification,
   GuvReport,
   ReportDrilldownEntry,
   ReportDrilldownSelection,
@@ -96,11 +98,13 @@ export interface ProAccountingDataAdapter {
   getBalanceSheetPreview?: (filters: ReportFilterState) => Promise<BalanceSheetPreview>;
   getReportDrilldownEntries?: (selection: ReportDrilldownSelection) => Promise<ReportDrilldownEntry[]>;
   getEurReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  listEurCashItems?: () => Promise<EurCashItem[]>;
+  upsertEurClassification?: (input: EurCashClassification & { reason: string }) => Promise<unknown>;
   getBwaReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   getManagementGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   getHgbGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   /** Read-only catalog and report-specific missing-account diagnostics. */
-  getReportMappingHealth?: (args?: { chart?: 'SKR03' | 'SKR04'; statement?: ReportMappingHealth['unmapped'][number]['statement'] }) => Promise<ReportMappingHealth>;
+  getReportMappingHealth?: (args?: { chart?: 'SKR03' | 'SKR04'; statement?: ReportMappingHealth['unmapped'][number]['statement']; asOfDate?: string }) => Promise<ReportMappingHealth>;
   listReportMappingPositions?: (statement: ReportMappingHealth['unmapped'][number]['statement']) => Promise<ReportMappingPosition[]>;
   upsertReportMappingOverride?: (input: ReportMappingOverrideInput) => Promise<unknown>;
   listReportSnapshots?: (reportType?: string) => Promise<ReportSnapshotRecord[]>;

@@ -79,6 +79,34 @@ test('Pro web client reads native 2025 EÜR rows without a ledger reconciliation
   }
 });
 
+test('Pro web client lists EÜR cash sources and persists tenant classifications', async () => {
+  const previousFetch = globalThis.fetch;
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input, init) => {
+    calls.push({ input: String(input), init });
+    if (calls.length === 1) {
+      return new Response(JSON.stringify([{
+        sourceType: 'transaction', sourceId: 'bank-1', date: '2025-02-01', amountGross: 119, amountNet: 100,
+        flowType: 'expense', counterparty: 'Lieferant', purpose: 'Beleg',
+      }]), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ id: 'classification-1', sourceType: 'transaction', sourceId: 'bank-1', taxYear: 2025, eurLineId: 'E2025_KZ123', excluded: false, vatMode: 'default', vatRate: 19, updatedAt: '2025-02-01T12:00:00.000Z' }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    const items = await client.listEurCashItems();
+    assert.equal(items[0]?.sourceId, 'bank-1');
+    await client.upsertEurClassification({ sourceType: 'transaction', sourceId: 'bank-1', taxYear: 2025, eurLineId: 'E2025_KZ123', vatMode: 'default', vatRate: 19, reason: 'Beleg geprüft' });
+    assert.match(calls[0]?.input ?? '', /reports\/eur\/items$/);
+    assert.match(calls[1]?.input ?? '', /reports\/eur\/classifications$/);
+    assert.deepEqual(JSON.parse(String(calls[1]?.init?.body)), {
+      sourceType: 'transaction', sourceId: 'bank-1', taxYear: 2025, eurLineId: 'E2025_KZ123', vatMode: 'default', vatRate: 19, reason: 'Beleg geprüft',
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('Pro web client scopes mapping health and overrides to canonical report types', async () => {
   const previousFetch = globalThis.fetch;
   const calls: Array<{ input: string; init?: RequestInit }> = [];
@@ -88,7 +116,7 @@ test('Pro web client scopes mapping health and overrides to canonical report typ
   }) as typeof fetch;
   try {
     const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
-    await client.getAccountMappingHealth('SKR04', 'hgb-bilanz');
+    await client.getAccountMappingHealth('SKR04', 'hgb-bilanz', '2025-12-31');
     await client.saveAccountMappingOverride({
       chart: 'SKR04',
       accountNumber: '1200',
@@ -98,7 +126,7 @@ test('Pro web client scopes mapping health and overrides to canonical report typ
       balanceSide: 'asset',
       reason: 'Kontenplan geprüft',
     });
-    assert.match(calls[0]?.input ?? '', /mappings\/health\?chart=SKR04&reportType=hgb-bilanz$/);
+    assert.match(calls[0]?.input ?? '', /mappings\/health\?chart=SKR04&reportType=hgb-bilanz&asOfDate=2025-12-31$/);
     assert.deepEqual(JSON.parse(String(calls[1]?.init?.body)), {
       chart: 'SKR04',
       accountNumber: '1200',

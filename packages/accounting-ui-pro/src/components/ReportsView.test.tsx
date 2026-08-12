@@ -174,6 +174,57 @@ describe('ReportsView drilldown ranges', () => {
     })));
   });
 
+  it('classifies native EÜR cash sources with an audit reason', async () => {
+    const upsertEurClassification = vi.fn(async () => ({}));
+    const getEurReport = vi.fn(async () => ({
+      lines: [{ id: 'E2025_KZ123', code: '123', label: 'Betriebsausgaben', level: 0, amountCurrent: 0, isSubtotal: false }],
+      totals: { revenue: 0, expenses: 0, result: 0 },
+      quality: { unmappedAccounts: [], warnings: 1, generatedAt: '', source: 'live' as const, mappingStatus: 'blocked' as const },
+      filing: {
+        kind: 'euer' as const,
+        taxYear: 2025,
+        catalog: { id: 'anlage-euer-2025', version: 'BMF-2025-2025-08-29', sourceHash: 'b'.repeat(64), delivery: 'print-form-only' as const, elsterReady: false },
+        lineProvenance: [{ lineId: 'E2025_KZ123', kennziffer: '123', providerPath: 'expense', exportable: true }],
+      },
+    }));
+    render(<ReportsView
+      dataAdapter={{
+        getEurReport,
+        listEurCashItems: vi.fn(async () => [{ sourceType: 'transaction', sourceId: 'bank-1', date: '2025-02-01', amountGross: 119, amountNet: 119, flowType: 'expense', counterparty: 'Lieferant', purpose: 'Beleg' }]),
+        upsertEurClassification,
+      }}
+      availableTabs={['eur']}
+    />);
+
+    await screen.findByText('Quelle: transaction:bank-1');
+    fireEvent.change(screen.getByLabelText('Audit-Grund für Klassifikationen'), { target: { value: 'Beleg geprüft' } });
+    fireEvent.change(screen.getByLabelText('EÜR-Zeile'), { target: { value: 'E2025_KZ123' } });
+    fireEvent.change(screen.getByLabelText('USt.'), { target: { value: 'default' } });
+    fireEvent.change(screen.getByLabelText('USt.-Satz'), { target: { value: '19' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
+    await waitFor(() => expect(upsertEurClassification).toHaveBeenCalledWith(expect.objectContaining({
+      sourceType: 'transaction', sourceId: 'bank-1', eurLineId: 'E2025_KZ123', reason: 'Beleg geprüft', taxYear: 2025, vatMode: 'default', vatRate: 19,
+    })));
+  });
+
+  it.each(['viewer', 'auditor'] as const)('keeps EÜR classification controls hidden for %s', async (role) => {
+    const upsertEurClassification = vi.fn(async () => ({}));
+    render(<ReportsView
+      role={role}
+      dataAdapter={{
+        getEurReport: vi.fn(async () => ({ lines: [], totals: { revenue: 0, expenses: 0, result: 0 }, quality: { unmappedAccounts: [], warnings: 0, generatedAt: '', source: 'live' as const } })),
+        listEurCashItems: vi.fn(async () => [{ sourceType: 'transaction', sourceId: 'bank-1', date: '2025-02-01', amountGross: 10, amountNet: 10, flowType: 'income', counterparty: 'Kunde', purpose: 'Zahlung' }]),
+        upsertEurClassification,
+      }}
+      availableTabs={['eur']}
+    />);
+
+    await screen.findByText('Quelle: transaction:bank-1');
+    expect(screen.queryByLabelText('Audit-Grund für Klassifikationen')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Speichern' })).toBeNull();
+    expect(upsertEurClassification).not.toHaveBeenCalled();
+  });
+
   it('allows BWA export when the public catalog provenance is verified', async () => {
     const exportReport = vi.fn(async () => ({ format: 'csv' as const }));
     render(<ReportsView

@@ -1103,8 +1103,10 @@ export const registerIpcHandlers = (
     excluded,
     vatMode,
     note,
+    reason,
   }) => {
     const db = requireDb();
+    const settings = requireSettings(db);
     return upsertEurItemClassification(db, {
       sourceType,
       sourceId,
@@ -1113,6 +1115,10 @@ export const registerIpcHandlers = (
       excluded,
       vatMode,
       note,
+      reason,
+      actor: 'lite',
+      product: 'lite',
+      settings,
     });
   });
 

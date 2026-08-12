@@ -1,6 +1,6 @@
 import { EUR_CATALOG_MANIFEST_2025 } from '@billme/desktop-services/eurCatalog';
 import { calculateEurRows, type EurCalculationItem, type EurCalculationLine } from '@billme/accounting-shared';
-import type { TenantScope } from '@billme/server-core';
+import { paymentSchema, type TenantScope } from '@billme/server-core';
 import type { PostgresQueryable } from './connection.js';
 
 const q = async <T = Record<string, unknown>>(db: PostgresQueryable, text: string, values: unknown[] = []): Promise<T[]> => (await db.query(text, values)).rows as T[];
@@ -39,13 +39,40 @@ export interface ServerEurReportResult {
   };
 }
 
+export interface ServerEurCashItem {
+  sourceType: 'transaction' | 'invoice';
+  sourceId: string;
+  date: string;
+  amountGross: number;
+  amountNet: number;
+  flowType: 'income' | 'expense';
+  counterparty: string;
+  purpose: string;
+  vatWarning?: string;
+  classification?: {
+    id: string;
+    sourceType: 'transaction' | 'invoice';
+    sourceId: string;
+    taxYear: 2025;
+    eurLineId?: string;
+    excluded: boolean;
+    vatMode: 'none' | 'default';
+    vatRate?: number;
+    note?: string;
+    updatedAt: string;
+  };
+}
+
 type ClassificationRow = {
+  id: string;
   source_type: string;
   source_id: string;
   eur_line_id: string | null;
   excluded: boolean;
   vat_mode: string;
   vat_rate: string | number | null;
+  note?: string | null;
+  updated_at?: string;
 };
 
 type CashSource = {
@@ -60,6 +87,8 @@ type CashSource = {
   invoiceId?: string;
   classificationSourceIds?: string[];
 };
+
+type EurProduct = 'lite' | 'pro';
 
 const invoiceBasis = async (db: PostgresQueryable, scope: TenantScope, source: CashSource, allocatedGross: number): Promise<{ sourceNet?: number; counterparty?: string; purpose?: string }> => {
   if (!source.invoiceId || !source.invoiceType) return {};
@@ -78,9 +107,61 @@ const invoiceBasis = async (db: PostgresQueryable, scope: TenantScope, source: C
   };
 };
 
-const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: string, to: string): Promise<CashSource[]> => {
+const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: string, to: string, product: EurProduct = 'pro'): Promise<CashSource[]> => {
   const t = tenant(scope);
   const result: CashSource[] = [];
+
+  if (product === 'lite') {
+    const invoices = await q<Record<string, unknown>>(db, `
+      SELECT id,date,client,number,amount,tax_snapshot_json,payments_json
+      FROM invoices
+      WHERE tenant_id=$1
+      ORDER BY date,id`, [t]);
+    for (const invoice of invoices) {
+      const payments = (parseJsonArray(invoice.payments_json) ?? []).flatMap((payment) => {
+        const parsed = paymentSchema.safeParse(payment);
+        return parsed.success ? [parsed.data] : [];
+      });
+      const inYear = payments.filter((payment) => payment.date >= from && payment.date <= to && payment.amount !== 0);
+      if (!inYear.length) continue;
+      const amountGross = round(inYear.reduce((sum, payment) => sum + Math.abs(Number(payment.amount)), 0));
+      result.push({
+        sourceType: 'invoice',
+        sourceId: String(invoice.id),
+        date: inYear.map((payment) => String(payment.date)).sort()[0] ?? String(invoice.date),
+        amountGross,
+        flowType: 'income',
+        counterparty: String(invoice.client ?? ''),
+        purpose: `Rechnung ${String(invoice.number ?? invoice.id)}`,
+        invoiceType: 'outgoing_invoice',
+        invoiceId: String(invoice.id),
+      });
+    }
+
+    const banks = await q<Record<string, unknown>>(db, `
+      SELECT id,date,amount,type,counterparty,purpose,source_transaction_id
+      FROM bank_transactions
+      WHERE tenant_id=$1 AND status='booked' AND linked_invoice_id IS NULL
+        AND date >= $2 AND date <= $3
+      ORDER BY date,id`, [t, from, to]);
+    for (const bank of banks) {
+      const sourceTransactionId = typeof bank.source_transaction_id === 'string' && bank.source_transaction_id.trim()
+        ? bank.source_transaction_id
+        : undefined;
+      result.push({
+        sourceType: 'transaction',
+        sourceId: String(bank.id),
+        date: String(bank.date),
+        amountGross: Math.abs(Number(bank.amount) || 0),
+        flowType: bank.type === 'expense' ? 'expense' : 'income',
+        counterparty: String(bank.counterparty ?? ''),
+        purpose: String(bank.purpose ?? ''),
+        classificationSourceIds: sourceTransactionId ? [sourceTransactionId] : undefined,
+      });
+    }
+    return result;
+  }
+
   const representedBanks = new Set<string>();
   const payments = await q<Record<string, unknown>>(db, `
     SELECT p.id,p.payment_date,p.amount,p.party_type,p.source_type,p.source_id,
@@ -135,7 +216,7 @@ const toNet = (gross: number, classification: ClassificationRow | undefined, sou
   return { amountNet: round(gross), warning: `VAT_RATE_REQUIRED:${sourceId}` };
 };
 
-export const getServerEurReport = async (db: PostgresQueryable, scope: TenantScope, args: { from?: string; to?: string } = {}): Promise<ServerEurReportResult> => {
+export const assertServerEurProfile = async (db: PostgresQueryable, scope: TenantScope, args: { from?: string; to?: string }): Promise<{ from: '2025-01-01'; to: '2025-12-31'; smallBusiness: boolean }> => {
   const from = iso2025(args.from, '2025-01-01');
   const to = iso2025(args.to, '2025-12-31');
   if (from !== '2025-01-01' || to !== '2025-12-31') throw new Error('EUR_RANGE_2025_REQUIRED');
@@ -146,6 +227,56 @@ export const getServerEurReport = async (db: PostgresQueryable, scope: TenantSco
   if (!profile || typeof profile !== 'object' || (profile as any).jurisdiction !== 'DE' || (profile as any).legalForm !== 'sole_proprietor' || (profile as any).profitDetermination !== 'eur' || ((profile as any).fiscalYearStart !== undefined && (profile as any).fiscalYearStart !== '01-01')) {
     throw new Error('EUR_PROFILE_REQUIRED');
   }
+  return { from: '2025-01-01', to: '2025-12-31', smallBusiness: Boolean(settingsJson.legal && typeof settingsJson.legal === 'object' && (settingsJson.legal as any).smallBusinessRule === true) };
+};
+
+const loadClassifications = async (db: PostgresQueryable, scope: TenantScope): Promise<Map<string, ClassificationRow>> => {
+  const rows = await q<ClassificationRow>(db, `SELECT id,source_type,source_id,eur_line_id,excluded,vat_mode,vat_rate,note,updated_at FROM eur_classifications WHERE tenant_id=$1 AND tax_year=2025`, [tenant(scope)]);
+  return new Map(rows.map((row) => [`${row.source_type}:${row.source_id}`, row]));
+};
+
+export const listServerEurCashItems = async (db: PostgresQueryable, scope: TenantScope, args: { from?: string; to?: string; product?: EurProduct } = {}): Promise<ServerEurCashItem[]> => {
+  const { from, to, smallBusiness } = await assertServerEurProfile(db, scope, args);
+  const product = args.product ?? 'pro';
+  const classifications = await loadClassifications(db, scope);
+  const items: ServerEurCashItem[] = [];
+  for (const source of await listCashSources(db, scope, from, to, product)) {
+    const basis = await invoiceBasis(db, scope, source, source.amountGross);
+    const classification = classifications.get(`${source.sourceType}:${source.sourceId}`)
+      ?? (source.classificationSourceIds ?? []).map((sourceId) => classifications.get(`transaction:${sourceId}`)).find(Boolean)
+      ?? (source.invoiceId ? classifications.get(`invoice:${source.invoiceId}`) : undefined);
+    const net = toNet(source.amountGross, classification, basis.sourceNet, smallBusiness, source.sourceId);
+    items.push({ sourceType: source.sourceType as ServerEurCashItem['sourceType'], sourceId: source.sourceId, date: source.date, amountGross: source.amountGross, amountNet: net.amountNet, flowType: source.flowType, counterparty: basis.counterparty ?? source.counterparty, purpose: basis.purpose ?? source.purpose, vatWarning: net.warning, classification: classification ? { id: classification.id, sourceType: classification.source_type as ServerEurCashItem['sourceType'], sourceId: classification.source_id, taxYear: 2025, eurLineId: classification.eur_line_id ?? undefined, excluded: Boolean(classification.excluded), vatMode: classification.vat_mode === 'default' ? 'default' : 'none', vatRate: classification.vat_rate == null ? undefined : Number(classification.vat_rate), note: classification.note ?? undefined, updatedAt: classification.updated_at ?? '' } : undefined });
+  }
+  return items.sort((left, right) => left.date === right.date ? left.sourceId.localeCompare(right.sourceId) : left.date.localeCompare(right.date));
+};
+
+/**
+ * Ensure a classification targets a currently visible cash source.  Payment
+ * rows deliberately expose synthetic ids for allocations/residuals, while
+ * imported classifications may use the canonical bank transaction id (or an
+ * invoice id for the invoice basis).  Accept those aliases, but never allow a
+ * tenant to create a classification for an arbitrary id.
+ */
+export const assertServerEurCashSource = async (
+  db: PostgresQueryable,
+  scope: TenantScope,
+  sourceType: 'transaction' | 'invoice',
+  sourceId: string,
+  product: EurProduct = 'pro',
+): Promise<CashSource> => {
+  const { from, to } = await assertServerEurProfile(db, scope, {});
+  const sources = await listCashSources(db, scope, from, to, product);
+  const source = sources.find((candidate) => {
+    if (sourceType === 'invoice') return candidate.invoiceType !== undefined && candidate.invoiceId === sourceId;
+    return candidate.sourceId === sourceId || (candidate.classificationSourceIds ?? []).includes(sourceId);
+  });
+  if (!source) throw new Error('EUR_SOURCE_NOT_FOUND');
+  return source;
+};
+
+export const getServerEurReport = async (db: PostgresQueryable, scope: TenantScope, args: { from?: string; to?: string; product?: EurProduct } = {}): Promise<ServerEurReportResult> => {
+  const { from, to } = await assertServerEurProfile(db, scope, args);
   const lines = await q<Record<string, unknown>>(db, `SELECT id,tax_year,kennziffer,provider_path,label,kind,exportable,sort_order,computed_from_json,computed_terms_json FROM eur_lines WHERE tax_year=2025 ORDER BY sort_order,id`);
   if (!lines.length) throw new Error('EUR_SERVER_REPORT_UNAVAILABLE');
   const catalogLines: EurCalculationLine[] = lines.map((row) => ({
@@ -153,18 +284,9 @@ export const getServerEurReport = async (db: PostgresQueryable, scope: TenantSco
     computedFromIds: parseJsonArray(row.computed_from_json)?.filter((id): id is string => typeof id === 'string'),
     computedTerms: parseJsonArray(row.computed_terms_json)?.filter((term): term is { id: string; sign: 1 | -1 } => Boolean(term && typeof term === 'object' && typeof (term as any).id === 'string' && ((term as any).sign === 1 || (term as any).sign === -1))),
   }));
-  const classifications = await q<ClassificationRow>(db, `SELECT source_type,source_id,eur_line_id,excluded,vat_mode,vat_rate FROM eur_classifications WHERE tenant_id=$1 AND tax_year=2025`, [tenant(scope)]);
-  const classificationMap = new Map(classifications.map((row) => [`${row.source_type}:${row.source_id}`, row]));
-  const smallBusiness = Boolean(settingsJson?.legal && typeof settingsJson.legal === 'object' && (settingsJson.legal as any).smallBusinessRule === true);
+  const sourceItems = await listServerEurCashItems(db, scope, { from, to, product: args.product });
   const items: EurCalculationItem[] = [];
-  for (const source of await listCashSources(db, scope, from, to)) {
-    const basis = await invoiceBasis(db, scope, source, source.amountGross);
-    const classification = classificationMap.get(`${source.sourceType}:${source.sourceId}`)
-      ?? (source.classificationSourceIds ?? []).map((sourceId) => classificationMap.get(`transaction:${sourceId}`)).find(Boolean)
-      ?? (source.invoiceId ? classificationMap.get(`invoice:${source.invoiceId}`) : undefined);
-    const net = toNet(source.amountGross, classification, basis.sourceNet, smallBusiness, source.sourceId);
-    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, amountNet: net.amountNet, flowType: source.flowType, lineId: classification?.eur_line_id ?? undefined, excluded: classification?.excluded, warning: net.warning });
-  }
+  for (const source of sourceItems) items.push({ sourceType: source.sourceType, sourceId: source.sourceId, amountNet: source.amountNet, flowType: source.flowType, lineId: source.classification?.eurLineId, excluded: source.classification?.excluded, warning: source.vatWarning });
   const calculation = calculateEurRows(catalogLines, items);
   return { taxYear: 2025, from, to, ...calculation, catalog: { id: EUR_CATALOG_MANIFEST_2025.id, version: EUR_CATALOG_MANIFEST_2025.version, sourceHash: EUR_CATALOG_MANIFEST_2025.sha256, delivery: EUR_CATALOG_MANIFEST_2025.delivery, elsterReady: EUR_CATALOG_MANIFEST_2025.elsterReady } };
 };

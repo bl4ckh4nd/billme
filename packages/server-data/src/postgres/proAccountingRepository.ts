@@ -36,6 +36,8 @@ import {
   type ReportSnapshotRecord,
 } from './reporting.js';
 import { getServerEurReport, type ServerEurReportResult } from './eurReport.js';
+import { assertServerEurCashSource, assertServerEurProfile, listServerEurCashItems, type ServerEurCashItem } from './eurReport.js';
+import { saveServerEurClassification, type ServerEurClassificationRecord } from './proAccounting.js';
 
 const q = async <T = any>(db: PostgresQueryable, text: string, values: unknown[] = []): Promise<T[]> => (await db.query(text, values)).rows as T[];
 const isPool = (db: PostgresQueryable): db is Pool => typeof (db as Pool).connect === 'function';
@@ -202,17 +204,6 @@ export const normalizeDatevBuKey = (value: unknown): string | undefined => {
 };
 const issue = (code: string, message: string, fieldPath?: string): ValidationIssue => ({ id: randomUUID(), code, severity: 'error', message, fieldPath, blocking: true, source: 'system' });
 const defaultActor = { type: 'service' as const, displayName: 'server-accounting' };
-
-const bwa01Positions = [
-  ['revenue', 'Umsatzerlöse'], ['inventory-change', 'Bestandsveränderungen'], ['capitalized-work', 'Aktivierte Eigenleistungen'],
-  ['total-output', 'Gesamtleistung'], ['material-expense', 'Wareneinsatz/Materialaufwand'], ['gross-profit', 'Rohertrag'],
-  ['personnel-expense', 'Personalkosten'], ['space-expense', 'Raumkosten'], ['insurance-contributions', 'Versicherungen/Beiträge'],
-  ['vehicle-expense', 'Kfz-Kosten'], ['advertising-travel', 'Werbe-/Reisekosten'], ['cost-of-goods-out', 'Kosten der Warenabgabe'],
-  ['depreciation', 'Abschreibungen'], ['maintenance', 'Reparatur/Instandhaltung'], ['other-operating-expense', 'Sonstige Kosten'],
-  ['total-costs', 'Gesamtkosten'], ['operating-result', 'Betriebsergebnis'], ['interest-expense', 'Zinsaufwand'],
-  ['neutral-expense', 'Neutraler Aufwand'], ['neutral-income', 'Neutraler Ertrag'], ['result-before-tax', 'Ergebnis vor Steuern'],
-  ['income-tax', 'Steuern vom Einkommen und Ertrag'], ['preliminary-result', 'Vorläufiges Ergebnis'],
-] as const;
 
 const audit = (client: PostgresTransactionClient, scope: TenantScope, entityType: string, entityId: string, action: string, reason: string, before: unknown, after: unknown, mutation?: AccountingMutationContext): Promise<unknown> => {
   const suppliedReason = mutation?.reason?.trim();
@@ -584,11 +575,13 @@ export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGu
   getGuvReport(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: 'guv' | 'management-guv' | 'hgb-guv' }): Promise<ReportResult<ManagementGuvReport | HgbGuvReport>>;
   getBilanzReport(scope: TenantScope, args?: { asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<ReportResult<HgbBilanzReport>>;
   getReportingReport(scope: TenantScope, args: { kind: ReportKind; from?: string; to?: string; asOfDate?: string }): Promise<ReportResult<object>>;
-  getEurReport(scope: TenantScope, args?: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<ServerEurReportResult>;
+  getEurReport(scope: TenantScope, args?: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; product?: 'lite' | 'pro' }): Promise<ServerEurReportResult>;
+  listEurCashItems(scope: TenantScope, args?: { from?: string; to?: string; product?: 'lite' | 'pro' }): Promise<ServerEurCashItem[]>;
+  upsertEurClassification(scope: TenantScope, input: Omit<ServerEurClassificationRecord, 'id' | 'tenantId' | 'updatedAt'> & { product?: 'lite' | 'pro'; mutation?: AccountingMutationContext }): Promise<ServerEurClassificationRecord>;
   listReportSnapshots(scope: TenantScope, reportType?: string): Promise<ReportSnapshotRecord[]>;
   getReportSnapshot(scope: TenantScope, id: string): Promise<ReportSnapshotRecord>;
   saveReportSnapshot(scope: TenantScope, input: { reportType: string; args: unknown; payload: unknown; mutation?: AccountingMutationContext }): Promise<ReportSnapshotRecord>;
-  getAccountMappingHealth(scope: TenantScope, chart?: 'SKR03' | 'SKR04', reportType?: ReportMappingType): Promise<{ chart: string; reportType?: string; unmapped: Array<{ accountNumber: string; statementType: string }> }>;
+  getAccountMappingHealth(scope: TenantScope, chart?: 'SKR03' | 'SKR04', reportType?: ReportMappingType, asOfDate?: string): Promise<{ chart: string; reportType?: string; unmapped: Array<{ accountNumber: string; statementType: string }> }>;
   listReportMappingPositions(scope: TenantScope, reportType: ReportMappingType): Promise<ReturnType<typeof listReportMappingPositions>>;
   upsertAccountMappingOverride(scope: TenantScope, input: { chart: 'SKR03' | 'SKR04'; accountNumber: string; statementType: ReportMappingType; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; mutation?: AccountingMutationContext }): Promise<unknown>;
 };
@@ -628,6 +621,34 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
     if (args.asOfDate && args.asOfDate !== '2025-12-31') throw new Error('EUR_RANGE_2025_REQUIRED');
     return getServerEurReport(db, scope, args);
   },
+  async listEurCashItems(scope, args = {}) {
+    return listServerEurCashItems(db, scope, args);
+  },
+  async upsertEurClassification(scope, input) {
+    const mutationReason = input.mutation?.reason?.trim();
+    if (!mutationReason) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
+    const sourceType = input.sourceType === 'transaction' || input.sourceType === 'invoice' ? input.sourceType : undefined;
+    if (!sourceType) throw new Error('EUR_SOURCE_TYPE_INVALID');
+    return inTx(db, async (tx) => {
+      await assertServerEurProfile(tx, scope, {});
+      const source = await assertServerEurCashSource(tx, scope, sourceType, input.sourceId, input.product ?? 'pro');
+      if (input.taxYear !== 2025) throw new Error('EUR_RANGE_2025_REQUIRED');
+      if (input.eurLineId) {
+        const line = (await q<any>(tx, `SELECT kind FROM eur_lines WHERE id=$1 AND tax_year=2025 LIMIT 1`, [input.eurLineId]))[0];
+        if (!line) throw new Error('EUR_LINE_NOT_FOUND');
+        if (line.kind === 'computed') throw new Error('EUR_COMPUTED_LINE_NOT_CLASSIFIABLE');
+        if (!input.excluded && (line.kind === 'income' || line.kind === 'expense') && line.kind !== source.flowType) throw new Error('EUR_LINE_FLOW_MISMATCH');
+      }
+      const existing = (await q<any>(tx, `SELECT * FROM eur_classifications WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND tax_year=$4 LIMIT 1`, [tenant(scope), sourceType, input.sourceId, input.taxYear]))[0];
+      const record: ServerEurClassificationRecord = {
+        id: String(existing?.id ?? randomUUID()), tenantId: tenant(scope), sourceType, sourceId: input.sourceId, taxYear: 2025,
+        eurLineId: input.excluded ? undefined : input.eurLineId, excluded: input.excluded === true, vatMode: input.vatMode ?? 'none', vatRate: input.vatRate, note: input.note, updatedAt: now(),
+      };
+      await saveServerEurClassification(tx, record);
+      await audit(tx as PostgresTransactionClient, scope, 'eur_classification', `${record.sourceType}:${record.sourceId}:2025`, existing ? 'update' : 'create', mutationReason, existing ?? null, record, input.mutation);
+      return record;
+    });
+  },
   async getReportingReport(scope, args) {
     const kind = args.kind.replaceAll('_', '-');
     if (kind === 'bwa01') return calculateDatabaseReport(db, scope, 'bwa01', args);
@@ -654,12 +675,15 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       return snapshot;
     });
   },
-  async getAccountMappingHealth(scope, chart, reportType) {
+  async getAccountMappingHealth(scope, chart, reportType, asOfDate) {
     const p = await policy(db, tenant(scope));
     const activeChart = chart ?? p.activeChart;
     if (chart && chart !== p.activeChart) throw new Error('REPORT_CHART_MISMATCH');
     const requested = reportType ?? 'management-guv';
-    const rows = await q<any>(db, `SELECT DISTINCT jl.account_number,$3::text AS statement_type FROM journal_lines jl LEFT JOIN report_account_mappings relevant ON relevant.tenant_id=jl.tenant_id AND relevant.chart=$2 AND relevant.account_number=jl.account_number AND relevant.report_type = ANY($4::text[]) AND (relevant.valid_from IS NULL OR relevant.valid_from <= CURRENT_DATE) AND (relevant.valid_to IS NULL OR relevant.valid_to >= CURRENT_DATE) LEFT JOIN report_account_mappings current_mapping ON current_mapping.tenant_id=jl.tenant_id AND current_mapping.chart=$2 AND current_mapping.account_number=jl.account_number AND current_mapping.report_type=$3 AND (current_mapping.valid_from IS NULL OR current_mapping.valid_from <= CURRENT_DATE) AND (current_mapping.valid_to IS NULL OR current_mapping.valid_to >= CURRENT_DATE) WHERE jl.tenant_id=$1 AND (relevant.id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM report_account_mappings any_mapping WHERE any_mapping.tenant_id=jl.tenant_id AND any_mapping.chart=$2 AND any_mapping.account_number=jl.account_number)) AND current_mapping.id IS NULL ORDER BY jl.account_number`, [tenant(scope), activeChart, requested, requested === 'hgb-bilanz' ? ['hgb-bilanz'] : ['bwa01', 'management-guv', 'hgb-guv']]);
+    // Reports are currently catalogued for 2025. Keep the fallback explicit so
+    // omitted legacy callers never drift with wall-clock time.
+    const effectiveAsOfDate = asOfDate ?? '2025-12-31';
+    const rows = await q<any>(db, `SELECT DISTINCT jl.account_number,$3::text AS statement_type FROM journal_lines jl LEFT JOIN report_account_mappings relevant ON relevant.tenant_id=jl.tenant_id AND relevant.chart=$2 AND relevant.account_number=jl.account_number AND relevant.report_type = ANY($4::text[]) AND (relevant.valid_from IS NULL OR relevant.valid_from::date <= $5::date) AND (relevant.valid_to IS NULL OR relevant.valid_to::date >= $5::date) LEFT JOIN report_account_mappings current_mapping ON current_mapping.tenant_id=jl.tenant_id AND current_mapping.chart=$2 AND current_mapping.account_number=jl.account_number AND current_mapping.report_type=$3 AND (current_mapping.valid_from IS NULL OR current_mapping.valid_from::date <= $5::date) AND (current_mapping.valid_to IS NULL OR current_mapping.valid_to::date >= $5::date) WHERE jl.tenant_id=$1 AND (relevant.id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM report_account_mappings any_mapping WHERE any_mapping.tenant_id=jl.tenant_id AND any_mapping.chart=$2 AND any_mapping.account_number=jl.account_number AND (any_mapping.valid_from IS NULL OR any_mapping.valid_from::date <= $5::date) AND (any_mapping.valid_to IS NULL OR any_mapping.valid_to::date >= $5::date))) AND current_mapping.id IS NULL ORDER BY jl.account_number`, [tenant(scope), activeChart, requested, requested === 'hgb-bilanz' ? ['hgb-bilanz'] : ['bwa01', 'management-guv', 'hgb-guv'], effectiveAsOfDate]);
     return { chart: activeChart, reportType: requested, unmapped: rows.map((r) => ({ accountNumber: String(r.account_number), statementType: String(r.statement_type) })) };
   },
   async listReportMappingPositions(scope, reportType) {

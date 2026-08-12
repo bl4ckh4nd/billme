@@ -100,6 +100,32 @@ export interface GuvReport {
   filing?: ReportFilingProvenance;
 }
 
+export interface EurCashClassification {
+  id?: string;
+  sourceType: 'transaction' | 'invoice';
+  sourceId: string;
+  taxYear: 2025;
+  eurLineId?: string;
+  excluded: boolean;
+  vatMode: 'none' | 'default';
+  vatRate?: number;
+  note?: string;
+  updatedAt?: string;
+}
+
+export interface EurCashItem {
+  sourceType: 'transaction' | 'invoice';
+  sourceId: string;
+  date: string;
+  amountGross: number;
+  amountNet: number;
+  flowType: 'income' | 'expense';
+  counterparty: string;
+  purpose: string;
+  vatWarning?: string;
+  classification?: EurCashClassification;
+}
+
 export interface ReportFilingProvenance {
   kind: 'euer';
   taxYear: number;

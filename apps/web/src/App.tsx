@@ -77,7 +77,7 @@ const DesktopShell: React.FC<{
     const runtime: DesktopRendererRuntime = {
       shell: 'web',
       product: 'lite',
-      navigation: ['dashboard', 'clients', 'documents'],
+      navigation: ['dashboard', 'clients', 'documents', 'finance'],
       onLogout,
       validateVatId: api.validateVatId,
     };

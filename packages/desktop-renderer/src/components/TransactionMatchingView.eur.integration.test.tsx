@@ -110,6 +110,7 @@ describe('TransactionMatchingView EÜR integration', () => {
     const rowBtn = await screen.findByRole('button', { name: /Hosting GmbH/i });
     await userEvent.click(rowBtn);
 
+    await userEvent.type(screen.getAllByLabelText('Begründung für EÜR-Änderung').at(-1)!, 'Beleg geprüft');
     const saveBtn = await screen.findByRole('button', { name: /Klassifizierung speichern/i });
     await userEvent.click(saveBtn);
 
@@ -160,6 +161,7 @@ describe('TransactionMatchingView EÜR integration', () => {
     const selectAllBtn = await screen.findByRole('button', { name: /Alle wählen/i });
     await userEvent.click(selectAllBtn);
 
+    await userEvent.type(await screen.findByLabelText('Begründung für EÜR-Änderung'), 'Sammelprüfung abgeschlossen');
     const bulkBtn = await screen.findByRole('button', { name: /Vorschlag anwenden/i });
     await userEvent.click(bulkBtn);
 
@@ -191,6 +193,7 @@ describe('TransactionMatchingView EÜR integration', () => {
     }]);
     const rendered = renderView('eur');
     await userEvent.click(await screen.findByRole('button', { name: /Vendor/i }));
+    await userEvent.type(screen.getAllByLabelText('Begründung für EÜR-Änderung').at(-1)!, 'USt-Beleg geprüft');
     expect(screen.getByText('USt.-Satz (%)')).toBeTruthy();
     await userEvent.click(await screen.findByRole('button', { name: /Klassifizierung speichern/i }));
     await waitFor(() => expect(mockIpc.eur.upsertClassification).toHaveBeenCalledWith(expect.objectContaining({ vatRate: 19 })));

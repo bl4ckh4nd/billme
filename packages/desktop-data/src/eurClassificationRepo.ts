@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { and, eq } from 'drizzle-orm';
+import { appendAuditLog } from './audit';
 import { createDrizzle, schema } from './drizzle';
 
 export type EurSourceType = 'transaction' | 'invoice';
@@ -28,52 +29,70 @@ export interface UpsertEurClassificationInput {
   vatMode?: EurVatMode;
   vatRate?: number;
   note?: string;
+  reason: string;
+  actor: string;
+  product: 'lite' | 'pro';
 }
 
 export const upsertEurClassification = (
   db: Database.Database,
   input: UpsertEurClassificationInput,
 ): EurClassification => {
-  const now = new Date().toISOString();
+  const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+  if (!reason) throw new Error('EUR_CLASSIFICATION_REASON_REQUIRED');
+  const actor = typeof input.actor === 'string' ? input.actor.trim() : '';
+  if (!actor) throw new Error('EUR_CLASSIFICATION_ACTOR_REQUIRED');
+  if (input.product !== 'lite' && input.product !== 'pro') throw new Error('EUR_CLASSIFICATION_PRODUCT_REQUIRED');
 
-  const drizzle = createDrizzle(db);
-  const existing = drizzle.select({ id: schema.eurClassifications.id })
-    .from(schema.eurClassifications)
-    .where(and(
-      eq(schema.eurClassifications.sourceType, input.sourceType),
-      eq(schema.eurClassifications.sourceId, input.sourceId),
-      eq(schema.eurClassifications.taxYear, input.taxYear),
-    )).get();
+  return db.transaction(() => {
+    const now = new Date().toISOString();
 
-  const id = existing?.id ?? randomUUID();
-  const excluded = input.excluded === true;
-  const eurLineId = excluded ? null : (input.eurLineId ?? null);
+    const drizzle = createDrizzle(db);
+    const existing = getEurClassification(db, input.sourceType, input.sourceId, input.taxYear);
 
-  drizzle.insert(schema.eurClassifications).values({
-    id,
-    sourceType: input.sourceType,
-    sourceId: input.sourceId,
-    taxYear: input.taxYear,
-    eurLineId,
-    excluded: excluded ? 1 : 0,
-    vatMode: input.vatMode ?? 'none',
-    vatRate: input.vatRate ?? null,
-    note: input.note ?? null,
-    updatedAt: now,
-  }).onConflictDoUpdate({ target: [
-    schema.eurClassifications.sourceType,
-    schema.eurClassifications.sourceId,
-    schema.eurClassifications.taxYear,
-  ], set: {
-    eurLineId,
-    excluded: excluded ? 1 : 0,
-    vatMode: input.vatMode ?? 'none',
-    vatRate: input.vatRate ?? null,
-    note: input.note ?? null,
-    updatedAt: now,
-  }}).run();
+    const id = existing?.id ?? randomUUID();
+    const excluded = input.excluded === true;
+    const eurLineId = excluded ? null : (input.eurLineId ?? null);
 
-  return getEurClassification(db, input.sourceType, input.sourceId, input.taxYear)!;
+    drizzle.insert(schema.eurClassifications).values({
+      id,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      taxYear: input.taxYear,
+      eurLineId,
+      excluded: excluded ? 1 : 0,
+      vatMode: input.vatMode ?? 'none',
+      vatRate: input.vatRate ?? null,
+      note: input.note ?? null,
+      updatedAt: now,
+    }).onConflictDoUpdate({ target: [
+      schema.eurClassifications.sourceType,
+      schema.eurClassifications.sourceId,
+      schema.eurClassifications.taxYear,
+    ], set: {
+      eurLineId,
+      excluded: excluded ? 1 : 0,
+      vatMode: input.vatMode ?? 'none',
+      vatRate: input.vatRate ?? null,
+      note: input.note ?? null,
+      updatedAt: now,
+    }}).run();
+
+    const classification = getEurClassification(db, input.sourceType, input.sourceId, input.taxYear);
+    if (!classification) throw new Error('EUR_CLASSIFICATION_PERSISTENCE_FAILED');
+
+    appendAuditLog(db, {
+      entityType: 'eur_classification',
+      entityId: `${input.sourceType}:${input.sourceId}:${input.taxYear}`,
+      action: 'upsert',
+      reason,
+      before: existing ? auditSnapshot(existing, input.product) : null,
+      after: auditSnapshot(classification, input.product),
+      actor,
+    });
+
+    return classification;
+  })();
 };
 
 export const getEurClassification = (
@@ -145,4 +164,18 @@ const mapSchemaRow = (row: typeof schema.eurClassifications.$inferSelect): EurCl
   vat_rate: row.vatRate ?? null,
   note: row.note ?? null,
   updated_at: row.updatedAt!,
+});
+
+const auditSnapshot = (classification: EurClassification, product: 'lite' | 'pro') => ({
+  id: classification.id,
+  sourceType: classification.sourceType,
+  sourceId: classification.sourceId,
+  taxYear: classification.taxYear,
+  eurLineId: classification.eurLineId ?? null,
+  excluded: classification.excluded,
+  vatMode: classification.vatMode,
+  vatRate: classification.vatRate ?? null,
+  note: classification.note ?? null,
+  updatedAt: classification.updatedAt,
+  product,
 });

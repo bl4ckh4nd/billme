@@ -1094,7 +1094,7 @@ export default function App() {
         });
       },
       async getReportMappingHealth(args) {
-        const health = await client.getAccountMappingHealth(args?.chart, args?.statement);
+        const health = await client.getAccountMappingHealth(args?.chart, args?.statement, args?.asOfDate);
         return {
           chart: health.chart as 'SKR03' | 'SKR04',
           unmapped: (health.unmapped ?? []).map((entry: { accountNumber: string; statementType: string }) => ({
@@ -1181,6 +1181,22 @@ export default function App() {
             lineProvenance: report.rows.map((row) => ({ lineId: row.id, kennziffer: row.kennziffer, providerPath: row.providerPath, exportable: row.exportable })),
           },
         };
+      },
+      listEurCashItems() {
+        return client.listEurCashItems();
+      },
+      upsertEurClassification(input) {
+        return client.upsertEurClassification({
+          sourceType: input.sourceType,
+          sourceId: input.sourceId,
+          taxYear: 2025,
+          eurLineId: input.eurLineId,
+          excluded: input.excluded,
+          vatMode: input.vatMode,
+          vatRate: input.vatRate,
+          note: input.note,
+          reason: requireMutationReason(input.reason, 'EÜR-Klassifikation speichern'),
+        });
       },
       async getManagementGuvReport(filters: ReportFilterState): Promise<GuvReport> {
         const report = await client.getManagementGuvReport(reportFilter(filters));

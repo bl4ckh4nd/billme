@@ -98,6 +98,10 @@ CREATE TABLE IF NOT EXISTS tax_submissions (
   updated_at TEXT NOT NULL,
   submitted_at TEXT
 );
+-- Child tables use a tenant-aware foreign key; the primary key on id alone is
+-- not sufficient for PostgreSQL to validate that composite reference.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_tax_submissions_id_tenant
+  ON tax_submissions (id, tenant_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_tax_submissions_idempotency
   ON tax_submissions (tenant_id, idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_tax_submissions_status

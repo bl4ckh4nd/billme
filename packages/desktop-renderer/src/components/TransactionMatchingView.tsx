@@ -188,7 +188,8 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
   const [eurVatMode, setEurVatMode] = useState<'none' | 'default'>('none');
   const [eurVatRate, setEurVatRate] = useState<number | undefined>(undefined);
   const [eurExcluded, setEurExcluded] = useState(false);
-  const [eurUndo, setEurUndo] = useState<{ label: string; changes: EurUndo[] } | null>(null);
+  const [eurReason, setEurReason] = useState('');
+  const [eurUndo, setEurUndo] = useState<{ label: string; reason: string; changes: EurUndo[] } | null>(null);
   const [eurPending, setEurPending] = useState(false);
   const [eurSort, setEurSort] = useState<'date_desc' | 'amount_desc' | 'counterparty_asc'>('date_desc');
 
@@ -218,6 +219,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
       excluded?: boolean;
       vatMode?: 'none' | 'default';
       vatRate?: number;
+      reason: string;
     }) => ipc.eur.upsertClassification(payload),
   });
 
@@ -285,6 +287,11 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
 
   const applyEurSingle = async () => {
     if (!eurActive) return;
+    const reason = eurReason.trim();
+    if (!reason) {
+      showNotification('Bitte eine Begründung für den Audit-Eintrag eingeben.', 'warning');
+      return;
+    }
     const change: EurUndo = {
       sourceType: eurActive.sourceType,
       sourceId: eurActive.sourceId,
@@ -305,8 +312,9 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
         excluded: eurExcluded,
         vatMode: eurVatMode,
         vatRate: isProProduct ? eurVatRate : undefined,
+        reason,
       });
-      setEurUndo({ label: 'Einzelklassifizierung', changes: [change] });
+      setEurUndo({ label: 'Einzelklassifizierung', reason, changes: [change] });
       await invalidateEur();
       showNotification('EÜR-Klassifizierung gespeichert', 'success');
     } finally {
@@ -324,6 +332,11 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
     resolver: (item: EurTxItem) => { eurLineId?: string; excluded?: boolean; vatMode?: 'none' | 'default'; vatRate?: number },
   ) => {
     if (selectedEurItems.length === 0) return;
+    const reason = eurReason.trim();
+    if (!reason) {
+      showNotification('Bitte eine Begründung für den Audit-Eintrag eingeben.', 'warning');
+      return;
+    }
 
     const changes: EurUndo[] = selectedEurItems.map((item) => ({
       sourceType: item.sourceType,
@@ -346,10 +359,11 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
             taxYear,
             ...resolved,
             vatRate: isProProduct ? resolved.vatRate : undefined,
+            reason,
           });
         }),
       );
-      setEurUndo({ label, changes });
+      setEurUndo({ label, reason, changes });
       setEurSelected(new Set());
       await invalidateEur();
       showNotification(`${selectedEurItems.length} Einträge klassifiziert`, 'success');
@@ -372,6 +386,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
             excluded: item.prevExcluded,
             vatMode: item.prevVatMode,
             vatRate: isProProduct ? item.prevVatRate : undefined,
+            reason: `Undo: ${eurUndo.label}; ursprüngliche Begründung: ${eurUndo.reason}`,
           }),
         ),
       );
@@ -741,6 +756,16 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
               <div className="m-4 rounded-xl border border-gray-200 p-3">
                 <div className="text-xs text-gray-500 mb-2">Bulk-Aktionen ({eurSelected.size} ausgewählt)</div>
                 <div className="grid grid-cols-1 gap-2">
+                  <label className="text-xs font-semibold text-foreground">
+                    Begründung (Audit) <span className="text-error">*</span>
+                    <input
+                      aria-label="Begründung für EÜR-Änderung"
+                      value={eurReason}
+                      onChange={(event) => setEurReason(event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+                      placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
+                    />
+                  </label>
                   <button
                     onClick={() =>
                       void applyEurBulk('Bulk: Vorschlag anwenden', (item) => ({
@@ -750,7 +775,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                         vatRate: item.classification?.vatRate,
                       }))
                     }
-                    disabled={eurSelected.size === 0 || eurPending}
+                    disabled={eurSelected.size === 0 || eurPending || eurReason.trim().length === 0}
                     className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-60"
                   >
                     <Sparkles size={14} className="text-blue-500 flex-shrink-0" />
@@ -765,7 +790,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                         vatRate: undefined,
                       }))
                     }
-                    disabled={eurSelected.size === 0 || eurPending}
+                    disabled={eurSelected.size === 0 || eurPending || eurReason.trim().length === 0}
                     className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-60"
                   >
                     <Ban size={14} className="text-red-500 flex-shrink-0" />
@@ -861,6 +886,19 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
               ) : (
                 <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
                   <div>
+                    <label className="text-xs font-semibold text-foreground">
+                      Begründung (Audit) <span className="text-error">*</span>
+                      <input
+                        aria-label="Begründung für EÜR-Änderung"
+                        value={eurReason}
+                        onChange={(event) => setEurReason(event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm"
+                        placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
+                      />
+                    </label>
+                  </div>
+
+                  <div>
                     <h2 className="text-lg font-bold text-gray-900">EÜR-Klassifizierung</h2>
                     <p className="text-sm text-gray-500">Direkt in der Bank-Ansicht klassifizieren.</p>
                   </div>
@@ -940,7 +978,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                   </label>
 
                   <div className="flex items-center gap-2">
-                    <Button onClick={() => void applyEurSingle()} disabled={eurPending}>
+                    <Button onClick={() => void applyEurSingle()} disabled={eurPending || eurReason.trim().length === 0}>
                       {eurPending ? 'Speichern...' : 'Klassifizierung speichern'}
                     </Button>
                     <Button

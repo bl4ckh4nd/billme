@@ -116,7 +116,7 @@ vi.mock('./eurRulesRepo', () => ({
   listEurRules: vi.fn(() => []),
 }));
 
-import { getEurReport, listEurItems } from './eurReport';
+import { getEurReport, listEurItems, upsertEurItemClassification } from './eurReport';
 
 const makeSettings = () => ({
   company: { name: '', owner: '', street: '', zip: '', city: '', email: '', phone: '', website: '' },
@@ -196,6 +196,23 @@ const buildFakeDb = () => {
   return db as any;
 };
 
+const buildProFakeDb = () => {
+  const db = buildFakeDb();
+  db.exec(`
+    ALTER TABLE invoices ADD COLUMN amount REAL;
+    ALTER TABLE invoices ADD COLUMN tax_snapshot_json TEXT;
+    CREATE TABLE bank_transactions (
+      id TEXT PRIMARY KEY, account_id TEXT NOT NULL, date TEXT NOT NULL, amount REAL NOT NULL,
+      type TEXT NOT NULL, counterparty TEXT NOT NULL, purpose TEXT NOT NULL,
+      linked_invoice_id TEXT, status TEXT NOT NULL, deleted_at TEXT
+    );
+  `);
+  db.prepare(`INSERT INTO bank_transactions
+    (id, account_id, date, amount, type, counterparty, purpose, status)
+    VALUES ('bank-1', 'acc-1', '2025-01-03', -59.5, 'expense', 'Hosting GmbH', 'Hosting Januar', 'booked')`).run();
+  return db;
+};
+
 describe('eurReport integration (service boundary)', () => {
   beforeEach(() => {
     mockClassificationMap = new Map();
@@ -251,6 +268,66 @@ describe('eurReport integration (service boundary)', () => {
     expect(income?.total).toBe(100);
     expect(expense?.total).toBe(50);
     expect(report.unclassifiedCount).toBe(0);
+  });
+
+  it('aggregates Lite invoice partial payments into one classified item', () => {
+    const db = buildFakeDb();
+    db.prepare('INSERT INTO invoice_payments (id, invoice_id, date, amount, method) VALUES (?, ?, ?, ?, ?)')
+      .run('p-2', 'inv-1', '2025-01-10', 59.5, 'wire');
+    mockClassificationMap = new Map([
+      ['invoice:inv-1', {
+        id: 'c1', sourceType: 'invoice', sourceId: 'inv-1', taxYear: 2025,
+        eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'default',
+        updatedAt: '2025-01-01T00:00:00.000Z',
+      }],
+    ]);
+
+    const settings = makeSettings() as any;
+    const items = listEurItems(db, {
+      taxYear: 2025,
+      settings,
+      sourceType: 'invoice',
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      sourceId: 'inv-1',
+      date: '2025-01-10',
+      amountGross: 178.5,
+      amountNet: 150,
+    });
+
+    const report = getEurReport(db, { taxYear: 2025, settings });
+    expect(report.rows.find((row) => row.lineId === 'E2025_KZ112')?.total).toBe(150);
+  });
+
+  it.each([
+    { product: 'lite' as const, makeDb: buildFakeDb, sourceType: 'invoice' as const, sourceId: 'inv-1', incomeLine: 'E2025_KZ112', expenseLine: 'E2025_KZ280' },
+    { product: 'pro' as const, makeDb: buildProFakeDb, sourceType: 'transaction' as const, sourceId: 'bank-1', incomeLine: 'E2025_KZ112', expenseLine: 'E2025_KZ280' },
+  ])('rejects invalid $product EÜR classification targets at the shared upsert seam', ({ product, makeDb, sourceType, sourceId, incomeLine, expenseLine }) => {
+    const db = makeDb();
+    const settings = makeSettings() as any;
+    const base = {
+      sourceType,
+      sourceId,
+      taxYear: 2025,
+      reason: 'Boundary geprüft',
+      actor: product,
+      product,
+      settings,
+    };
+
+    expect(() => upsertEurItemClassification(db, { ...base, sourceId: 'ghost-source', eurLineId: expenseLine }))
+      .toThrow('EUR_CLASSIFICATION_SOURCE_NOT_FOUND');
+    expect(() => upsertEurItemClassification(db, { ...base, eurLineId: 'E2025_KZ290' }))
+      .toThrow('EUR_CLASSIFICATION_COMPUTED_LINE_FORBIDDEN');
+    expect(() => upsertEurItemClassification(db, { ...base, eurLineId: sourceType === 'invoice' ? expenseLine : incomeLine }))
+      .toThrow('EUR_CLASSIFICATION_FLOW_MISMATCH');
+
+    expect(() => upsertEurItemClassification(db, { ...base, eurLineId: sourceType === 'invoice' ? incomeLine : expenseLine }))
+      .not.toThrow();
+    expect(() => upsertEurItemClassification(db, { ...base, eurLineId: undefined, excluded: true }))
+      .not.toThrow();
   });
 
   it('preserves signed terms in computed report lines', () => {

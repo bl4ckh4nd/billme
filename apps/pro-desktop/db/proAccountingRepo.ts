@@ -2357,7 +2357,7 @@ export const getReportSnapshot = (
 export const getReportMappingHealth = (
   db: Database.Database,
   scope: TenantScope,
-  args: { chart?: 'SKR03' | 'SKR04'; statement?: ReportingStatement } = {},
+  args: { chart?: 'SKR03' | 'SKR04'; statement?: ReportingStatement; asOfDate?: string } = {},
 ): MappingHealth => {
   const tenantId = getTenantId(scope);
   const activeChart = getAccountingPolicy(db, tenantId).activeChart;
@@ -2382,7 +2382,7 @@ export const getReportMappingHealth = (
   const relevantStatements = requested === 'hgb-bilanz'
     ? new Set<ReportingStatement>(['hgb-bilanz'])
     : new Set<ReportingStatement>(['bwa01', 'management-guv', 'hgb-guv']);
-  const rows = loadReportJournalLines(db, tenantId);
+  const rows = loadReportJournalLines(db, tenantId, args.asOfDate ? { to: args.asOfDate } : {});
   const seenAccounts = new Set(rows.map((row) => row.account_number));
   const unmappedAccounts = [...seenAccounts].filter((accountNumber) => {
     const accountMappings = mappingsByAccount.get(accountNumber);
@@ -2440,25 +2440,27 @@ export const upsertReportMappingOverride = (
     balanceSide: input.side ?? null,
     updatedAt: new Date().toISOString(),
   } as const;
-  createDrizzle(db).insert(schema.accountMappingsHgb).values(definition)
-    .onConflictDoUpdate({
-      target: [schema.accountMappingsHgb.tenantId, schema.accountMappingsHgb.chart, schema.accountMappingsHgb.accountNumber, schema.accountMappingsHgb.statementType],
-      set: {
-        positionKey: definition.positionKey,
-        positionLabel: definition.positionLabel,
-        balanceSide: definition.balanceSide,
-        updatedAt: definition.updatedAt,
-      },
-    }).run();
-  appendAuditLog(db, {
-    entityType: 'report_mapping',
-    entityId: definition.id,
-    action: 'override',
-    reason,
-    before: null,
-    after: definition,
-    actor: 'pro',
-  });
+  db.transaction(() => {
+    createDrizzle(db).insert(schema.accountMappingsHgb).values(definition)
+      .onConflictDoUpdate({
+        target: [schema.accountMappingsHgb.tenantId, schema.accountMappingsHgb.chart, schema.accountMappingsHgb.accountNumber, schema.accountMappingsHgb.statementType],
+        set: {
+          positionKey: definition.positionKey,
+          positionLabel: definition.positionLabel,
+          balanceSide: definition.balanceSide,
+          updatedAt: definition.updatedAt,
+        },
+      }).run();
+    appendAuditLog(db, {
+      entityType: 'report_mapping',
+      entityId: definition.id,
+      action: 'override',
+      reason,
+      before: null,
+      after: definition,
+      actor: 'pro',
+    });
+  })();
   return {
     accountNumber,
     statement: input.statement,

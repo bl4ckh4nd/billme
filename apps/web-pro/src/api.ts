@@ -146,6 +146,20 @@ const eurReportSchema = z.object({
   warnings: z.array(z.string()),
   catalog: z.object({ id: z.string(), version: z.string(), sourceHash: z.string(), delivery: z.enum(['print-form-only', 'elster-ready']), elsterReady: z.boolean() }),
 });
+const eurCashItemSchema = z.object({
+  sourceType: z.enum(['transaction', 'invoice']),
+  sourceId: z.string(),
+  date: z.string(),
+  amountGross: z.number(),
+  amountNet: z.number(),
+  flowType: z.enum(['income', 'expense']),
+  counterparty: z.string(),
+  purpose: z.string(),
+  vatWarning: z.string().optional(),
+  classification: z.object({
+    id: z.string(), sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string(), taxYear: z.literal(2025), eurLineId: z.string().optional(), excluded: z.boolean(), vatMode: z.enum(['none', 'default']), vatRate: z.number().optional(), note: z.string().optional(), updatedAt: z.string(),
+  }).optional(),
+});
 const bwa01ReportSchema = z.object({
   kind: z.literal('bwa01'),
   rows: z.array(reportingLineSchema),
@@ -493,6 +507,12 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     getEurReport(query?: { from?: string; to?: string }) {
       return requestJson({ parser: eurReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/eur');
     },
+    listEurCashItems(query?: { from?: string; to?: string }) {
+      return requestJson({ parser: parseArray(eurCashItemSchema), query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/eur/items');
+    },
+    upsertEurClassification(input: { sourceType: 'transaction' | 'invoice'; sourceId: string; taxYear: 2025; eurLineId?: string; excluded?: boolean; vatMode?: 'none' | 'default'; vatRate?: number; note?: string; reason: string }) {
+      return requestJson({ method: 'PUT', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/eur/classifications');
+    },
     getGuvReport(query?: unknown) {
       return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/guv');
     },
@@ -518,8 +538,8 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     createReportSnapshot(input: { reportType: 'susa' | 'eur' | 'guv' | 'management-guv' | 'hgb-guv' | 'bilanz' | 'hgb-bilanz' | 'bwa01'; from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string; reason: string }) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/snapshots');
     },
-    getAccountMappingHealth(chart?: 'SKR03' | 'SKR04', reportType?: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz') {
-      return requestJson({ parser: z.object({ chart: z.enum(['SKR03', 'SKR04']).optional(), unmapped: z.array(z.object({ accountNumber: z.string(), statementType: z.string() })).optional() }), query: chart || reportType ? { chart, reportType } : undefined }, '/api/v1/pro/accounting/mappings/health');
+    getAccountMappingHealth(chart?: 'SKR03' | 'SKR04', reportType?: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz', asOfDate?: string) {
+      return requestJson({ parser: z.object({ chart: z.enum(['SKR03', 'SKR04']).optional(), unmapped: z.array(z.object({ accountNumber: z.string(), statementType: z.string() })).optional() }), query: chart || reportType || asOfDate ? { chart, reportType, asOfDate } : undefined }, '/api/v1/pro/accounting/mappings/health');
     },
     listReportMappingPositions(reportType: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz') {
       return requestJson({ parser: parseArray(z.object({ key: z.string(), label: z.string(), kind: z.enum(['heading', 'line', 'subtotal', 'result']), side: z.enum(['asset', 'liability']).optional() })), query: { reportType } }, '/api/v1/pro/accounting/mappings/positions');

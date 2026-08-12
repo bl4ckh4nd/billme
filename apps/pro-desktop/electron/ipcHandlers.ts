@@ -1262,9 +1262,9 @@ export const registerIpcHandlers = (
     return saveReportSnapshot(requireDb(), { reportType, args, payload, reason }, getProScope());
   });
 
-  register(ipcMain, 'pro:getReportMappingHealth', ({ chart, statement }) => {
+  register(ipcMain, 'pro:getReportMappingHealth', ({ chart, statement, asOfDate }) => {
     const db = requireDb();
-    const health = createSqliteProAccountingRepository(db).getReportMappingHealth(getProScope(), { chart, statement });
+    const health = createSqliteProAccountingRepository(db).getReportMappingHealth(getProScope(), { chart, statement, asOfDate });
     return getProAccountingService().getAccountingPolicy().then((policy) => ({
       chart: policy.activeChart,
       unmapped: health.unmappedAccounts.map((accountNumber) => ({ accountNumber, statement: statement ?? 'management-guv' })),
@@ -1501,8 +1501,10 @@ export const registerIpcHandlers = (
     vatMode,
     vatRate,
     note,
+    reason,
   }) => {
     const db = requireDb();
+    const settings = requireSettings(db);
     return upsertEurItemClassification(db, {
       sourceType,
       sourceId,
@@ -1512,6 +1514,10 @@ export const registerIpcHandlers = (
       vatMode,
       vatRate,
       note,
+      reason,
+      actor: 'pro',
+      product: 'pro',
+      settings,
     });
   });
 

@@ -93,7 +93,11 @@ export const reportSnapshotBodySchema = z.object({
   if (body.asOfDate !== undefined && body.asOfDate !== '2025-12-31') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['asOfDate'], message: 'EÜR snapshots require 2025-12-31.' });
 });
 export const reportMappingTypeSchema = z.enum(['bwa01', 'management-guv', 'hgb-guv', 'hgb-bilanz']);
-export const mappingHealthQuerySchema = z.object({ chart: z.enum(['SKR03', 'SKR04']).optional(), reportType: reportMappingTypeSchema.optional() });
+export const mappingHealthQuerySchema = z.object({
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
+  reportType: reportMappingTypeSchema.optional(),
+  asOfDate: z.string().date().optional(),
+});
 export const mappingPositionsQuerySchema = z.object({ reportType: reportMappingTypeSchema });
 export const mappingOverrideBodySchema = z.object({
   reason: reasonSchema,
@@ -111,6 +115,17 @@ const mappingPositionsQuery = mappingPositionsQuerySchema;
 const mappingOverrideBody = mappingOverrideBodySchema;
 export const susaReportQuerySchema = reportRange.extend({ asOfDate: z.string().optional() });
 export const eurReportQuerySchema = z.object({ from: z.literal('2025-01-01').default('2025-01-01'), to: z.literal('2025-12-31').default('2025-12-31') });
+export const eurClassificationBodySchema = z.object({
+  sourceType: z.enum(['transaction', 'invoice']),
+  sourceId: z.string().min(1),
+  taxYear: z.literal(2025),
+  eurLineId: z.string().min(1).optional(),
+  excluded: z.boolean().default(false),
+  vatMode: z.enum(['none', 'default']).default('none'),
+  vatRate: z.number().min(0).max(100).optional(),
+  note: z.string().max(1000).optional(),
+  reason: reasonSchema,
+});
 export const datevExportQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -277,6 +292,54 @@ const CLIENT_CONTROLLED_WORKFLOW_STATUSES = new Set([
 
 export const registerProAccountingRoutes = (app: FastifyInstance) => {
   const prefix = '/api/v1/pro/accounting';
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/reports/eur/items`,
+    query: eurReportQuerySchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      try {
+        return await repositoryFor(app).listEurCashItems(session.scope, query);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(503, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
+        if (error instanceof Error && error.message === 'EUR_RANGE_2025_REQUIRED') throw new ApiError(400, 'EÜR verwendet ausschließlich den Kalenderzeitraum 2025.');
+        if (error instanceof Error && error.message === 'EUR_SERVER_REPORT_UNAVAILABLE') throw new ApiError(503, 'Native EÜR-Daten sind derzeit nicht verfügbar.');
+        throw error;
+      }
+    },
+  });
+
+  typedRoute(app, {
+    method: 'PUT',
+    url: `${prefix}/reports/eur/classifications`,
+    body: eurClassificationBodySchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      try {
+        return await repositoryFor(app).upsertEurClassification(session.scope, {
+          sourceType: body.sourceType,
+          sourceId: body.sourceId,
+          taxYear: body.taxYear,
+          eurLineId: body.eurLineId,
+          excluded: body.excluded,
+          vatMode: body.vatMode,
+          vatRate: body.vatRate,
+          note: body.note,
+          mutation: mutationFor(session, body.reason),
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(503, 'EÜR-Klassifikation ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
+        if (error instanceof Error && error.message === 'EUR_SERVER_REPORT_UNAVAILABLE') throw new ApiError(503, 'Native EÜR-Daten sind derzeit nicht verfügbar.');
+        if (error instanceof Error && error.message === 'EUR_SOURCE_NOT_FOUND') throw new ApiError(400, 'Die EÜR-Cash-Quelle ist im Kalenderzeitraum 2025 nicht vorhanden.');
+        if (error instanceof Error && error.message === 'EUR_RANGE_2025_REQUIRED') throw new ApiError(400, 'EÜR verwendet ausschließlich den Kalenderzeitraum 2025.');
+        if (error instanceof Error && error.message === 'EUR_LINE_NOT_FOUND') throw new ApiError(400, 'Die EÜR-Kennziffer ist für den Katalog 2025 nicht vorhanden.');
+        if (error instanceof Error && error.message === 'EUR_COMPUTED_LINE_NOT_CLASSIFIABLE') throw new ApiError(400, 'Berechnete EÜR-Zeilen können nicht direkt klassifiziert werden.');
+        if (error instanceof Error && error.message === 'EUR_LINE_FLOW_MISMATCH') throw new ApiError(400, 'Die Zielzeile passt nicht zum Einnahmen-/Ausgabenfluss der Quelle.');
+        throw error;
+      }
+    },
+  });
 
   typedRoute(app, {
     method: 'GET',
@@ -731,7 +794,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     query: mappingHealthQuery,
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
-      return repositoryFor(app).getAccountMappingHealth(session.scope, query.chart, query.reportType);
+      return repositoryFor(app).getAccountMappingHealth(session.scope, query.chart, query.reportType, query.asOfDate);
     },
   });
 

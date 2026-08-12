@@ -399,7 +399,7 @@ export const runProAccountingScenario = async (page) => {
     { statementType: 'management-guv', accountNumber: '3125', positionKey: 'variable-costs', positionLabel: 'Variable Kosten' },
     { statementType: 'hgb-guv', accountNumber: '8400', positionKey: 'revenue', positionLabel: '1. Umsatzerlöse' },
     { statementType: 'hgb-guv', accountNumber: '3125', positionKey: 'material.services', positionLabel: 'b) Aufwendungen für bezogene Leistungen' },
-    { statementType: 'hgb-bilanz', accountNumber: '1200', positionKey: 'assets.current.cash', positionLabel: 'IV. Kassenbestand und Guthaben bei Kreditinstituten', balanceSide: 'asset' },
+    { statementType: 'hgb-bilanz', accountNumber: '1200', positionKey: 'assets.current', positionLabel: 'B. Umlaufvermögen', balanceSide: 'asset' },
     { statementType: 'hgb-bilanz', accountNumber: '1776', positionKey: 'liabilities', positionLabel: 'C. Verbindlichkeiten', balanceSide: 'liability' },
   ];
   for (const mapping of reportMappingFixtures) {
@@ -936,7 +936,7 @@ export const runProAccountingScenario = async (page) => {
   const reportAssertions = [
     { reportType: 'bwa01', path: '/api/v1/pro/accounting/reports/bwa01', query: { from: '2026-03-01', to: '2026-03-31' }, keys: ['revenue', 'material-expense', 'operating-result'] },
     { reportType: 'hgb-guv', path: '/api/v1/pro/accounting/reports/hgb-guv', query: { from: '2026-03-01', to: '2026-03-31' }, keys: ['revenue', 'material', 'annual-result'] },
-    { reportType: 'hgb-bilanz', path: '/api/v1/pro/accounting/reports/hgb-bilanz', query: { asOfDate: '2026-03-31' }, keys: ['assets.current.cash', 'equity', 'liabilities'] },
+    { reportType: 'hgb-bilanz', path: '/api/v1/pro/accounting/reports/hgb-bilanz', query: { asOfDate: '2026-03-31' }, keys: ['assets.current', 'equity', 'liabilities'] },
   ];
   for (const reportAssertion of reportAssertions) {
     const mappingHealth = await requestJson(state, session, '/api/v1/pro/accounting/mappings/health', {

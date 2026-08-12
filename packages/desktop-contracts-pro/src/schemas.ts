@@ -1135,3 +1135,29 @@ export const proGetReportingReportResultSchema = z.object({
     blocking: z.boolean(),
   }),
 }).passthrough();
+
+export const reportMappingStatementSchema = z.enum(['bwa01', 'management-guv', 'hgb-guv', 'hgb-bilanz']);
+export const reportMappingPositionSchema = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  kind: z.enum(['heading', 'line', 'subtotal', 'result']),
+  side: z.enum(['asset', 'liability']).optional(),
+});
+export const proGetReportMappingHealthArgsSchema = z.object({
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
+  statement: reportMappingStatementSchema.optional(),
+});
+export const proGetReportMappingHealthResultSchema = z.object({
+  chart: z.enum(['SKR03', 'SKR04']),
+  unmapped: z.array(z.object({ accountNumber: z.string().min(1), statement: reportMappingStatementSchema })),
+});
+export const proListReportMappingPositionsArgsSchema = z.object({ statement: reportMappingStatementSchema });
+export const proUpsertReportMappingOverrideArgsSchema = z.object({
+  chart: z.enum(['SKR03', 'SKR04']),
+  accountNumber: z.string().trim().min(1),
+  statement: reportMappingStatementSchema,
+  position: z.string().trim().min(1),
+  label: z.string().trim().min(1),
+  side: z.enum(['asset', 'liability']).optional(),
+  reason: z.string().trim().min(1),
+});

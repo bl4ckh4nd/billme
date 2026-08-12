@@ -275,7 +275,7 @@ function balanceValues(
       warnings.push(`${row.accountNumber} has an inconsistent balance side for ${position}`);
       continue;
     }
-    const valueKey = microClosedResult ? 'equity.result' : catalogPosition.key;
+    const valueKey = microClosedResult ? 'equity.result' : catalogPosition!.key;
     const current = values.get(valueKey) ?? { amount: 0, accounts: new Set<string>() };
     current.amount += expectedSide === 'asset' ? balance(row) : -balance(row);
     current.accounts.add(row.accountNumber);

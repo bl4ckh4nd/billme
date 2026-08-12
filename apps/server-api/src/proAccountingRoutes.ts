@@ -86,9 +86,15 @@ export const reportSnapshotBodySchema = z.object({
   chart: z.enum(['SKR03', 'SKR04']).optional(),
   profile: z.string().trim().min(1).optional(),
   reason: reasonSchema,
+}).superRefine((body, ctx) => {
+  if (body.reportType !== 'eur') return;
+  if (body.from !== undefined && body.from !== '2025-01-01') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['from'], message: 'EÜR snapshots require 2025-01-01.' });
+  if (body.to !== undefined && body.to !== '2025-12-31') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['to'], message: 'EÜR snapshots require 2025-12-31.' });
+  if (body.asOfDate !== undefined && body.asOfDate !== '2025-12-31') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['asOfDate'], message: 'EÜR snapshots require 2025-12-31.' });
 });
 export const reportMappingTypeSchema = z.enum(['bwa01', 'management-guv', 'hgb-guv', 'hgb-bilanz']);
 export const mappingHealthQuerySchema = z.object({ chart: z.enum(['SKR03', 'SKR04']).optional(), reportType: reportMappingTypeSchema.optional() });
+export const mappingPositionsQuerySchema = z.object({ reportType: reportMappingTypeSchema });
 export const mappingOverrideBodySchema = z.object({
   reason: reasonSchema,
   chart: z.enum(['SKR03', 'SKR04']),
@@ -101,8 +107,10 @@ export const mappingOverrideBodySchema = z.object({
 const reportSnapshotQuery = reportSnapshotQuerySchema;
 const reportSnapshotBody = reportSnapshotBodySchema;
 const mappingHealthQuery = mappingHealthQuerySchema;
+const mappingPositionsQuery = mappingPositionsQuerySchema;
 const mappingOverrideBody = mappingOverrideBodySchema;
 export const susaReportQuerySchema = reportRange.extend({ asOfDate: z.string().optional() });
+export const eurReportQuerySchema = z.object({ from: z.literal('2025-01-01').default('2025-01-01'), to: z.literal('2025-12-31').default('2025-12-31') });
 export const datevExportQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -415,7 +423,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
   typedRoute(app, {
     method: 'GET',
     url: `${prefix}/reports/eur`,
-    query: susaReportQuerySchema,
+    query: eurReportQuerySchema,
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
       try {
@@ -423,6 +431,12 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       } catch (error) {
         if (error instanceof Error && error.message === 'EUR_SERVER_REPORT_UNAVAILABLE') {
           throw new ApiError(503, 'EÜR ist im Server-Modus erst verfügbar, wenn der 2025-Katalog und die Kontenklassifikation importiert sind.');
+        }
+        if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') {
+          throw new ApiError(503, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR und Kalenderjahr 2025 verfügbar.');
+        }
+        if (error instanceof Error && error.message === 'EUR_RANGE_2025_REQUIRED') {
+          throw new ApiError(400, 'EÜR unterstützt ausschließlich den Kalenderzeitraum 01.01.2025 bis 31.12.2025.');
         }
         throw error;
       }
@@ -507,19 +521,23 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     body: reportSnapshotBody,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      if (body.reportType === 'eur') {
-        throw new ApiError(503, 'EÜR ist im Server-Modus erst verfügbar, wenn der 2025-Katalog und die Kontenklassifikation importiert sind.');
-      }
-      const args = { from: body.from, to: body.to, asOfDate: body.asOfDate, chart: body.chart, profile: body.profile };
+      const args = body.reportType === 'eur'
+        ? { from: body.from, to: body.to, asOfDate: body.asOfDate }
+        : { from: body.from, to: body.to, asOfDate: body.asOfDate, chart: body.chart, profile: body.profile };
       const service = serviceFor(app);
       const repository = service.repository;
-      const payload = body.reportType === 'susa'
-        ? await service.getSusaReport(session.scope, { ...args, fromDate: body.from, asOfDate: body.to ?? body.asOfDate })
+      const payload = body.reportType === 'eur'
+        ? await repository.getEurReport(session.scope, { from: body.from, to: body.to, asOfDate: body.asOfDate })
+        : body.reportType === 'susa'
+          ? await service.getSusaReport(session.scope, { ...args, fromDate: body.from, asOfDate: body.to ?? body.asOfDate })
         : body.reportType === 'bilanz' || body.reportType === 'hgb-bilanz'
           ? await repository.getBilanzReport(session.scope, { asOfDate: body.asOfDate, chart: body.chart })
           : body.reportType === 'bwa01'
             ? await repository.getBwa01Report(session.scope, { from: body.from, to: body.to, chart: body.chart, profile: body.profile })
             : await repository.getGuvReport(session.scope, { from: body.from, to: body.to, chart: body.chart, profile: body.reportType === 'management-guv' || body.reportType === 'hgb-guv' ? body.reportType : 'management-guv' });
+      if (body.reportType === 'eur' && ((payload as Awaited<ReturnType<typeof repository.getEurReport>>).warnings.length > 0 || (payload as Awaited<ReturnType<typeof repository.getEurReport>>).unclassifiedCount > 0)) {
+        throw new ApiError(422, 'EÜR-Snapshot ist wegen Warnungen oder nicht klassifizierter Zahlungsquellen gesperrt.');
+      }
       return repository.saveReportSnapshot(session.scope, {
         reportType: body.reportType,
         args,
@@ -714,6 +732,17 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
       return repositoryFor(app).getAccountMappingHealth(session.scope, query.chart, query.reportType);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/mappings/positions`,
+    query: mappingPositionsQuery,
+    response: z.array(z.object({ key: z.string(), label: z.string(), kind: z.enum(['heading', 'line', 'subtotal', 'result']), side: z.enum(['asset', 'liability']).optional() })),
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return repositoryFor(app).listReportMappingPositions(session.scope, query.reportType);
     },
   });
 

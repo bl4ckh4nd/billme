@@ -41,6 +41,7 @@ import DatevExportPanel from './reports/DatevExportPanel';
 import { defaultReportFilters, reportDateRange, reportFiscalYearRange } from '../domain/reportDates';
 import ReportStatusBadge, { MappingHealthBlock, reportIsMappingBlocked } from './reports/ReportStatusBadge';
 import ReportMappingSetup from './reports/ReportMappingSetup';
+import type { ReportMappingStatement } from '../domain/reportMapping';
 
 interface ReportsViewProps {
   dataAdapter?: ProAccountingDataAdapter;
@@ -231,6 +232,12 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
             ? managementGuvReport
             : hgbGuvReport;
   const activeQuality = activeReport?.quality;
+  const mappingStatements = useMemo<ReportMappingStatement[]>(() => [
+    ...(visibleTabs.includes('bwa01') ? ['bwa01' as const] : []),
+    ...(visibleTabs.includes('management_guv') ? ['management-guv' as const] : []),
+    ...(visibleTabs.includes('hgb_guv') ? ['hgb-guv' as const] : []),
+    ...(visibleTabs.includes('bilanz') ? ['hgb-bilanz' as const] : []),
+  ], [visibleTabs]);
   const activeQualityBlocksFreeze = activeTab === 'eur' && Boolean(activeQuality && (
     reportIsMappingBlocked(activeQuality)
     || ('warnings' in activeQuality && typeof activeQuality.warnings === 'number' && activeQuality.warnings > 0)
@@ -354,10 +361,18 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
           dataAdapter={dataAdapter}
           chart={filters.chart}
           role={role}
+          statements={mappingStatements}
           refreshKey={reportsRetryKey}
           onMappingChanged={() => setReportsRetryKey((current) => current + 1)}
         />
-        <ReportToolbar filters={filters} onChange={setFilters} activeTab={activeTab} onExport={dataAdapter ? exportReport : undefined} exporting={exporting} />
+        <ReportToolbar
+          filters={filters}
+          onChange={setFilters}
+          activeTab={activeTab}
+          onExport={dataAdapter ? exportReport : undefined}
+          exporting={exporting}
+          exportBlockedReason={activeTab === 'bwa01' ? 'BWA-Export bleibt blockiert: Der externe BWA-Quell-Hash ist nicht verfügbar. Bitte den externen Katalog-/DATEV-Import-Gate verwenden.' : undefined}
+        />
         {activeTab === 'eur' && dataAdapter?.saveReportSnapshot ? canMutate ? (
           <div className="flex flex-wrap items-end gap-2 rounded-xl border border-border bg-surface p-3">
             <label className="flex min-w-64 flex-1 flex-col gap-1 text-xs font-semibold text-foreground" htmlFor="report-freeze-reason">

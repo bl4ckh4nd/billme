@@ -72,6 +72,11 @@ import {
   saveReportSnapshotArgsSchema,
   proGetReportingReportArgsSchema,
   proGetReportingReportResultSchema,
+  proGetReportMappingHealthArgsSchema,
+  proGetReportMappingHealthResultSchema,
+  proListReportMappingPositionsArgsSchema,
+  reportMappingPositionSchema,
+  proUpsertReportMappingOverrideArgsSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -1146,6 +1151,21 @@ export const ipcRoutes = {
     channel: 'pro:saveReportSnapshot',
     args: saveReportSnapshotArgsSchema,
     result: reportSnapshotRecordSchema,
+  },
+  'pro:getReportMappingHealth': {
+    channel: 'pro:getReportMappingHealth',
+    args: proGetReportMappingHealthArgsSchema,
+    result: proGetReportMappingHealthResultSchema,
+  },
+  'pro:listReportMappingPositions': {
+    channel: 'pro:listReportMappingPositions',
+    args: proListReportMappingPositionsArgsSchema,
+    result: z.array(reportMappingPositionSchema),
+  },
+  'pro:upsertReportMappingOverride': {
+    channel: 'pro:upsertReportMappingOverride',
+    args: proUpsertReportMappingOverrideArgsSchema,
+    result: z.unknown(),
   },
   'pro:listAssets': {
     channel: 'pro:listAssets',

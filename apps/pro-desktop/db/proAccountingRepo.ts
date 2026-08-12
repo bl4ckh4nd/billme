@@ -2360,7 +2360,9 @@ export const getReportMappingHealth = (
   args: { chart?: 'SKR03' | 'SKR04'; statement?: ReportingStatement } = {},
 ): MappingHealth => {
   const tenantId = getTenantId(scope);
-  const chart = args.chart ?? getAccountingPolicy(db, tenantId).activeChart;
+  const activeChart = getAccountingPolicy(db, tenantId).activeChart;
+  if (args.chart && args.chart !== activeChart) throw new Error('REPORT_CHART_MISMATCH');
+  const chart = args.chart ?? activeChart;
   const mappings = loadHgbMappings(db, tenantId, chart).filter((row) => !args.statement || row.statement_type === args.statement);
   const mappedAccounts = new Set(mappings.map((row) => row.account_number));
   const rows = loadReportJournalLines(db, tenantId);

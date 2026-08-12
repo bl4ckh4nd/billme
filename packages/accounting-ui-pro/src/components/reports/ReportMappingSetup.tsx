@@ -5,6 +5,7 @@ import { permissionContextForRole } from '../../mocks/users';
 import type { UserRole } from '../../types';
 import {
   REPORT_MAPPING_STATEMENTS,
+  reportMappingStatementLabel,
   type ReportMappingHealth,
   type ReportMappingMissingAccount,
   type ReportMappingOverrideInput,
@@ -16,20 +17,24 @@ interface ReportMappingSetupProps {
   dataAdapter?: ProAccountingDataAdapter;
   chart: 'SKR03' | 'SKR04';
   role: UserRole;
+  statements?: ReportMappingStatement[];
   refreshKey?: number;
   onMappingChanged?: () => void;
 }
 
 type PositionMap = Partial<Record<ReportMappingStatement, ReportMappingPosition[]>>;
+const DEFAULT_REPORT_MAPPING_STATEMENTS = REPORT_MAPPING_STATEMENTS.map((entry) => entry.value);
 
 const rowId = (entry: ReportMappingMissingAccount): string => `${entry.accountNumber}:${entry.statement}`;
 
 const normalizeHealth = (value: ReportMappingHealth): ReportMappingHealth => ({
   chart: value.chart,
-  unmapped: value.unmapped.filter((entry) => entry.accountNumber.trim() && REPORT_MAPPING_STATEMENTS.some((item) => item.value === entry.statement)),
+  unmapped: [...new Map(value.unmapped
+    .filter((entry) => entry.accountNumber.trim() && REPORT_MAPPING_STATEMENTS.some((item) => item.value === entry.statement))
+    .map((entry) => [rowId(entry), entry] as const)).values()],
 });
 
-export default function ReportMappingSetup({ dataAdapter, chart, role, refreshKey = 0, onMappingChanged }: ReportMappingSetupProps) {
+export default function ReportMappingSetup({ dataAdapter, chart, role, statements = DEFAULT_REPORT_MAPPING_STATEMENTS, refreshKey = 0, onMappingChanged }: ReportMappingSetupProps) {
   const canMutate = permissionContextForRole(role).canMutate;
   const enabled = Boolean(dataAdapter?.getReportMappingHealth && dataAdapter.listReportMappingPositions && dataAdapter.upsertReportMappingOverride);
   const [health, setHealth] = useState<ReportMappingHealth | null>(null);
@@ -47,9 +52,12 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, refreshKe
     setError(null);
     setNotice(null);
     try {
-      const nextHealth = normalizeHealth(await dataAdapter.getReportMappingHealth({ chart }));
-      const statements = [...new Set(nextHealth.unmapped.map((entry) => entry.statement))];
-      const loaded = await Promise.all(statements.map(async (statement) => [
+      const healths = await Promise.all(statements.map((statement) => dataAdapter.getReportMappingHealth!({ chart, statement })));
+      const nextHealth = normalizeHealth({
+        chart,
+        unmapped: healths.flatMap((value) => value.unmapped),
+      });
+      const loaded = await Promise.all([...new Set(nextHealth.unmapped.map((entry) => entry.statement))].map(async (statement) => [
         statement,
         await dataAdapter.listReportMappingPositions!(statement),
       ] as const));
@@ -67,7 +75,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, refreshKe
     } finally {
       setLoading(false);
     }
-  }, [chart, dataAdapter, enabled]);
+  }, [chart, dataAdapter, enabled, statements]);
 
   useEffect(() => {
     void load();
@@ -75,11 +83,6 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, refreshKe
 
   const hasBwa = Boolean(health?.unmapped.some((entry) => entry.statement === 'bwa01'));
   const mutationDisabled = !canMutate || loading || Boolean(saving) || !reason.trim();
-
-  const updateStatement = (entry: ReportMappingMissingAccount, statement: ReportMappingStatement) => {
-    const id = rowId(entry);
-    setSelections((current) => ({ ...current, [id]: { statement, position: '' } }));
-  };
 
   const save = async (entry: ReportMappingMissingAccount) => {
     if (!dataAdapter?.upsertReportMappingOverride) return;
@@ -164,18 +167,10 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, refreshKe
                     <div className="text-[10px] font-bold uppercase tracking-wide text-muted">Konto</div>
                     <div className="font-mono text-sm font-bold text-foreground">{entry.accountNumber}</div>
                   </div>
-                  <label className="text-xs font-semibold text-foreground" htmlFor={`report-mapping-statement-${id}`}>
-                    Report
-                    <select
-                      id={`report-mapping-statement-${id}`}
-                      value={selected.statement}
-                      disabled={!canMutate || Boolean(saving)}
-                      onChange={(event) => updateStatement(entry, event.target.value as ReportMappingStatement)}
-                      className="mt-1 block w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal outline-none focus:border-accent focus:ring-2 focus:ring-accent"
-                    >
-                      {REPORT_MAPPING_STATEMENTS.map((statement) => <option key={statement.value} value={statement.value}>{statement.label}</option>)}
-                    </select>
-                  </label>
+                  <div className="min-w-36 text-xs font-semibold text-foreground">
+                    <div>Report</div>
+                    <div className="mt-1 rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal">{reportMappingStatementLabel(entry.statement)}</div>
+                  </div>
                   <label className="text-xs font-semibold text-foreground" htmlFor={`report-mapping-position-${id}`}>
                     Erlaubte Position
                     <select

@@ -9,9 +9,10 @@ interface ReportToolbarProps {
   activeTab?: ReportTabId;
   onExport?: (format: 'pdf' | 'csv') => void;
   exporting?: boolean;
+  exportBlockedReason?: string;
 }
 
-export default function ReportToolbar({ filters, onChange, activeTab, onExport, exporting = false }: ReportToolbarProps) {
+export default function ReportToolbar({ filters, onChange, activeTab, onExport, exporting = false, exportBlockedReason }: ReportToolbarProps) {
   const setPreset = (periodPreset: ReportFilterState['periodPreset']) => {
     const nextPreset = periodPreset ?? 'current';
     const range = reportPeriodRangeForPreset(filters.asOfDate, filters.businessReportingProfile, nextPreset);
@@ -101,15 +102,16 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
           </button>
           {onExport && activeTab ? (
             <>
-              <Button type="button" size="sm" variant="secondary" onClick={() => onExport('pdf')} disabled={exporting}>
+              <Button type="button" size="sm" variant="secondary" onClick={() => onExport('pdf')} disabled={exporting || Boolean(exportBlockedReason)}>
                 <FileText size={13} aria-hidden="true" /> PDF
               </Button>
-              <Button type="button" size="sm" variant="secondary" onClick={() => onExport('csv')} disabled={exporting}>
+              <Button type="button" size="sm" variant="secondary" onClick={() => onExport('csv')} disabled={exporting || Boolean(exportBlockedReason)}>
                 <FileDown size={13} aria-hidden="true" /> CSV
               </Button>
             </>
           ) : null}
         </div>
+        {exportBlockedReason ? <p className="text-xs text-error" role="status">{exportBlockedReason}</p> : null}
       </div>
     </div>
   );

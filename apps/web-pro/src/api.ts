@@ -126,17 +126,25 @@ const guvReportSchema = z.object({
   mappingHealth: mappingHealthSchema,
 });
 const eurReportSchema = z.object({
-  kind: z.literal('eur-ledger-reconciliation'),
-  cashIncome: z.number(),
-  cashExpenses: z.number(),
-  cashResult: z.number(),
-  ledgerIncome: z.number(),
-  ledgerExpenses: z.number(),
-  ledgerResult: z.number(),
-  differences: z.object({ income: z.number(), expenses: z.number(), result: z.number() }),
-  unmatchedCashEntries: z.array(z.string()),
-  snapshot: reportSnapshotSchema,
-  mappingHealth: mappingHealthSchema,
+  taxYear: z.literal(2025),
+  from: z.literal('2025-01-01'),
+  to: z.literal('2025-12-31'),
+  rows: z.array(z.object({
+    id: z.string(),
+    kennziffer: z.string().optional(),
+    providerPath: z.string().optional(),
+    label: z.string(),
+    kind: z.enum(['income', 'expense', 'computed']),
+    exportable: z.boolean(),
+    sortOrder: z.number(),
+    computedFromIds: z.array(z.string()).optional(),
+    computedTerms: z.array(z.object({ id: z.string(), sign: z.union([z.literal(1), z.literal(-1)]) })).optional(),
+    total: z.number(),
+  })),
+  summary: z.object({ incomeTotal: z.number(), expenseTotal: z.number(), surplus: z.number() }),
+  unclassifiedCount: z.number().int().nonnegative(),
+  warnings: z.array(z.string()),
+  catalog: z.object({ id: z.string(), version: z.string(), sourceHash: z.string(), delivery: z.enum(['print-form-only', 'elster-ready']), elsterReady: z.boolean() }),
 });
 const bwa01ReportSchema = z.object({
   kind: z.literal('bwa01'),
@@ -482,7 +490,7 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     getSusaReport(query?: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }) {
       return requestJson({ parser: susaReportSchema, query }, '/api/v1/pro/accounting/reports/susa');
     },
-    getEurReport(query?: unknown) {
+    getEurReport(query?: { from?: string; to?: string }) {
       return requestJson({ parser: eurReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/eur');
     },
     getGuvReport(query?: unknown) {
@@ -511,7 +519,10 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/snapshots');
     },
     getAccountMappingHealth(chart?: 'SKR03' | 'SKR04', reportType?: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz') {
-      return requestJson({ parser: (input) => input, query: chart || reportType ? { chart, reportType } : undefined }, '/api/v1/pro/accounting/mappings/health');
+      return requestJson({ parser: z.object({ chart: z.enum(['SKR03', 'SKR04']).optional(), unmapped: z.array(z.object({ accountNumber: z.string(), statementType: z.string() })).optional() }), query: chart || reportType ? { chart, reportType } : undefined }, '/api/v1/pro/accounting/mappings/health');
+    },
+    listReportMappingPositions(reportType: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz') {
+      return requestJson({ parser: parseArray(z.object({ key: z.string(), label: z.string(), kind: z.enum(['heading', 'line', 'subtotal', 'result']), side: z.enum(['asset', 'liability']).optional() })), query: { reportType } }, '/api/v1/pro/accounting/mappings/positions');
     },
     saveAccountMappingOverride(input: { chart: 'SKR03' | 'SKR04'; accountNumber: string; statementType: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz'; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; reason: string }) {
       return requestJson({ method: 'PUT', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/mappings/overrides');

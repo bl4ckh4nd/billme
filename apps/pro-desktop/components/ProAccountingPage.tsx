@@ -51,7 +51,7 @@ const runReportingReport = async (
   kind: Extract<ReportKind, 'bwa01' | 'management-guv' | 'hgb-guv'>,
   range: { from?: string; to?: string },
 ): Promise<ReportResult<object>> => {
-  return ipc.pro.getReportingReport({ kind, ...range });
+  return ipc.pro.getReportingReport({ kind, ...range }) as unknown as ReportResult<object>;
 };
 
 type DatevExportArgs = {
@@ -501,6 +501,15 @@ export const ProAccountingPage: React.FC = () => {
           args: row.args ?? {},
           payload: row.payload ?? null,
         }));
+      },
+      getReportMappingHealth(args) {
+        return ipc.pro.getReportMappingHealth(args ?? {});
+      },
+      listReportMappingPositions(statement) {
+        return ipc.pro.listReportMappingPositions({ statement });
+      },
+      upsertReportMappingOverride(input) {
+        return runMutation(() => ipc.pro.upsertReportMappingOverride(input));
       },
       async getBwaReport(filters) {
         activeReportFilters = filters;

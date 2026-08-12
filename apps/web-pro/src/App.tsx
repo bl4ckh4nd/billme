@@ -1093,6 +1093,30 @@ export default function App() {
           overrideReason: options.overrideReason,
         });
       },
+      async getReportMappingHealth(args) {
+        const health = await client.getAccountMappingHealth(args?.chart, args?.statement);
+        return {
+          chart: health.chart as 'SKR03' | 'SKR04',
+          unmapped: (health.unmapped ?? []).map((entry: { accountNumber: string; statementType: string }) => ({
+            accountNumber: entry.accountNumber,
+            statement: entry.statementType as 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz',
+          })),
+        };
+      },
+      listReportMappingPositions(statement) {
+        return client.listReportMappingPositions(statement);
+      },
+      upsertReportMappingOverride(input) {
+        return client.saveAccountMappingOverride({
+          chart: input.chart,
+          accountNumber: input.accountNumber,
+          statementType: input.statement,
+          positionKey: input.position,
+          positionLabel: input.label,
+          balanceSide: input.side,
+          reason: requireMutationReason(input.reason, 'Report-Mapping speichern'),
+        });
+      },
       async getSusaReport(filters: ReportFilterState): Promise<SusaReport> {
         const report = await client.getSusaReport(reportFilter(filters));
         const names = new Map(data.ledgerAccounts.map((account) => [account.accountNumber, account.name]));
@@ -1128,17 +1152,34 @@ export default function App() {
           quality: reportQuality(report.mappingHealth),
         };
       },
-      async getEurReport(filters: ReportFilterState): Promise<GuvReport> {
-        const report = await client.getEurReport(reportFilter(filters));
-        const rows = [
-          { position: 'income', label: 'Betriebseinnahmen', amount: report.cashIncome, accountNumbers: [] as string[] },
-          { position: 'expense', label: 'Betriebsausgaben', amount: -report.cashExpenses, accountNumbers: [] as string[] },
-          { position: 'result', label: 'EÜR-Ergebnis', amount: report.cashResult, accountNumbers: [] as string[], kind: 'result' },
-        ];
+      async getEurReport(_filters: ReportFilterState): Promise<GuvReport> {
+        // EÜR is a calendar-year cash report; do not send the double-entry
+        // chart or current fiscal-year filter to its native endpoint.
+        const report = await client.getEurReport();
+        const rows = report.rows.map((row) => ({
+          position: row.id,
+          label: row.kennziffer ? `${row.kennziffer} · ${row.label}` : row.label,
+          amount: row.kind === 'expense' ? -row.total : row.total,
+          accountNumbers: [] as string[],
+          kind: row.kind === 'computed' ? 'subtotal' : 'line',
+        }));
         return {
           lines: reportLines(rows),
-          totals: { revenue: report.cashIncome, expenses: report.cashExpenses, result: report.cashResult },
-          quality: { ...reportQuality(report.mappingHealth), mappingNotes: [...report.mappingHealth.warnings, ...report.unmatchedCashEntries.map((entry) => `Nicht klassifiziert: ${entry}`)] },
+          totals: { revenue: report.summary.incomeTotal, expenses: report.summary.expenseTotal, result: report.summary.surplus },
+          quality: {
+            unmappedAccounts: [],
+            warnings: report.warnings.length + (report.unclassifiedCount > 0 ? 1 : 0),
+            generatedAt: new Date().toISOString(),
+            source: 'live',
+            mappingStatus: report.warnings.length || report.unclassifiedCount > 0 ? 'blocked' : 'healthy',
+            mappingNotes: [...report.warnings, ...(report.unclassifiedCount > 0 ? [`Nicht klassifiziert: ${report.unclassifiedCount}`] : [])],
+          },
+          filing: {
+            kind: 'euer',
+            taxYear: report.taxYear,
+            catalog: report.catalog,
+            lineProvenance: report.rows.map((row) => ({ lineId: row.id, kennziffer: row.kennziffer, providerPath: row.providerPath, exportable: row.exportable })),
+          },
         };
       },
       async getManagementGuvReport(filters: ReportFilterState): Promise<GuvReport> {

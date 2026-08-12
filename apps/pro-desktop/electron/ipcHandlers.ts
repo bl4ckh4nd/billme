@@ -80,6 +80,7 @@ import {
   createProAccountingCatalogService,
   createProAccountingService,
   createProWorkflowService,
+  listReportMappingPositions,
 } from '@billme/accounting-engine';
 import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import { eq } from 'drizzle-orm';
@@ -1259,6 +1260,36 @@ export const registerIpcHandlers = (
     assertLocalOwner('pro:saveReportSnapshot');
     assertReportSnapshotFreezable({ reportType, payload });
     return saveReportSnapshot(requireDb(), { reportType, args, payload, reason }, getProScope());
+  });
+
+  register(ipcMain, 'pro:getReportMappingHealth', ({ chart, statement }) => {
+    const db = requireDb();
+    const health = createSqliteProAccountingRepository(db).getReportMappingHealth(getProScope(), { chart, statement });
+    return getProAccountingService().getAccountingPolicy().then((policy) => ({
+      chart: policy.activeChart,
+      unmapped: health.unmappedAccounts.map((accountNumber) => ({ accountNumber, statement: statement ?? 'management-guv' })),
+    }));
+  });
+
+  register(ipcMain, 'pro:listReportMappingPositions', ({ statement }) => {
+    const size = getSettings(requireDb())?.businessReportingProfile?.hgbSizeClass ?? 'small';
+    return listReportMappingPositions(statement, size);
+  });
+
+  register(ipcMain, 'pro:upsertReportMappingOverride', ({ chart, accountNumber, statement, position, label, side, reason }) => {
+    assertLocalOwner('pro:upsertReportMappingOverride');
+    const db = requireDb();
+    const size = getSettings(db)?.businessReportingProfile?.hgbSizeClass ?? 'small';
+    if (!listReportMappingPositions(statement, size).some((item) => item.key === position)) throw new Error('REPORT_MAPPING_POSITION_NOT_ALLOWED');
+    return createSqliteProAccountingRepository(db).upsertReportMappingOverride(getProScope(), {
+      chart,
+      accountNumber,
+      statement,
+      position,
+      label,
+      side,
+      reason,
+    });
   });
 
   register(ipcMain, 'pro:listAssets', () => {

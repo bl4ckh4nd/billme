@@ -1,15 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  Archive,
-  ArrowRightLeft,
-  Building2,
-  CalendarClock,
-  FileText,
-  Filter,
-  Plus,
-  Search,
-  Sparkles,
-} from 'lucide-react';
+import { Building2, Search } from 'lucide-react';
 import type { AssetDepreciationScheduleEntry, AssetItem, AssetStatus } from '../domain/assetTypes';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
 
@@ -123,17 +113,31 @@ function statusPill(status: AssetStatus) {
 }
 
 export default function AssetManagementView({ dataAdapter }: { dataAdapter?: ProAccountingDataAdapter }) {
-  const [assets, setAssets] = useState<AssetItem[]>(mockAssets);
+  const [assets, setAssets] = useState<AssetItem[]>(() => (dataAdapter ? [] : mockAssets));
   const [schedule, setSchedule] = useState<AssetDepreciationScheduleEntry[]>([]);
+  const [assetsError, setAssetsError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'alle' | AssetStatus>('alle');
   const [selectedId, setSelectedId] = useState<string>(mockAssets[0]?.id ?? '');
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>('Übersicht');
 
   useEffect(() => {
-    const list = dataAdapter?.listAssets;
-    if (!list) return;
-    void list().then(setAssets).catch(() => setAssets(mockAssets));
+    if (!dataAdapter) {
+      setAssets(mockAssets);
+      setAssetsError(null);
+      return;
+    }
+    const list = dataAdapter.listAssets;
+    if (!list) {
+      setAssets([]);
+      setAssetsError('Anlagen konnten nicht geladen werden.');
+      return;
+    }
+    setAssetsError(null);
+    void list().then(setAssets).catch((error) => {
+      setAssets([]);
+      setAssetsError(error instanceof Error ? error.message : 'Anlagen konnten nicht geladen werden.');
+    });
   }, [dataAdapter]);
 
   const filtered = useMemo(() => {
@@ -176,7 +180,7 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
       <div className="flex min-h-0 flex-col border-b border-gray-100 xl:basis-[34rem] xl:min-w-[24rem] xl:max-w-[34rem] xl:border-b-0 xl:border-r">
         <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-black text-[#ccff00] flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-black text-accent flex items-center justify-center shrink-0">
               <Building2 size={15} />
             </div>
             <div className="flex-1 min-w-0">
@@ -185,10 +189,6 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
                 Übersicht, Aktivierung und Abschreibung.
               </p>
             </div>
-            <button className="h-8 px-3 rounded-full bg-black text-white text-xs font-bold hover:bg-gray-900 inline-flex items-center gap-1 shrink-0">
-              <Plus size={12} />
-              Anlage erfassen
-            </button>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -226,9 +226,6 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
                 <option value="verkauft">Verkauft</option>
                 <option value="stillgelegt">Stillgelegt</option>
               </select>
-              <button className="h-8 px-2.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
-                <Filter size={13} />
-              </button>
             </div>
           </div>
         </div>
@@ -274,7 +271,8 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
               </button>
             );
           })}
-          {filtered.length === 0 && (
+          {assetsError && <div className="rounded-xl border border-error-border bg-error-bg p-4 text-sm text-error" role="alert" aria-live="assertive">{assetsError}</div>}
+          {filtered.length === 0 && !assetsError && (
             <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-500">
               Keine Anlagen gefunden.
             </div>
@@ -303,20 +301,6 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
                   <p className="text-xs text-gray-400 font-medium">
                     {selected.assetClass} • {selected.costCenter} • {selected.location}
                   </p>
-                </div>
-                <div className="flex flex-wrap gap-1.5 justify-end shrink-0">
-                  <button className="h-8 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1">
-                    <ArrowRightLeft size={12} />
-                    Bewegung
-                  </button>
-                  <button className="h-8 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1">
-                    <CalendarClock size={12} />
-                    AfA-Vorschau
-                  </button>
-                  <button className="h-8 px-3 rounded-full bg-black text-white text-xs font-bold hover:bg-gray-900 inline-flex items-center gap-1">
-                    <Sparkles size={12} />
-                    Bearbeiten
-                  </button>
                 </div>
               </div>
 
@@ -380,8 +364,8 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
 
                   {activeTab === 'Abschreibungsplan' && (
                     <div className="space-y-3">
-                      {(schedule.length ? schedule : [{
-                        id: 'mock',
+                      {(schedule.length ? schedule : dataAdapter ? [] : [{
+                        id: 'fallback',
                         assetId: selected.id,
                         year: Number(selected.activationDate.slice(0, 4)),
                         amount: selected.annualDepreciation,
@@ -402,73 +386,24 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
 
                   {activeTab === 'Bewegungen' && (
                     <div className="space-y-3">
+                      {!schedule.length && dataAdapter ? <div className="text-sm text-gray-500">Kein Abschreibungsplan vorhanden.</div> : null}
                       <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
                         <div className="font-bold text-gray-900">Zugang / Aktivierung</div>
                         <div className="text-sm text-gray-600 mt-1">
                           {selected.activationDate} • Anschaffung {euro(selected.acquisitionCost)} • Status {statusPill(selected.status).label}
                         </div>
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        {['Teilabgang', 'Umbuchung', 'Stilllegung'].map((action) => (
-                          <button key={action} className="rounded-xl border border-gray-200 p-4 text-left hover:bg-gray-50">
-                            <div className="font-bold text-gray-900">{action}</div>
-                            <div className="text-sm text-gray-500 mt-1">Wizard mit Auswirkungs-Vorschau (Mock)</div>
-                          </button>
-                        ))}
-                      </div>
                     </div>
                   )}
 
                   {!['Übersicht', 'Abschreibungsplan', 'Bewegungen'].includes(activeTab) && (
                     <div className="rounded-xl border border-dashed border-gray-300 p-6 text-sm text-gray-500">
-                      {activeTab} — UI-Skeleton vorbereitet. Hier folgen Details, Tabellen und Workflows für produktive Nutzung.
+                      Für diesen Bereich liegen noch keine Daten vor.
                     </div>
                   )}
                 </div>
               </section>
 
-              <section className="min-w-0 space-y-4">
-                <div className="rounded-2xl border border-gray-200 bg-white p-5">
-                  <div className="text-sm font-bold text-gray-900 mb-3">Anlage erfassen (Wizard-Vorschau)</div>
-                  <div className="space-y-2">
-                    {[
-                      ['1', 'Grunddaten', 'Bezeichnung, Anlagenklasse, Lieferant, Beleg'],
-                      ['2', 'Anschaffung', 'Anschaffungs-/Rechnungs-/Aktivierungsdatum, AK netto/brutto'],
-                      ['3', 'Abschreibung', 'Methode, Nutzungsdauer, AfA-Beginn'],
-                      ['4', 'Kontierung', 'Anlagenkonto, AfA-Konto, Gegenkonto, Kostenstelle'],
-                      ['5', 'Prüfen & Aktivieren', 'Validierung, Vorschau, Aktivierung'],
-                    ].map(([step, title, desc]) => (
-                      <div key={step} className="flex gap-3 rounded-lg border border-gray-100 p-3">
-                        <div className="w-7 h-7 rounded-full bg-black text-white text-xs font-bold flex items-center justify-center shrink-0">
-                          {step}
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-gray-800">{title}</div>
-                          <div className="text-xs text-gray-500">{desc}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-gray-200 bg-white p-5">
-                  <div className="text-sm font-bold text-gray-900 mb-3">Quick Actions</div>
-                  <div className="space-y-2">
-                    <button className="w-full px-4 py-3 rounded-xl border border-gray-200 text-left hover:bg-gray-50 inline-flex items-center gap-2">
-                      <FileText size={16} className="text-gray-500" />
-                      <span className="font-bold text-gray-800">Beleg anzeigen / verknüpfen</span>
-                    </button>
-                    <button className="w-full px-4 py-3 rounded-xl border border-gray-200 text-left hover:bg-gray-50 inline-flex items-center gap-2">
-                      <Archive size={16} className="text-gray-500" />
-                      <span className="font-bold text-gray-800">AfA-Buchungen prüfen</span>
-                    </button>
-                    <button className="w-full px-4 py-3 rounded-xl border border-gray-200 text-left hover:bg-gray-50 inline-flex items-center gap-2">
-                      <ArrowRightLeft size={16} className="text-gray-500" />
-                      <span className="font-bold text-gray-800">Abgang / Umbuchung erfassen</span>
-                    </button>
-                  </div>
-                </div>
-              </section>
             </div>
           </>
         )}

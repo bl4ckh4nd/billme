@@ -78,7 +78,7 @@ export default function GuvView({ report, compareMode, onSelectLine }: GuvViewPr
 
       <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
         <div className="px-4 h-12 border-b border-gray-100 flex items-center justify-between gap-3">
-          <div className="text-sm font-bold text-gray-900">Gewinn- und Verlustrechnung (Preview)</div>
+          <div className="text-sm font-bold text-gray-900">Gewinn- und Verlustrechnung</div>
           <div className="text-xs text-gray-500">
             Stand: {new Date(report.quality.generatedAt).toLocaleString('de-DE')}
           </div>
@@ -94,10 +94,10 @@ export default function GuvView({ report, compareMode, onSelectLine }: GuvViewPr
             </colgroup>
             <thead className="sticky top-0 bg-gray-50 z-10">
               <tr className="text-xs uppercase tracking-wide text-gray-500">
-                <th className="px-3 py-3 text-left font-bold">Position</th>
-                <th className="px-3 py-3 text-right font-bold">Aktuell</th>
-                {compareMode !== 'none' && <th className="px-3 py-3 text-right font-bold">Vergleich</th>}
-                {compareMode !== 'none' && <th className="px-3 py-3 text-right font-bold">Delta</th>}
+                <th scope="col" className="px-3 py-3 text-left font-bold">Position</th>
+                <th scope="col" className="px-3 py-3 text-right font-bold">Aktuell</th>
+                {compareMode !== 'none' && <th scope="col" className="px-3 py-3 text-right font-bold">Vergleich</th>}
+                {compareMode !== 'none' && <th scope="col" className="px-3 py-3 text-right font-bold">Delta</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -111,6 +111,14 @@ export default function GuvView({ report, compareMode, onSelectLine }: GuvViewPr
                     key={line.id}
                     className={`cursor-pointer hover:bg-gray-50 ${line.isSubtotal ? 'bg-gray-50/70' : ''}`}
                     onClick={() => onSelectLine(line)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onSelectLine(line);
+                      }
+                    }}
+                    tabIndex={0}
+                    role="button"
                   >
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-2" style={{ paddingLeft: `${level * 16}px` }}>

@@ -1,4 +1,4 @@
-import { Filter, RotateCcw } from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
 import { ReportFilterState } from '../../domain/reportTypes';
 
 interface ReportToolbarProps {
@@ -89,13 +89,9 @@ export default function ReportToolbar({ filters, onChange }: ReportToolbarProps)
             onChange={(e) => set('includeDrafts', e.target.checked)}
             className="rounded border-gray-300"
           />
-          Entwürfe einbeziehen (Preview)
+          Entwürfe einbeziehen
         </label>
         <div className="flex gap-1.5">
-          <button className="h-7 px-2.5 rounded-full border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 transition-colors">
-            <Filter size={12} />
-            Filter speichern (Mock)
-          </button>
           <button
             onClick={() =>
               onChange({

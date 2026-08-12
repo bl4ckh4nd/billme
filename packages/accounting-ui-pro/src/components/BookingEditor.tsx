@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Check,
@@ -22,7 +22,7 @@ import {
   getTransactionById,
   saveDraft,
 } from '../services/mockBookingStore';
-import { BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
+import { Account, BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
 import AccountCombobox from './AccountCombobox';
 import ActivityTimeline from './ActivityTimeline';
 import ValidationSummary from './ValidationSummary';
@@ -31,6 +31,7 @@ import WorkflowActionBar from './WorkflowActionBar';
 interface BookingEditorProps {
   transactionId: string | null;
   role: UserRole;
+  accounts?: Account[];
   onBack: () => void;
   onStoreChange: () => void;
 }
@@ -49,12 +50,13 @@ function actionRequiresConfirmation(action: BookingAction) {
   return action === 'reverse' || action === 'reject';
 }
 
-export default function BookingEditor({ transactionId, role, onBack, onStoreChange }: BookingEditorProps) {
+export default function BookingEditor({ transactionId, role, accounts, onBack, onStoreChange }: BookingEditorProps) {
+  const accountOptions = accounts ?? mockAccounts;
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [draft, setDraft] = useState<BookingDraft | null>(null);
-  const [showReceipt, setShowReceipt] = useState(true);
   const [busy, setBusy] = useState(false);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
+  const shortcutCloseRef = useRef<HTMLButtonElement>(null);
   const [announceMessage, setAnnounceMessage] = useState('');
 
   useEffect(() => {
@@ -62,6 +64,10 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
     setTransaction(getTransactionById(transactionId) ?? null);
     setDraft(getBookingDraftByTransactionId(transactionId) ?? null);
   }, [transactionId]);
+
+  useEffect(() => {
+    if (showShortcutHelp) shortcutCloseRef.current?.focus();
+  }, [showShortcutHelp]);
 
   const permissionCtx = permissionContextForRole(role);
   const validationIssues = useMemo(() => {
@@ -166,7 +172,7 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
   }
 
   async function persistDraft(localDraft: BookingDraft) {
-    const saved = saveDraft(localDraft, role);
+    const saved = await saveDraft(localDraft, role);
     setDraft(saved);
     setTransaction(getTransactionById(activeTransactionId) ?? transaction);
     onStoreChange();
@@ -190,9 +196,9 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
         await persistDraft({ ...draft });
         setAnnounceMessage('Entwurf gespeichert');
       } else {
-        const saved = saveDraft({ ...draft }, role);
+        const saved = await saveDraft({ ...draft }, role);
         setDraft(saved);
-        const next = dispatchBookingAction(activeTransactionId, action, { role, actorName: role });
+        const next = await dispatchBookingAction(activeTransactionId, action, { role, actorName: role });
         setDraft(next);
         setTransaction(getTransactionById(activeTransactionId) ?? transaction);
         onStoreChange();
@@ -221,7 +227,7 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
           >
             <ArrowLeft size={15} />
           </button>
-          <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-[#ccff00] shrink-0">
+          <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-accent shrink-0">
             <FileText size={15} />
           </div>
           <div className="min-w-0">
@@ -262,16 +268,10 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
       </div>
 
       <div className="flex flex-1 overflow-hidden p-5 gap-5">
-        <div className={`flex flex-col gap-4 ${showReceipt ? 'w-[30rem]' : 'w-[22rem]'} shrink-0`}>
+        <div className="flex flex-col gap-4 w-[22rem] shrink-0">
           <div className="border border-gray-200 rounded-2xl overflow-hidden">
             <div className="p-4 border-b border-gray-100 bg-gray-50/50 flex items-center justify-between">
               <h3 className="text-sm font-bold text-gray-900">Transaktion & Meta</h3>
-              <button
-                onClick={() => setShowReceipt((v) => !v)}
-                className="text-xs font-bold px-3 py-1 rounded-full border border-gray-200 bg-white"
-              >
-                Beleg {showReceipt ? 'ausblenden' : 'einblenden'}
-              </button>
             </div>
             <div className="p-4 space-y-4">
               <div className="grid grid-cols-2 gap-3">
@@ -342,36 +342,6 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
             </div>
           </div>
 
-          {showReceipt && (
-            <div className="border border-gray-200 rounded-2xl overflow-hidden flex-1 min-h-[14rem]">
-              <div className="p-4 border-b border-gray-100 bg-gray-50/50 flex items-center justify-between">
-                <h3 className="text-sm font-bold text-gray-900">Beleg (Mockup)</h3>
-                <span className="text-xs font-bold text-gray-500">
-                  {transaction.hasReceipt ? 'PDF • 1 Seite' : 'Kein Beleg'}
-                </span>
-              </div>
-              <div className="p-4 h-full">
-                <div className="h-full min-h-[12rem] rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center">
-                  {transaction.hasReceipt ? (
-                    <img
-                      src={`https://picsum.photos/seed/${transaction.id}/360/420?blur=2`}
-                      alt="Beleg Vorschau"
-                      className="w-full h-full object-cover opacity-60 rounded-xl"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="text-center">
-                      <FileText className="mx-auto text-gray-300 mb-2" />
-                      <p className="text-sm text-gray-500">Beleg fehlt</p>
-                      <button className="mt-2 text-sm font-bold text-black hover:underline">
-                        Beleg anfordern
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
         </div>
 
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
@@ -416,7 +386,7 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
 
                         <div className="col-span-4">
                           <AccountCombobox
-                            accounts={mockAccounts}
+                            accounts={accountOptions}
                             valueAccountId={line.accountId}
                             valueAccountName={line.accountName}
                             disabled={readOnly}
@@ -641,7 +611,7 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
                 </div>
                 <div className="text-right">
                   <div className="text-xs uppercase tracking-wider text-gray-400 font-bold">Differenz</div>
-                  <div className={`text-2xl font-bold ${difference < 0.01 ? 'text-[#ccff00]' : 'text-red-400'}`}>
+                  <div className={`text-2xl font-bold ${difference < 0.01 ? 'text-accent' : 'text-red-400'}`}>
                     {formatCurrency(difference, transaction.currency)}
                   </div>
                 </div>
@@ -654,11 +624,11 @@ export default function BookingEditor({ transactionId, role, onBack, onStoreChan
       </div>
 
       {showShortcutHelp && (
-        <div className="absolute inset-0 bg-gray-900/40 flex items-center justify-center p-6">
-          <div className="w-full max-w-lg bg-white rounded-2xl border border-gray-200 shadow-xl p-6">
+        <div className="absolute inset-0 bg-gray-900/40 flex items-center justify-center p-6" role="presentation">
+          <div className="w-full max-w-lg bg-white rounded-2xl border border-gray-200 shadow-xl p-6" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-gray-900">Shortcuts (MVP)</h3>
-              <button onClick={() => setShowShortcutHelp(false)} className="text-sm font-bold text-gray-600">
+              <h3 id="shortcut-help-title" className="text-lg font-bold text-gray-900">Tastenkürzel</h3>
+              <button ref={shortcutCloseRef} onClick={() => setShowShortcutHelp(false)} className="text-sm font-bold text-gray-600">
                 Schließen
               </button>
             </div>

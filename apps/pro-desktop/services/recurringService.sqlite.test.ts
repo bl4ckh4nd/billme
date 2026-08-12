@@ -118,7 +118,7 @@ describe.skipIf(!canRunNativeSqlite)('recurringService sqlite adapters', () => {
         clientId: client.id,
         clientEmail: 'billing@acme.example',
         projectId: expect.any(String),
-        status: 'draft',
+        status: 'open',
       }),
     );
     expect(storedInvoice?.number).toBe('RE-2026-104');

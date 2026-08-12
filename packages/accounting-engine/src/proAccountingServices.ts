@@ -53,13 +53,13 @@ export interface ProAccountingOposRepository {
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
   allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
   allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
-  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string }): Promise<{ ok: true; reversalEntryId: string }>;
+  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
 }
@@ -111,13 +111,13 @@ export interface ProAccountingService {
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
   allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
   allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
-  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string }): Promise<{ ok: true; reversalEntryId: string }>;
+  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(scope: TenantScope): Promise<void>;
@@ -163,13 +163,13 @@ export interface BoundProAccountingService {
   listIncomingInvoices(): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
-  postIncomingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
   listOpenItems(): Promise<OpenItemEntity[]>;
   allocateOpenItemPayment(input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
   allocateRemainingOpenItemPayment(paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
-  reverseDocumentAccounting(input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string }): Promise<{ ok: true; reversalEntryId: string }>;
+  reverseDocumentAccounting(input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(): Promise<void>;
@@ -274,9 +274,9 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   listIncomingInvoices: (scope) => repository.listIncomingInvoices(scope),
   upsertIncomingInvoice: (scope, input) => repository.upsertIncomingInvoice(scope, input),
   previewOutgoingInvoice: (scope, invoiceId) => repository.previewOutgoingInvoice(scope, invoiceId),
-  postOutgoingInvoice: (scope, invoiceId) => repository.postOutgoingInvoice(scope, invoiceId),
+  postOutgoingInvoice: (scope, invoiceId, options) => repository.postOutgoingInvoice(scope, invoiceId, options),
   previewIncomingInvoice: (scope, invoiceId) => repository.previewIncomingInvoice(scope, invoiceId),
-  postIncomingInvoice: (scope, invoiceId) => repository.postIncomingInvoice(scope, invoiceId),
+  postIncomingInvoice: (scope, invoiceId, options) => repository.postIncomingInvoice(scope, invoiceId, options),
   listOpenItems: (scope) => repository.listOpenItems(scope),
   allocateOpenItemPayment: (scope, input) => repository.allocateOpenItemPayment(scope, input),
   allocateRemainingOpenItemPayment: (scope, paymentId, allocations) => repository.allocateRemainingOpenItemPayment(scope, paymentId, allocations),
@@ -316,9 +316,9 @@ export const bindProAccountingScope = (
   listIncomingInvoices: () => service.listIncomingInvoices(scope),
   upsertIncomingInvoice: (input) => service.upsertIncomingInvoice(scope, input),
   previewOutgoingInvoice: (invoiceId) => service.previewOutgoingInvoice(scope, invoiceId),
-  postOutgoingInvoice: (invoiceId) => service.postOutgoingInvoice(scope, invoiceId),
+  postOutgoingInvoice: (invoiceId, options) => service.postOutgoingInvoice(scope, invoiceId, options),
   previewIncomingInvoice: (invoiceId) => service.previewIncomingInvoice(scope, invoiceId),
-  postIncomingInvoice: (invoiceId) => service.postIncomingInvoice(scope, invoiceId),
+  postIncomingInvoice: (invoiceId, options) => service.postIncomingInvoice(scope, invoiceId, options),
   listOpenItems: () => service.listOpenItems(scope),
   allocateOpenItemPayment: (input) => service.allocateOpenItemPayment(scope, input),
   allocateRemainingOpenItemPayment: (paymentId, allocations) => service.allocateRemainingOpenItemPayment(scope, paymentId, allocations),

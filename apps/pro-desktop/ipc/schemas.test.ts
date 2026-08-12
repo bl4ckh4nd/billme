@@ -61,6 +61,15 @@ describe('Pro IPC route schemas', () => {
       }),
     ).not.toThrow();
   });
+
+  it('accepts the Ist-USt deferred output VAT mapping role', () => {
+    expect(ipcRoutes['pro:upsertAccountingAccountMapping'].args.parse({ chart: 'SKR03', role: 'output_vat_deferred', accountNumber: '1780' })).toMatchObject({ role: 'output_vat_deferred', accountNumber: '1780' });
+  });
+
+  it('requires an audited reason for document soft-lock overrides', () => {
+    expect(() => ipcRoutes['pro:postOutgoingInvoiceAccounting'].args.parse({ invoiceId: 'inv-1', softLockOverride: true })).toThrow();
+    expect(ipcRoutes['pro:postOutgoingInvoiceAccounting'].args.parse({ invoiceId: 'inv-1', softLockOverride: true, overrideReason: 'Owner approval' })).toMatchObject({ softLockOverride: true });
+  });
 });
 
 describe('Invoice Schemas', () => {

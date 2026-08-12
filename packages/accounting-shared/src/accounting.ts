@@ -213,6 +213,12 @@ export interface DatevExportResult {
   manifestJson?: string;
   status?: string;
   validationJson?: string;
+  contentSha256?: string;
+}
+
+export interface DatevExportContent extends DatevExportResult {
+  contentSha256: string;
+  content: Uint8Array;
 }
 
 export interface ProWorkflowEntry {

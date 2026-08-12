@@ -12,8 +12,21 @@ import {
   type BookingDraft as WorkspaceBookingDraft,
   type ProAccountingSeed,
   type Transaction as WorkspaceTransaction,
+  type AssetDepreciationScheduleEntry,
+  type AssetItem,
+  type AssetUpsertInput,
+  type UserRole,
+} from '@billme/accounting-ui-pro';
+import type {
+  BalanceSheetPreview,
+  GuvReport,
+  ReportDrilldownEntry,
+  ReportDrilldownSelection,
+  ReportFilterState,
+  SusaReport,
 } from '@billme/accounting-ui-pro';
 import { createProWebClient, type ProWebClient } from './api';
+import { mapTransactionBankAccounts } from './accountingSeed';
 
 const DEFAULT_API_URL = (import.meta.env.VITE_SERVER_API_URL as string | undefined) ?? 'http://127.0.0.1:3100';
 const SESSION_STORAGE_KEY = 'billme.web-pro.session.v1';
@@ -38,6 +51,9 @@ type AppData = {
     offer: Awaited<ReturnType<ProWebClient['getActiveTemplate']>>;
   };
   workflowEntries: Awaited<ReturnType<ProWebClient['listWorkflowEntries']>>;
+  accountingTransactions: Awaited<ReturnType<ProWebClient['listAccountingTransactions']>>;
+  accountingDrafts: Awaited<ReturnType<ProWebClient['listAccountingDrafts']>>;
+  accountingPolicy: Awaited<ReturnType<ProWebClient['getAccountingPolicy']>>;
   ledgerStats: Awaited<ReturnType<ProWebClient['getLedgerStats']>>;
   ledgerAccounts: Awaited<ReturnType<ProWebClient['listLedgerAccounts']>>;
   taxCases: Awaited<ReturnType<ProWebClient['listTaxCases']>>;
@@ -340,21 +356,6 @@ const mapWorkflowDraftToWorkspace = (
   };
 };
 
-const mapWorkspaceTransactionToEntity = (transaction: WorkspaceTransaction) => {
-  return {
-    id: transaction.id,
-    date: transaction.date,
-    amount: transaction.amount,
-    type: transaction.amount >= 0 ? 'income' : 'expense',
-    counterparty: transaction.payee,
-    purpose: transaction.description,
-    linkedInvoiceId: transaction.hasReceipt ? transaction.id : undefined,
-    status: transaction.workflowStatus === 'posted' ? 'booked' : 'pending',
-    suggestedAccountNumber: transaction.suggestion,
-    suggestionConfidence: transaction.suggestionConfidence,
-  };
-};
-
 const mapWorkspaceDraftToEntity = (
   draft: WorkspaceBookingDraft,
   tenantId: string,
@@ -419,6 +420,61 @@ const readWorkflowSeed = (client: ProWebClient, workflowEntries: AppData['workfl
     transactions,
     drafts,
   };
+};
+
+const readCanonicalSeed = (
+  transactions: AppData['accountingTransactions'],
+  drafts: AppData['accountingDrafts'],
+): ProAccountingSeed => {
+  const draftByTransactionId = new Map(
+    drafts.filter((draft): draft is NonNullable<typeof draft> => draft !== null).map((draft) => [draft.transactionId, draft]),
+  );
+  return {
+    transactions: transactions.map((row) => {
+      const draft = draftByTransactionId.get(row.id);
+      const workflowStatus: WorkspaceTransaction['workflowStatus'] = draft
+        ? draft.workflowStatus
+        : row.status === 'booked'
+          ? 'posted'
+          : 'imported';
+      return {
+        id: row.id,
+        date: row.date,
+        payee: row.counterparty || 'Unbekannt',
+        description: row.purpose || 'Banktransaktion',
+        amount: Number(row.amount || 0),
+        currency: 'EUR',
+        workflowStatus,
+        suggestion: row.suggestedAccountNumber,
+        suggestionConfidence: row.suggestionConfidence,
+        hasReceipt: Boolean(row.linkedInvoiceId),
+        issueCounts: { errors: 0, warnings: row.linkedInvoiceId ? 0 : 1, infos: 0 },
+        flags: row.linkedInvoiceId ? [] : ['missing_receipt'],
+        bookingDraftId: draft?.id ?? `draft-${row.id}`,
+        owner: 'Server accounting',
+      } satisfies WorkspaceTransaction;
+    }),
+    drafts: drafts.filter((draft): draft is NonNullable<typeof draft> => draft !== null).map(mapWorkflowDraftToWorkspace),
+  };
+};
+
+const WORKSPACE_ROLE_VALUES = new Set<UserRole>(['bookkeeper', 'reviewer', 'accountant', 'admin', 'auditor']);
+
+const requireMutationReason = (candidate: string | undefined, operation: string): string => {
+  const supplied = candidate?.trim();
+  // Shared workspace actions historically passed the UI role as actorName. A role
+  // is authorization context, not an audit reason, so never forward it as one.
+  if (supplied && supplied !== 'Web Pro' && !WORKSPACE_ROLE_VALUES.has(supplied.toLowerCase() as UserRole)) {
+    return supplied;
+  }
+  if (typeof window === 'undefined' || typeof window.prompt !== 'function') {
+    throw new Error(`Eine ausdrückliche Begründung ist für ${operation} erforderlich.`);
+  }
+  const entered = window.prompt(`Begründung für ${operation}`)?.trim() ?? '';
+  if (!entered || WORKSPACE_ROLE_VALUES.has(entered.toLowerCase() as UserRole)) {
+    throw new Error(`Eine ausdrückliche Begründung ist für ${operation} erforderlich.`);
+  }
+  return entered;
 };
 
 const triggerBlobDownload = (blob: Blob, fileName: string) => {
@@ -644,6 +700,8 @@ export default function App() {
     setLoading(true);
     setLoadError('');
     try {
+      const accountingPolicy = await client.getAccountingPolicy();
+      const accountingTransactionsPromise = client.listAccountingTransactions();
       const [
         health,
         capabilities,
@@ -659,6 +717,8 @@ export default function App() {
         activeInvoiceTemplate,
         activeOfferTemplate,
         workflowEntries,
+        accountingTransactions,
+        accountingDrafts,
         ledgerStats,
         ledgerAccounts,
         taxCases,
@@ -679,11 +739,13 @@ export default function App() {
         client.getActiveTemplate('invoice'),
         client.getActiveTemplate('offer'),
         client.listWorkflowEntries(),
+        accountingTransactionsPromise,
+        accountingTransactionsPromise.then((rows) => client.listAccountingDrafts(rows.map((row) => row.id))),
         client.getLedgerStats(),
-        client.listLedgerAccounts({ chart: 'SKR03', limit: 5000 }),
+        client.listLedgerAccounts({ chart: accountingPolicy.activeChart, limit: 5000 }),
         client.listTaxCases({ activeOnly: false }),
-        client.listTaxCaseMappings({ chart: 'SKR03' }),
-        client.listAccountSuggestionRules({ chart: 'SKR03', activeOnly: false }),
+        client.listTaxCaseMappings({ chart: accountingPolicy.activeChart }),
+        client.listAccountSuggestionRules({ chart: accountingPolicy.activeChart, activeOnly: false }),
       ]);
 
       setData({
@@ -703,6 +765,9 @@ export default function App() {
           offer: activeOfferTemplate,
         },
         workflowEntries,
+        accountingTransactions,
+        accountingDrafts,
+        accountingPolicy,
         ledgerStats,
         ledgerAccounts,
         taxCases,
@@ -784,14 +849,192 @@ export default function App() {
     if (!data) {
       return undefined;
     }
-    const base = readWorkflowSeed(client, data.workflowEntries);
+    const canonical = readCanonicalSeed(data.accountingTransactions, data.accountingDrafts);
+    const base = data.accountingTransactions.length > 0
+      ? canonical
+      : readWorkflowSeed(client, data.workflowEntries);
+    const bankAccountNumberByTransactionId = mapTransactionBankAccounts(data.accountingTransactions, data.bankAccounts);
+    const bankAccountNumbers = [...new Set(Object.values(bankAccountNumberByTransactionId))];
     return {
       ...base,
       accounts: mapLedgerAccountsToWorkspace(data.ledgerAccounts),
-      chartFramework: data.ledgerStats.byChart.SKR03 > 0 ? 'SKR03' : 'SKR04',
-      seedVersion: `${data.workflowEntries.length}:${data.ledgerAccounts.length}`,
+      bankAccountNumber: bankAccountNumbers.length === 1 ? bankAccountNumbers[0] : undefined,
+      bankAccountNumberByTransactionId,
+      chartFramework: data.accountingPolicy.activeChart,
+      seedVersion: `${data.accountingTransactions.length}:${data.accountingDrafts.length}:${data.workflowEntries.length}:${data.ledgerAccounts.length}:${data.accountingPolicy.updatedAt}`,
     } satisfies ProAccountingSeed;
   }, [client, data]);
+
+  const accountingDataAdapter = React.useMemo(() => {
+    if (!accountingSeed || !data) return undefined;
+    let transactions = structuredClone(accountingSeed.transactions ?? []);
+    let drafts = structuredClone(accountingSeed.drafts ?? []);
+    const canonical = data.accountingTransactions.length > 0;
+    const refreshCanonicalSnapshots = async () => {
+      const nextTransactions = await client.listAccountingTransactions();
+      const nextDrafts = await client.listAccountingDrafts(nextTransactions.map((row) => row.id));
+      const nextSeed = readCanonicalSeed(nextTransactions, nextDrafts);
+      transactions = structuredClone(nextSeed.transactions ?? []);
+      drafts = structuredClone(nextSeed.drafts ?? []);
+    };
+    const readOnly = (operation: string): never => {
+      throw new Error(`${operation} is unavailable in the legacy snapshot fallback. Reload canonical accounting data.`);
+    };
+    const reportFilter = (filters: ReportFilterState) => ({
+      from: filters.periodFrom,
+      to: filters.periodTo ?? filters.asOfDate,
+    });
+    return {
+      hydrate(seed: ProAccountingSeed) {
+        transactions = structuredClone(seed.transactions ?? []);
+        drafts = structuredClone(seed.drafts ?? []);
+      },
+      listTransactions() {
+        return structuredClone(transactions);
+      },
+      listBookingDrafts() {
+        return structuredClone(drafts);
+      },
+      getTransactionById(id: string) {
+        return structuredClone(transactions.find((row) => row.id === id));
+      },
+      getBookingDraftByTransactionId(transactionId: string) {
+        return structuredClone(drafts.find((row) => row.transactionId === transactionId));
+      },
+      async saveDraft(draft: WorkspaceBookingDraft, actorName = 'Web Pro') {
+        if (!canonical) return readOnly('Draft mutation');
+        const saved = await client.saveAccountingDraft(
+          mapWorkspaceDraftToEntity(draft, data.sessionInfo.tenantId),
+          requireMutationReason(actorName, 'Speichern des Entwurfs'),
+        );
+        await refreshCanonicalSnapshots();
+        await refreshData();
+        return mapWorkflowDraftToWorkspace(saved);
+      },
+      async dispatchBookingAction(transactionId: string, action: string, options?: { actorName?: string; rejectReason?: string }) {
+        if (!canonical) return readOnly('Workflow mutation');
+        const saved = await client.dispatchAccountingDraftAction(
+          transactionId,
+          action,
+          requireMutationReason(options?.actorName, `Workflow-Aktion ${action}`),
+          options?.rejectReason,
+        );
+        await refreshCanonicalSnapshots();
+        await refreshData();
+        return mapWorkflowDraftToWorkspace(saved);
+      },
+      listActivity(_transactionId: string) {
+        return [];
+      },
+      reset() {
+        return readOnly('Workspace reset');
+      },
+      async updateExceptionCase(_transactionId: string, _patch: Partial<NonNullable<WorkspaceTransaction['exceptionCase']>>, _actorName: string) {
+        return readOnly('Exception mutation');
+      },
+      async assignExceptionOwner(_transactionId: string, _owner: string, _actorName: string) {
+        return readOnly('Exception mutation');
+      },
+      async snoozeException(_transactionId: string, _snoozedUntil: string, _actorName: string, _note?: string) {
+        return readOnly('Exception mutation');
+      },
+      async resolveException(_transactionId: string, _resolutionNote: string, _actorName: string) {
+        return readOnly('Exception mutation');
+      },
+      async reopenException(_transactionId: string, _actorName: string) {
+        return readOnly('Exception mutation');
+      },
+      async setTransactionReceiptStatus(_transactionId: string, _hasReceipt: boolean, _actorName: string) {
+        return readOnly('Receipt mutation');
+      },
+      async listAssets(): Promise<AssetItem[]> {
+        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      },
+      async upsertAsset(_asset: AssetUpsertInput, _reason: string): Promise<AssetItem> {
+        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      },
+      async getDepreciationSchedule(_assetId: string): Promise<AssetDepreciationScheduleEntry[]> {
+        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      },
+      async runDepreciation(_args: {
+        assetId: string;
+        year: number;
+        postingDate: string;
+        reason: string;
+        actorRole: UserRole;
+      }) {
+        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      },
+      async disposeAsset(_args: {
+        assetId: string;
+        disposalDate: string;
+        proceeds: number;
+        reason: string;
+        actorRole: UserRole;
+      }) {
+        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      },
+      async getSusaReport(filters: ReportFilterState): Promise<SusaReport> {
+        const report = await client.getSusaReport(filters.asOfDate);
+        const names = new Map(data.ledgerAccounts.map((account) => [account.accountNumber, account.name]));
+        return {
+          rows: report.rows.map((row) => ({
+            ...row,
+            accountName: names.get(row.accountNumber) ?? row.accountNumber,
+            normalBalance: row.closingBalance >= 0 ? 'debit' : 'credit',
+          })),
+          totals: {
+            openingDebit: 0,
+            openingCredit: 0,
+            turnoverDebit: report.totals.debit,
+            turnoverCredit: report.totals.credit,
+            closingDebit: Math.max(0, report.totals.balance),
+            closingCredit: Math.max(0, -report.totals.balance),
+          },
+          quality: { unmappedAccounts: report.unmappedAccounts?.length ?? 0, warnings: 0, generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
+      async getGuvReport(filters: ReportFilterState): Promise<GuvReport> {
+        const report = await client.getGuvReport(reportFilter(filters));
+        return {
+          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount })),
+          totals: {
+            revenue: report.rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + row.amount, 0),
+            expenses: report.rows.filter((row) => row.positionKey === 'expense').reduce((sum, row) => sum + Math.abs(row.amount), 0),
+            result: report.netResult,
+          },
+          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: 0, generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
+      async getBalanceSheetPreview(filters: ReportFilterState): Promise<BalanceSheetPreview> {
+        const report = await client.getBilanzReport(filters.asOfDate);
+        return {
+          aktiva: report.assets.map((row) => ({ id: row.accountNumber, code: row.accountNumber, label: row.accountNumber, amount: row.amount, level: 0, side: 'aktiva' })),
+          passiva: report.liabilities.map((row) => ({ id: row.accountNumber, code: row.accountNumber, label: row.accountNumber, amount: row.amount, level: 0, side: 'passiva' })),
+          totals: { aktiva: report.totals.assets, passiva: report.totals.liabilities, difference: report.totals.delta },
+          quality: { status: Math.abs(report.totals.delta) < 0.01 ? 'ok' : 'warning', notes: [], generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
+      async getReportDrilldownEntries(selection: ReportDrilldownSelection): Promise<ReportDrilldownEntry[]> {
+        const rows = await client.listAccountingJournalEntries({ accountNumbers: selection.accountNumbers });
+        return rows.flatMap((entry) => entry.lines.filter((line) => selection.accountNumbers.length === 0 || selection.accountNumbers.includes(line.accountNumber)).map((line) => ({
+          id: line.id,
+          date: entry.postingDate,
+          bookingText: entry.bookingText,
+          reference: entry.reference,
+          journalEntryId: entry.id,
+          sourceType: entry.sourceType === 'outgoing_invoice' ? 'invoice' : entry.sourceType === 'incoming_invoice' ? 'incoming_invoice' : entry.sourceType === 'payment' ? 'payment' : 'journal_entry',
+          sourceId: entry.sourceKey ?? entry.id,
+          transactionId: entry.sourceType === 'legacy_transaction' ? entry.sourceKey : undefined,
+          accountNumber: line.accountNumber,
+          debit: line.debitAmount,
+          credit: line.creditAmount,
+          amount: line.debitAmount || line.creditAmount,
+          source: 'Manuell' as const,
+        })));
+      },
+    };
+  }, [accountingSeed, client, data, refreshData]);
 
   const handleSaveSettings = async () => {
     await runAction(async () => {
@@ -962,7 +1205,8 @@ export default function App() {
   };
 
   const handleCreateSampleWorkflow = async () => {
-    if (!data) {
+    if (!data || data.accountingTransactions.length === 0) {
+      setNotice(createNotice('neutral', 'Legacy-Workflow-Snapshots sind im Web nur lesbar.'));
       return;
     }
     await runAction(async () => {
@@ -971,26 +1215,6 @@ export default function App() {
         navigate('accounting');
       }
     }, 'Beispiel-Workflow angelegt.');
-  };
-
-  const handlePersistWorkflowEntry = async (entry: { transaction: WorkspaceTransaction; draft: WorkspaceBookingDraft }) => {
-    if (!data) {
-      return;
-    }
-    try {
-      await client.upsertWorkflowEntry({
-        transactionId: entry.transaction.id,
-        transactionJson: JSON.stringify(mapWorkspaceTransactionToEntity(entry.transaction)),
-        draftJson: JSON.stringify(mapWorkspaceDraftToEntity(entry.draft, data.sessionInfo.tenantId)),
-        updatedAt: new Date().toISOString(),
-      });
-      await refreshData();
-      setNotice(createNotice('success', `Workflow ${entry.transaction.id} synchronisiert.`));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotice(createNotice('danger', message));
-      throw error;
-    }
   };
 
   if (!session) {
@@ -1617,8 +1841,8 @@ export default function App() {
                 eyebrow="Accounting"
                 title="Ledger, Regeln und Workflow-Snapshots"
                 actions={
-                  <Button variant="secondary" onClick={() => void handleCreateSampleWorkflow()}>
-                    Beispiel-Workflow anlegen
+                  <Button variant="secondary" onClick={() => void handleCreateSampleWorkflow()} disabled={data.accountingTransactions.length === 0}>
+                    {data.accountingTransactions.length > 0 ? 'Beispiel-Workflow anlegen' : 'Legacy-Snapshots nur lesen'}
                   </Button>
                 }
               >
@@ -1629,8 +1853,9 @@ export default function App() {
                   <StatCard label="Regeln" value={String(data.suggestionRules.length)} hint="Kontovorschläge" />
                 </div>
                 <p className="helper-copy">
-                  Diese Webfläche ersetzt lokale Dateisystem-/IPC-Annahmen durch HTTP-Workflow-Persistenz. Für frische
-                  Installationen kann ein Beispieldatensatz angelegt werden, damit die Pro-Workspace-UI sofort nutzbar ist.
+                  {data.accountingTransactions.length > 0
+                    ? 'Die Pro-Workspace-UI liest kanonische Accounting-Daten aus Postgres; Entwürfe, Aktionen und Reports werden über die Accounting-API persistiert.'
+                    : 'Legacy-Workflow-Snapshots sind eine read-only Fallback-Ansicht. Mutationen bleiben deaktiviert, bis kanonische Accounting-Daten verfügbar sind.'}
                 </p>
               </SectionCard>
 
@@ -1767,10 +1992,18 @@ export default function App() {
               </SectionCard>
 
               <SectionCard eyebrow="Workspace" title="Geteilte Pro-Accounting-Oberfläche im Browser">
-                {accountingSeed ? (
+                {accountingSeed && data.accountingTransactions.length > 0 ? (
                   <div className="workspace-frame">
-                    <ProAccountingWorkspace seed={accountingSeed} onPersistEntry={handlePersistWorkflowEntry} />
+                    <ProAccountingWorkspace
+                      seed={accountingSeed}
+                      dataAdapter={accountingDataAdapter}
+                    />
                   </div>
+                ) : data.workflowEntries.length > 0 ? (
+                  <EmptyState
+                    title="Legacy-Snapshots sind schreibgeschützt"
+                    body="Die alte Workflow-Ansicht bleibt als Fallback lesbar. Mutationen sind deaktiviert, bis kanonische Accounting-Daten geladen werden."
+                  />
                 ) : (
                   <EmptyState title="Workspace noch leer" body="Sobald Workflow-Snapshots vorhanden sind, wird die Pro-Workspace-UI hier direkt aus dem Shared Package gemountet." />
                 )}

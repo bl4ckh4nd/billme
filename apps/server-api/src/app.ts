@@ -68,6 +68,7 @@ import { SessionTokenService, checkSessionSecret, type AuthSession, type AuthSes
 import { createAuthStore, type AuthStore } from './authStore.js';
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
 import { registerServerApiOrpc } from './orpc.js';
+import { registerProAccountingRoutes } from './proAccountingRoutes.js';
 
 type Pool = ReturnType<typeof createPostgresPool>;
 type AppSettings = z.infer<typeof appSettingsSchema>;
@@ -247,7 +248,7 @@ const mapAccountRecord = (record: Awaited<ReturnType<typeof listServerBankAccoun
     color: record.color,
   });
 
-const requireSession = async (
+export const requireSession = async (
   app: FastifyInstance,
   product: 'lite' | 'pro',
   authHeader: string | undefined,
@@ -266,7 +267,7 @@ const requireSession = async (
   return session;
 };
 
-const requirePool = (app: FastifyInstance): Pool => {
+export const requirePool = (app: FastifyInstance): Pool => {
   if (!app.serverPool) {
     throw new ApiError(503, 'DATABASE_URL is required for server billing routes');
   }
@@ -1306,6 +1307,7 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
   registerBillingRoutes(app, 'lite', '/api/v1/lite');
   registerBillingRoutes(app, 'pro', '/api/v1/pro');
   registerProRoutes(app);
+  registerProAccountingRoutes(app);
 
   typedRoute(app, {
     method: 'POST',

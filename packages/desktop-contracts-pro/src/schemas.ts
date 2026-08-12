@@ -750,6 +750,7 @@ export const datevExportResultSchema = z.object({
   manifestJson: z.string().optional(),
   status: z.string().optional(),
   validationJson: z.string().optional(),
+  contentSha256: z.string().length(64).optional(),
 });
 
 export const recurringProfileSchema = z.object({

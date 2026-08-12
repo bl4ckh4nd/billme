@@ -3,6 +3,7 @@ import type {
   AccountSuggestionRule,
   BookingDraftEntity,
   DatevExportResult,
+  DatevExportContent,
   JournalEntryEntity,
   LedgerAccount,
   LedgerAccountStats,
@@ -465,7 +466,7 @@ export interface ProAccountingRepository {
   dispatchDraftAction(scope: TenantScope, args: ProDraftActionRequest): Promise<BookingDraftEntity>;
   validateTaxCompliance(
     scope: TenantScope,
-    args: { draftId?: string; transactionId?: string },
+    args: { draftId?: string; transactionId?: string; mutation?: AccountingMutationContext },
   ): Promise<{ ok: boolean; issues: ValidationIssue[] }>;
   postDraft(scope: TenantScope, draftId: string, options?: PostDraftOptions): Promise<{
     entry: JournalEntryEntity;
@@ -478,6 +479,7 @@ export interface ProAccountingRepository {
   getGuvReport(scope: TenantScope, args?: ReportRangeOptions): Promise<GuvReport>;
   getBilanzReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<BilanzReport>;
   listDatevExports(scope: TenantScope): Promise<DatevExportResult[]>;
+  getDatevExportContent?(scope: TenantScope, exportId: string): Promise<DatevExportContent>;
   insertDatevExport(
     scope: TenantScope,
     args: {
@@ -496,6 +498,10 @@ export interface ProAccountingRepository {
       manifestJson?: string;
       status?: string;
       validationJson?: string;
+      content?: Uint8Array;
+      contentSha256?: string;
+      sourceSnapshot?: { from?: string; to?: string; recordCount: number };
+      mutation?: AccountingMutationContext;
     },
   ): Promise<DatevExportResult>;
   getAccountingHealth(scope: TenantScope): Promise<AccountingHealthSnapshot>;

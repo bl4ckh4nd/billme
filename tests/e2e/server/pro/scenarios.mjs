@@ -195,9 +195,10 @@ export const runProAccountingScenario = async (page) => {
   const mappingSection = sectionByTitle(page, 'Tax Cases auf Konten abbilden');
   const rulesSection = sectionByTitle(page, 'Rule-based Assignment im Browser pflegen');
   const accountingSection = sectionByTitle(page, 'Ledger, Regeln und Workflow-Snapshots');
+  const workspaceSection = sectionByTitle(page, 'Geteilte Pro-Accounting-Oberfläche im Browser');
 
   await expect(accountingSection).toBeVisible();
-  await expect(accountingSection.locator('.workspace-frame')).toBeVisible();
+  await expect(workspaceSection.locator('.workspace-frame')).toBeVisible();
   await expect(mappingSection.getByRole('cell', { name: 'DE_STD_19' }).first()).toBeVisible();
   await expect(rulesSection.getByText('Hosting').first()).toBeVisible();
 

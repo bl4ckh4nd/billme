@@ -140,7 +140,7 @@ export interface OpenItemPaymentInput {
   allocations: Array<{ openItemId: string; amount: number }>;
   mutation?: AccountingMutationContext;
   /** Stable retry key for one allocation event (not the payment id). */
-  allocationEventId?: string;
+  allocationEventId: string;
 }
 
 export interface OpenItemAllocationEntity {

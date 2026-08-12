@@ -53,9 +53,47 @@ jobs:
       - name: Pro tests
         run: pnpm -C apps/pro-desktop test --run
 
+  server-accounting-gate:
+    name: Validate (Server data + Pro Postgres E2E)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Server data typecheck
+        run: pnpm -C packages/server-data typecheck
+
+      - name: Server data and migration tests
+        run: pnpm -C packages/server-data test
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Full server-mode Pro E2E (Postgres migrations + accounting)
+        run: pnpm test:e2e:server:full:pro
+
   build:
     name: Build ${{ matrix.app.name }} Release (${{ matrix.os }})
-    needs: [validate]
+    needs: [validate, server-accounting-gate]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -116,7 +154,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, server-accounting-gate]
     runs-on: ubuntu-latest
     steps:
       - name: Download release artifacts

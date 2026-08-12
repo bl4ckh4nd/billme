@@ -58,11 +58,7 @@ const mapTransactions = (
 ): ProUiTransaction[] => {
   return rows.map((row) => {
     const workflowStatus: ProUiTransaction['workflowStatus'] =
-      row.linkedInvoiceId
-        ? 'posted'
-        : row.status === 'booked'
-          ? 'suggested'
-          : 'imported';
+      row.status === 'booked' || row.linkedInvoiceId ? 'posted' : 'imported';
     const missingReceipt = !row.linkedInvoiceId;
 
     return {
@@ -92,11 +88,12 @@ const mapEntityDraftToUiDraft = (
   draft: NonNullable<IpcResult<'pro:getDraftByTransactionId'>>,
   accountNames: ReadonlyMap<string, string> = new Map(),
   chartFramework: 'SKR03' | 'SKR04' = 'SKR03',
+  workflowStatus: ProUiBookingDraft['workflowStatus'] = draft.workflowStatus,
 ): ProUiBookingDraft => {
   return {
     id: draft.id,
     transactionId: draft.transactionId,
-    workflowStatus: draft.workflowStatus,
+    workflowStatus,
     documentDate: draft.documentDate,
     postingDate: draft.postingDate,
     serviceDate: draft.documentDate,
@@ -226,10 +223,20 @@ export const ProAccountingPage: React.FC = () => {
   const seed = React.useMemo<ProAccountingSeed>(() => {
     const draftMap = new Map<string, ProUiBookingDraft>();
     const draftRows = draftQuery.data ?? [];
+    const transactionRows = txQuery.data ?? [];
+    const bankStatusByTransactionId = new Map(transactionRows.map((tx) => [tx.id, tx.status]));
     const activeLedgerAccounts = ledgerAccounts.filter((row) => !row.chart || row.chart === activeChart);
     const accountNames = mapLedgerAccountNames(activeLedgerAccounts);
     for (const draft of draftRows) {
-      draftMap.set(draft.transactionId, mapEntityDraftToUiDraft(draft, accountNames, activeChart));
+      draftMap.set(
+        draft.transactionId,
+        mapEntityDraftToUiDraft(
+          draft,
+          accountNames,
+          activeChart,
+          bankStatusByTransactionId.get(draft.transactionId) === 'booked' ? 'posted' : draft.workflowStatus,
+        ),
+      );
     }
 
     const baseTransactions = mapTransactions(txQuery.data ?? []);

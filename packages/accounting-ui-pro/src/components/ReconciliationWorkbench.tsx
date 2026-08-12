@@ -131,6 +131,7 @@ export default function ReconciliationWorkbench({
   }, [storeDraft?.id, storeDraft?.activity.length]);
 
   const draft = localDraft ?? storeDraft;
+  const draftReadOnly = !!draft && ['posted', 'reversed'].includes(draft.workflowStatus);
   const allowed = draft ? getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues) : [];
   const primary = getPrimaryAction(allowed);
   const bankAccountNumber = draft
@@ -249,6 +250,10 @@ export default function ReconciliationWorkbench({
 
   const saveInlineSplit = async () => {
     if (!draft) return;
+    if (draftReadOnly) {
+      setMutationError('POSTED_DRAFT_IMMUTABLE: Storno oder Korrektur erforderlich.');
+      return;
+    }
     setMutationBusy(true);
     setMutationError(null);
     try {
@@ -346,7 +351,7 @@ export default function ReconciliationWorkbench({
                     accounts={accountOptions}
                     valueAccountId={bankAccountNumber ? draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountId ?? '' : ''}
                     valueAccountName={bankAccountNumber ? draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountName ?? '' : ''}
-                    disabled={!bankAccountNumber}
+                    disabled={draftReadOnly || !bankAccountNumber}
                     placeholder="Gegenkonto wählen..."
                     onSelect={(account) => {
                       if (!bankAccountNumber) return;
@@ -403,9 +408,10 @@ export default function ReconciliationWorkbench({
                       >
                         Im Editor öffnen
                       </button>
-                      <button
-                        className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1"
-                        onClick={addSplitLine}
+                        <button
+                          className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1"
+                          onClick={addSplitLine}
+                          disabled={draftReadOnly}
                       >
                         <GitBranch size={14} />
                         Split-Zeile hinzufügen
@@ -438,7 +444,7 @@ export default function ReconciliationWorkbench({
                   <div className="text-sm font-bold text-gray-900">Entwurf / Split-Bearbeitung inline</div>
                     <button
                     onClick={saveInlineSplit}
-                    disabled={mutationBusy}
+                    disabled={draftReadOnly || mutationBusy}
                     className="px-3 py-1.5 rounded-full bg-black text-white text-xs font-bold hover:bg-gray-900"
                   >
                     Split speichern
@@ -455,6 +461,7 @@ export default function ReconciliationWorkbench({
                         onChange={(e) =>
                           updateLine(line.id, (cur) => ({ ...cur, type: e.target.value as 'Soll' | 'Haben' }))
                         }
+                        disabled={draftReadOnly}
                         className="col-span-2 border border-gray-200 rounded-xl px-2 py-2 text-sm"
                         aria-label="Soll/Haben"
                       >
@@ -466,7 +473,7 @@ export default function ReconciliationWorkbench({
                           accounts={accountOptions}
                           valueAccountId={line.accountId}
                           valueAccountName={line.accountName}
-                          disabled={!bankAccountNumber}
+                          disabled={draftReadOnly || !bankAccountNumber}
                           onSelect={(account) =>
                             updateLine(line.id, (cur) => ({
                               ...cur,
@@ -488,6 +495,7 @@ export default function ReconciliationWorkbench({
                         min="0"
                         value={line.amount}
                         onChange={(e) => updateLine(line.id, (cur) => ({ ...cur, amount: e.target.value }))}
+                        disabled={draftReadOnly}
                         className="col-span-3 border border-gray-200 rounded-xl px-2 py-2 text-sm text-right"
                         aria-label="Betrag"
                       />
@@ -495,7 +503,7 @@ export default function ReconciliationWorkbench({
                         onClick={() => removeLine(line.id)}
                         className="col-span-1 text-xs font-bold text-gray-500 hover:text-red-600"
                         aria-label="Zeile entfernen"
-                        disabled={draft.lines.length <= 2}
+                        disabled={draftReadOnly || draft.lines.length <= 2}
                       >
                         ×
                       </button>

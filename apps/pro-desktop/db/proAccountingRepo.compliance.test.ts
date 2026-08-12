@@ -15,6 +15,7 @@ import {
   saveDraft,
   getVatSummary,
   buildDatevRows,
+  dispatchDraftAction,
 } from './proAccountingRepo';
 import { ensureTaxCaseSeedData } from './taxCasesRepo';
 import { createProTenantScope } from '../tenantScope';
@@ -191,6 +192,35 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     expect(() =>
       db.prepare('DELETE FROM datev_exports WHERE id = ?').run(datev.id),
     ).toThrow(/immutable/i);
+  });
+
+  it('rejects edits to a posted draft but accepts an exact replay', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const draft = validDraft(db, 'tx-posted-draft-1', '2026-03-01');
+
+    postDraft(db, draft.id, { postingDate: '2026-03-01' }, scope);
+    const posted = getDraftByTransactionId(db, 'tx-posted-draft-1', scope);
+    expect(posted?.workflowStatus).toBe('posted');
+
+    expect(saveDraft(db, { ...posted!, updatedAt: 'different-replay-timestamp' }, scope)).toEqual(posted);
+    expect(() => saveDraft(db, { ...posted!, bookingText: 'Manipulierte Buchung' }, scope))
+      .toThrow('POSTED_DRAFT_IMMUTABLE');
+
+    expect(dispatchDraftAction(db, { transactionId: 'tx-posted-draft-1', action: 'reverse' }, scope).workflowStatus)
+      .toBe('reversed');
+  });
+
+  it('keeps OPOS-booked bank transactions read-only even without a booking journal source', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    seedBankTransaction(db, 'tx-opos-booked-1', '2026-03-01');
+    db.prepare("UPDATE bank_transactions SET status = 'booked' WHERE id = ?").run('tx-opos-booked-1');
+
+    const projected = getDraftByTransactionId(db, 'tx-opos-booked-1', scope);
+    expect(projected?.workflowStatus).toBe('posted');
+    expect(() => saveDraft(db, { ...projected!, bookingText: 'Payment-Manipulation' }, scope))
+      .toThrow('POSTED_DRAFT_IMMUTABLE');
   });
 
   it('filters journal entries by account before pagination', () => {

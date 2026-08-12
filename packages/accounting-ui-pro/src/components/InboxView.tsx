@@ -212,6 +212,10 @@ export default function InboxView({
   };
 
   const saveInboxDraft = async (nextDraft: BookingDraft) => {
+    if (['posted', 'reversed'].includes(nextDraft.workflowStatus)) {
+      setBatchMessage('POSTED_DRAFT_IMMUTABLE: Storno oder Korrektur erforderlich.');
+      return;
+    }
     try {
       await saveDraft(nextDraft, role);
       onRefresh();

@@ -101,6 +101,15 @@ export interface BookingDraftEntity {
   updatedAt: string;
 }
 
+export class PostedDraftImmutableError extends Error {
+  readonly code = 'POSTED_DRAFT_IMMUTABLE';
+
+  constructor() {
+    super('POSTED_DRAFT_IMMUTABLE: Storno oder Korrektur erforderlich.');
+    this.name = 'PostedDraftImmutableError';
+  }
+}
+
 export interface JournalLineEntity {
   id: string;
   accountNumber: string;
@@ -378,6 +387,81 @@ const parseDraftRow = (
     validationIssues: draft.validationIssues ?? [],
     updatedAt: row.updated_at,
   };
+};
+
+const canonicalDraftSnapshot = (draft: BookingDraftEntity, tenantId: string): string => JSON.stringify({
+  id: draft.id,
+  tenantId,
+  transactionId: draft.transactionId,
+  workflowStatus: draft.workflowStatus,
+  postingDate: draft.postingDate ?? null,
+  documentDate: draft.documentDate ?? null,
+  bookingText: draft.bookingText,
+  reference: draft.reference ?? null,
+  period: draft.period,
+  fiscalYear: draft.fiscalYear,
+  lines: (draft.lines ?? []).map((line) => ({
+    id: line.id,
+    accountNumber: line.accountNumber,
+    debitAmount: round2(Number(line.debitAmount ?? 0)),
+    creditAmount: round2(Number(line.creditAmount ?? 0)),
+    taxCode: line.taxCode ?? null,
+    taxCaseKey: line.taxCaseKey ?? null,
+    taxRate: line.taxRate ?? null,
+    netAmount: line.netAmount ?? null,
+    taxAmount: line.taxAmount ?? null,
+    grossAmount: line.grossAmount ?? null,
+    countryCode: line.countryCode ?? null,
+    counterpartyVatId: line.counterpartyVatId ?? null,
+    evidenceType: line.evidenceType ?? null,
+    evidenceReference: line.evidenceReference ?? null,
+    costCenter: line.costCenter ?? null,
+    memo: line.memo ?? null,
+  })),
+  validationIssues: (draft.validationIssues ?? [])
+    .map((issue) => ({
+      code: issue.code,
+      severity: issue.severity,
+      message: issue.message,
+      fieldPath: issue.fieldPath ?? null,
+      blocking: issue.blocking,
+      source: issue.source,
+    }))
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+});
+
+const rejectPostedDraftMutationUnlessReplay = (
+  db: Database.Database,
+  draft: BookingDraftEntity,
+  tenantId: string,
+): BookingDraftEntity | undefined => {
+  const postedJournal = createDrizzle(db).select({ id: schema.journalEntries.id })
+    .from(schema.journalEntries)
+    .where(and(
+      eq(schema.journalEntries.tenantId, tenantId),
+      eq(schema.journalEntries.sourceDraftId, draft.id),
+      eq(schema.journalEntries.status, 'posted'),
+    ))
+    .get();
+  const bankTransaction = createDrizzle(db).select({ status: schema.bankTransactions.status })
+    .from(schema.bankTransactions)
+    .where(and(
+      eq(schema.bankTransactions.tenantId, tenantId),
+      eq(schema.bankTransactions.id, draft.transactionId),
+    ))
+    .get() as { status: string } | undefined;
+  if (!postedJournal && bankTransaction?.status !== 'booked') return undefined;
+  if (!postedJournal) throw new PostedDraftImmutableError();
+
+  const row = createDrizzle(db).select({ draft_json: schema.bookingDrafts.draftJson, updated_at: schema.bookingDrafts.updatedAt })
+    .from(schema.bookingDrafts)
+    .where(and(eq(schema.bookingDrafts.tenantId, tenantId), eq(schema.bookingDrafts.id, draft.id)))
+    .get() as { draft_json: string; updated_at: string } | undefined;
+  const persisted = row ? parseDraftRow(row, tenantId) : undefined;
+  if (!persisted || canonicalDraftSnapshot(persisted, tenantId) !== canonicalDraftSnapshot(draft, tenantId)) {
+    throw new PostedDraftImmutableError();
+  }
+  return persisted;
 };
 
 const getNextEntryNumber = (db: Database.Database, tenantId: string): number => {
@@ -833,16 +917,23 @@ export const getDraftByTransactionId = (
   const suggestion = buildSuggestionsByTransaction(db, [tx], scope).get(tx.id);
   const bankLedgerAccount = resolveBankLedgerAccountForTransaction(db, tx);
   const draft = defaultDraftFromBankTx(tx, suggestion?.accountNumber, bankLedgerAccount);
-  return saveDraft(db, draft, scope);
+  // A booked bank movement can have been posted by OPOS directly (payment
+  // journal, no booking_draft/source_draft_id).  Keep that read-only
+  // projection available to the UI; saveDraft itself rejects mutations.
+  return tx.status === 'booked' ? draft : saveDraft(db, draft, scope);
 };
 
 export const saveDraft = (
   db: Database.Database,
   draft: BookingDraftEntity,
   scope: TenantScope,
-  options: { trustedSourceType?: string; inTransaction?: boolean } = {},
+  options: { trustedSourceType?: string; inTransaction?: boolean; allowPostedTransition?: boolean } = {},
 ): BookingDraftEntity => {
   const tenantId = getTenantId(scope);
+  const replay = options.allowPostedTransition
+    ? undefined
+    : rejectPostedDraftMutationUnlessReplay(db, draft, tenantId);
+  if (replay) return replay;
   const now = new Date().toISOString();
   const chart = getActiveChart(db, tenantId);
   const normalized: BookingDraftEntity = {
@@ -973,7 +1064,9 @@ export const dispatchDraftAction = (
       break;
   }
 
-  return saveDraft(db, next, scope);
+  return saveDraft(db, next, scope, {
+    allowPostedTransition: args.action === 'reverse',
+  });
 };
 
 export const validateTaxCompliance = (

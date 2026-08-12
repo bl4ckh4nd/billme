@@ -242,7 +242,7 @@ describe('ProAccountingPage integration', () => {
         id: 'draft-1',
         tenantId: 'default',
         transactionId: 'tx-1',
-        workflowStatus: 'suggested',
+        workflowStatus: 'posted',
         postingDate: '2026-01-10',
         documentDate: '2026-01-10',
         bookingText: 'Telefonkosten',
@@ -271,7 +271,7 @@ describe('ProAccountingPage integration', () => {
       expect(workspaceState.lastProps?.seed?.transactions?.length).toBe(2);
     });
 
-    expect(workspaceState.lastProps.seed.transactions[0].workflowStatus).toBe('suggested');
+    expect(workspaceState.lastProps.seed.transactions[0].workflowStatus).toBe('posted');
     expect(workspaceState.lastProps.seed.transactions[1].workflowStatus).toBe('posted');
     expect(workspaceState.lastProps.seed.accounts[0]).toEqual(
       expect.objectContaining({ id: '8400', type: 'Revenue' }),
@@ -280,6 +280,7 @@ describe('ProAccountingPage integration', () => {
       expect.objectContaining({ id: '1200', keywords: ['Bank'] }),
     );
     expect(workspaceState.lastProps.seed.drafts).toHaveLength(1);
+    expect(workspaceState.lastProps.seed.drafts[0].workflowStatus).toBe('posted');
 
     await userEvent.click(screen.getByRole('button', { name: 'persist-entry' }));
     await waitFor(() => {

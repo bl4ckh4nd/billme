@@ -427,9 +427,11 @@ export const ProAccountingPage: React.FC = () => {
       async getReportDrilldownEntries(selection) {
         if (!selection.accountNumbers.length) return [];
         const filters = activeReportFilters;
-        const range = selection.reportType === 'bilanz'
-          ? { to: filters?.asOfDate }
-          : filters ? reportPeriodRange(filters) : {};
+        const range = selection.from || selection.to
+          ? { from: selection.from, to: selection.to }
+          : selection.reportType === 'bilanz'
+            ? { to: filters?.asOfDate }
+            : filters ? reportPeriodRange(filters) : {};
         const entries = await ipc.pro.listJournalEntries({
           ...range,
           accountNumbers: selection.accountNumbers,

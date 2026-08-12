@@ -51,10 +51,12 @@ function buildDefaultFilters(): ReportFilterState {
 interface ReportsViewProps {
   dataAdapter?: ProAccountingDataAdapter;
   onOpenTransaction?: (transactionId: string) => void;
+  onOpenInvoice?: (invoiceId: string) => void;
   onOpenReceipt?: (transactionId: string) => void;
+  onOpenJournalEntry?: (journalEntryId: string) => void;
 }
 
-export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenReceipt }: ReportsViewProps) {
+export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenInvoice, onOpenReceipt, onOpenJournalEntry }: ReportsViewProps) {
   const [activeTab, setActiveTab] = useState<'susa' | 'guv' | 'bilanz'>('susa');
   const [filters, setFilters] = useState<ReportFilterState>(() => buildDefaultFilters());
   const [susaReport, setSusaReport] = useState<SusaReport | null>(null);
@@ -136,6 +138,8 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenRece
       targetId: row.accountNumber,
       targetLabel: `${row.accountNumber} · ${row.accountName}`,
       accountNumbers: [row.accountNumber],
+      from: filters.periodFrom ? `${filters.periodFrom}-01` : undefined,
+      to: filters.periodTo ? `${filters.periodTo}-31` : filters.asOfDate,
     });
   };
 
@@ -145,6 +149,8 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenRece
       targetId: line.id,
       targetLabel: `${line.code} · ${line.label}`,
       accountNumbers: line.accountRefs ?? [],
+      from: filters.periodFrom ? `${filters.periodFrom}-01` : undefined,
+      to: filters.periodTo ? `${filters.periodTo}-31` : filters.asOfDate,
     });
   };
 
@@ -154,6 +160,7 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenRece
       targetId: line.id,
       targetLabel: `${line.code} · ${line.label}`,
       accountNumbers: BILANZ_ACCOUNT_MAP[line.id] ?? [line.code],
+      to: filters.asOfDate,
     });
   };
 
@@ -229,8 +236,10 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenRece
                   entries={drilldownEntries}
                   loading={drilldownLoading}
                   onClose={() => setDrilldownSelection(null)}
-                  onOpenJournalEntry={onOpenTransaction}
+                  onOpenTransaction={onOpenTransaction}
+                  onOpenInvoice={onOpenInvoice}
                   onOpenReceipt={onOpenReceipt}
+                  onOpenJournalEntry={onOpenJournalEntry}
                 />
               ) : (
                 <div className="hidden xl:flex h-full items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-white/70 text-sm text-gray-400 px-6 text-center">

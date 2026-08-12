@@ -59,11 +59,16 @@ export interface GuvReport {
     result: number;
   };
   quality: {
-    unmappedAccounts: number;
+    unmappedAccounts: ReportUnmappedAccount[];
     warnings: number;
     generatedAt: string;
     source: 'mock' | 'live';
   };
+}
+
+export interface ReportUnmappedAccount {
+  accountNumber: string;
+  amount: number;
 }
 
 export interface BalanceSheetPreviewLine {
@@ -97,6 +102,15 @@ export interface ReportDrilldownSelection {
   targetId: string;
   targetLabel: string;
   accountNumbers: string[];
+  from?: string;
+  to?: string;
+}
+
+export type ReportDrilldownSourceType = 'bank_transaction' | 'invoice' | 'receipt' | 'payment' | 'journal_entry';
+
+export interface ReportDrilldownSource {
+  sourceType: ReportDrilldownSourceType;
+  sourceId: string;
 }
 
 export interface ReportDrilldownEntry {
@@ -104,6 +118,9 @@ export interface ReportDrilldownEntry {
   date: string;
   bookingText: string;
   reference?: string;
+  journalEntryId: string;
+  sourceType: ReportDrilldownSourceType;
+  sourceId: string;
   transactionId?: string;
   accountNumber: string;
   debit: number;

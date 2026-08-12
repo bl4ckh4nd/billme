@@ -10,8 +10,10 @@ interface ReportDrilldownPanelProps {
   entries: ReportDrilldownEntry[];
   loading?: boolean;
   onClose: () => void;
-  onOpenJournalEntry?: (transactionId: string) => void;
-  onOpenReceipt?: (transactionId: string) => void;
+  onOpenTransaction?: (transactionId: string) => void;
+  onOpenInvoice?: (invoiceId: string) => void;
+  onOpenReceipt?: (receiptId: string) => void;
+  onOpenJournalEntry?: (journalEntryId: string) => void;
 }
 
 export default function ReportDrilldownPanel({
@@ -19,8 +21,10 @@ export default function ReportDrilldownPanel({
   entries,
   loading,
   onClose,
-  onOpenJournalEntry,
+  onOpenTransaction,
+  onOpenInvoice,
   onOpenReceipt,
+  onOpenJournalEntry,
 }: ReportDrilldownPanelProps) {
   if (!selection) return null;
 
@@ -69,20 +73,47 @@ export default function ReportDrilldownPanel({
                   <div><span className="text-gray-400">Soll</span><div className="font-bold text-gray-700">{euro(entry.debit)}</div></div>
                   <div><span className="text-gray-400">Haben</span><div className="font-bold text-gray-700">{euro(entry.credit)}</div></div>
                 </div>
-                {entry.transactionId ? (
+                <div className="mt-2 rounded-lg bg-gray-50 px-2.5 py-2 text-[11px] text-gray-600" data-testid={`drilldown-source-${entry.id}`}>
+                  <div>Quelle: <span className="font-semibold">{entry.sourceType}</span> · {entry.sourceId}</div>
+                  <div>Journal-ID: <span className="font-mono">{entry.journalEntryId}</span></div>
+                </div>
+                {((entry.sourceType === 'bank_transaction' && onOpenTransaction) ||
+                  (entry.sourceType === 'invoice' && onOpenInvoice) ||
+                  (entry.sourceType === 'receipt' && onOpenReceipt) ||
+                  ((entry.sourceType === 'payment' || entry.sourceType === 'journal_entry') && onOpenJournalEntry)) ? (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      onClick={() => onOpenJournalEntry?.(entry.transactionId!)}
-                      className="h-8 px-2.5 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
-                    >
-                      Journal öffnen
-                    </button>
-                    <button
-                      onClick={() => onOpenReceipt?.(entry.transactionId!)}
-                      className="h-8 px-2.5 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
-                    >
-                      Beleg öffnen
-                    </button>
+                    {entry.sourceType === 'bank_transaction' && onOpenTransaction ? (
+                      <button
+                        onClick={() => onOpenTransaction(entry.sourceId)}
+                        className="h-8 px-2.5 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        Transaktion öffnen
+                      </button>
+                    ) : null}
+                    {entry.sourceType === 'invoice' && onOpenInvoice ? (
+                      <button
+                        onClick={() => onOpenInvoice(entry.sourceId)}
+                        className="h-8 px-2.5 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        Rechnung öffnen
+                      </button>
+                    ) : null}
+                    {entry.sourceType === 'receipt' && onOpenReceipt ? (
+                      <button
+                        onClick={() => onOpenReceipt(entry.sourceId)}
+                        className="h-8 px-2.5 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        Beleg öffnen
+                      </button>
+                    ) : null}
+                    {(entry.sourceType === 'payment' || entry.sourceType === 'journal_entry') && onOpenJournalEntry ? (
+                      <button
+                        onClick={() => onOpenJournalEntry(entry.journalEntryId)}
+                        className="h-8 px-2.5 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        Journal öffnen
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

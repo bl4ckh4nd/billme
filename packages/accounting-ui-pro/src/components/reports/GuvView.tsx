@@ -69,12 +69,28 @@ export default function GuvView({ report, compareMode, onSelectLine }: GuvViewPr
           },
           {
             label: 'Qualität',
-            value: `${report.quality.unmappedAccounts} ungemappt`,
+            value: `${report.quality.unmappedAccounts.length} ungemappt`,
             sublabel: `${report.quality.warnings} Hinweise`,
-            tone: report.quality.unmappedAccounts > 0 ? 'warning' : 'ok',
+            tone: report.quality.unmappedAccounts.length > 0 ? 'warning' : 'ok',
           },
         ]}
       />
+
+      {report.quality.unmappedAccounts.length > 0 ? (
+        <div
+          data-testid="guv-unmapped-accounts"
+          className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+        >
+          <div className="font-bold">Nicht zugeordnete Konten</div>
+          <ul className="mt-1 space-y-0.5 text-xs">
+            {report.quality.unmappedAccounts.map((account) => (
+              <li key={account.accountNumber}>
+                Konto {account.accountNumber}: {euro(account.amount)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
         <div className="px-4 h-12 border-b border-gray-100 flex items-center justify-between gap-3">

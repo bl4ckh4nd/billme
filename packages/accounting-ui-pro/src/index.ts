@@ -5,8 +5,11 @@ export type {
   BalanceSheetPreview,
   GuvReport,
   ReportDrilldownEntry,
+  ReportDrilldownSource,
   ReportDrilldownSelection,
   ReportFilterState,
+  ReportUnmappedAccount,
+  ReportDrilldownSourceType,
   SusaReport,
 } from './domain/reportTypes';
 export type {

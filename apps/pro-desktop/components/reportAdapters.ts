@@ -2,12 +2,11 @@ import type {
   BalanceSheetPreview,
   GuvReport,
   ReportDrilldownEntry,
+  ReportDrilldownSource,
+  ReportDrilldownSourceType,
   ReportDrilldownSelection,
   SusaReport,
 } from '@billme/accounting-ui-pro';
-import type {
-  ReportDrilldownSource,
-} from '@billme/accounting-shared';
 import type { IpcResult } from '../ipc/contract';
 
 type LedgerAccount = IpcResult<'pro:listLedgerAccounts'>[number];
@@ -70,6 +69,7 @@ export const mapGuvReport = (report: IpcResult<'pro:getGuvReport'>): GuvReport =
   const expenses = Math.abs(report.rows
     .filter((row) => row.positionKey === 'expense')
     .reduce((sum, row) => sum + row.amount, 0));
+  const unmappedAccounts = report.unmappedAccounts ?? [];
   return {
     lines: [
       ...report.rows.map((row) => ({
@@ -91,8 +91,8 @@ export const mapGuvReport = (report: IpcResult<'pro:getGuvReport'>): GuvReport =
     ],
     totals: { revenue: round2(revenue), expenses: round2(expenses), result: report.netResult },
     quality: {
-      unmappedAccounts: report.unmappedAccounts?.length ?? 0,
-      warnings: report.blocking ? report.unmappedAccounts?.length ?? 0 : 0,
+      unmappedAccounts,
+      warnings: report.blocking ? unmappedAccounts.length : 0,
       generatedAt: new Date().toISOString(),
       source: 'live',
     },

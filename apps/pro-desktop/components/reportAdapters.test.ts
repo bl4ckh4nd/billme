@@ -95,6 +95,18 @@ describe('reportAdapters', () => {
     });
   });
 
+  it('retains exact GuV unmapped account identities for UI resolution', () => {
+    const report = mapGuvReport({
+      rows: [],
+      netResult: -12.5,
+      blocking: true,
+      unmappedAccounts: [{ accountNumber: '9999', amount: -12.5 }],
+    });
+
+    expect(report.quality.unmappedAccounts).toEqual([{ accountNumber: '9999', amount: -12.5 }]);
+    expect(report.quality.warnings).toBe(1);
+  });
+
   it('maps Bilanz delta to difference and resolves account names', () => {
     const report = mapBalanceSheetPreview(
       {

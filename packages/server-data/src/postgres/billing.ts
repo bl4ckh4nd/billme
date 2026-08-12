@@ -1701,6 +1701,15 @@ export const tenantCoreRowCountTables = [
   "email_outbox",
   "email_log",
   "audit_log",
+  "accounting_policies",
+  "accounting_account_mappings",
+  "vendors",
+  "incoming_invoices",
+  "incoming_invoice_lines",
+  "open_items",
+  "open_item_payments",
+  "open_item_allocations",
+  "accounting_backfill_runs",
 ] as const;
 
 export const countTenantCoreRows = async (
@@ -1745,6 +1754,15 @@ export const countTenantCoreRows = async (
     email_outbox: schema.emailOutbox,
     email_log: schema.emailLog,
     audit_log: schema.auditLog,
+    accounting_policies: schema.accountingPolicies,
+    accounting_account_mappings: schema.accountingAccountMappings,
+    vendors: schema.vendors,
+    incoming_invoices: schema.incomingInvoices,
+    incoming_invoice_lines: schema.incomingInvoiceLines,
+    open_items: schema.openItems,
+    open_item_payments: schema.openItemPayments,
+    open_item_allocations: schema.openItemAllocations,
+    accounting_backfill_runs: schema.accountingBackfillRuns,
   };
   let total = 0;
   for (const tableName of tenantCoreRowCountTables) {

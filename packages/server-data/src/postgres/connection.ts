@@ -16,6 +16,20 @@ export const createPostgresPool = (config: string | PoolConfig): Pool => {
 export type PostgresQueryable = Pick<Pool, 'query'> | Pick<PoolClient, 'query'>;
 export type PostgresTransactionClient = PoolClient;
 
+const SERIALIZABLE_TRANSACTION_MAX_ATTEMPTS = 3;
+const SERIALIZABLE_TRANSACTION_RETRY_DELAY_MS = 5;
+
+const isRetryableSerializableTransactionError = (error: unknown): boolean => {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return false;
+  }
+
+  return error.code === '40001' || error.code === '40P01';
+};
+
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 export const withPostgresTransaction = async <T>(
   pool: Pool,
   work: (client: PostgresTransactionClient) => Promise<T>,
@@ -42,20 +56,31 @@ export const withSerializablePostgresTransaction = async <T>(
   pool: Pool,
   work: (client: PostgresTransactionClient) => Promise<T>,
 ): Promise<T> => {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
-    const result = await work(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
+  for (let attempt = 1; attempt <= SERIALIZABLE_TRANSACTION_MAX_ATTEMPTS; attempt += 1) {
+    const client = await pool.connect();
+    let retry = false;
     try {
-      await client.query('ROLLBACK');
-    } catch {
-      // ignore rollback errors and rethrow original problem
+      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // ignore rollback errors and rethrow original problem
+      }
+
+      retry =
+        attempt < SERIALIZABLE_TRANSACTION_MAX_ATTEMPTS &&
+        isRetryableSerializableTransactionError(error);
+      if (!retry) throw error;
+    } finally {
+      client.release();
     }
-    throw error;
-  } finally {
-    client.release();
+
+    if (retry) await delay(SERIALIZABLE_TRANSACTION_RETRY_DELAY_MS);
   }
+
+  throw new Error('Serializable transaction exhausted retry attempts');
 };

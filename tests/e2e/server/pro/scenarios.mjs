@@ -928,7 +928,7 @@ export const runProAccountingScenario = async (page) => {
   const bilanzReport = await requestJson(state, session, '/api/v1/pro/accounting/reports/bilanz', {
     asOfDate: '2026-03-31',
   });
-  expect(bilanzReport).toMatchObject({ asOfDate: '2026-03-31', assets: expect.any(Array), liabilities: expect.any(Array) });
+  expect(bilanzReport).toMatchObject({ snapshot: { asOfDate: '2026-03-31' }, assets: expect.any(Array), liabilities: expect.any(Array) });
   expect(Number.isFinite(bilanzReport.totals.assets)).toBe(true);
   expect(Number.isFinite(bilanzReport.totals.liabilities)).toBe(true);
   expect(Number.isFinite(bilanzReport.totals.delta)).toBe(true);

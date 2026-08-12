@@ -63,6 +63,16 @@ test('report snapshots accept distinct canonical report profiles', () => {
   assert.equal(reportSnapshotBodySchema.parse({ reportType: 'hgb-bilanz', asOfDate: '2026-12-31', reason: 'Jahresabschluss' }).reportType, 'hgb-bilanz');
 });
 
+test('EÜR uses its native report endpoint and calendar-year snapshot type', () => {
+  assert.equal(reportSnapshotQuerySchema.parse({ reportType: 'eur' }).reportType, 'eur');
+  assert.deepEqual(reportSnapshotBodySchema.parse({ reportType: 'eur', from: '2025-01-01', to: '2025-12-31', reason: 'EÜR 2025' }), {
+    reportType: 'eur',
+    from: '2025-01-01',
+    to: '2025-12-31',
+    reason: 'EÜR 2025',
+  });
+});
+
 test('mapping overrides require an explicit reason and never accept arbitrary statement types', () => {
   assert.throws(() => mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz' }));
   assert.equal(mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }).balanceSide, undefined);

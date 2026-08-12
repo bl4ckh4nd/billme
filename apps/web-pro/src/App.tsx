@@ -292,6 +292,25 @@ const mapLedgerAccountsToWorkspace = (ledgerAccounts: AppData['ledgerAccounts'])
   }));
 };
 
+const reportQuality = (health: { unmappedAccounts: string[]; warnings: string[]; blocking: boolean }): GuvReport['quality'] => ({
+  unmappedAccounts: health.unmappedAccounts.map((accountNumber) => ({ accountNumber, amount: 0 })),
+  warnings: health.warnings.length,
+  generatedAt: new Date().toISOString(),
+  source: 'live',
+  mappingStatus: health.blocking ? 'blocked' : health.warnings.length > 0 ? 'warning' : 'healthy',
+  mappingNotes: health.warnings,
+});
+
+const reportLines = (rows: Array<{ position: string; label: string; amount: number; accountNumbers: string[]; accountRefs?: string[]; kind?: string; parentPosition?: string }>) => rows.map((row) => ({
+  id: row.position,
+  code: row.position,
+  label: row.label,
+  level: row.parentPosition ? 1 : 0,
+  amountCurrent: row.amount,
+  accountRefs: row.accountRefs ?? row.accountNumbers,
+  isSubtotal: row.kind === 'heading' || row.kind === 'subtotal' || row.kind === 'result',
+}));
+
 const mapWorkflowTransactionToWorkspace = (
   row: ReturnType<ProWebClient['parseWorkflowTransaction']>,
 ): WorkspaceTransaction => {
@@ -1100,61 +1119,64 @@ export default function App() {
       async getGuvReport(filters: ReportFilterState): Promise<GuvReport> {
         const report = await client.getGuvReport(reportFilter(filters));
         return {
-          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount, accountRefs: row.accountRefs })),
+          lines: reportLines(report.rows),
           totals: {
-            revenue: report.rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + row.amount, 0),
-            expenses: report.rows.filter((row) => row.positionKey === 'expense').reduce((sum, row) => sum + Math.abs(row.amount), 0),
+            revenue: report.rows.filter((row) => row.position === 'revenue').reduce((sum, row) => sum + row.amount, 0),
+            expenses: report.rows.filter((row) => row.position !== 'revenue' && row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0),
             result: report.netResult,
           },
-          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
+          quality: reportQuality(report.mappingHealth),
         };
       },
       async getEurReport(filters: ReportFilterState): Promise<GuvReport> {
-        // Server mode exposes the canonical ledger report; keep EÜR explicit rather
-        // than silently substituting the local mock service when the adapter exists.
-        const report = await client.getGuvReport(reportFilter(filters));
+        const report = await client.getEurReport(reportFilter(filters));
+        const rows = [
+          { position: 'income', label: 'Betriebseinnahmen', amount: report.cashIncome, accountNumbers: [] as string[] },
+          { position: 'expense', label: 'Betriebsausgaben', amount: -report.cashExpenses, accountNumbers: [] as string[] },
+          { position: 'result', label: 'EÜR-Ergebnis', amount: report.cashResult, accountNumbers: [] as string[], kind: 'result' },
+        ];
         return {
-          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount, accountRefs: row.accountRefs })),
-          totals: { revenue: report.rows.filter((row) => row.amount > 0).reduce((sum, row) => sum + row.amount, 0), expenses: report.rows.filter((row) => row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0), result: report.netResult },
-          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
+          lines: reportLines(rows),
+          totals: { revenue: report.cashIncome, expenses: report.cashExpenses, result: report.cashResult },
+          quality: { ...reportQuality(report.mappingHealth), mappingNotes: [...report.mappingHealth.warnings, ...report.unmatchedCashEntries.map((entry) => `Nicht klassifiziert: ${entry}`)] },
         };
       },
       async getManagementGuvReport(filters: ReportFilterState): Promise<GuvReport> {
         const report = await client.getManagementGuvReport(reportFilter(filters));
         return {
-          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount, accountRefs: row.accountRefs })),
-          totals: { revenue: report.rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + row.amount, 0), expenses: report.rows.filter((row) => row.positionKey !== 'revenue' && row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0), result: report.netResult },
-          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
+          lines: reportLines(report.rows),
+          totals: { revenue: report.rows.filter((row) => row.position === 'revenue').reduce((sum, row) => sum + row.amount, 0), expenses: report.rows.filter((row) => row.position !== 'revenue' && row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0), result: report.netResult },
+          quality: reportQuality(report.mappingHealth),
         };
       },
       async getHgbGuvReport(filters: ReportFilterState): Promise<GuvReport> {
         const report = await client.getHgbGuvReport(reportFilter(filters));
         return {
-          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount, accountRefs: row.accountRefs })),
-          totals: { revenue: report.rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + row.amount, 0), expenses: report.rows.filter((row) => row.positionKey !== 'revenue' && row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0), result: report.netResult },
-          quality: { unmappedAccounts: report.unmappedAccounts ?? [], warnings: report.blocking ? 1 : 0, generatedAt: new Date().toISOString(), source: 'live' },
+          lines: reportLines(report.rows),
+          totals: { revenue: report.rows.filter((row) => row.position === 'revenue').reduce((sum, row) => sum + row.amount, 0), expenses: report.rows.filter((row) => row.position !== 'revenue' && row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0), result: report.netResult },
+          quality: reportQuality(report.mappingHealth),
         };
       },
       async getBwaReport(filters: ReportFilterState): Promise<GuvReport> {
         const report = await client.getBwa01Report(reportFilter(filters));
         return {
-          lines: report.rows.map((row) => ({ id: row.position, code: row.position, label: row.label, level: 0, amountCurrent: row.amount, accountRefs: row.accountNumbers })),
+          lines: reportLines(report.rows),
           totals: {
             revenue: report.totals.revenue,
             expenses: report.totals.expenses,
             result: report.totals.operatingResult,
           },
-          quality: { unmappedAccounts: report.unmappedAccounts, warnings: report.mappingHealth.warnings.length, generatedAt: new Date().toISOString(), source: 'live' },
+          quality: reportQuality(report.mappingHealth),
         };
       },
       async getBalanceSheetPreview(filters: ReportFilterState): Promise<BalanceSheetPreview> {
         const report = await client.getBilanzReport({ asOfDate: filters.asOfDate, chart: filters.chart });
-        const unmappedNotes = (report.unmappedAccounts ?? []).map((row) => `Konto ${row.accountNumber} ist nicht zugeordnet (${row.amount.toFixed(2)} €).`);
+        const unmappedNotes = report.mappingHealth.unmappedAccounts.map((accountNumber) => `Konto ${accountNumber} ist nicht zugeordnet.`);
         return {
-          aktiva: report.assets.map((row) => ({ id: row.accountNumber, code: row.accountNumber, label: row.accountNumber, amount: row.amount, level: 0, side: 'aktiva' })),
-          passiva: report.liabilities.map((row) => ({ id: row.accountNumber, code: row.accountNumber, label: row.accountNumber, amount: row.amount, level: 0, side: 'passiva' })),
+          aktiva: report.assets.map((row) => ({ id: row.position, code: row.position, label: row.label, amount: row.amount, level: row.parentPosition ? 1 : 0, side: 'aktiva' as const, accountRefs: row.accountRefs ?? row.accountNumbers, isSubtotal: row.kind === 'heading' || row.kind === 'subtotal' || row.kind === 'result' })),
+          passiva: report.liabilities.map((row) => ({ id: row.position, code: row.position, label: row.label, amount: row.amount, level: row.parentPosition ? 1 : 0, side: 'passiva' as const, accountRefs: row.accountRefs ?? row.accountNumbers, isSubtotal: row.kind === 'heading' || row.kind === 'subtotal' || row.kind === 'result' })),
           totals: { aktiva: report.totals.assets, passiva: report.totals.liabilities, difference: report.totals.delta },
-          quality: { status: Math.abs(report.totals.delta) < 0.01 && unmappedNotes.length === 0 ? 'ok' : 'warning', notes: unmappedNotes, generatedAt: new Date().toISOString(), source: 'live' },
+          quality: { status: Math.abs(report.totals.delta) < 0.01 && unmappedNotes.length === 0 && !report.mappingHealth.blocking ? 'ok' : 'warning', notes: [...unmappedNotes, ...report.mappingHealth.warnings], generatedAt: new Date().toISOString(), source: 'live' },
         };
       },
       async getReportDrilldownEntries(selection: ReportDrilldownSelection): Promise<ReportDrilldownEntry[]> {

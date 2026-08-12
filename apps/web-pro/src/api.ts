@@ -88,23 +88,62 @@ const susaReportSchema = z.object({
   unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
   blocking: z.boolean().optional(),
 });
-const guvReportSchema = z.object({
+const reportSnapshotSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
-  chart: z.enum(['SKR03', 'SKR04']).optional(),
-  rows: z.array(z.object({ positionKey: z.string(), positionLabel: z.string(), amount: z.number(), accountRefs: z.array(z.string()).optional() })),
+  asOfDate: z.string().optional(),
+  fiscalYear: z.number(),
+  fiscalYearStart: z.string(),
+  fiscalYearRange: z.object({ fiscalYear: z.number(), start: z.string(), end: z.string(), label: z.string() }).optional(),
+  businessSize: z.enum(['micro', 'small']),
+  ledgerEntryCount: z.number(),
+  ledgerAccountCount: z.number(),
+  cashEntryCount: z.number(),
+});
+const mappingHealthSchema = z.object({
+  mappedAccounts: z.number(),
+  inferredAccounts: z.number(),
+  unmappedAccounts: z.array(z.string()),
+  warnings: z.array(z.string()),
+  blocking: z.boolean(),
+});
+const reportingLineSchema = z.object({
+  position: z.string(),
+  label: z.string(),
+  amount: z.number(),
+  accountNumbers: z.array(z.string()),
+  accountRefs: z.array(z.string()).optional(),
+  kind: z.enum(['heading', 'line', 'subtotal', 'result']).optional(),
+  parentPosition: z.string().optional(),
+  formula: z.string().optional(),
+});
+const guvReportSchema = z.object({
+  kind: z.enum(['management-guv', 'hgb-guv']).optional(),
+  rows: z.array(reportingLineSchema),
   netResult: z.number(),
-  unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
-  blocking: z.boolean().optional(),
+  method: z.string().optional(),
+  snapshot: reportSnapshotSchema,
+  mappingHealth: mappingHealthSchema,
+});
+const eurReportSchema = z.object({
+  kind: z.literal('eur-ledger-reconciliation'),
+  cashIncome: z.number(),
+  cashExpenses: z.number(),
+  cashResult: z.number(),
+  ledgerIncome: z.number(),
+  ledgerExpenses: z.number(),
+  ledgerResult: z.number(),
+  differences: z.object({ income: z.number(), expenses: z.number(), result: z.number() }),
+  unmatchedCashEntries: z.array(z.string()),
+  snapshot: reportSnapshotSchema,
+  mappingHealth: mappingHealthSchema,
 });
 const bwa01ReportSchema = z.object({
   kind: z.literal('bwa01'),
-  from: z.string().optional(),
-  to: z.string().optional(),
-  rows: z.array(z.object({ position: z.string(), label: z.string(), amount: z.number(), accountNumbers: z.array(z.string()) })),
+  rows: z.array(reportingLineSchema),
   totals: z.object({ revenue: z.number(), expenses: z.number(), operatingResult: z.number() }),
-  unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })),
-  mappingHealth: z.object({ mappedAccounts: z.number(), inferredAccounts: z.number(), unmappedAccounts: z.array(z.string()), warnings: z.array(z.string()), blocking: z.boolean() }),
+  snapshot: reportSnapshotSchema,
+  mappingHealth: mappingHealthSchema,
 });
 const assetDepreciationResultSchema = z.object({
   asset: assetSchema,
@@ -118,13 +157,12 @@ const assetDisposalResultSchema = z.object({
   journalEntryId: z.string().min(1),
 });
 const bilanzReportSchema = z.object({
-  asOfDate: z.string(),
-  chart: z.enum(['SKR03', 'SKR04']).optional(),
-  assets: z.array(z.object({ accountNumber: z.string(), amount: z.number() })),
-  liabilities: z.array(z.object({ accountNumber: z.string(), amount: z.number() })),
+  kind: z.literal('hgb-bilanz').optional(),
+  assets: z.array(reportingLineSchema),
+  liabilities: z.array(reportingLineSchema),
   totals: z.object({ assets: z.number(), liabilities: z.number(), delta: z.number() }),
-  unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
-  blocking: z.boolean().optional(),
+  snapshot: reportSnapshotSchema,
+  mappingHealth: mappingHealthSchema,
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
@@ -444,6 +482,9 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     getSusaReport(query?: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }) {
       return requestJson({ parser: susaReportSchema, query }, '/api/v1/pro/accounting/reports/susa');
     },
+    getEurReport(query?: unknown) {
+      return requestJson({ parser: eurReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/eur');
+    },
     getGuvReport(query?: unknown) {
       return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/guv');
     },
@@ -460,13 +501,13 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       const query = typeof asOfDate === 'string' ? { asOfDate } : asOfDate;
       return requestJson({ parser: bilanzReportSchema, query }, '/api/v1/pro/accounting/reports/bilanz');
     },
-    listReportSnapshots(reportType?: 'susa' | 'guv' | 'management-guv' | 'hgb-guv' | 'bilanz' | 'hgb-bilanz' | 'bwa01') {
+    listReportSnapshots(reportType?: 'susa' | 'eur' | 'guv' | 'management-guv' | 'hgb-guv' | 'bilanz' | 'hgb-bilanz' | 'bwa01') {
       return requestJson({ parser: (input) => input, query: reportType ? { reportType } : undefined }, '/api/v1/pro/accounting/reports/snapshots');
     },
     getReportSnapshot(id: string) {
       return requestJson({ parser: (input) => input }, `/api/v1/pro/accounting/reports/snapshots/${encodeURIComponent(id)}`);
     },
-    createReportSnapshot(input: { reportType: 'susa' | 'guv' | 'management-guv' | 'hgb-guv' | 'bilanz' | 'hgb-bilanz' | 'bwa01'; from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string; reason: string }) {
+    createReportSnapshot(input: { reportType: 'susa' | 'eur' | 'guv' | 'management-guv' | 'hgb-guv' | 'bilanz' | 'hgb-bilanz' | 'bwa01'; from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string; reason: string }) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/snapshots');
     },
     getAccountMappingHealth(chart?: 'SKR03' | 'SKR04') {

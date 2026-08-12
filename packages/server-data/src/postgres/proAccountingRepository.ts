@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import {
   buildDepreciationSchedule,
+  calculateReport,
   computeAssetDisposal,
   DEPRECIATION_EXPENSE_ACCOUNTS,
   resolveDepreciationMethod,
@@ -14,6 +15,7 @@ import type {
   AccountingDocumentSource, AccountingPostingPreview, AccountingSnapshot, IncomingInvoiceEntity,
   IncomingInvoiceLineEntity, OpenItemEntity, OpenItemPaymentEntity, OpenItemPaymentInput, VendorEntity,
   BookingDraftEntity, JournalEntryEntity, JournalLineEntity, LedgerBalance, ValidationIssue, AccountingMutationContext, DatevExportContent, DatevExportSourceSnapshot, DatevTaxEvidence, TaxCaseDefinition, TaxCaseKey,
+  ReportKind, ReportingCalculationProfile, ReportingMapping, ReportResult, Bwa01Report, ManagementGuvReport, HgbGuvReport, HgbBilanzReport,
 } from '@billme/accounting-shared';
 import { datevDestinationCases, datevSachverhaltCases, normalizeDatevTaxEvidence, validateDatevTaxEvidence } from '@billme/accounting-shared';
 import type {
@@ -48,6 +50,14 @@ const isoDate = (value: unknown): value is string => {
 const period = (date: string): string => date.slice(0, 7);
 const parse = <T>(value: unknown, fallback: T): T => { if (value == null) return fallback; try { return typeof value === 'string' ? JSON.parse(value) as T : (value as T); } catch { return fallback; } };
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+const canonicalize = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => [key, canonicalize(entry)]));
+};
+
+const canonicalJson = (value: unknown): string => JSON.stringify(canonicalize(value));
 
 /** Canonical fiscal year calculation for double-entry posting. EÜR stays calendar-year. */
 export const fiscalYearForPostingDate = (postingDate: string, fiscalYearStart = '01-01'): number =>
@@ -91,6 +101,59 @@ const snapshotPositions = (payload: unknown): Array<{ positionKey: string; posit
     }];
   });
 };
+
+type DatabaseReportType = 'bwa01' | 'guv' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz';
+type DatabaseReportFor<T extends DatabaseReportType> = T extends 'bwa01'
+  ? ReportResult<Bwa01Report>
+  : T extends 'hgb-guv'
+    ? ReportResult<HgbGuvReport>
+    : T extends 'hgb-bilanz'
+      ? ReportResult<HgbBilanzReport>
+      : ReportResult<ManagementGuvReport>;
+
+const reportKindFor = (reportType: DatabaseReportType): ReportKind => reportType === 'guv' ? 'management-guv' : reportType;
+
+const reportStatementFor = (reportType: string): ReportingMapping['statement'] => reportType === 'guv' ? 'management-guv' : reportType as ReportingMapping['statement'];
+
+const reportProfile = async (db: PostgresQueryable, t: string, activeChart: 'SKR03' | 'SKR04'): Promise<ReportingCalculationProfile> => {
+  const rows = await q<any>(db, `SELECT settings_json FROM server_settings WHERE tenant_id=$1 LIMIT 1`, [t]);
+  const settings = parse<Record<string, unknown>>(rows[0]?.settings_json, {});
+  const profile = parse<Record<string, unknown>>(settings.businessReportingProfile ?? settings.business_reporting_profile ?? settings.reportingProfile ?? settings, {});
+  const fiscalYearStart = typeof profile.fiscalYearStart === 'string' ? profile.fiscalYearStart : '01-01';
+  const size = profile.hgbSizeClass === 'small' || profile.size === 'small' ? 'small' : 'micro';
+  return { size, fiscalYearStart, chart: activeChart, businessId: t };
+};
+
+const reportMappings = async (db: PostgresQueryable, scope: TenantScope, chart: 'SKR03' | 'SKR04', asOfDate?: string): Promise<ReportingMapping[]> => {
+  const rows = await q<any>(db, `SELECT DISTINCT ON (account_number,report_type) account_number,report_type,position_key,position_label FROM report_account_mappings WHERE tenant_id=$1 AND chart=$2 AND (valid_from IS NULL OR valid_from <= COALESCE($3,CURRENT_DATE::text)) AND (valid_to IS NULL OR valid_to >= COALESCE($3,CURRENT_DATE::text)) ORDER BY account_number,report_type,version DESC`, [tenant(scope), chart, asOfDate ?? null]);
+  return rows.map((row) => {
+    const rawPosition = String(row.position_key);
+    const explicitSide = rawPosition.match(/^(asset|liability):(.+)$/);
+    const reportType = String(row.report_type);
+    const catalogSide = reportType === 'hgb-bilanz' || reportType === 'bilanz'
+      ? rawPosition.startsWith('assets.') ? 'asset' : /^(equity|provisions|liabilities|deferred-income)(?:\.|$)/.test(rawPosition) ? 'liability' : undefined
+      : undefined;
+    return {
+      accountNumber: String(row.account_number),
+      statement: reportStatementFor(reportType),
+      position: explicitSide?.[2] ?? rawPosition,
+      label: String(row.position_label ?? row.position_key),
+      ...((reportType === 'hgb-bilanz' || reportType === 'bilanz') && (explicitSide?.[1] ?? catalogSide) ? { side: (explicitSide?.[1] ?? catalogSide) as 'asset' | 'liability' } : {}),
+    };
+  });
+};
+
+const calculateDatabaseReport = async <T extends DatabaseReportType>(db: PostgresQueryable, scope: TenantScope, reportType: T, args: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<DatabaseReportFor<T>> => {
+  const p = await policy(db, tenant(scope));
+  const fromDate = args.from;
+  const toDate = args.to ?? args.asOfDate;
+  const balances = await q<any>(db, `SELECT jl.account_number,COALESCE(SUM(CASE WHEN $3::text IS NOT NULL AND je.posting_date < $3 THEN jl.debit_amount-jl.credit_amount ELSE 0 END),0) opening_balance,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.debit_amount ELSE 0 END),0) debit_turnover,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.credit_amount ELSE 0 END),0) credit_turnover FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND ($2::text IS NULL OR je.posting_date <= $2) GROUP BY jl.account_number ORDER BY jl.account_number`, [tenant(scope), toDate ?? null, fromDate ?? null]);
+  const chart = args.chart ?? p.activeChart;
+  const profile = await reportProfile(db, tenant(scope), chart);
+  const mappings = await reportMappings(db, scope, chart, toDate);
+  return calculateReport({ kind: reportKindFor(reportType), profile, ledger: { balances: balances.map((row) => ({ accountNumber: String(row.account_number), openingBalance: Number(row.opening_balance), debitTurnover: Number(row.debit_turnover), creditTurnover: Number(row.credit_turnover), closingBalance: Number(row.opening_balance) + Number(row.debit_turnover) - Number(row.credit_turnover) })) }, mappings, from: fromDate, to: toDate, asOfDate: args.asOfDate ?? toDate }) as DatabaseReportFor<T>;
+};
+
 export const normalizeDatevBuKey = (value: unknown): string | undefined => {
   const normalized = String(value ?? '').trim();
   return normalized ? normalized.padStart(4, '0') : undefined;
@@ -474,17 +537,11 @@ const recognizeIstVat = async (
   if (payableLines.length) await insertEntry(db, scope, 'payment_vat', `payment-vat:${paymentId}:${allocationId}`, paymentDate, 'USt Vereinnahmung', payableLines, {});
 };
 
-export type ProAccountingReportRepository = ProAccountingRepository & ProAccountingAssetRepository & {
-  getBwa01Report(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }): Promise<{
-    kind: 'bwa01';
-    from?: string;
-    to?: string;
-    rows: Array<{ position: string; label: string; amount: number; accountNumbers: string[] }>;
-    totals: { revenue: number; expenses: number; operatingResult: number };
-    unmappedAccounts: Array<{ accountNumber: string; amount: number }>;
-    mappingHealth: { mappedAccounts: number; inferredAccounts: number; unmappedAccounts: string[]; warnings: string[]; blocking: boolean };
-  }>;
-  getGuvReport(scope: TenantScope, args?: { from?: string; to?: string; profile?: 'guv' | 'management-guv' | 'hgb-guv' }): Promise<Awaited<ReturnType<ProAccountingRepository['getGuvReport']>>>;
+export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGuvReport' | 'getBilanzReport'> & ProAccountingAssetRepository & {
+  getBwa01Report(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }): Promise<ReportResult<Bwa01Report>>;
+  getGuvReport(scope: TenantScope, args?: { from?: string; to?: string; profile?: 'guv' | 'management-guv' | 'hgb-guv' }): Promise<ReportResult<ManagementGuvReport | HgbGuvReport>>;
+  getBilanzReport(scope: TenantScope, args?: { asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<ReportResult<HgbBilanzReport>>;
+  getEurReport(scope: TenantScope, args?: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<never>;
   listReportSnapshots(scope: TenantScope, reportType?: string): Promise<ReportSnapshotRecord[]>;
   getReportSnapshot(scope: TenantScope, id: string): Promise<ReportSnapshotRecord>;
   saveReportSnapshot(scope: TenantScope, input: { reportType: string; args: unknown; payload: unknown; mutation?: AccountingMutationContext }): Promise<ReportSnapshotRecord>;
@@ -504,39 +561,36 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   async getLedgerBalances(scope, args = {}) { const values: unknown[] = [tenant(scope)]; const conditions = [`jl.tenant_id=$1`, `je.status IN ('posted','reversed')`]; const asOf = args.to ?? args.asOfDate; const from = args.fromDate ?? args.from ?? (asOf ? `${asOf.slice(0, 4)}-01-01` : undefined); if (asOf) { values.push(asOf); conditions.push(`je.posting_date <= $${values.length}`); } if (from) values.push(from); const rangeParam = from ? `$${values.length}` : ''; const rows = await q<any>(db, `SELECT jl.account_number,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date < ${rangeParam}` : 'FALSE'} THEN jl.debit_amount ELSE 0 END),0) opening_debit,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date < ${rangeParam}` : 'FALSE'} THEN jl.credit_amount ELSE 0 END),0) opening_credit,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date >= ${rangeParam}` : 'TRUE'} THEN jl.debit_amount ELSE 0 END),0) debit,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date >= ${rangeParam}` : 'TRUE'} THEN jl.credit_amount ELSE 0 END),0) credit FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE ${conditions.join(' AND ')} GROUP BY jl.account_number ORDER BY jl.account_number`, values); return rows.map((r) => ({ accountNumber: r.account_number, openingBalance: round(Number(r.opening_debit) - Number(r.opening_credit)), debitTurnover: round(r.debit), creditTurnover: round(r.credit), closingBalance: round(Number(r.opening_debit) - Number(r.opening_credit) + Number(r.debit) - Number(r.credit)) } as LedgerBalance)); },
   async getSusaReport(scope, args = {}) { const fromDate = args.fromDate ?? args.from; const asOfDate = args.to ?? args.asOfDate; const rows = await this.getLedgerBalances(scope, { ...args, fromDate, asOfDate }); return { from: fromDate, to: asOfDate, asOfDate: asOfDate ?? now().slice(0, 10), rows, totals: { debit: round(rows.reduce((s, r) => s + r.debitTurnover, 0)), credit: round(rows.reduce((s, r) => s + r.creditTurnover, 0)), balance: round(rows.reduce((s, r) => s + r.closingBalance, 0)) } }; },
   async getBwa01Report(scope, args = {}) {
-    const p = await policy(db, tenant(scope));
-    const values: unknown[] = [tenant(scope), args.chart ?? p.activeChart, args.to ?? null];
-    const date: string[] = [];
-    if (args.from) { values.push(args.from); date.push(`je.posting_date >= $${values.length}`); }
-    if (args.to) { values.push(args.to); date.push(`je.posting_date <= $${values.length}`); }
-    const rows = await q<any>(db, `WITH mapping AS (SELECT DISTINCT ON (account_number) account_number,position_key,position_label FROM report_account_mappings WHERE tenant_id=$1 AND chart=$2 AND report_type='bwa01' AND (valid_from IS NULL OR valid_from <= COALESCE($3,CURRENT_DATE::text)) AND (valid_to IS NULL OR valid_to >= COALESCE($3,CURRENT_DATE::text)) ORDER BY account_number,version DESC) SELECT m.position_key,m.position_label,jl.account_number,SUM(jl.credit_amount-jl.debit_amount) amount FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id LEFT JOIN mapping m ON m.account_number=jl.account_number WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed')${date.length ? ` AND ${date.join(' AND ')}` : ''} GROUP BY m.position_key,m.position_label,jl.account_number ORDER BY m.position_key,jl.account_number`, values);
-    const grouped = new Map<string, { label: string; amount: number; accounts: Set<string> }>();
-    const unmappedAccounts = rows.filter((row) => !row.position_key).map((row) => ({ accountNumber: String(row.account_number), amount: round(row.amount) }));
-    for (const row of rows) {
-      if (!row.position_key) continue;
-      const current = grouped.get(row.position_key) ?? { label: String(row.position_label ?? row.position_key), amount: 0, accounts: new Set<string>() };
-      current.amount = round(current.amount + Number(row.amount)); current.accounts.add(String(row.account_number)); grouped.set(row.position_key, current);
-    }
-    const amount = (key: string): number => grouped.get(key)?.amount ?? 0;
-    const accounts = (keys: string[]): string[] => [...new Set(keys.flatMap((key) => [...(grouped.get(key)?.accounts ?? [])]))].sort();
-    const line = (position: (typeof bwa01Positions)[number][0], value = amount(position), accountNumbers = [...(grouped.get(position)?.accounts ?? [])]): { position: string; label: string; amount: number; accountNumbers: string[] } => ({ position, label: bwa01Positions.find(([key]) => key === position)?.[1] ?? grouped.get(position)?.label ?? position, amount: round(value), accountNumbers: accountNumbers.sort() });
-    const totalOutput = amount('revenue') + amount('inventory-change') + amount('capitalized-work');
-    const grossProfit = totalOutput + amount('material-expense');
-    const totalCosts = ['material-expense', 'personnel-expense', 'space-expense', 'insurance-contributions', 'vehicle-expense', 'advertising-travel', 'cost-of-goods-out', 'depreciation', 'maintenance', 'other-operating-expense'].reduce((sum, key) => sum + amount(key), 0);
-    const operatingResult = grossProfit + totalCosts - amount('material-expense');
-    const resultBeforeTax = operatingResult + amount('interest-expense') + amount('neutral-expense') + amount('neutral-income');
-    const valuesByPosition: Record<string, number> = { 'total-output': totalOutput, 'gross-profit': grossProfit, 'total-costs': totalCosts, 'operating-result': operatingResult, 'result-before-tax': resultBeforeTax, 'preliminary-result': resultBeforeTax + amount('income-tax') };
-    const rowsOut = bwa01Positions.map(([position]) => line(position, valuesByPosition[position], valuesByPosition[position] === undefined ? [...(grouped.get(position)?.accounts ?? [])] : accounts(position === 'total-output' ? ['revenue', 'inventory-change', 'capitalized-work'] : position === 'gross-profit' ? ['revenue', 'inventory-change', 'capitalized-work', 'material-expense'] : position === 'total-costs' ? ['material-expense', 'personnel-expense', 'space-expense', 'insurance-contributions', 'vehicle-expense', 'advertising-travel', 'cost-of-goods-out', 'depreciation', 'maintenance', 'other-operating-expense'] : position === 'operating-result' ? ['revenue', 'inventory-change', 'capitalized-work', 'material-expense', 'personnel-expense', 'space-expense', 'insurance-contributions', 'vehicle-expense', 'advertising-travel', 'cost-of-goods-out', 'depreciation', 'maintenance', 'other-operating-expense'] : position === 'result-before-tax' ? ['revenue', 'inventory-change', 'capitalized-work', 'material-expense', 'personnel-expense', 'space-expense', 'insurance-contributions', 'vehicle-expense', 'advertising-travel', 'cost-of-goods-out', 'depreciation', 'maintenance', 'other-operating-expense', 'interest-expense', 'neutral-expense', 'neutral-income'] : position === 'preliminary-result' ? ['revenue', 'inventory-change', 'capitalized-work', 'material-expense', 'personnel-expense', 'space-expense', 'insurance-contributions', 'vehicle-expense', 'advertising-travel', 'cost-of-goods-out', 'depreciation', 'maintenance', 'other-operating-expense', 'interest-expense', 'neutral-expense', 'neutral-income', 'income-tax'] : [position])));
-    const expensePositions = ['material-expense', 'personnel-expense', 'space-expense', 'insurance-contributions', 'vehicle-expense', 'advertising-travel', 'cost-of-goods-out', 'depreciation', 'maintenance', 'other-operating-expense', 'interest-expense', 'neutral-expense', 'income-tax'];
-    const expenses = expensePositions.reduce((sum, position) => sum + Math.abs(Math.min(0, amount(position))), 0);
-    return { kind: 'bwa01', from: args.from, to: args.to, rows: rowsOut, totals: { revenue: amount('revenue'), expenses: round(expenses), operatingResult: round(operatingResult) }, unmappedAccounts, mappingHealth: { mappedAccounts: new Set(rows.filter((row) => row.position_key).map((row) => row.account_number)).size, inferredAccounts: 0, unmappedAccounts: unmappedAccounts.map((row) => row.accountNumber), warnings: unmappedAccounts.length ? ['BWA01 enthält nicht zugeordnete Konten.'] : [], blocking: unmappedAccounts.length > 0 } };
+    return calculateDatabaseReport(db, scope, 'bwa01', args);
   },
-  async getGuvReport(scope, args: { from?: string; to?: string; profile?: 'guv' | 'management-guv' | 'hgb-guv' } = {}) { const p = await policy(db, tenant(scope)); const reportType = args.profile ?? 'guv'; const values: unknown[] = [tenant(scope), p.activeChart, args.to ?? null, reportType]; const date: string[] = []; if (args.from) { values.push(args.from); date.push(`je.posting_date >= $${values.length}`); } if (args.to) { values.push(args.to); date.push(`je.posting_date <= $${values.length}`); } const rows = await q<any>(db, `SELECT COALESCE(am.position_key,'unmapped:'||jl.account_number) position_key,COALESCE(am.position_label,'Nicht zugeordnet ('||jl.account_number||')') position_label,SUM(jl.credit_amount-jl.debit_amount) amount,ARRAY_AGG(DISTINCT jl.account_number ORDER BY jl.account_number) account_refs FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id LEFT JOIN (SELECT DISTINCT ON (account_number) account_number,position_key,position_label FROM report_account_mappings WHERE tenant_id=$1 AND chart=$2 AND report_type=$4 AND (valid_from IS NULL OR valid_from <= COALESCE($3,CURRENT_DATE::text)) AND (valid_to IS NULL OR valid_to >= COALESCE($3,CURRENT_DATE::text)) ORDER BY account_number,version DESC) am ON am.account_number=jl.account_number WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed')${date.length ? ` AND ${date.join(' AND ')}` : ''} GROUP BY COALESCE(am.position_key,'unmapped:'||jl.account_number),COALESCE(am.position_label,'Nicht zugeordnet ('||jl.account_number||')') ORDER BY position_key`, values); const mapped = rows.map((r) => ({ positionKey: r.position_key, positionLabel: r.position_label, amount: round(r.amount), accountRefs: Array.isArray(r.account_refs) ? r.account_refs.map(String) : [] })); const unmappedAccounts = rows.filter((r) => String(r.position_key).startsWith('unmapped:')).map((r) => ({ accountNumber: String(r.account_refs?.[0] ?? String(r.position_key).slice('unmapped:'.length)), amount: round(r.amount) })); const netResult = mapped.filter((row) => !String(row.positionKey).startsWith('unmapped:')).reduce((sum, row) => sum + row.amount, 0); return { from: args.from, to: args.to, chart: p.activeChart, rows: mapped, netResult: round(netResult), unmappedAccounts, blocking: unmappedAccounts.length > 0 }; },
-  async getBilanzReport(scope, args = {}) { const p = await policy(db, tenant(scope)); const values: unknown[] = [tenant(scope), p.activeChart]; let date = ''; if (args.asOfDate) { values.push(args.asOfDate); date = ` AND je.posting_date <= $${values.length}`; } const rows = await q<any>(db, `SELECT am.balance_side,jl.account_number,SUM(jl.debit_amount-jl.credit_amount) amount FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id LEFT JOIN account_mappings_hgb am ON am.tenant_id=jl.tenant_id AND am.chart=$2 AND am.account_number=jl.account_number AND am.statement_type='bilanz' WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed')${date} GROUP BY am.balance_side,jl.account_number ORDER BY jl.account_number`, values); const assets = rows.filter((r) => r.balance_side === 'asset').map((r) => ({ accountNumber: r.account_number, amount: round(r.amount) })); const liabilities = rows.filter((r) => r.balance_side === 'liability').map((r) => ({ accountNumber: r.account_number, amount: round(Math.abs(Number(r.amount))) })); const unmappedAccounts = rows.filter((r) => !r.balance_side).map((r) => ({ accountNumber: r.account_number, amount: round(Number(r.amount)) })); const a = assets.reduce((s, r) => s + r.amount, 0); const l = liabilities.reduce((s, r) => s + r.amount, 0); return { chart: p.activeChart, asOfDate: args.asOfDate ?? now().slice(0, 10), assets, liabilities, unmappedAccounts, blocking: unmappedAccounts.length > 0, totals: { assets: round(a), liabilities: round(l), delta: round(a - l) } }; },
+  async getGuvReport(scope, args: { from?: string; to?: string; profile?: 'guv' | 'management-guv' | 'hgb-guv' } = {}) {
+    return calculateDatabaseReport(db, scope, args.profile ?? 'guv', args);
+  },
+  async getBilanzReport(scope, args = {}) {
+    return calculateDatabaseReport(db, scope, 'hgb-bilanz', args);
+  },
+  async getEurReport() {
+    throw new Error('EUR_SERVER_REPORT_UNAVAILABLE');
+  },
   async listReportSnapshots(scope, reportType) { return listReportSnapshots(db, scope, reportType); },
   async getReportSnapshot(scope, id) { const snapshot = await getReportSnapshot(db, scope, id); if (!snapshot) throw new Error('REPORT_SNAPSHOT_NOT_FOUND'); return snapshot; },
-  async saveReportSnapshot(scope, input) { return inTx(db, async (tx) => { const args = (input.args && typeof input.args === 'object' ? input.args : {}) as Record<string, unknown>; const snapshot = await createReportSnapshot(tx, scope, { reportType: input.reportType, argsJson: JSON.stringify(args), payloadJson: JSON.stringify(input.payload), sourceHash: hashReportSource({ reportType: input.reportType, args, payload: input.payload }), fromDate: typeof args.from === 'string' ? args.from : undefined, toDate: typeof args.to === 'string' ? args.to : undefined, asOfDate: typeof args.asOfDate === 'string' ? args.asOfDate : undefined, positions: snapshotPositions(input.payload) }); await audit(tx as PostgresTransactionClient, scope, 'report_snapshot', snapshot.id, 'create', input.mutation?.reason ?? 'Report snapshot created', null, { reportType: input.reportType, args }, input.mutation); return snapshot; }); },
-  async getAccountMappingHealth(scope, chart) { const p = await policy(db, tenant(scope)); const activeChart = chart ?? p.activeChart; const rows = await q<any>(db, `SELECT DISTINCT jl.account_number,required.statement_type FROM journal_lines jl CROSS JOIN (VALUES ('guv'::text),('bilanz'::text),('bwa01'::text)) required(statement_type) LEFT JOIN account_mappings_hgb am ON am.tenant_id=jl.tenant_id AND am.chart=$2 AND am.account_number=jl.account_number AND am.statement_type=required.statement_type LEFT JOIN report_account_mappings rm ON rm.tenant_id=jl.tenant_id AND rm.chart=$2 AND rm.account_number=jl.account_number AND rm.report_type=required.statement_type WHERE jl.tenant_id=$1 AND am.id IS NULL AND rm.id IS NULL ORDER BY jl.account_number,required.statement_type`, [tenant(scope), activeChart]); return { chart: activeChart, unmapped: rows.map((r) => ({ accountNumber: String(r.account_number), statementType: String(r.statement_type) })) }; },
+  async saveReportSnapshot(scope, input) {
+    return inTx(db, async (tx) => {
+      const args = (input.args && typeof input.args === 'object' ? input.args : {}) as Record<string, unknown>;
+      const payload = input.payload && typeof input.payload === 'object' ? input.payload as Record<string, unknown> : {};
+      const health = payload.mappingHealth && typeof payload.mappingHealth === 'object' ? payload.mappingHealth as Record<string, unknown> : undefined;
+      const blocked = input.reportType !== 'susa' && (health?.blocking === true || payload.blocking === true || payload.complete === false || (input.reportType.includes('eur') && Array.isArray(payload.unmatchedCashEntries) && payload.unmatchedCashEntries.length > 0));
+      if (blocked) throw new Error('REPORT_SNAPSHOT_BLOCKED_INCOMPLETE_MAPPING');
+      const argsJson = canonicalJson(args);
+      const payloadJson = canonicalJson(input.payload);
+      const positions = snapshotPositions(input.payload);
+      const sourceHash = hashReportSource(canonicalize({ reportType: input.reportType, args, payload: input.payload, mappingRefs: positions.map((position) => ({ positionKey: position.positionKey, metadataJson: position.metadataJson })) }));
+      const snapshot = await createReportSnapshot(tx, scope, { reportType: input.reportType, argsJson, payloadJson, sourceHash, fromDate: typeof args.from === 'string' ? args.from : undefined, toDate: typeof args.to === 'string' ? args.to : undefined, asOfDate: typeof args.asOfDate === 'string' ? args.asOfDate : undefined, positions });
+      await audit(tx as PostgresTransactionClient, scope, 'report_snapshot', snapshot.id, 'create', input.mutation?.reason ?? 'Report snapshot created', null, { reportType: input.reportType, args, sourceHash }, input.mutation);
+      return snapshot;
+    });
+  },
+  async getAccountMappingHealth(scope, chart) { const p = await policy(db, tenant(scope)); const activeChart = chart ?? p.activeChart; const rows = await q<any>(db, `SELECT DISTINCT jl.account_number,required.statement_type FROM journal_lines jl CROSS JOIN (VALUES ('bwa01'::text),('management-guv'::text),('hgb-guv'::text),('hgb-bilanz'::text)) required(statement_type) LEFT JOIN report_account_mappings rm ON rm.tenant_id=jl.tenant_id AND rm.chart=$2 AND rm.account_number=jl.account_number AND rm.report_type=required.statement_type AND (rm.valid_from IS NULL OR rm.valid_from <= CURRENT_DATE) AND (rm.valid_to IS NULL OR rm.valid_to >= CURRENT_DATE) WHERE jl.tenant_id=$1 AND rm.id IS NULL ORDER BY jl.account_number,required.statement_type`, [tenant(scope), activeChart]); return { chart: activeChart, unmapped: rows.map((r) => ({ accountNumber: String(r.account_number), statementType: String(r.statement_type) })) }; },
   async upsertAccountMappingOverride(scope, input) { return inTx(db, async (tx) => { const id = randomUUID(); const stamp = now(); const accountNumber = input.accountNumber.trim(); const positionKey = input.positionKey.trim(); const positionLabel = input.positionLabel.trim(); const reportType = input.statementType; const version = Number((await q<any>(tx, `SELECT COALESCE(MAX(version),0)+1 AS version FROM report_account_mappings WHERE tenant_id=$1 AND report_type=$2 AND chart=$3 AND account_number=$4`, [tenant(scope), reportType, input.chart, accountNumber]))[0]?.version ?? 1); await q(tx, `INSERT INTO report_account_mappings (id,tenant_id,report_type,chart,account_number,position_key,position_label,valid_from,valid_to,version,source,source_hash,created_by,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,NULL,$8,'tenant_override',$9,$10,$11)`, [randomUUID(), tenant(scope), reportType, input.chart, accountNumber, positionKey, positionLabel, version, hash({ reportType, chart: input.chart, accountNumber, positionKey, positionLabel, balanceSide: input.balanceSide }), input.mutation?.actor?.displayName ?? null, stamp]); await q(tx, `INSERT INTO account_mappings_hgb (id,tenant_id,chart,account_number,statement_type,position_key,position_label,balance_side,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (tenant_id,chart,account_number,statement_type) DO UPDATE SET position_key=EXCLUDED.position_key,position_label=EXCLUDED.position_label,balance_side=EXCLUDED.balance_side,updated_at=EXCLUDED.updated_at`, [id, tenant(scope), input.chart, accountNumber, input.statementType, positionKey, positionLabel, input.balanceSide ?? null, stamp]); await audit(tx as PostgresTransactionClient, scope, 'account_mapping_hgb', `${input.chart}:${input.statementType}:${accountNumber}`, 'override', input.mutation?.reason ?? 'Report mapping override', null, input, input.mutation); const row = (await q<any>(tx, `SELECT id,tenant_id,chart,account_number,statement_type,position_key,position_label,balance_side,updated_at FROM account_mappings_hgb WHERE tenant_id=$1 AND chart=$2 AND account_number=$3 AND statement_type=$4`, [tenant(scope), input.chart, accountNumber, input.statementType]))[0]; return { id: row.id, tenantId: row.tenant_id, chart: row.chart, accountNumber: row.account_number, statementType: row.statement_type, positionKey: row.position_key, positionLabel: row.position_label, balanceSide: row.balance_side ?? undefined, updatedAt: row.updated_at }; }); },
   async listDatevExports(scope) { return (await q<any>(db, `SELECT * FROM datev_exports WHERE tenant_id=$1 ORDER BY created_at DESC`, [tenant(scope)])).map((r) => { const metadata = parse<{ contentSha256?: string; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshot?: DatevExportSourceSnapshot }>(r.meta_json, {}); return { id: r.id, filePath: r.file_path, recordCount: Number(r.record_count), fromDate: r.from_date ?? undefined, toDate: r.to_date ?? undefined, createdAt: r.created_at, contentSha256: metadata.contentSha256, encoding: metadata.encoding, headerVersion: metadata.headerVersion, formatVersion: metadata.formatVersion, chart: metadata.chart, sourceSnapshotHash: metadata.sourceSnapshot ? createHash('sha256').update(JSON.stringify(metadata.sourceSnapshot)).digest('hex') : undefined }; }); },
   async getDatevExportContent(scope, exportId): Promise<DatevExportContent> { const row = (await q<any>(db, `SELECT * FROM datev_exports WHERE tenant_id=$1 AND id=$2`, [tenant(scope), exportId]))[0]; if (!row) throw new Error('DATEV_EXPORT_NOT_FOUND'); if (!row.content_bytes) throw new Error('DATEV_EXPORT_CONTENT_UNAVAILABLE'); const content = new Uint8Array(row.content_bytes); const contentSha256 = createHash('sha256').update(content).digest('hex'); const metadata = parse<{ contentSha256?: string; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshot?: DatevExportSourceSnapshot }>(row.meta_json, {}); if (metadata.contentSha256 && metadata.contentSha256 !== contentSha256) throw new Error('DATEV_EXPORT_HASH_MISMATCH'); return { id: row.id, filePath: row.file_path, recordCount: Number(row.record_count), fromDate: row.from_date ?? undefined, toDate: row.to_date ?? undefined, createdAt: row.created_at, contentSha256, content, encoding: metadata.encoding, headerVersion: metadata.headerVersion, formatVersion: metadata.formatVersion, chart: metadata.chart, sourceSnapshotHash: metadata.sourceSnapshot ? createHash('sha256').update(JSON.stringify(metadata.sourceSnapshot)).digest('hex') : undefined }; },

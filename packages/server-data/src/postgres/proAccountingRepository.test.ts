@@ -54,18 +54,20 @@ test('SuSa report maps inclusive from/to bounds into ledger opening and turnover
   assert.equal(report.asOfDate, '2026-12-31');
 });
 
+test('EÜR server report fails closed until the native 2025 catalog/classification path is available', async () => {
+  const repository = createPostgresProAccountingRepository({ query: async () => ({ rows: [] }) } as unknown as PostgresQueryable);
+  await assert.rejects(() => repository.getEurReport(createSingleTenantScope('eur-report-test', 'pro'), { from: '2025-01-01', to: '2025-12-31' }), /EUR_SERVER_REPORT_UNAVAILABLE/);
+});
+
 test('GuV report preserves account references and surfaces unmapped accounts', async () => {
   const calls: Array<{ text: string; values: unknown[] }> = [];
   const db = {
     query: async (text: string, values?: unknown[]) => {
       calls.push({ text, values: values ?? [] });
       if (calls.length === 1) return { rows: [{ active_chart: 'SKR04', vat_method: 'soll', updated_at: '2026-12-01' }] };
-      return {
-        rows: [
-          { position_key: 'revenue', position_label: 'Umsatz', amount: '100', account_refs: ['8400', '8401'] },
-          { position_key: 'unmapped:9999', position_label: 'Nicht zugeordnet (9999)', amount: '-20', account_refs: ['9999'] },
-        ],
-      };
+      if (calls.length === 2) return { rows: [{ account_number: '8400', opening_balance: '0', debit_turnover: '0', credit_turnover: '100' }, { account_number: '9999', opening_balance: '0', debit_turnover: '20', credit_turnover: '0' }] };
+      if (calls.length === 3) return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { fiscalYearStart: '01-01', hgbSizeClass: 'small' } }) }] };
+      return { rows: [{ account_number: '8400', report_type: 'management-guv', position_key: 'revenue', position_label: 'Umsatz' }] };
     },
   } as unknown as PostgresQueryable;
   const report = await createPostgresProAccountingRepository(db).getGuvReport(createSingleTenantScope('guv-report-test', 'pro'), {
@@ -73,36 +75,31 @@ test('GuV report preserves account references and surfaces unmapped accounts', a
     to: '2026-12-31',
   });
 
-  assert.deepEqual(report.rows[0]?.accountRefs, ['8400', '8401']);
-  assert.deepEqual(report.unmappedAccounts, [{ accountNumber: '9999', amount: -20 }]);
-  assert.equal(report.blocking, true);
-  assert.match(calls[1]?.text ?? '', /ARRAY_AGG\(DISTINCT jl\.account_number/);
-  assert.match(calls[1]?.text ?? '', /report_type=\$4/);
-  assert.deepEqual(calls[1]?.values.slice(0, 4), ['guv-report-test', 'SKR04', '2026-12-31', 'guv']);
+  assert.deepEqual(report.rows, []);
+  assert.deepEqual(report.mappingHealth.unmappedAccounts, ['9999']);
+  assert.equal(report.mappingHealth.blocking, true);
+  assert.match(calls[3]?.text ?? '', /report_account_mappings/);
+  assert.match(calls[3]?.text ?? '', /report_type/);
+  assert.deepEqual(calls[3]?.values, ['guv-report-test', 'SKR04', '2026-12-31']);
 });
 
 test('BWA01 uses explicit mapped positions, catalog order, and blocking unmapped accounts', async () => {
   let call = 0;
   const db = {
-    query: async () => {
+    query: async (text: string) => {
       call += 1;
       if (call === 1) return { rows: [{ active_chart: 'SKR04', vat_method: 'soll', updated_at: '2026-12-01' }] };
-      return {
-        rows: [
-          { position_key: 'revenue', position_label: 'Umsatz', account_number: '4400', amount: '100' },
-          { position_key: 'material-expense', position_label: 'Material', account_number: '5400', amount: '-30' },
-          { position_key: null, position_label: null, account_number: '9999', amount: '-5' },
-        ],
-      };
+      if (call === 2) return { rows: [{ account_number: '4400', opening_balance: '0', debit_turnover: '0', credit_turnover: '100' }, { account_number: '5400', opening_balance: '0', debit_turnover: '30', credit_turnover: '0' }, { account_number: '9999', opening_balance: '0', debit_turnover: '5', credit_turnover: '0' }] };
+      if (call === 3) return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { fiscalYearStart: '01-01' } }) }] };
+      assert.match(text, /report_type/);
+      return { rows: [{ account_number: '4400', report_type: 'bwa01', position_key: 'revenue', position_label: 'Umsatz' }, { account_number: '5400', report_type: 'bwa01', position_key: 'material-expense', position_label: 'Material' }] };
     },
   } as unknown as PostgresQueryable;
   const report = await createPostgresProAccountingRepository(db).getBwa01Report(createSingleTenantScope('bwa-test', 'pro'), { from: '2026-12-01', to: '2026-12-31' });
   assert.equal(report.kind, 'bwa01');
-  assert.deepEqual(report.rows.slice(0, 6).map((row) => row.position), ['revenue', 'inventory-change', 'capitalized-work', 'total-output', 'material-expense', 'gross-profit']);
-  assert.equal(report.rows.find((row) => row.position === 'total-output')?.amount, 100);
-  assert.equal(report.rows.find((row) => row.position === 'gross-profit')?.amount, 70);
-  assert.equal(report.totals.operatingResult, 70);
-  assert.deepEqual(report.unmappedAccounts, [{ accountNumber: '9999', amount: -5 }]);
+  assert.deepEqual(report.rows, []);
+  assert.equal(report.totals.operatingResult, 0);
+  assert.deepEqual(report.mappingHealth.unmappedAccounts, ['9999']);
   assert.equal(report.mappingHealth.blocking, true);
 });
 
@@ -531,9 +528,9 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     const balances = await repository.getLedgerBalances(scope, { fromDate: '2026-08-12', asOfDate: '2026-08-12' });
     assert.ok(balances.some((row) => row.debitTurnover > 0));
     const guv = await repository.getGuvReport(scope, { from: '2026-08-12', to: '2026-08-12' });
-    assert.ok(guv.rows.some((row) => row.positionKey.startsWith('unmapped:')));
+    assert.equal(guv.mappingHealth.blocking, true);
     const bilanz = await repository.getBilanzReport(scope, { asOfDate: '2026-08-12' });
-    assert.ok((bilanz.unmappedAccounts ?? []).length > 0);
+    assert.equal(bilanz.mappingHealth.blocking, true);
     const backfillNumber = `RE-BF-${suffix}`;
     await pool.query(`INSERT INTO invoices (id,tenant_id,number,client,client_email,date,due_date,amount,status,dunning_level,items_json,payments_json,history_json,created_at,updated_at,accounting_status) VALUES ($1,$2,$3,'Backfill client','test@example.test','2026-08-12','2026-08-31',119,'open',0,$4,'[]','[]',$5,$5,'unposted')`, [backfillInvoiceId, tenantId, backfillNumber, JSON.stringify([{ description: 'Backfill service', total: 119, taxRate: 19 }]), now]);
     await pool.query(`INSERT INTO number_reservations (id,tenant_id,kind,number,counter_value,status,document_id,created_at,updated_at) VALUES ($1,$2,'invoice',$3,1,'finalized',$4,$5,$5)`, [backfillReservationId, tenantId, backfillNumber, backfillInvoiceId, now]);

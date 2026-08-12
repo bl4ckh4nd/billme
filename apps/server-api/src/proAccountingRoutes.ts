@@ -41,7 +41,35 @@ const repositoryFor = (app: FastifyInstance): ReturnType<typeof createPostgresPr
 
 const serviceFor = (app: FastifyInstance) => {
   const repository = repositoryFor(app);
-  return { ...createProAccountingService(repository), ...createProAccountingAssetService(repository), repository };
+  // The shared service still exposes the legacy report DTO for Lite callers.
+  // Keep that compatibility projection at this boundary; Pro report routes use
+  // the canonical repository result directly and never calculate reports twice.
+  const legacyRepository = {
+    ...repository,
+    getGuvReport: async (scope: TenantScope, args?: { from?: string; to?: string }) => {
+      const report = await repository.getGuvReport(scope, { ...args, profile: 'guv' });
+      return {
+        from: report.snapshot.from,
+        to: report.snapshot.to,
+        rows: report.rows.map((row) => ({ positionKey: row.position, positionLabel: row.label, amount: row.amount, accountRefs: row.accountRefs ?? row.accountNumbers })),
+        netResult: 'netResult' in report && typeof report.netResult === 'number' ? report.netResult : 0,
+        unmappedAccounts: report.mappingHealth.unmappedAccounts.map((accountNumber) => ({ accountNumber, amount: 0 })),
+        blocking: report.mappingHealth.blocking,
+      };
+    },
+    getBilanzReport: async (scope: TenantScope, args?: { asOfDate?: string }) => {
+      const report = await repository.getBilanzReport(scope, args);
+      return {
+        asOfDate: report.snapshot.asOfDate ?? args?.asOfDate ?? new Date().toISOString().slice(0, 10),
+        assets: report.assets.flatMap((row) => row.accountNumbers.map((accountNumber) => ({ accountNumber, amount: row.amount }))),
+        liabilities: report.liabilities.flatMap((row) => row.accountNumbers.map((accountNumber) => ({ accountNumber, amount: row.amount }))),
+        totals: report.totals,
+        unmappedAccounts: report.mappingHealth.unmappedAccounts.map((accountNumber) => ({ accountNumber, amount: 0 })),
+        blocking: report.mappingHealth.blocking,
+      };
+    },
+  };
+  return { ...createProAccountingService(legacyRepository), ...createProAccountingAssetService(repository), repository };
 };
 
 const reasonSchema = z.string().trim().min(1, 'reason is required');
@@ -49,9 +77,9 @@ const idParams = z.object({ id: z.string().min(1) });
 const transactionParams = z.object({ transactionId: z.string().min(1) });
 const draftParams = z.object({ draftId: z.string().min(1) });
 const reportRange = z.object({ from: z.string().optional(), to: z.string().optional(), chart: z.enum(['SKR03', 'SKR04']).optional(), profile: z.string().trim().min(1).optional() });
-export const reportSnapshotQuerySchema = z.object({ reportType: z.enum(['susa', 'guv', 'management-guv', 'hgb-guv', 'bilanz', 'hgb-bilanz', 'bwa01']).optional() });
+export const reportSnapshotQuerySchema = z.object({ reportType: z.enum(['susa', 'eur', 'guv', 'management-guv', 'hgb-guv', 'bilanz', 'hgb-bilanz', 'bwa01']).optional() });
 export const reportSnapshotBodySchema = z.object({
-  reportType: z.enum(['susa', 'guv', 'management-guv', 'hgb-guv', 'bilanz', 'hgb-bilanz', 'bwa01']),
+  reportType: z.enum(['susa', 'eur', 'guv', 'management-guv', 'hgb-guv', 'bilanz', 'hgb-bilanz', 'bwa01']),
   from: z.string().optional(),
   to: z.string().optional(),
   asOfDate: z.string().optional(),
@@ -385,11 +413,28 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
 
   typedRoute(app, {
     method: 'GET',
+    url: `${prefix}/reports/eur`,
+    query: susaReportQuerySchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      try {
+        return await repositoryFor(app).getEurReport(session.scope, query);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'EUR_SERVER_REPORT_UNAVAILABLE') {
+          throw new ApiError(503, 'EÜR ist im Server-Modus erst verfügbar, wenn der 2025-Katalog und die Kontenklassifikation importiert sind.');
+        }
+        throw error;
+      }
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
     url: `${prefix}/reports/guv`,
     query: reportRange,
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
-      return serviceFor(app).getGuvReport(session.scope, query);
+      return repositoryFor(app).getGuvReport(session.scope, { ...query, profile: 'guv' });
     },
   });
 
@@ -421,7 +466,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     query: asOfDate,
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
-      return serviceFor(app).getBilanzReport(session.scope, query);
+      return repositoryFor(app).getBilanzReport(session.scope, query);
     },
   });
 
@@ -431,7 +476,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     query: asOfDate,
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
-      return serviceFor(app).getBilanzReport(session.scope, query);
+      return repositoryFor(app).getBilanzReport(session.scope, query);
     },
   });
 
@@ -461,16 +506,22 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     body: reportSnapshotBody,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
+      if (body.reportType === 'eur') {
+        throw new ApiError(503, 'EÜR ist im Server-Modus erst verfügbar, wenn der 2025-Katalog und die Kontenklassifikation importiert sind.');
+      }
       const args = { from: body.from, to: body.to, asOfDate: body.asOfDate, chart: body.chart, profile: body.profile };
       const service = serviceFor(app);
+      const repository = service.repository;
       const payload = body.reportType === 'susa'
         ? await service.getSusaReport(session.scope, { ...args, fromDate: body.from, asOfDate: body.to ?? body.asOfDate })
+        : body.reportType === 'eur'
+          ? await repository.getEurReport(session.scope, args)
         : body.reportType === 'bilanz' || body.reportType === 'hgb-bilanz'
-          ? await service.getBilanzReport(session.scope, { asOfDate: body.asOfDate })
+          ? await repository.getBilanzReport(session.scope, { asOfDate: body.asOfDate, chart: body.chart })
           : body.reportType === 'bwa01'
-            ? await service.repository.getBwa01Report(session.scope, { from: body.from, to: body.to, chart: body.chart, profile: body.profile })
-            : await service.repository.getGuvReport(session.scope, { from: body.from, to: body.to, profile: body.reportType === 'management-guv' || body.reportType === 'hgb-guv' ? body.reportType : 'guv' });
-      return service.repository.saveReportSnapshot(session.scope, {
+            ? await repository.getBwa01Report(session.scope, { from: body.from, to: body.to, chart: body.chart, profile: body.profile })
+            : await repository.getGuvReport(session.scope, { from: body.from, to: body.to, profile: body.reportType === 'management-guv' || body.reportType === 'hgb-guv' ? body.reportType : 'guv' });
+      return repository.saveReportSnapshot(session.scope, {
         reportType: body.reportType,
         args,
         payload,

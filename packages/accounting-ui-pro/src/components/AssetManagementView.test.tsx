@@ -69,4 +69,41 @@ describe('AssetManagementView productive mutations', () => {
     expect(runDepreciation).toHaveBeenCalledWith(expect.objectContaining({ assetId: asset.id, reason: 'Jahres-AfA 2026', actorRole: 'admin' }));
     expect(screen.getAllByText((text) => text.includes('800,00')).length).toBeGreaterThan(0);
   });
+
+  it('discards a slow schedule response after selection changes', async () => {
+    const assetB = { ...asset, id: 'asset-2', assetNumber: 'ANL-2026-002', name: 'Monitor' };
+    const scheduleB: AssetDepreciationScheduleEntry = { ...scheduleEntry, id: 'schedule-2', assetId: assetB.id, amount: 200 };
+    let resolveA: (value: AssetDepreciationScheduleEntry[]) => void = () => undefined;
+    const slowA = new Promise<AssetDepreciationScheduleEntry[]>((resolve) => { resolveA = resolve; });
+    const getDepreciationSchedule = vi.fn((assetId: string) => assetId === asset.id ? slowA : Promise.resolve([scheduleB]));
+    render(<AssetManagementView dataAdapter={{ listAssets: vi.fn(async () => [asset, assetB]), getDepreciationSchedule }} />);
+
+    await screen.findAllByText('Monitor');
+    await waitFor(() => expect(getDepreciationSchedule).toHaveBeenCalledWith(asset.id));
+    fireEvent.click(screen.getByRole('button', { name: /ANL-2026-002/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abschreibungsplan' }));
+
+    expect(await screen.findAllByText((text) => text.includes('200,00'))).not.toHaveLength(0);
+    resolveA([scheduleEntry]);
+    await waitFor(() => expect(screen.getAllByText((text) => text.includes('200,00')).length).toBeGreaterThan(0));
+  });
+
+  it('sends tax rate and proceeds account for a sale', async () => {
+    const soldAsset = { ...asset, status: 'verkauft' as const, disposalDate: '2026-08-12', disposalProceeds: 500 };
+    const listAssets = vi.fn(async () => [asset]);
+    const disposeAsset = vi.fn(async () => ({ asset: soldAsset, residualBookValue: 800, gainLoss: -300, journalEntryId: 'journal-sale' }));
+    render(<AssetManagementView dataAdapter={{ listAssets, disposeAsset }} />);
+
+    await screen.findAllByText('Server');
+    fireEvent.change(screen.getByLabelText('Verkaufserlös netto *'), { target: { value: '500' } });
+    fireEvent.change(screen.getByLabelText('Umsatzsteuersatz *'), { target: { value: '19' } });
+    fireEvent.change(screen.getByLabelText('Erlöskonto / Zahlungskonto'), { target: { value: '1200' } });
+    fireEvent.change(screen.getByPlaceholderText('Warum wird die Anlage ausgebucht?'), { target: { value: 'Verkauf' } });
+    fireEvent.click(screen.getByLabelText(/Ich bestätige die Ausbuchung/));
+    fireEvent.submit(screen.getByRole('button', { name: 'Ausbuchung bestätigen' }).closest('form')!);
+
+    await waitFor(() => expect(disposeAsset).toHaveBeenCalledTimes(1));
+    expect((await screen.findByRole('status')).textContent).toContain('Journal journal-sale');
+    expect(disposeAsset).toHaveBeenCalledWith(expect.objectContaining({ proceeds: 500, taxRate: 19, proceedsAccountNumber: '1200', reason: 'Verkauf', actorRole: 'admin' }));
+  });
 });

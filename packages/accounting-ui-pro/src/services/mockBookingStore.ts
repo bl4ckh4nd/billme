@@ -91,6 +91,8 @@ export interface ProAccountingDataAdapter {
     assetId: string;
     disposalDate: string;
     proceeds: number;
+    taxRate: 0 | 7 | 19;
+    proceedsAccountNumber?: string;
     reason: string;
     actorRole: UserRole;
   }) => Promise<{ asset: AssetItem; residualBookValue: number; gainLoss: number; journalEntryId?: string }>;

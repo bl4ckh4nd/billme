@@ -306,15 +306,15 @@ export default function InboxView({
       {/* ── LEFT: table area ── */}
       <div className="flex flex-col h-full flex-1 min-w-0">
         {/* Header — compact two-row layout */}
-        <div className="px-6 pt-3 pb-0 border-b border-gray-100 shrink-0">
+        <div className="px-6 pt-3 pb-0 border-b border-subtle shrink-0">
           {/* Row 1: icon + title */}
           <div className="flex items-center gap-3 pb-3">
-            <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-accent shrink-0">
+            <div className="w-8 h-8 bg-dark-base rounded-lg flex items-center justify-center text-accent shrink-0">
               <Inbox size={15} />
             </div>
             <div className="flex-1 min-w-0">
-              <h1 className="text-sm font-black text-gray-900 leading-tight">Buchungs-Inbox</h1>
-              <p className="text-xs text-gray-400 font-medium leading-tight">
+              <h1 className="text-sm font-black text-foreground leading-tight">Buchungs-Inbox</h1>
+              <p className="text-xs text-muted font-medium leading-tight">
                 Workflow-Queues, Validierungen und Freigaben.
               </p>
             </div>
@@ -326,7 +326,7 @@ export default function InboxView({
             <div className="ml-auto flex items-center gap-1.5 shrink-0">
               <button
                 onClick={toggleSelectAllVisible}
-                className="h-7 px-2.5 rounded-full border border-gray-200 bg-white text-[11px] font-bold text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 transition-colors"
+                className="h-7 px-2.5 rounded-full border border-border bg-surface text-[11px] font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1 transition-colors"
               >
                 <CheckSquare size={11} />
                 {allVisibleSelected ? 'Auswahl aufheben' : 'Sichtbare markieren'}
@@ -335,8 +335,8 @@ export default function InboxView({
           </div>
 
           {selectedIds.length > 0 && (
-            <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-sm font-medium text-gray-700">
+            <div className="rounded-xl border border-border bg-surface-muted/60 p-3 mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-medium text-foreground">
                 <span className="font-bold">{selectedIds.length}</span> Vorgänge markiert für Sammelverarbeitung
               </div>
               <div className="flex flex-wrap gap-2">
@@ -351,31 +351,31 @@ export default function InboxView({
                 </div>
                 <button
                   onClick={assignBatchAccount}
-                  className="h-9 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                  className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Konto zuweisen
                 </button>
                 <button
                   onClick={() => runBatchAction('request_receipt')}
-                  className="h-9 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                  className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Beleg anfordern
                 </button>
                 <button
                   onClick={() => runBatchAction('submit_for_review')}
-                  className="h-9 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                  className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Zur Prüfung
                 </button>
                 <button
                   onClick={() => runBatchAction('approve')}
-                  className="h-9 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                  className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Freigeben
                 </button>
                 <button
                   onClick={() => runBatchAction('post')}
-                  className="h-9 px-3 rounded-full bg-black text-white text-xs font-bold hover:bg-gray-900 transition-colors"
+                  className="h-9 px-3 rounded-full bg-dark-base text-background text-xs font-bold hover:bg-dark-2 transition-colors"
                 >
                   Sammel-Buchen
                 </button>
@@ -384,20 +384,20 @@ export default function InboxView({
           )}
 
           {batchMessage && (
-            <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700" aria-live="polite">
+            <div className="rounded-xl border border-border bg-surface-muted px-4 py-2 text-sm text-foreground" aria-live="polite">
               {batchMessage}
             </div>
           )}
         </div>
 
         {/* Toolbar row with count + Einklappen */}
-        <div className="flex items-center justify-between px-6 py-2.5 border-b border-gray-100 bg-gray-50/40 shrink-0">
-          <span className="text-xs font-bold text-gray-400 uppercase tracking-wide">
+        <div className="flex items-center justify-between px-6 py-2.5 border-b border-subtle bg-surface-muted/40 shrink-0">
+          <span className="text-xs font-bold text-muted uppercase tracking-wide">
             {filtered.length} Vorgänge
           </span>
           <button
             onClick={() => setSidebarCollapsed((v) => !v)}
-            className="h-8 px-3 rounded-full border border-gray-200 bg-white text-xs font-bold text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1.5 transition-colors"
+            className="h-8 px-3 rounded-full border border-border bg-surface text-xs font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1.5 transition-colors"
           >
             {sidebarCollapsed ? <PanelRightOpen size={13} /> : <PanelRightClose size={13} />}
             {sidebarCollapsed ? 'Einblenden' : 'Einklappen'}
@@ -408,14 +408,14 @@ export default function InboxView({
         <div className="flex-1 overflow-auto p-6">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="text-xs uppercase tracking-wider text-gray-400 font-bold border-b border-gray-100">
+              <tr className="text-xs uppercase tracking-wider text-muted font-bold border-b border-subtle">
                 <th scope="col" className="px-3 py-3 w-10">
                   <input
                     type="checkbox"
                     aria-label="Alle sichtbaren Vorgänge markieren"
                     checked={allVisibleSelected}
                     onChange={toggleSelectAllVisible}
-                    className="rounded border-gray-300"
+                    className="rounded border-border"
                   />
                 </th>
                 <th scope="col" className="px-3 py-3 w-32">STATUS</th>
@@ -425,13 +425,13 @@ export default function InboxView({
                 <th scope="col" className="px-3 py-3 text-right w-32">BETRAG</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-border-subtle">
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-12">
-                    <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-8 text-center">
-                      <div className="text-sm font-bold text-gray-700">Keine Vorgänge in dieser Queue</div>
-                      <div className="mt-1 text-sm text-gray-500">Passe Filter oder Queue an, um Vorgänge anzuzeigen.</div>
+                    <div className="rounded-2xl border border-dashed border-border bg-surface-muted p-8 text-center">
+                      <div className="text-sm font-bold text-foreground">Keine Vorgänge in dieser Queue</div>
+                      <div className="mt-1 text-sm text-muted">Passe Filter oder Queue an, um Vorgänge anzuzeigen.</div>
                     </div>
                   </td>
                 </tr>
@@ -445,8 +445,8 @@ export default function InboxView({
                 return (
                   <tr
                     key={tx.id}
-                    className={`hover:bg-gray-50/60 transition-colors ${
-                      isSelectedPreview ? 'bg-gray-50/90 border-l-2 border-dark-1' : ''
+                    className={`hover:bg-surface-muted/60 transition-colors ${
+                      isSelectedPreview ? 'bg-surface-muted/90 border-l-2 border-dark-1' : ''
                     } ${blockerCount > 0 ? 'border-l-2 border-error-border' : ''}`}
                   >
                     <td className="px-3 py-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
@@ -455,7 +455,7 @@ export default function InboxView({
                         aria-label={`${tx.payee} markieren`}
                         checked={selectedSet.has(tx.id)}
                         onChange={() => toggleRowSelection(tx.id)}
-                        className="rounded border-gray-300"
+                        className="rounded border-border"
                       />
                     </td>
                     <td className="px-3 py-4 whitespace-nowrap align-top">
@@ -463,7 +463,7 @@ export default function InboxView({
                         {status.label}
                       </span>
                     </td>
-                    <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500 font-medium align-top">
+                    <td className="px-3 py-4 whitespace-nowrap text-sm text-muted font-medium align-top">
                       {new Date(tx.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
                     </td>
                     <td className="px-3 py-4 align-top">
@@ -474,8 +474,8 @@ export default function InboxView({
                         aria-pressed={isSelectedPreview}
                         className="w-full text-left rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
                       >
-                        <div className="font-bold text-gray-900 text-sm">{tx.payee}</div>
-                        <div className="text-xs text-gray-500 mt-0.5 line-clamp-1">{tx.description}</div>
+                        <div className="font-bold text-foreground text-sm">{tx.payee}</div>
+                        <div className="text-xs text-muted mt-0.5 line-clamp-1">{tx.description}</div>
                       </button>
                     </td>
                     <td className="px-3 py-4 text-right align-top">
@@ -483,7 +483,7 @@ export default function InboxView({
                         <IssueBadges transaction={tx} />
                       </div>
                     </td>
-                    <td className={`px-3 py-4 whitespace-nowrap text-sm font-bold text-right align-top ${tx.amount < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                    <td className={`px-3 py-4 whitespace-nowrap text-sm font-bold text-right align-top ${tx.amount < 0 ? 'text-error' : 'text-success'}`}>
                       {formatCurrency(tx.amount, tx.currency)}
                     </td>
                   </tr>
@@ -496,29 +496,29 @@ export default function InboxView({
 
       {/* ── RIGHT: editing sidebar ── */}
       <aside
-        className={`shrink-0 flex flex-col h-full border-l border-gray-100 transition-all duration-300 overflow-hidden ${
+        className={`shrink-0 flex flex-col h-full border-l border-subtle transition-all duration-300 overflow-hidden ${
           !sidebarCollapsed ? 'w-80 xl:w-80 opacity-100' : 'w-0 opacity-0 pointer-events-none'
         }`}
         aria-hidden={sidebarCollapsed}
       >
         {!previewTx || !previewDraft ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400 text-sm p-6 text-center gap-3">
-            <Inbox size={28} className="text-gray-300" />
+          <div className="flex flex-col items-center justify-center h-full text-muted text-sm p-6 text-center gap-3">
+            <Inbox size={28} className="text-muted" />
             <span>Transaktion auswählen um die Schnellbuchung zu starten</span>
           </div>
         ) : (
           <>
             {/* Header card */}
-            <div className="p-4 border-b border-gray-100 shrink-0">
+            <div className="p-4 border-b border-subtle shrink-0">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="font-bold text-gray-900 leading-tight truncate">{previewTx.payee}</div>
-                  <div className="text-xs text-gray-400 mt-0.5">
+                  <div className="font-bold text-foreground leading-tight truncate">{previewTx.payee}</div>
+                  <div className="text-xs text-muted mt-0.5">
                     {new Date(previewTx.date).toLocaleDateString('de-DE')}
                     {previewDraft.externalReference ? ` · ${previewDraft.externalReference}` : ''}
                   </div>
                 </div>
-                <div className={`text-base font-bold shrink-0 ${previewTx.amount < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                <div className={`text-base font-bold shrink-0 ${previewTx.amount < 0 ? 'text-error' : 'text-success'}`}>
                   {formatCurrency(previewTx.amount, previewTx.currency)}
                 </div>
               </div>
@@ -527,7 +527,7 @@ export default function InboxView({
                   {getStatusPresentation(previewTx.workflowStatus).label}
                 </span>
                 {!previewTx.hasReceipt && (
-                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-gray-100 text-gray-600">
+                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-border-subtle text-muted">
                     Ohne Beleg
                   </span>
                 )}
@@ -538,26 +538,26 @@ export default function InboxView({
             <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5">
               {/* TRANSAKTIONSDETAILS */}
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-muted mb-2">
                   Transaktionsdetails
                 </div>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between gap-3">
-                    <span className="text-gray-500 shrink-0">Verwendungszweck</span>
-                    <span className="font-medium text-gray-800 text-right line-clamp-2">
+                    <span className="text-muted shrink-0">Verwendungszweck</span>
+                    <span className="font-medium text-foreground text-right line-clamp-2">
                       {previewTx.description ?? '—'}
                     </span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="text-gray-500 shrink-0">Buchungstext</span>
-                    <span className="font-medium text-gray-800 text-right">
+                    <span className="text-muted shrink-0">Buchungstext</span>
+                    <span className="font-medium text-foreground text-right">
                       {previewDraft.bookingText || '—'}
                     </span>
                   </div>
                   {previewTx.suggestion && (
                     <div className="flex justify-between gap-3">
-                      <span className="text-gray-500 shrink-0">Kategorie</span>
-                      <span className="font-medium text-gray-800 text-right">{previewTx.suggestion}</span>
+                      <span className="text-muted shrink-0">Kategorie</span>
+                      <span className="font-medium text-foreground text-right">{previewTx.suggestion}</span>
                     </div>
                   )}
                 </div>
@@ -565,17 +565,17 @@ export default function InboxView({
 
               {/* SCHNELLBUCHUNG */}
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-3">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-muted mb-3">
                   Schnellbuchung
                 </div>
                 <div className="space-y-3">
                   {!previewBankAccountNumber && (
-                    <p className="text-xs text-red-700" role="alert">
+                    <p className="text-xs text-error" role="alert">
                       Bankkonto ist nicht konfiguriert. Schnellbuchung ist deaktiviert.
                     </p>
                   )}
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Konto</label>
+                    <label className="block text-xs font-bold text-muted mb-1">Konto</label>
                     <AccountCombobox
                       accounts={accountOptions}
                       valueAccountId={previewCounterLine?.accountId ?? ''}
@@ -588,12 +588,12 @@ export default function InboxView({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Steuerfall</label>
+                    <label className="block text-xs font-bold text-muted mb-1">Steuerfall</label>
                     <select
                       value={normalizeTaxCaseKey(previewCounterLine?.taxCaseKey ?? previewCounterLine?.taxCode) ?? ''}
                       disabled={!previewAccountEditable || !previewBankAccountNumber}
                       onChange={(e) => updateInboxTaxCase(previewTx.id, e.target.value)}
-                      className="h-10 w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white disabled:bg-gray-50"
+                      className="h-10 w-full border border-border rounded-xl px-3 py-2 text-sm bg-surface disabled:bg-surface-muted"
                     >
                       <option value="">Keine</option>
                       {TAX_CASE_OPTIONS.map((option) => (
@@ -605,7 +605,7 @@ export default function InboxView({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Notiz</label>
+                    <label className="block text-xs font-bold text-muted mb-1">Notiz</label>
                     <textarea
                       value={notesEdits[previewTx.id] ?? ''}
                       onChange={(e) =>
@@ -613,12 +613,12 @@ export default function InboxView({
                       }
                       placeholder="Optionale Notiz..."
                       rows={3}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none"
+                      className="w-full border border-border rounded-xl px-3 py-2 text-sm resize-none"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Buchungstext bearbeiten</label>
+                    <label className="block text-xs font-bold text-muted mb-1">Buchungstext bearbeiten</label>
                     <input
                       type="text"
                       value={bookingTextEdits[previewTx.id] ?? previewDraft.bookingText ?? ''}
@@ -631,7 +631,7 @@ export default function InboxView({
                         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
                       }}
                       placeholder="Buchungstext eingeben"
-                      className="h-10 w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white disabled:bg-gray-50"
+                      className="h-10 w-full border border-border rounded-xl px-3 py-2 text-sm bg-surface disabled:bg-surface-muted"
                     />
                   </div>
                 </div>
@@ -639,17 +639,17 @@ export default function InboxView({
             </div>
 
             {/* Action bar */}
-            <div className="p-4 border-t border-gray-100 flex gap-2 shrink-0">
+            <div className="p-4 border-t border-subtle flex gap-2 shrink-0">
               <button
                 onClick={() => handleInlineAction(previewTx)}
                 disabled={!previewPrimaryAction}
-                className="flex-1 py-3 rounded-xl bg-black text-white font-bold text-sm hover:bg-gray-900 transition-colors disabled:opacity-40"
+                className="flex-1 py-3 rounded-xl bg-dark-base text-background font-bold text-sm hover:bg-dark-2 transition-colors disabled:opacity-40"
               >
                 {previewPrimaryAction ? nextActionLabel(previewPrimaryAction) : 'Keine Aktion'}
               </button>
               <button
                 onClick={() => onOpenTransaction(previewTx.id)}
-                className="px-5 py-3 rounded-xl border border-gray-200 font-bold text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                className="px-5 py-3 rounded-xl border border-border font-bold text-sm text-foreground hover:bg-surface-muted transition-colors"
               >
                 Erweitern
               </button>

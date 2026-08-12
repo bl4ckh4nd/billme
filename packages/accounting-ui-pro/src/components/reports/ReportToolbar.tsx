@@ -11,35 +11,35 @@ export default function ReportToolbar({ filters, onChange }: ReportToolbarProps)
     onChange({ ...filters, [key]: value });
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 space-y-2">
+    <div className="rounded-xl border border-border bg-surface px-4 py-3 space-y-2">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="text-[10px] font-bold uppercase tracking-wide text-gray-400">
+        <label className="text-[10px] font-bold uppercase tracking-wide text-muted">
           Stichtag
           <input
             type="date"
             value={filters.asOfDate}
             onChange={(e) => set('asOfDate', e.target.value)}
-            className="mt-0.5 h-8 w-full rounded-lg border border-gray-200 px-2 text-sm"
+            className="mt-0.5 h-8 w-full rounded-lg border border-border px-2 text-sm"
           />
         </label>
 
-        <label className="text-[10px] font-bold uppercase tracking-wide text-gray-400">
+        <label className="text-[10px] font-bold uppercase tracking-wide text-muted">
           Periode von
           <input
             type="month"
             value={filters.periodFrom}
             onChange={(e) => set('periodFrom', e.target.value)}
-            className="mt-0.5 h-8 w-full rounded-lg border border-gray-200 px-2 text-sm"
+            className="mt-0.5 h-8 w-full rounded-lg border border-border px-2 text-sm"
           />
         </label>
 
-        <label className="text-[10px] font-bold uppercase tracking-wide text-gray-400">
+        <label className="text-[10px] font-bold uppercase tracking-wide text-muted">
           Periode bis
           <input
             type="month"
             value={filters.periodTo}
             onChange={(e) => set('periodTo', e.target.value)}
-            className="mt-0.5 h-8 w-full rounded-lg border border-gray-200 px-2 text-sm"
+            className="mt-0.5 h-8 w-full rounded-lg border border-border px-2 text-sm"
           />
         </label>
 
@@ -59,7 +59,7 @@ export default function ReportToolbar({ filters, onChange }: ReportToolbarProps)
                 includeDrafts: false,
               })
             }
-            className="h-7 px-2.5 rounded-full border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 transition-colors"
+            className="h-7 px-2.5 rounded-full border border-border text-xs font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1 transition-colors"
           >
             <RotateCcw size={12} />
             Reset

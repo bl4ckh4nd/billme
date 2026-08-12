@@ -186,17 +186,17 @@ export default function ReportsView({ dataAdapter, chartFramework, onOpenTransac
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-6 py-3 border-b border-gray-100 shrink-0">
+      <div className="px-6 py-3 border-b border-subtle shrink-0">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gray-400 shrink-0">
-            <span className="w-6 h-6 rounded-md bg-accent text-black flex items-center justify-center">
+          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-muted shrink-0">
+            <span className="w-6 h-6 rounded-md bg-accent text-foreground flex items-center justify-center">
               <FileBarChart2 size={13} />
             </span>
             Auswertungen
           </div>
           <div className="flex-1 min-w-0">
-            <h1 className="text-sm font-black tracking-tight text-gray-900">SuSa, GuV und Bilanz</h1>
-            <p className="text-xs text-gray-400">SuSa, GuV und Bilanz mit Journal-Drilldown.</p>
+            <h1 className="text-sm font-black tracking-tight text-foreground">SuSa, GuV und Bilanz</h1>
+            <p className="text-xs text-muted">SuSa, GuV und Bilanz mit Journal-Drilldown.</p>
           </div>
         </div>
       </div>
@@ -205,11 +205,11 @@ export default function ReportsView({ dataAdapter, chartFramework, onOpenTransac
         <ReportToolbar filters={filters} onChange={setFilters} />
         <div className="flex items-center justify-between gap-3">
           <ReportTabSwitch activeTab={activeTab} onChange={setActiveTab} />
-          <div className="text-xs text-gray-500 flex items-center gap-2">
+          <div className="text-xs text-muted flex items-center gap-2">
             Aktive Ansicht: {activeReportLabel}
             {activeSource ? (
               <span
-                className="rounded-full border border-gray-200 bg-white px-2 py-0.5 font-semibold uppercase tracking-wide"
+                className="rounded-full border border-border bg-surface px-2 py-0.5 font-semibold uppercase tracking-wide"
                 title={
                   activeSource === 'live'
                     ? 'Auswertung aus den gebuchten Daten dieser Installation.'
@@ -225,7 +225,7 @@ export default function ReportsView({ dataAdapter, chartFramework, onOpenTransac
         <div className="flex flex-col xl:flex-row gap-4">
             <div className="flex-1 min-w-0 pr-1">
               {reportsLoading ? (
-                <div className="rounded-2xl border border-gray-200 bg-white p-8 text-sm text-gray-500">
+                <div className="rounded-2xl border border-border bg-surface p-8 text-sm text-muted">
                   Lade Auswertungen…
                 </div>
               ) : reportsError ? (
@@ -254,7 +254,7 @@ export default function ReportsView({ dataAdapter, chartFramework, onOpenTransac
                   onOpenJournalEntry={onOpenJournalEntry}
                 />
               ) : (
-                <div className="hidden xl:flex h-full items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-white/70 text-sm text-gray-400 px-6 text-center">
+                <div className="hidden xl:flex h-full items-center justify-center rounded-2xl border border-dashed border-border bg-surface/70 text-sm text-muted px-6 text-center">
                   Konto- oder Reportzeile anklicken, um Drilldown zu sehen.
                 </div>
               )}

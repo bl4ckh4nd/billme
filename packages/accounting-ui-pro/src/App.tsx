@@ -91,8 +91,8 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
   };
 
   return (
-    <div className="flex flex-col h-full w-full text-gray-900">
-      <div className="flex items-center gap-1 px-6 pt-2 shrink-0 border-b border-gray-100">
+    <div className="flex flex-col h-full w-full text-foreground">
+      <div className="flex items-center gap-1 px-6 pt-2 shrink-0 border-b border-subtle">
         <nav className="flex items-center gap-0.5">
           {(
             [
@@ -110,8 +110,8 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
               aria-current={currentView === view ? 'page' : undefined}
               className={`px-4 py-2 text-sm font-bold transition-colors rounded-t-lg relative ${
                 currentView === view
-                  ? 'text-gray-900 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-black'
-                  : 'text-gray-500 hover:text-gray-800'
+                  ? 'text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-dark-base'
+                  : 'text-muted hover:text-foreground'
               }`}
             >
               {label}

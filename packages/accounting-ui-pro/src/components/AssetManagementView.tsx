@@ -106,11 +106,11 @@ function euro(value: number) {
 
 function statusPill(status: AssetStatus) {
   const map: Record<AssetStatus, { label: string; className: string }> = {
-    entwurf: { label: 'Entwurf', className: 'bg-amber-100 text-amber-700' },
-    aktiv: { label: 'Aktiv', className: 'bg-emerald-100 text-emerald-700' },
-    voll_abgeschrieben: { label: 'Voll abgeschrieben', className: 'bg-gray-100 text-gray-700' },
-    verkauft: { label: 'Verkauft', className: 'bg-blue-100 text-blue-700' },
-    stillgelegt: { label: 'Stillgelegt', className: 'bg-rose-100 text-rose-700' },
+    entwurf: { label: 'Entwurf', className: 'bg-warning-bg text-warning' },
+    aktiv: { label: 'Aktiv', className: 'bg-success-bg text-success' },
+    voll_abgeschrieben: { label: 'Voll abgeschrieben', className: 'bg-border-subtle text-foreground' },
+    verkauft: { label: 'Verkauft', className: 'bg-info-bg text-info' },
+    stillgelegt: { label: 'Stillgelegt', className: 'bg-error-bg text-error' },
   };
   return map[status];
 }
@@ -516,15 +516,15 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden xl:flex-row">
-      <div className="flex min-h-0 flex-col border-b border-gray-100 xl:w-96 xl:min-w-96 xl:max-w-96 xl:border-b-0 xl:border-r">
-        <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
+      <div className="flex min-h-0 flex-col border-b border-subtle xl:w-96 xl:min-w-96 xl:max-w-96 xl:border-b-0 xl:border-r">
+        <div className="px-4 py-3 border-b border-subtle space-y-2.5">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-black text-accent flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-dark-base text-accent flex items-center justify-center shrink-0">
               <Building2 size={15} />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2">
-                <h1 className="text-sm font-black tracking-tight text-gray-900 leading-tight">Anlagenverwaltung</h1>
+                <h1 className="text-sm font-black tracking-tight text-foreground leading-tight">Anlagenverwaltung</h1>
                 {dataAdapter?.upsertAsset && (
                   <Button
                     type="button"
@@ -538,37 +538,37 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                   </Button>
                 )}
               </div>
-              <p className="text-xs text-gray-400 font-medium leading-tight">Übersicht, Aktivierung und Abschreibung.</p>
+              <p className="text-xs text-muted font-medium leading-tight">Übersicht, Aktivierung und Abschreibung.</p>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-              <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">Anlagen gesamt</div>
-              <div className="text-sm font-bold text-gray-900 mt-0.5">{totals.totalAssets} <span className="text-xs font-medium text-gray-500">({totals.activeAssets} aktiv)</span></div>
+            <div className="rounded-lg border border-border bg-surface px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide font-bold text-muted">Anlagen gesamt</div>
+              <div className="text-sm font-bold text-foreground mt-0.5">{totals.totalAssets} <span className="text-xs font-medium text-muted">({totals.activeAssets} aktiv)</span></div>
             </div>
-            <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-              <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">Restbuchwert</div>
-              <div className="text-sm font-bold text-gray-900 mt-0.5">{euro(totals.totalResidual)} <span className="text-xs font-medium text-gray-500">AK {euro(totals.totalAcquisition)}</span></div>
+            <div className="rounded-lg border border-border bg-surface px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide font-bold text-muted">Restbuchwert</div>
+              <div className="text-sm font-bold text-foreground mt-0.5">{euro(totals.totalResidual)} <span className="text-xs font-medium text-muted">AK {euro(totals.totalAcquisition)}</span></div>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={13} />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={13} />
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Anlage suchen (Nr., Name, Klasse, KSt.)"
-                className="w-full h-8 rounded-lg border border-gray-200 pl-8 pr-3 text-xs"
+                className="w-full h-8 rounded-lg border border-border pl-8 pr-3 text-xs"
               />
             </div>
             <div className="flex items-center gap-1.5">
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as 'alle' | AssetStatus)}
-                className="h-8 rounded-lg border border-gray-200 px-2 text-xs font-medium"
+                className="h-8 rounded-lg border border-border px-2 text-xs font-medium"
               >
                 <option value="alle">Alle Status</option>
                 <option value="entwurf">Entwurf</option>
@@ -590,14 +590,14 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                 key={asset.id}
                 onClick={() => setSelectedId(asset.id)}
                 className={`w-full text-left rounded-xl border p-4 transition-colors ${
-                  selectedCard ? 'border-black bg-gray-50' : 'border-gray-200 bg-white hover:bg-gray-50'
+                  selectedCard ? 'border-dark-base bg-surface-muted' : 'border-border bg-surface hover:bg-surface-muted'
                 }`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-xs text-gray-400 font-bold">{asset.assetNumber}</div>
-                    <div className="font-bold text-gray-900 truncate">{asset.name}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">
+                    <div className="text-xs text-muted font-bold">{asset.assetNumber}</div>
+                    <div className="font-bold text-foreground truncate">{asset.name}</div>
+                    <div className="text-xs text-muted mt-0.5">
                       {asset.assetClass} • {asset.costCenter} • {asset.location}
                     </div>
                   </div>
@@ -607,16 +607,16 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                   <div>
-                    <div className="text-gray-400 font-bold uppercase tracking-wide">AK</div>
-                    <div className="text-gray-700 font-bold">{euro(asset.acquisitionCost)}</div>
+                    <div className="text-muted font-bold uppercase tracking-wide">AK</div>
+                    <div className="text-foreground font-bold">{euro(asset.acquisitionCost)}</div>
                   </div>
                   <div>
-                    <div className="text-gray-400 font-bold uppercase tracking-wide">RBW</div>
-                    <div className="text-gray-700 font-bold">{euro(asset.residualValue)}</div>
+                    <div className="text-muted font-bold uppercase tracking-wide">RBW</div>
+                    <div className="text-foreground font-bold">{euro(asset.residualValue)}</div>
                   </div>
                   <div>
-                    <div className="text-gray-400 font-bold uppercase tracking-wide">Nächste AfA</div>
-                    <div className="text-gray-700 font-bold">{asset.nextDepreciation}</div>
+                    <div className="text-muted font-bold uppercase tracking-wide">Nächste AfA</div>
+                    <div className="text-foreground font-bold">{asset.nextDepreciation}</div>
                   </div>
                 </div>
               </button>
@@ -624,7 +624,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
           })}
           {assetsError && <div className="rounded-xl border border-error-border bg-error-bg p-4 text-sm text-error" role="alert" aria-live="assertive">{assetsError}</div>}
           {filtered.length === 0 && !assetsError && (
-            <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-500">
+            <div className="rounded-xl border border-border bg-surface p-6 text-sm text-muted">
               Keine Anlagen gefunden.
             </div>
           )}
@@ -643,23 +643,23 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
             onCancel={() => setEditForm(null)}
           />
         ) : !selected ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center p-12 text-gray-500">Keine Anlage ausgewählt.</div>
+          <div className="flex min-h-0 flex-1 items-center justify-center p-12 text-muted">Keine Anlage ausgewählt.</div>
         ) : (
           <>
-            <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
+            <div className="px-4 py-3 border-b border-subtle space-y-2.5">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-xs font-bold text-gray-400">{selected.assetNumber}</span>
+                    <span className="text-xs font-bold text-muted">{selected.assetNumber}</span>
                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusPill(selected.status).className}`}>
                       {statusPill(selected.status).label}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${selected.receiptLinked ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${selected.receiptLinked ? 'bg-success-bg text-success' : 'bg-warning-bg text-warning'}`}>
                       {selected.receiptLinked ? 'Beleg verknüpft' : 'Beleg fehlt'}
                     </span>
                   </div>
-                  <h2 className="text-base font-black text-gray-900 tracking-tight mt-0.5">{selected.name}</h2>
-                  <p className="text-xs text-gray-400 font-medium">
+                  <h2 className="text-base font-black text-foreground tracking-tight mt-0.5">{selected.name}</h2>
+                  <p className="text-xs text-muted font-medium">
                     {selected.assetClass} • {selected.costCenter} • {selected.location}
                   </p>
                 </div>
@@ -672,21 +672,21 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
               </div>
 
               <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
-                <div className="rounded-lg border border-gray-200 px-3 py-2 bg-white">
-                  <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">AK</div>
-                  <div className="text-sm font-bold text-gray-900 mt-0.5">{euro(selected.acquisitionCost)}</div>
+                <div className="rounded-lg border border-border px-3 py-2 bg-surface">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-muted">AK</div>
+                  <div className="text-sm font-bold text-foreground mt-0.5">{euro(selected.acquisitionCost)}</div>
                 </div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2 bg-white">
-                  <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">RBW</div>
-                  <div className="text-sm font-bold text-gray-900 mt-0.5">{euro(selected.residualValue)}</div>
+                <div className="rounded-lg border border-border px-3 py-2 bg-surface">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-muted">RBW</div>
+                  <div className="text-sm font-bold text-foreground mt-0.5">{euro(selected.residualValue)}</div>
                 </div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2 bg-white">
-                  <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">AfA p.a.</div>
-                  <div className="text-sm font-bold text-gray-900 mt-0.5">{euro(selected.annualDepreciation)}</div>
+                <div className="rounded-lg border border-border px-3 py-2 bg-surface">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-muted">AfA p.a.</div>
+                  <div className="text-sm font-bold text-foreground mt-0.5">{euro(selected.annualDepreciation)}</div>
                 </div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2 bg-white">
-                  <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">Nächste AfA</div>
-                  <div className="text-sm font-bold text-gray-900 mt-0.5">{selected.nextDepreciation}</div>
+                <div className="rounded-lg border border-border px-3 py-2 bg-surface">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-muted">Nächste AfA</div>
+                  <div className="text-sm font-bold text-foreground mt-0.5">{selected.nextDepreciation}</div>
                 </div>
               </div>
 
@@ -697,8 +697,8 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                     onClick={() => setActiveTab(tab)}
                     className={`h-7 px-3 rounded-full text-xs font-bold border ${
                       activeTab === tab
-                        ? 'bg-black text-white border-black'
-                        : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                        ? 'bg-dark-base text-background border-dark-base'
+                        : 'bg-surface text-muted border-border hover:bg-surface-muted'
                     }`}
                   >
                     {tab}
@@ -709,22 +709,22 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
 
             <div className="min-h-0 flex-1 overflow-y-auto p-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
               <section className="min-w-0 space-y-4">
-                <div className="rounded-2xl border border-gray-200 bg-white p-5">
-                  <div className="text-sm font-bold text-gray-900 mb-3">{activeTab}</div>
+                <div className="rounded-2xl border border-border bg-surface p-5">
+                  <div className="text-sm font-bold text-foreground mb-3">{activeTab}</div>
 
                   {activeTab === 'Übersicht' && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                       <div className="space-y-2">
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Lieferant</span><span className="font-bold text-gray-800">{selected.supplier ?? '—'}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Rechnung</span><span className="font-bold text-gray-800">{selected.invoiceRef ?? '—'}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Aktivierung</span><span className="font-bold text-gray-800">{selected.activationDate}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Kostenstelle</span><span className="font-bold text-gray-800">{selected.costCenter}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Lieferant</span><span className="font-bold text-foreground">{selected.supplier ?? '—'}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Rechnung</span><span className="font-bold text-foreground">{selected.invoiceRef ?? '—'}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Aktivierung</span><span className="font-bold text-foreground">{selected.activationDate}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Kostenstelle</span><span className="font-bold text-foreground">{selected.costCenter}</span></div>
                       </div>
                       <div className="space-y-2">
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Standort</span><span className="font-bold text-gray-800">{selected.location}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Status</span><span className="font-bold text-gray-800">{statusPill(selected.status).label}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Beleg</span><span className="font-bold text-gray-800">{selected.receiptLinked ? 'Verknüpft' : 'Offen'}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Nächste AfA</span><span className="font-bold text-gray-800">{selected.nextDepreciation}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Standort</span><span className="font-bold text-foreground">{selected.location}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Status</span><span className="font-bold text-foreground">{statusPill(selected.status).label}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Beleg</span><span className="font-bold text-foreground">{selected.receiptLinked ? 'Verknüpft' : 'Offen'}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Nächste AfA</span><span className="font-bold text-foreground">{selected.nextDepreciation}</span></div>
                       </div>
                     </div>
                   )}
@@ -742,11 +742,11 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                       }]).map((period, index, rows) => {
                         const depreciated = rows.slice(0, index + 1).reduce((sum, row) => sum + row.amount, 0);
                         return (
-                        <div key={period.id} className="grid grid-cols-4 gap-3 rounded-lg border border-gray-100 p-3 text-sm">
-                          <div><div className="text-xs text-gray-400 font-bold">Jahr</div><div className="font-bold text-gray-800">{period.year}</div></div>
-                          <div><div className="text-xs text-gray-400 font-bold">AfA</div><div className="font-bold text-gray-800">{euro(period.amount)}</div></div>
-                          <div><div className="text-xs text-gray-400 font-bold">Status</div><div className="font-bold text-gray-800">{period.status === 'posted' ? 'Gebucht' : period.status === 'cancelled' ? 'Storniert' : 'Geplant'}</div></div>
-                          <div><div className="text-xs text-gray-400 font-bold">RBW danach</div><div className="font-bold text-gray-800">{euro(Math.max(selected.acquisitionCost - depreciated, 0))}</div></div>
+                        <div key={period.id} className="grid grid-cols-4 gap-3 rounded-lg border border-subtle p-3 text-sm">
+                          <div><div className="text-xs text-muted font-bold">Jahr</div><div className="font-bold text-foreground">{period.year}</div></div>
+                          <div><div className="text-xs text-muted font-bold">AfA</div><div className="font-bold text-foreground">{euro(period.amount)}</div></div>
+                          <div><div className="text-xs text-muted font-bold">Status</div><div className="font-bold text-foreground">{period.status === 'posted' ? 'Gebucht' : period.status === 'cancelled' ? 'Storniert' : 'Geplant'}</div></div>
+                          <div><div className="text-xs text-muted font-bold">RBW danach</div><div className="font-bold text-foreground">{euro(Math.max(selected.acquisitionCost - depreciated, 0))}</div></div>
                         </div>
                       );})}
                     </div>
@@ -754,10 +754,10 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
 
                   {activeTab === 'Bewegungen' && (
                     <div className="space-y-3">
-                      {!schedule.length && dataAdapter ? <div className="text-sm text-gray-500">Kein Abschreibungsplan vorhanden.</div> : null}
-                      <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
-                        <div className="font-bold text-gray-900">Zugang / Aktivierung</div>
-                        <div className="text-sm text-gray-600 mt-1">
+                      {!schedule.length && dataAdapter ? <div className="text-sm text-muted">Kein Abschreibungsplan vorhanden.</div> : null}
+                      <div className="rounded-xl border border-border bg-surface-muted/60 p-4">
+                        <div className="font-bold text-foreground">Zugang / Aktivierung</div>
+                        <div className="text-sm text-muted mt-1">
                           {selected.activationDate} • Anschaffung {euro(selected.acquisitionCost)} • Status {statusPill(selected.status).label}
                         </div>
                       </div>
@@ -765,7 +765,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                   )}
 
                   {!['Übersicht', 'Abschreibungsplan', 'Bewegungen'].includes(activeTab) && (
-                    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-sm text-gray-500">
+                    <div className="rounded-xl border border-dashed border-border p-6 text-sm text-muted">
                       Für diesen Bereich liegen noch keine Daten vor.
                     </div>
                   )}

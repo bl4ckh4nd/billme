@@ -541,7 +541,7 @@ export const ProAccountingPage: React.FC = () => {
 
   if (txQuery.isLoading || draftQuery.isLoading || policyQuery.isLoading) {
     return (
-      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-gray-600">
+      <div className="bg-surface rounded-2xl p-8 min-h-full shadow-sm text-sm text-muted">
         Lade Pro-Buchhaltungsdaten…
       </div>
     );
@@ -549,7 +549,7 @@ export const ProAccountingPage: React.FC = () => {
 
   if (txQuery.isError || draftQuery.isError || policyQuery.isError || ledgerStatsError || ledgerAccountsError || bankAccountsError) {
     return (
-      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-red-700" role="alert">
+      <div className="bg-surface rounded-2xl p-8 min-h-full shadow-sm text-sm text-error" role="alert">
         Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error ?? policyQuery.error ?? ledgerStatsLoadError ?? ledgerAccountsLoadError ?? bankAccountsLoadError)}
       </div>
     );
@@ -557,30 +557,32 @@ export const ProAccountingPage: React.FC = () => {
 
   if ((ledgerStats?.total ?? 0) === 0) {
     return (
-      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
-        <h2 className="text-xl font-black text-gray-900">Pro Kontenrahmen fehlt</h2>
-        <p className="mt-2 text-sm text-gray-600">
+      <div className="bg-surface rounded-2xl p-8 min-h-full shadow-sm">
+        <h2 className="text-xl font-black text-foreground">Pro Kontenrahmen fehlt</h2>
+        <p className="mt-2 text-sm text-muted">
           Bitte laden Sie zuerst den SKR03/04 Kontenrahmen für die Pro-Buchhaltung.
         </p>
         {importMessage && <div className={`mt-3 text-sm ${importFailed ? 'text-error' : 'text-success'}`} role={importFailed ? 'alert' : 'status'} aria-live={importFailed ? 'assertive' : 'polite'}>{importMessage}</div>}
-        <button
+        <Button
+          variant="dark"
+          size="md"
           onClick={() => void handleImportSkr()}
           disabled={importSkr.isPending}
           aria-busy={importSkr.isPending}
-          className="mt-5 px-5 py-2.5 rounded-xl bg-black text-white text-sm font-semibold disabled:opacity-60"
+          className="mt-5"
         >
           {importSkr.isPending ? 'Import läuft…' : 'SKR03/04 importieren'}
-        </button>
+        </Button>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-2xl px-6 pt-5 pb-0 h-full flex flex-col shadow-sm">
+    <div className="bg-surface rounded-2xl px-6 pt-5 pb-0 h-full flex flex-col shadow-sm">
       <div className="mb-3 flex items-center justify-between shrink-0">
         <div>
-          <h2 className="text-xl font-black text-gray-900 leading-tight">Pro Buchhaltung</h2>
-          <p className="text-xs text-gray-500 mt-0.5">Doppelte Buchführung, Kontenrahmen und Berichte.</p>
+          <h2 className="text-xl font-black text-foreground leading-tight">Pro Buchhaltung</h2>
+          <p className="text-xs text-muted mt-0.5">Doppelte Buchführung, Kontenrahmen und Berichte.</p>
         </div>
         <Button size="sm" variant="secondary" onClick={() => setShowRulesModal(true)}>
           <Settings2 size={14} />
@@ -590,13 +592,13 @@ export const ProAccountingPage: React.FC = () => {
 
 
 
-      {adapterBusy && <div className="px-1 pb-2 text-xs text-gray-500" aria-live="polite">Speichere Änderung…</div>}
+      {adapterBusy && <div className="px-1 pb-2 text-xs text-muted" aria-live="polite">Speichere Änderung…</div>}
       {adapterError && (
         <div className="mb-2 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">
           {adapterError}
         </div>
       )}
-      <div className="flex-1 min-h-0 rounded-t-2xl border border-b-0 border-gray-200 overflow-hidden">
+      <div className="flex-1 min-h-0 rounded-t-2xl border border-b-0 border-border overflow-hidden">
         <ProAccountingWorkspace
           seed={seed}
           dataAdapter={dataAdapter}

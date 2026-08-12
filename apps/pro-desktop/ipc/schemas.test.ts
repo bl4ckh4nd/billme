@@ -44,6 +44,16 @@ describe('Pro IPC route schemas', () => {
     ).toThrow();
   });
 
+  it('preserves report ranges, active chart and GuV drilldown refs in IPC contracts', () => {
+    expect(ipcRoutes['pro:getSusaReport'].args.parse({ from: '2026-01-01', to: '2026-03-31', asOfDate: '2026-03-31' }))
+      .toMatchObject({ from: '2026-01-01', to: '2026-03-31' });
+    expect(ipcRoutes['pro:getGuvReport'].result.parse({
+      from: '2026-01-01', to: '2026-03-31', chart: 'SKR03',
+      rows: [{ positionKey: 'revenue', positionLabel: 'Umsatz', amount: 100, accountRefs: ['8400'] }],
+      netResult: 100,
+    }).rows[0]?.accountRefs).toEqual(['8400']);
+  });
+
   it('requires roles and audit reasons for asset mutations', () => {
     expect(() =>
       ipcRoutes['pro:runDepreciation'].args.parse({

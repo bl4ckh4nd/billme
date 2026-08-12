@@ -18,13 +18,24 @@ export type PostgresTransactionClient = PoolClient;
 
 const SERIALIZABLE_TRANSACTION_MAX_ATTEMPTS = 3;
 const SERIALIZABLE_TRANSACTION_RETRY_DELAY_MS = 5;
+const MAX_POSTGRES_ERROR_CAUSE_DEPTH = 8;
 
 const isRetryableSerializableTransactionError = (error: unknown): boolean => {
-  if (typeof error !== 'object' || error === null || !('code' in error)) {
-    return false;
+  const seen = new Set<object>();
+  let current: unknown = error;
+
+  for (let depth = 0; depth < MAX_POSTGRES_ERROR_CAUSE_DEPTH; depth += 1) {
+    if (typeof current !== 'object' || current === null || seen.has(current)) return false;
+    seen.add(current);
+
+    if ('code' in current && (current.code === '40001' || current.code === '40P01')) {
+      return true;
+    }
+
+    current = 'cause' in current ? current.cause : undefined;
   }
 
-  return error.code === '40001' || error.code === '40P01';
+  return false;
 };
 
 const delay = (milliseconds: number): Promise<void> =>

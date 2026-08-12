@@ -43,7 +43,9 @@ test('retries a serialization failure with a fresh client', async () => {
   const result = await withSerializablePostgresTransaction(pool, async (client) => {
     workCalls += 1;
     if (workCalls === 1) {
-      throw Object.assign(new Error('serialization failure'), { code: '40001' });
+      throw new Error('query failed', {
+        cause: Object.assign(new Error('serialization failure'), { code: '40001' }),
+      });
     }
     return 'committed';
   });
@@ -59,7 +61,9 @@ test('retries a serialization failure with a fresh client', async () => {
 test('does not retry non-transaction errors', async () => {
   const client = createClient(async () => undefined);
   const pool = createPool([client]);
-  const error = Object.assign(new Error('duplicate key'), { code: '23505' });
+  const error = new Error('query failed', {
+    cause: Object.assign(new Error('duplicate key'), { code: '23505' }),
+  });
   let workCalls = 0;
 
   await assert.rejects(

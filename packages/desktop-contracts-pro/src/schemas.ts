@@ -564,6 +564,7 @@ export const bookingDraftLineEntitySchema = z.object({
   counterpartyVatId: z.string().optional(),
   evidenceType: z.string().optional(),
   evidenceReference: z.string().optional(),
+  datevSachverhaltLl: z.string().regex(/^[1-9]\d{0,2}$/).optional(),
   costCenter: z.string().optional(),
   memo: z.string().optional(),
 });
@@ -622,6 +623,7 @@ export const journalLineEntitySchema = z.object({
   counterpartyVatId: z.string().optional(),
   evidenceType: z.string().optional(),
   evidenceReference: z.string().optional(),
+  datevSachverhaltLl: z.string().regex(/^[1-9]\d{0,2}$/).optional(),
   costCenter: z.string().optional(),
   memo: z.string().optional(),
 });

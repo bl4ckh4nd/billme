@@ -117,6 +117,7 @@ export interface BookingDraftLineEntity {
   counterpartyVatId?: string;
   evidenceType?: string;
   evidenceReference?: string;
+  datevSachverhaltLl?: string;
   costCenter?: string;
   memo?: string;
 }
@@ -153,6 +154,7 @@ export interface JournalLineEntity {
   counterpartyVatId?: string;
   evidenceType?: string;
   evidenceReference?: string;
+  datevSachverhaltLl?: string;
   costCenter?: string;
   memo?: string;
 }

@@ -228,7 +228,7 @@ export const SettingsView: React.FC = () => {
         return { ...current, legalForm: value, profitDetermination: 'double_entry', hgbSizeClass: current.hgbSizeClass ?? 'micro', chart: current.chart ?? 'SKR03' };
       }
       if (field === 'legalForm' && value === 'sole_proprietor') {
-        return { ...current, legalForm: value, hgbSizeClass: undefined };
+        return { ...current, legalForm: value, profitDetermination: 'eur', hgbSizeClass: undefined };
       }
       if (field === 'profitDetermination' && value === 'eur' && current.legalForm === 'gmbh') return current;
       return { ...current, [field]: value };

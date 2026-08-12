@@ -179,6 +179,9 @@ const validateBillingStep = (draft: BusinessOnboardingDraft): Partial<Record<Fie
   if (profile.legalForm === 'gmbh' && profile.profitDetermination !== 'double_entry') {
     errors['businessReportingProfile.profitDetermination'] = 'Eine GmbH muss in diesem Umfang doppelte Buchführung verwenden.';
   }
+  if (profile.legalForm === 'sole_proprietor' && profile.profitDetermination !== 'eur') {
+    errors['businessReportingProfile.profitDetermination'] = 'Einzelunternehmen sind in diesem Umfang nur mit EÜR möglich.';
+  }
   if (profile.legalForm === 'gmbh' && !profile.hgbSizeClass) {
     errors['businessReportingProfile.hgbSizeClass'] = 'Für eine GmbH bitte Micro oder Small auswählen.';
   }
@@ -322,6 +325,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
           businessReportingProfile: {
             ...profile,
             legalForm: value,
+            profitDetermination: 'eur',
             hgbSizeClass: undefined,
           },
         };

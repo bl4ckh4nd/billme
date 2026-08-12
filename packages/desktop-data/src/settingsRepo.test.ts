@@ -224,6 +224,16 @@ describe("settingsRepo", () => {
     })).toThrow();
   });
 
+  it('rejects sole-proprietor double-entry profiles at the settings boundary', () => {
+    expect(() => BusinessReportingProfileSchema.parse({
+      jurisdiction: 'DE',
+      legalForm: 'sole_proprietor',
+      profitDetermination: 'double_entry',
+      fiscalYearStart: '01-01',
+      vatMethod: 'soll',
+    })).toThrow(/Sole proprietors require EÜR/);
+  });
+
   it('rejects impossible month-day values', () => {
     expect(() => BusinessReportingProfileSchema.parse({
       jurisdiction: 'DE',

@@ -25,6 +25,13 @@ export const businessReportingProfileSchema = z
         message: 'EÜR requires a calendar-year start (01-01)',
       });
     }
+    if (profile.legalForm === 'sole_proprietor' && profile.profitDetermination !== 'eur') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['profitDetermination'],
+        message: 'Sole proprietors require EÜR (cash-basis accounting)',
+      });
+    }
     if (profile.legalForm !== 'gmbh') return;
     if (profile.profitDetermination !== 'double_entry') {
       ctx.addIssue({

@@ -39,6 +39,19 @@ test('EÜR is restricted to the calendar year', () => {
   }));
 });
 
+test('sole proprietors cannot use double-entry accounting', () => {
+  assert.throws(
+    () => businessReportingProfileSchema.parse({
+      jurisdiction: 'DE',
+      legalForm: 'sole_proprietor',
+      profitDetermination: 'double_entry',
+      fiscalYearStart: '01-01',
+      vatMethod: 'soll',
+    }),
+    /Sole proprietors require EÜR/,
+  );
+});
+
 test('rejects impossible month-day values', () => {
   assert.throws(() => businessReportingProfileSchema.parse({
     jurisdiction: 'DE',

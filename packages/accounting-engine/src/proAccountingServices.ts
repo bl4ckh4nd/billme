@@ -35,6 +35,7 @@ import type {
   AccountingBackfillPreview,
   AccountingBackfillResult,
   AccountingPostingPreview,
+  AccountingMutationContext,
   IncomingInvoiceEntity,
   OpenItemEntity,
   OpenItemPaymentEntity,
@@ -45,21 +46,21 @@ import type { TenantScope } from '@billme/server-core';
 
 export interface ProAccountingOposRepository {
   getAccountingPolicy(scope: TenantScope): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
-  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist' }): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
+  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; mutation?: AccountingMutationContext }): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
   listAccountingAccountMappings(scope: TenantScope, chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
-  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string }): Promise<AccountingAccountMapping>;
+  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string; mutation?: AccountingMutationContext }): Promise<AccountingAccountMapping>;
   listVendors(scope: TenantScope): Promise<VendorEntity[]>;
-  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<VendorEntity>;
+  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
-  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
+  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
   allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
-  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
-  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string }): Promise<{ ok: true; reversalEntryId: string }>;
+  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>, allocationEventId?: string, mutation?: AccountingMutationContext): Promise<OpenItemPaymentEntity>;
+  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
 }
@@ -103,21 +104,21 @@ export interface ProAccountingService {
   }>;
   buildDatevRows(scope: TenantScope, args?: ReportRangeOptions): Promise<DatevPostingRow[]>;
   getAccountingPolicy(scope: TenantScope): ReturnType<ProAccountingOposRepository['getAccountingPolicy']>;
-  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist' }): ReturnType<ProAccountingOposRepository['setAccountingPolicy']>;
+  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; mutation?: AccountingMutationContext }): ReturnType<ProAccountingOposRepository['setAccountingPolicy']>;
   listAccountingAccountMappings(scope: TenantScope, chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
-  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string }): Promise<AccountingAccountMapping>;
+  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string; mutation?: AccountingMutationContext }): Promise<AccountingAccountMapping>;
   listVendors(scope: TenantScope): Promise<VendorEntity[]>;
-  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<VendorEntity>;
+  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
-  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
+  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
   allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
-  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
-  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string }): Promise<{ ok: true; reversalEntryId: string }>;
+  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>, allocationEventId?: string, mutation?: AccountingMutationContext): Promise<OpenItemPaymentEntity>;
+  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(scope: TenantScope): Promise<void>;
@@ -155,21 +156,21 @@ export interface BoundProAccountingService {
   }>;
   buildDatevRows(args?: ReportRangeOptions): Promise<DatevPostingRow[]>;
   getAccountingPolicy(): ReturnType<ProAccountingOposRepository['getAccountingPolicy']>;
-  setAccountingPolicy(input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist' }): ReturnType<ProAccountingOposRepository['setAccountingPolicy']>;
+  setAccountingPolicy(input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; mutation?: AccountingMutationContext }): ReturnType<ProAccountingOposRepository['setAccountingPolicy']>;
   listAccountingAccountMappings(chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
-  upsertAccountingAccountMapping(input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string }): Promise<AccountingAccountMapping>;
+  upsertAccountingAccountMapping(input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string; mutation?: AccountingMutationContext }): Promise<AccountingAccountMapping>;
   listVendors(): Promise<VendorEntity[]>;
-  upsertVendor(input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<VendorEntity>;
+  upsertVendor(input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
   listIncomingInvoices(): Promise<IncomingInvoiceEntity[]>;
-  upsertIncomingInvoice(input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
+  upsertIncomingInvoice(input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
-  postIncomingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   listOpenItems(): Promise<OpenItemEntity[]>;
   allocateOpenItemPayment(input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
-  allocateRemainingOpenItemPayment(paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
-  reverseDocumentAccounting(input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string }): Promise<{ ok: true; reversalEntryId: string }>;
+  allocateRemainingOpenItemPayment(paymentId: string, allocations: Array<{ openItemId: string; amount: number }>, allocationEventId?: string, mutation?: AccountingMutationContext): Promise<OpenItemPaymentEntity>;
+  reverseDocumentAccounting(input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(): Promise<void>;
@@ -279,7 +280,7 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   postIncomingInvoice: (scope, invoiceId, options) => repository.postIncomingInvoice(scope, invoiceId, options),
   listOpenItems: (scope) => repository.listOpenItems(scope),
   allocateOpenItemPayment: (scope, input) => repository.allocateOpenItemPayment(scope, input),
-  allocateRemainingOpenItemPayment: (scope, paymentId, allocations) => repository.allocateRemainingOpenItemPayment(scope, paymentId, allocations),
+  allocateRemainingOpenItemPayment: (scope, paymentId, allocations, allocationEventId, mutation) => repository.allocateRemainingOpenItemPayment(scope, paymentId, allocations, allocationEventId, mutation),
   reverseDocumentAccounting: (scope, input) => repository.reverseDocumentAccounting(scope, input),
   previewAccountingBackfill: (scope) => repository.previewAccountingBackfill(scope),
   confirmAccountingBackfill: (scope, input) => repository.confirmAccountingBackfill(scope, input),
@@ -321,7 +322,7 @@ export const bindProAccountingScope = (
   postIncomingInvoice: (invoiceId, options) => service.postIncomingInvoice(scope, invoiceId, options),
   listOpenItems: () => service.listOpenItems(scope),
   allocateOpenItemPayment: (input) => service.allocateOpenItemPayment(scope, input),
-  allocateRemainingOpenItemPayment: (paymentId, allocations) => service.allocateRemainingOpenItemPayment(scope, paymentId, allocations),
+  allocateRemainingOpenItemPayment: (paymentId, allocations, allocationEventId, mutation) => service.allocateRemainingOpenItemPayment(scope, paymentId, allocations, allocationEventId, mutation),
   reverseDocumentAccounting: (input) => service.reverseDocumentAccounting(scope, input),
   previewAccountingBackfill: () => service.previewAccountingBackfill(scope),
   confirmAccountingBackfill: (input) => service.confirmAccountingBackfill(scope, input),

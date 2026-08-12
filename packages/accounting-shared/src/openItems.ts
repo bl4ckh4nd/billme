@@ -4,6 +4,16 @@ export type OpenItemPartyType = 'debtor' | 'creditor';
 export type OpenItemStatus = 'open' | 'partially_paid' | 'paid' | 'overpaid' | 'unresolved';
 export type AccountingDocumentSource = 'outgoing_invoice' | 'incoming_invoice' | 'legacy_transaction';
 
+/** Caller supplied audit context for a server-side accounting mutation. */
+export interface AccountingMutationContext {
+  reason: string;
+  actor?: {
+    type: 'system' | 'user' | 'service';
+    id?: string;
+    displayName?: string;
+  };
+}
+
 export interface VendorEntity {
   id: string;
   tenantId: string;
@@ -128,6 +138,9 @@ export interface OpenItemPaymentInput {
   sourceType: 'bank_transaction' | 'invoice_payment' | 'manual';
   sourceId: string;
   allocations: Array<{ openItemId: string; amount: number }>;
+  mutation?: AccountingMutationContext;
+  /** Stable retry key for one allocation event (not the payment id). */
+  allocationEventId?: string;
 }
 
 export interface OpenItemAllocationEntity {

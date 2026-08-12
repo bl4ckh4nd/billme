@@ -195,6 +195,7 @@ export interface AccountingBackfillConfirmation {
   runId: string;
   confirmationHash: string;
   reason: string;
+  mutation?: AccountingMutationContext;
 }
 
 export interface AccountingBackfillResult {

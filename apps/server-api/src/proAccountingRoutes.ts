@@ -717,7 +717,10 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     response: accountingBackfillResultSchema,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const input: AccountingBackfillConfirmation = body;
+      const input: AccountingBackfillConfirmation = {
+        ...body,
+        mutation: mutationFor(session, body.reason),
+      };
       const result = await serviceFor(app).confirmAccountingBackfill(session.scope, input);
       return result;
     },

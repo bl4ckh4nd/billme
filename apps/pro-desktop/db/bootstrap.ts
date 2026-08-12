@@ -207,7 +207,6 @@ CREATE INDEX IF NOT EXISTS idx_ledger_accounts_chart
   ON ledger_accounts(chart);
 CREATE INDEX IF NOT EXISTS idx_ledger_accounts_name
   ON ledger_accounts(name);
-
 CREATE TABLE IF NOT EXISTS pro_workflow_entries (
   tenant_id TEXT NOT NULL DEFAULT 'default',
   transaction_id TEXT NOT NULL,
@@ -309,6 +308,13 @@ CREATE TABLE IF NOT EXISTS accounting_periods (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS accounting_policies (
+  tenant_id TEXT PRIMARY KEY,
+  active_chart TEXT NOT NULL DEFAULT 'SKR03' CHECK (active_chart IN ('SKR03', 'SKR04')),
+  period_policy TEXT NOT NULL DEFAULT 'calendar_month' CHECK (period_policy IN ('calendar_month')),
+  updated_at TEXT NOT NULL
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_accounting_periods_tenant_period
   ON accounting_periods(tenant_id, period);
 
@@ -324,12 +330,17 @@ CREATE TABLE IF NOT EXISTS journal_entries (
   fiscal_year INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('posted', 'reversed')),
   source_draft_id TEXT,
+  source_type TEXT NOT NULL DEFAULT 'booking_draft',
+  source_key TEXT,
   reversed_entry_id TEXT,
   created_at TEXT NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_entry_number
   ON journal_entries(tenant_id, entry_number);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source
+  ON journal_entries(tenant_id, source_type, source_key)
+  WHERE source_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_journal_entries_tenant_posting_date
   ON journal_entries(tenant_id, posting_date DESC);
 
@@ -428,6 +439,8 @@ WHEN
   NEW.period != OLD.period OR
   NEW.fiscal_year != OLD.fiscal_year OR
   COALESCE(NEW.source_draft_id, '') != COALESCE(OLD.source_draft_id, '') OR
+  NEW.source_type != OLD.source_type OR
+  COALESCE(NEW.source_key, '') != COALESCE(OLD.source_key, '') OR
   NEW.created_at != OLD.created_at
 BEGIN
   SELECT RAISE(ABORT, 'journal_entries core fields are immutable');

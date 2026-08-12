@@ -13,6 +13,7 @@ import type {
   ReportRangeOptions,
   SusaReport,
 } from '@billme/server-core';
+import type { ReverseJournalEntryOptions } from '@billme/server-core/ports';
 import type {
   AccountSuggestionRule,
   BookingDraftEntity,
@@ -45,7 +46,7 @@ export interface ProAccountingService {
     entry: JournalEntryEntity;
     issues: ValidationIssue[];
   }>;
-  reverseJournalEntry(scope: TenantScope, entryId: string, reason: string): Promise<{ ok: true; reversalEntryId: string }>;
+  reverseJournalEntry(scope: TenantScope, entryId: string, reason: string, options?: ReverseJournalEntryOptions): Promise<{ ok: true; reversalEntryId: string }>;
   listJournalEntries(scope: TenantScope, args?: ListJournalEntriesOptions): Promise<JournalEntryEntity[]>;
   getLedgerBalances(scope: TenantScope, args?: LedgerBalanceOptions): Promise<LedgerBalance[]>;
   getSusaReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<SusaReport>;
@@ -82,7 +83,7 @@ export interface BoundProAccountingService {
     entry: JournalEntryEntity;
     issues: ValidationIssue[];
   }>;
-  reverseJournalEntry(entryId: string, reason: string): Promise<{ ok: true; reversalEntryId: string }>;
+  reverseJournalEntry(entryId: string, reason: string, options?: ReverseJournalEntryOptions): Promise<{ ok: true; reversalEntryId: string }>;
   listJournalEntries(args?: ListJournalEntriesOptions): Promise<JournalEntryEntity[]>;
   getLedgerBalances(args?: LedgerBalanceOptions): Promise<LedgerBalance[]>;
   getSusaReport(args?: LedgerBalanceOptions): Promise<SusaReport>;
@@ -184,7 +185,8 @@ export const createProAccountingService = (repository: ProAccountingRepository):
   dispatchDraftAction: (scope, args) => repository.dispatchDraftAction(scope, args),
   validateTaxCompliance: (scope, args) => repository.validateTaxCompliance(scope, args),
   postDraft: (scope, draftId, options) => repository.postDraft(scope, draftId, options),
-  reverseJournalEntry: (scope, entryId, reason) => repository.reverseJournalEntry(scope, entryId, reason),
+  reverseJournalEntry: (scope, entryId, reason, options) =>
+    (repository.reverseJournalEntry as unknown as (scope: TenantScope, entryId: string, reason: string, options?: ReverseJournalEntryOptions) => Promise<{ ok: true; reversalEntryId: string }>)(scope, entryId, reason, options),
   listJournalEntries: (scope, args) => repository.listJournalEntries(scope, args),
   getLedgerBalances: (scope, args) => repository.getLedgerBalances(scope, args),
   getSusaReport: (scope, args) => repository.getSusaReport(scope, args),
@@ -208,7 +210,7 @@ export const bindProAccountingScope = (
   dispatchDraftAction: (args) => service.dispatchDraftAction(scope, args),
   validateTaxCompliance: (args) => service.validateTaxCompliance(scope, args),
   postDraft: (draftId, options) => service.postDraft(scope, draftId, options),
-  reverseJournalEntry: (entryId, reason) => service.reverseJournalEntry(scope, entryId, reason),
+  reverseJournalEntry: (entryId, reason, options) => service.reverseJournalEntry(scope, entryId, reason, options),
   listJournalEntries: (args) => service.listJournalEntries(scope, args),
   getLedgerBalances: (args) => service.getLedgerBalances(scope, args),
   getSusaReport: (args) => service.getSusaReport(scope, args),

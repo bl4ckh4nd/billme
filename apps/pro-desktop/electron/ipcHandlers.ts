@@ -144,10 +144,10 @@ const requireSettings = (db: Database.Database): AppSettings => {
 };
 
 type ProActorRole = 'bookkeeper' | 'reviewer' | 'accountant' | 'admin' | 'auditor';
-
-const assertProRoleAllowed = (action: string, actorRole: ProActorRole, allowed: ProActorRole[]): void => {
-  if (allowed.includes(actorRole)) return;
-  throw new Error(`Unauthorized for ${action}: role "${actorRole}" is not permitted.`);
+// Local Electron has one authenticated owner; renderer role labels are advisory UI state.
+const LOCAL_OWNER_ROLE: ProActorRole = 'admin';
+const assertLocalOwner = (action: string): void => {
+  if (LOCAL_OWNER_ROLE !== 'admin') throw new Error(`Unauthorized for ${action}`);
 };
 
 type DbProvider = () => Database.Database;
@@ -863,8 +863,8 @@ export const registerIpcHandlers = (
     return { ok: verification.ok, verification };
   });
 
-  register(ipcMain, 'tax:auditExportPackage', ({ from, to, includeDocuments, actorRole }) => {
-    assertProRoleAllowed('tax:auditExportPackage', actorRole, ['accountant', 'admin', 'auditor']);
+  register(ipcMain, 'tax:auditExportPackage', ({ from, to, includeDocuments }) => {
+    assertLocalOwner('tax:auditExportPackage');
     const db = requireDb();
     return buildTaxAuditExportPackage(db, getUserDataPath(), {
       from,
@@ -1179,14 +1179,14 @@ export const registerIpcHandlers = (
     return getProAccountingService().dispatchDraftAction({ transactionId, action, rejectReason });
   });
 
-  register(ipcMain, 'pro:postDraft', ({ draftId, postingDate, actorRole }) => {
-    assertProRoleAllowed('pro:postDraft', actorRole, ['reviewer', 'accountant', 'admin']);
-    return getProAccountingService().postDraft(draftId, { postingDate });
+  register(ipcMain, 'pro:postDraft', ({ draftId, postingDate, idempotencyKey, softLockOverride, overrideReason }) => {
+    assertLocalOwner('pro:postDraft');
+    return getProAccountingService().postDraft(draftId, { postingDate, idempotencyKey, softLockOverride, overrideReason });
   });
 
-  register(ipcMain, 'pro:reverseJournalEntry', ({ entryId, reason, actorRole }) => {
-    assertProRoleAllowed('pro:reverseJournalEntry', actorRole, ['accountant', 'admin']);
-    return getProAccountingService().reverseJournalEntry(entryId, reason);
+  register(ipcMain, 'pro:reverseJournalEntry', ({ entryId, reason, postingDate, softLockOverride, overrideReason }) => {
+    assertLocalOwner('pro:reverseJournalEntry');
+    return getProAccountingService().reverseJournalEntry(entryId, reason, { postingDate, softLockOverride, overrideReason });
   });
 
   register(ipcMain, 'pro:listJournalEntries', ({ from, to, accountNumbers, limit, offset }) => {
@@ -1221,18 +1221,18 @@ export const registerIpcHandlers = (
     return getDepreciationSchedule(requireDb(), assetId, getProScope());
   });
 
-  register(ipcMain, 'pro:runDepreciation', ({ actorRole, ...args }) => {
-    assertProRoleAllowed('pro:runDepreciation', actorRole, ['reviewer', 'accountant', 'admin']);
+  register(ipcMain, 'pro:runDepreciation', (args) => {
+    assertLocalOwner('pro:runDepreciation');
     return runDepreciation(requireDb(), args, getProScope());
   });
 
-  register(ipcMain, 'pro:disposeAsset', ({ actorRole, ...args }) => {
-    assertProRoleAllowed('pro:disposeAsset', actorRole, ['reviewer', 'accountant', 'admin']);
+  register(ipcMain, 'pro:disposeAsset', (args) => {
+    assertLocalOwner('pro:disposeAsset');
     return disposeAsset(requireDb(), args, getProScope());
   });
 
-  register(ipcMain, 'pro:exportDatevBuchungsstapel', ({ from, to, actorRole }) => {
-    assertProRoleAllowed('pro:exportDatevBuchungsstapel', actorRole, ['accountant', 'admin']);
+  register(ipcMain, 'pro:exportDatevBuchungsstapel', ({ from, to }) => {
+    assertLocalOwner('pro:exportDatevBuchungsstapel');
     return getProAccountingService().buildDatevRows({ from, to }).then((rows) => {
       const userDataPath = getUserDataPath();
       const exportDir = path.join(userDataPath, 'exports', 'datev');

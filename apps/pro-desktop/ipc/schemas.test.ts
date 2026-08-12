@@ -50,7 +50,6 @@ describe('Pro IPC route schemas', () => {
         year: 2026,
         postingDate: '2026-12-31',
         reason: '',
-        actorRole: 'accountant',
       }),
     ).toThrow();
     expect(() =>
@@ -59,7 +58,6 @@ describe('Pro IPC route schemas', () => {
         disposalDate: '2026-12-31',
         proceeds: 0,
         reason: 'Scrapped',
-        actorRole: 'bookkeeper',
       }),
     ).not.toThrow();
   });

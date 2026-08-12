@@ -390,7 +390,6 @@ const taxAuditExportPackageArgsSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
   includeDocuments: z.boolean().optional(),
-  actorRole: proActorRoleSchema,
 });
 const taxAuditExportPackageResultSchema = z.object({
   bundleDir: z.string().min(1),
@@ -562,7 +561,10 @@ const proDispatchDraftActionArgsSchema = z.object({
 const proPostDraftArgsSchema = z.object({
   draftId: z.string().min(1),
   postingDate: z.string().optional(),
-  actorRole: proActorRoleSchema,
+  actorRole: proActorRoleSchema.optional(),
+  idempotencyKey: z.string().min(1).optional(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().optional(),
 });
 
 const proPostDraftResultSchema = z.object({
@@ -573,7 +575,10 @@ const proPostDraftResultSchema = z.object({
 const proReverseJournalEntryArgsSchema = z.object({
   entryId: z.string().min(1),
   reason: z.string().min(1),
-  actorRole: proActorRoleSchema,
+  actorRole: proActorRoleSchema.optional(),
+  postingDate: z.string().optional(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().optional(),
 });
 
 const proReverseJournalEntryResultSchema = z.object({
@@ -664,7 +669,7 @@ const proRunDepreciationArgsSchema = z.object({
   year: z.number().int(),
   postingDate: z.string(),
   reason: z.string().min(1),
-  actorRole: proActorRoleSchema,
+  actorRole: proActorRoleSchema.optional(),
 });
 
 const proDisposeAssetArgsSchema = z.object({
@@ -672,13 +677,13 @@ const proDisposeAssetArgsSchema = z.object({
   disposalDate: z.string(),
   proceeds: z.number().nonnegative(),
   reason: z.string().min(1),
-  actorRole: proActorRoleSchema,
+  actorRole: proActorRoleSchema.optional(),
 });
 
 const proExportDatevBuchungsstapelArgsSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
-  actorRole: proActorRoleSchema,
+  actorRole: proActorRoleSchema.optional(),
 });
 
 const proListDatevExportsArgsSchema = z.object({

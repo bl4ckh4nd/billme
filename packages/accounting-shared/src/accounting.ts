@@ -51,8 +51,12 @@ export interface JournalEntry {
   period: string;
   fiscalYear: number;
   status: 'posted' | 'reversed';
+  sourceType?: JournalSourceType;
+  sourceKey?: string;
   lines: JournalLine[];
 }
+
+export type JournalSourceType = 'booking_draft' | 'reversal' | 'depreciation' | 'manual';
 
 export interface LedgerBalance {
   accountNumber: string;
@@ -135,9 +139,18 @@ export interface JournalEntryEntity {
   fiscalYear: number;
   status: 'posted' | 'reversed';
   sourceDraftId?: string;
+  sourceType?: JournalSourceType;
+  sourceKey?: string;
   reversedEntryId?: string;
   createdAt: string;
   lines: JournalLineEntity[];
+}
+
+export interface AccountingPolicy {
+  tenantId: string;
+  activeChart: LedgerChart;
+  periodPolicy: 'calendar_month';
+  updatedAt: string;
 }
 
 export interface AccountingPeriod {

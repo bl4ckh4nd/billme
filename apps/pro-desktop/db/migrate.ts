@@ -55,10 +55,15 @@ export const runMigrations = (db: Database.Database): void => {
     CREATE INDEX IF NOT EXISTS idx_migration_log_name ON migration_log(migration_name, created_at DESC);
   `);
 
-  // Log migration start
-  const migrationVersion = new Date().toISOString().split('T')[0]!.replace(/-/g, '');
+    // Log migration start
+    const migrationVersion = new Date().toISOString().split('T')[0]!.replace(/-/g, '');
   try {
     logMigration(db, `migration_run_${migrationVersion}`, 'started');
+
+    // Add columns before the idempotent indexes below so upgrades from the
+    // original journal schema can run the same bootstrap block safely.
+    tryAddColumn(db, 'journal_entries', 'source_type', "TEXT NOT NULL DEFAULT 'booking_draft'");
+    tryAddColumn(db, 'journal_entries', 'source_key', 'TEXT');
 
     // Documents: project assignment
     tryAddColumn(db, 'invoices', 'project_id', 'TEXT');
@@ -308,6 +313,13 @@ export const runMigrations = (db: Database.Database): void => {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_accounting_periods_tenant_period
       ON accounting_periods(tenant_id, period);
 
+    CREATE TABLE IF NOT EXISTS accounting_policies (
+      tenant_id TEXT PRIMARY KEY,
+      active_chart TEXT NOT NULL DEFAULT 'SKR03' CHECK (active_chart IN ('SKR03', 'SKR04')),
+      period_policy TEXT NOT NULL DEFAULT 'calendar_month' CHECK (period_policy IN ('calendar_month')),
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS journal_entries (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL DEFAULT 'default',
@@ -320,12 +332,17 @@ export const runMigrations = (db: Database.Database): void => {
       fiscal_year INTEGER NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('posted', 'reversed')),
       source_draft_id TEXT,
+      source_type TEXT NOT NULL DEFAULT 'booking_draft',
+      source_key TEXT,
       reversed_entry_id TEXT,
       created_at TEXT NOT NULL
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_entry_number
       ON journal_entries(tenant_id, entry_number);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source
+      ON journal_entries(tenant_id, source_type, source_key)
+      WHERE source_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_journal_entries_tenant_posting_date
       ON journal_entries(tenant_id, posting_date DESC);
 
@@ -424,6 +441,8 @@ export const runMigrations = (db: Database.Database): void => {
       NEW.period != OLD.period OR
       NEW.fiscal_year != OLD.fiscal_year OR
       COALESCE(NEW.source_draft_id, '') != COALESCE(OLD.source_draft_id, '') OR
+      NEW.source_type != OLD.source_type OR
+      COALESCE(NEW.source_key, '') != COALESCE(OLD.source_key, '') OR
       NEW.created_at != OLD.created_at
     BEGIN
       SELECT RAISE(ABORT, 'journal_entries core fields are immutable');
@@ -621,6 +640,47 @@ export const runMigrations = (db: Database.Database): void => {
       datetime('now')
     FROM transactions t;
   `);
+
+  // Journal source identity and accounting policy were added after the initial
+  // Pro schema. Keep existing installs idempotent and preserve immutable rows.
+  tryAddColumn(db, 'journal_entries', 'source_type', "TEXT NOT NULL DEFAULT 'booking_draft'");
+  tryAddColumn(db, 'journal_entries', 'source_key', 'TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS accounting_policies (
+      tenant_id TEXT PRIMARY KEY,
+      active_chart TEXT NOT NULL DEFAULT 'SKR03' CHECK (active_chart IN ('SKR03', 'SKR04')),
+      period_policy TEXT NOT NULL DEFAULT 'calendar_month' CHECK (period_policy IN ('calendar_month')),
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source
+      ON journal_entries(tenant_id, source_type, source_key)
+      WHERE source_key IS NOT NULL;
+    DROP TRIGGER IF EXISTS journal_entries_protect_core_fields;
+    CREATE TRIGGER journal_entries_protect_core_fields
+    BEFORE UPDATE ON journal_entries
+    FOR EACH ROW
+    WHEN
+      NEW.id != OLD.id OR
+      NEW.tenant_id != OLD.tenant_id OR
+      NEW.entry_number != OLD.entry_number OR
+      NEW.posting_date != OLD.posting_date OR
+      COALESCE(NEW.document_date, '') != COALESCE(OLD.document_date, '') OR
+      NEW.booking_text != OLD.booking_text OR
+      COALESCE(NEW.reference, '') != COALESCE(OLD.reference, '') OR
+      NEW.period != OLD.period OR
+      NEW.fiscal_year != OLD.fiscal_year OR
+      COALESCE(NEW.source_draft_id, '') != COALESCE(OLD.source_draft_id, '') OR
+      NEW.source_type != OLD.source_type OR
+      COALESCE(NEW.source_key, '') != COALESCE(OLD.source_key, '') OR
+      NEW.created_at != OLD.created_at
+    BEGIN
+      SELECT RAISE(ABORT, 'journal_entries core fields are immutable');
+    END;
+  `);
+  db.prepare(`
+    INSERT OR IGNORE INTO accounting_policies (tenant_id, active_chart, period_policy, updated_at)
+    VALUES ('default', 'SKR03', 'calendar_month', ?)
+  `).run(new Date().toISOString());
 
   // Best-effort backfill for projects + document->project assignment.
   const now = new Date().toISOString();

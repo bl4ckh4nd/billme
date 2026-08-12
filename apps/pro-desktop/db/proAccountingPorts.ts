@@ -4,6 +4,8 @@ import type {
   ProAccountingRepository,
   ProWorkflowRepository,
 } from '@billme/server-core';
+import type { TenantScope } from '@billme/server-core';
+import type { ReverseJournalEntryOptions } from '@billme/server-core/ports';
 import {
   buildDatevRows,
   dispatchDraftAction,
@@ -40,7 +42,7 @@ export const createSqliteProAccountingRepository = (db: Database.Database): ProA
   dispatchDraftAction: async (scope, args) => dispatchDraftAction(db, args, scope),
   validateTaxCompliance: async (scope, args) => validateTaxCompliance(db, args, scope),
   postDraft: async (scope, draftId, options) => postDraft(db, draftId, options, scope),
-  reverseJournalEntry: async (scope, entryId, reason) => reverseJournalEntry(db, entryId, reason, scope),
+  reverseJournalEntry: async (scope: TenantScope, entryId: string, reason: string, options?: ReverseJournalEntryOptions) => reverseJournalEntry(db, entryId, reason, scope, options),
   listJournalEntries: async (scope, args) => listJournalEntries(db, args, scope),
   getLedgerBalances: async (scope, args) => getLedgerBalances(db, args, scope),
   getSusaReport: async (scope, args) => getSusaReport(db, args, scope),

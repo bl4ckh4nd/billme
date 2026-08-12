@@ -359,6 +359,16 @@ export const accountingPeriods = sqliteTable(
   }),
 );
 
+export const accountingPolicies = sqliteTable(
+  'accounting_policies',
+  {
+    tenantId: text('tenant_id').primaryKey(),
+    activeChart: text('active_chart').notNull().default('SKR03'),
+    periodPolicy: text('period_policy').notNull().default('calendar_month'),
+    updatedAt: text('updated_at').notNull(),
+  },
+);
+
 export const journalEntries = sqliteTable(
   'journal_entries',
   {
@@ -373,12 +383,15 @@ export const journalEntries = sqliteTable(
     fiscalYear: integer('fiscal_year').notNull(),
     status: text('status').notNull(),
     sourceDraftId: text('source_draft_id'),
+    sourceType: text('source_type').notNull().default('booking_draft'),
+    sourceKey: text('source_key'),
     reversedEntryId: text('reversed_entry_id'),
     createdAt: text('created_at').notNull(),
   },
   (t) => ({
     byTenantEntryNo: uniqueIndex('idx_journal_entries_tenant_entry_number').on(t.tenantId, t.entryNumber),
     byTenantPostingDate: index('idx_journal_entries_tenant_posting_date').on(t.tenantId, t.postingDate),
+    byTenantSource: uniqueIndex('idx_journal_entries_tenant_source').on(t.tenantId, t.sourceType, t.sourceKey),
   }),
 );
 

@@ -325,6 +325,15 @@ export interface ProDraftActionRequest {
 
 export interface PostDraftOptions {
   postingDate?: string;
+  idempotencyKey?: string;
+  softLockOverride?: boolean;
+  overrideReason?: string;
+}
+
+export interface ReverseJournalEntryOptions {
+  postingDate?: string;
+  softLockOverride?: boolean;
+  overrideReason?: string;
 }
 
 export interface ListJournalEntriesOptions {
@@ -427,7 +436,7 @@ export interface ProAccountingRepository {
     entry: JournalEntryEntity;
     issues: ValidationIssue[];
   }>;
-  reverseJournalEntry(scope: TenantScope, entryId: string, reason: string): Promise<{ ok: true; reversalEntryId: string }>;
+  reverseJournalEntry(scope: TenantScope, entryId: string, reason: string, options?: ReverseJournalEntryOptions): Promise<{ ok: true; reversalEntryId: string }>;
   listJournalEntries(scope: TenantScope, args?: ListJournalEntriesOptions): Promise<JournalEntryEntity[]>;
   getLedgerBalances(scope: TenantScope, args?: LedgerBalanceOptions): Promise<LedgerBalance[]>;
   getSusaReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<SusaReport>;

@@ -4,6 +4,7 @@ import {
   calculateBwa01,
   calculateHgbBilanz,
   calculateHgbGuv,
+  calculateManagementGuv,
   calculateSusa,
   reconcileEurToLedger,
 } from './reporting.js';
@@ -18,7 +19,7 @@ const mappings = [
 ];
 
 const request = (overrides: Partial<ReportRequest> = {}): ReportRequest => ({
-  profile: { size: 'small', fiscalYearStart: 7, hgbGuvMethod: 'gkv' },
+  profile: { size: 'small', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
   from: '2025-07-01',
   to: '2025-07-31',
   ledger: {
@@ -33,14 +34,24 @@ const request = (overrides: Partial<ReportRequest> = {}): ReportRequest => ({
 });
 
 test('fiscal-year helper uses the start year for non-calendar years', () => {
-  assert.equal(fiscalYearForDate('2025-06-30', 7), 2024);
-  assert.equal(fiscalYearForDate('2025-07-01', 7), 2025);
-  assert.deepEqual(fiscalYearRange(2025, 7), {
+  assert.equal(fiscalYearForDate('2025-06-30', '07-01'), 2024);
+  assert.equal(fiscalYearForDate('2025-07-01', '07-01'), 2025);
+  assert.equal(fiscalYearForDate('2025-04-14', '04-15'), 2024);
+  assert.equal(fiscalYearForDate('2025-04-15', '04-15'), 2025);
+  assert.deepEqual(fiscalYearRange(2025, '07-01'), {
     fiscalYear: 2025,
     start: '2025-07-01',
     end: '2026-06-30',
     label: '2025/2026',
   });
+  assert.deepEqual(fiscalYearRange(2025, '04-15'), {
+    fiscalYear: 2025,
+    start: '2025-04-15',
+    end: '2026-04-14',
+    label: '2025/2026',
+  });
+  assert.equal(fiscalYearRange(2023, '03-01').end, '2024-02-29');
+  assert.equal(fiscalYearRange(2024, '03-01').end, '2025-02-28');
 });
 
 test('SuSa carries opening balances and cent-exact turnover', () => {
@@ -64,7 +75,7 @@ test('BWA01, HGB GKV and HGB Bilanz are derived from the same neutral ledger', (
 test('EÜR reconciliation is calendar-year-only and compares cash with ledger', () => {
   assert.throws(() => reconcileEurToLedger(request()), /calendar fiscal year/);
   const report = reconcileEurToLedger(request({
-    profile: { size: 'micro', fiscalYearStart: 1 },
+    profile: { size: 'micro', fiscalYearStart: '01-01' },
     from: '2025-01-01', to: '2025-12-31',
     cash: { entries: [
       { id: 'income', date: '2025-07-10', amount: 1000, kind: 'income', accountNumber: '8000' },
@@ -73,4 +84,25 @@ test('EÜR reconciliation is calendar-year-only and compares cash with ledger', 
   }));
   assert.deepEqual(report.differences, { income: 0, expenses: 0, result: 0 });
   assert.deepEqual(report.unmatchedCashEntries, []);
+});
+
+test('missing licensed mappings block categorized reports instead of prefix-inference', () => {
+  const unmapped = request({
+    profile: { size: 'small', fiscalYearStart: '01-01' },
+    from: '2025-01-01',
+    to: '2025-12-31',
+    ledger: { entries: [{ postingDate: '2025-05-01', lines: [
+      { accountNumber: '8400', debit: 0, credit: 500 },
+      { accountNumber: '1000', debit: 500, credit: 0 },
+    ] }] },
+    mappings: [],
+  });
+  const bwa = calculateBwa01(unmapped);
+  assert.deepEqual(bwa.mappingHealth.unmappedAccounts, ['1000', '8400']);
+  assert.equal(bwa.mappingHealth.inferredAccounts, 0);
+  assert.equal(bwa.mappingHealth.blocking, true);
+  assert.deepEqual(bwa.rows, []);
+  assert.equal(calculateManagementGuv(unmapped).mappingHealth.blocking, true);
+  assert.equal(calculateHgbGuv(unmapped).mappingHealth.blocking, true);
+  assert.equal(calculateHgbBilanz(unmapped).mappingHealth.blocking, true);
 });

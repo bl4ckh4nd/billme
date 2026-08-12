@@ -4,7 +4,7 @@ import {
   fiscalYearRange,
 } from '@billme/accounting-shared';
 import type {
-  BusinessReportingProfile,
+  ReportingCalculationProfile,
   Bwa01Report,
   CashInputEntry,
   HgbBilanzReport,
@@ -32,13 +32,11 @@ interface Aggregate {
   credit: Cents;
 }
 
-interface ResolvedMapping extends ReportingMapping {
-  inferred?: boolean;
-}
+type ResolvedMapping = ReportingMapping;
 
 interface ReportingContext {
   request: ReportRequest;
-  profile: BusinessReportingProfile;
+  profile: ReportingCalculationProfile;
   from?: string;
   to?: string;
   asOfDate?: string;
@@ -75,36 +73,12 @@ function periodOf(request: ReportRequest): { from?: string; to?: string; asOfDat
   };
 }
 
-function validateProfile(profile: BusinessReportingProfile): void {
-  if (!Number.isInteger(profile.fiscalYearStart) || profile.fiscalYearStart < 1 || profile.fiscalYearStart > 12) {
-    throw new RangeError('fiscalYearStart must be a month from 1 to 12');
-  }
-}
-
-function defaultMapping(accountNumber: string): ResolvedMapping | undefined {
-  const first = accountNumber.trim()[0];
-  if (!first || !/^[0-8]$/.test(first)) return undefined;
-  if (first <= '3') {
-    return {
-      accountNumber,
-      statement: 'bilanz',
-      position: first <= '1' ? 'assets' : 'liabilities',
-      side: first <= '1' ? 'asset' : 'liability',
-      inferred: true,
-    };
-  }
-  if (first <= '7') {
-    return { accountNumber, statement: ['bwa', 'guv', 'eur'], position: 'operating_expenses', inferred: true };
-  }
-  return { accountNumber, statement: ['bwa', 'guv', 'eur'], position: 'revenue', inferred: true };
-}
-
 function statements(mapping: ReportingMapping): string[] {
   return typeof mapping.statement === 'string' ? [mapping.statement] : [...mapping.statement];
 }
 
 function makeContext(request: ReportRequest): ReportingContext {
-  validateProfile(request.profile);
+  fiscalYearRange(2000, request.profile.fiscalYearStart);
   const { from, to, asOfDate } = periodOf(request);
   const entries = request.ledger.entries ?? [];
   const cashEntries = request.cash?.entries ?? [];
@@ -150,22 +124,19 @@ function makeContext(request: ReportRequest): ReportingContext {
     ...aggregates.keys(),
     ...cashEntries.flatMap((entry) => entry.accountNumber ? [entry.accountNumber] : []),
   ])].sort();
-  const inferredAccounts: string[] = [];
   const unmappedAccounts: string[] = [];
   for (const accountNumber of accounts) {
-    const mapping = mappings.get(accountNumber) ?? defaultMapping(accountNumber);
+    const mapping = mappings.get(accountNumber);
     if (mapping) {
       mappings.set(accountNumber, mapping);
-      if (mapping.inferred) inferredAccounts.push(accountNumber);
     } else unmappedAccounts.push(accountNumber);
   }
   const warnings = [
-    ...(inferredAccounts.length ? [`${inferredAccounts.length} account(s) use inferred report mappings`] : []),
     ...(unmappedAccounts.length ? [`${unmappedAccounts.length} account(s) have no report mapping`] : []),
   ];
   const health: MappingHealth = {
-    mappedAccounts: accounts.length - inferredAccounts.length - unmappedAccounts.length,
-    inferredAccounts: inferredAccounts.length,
+    mappedAccounts: accounts.length - unmappedAccounts.length,
+    inferredAccounts: 0,
     unmappedAccounts,
     warnings,
     blocking: unmappedAccounts.length > 0,
@@ -194,13 +165,6 @@ function hasStatement(mapping: ReportingMapping | undefined, statement: string):
 
 function signedTurnover(row: Aggregate): Cents {
   return row.credit - row.debit;
-}
-
-function balanceSide(mapping: ReportingMapping): 'asset' | 'liability' | undefined {
-  if (mapping.side) return mapping.side;
-  if (/asset|aktiva|bank|cash|receivable|inventory/i.test(mapping.position)) return 'asset';
-  if (/liabil|passiva|equity|payable|debt/i.test(mapping.position)) return 'liability';
-  return undefined;
 }
 
 function balance(row: Aggregate): Cents {
@@ -322,7 +286,7 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
   const grouped = new Map<string, { label: string; side: 'asset' | 'liability'; amount: Cents; accounts: Set<string> }>();
   for (const row of context.rows) {
     const mapping = context.mappings.get(row.accountNumber);
-    const side = mapping ? balanceSide(mapping) : undefined;
+    const side = mapping?.side;
     if (!hasStatement(mapping, 'bilanz') || !mapping || !side) continue;
     const current = grouped.get(mapping.position) ?? { label: lineLabel(mapping, mapping.position), side, amount: 0, accounts: new Set<string>() };
     current.amount += side === 'asset' ? balance(row) : -balance(row);

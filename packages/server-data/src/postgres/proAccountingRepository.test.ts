@@ -259,7 +259,7 @@ test('real Postgres keeps activated asset status immutable while allowing metada
     await assert.rejects(() => repository.upsertAsset(scope, {
       id: assetId, assetNumber: 'A-OWN-001', name: 'Renamed server', assetClass: 'IT-Hardware', status: 'entwurf', activationDate: '2026-01-01', acquisitionCost: 1200, usefulLifeYears: 3, depreciationMethod: 'linear', costCenter: 'IT', location: 'Munich', receiptLinked: true, assetAccountNumber: '0480',
     }, 'invalid status replay'), /ACCOUNTING_ASSET_STATUS_IMMUTABLE/);
-    await assert.rejects(() => pool.query(`UPDATE assets SET status='entwurf' WHERE tenant_id=$1 AND id=$2`, [tenantId, assetId]), /asset status is immutable after accounting ownership/);
+    await assert.rejects(() => pool.query(`UPDATE assets SET status='entwurf' WHERE tenant_id=$1 AND id=$2`, [tenantId, assetId]), /asset status and disposal fields are immutable after accounting ownership/);
   } finally {
     await pool.query('ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete').catch(() => undefined);
     await pool.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]).catch(() => undefined);

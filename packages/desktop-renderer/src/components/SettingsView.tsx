@@ -6,7 +6,7 @@ import {
   Save, CheckCircle, HelpCircle, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Repeat
 } from 'lucide-react';
 import { Button } from '@billme/ui';
-import type { AppSettings, DunningLevel } from '@billme/desktop-core/types';
+import type { AppSettings, BusinessReportingProfile, DunningLevel } from '@billme/desktop-core/types';
 import { MOCK_SETTINGS } from '@billme/desktop-services/mockData';
 import { ipc } from '../runtime-api';
 import { useSetSettingsMutation, useSettingsQuery } from '../hooks/useSettings';
@@ -17,6 +17,20 @@ import { DunningLevelPreviewModal } from '@billme/desktop-ui/components/DunningL
 
 const normalizeCategoryName = (value: string): string => value.trim();
 
+const inferBusinessReportingProfile = (settings: AppSettings): BusinessReportingProfile => {
+  if (settings.businessReportingProfile) return settings.businessReportingProfile;
+  const isGmbh = /(?:GmbH|HRB)/i.test(`${settings.company.name} ${settings.finance.registerCourt}`);
+  return {
+    jurisdiction: 'DE',
+    legalForm: isGmbh ? 'gmbh' : 'sole_proprietor',
+    profitDetermination: isGmbh ? 'double_entry' : 'eur',
+    hgbSizeClass: isGmbh ? 'small' : undefined,
+    fiscalYearStart: '01-01',
+    chart: isGmbh ? 'SKR03' : undefined,
+    vatMethod: settings.legal.taxAccountingMethod ?? 'soll',
+  };
+};
+
 export const SettingsView: React.FC = () => {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<
@@ -25,6 +39,7 @@ export const SettingsView: React.FC = () => {
   const { data: loadedSettings } = useSettingsQuery();
   const setSettingsMutation = useSetSettingsMutation();
   const [settings, setSettings] = useState<AppSettings>(loadedSettings ?? MOCK_SETTINGS);
+  const [reportingProfile, setReportingProfile] = useState<BusinessReportingProfile>(() => inferBusinessReportingProfile(loadedSettings ?? MOCK_SETTINGS));
   const [showSaveToast, setShowSaveToast] = useState(false);
   const [backupPath, setBackupPath] = useState('');
   const [portalApiKey, setPortalApiKey] = useState('');
@@ -51,7 +66,10 @@ export const SettingsView: React.FC = () => {
   const [previewLevelIndex, setPreviewLevelIndex] = useState<number | null>(null);
 
   React.useEffect(() => {
-    if (loadedSettings) setSettings(loadedSettings);
+    if (loadedSettings) {
+      setSettings(loadedSettings);
+      setReportingProfile(inferBusinessReportingProfile(loadedSettings));
+    }
   }, [loadedSettings]);
 
   React.useEffect(() => {
@@ -132,6 +150,11 @@ export const SettingsView: React.FC = () => {
 
     const sanitizedSettings: AppSettings = {
       ...settings,
+      businessReportingProfile: reportingProfile,
+      legal: {
+        ...settings.legal,
+        taxAccountingMethod: reportingProfile.vatMethod,
+      },
       catalog: {
         categories: nextCategories.length > 0
           ? nextCategories
@@ -197,6 +220,19 @@ export const SettingsView: React.FC = () => {
         [field]: value
       }
     }));
+  };
+
+  const updateReportingProfile = <K extends keyof BusinessReportingProfile>(field: K, value: BusinessReportingProfile[K]) => {
+    setReportingProfile((current) => {
+      if (field === 'legalForm' && value === 'gmbh') {
+        return { ...current, legalForm: value, profitDetermination: 'double_entry', hgbSizeClass: current.hgbSizeClass ?? 'micro', chart: current.chart ?? 'SKR03' };
+      }
+      if (field === 'legalForm' && value === 'sole_proprietor') {
+        return { ...current, legalForm: value, hgbSizeClass: undefined };
+      }
+      if (field === 'profitDetermination' && value === 'eur' && current.legalForm === 'gmbh') return current;
+      return { ...current, [field]: value };
+    });
   };
 
   const updateDunningLevel = (index: number, field: keyof DunningLevel, value: any) => {
@@ -1337,6 +1373,65 @@ export const SettingsView: React.FC = () => {
                   </div>
                 </div>
               </div>
+            </div>
+
+            <div className="bg-white border-2 border-gray-100 rounded-3xl p-6 space-y-5">
+              <div>
+                <h4 className="font-bold text-sm">Berichtsprofil</h4>
+                <p className="text-xs text-gray-500 mt-1">Der aktuelle Berichts- und Steuerumfang unterstützt Deutschland. AT/CH-Berichte sind noch nicht verfügbar.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  Rechtsraum
+                  <select aria-label="Rechtsraum" value={reportingProfile.jurisdiction} onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                    <option value="DE">Deutschland</option>
+                  </select>
+                </label>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  Rechtsform
+                  <select aria-label="Rechtsform" value={reportingProfile.legalForm} onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                    <option value="sole_proprietor">Einzelunternehmen</option>
+                    <option value="gmbh">GmbH</option>
+                  </select>
+                </label>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  Gewinnermittlung
+                  <select aria-label="Gewinnermittlung" value={reportingProfile.profitDetermination} onChange={(event) => updateReportingProfile('profitDetermination', event.target.value as BusinessReportingProfile['profitDetermination'])} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                    <option value="eur" disabled={reportingProfile.legalForm === 'gmbh'}>EÜR</option>
+                    <option value="double_entry">Doppelte Buchführung</option>
+                  </select>
+                </label>
+                {reportingProfile.legalForm === 'gmbh' && (
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                    GmbH-Größe
+                    <select aria-label="GmbH-Größe" value={reportingProfile.hgbSizeClass ?? ''} onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                      <option value="micro">Micro</option>
+                      <option value="small">Small</option>
+                    </select>
+                  </label>
+                )}
+                {reportingProfile.profitDetermination === 'double_entry' && (
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                    Kontenrahmen
+                    <select aria-label="Kontenrahmen" value={reportingProfile.chart ?? ''} onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                      <option value="SKR03">SKR03</option>
+                      <option value="SKR04">SKR04</option>
+                    </select>
+                  </label>
+                )}
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  Wirtschaftsjahresbeginn (MM-TT)
+                  <input aria-label="Wirtschaftsjahresbeginn" value={reportingProfile.fiscalYearStart} onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)} placeholder="01-01" className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900" />
+                </label>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  Umsatzsteuer-Methode
+                  <select aria-label="Umsatzsteuer-Methode" value={reportingProfile.vatMethod} onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                    <option value="soll">Soll-Versteuerung</option>
+                    <option value="ist">Ist-Versteuerung</option>
+                  </select>
+                </label>
+              </div>
+              {reportingProfile.legalForm === 'gmbh' && reportingProfile.profitDetermination !== 'double_entry' && <p className="text-xs text-red-600">Eine GmbH muss mit doppelter Buchführung geführt werden.</p>}
             </div>
 
             <div

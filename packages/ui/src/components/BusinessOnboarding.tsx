@@ -2,6 +2,25 @@ import React from 'react';
 import { Button } from './Button';
 import { Input } from './Input';
 
+export type BusinessReportingProfile = {
+  jurisdiction: 'DE';
+  legalForm: 'sole_proprietor' | 'gmbh';
+  profitDetermination: 'eur' | 'double_entry';
+  hgbSizeClass?: 'micro' | 'small';
+  /** Calendar month and day, e.g. 01-01. */
+  fiscalYearStart: string;
+  chart?: 'SKR03' | 'SKR04';
+  vatMethod: 'soll' | 'ist';
+};
+
+const DEFAULT_BUSINESS_REPORTING_PROFILE: BusinessReportingProfile = {
+  jurisdiction: 'DE',
+  legalForm: 'sole_proprietor',
+  profitDetermination: 'eur',
+  fiscalYearStart: '01-01',
+  vatMethod: 'soll',
+};
+
 export type BusinessOnboardingDraft = {
   company: {
     name: string;
@@ -30,6 +49,7 @@ export type BusinessOnboardingDraft = {
     invoicePrefix: string;
     offerPrefix: string;
   };
+  businessReportingProfile?: BusinessReportingProfile;
 };
 
 type OnboardingVisibilitySettings = {
@@ -53,7 +73,14 @@ type FieldPath =
   | 'legal.paymentTermsDays'
   | 'legal.defaultVatRate'
   | 'finance.bankName'
-  | 'finance.iban';
+  | 'finance.iban'
+  | 'businessReportingProfile.jurisdiction'
+  | 'businessReportingProfile.legalForm'
+  | 'businessReportingProfile.profitDetermination'
+  | 'businessReportingProfile.hgbSizeClass'
+  | 'businessReportingProfile.fiscalYearStart'
+  | 'businessReportingProfile.chart'
+  | 'businessReportingProfile.vatMethod';
 
 type StepDefinition = {
   id: StepId;
@@ -91,6 +118,17 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const trim = (value: string) => value.trim();
 
+const withReportingProfile = (draft: BusinessOnboardingDraft): BusinessOnboardingDraft => ({
+  ...draft,
+  businessReportingProfile: {
+    ...DEFAULT_BUSINESS_REPORTING_PROFILE,
+    ...draft.businessReportingProfile,
+  },
+});
+
+const reportingProfileOf = (draft: BusinessOnboardingDraft): BusinessReportingProfile =>
+  draft.businessReportingProfile ?? DEFAULT_BUSINESS_REPORTING_PROFILE;
+
 const getInitialStepIndex = (draft: BusinessOnboardingDraft) => {
   if (!trim(draft.company.name)) return 0;
   if (!trim(draft.finance.taxId)) return 1;
@@ -116,6 +154,7 @@ const validateIdentityStep = (draft: BusinessOnboardingDraft): Partial<Record<Fi
 
 const validateBillingStep = (draft: BusinessOnboardingDraft): Partial<Record<FieldPath, string>> => {
   const errors: Partial<Record<FieldPath, string>> = {};
+  const profile = reportingProfileOf(draft);
 
   if (!trim(draft.finance.taxId)) errors['finance.taxId'] = 'Bitte gib die Steuernummer ein.';
   if (!trim(draft.numbers.invoicePrefix)) {
@@ -132,6 +171,22 @@ const validateBillingStep = (draft: BusinessOnboardingDraft): Partial<Record<Fie
     && (!Number.isFinite(draft.legal.defaultVatRate) || draft.legal.defaultVatRate < 0 || draft.legal.defaultVatRate > 100)
   ) {
     errors['legal.defaultVatRate'] = 'Bitte gib einen Mehrwertsteuersatz zwischen 0 und 100 an.';
+  }
+
+  if (profile.jurisdiction !== 'DE') {
+    errors['businessReportingProfile.jurisdiction'] = 'Der Berichts- und Steuerumfang unterstützt derzeit nur Deutschland.';
+  }
+  if (profile.legalForm === 'gmbh' && profile.profitDetermination !== 'double_entry') {
+    errors['businessReportingProfile.profitDetermination'] = 'Eine GmbH muss in diesem Umfang doppelte Buchführung verwenden.';
+  }
+  if (profile.legalForm === 'gmbh' && !profile.hgbSizeClass) {
+    errors['businessReportingProfile.hgbSizeClass'] = 'Für eine GmbH bitte Micro oder Small auswählen.';
+  }
+  if (profile.profitDetermination === 'double_entry' && !profile.chart) {
+    errors['businessReportingProfile.chart'] = 'Bei doppelter Buchführung bitte SKR03 oder SKR04 auswählen.';
+  }
+  if (!/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(profile.fiscalYearStart)) {
+    errors['businessReportingProfile.fiscalYearStart'] = 'Bitte den Wirtschaftsjahresbeginn als MM-TT eingeben, z. B. 01-01.';
   }
 
   return errors;
@@ -197,12 +252,12 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
   productName = 'Billme',
   submitLabel = 'Einrichtung abschliessen',
 }) => {
-  const [draft, setDraft] = React.useState(initialData);
+  const [draft, setDraft] = React.useState(() => withReportingProfile(initialData));
   const [stepIndex, setStepIndex] = React.useState(() => getInitialStepIndex(initialData));
   const [errors, setErrors] = React.useState<Partial<Record<FieldPath, string>>>({});
 
   React.useEffect(() => {
-    setDraft(initialData);
+    setDraft(withReportingProfile(initialData));
     setStepIndex(getInitialStepIndex(initialData));
     setErrors({});
   }, [initialData]);
@@ -210,6 +265,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
   const currentStep = STEPS[stepIndex];
   const progress = ((stepIndex + 1) / STEPS.length) * 100;
   const essentialsCompleted = countEssentials(draft);
+  const reportingProfile = reportingProfileOf(draft);
 
   const updateCompany = (field: keyof BusinessOnboardingDraft['company'], value: string) => {
     setDraft((current) => ({
@@ -242,6 +298,41 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
     }));
   };
 
+  const updateReportingProfile = <K extends keyof BusinessReportingProfile>(
+    field: K,
+    value: BusinessReportingProfile[K],
+  ) => {
+    setDraft((current) => {
+      const profile = reportingProfileOf(current);
+      if (field === 'legalForm' && value === 'gmbh') {
+        return {
+          ...current,
+          businessReportingProfile: {
+            ...profile,
+            legalForm: value,
+            profitDetermination: 'double_entry',
+            hgbSizeClass: profile.hgbSizeClass ?? 'micro',
+            chart: profile.chart ?? 'SKR03',
+          },
+        };
+      }
+      if (field === 'legalForm' && value === 'sole_proprietor') {
+        return {
+          ...current,
+          businessReportingProfile: {
+            ...profile,
+            legalForm: value,
+            hgbSizeClass: undefined,
+          },
+        };
+      }
+      return {
+        ...current,
+        businessReportingProfile: { ...profile, [field]: value },
+      };
+    });
+  };
+
   const handleNext = () => {
     const stepErrors = validateStep(stepIndex, draft);
     setErrors(stepErrors);
@@ -262,7 +353,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
       else setStepIndex(2);
       return;
     }
-    await onSubmit(draft);
+    await onSubmit(withReportingProfile(draft));
   };
 
   return (
@@ -509,6 +600,114 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                       />
                     </div>
                   )}
+                </section>
+
+                <section className="rounded-[1.7rem] border border-border bg-surface p-5">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Berichtsprofil</p>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
+                      Diese Auswahl steuert, welche deutschen Berichte und Kontenlogik angeboten werden. Österreich und Schweiz sind derzeit nicht unterstützt.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                    <label className="block text-sm font-medium text-foreground">
+                      <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">Rechtsraum</span>
+                      <select
+                        aria-label="Rechtsraum"
+                        value={reportingProfile.jurisdiction}
+                        onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')}
+                        className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
+                      >
+                        <option value="DE">Deutschland</option>
+                      </select>
+                      <span className="mt-2 block text-xs text-muted">AT/CH-Berichte sind noch nicht verfügbar.</span>
+                    </label>
+
+                    <label className="block text-sm font-medium text-foreground">
+                      <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">Rechtsform</span>
+                      <select
+                        aria-label="Rechtsform"
+                        value={reportingProfile.legalForm}
+                        onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])}
+                        className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
+                      >
+                        <option value="sole_proprietor">Einzelunternehmen</option>
+                        <option value="gmbh">GmbH</option>
+                      </select>
+                    </label>
+
+                    <label className="block text-sm font-medium text-foreground">
+                      <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">Gewinnermittlung</span>
+                      <select
+                        aria-label="Gewinnermittlung"
+                        value={reportingProfile.profitDetermination}
+                        onChange={(event) => updateReportingProfile('profitDetermination', event.target.value as BusinessReportingProfile['profitDetermination'])}
+                        className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
+                      >
+                        <option value="eur" disabled={reportingProfile.legalForm === 'gmbh'}>EÜR</option>
+                        <option value="double_entry">Doppelte Buchführung</option>
+                      </select>
+                      {reportingProfile.legalForm === 'gmbh' && (
+                        <span className="mt-2 block text-xs text-muted">GmbH ist hier nur mit doppelter Buchführung möglich.</span>
+                      )}
+                    </label>
+
+                    {reportingProfile.legalForm === 'gmbh' && (
+                      <label className="block text-sm font-medium text-foreground">
+                        <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">GmbH-Größenklasse</span>
+                        <select
+                          aria-label="GmbH-Größenklasse"
+                          value={reportingProfile.hgbSizeClass ?? ''}
+                          onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')}
+                          className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
+                        >
+                          <option value="" disabled>Bitte auswählen</option>
+                          <option value="micro">Kleinstgesellschaft (Micro)</option>
+                          <option value="small">Kleine Gesellschaft (Small)</option>
+                        </select>
+                        {errors['businessReportingProfile.hgbSizeClass'] && <span className="mt-2 block text-xs text-danger">{errors['businessReportingProfile.hgbSizeClass']}</span>}
+                      </label>
+                    )}
+
+                    {reportingProfile.profitDetermination === 'double_entry' && (
+                      <label className="block text-sm font-medium text-foreground">
+                        <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">Kontenrahmen</span>
+                        <select
+                          aria-label="Kontenrahmen"
+                          value={reportingProfile.chart ?? ''}
+                          onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')}
+                          className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
+                        >
+                          <option value="" disabled>Bitte auswählen</option>
+                          <option value="SKR03">SKR03</option>
+                          <option value="SKR04">SKR04</option>
+                        </select>
+                        {errors['businessReportingProfile.chart'] && <span className="mt-2 block text-xs text-danger">{errors['businessReportingProfile.chart']}</span>}
+                      </label>
+                    )}
+
+                    <Input
+                      label="Wirtschaftsjahresbeginn (MM-TT)"
+                      fullWidth
+                      value={reportingProfile.fiscalYearStart}
+                      onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)}
+                      placeholder="01-01"
+                      error={errors['businessReportingProfile.fiscalYearStart']}
+                    />
+                    <label className="block text-sm font-medium text-foreground">
+                      <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">Umsatzsteuer-Methode</span>
+                      <select
+                        aria-label="Umsatzsteuer-Methode"
+                        value={reportingProfile.vatMethod}
+                        onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])}
+                        className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
+                      >
+                        <option value="soll">Soll-Versteuerung</option>
+                        <option value="ist">Ist-Versteuerung</option>
+                      </select>
+                    </label>
+                  </div>
                 </section>
               </div>
             )}

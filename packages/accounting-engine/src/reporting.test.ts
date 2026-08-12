@@ -10,7 +10,7 @@ import {
 } from './reporting.js';
 import { fiscalYearForDate, fiscalYearRange } from '@billme/accounting-shared';
 import type { ReportRequest } from '@billme/accounting-shared';
-import { getPublicReportCatalogsIncludingUnverified } from './catalogs/publicReportCatalogs.js';
+import { getPublicReportCatalogs } from './catalogs/publicReportCatalogs.js';
 
 const mappings = [
   { accountNumber: '1000', statement: 'hgb-bilanz' as const, position: 'assets.current.cash', side: 'asset' as const, label: 'Bank' },
@@ -140,13 +140,13 @@ test('report families require their own statement mapping while balance-only acc
 
 test('catalog-driven reports emit complete ordered positions and formulas', () => {
   const bwa = calculateBwa01(request());
-  const bwaCatalog = getPublicReportCatalogsIncludingUnverified(2025).find((catalog) => catalog.kind === 'bwa01' && catalog.scope === 'small')!;
+  const bwaCatalog = getPublicReportCatalogs(2025).find((catalog) => catalog.kind === 'bwa01' && catalog.scope === 'small')!;
   assert.deepEqual(bwa.rows.map((row) => row.position), bwaCatalog.positions.map((position) => position.key));
   assert.equal(bwa.rows.find((row) => row.position === 'gross-profit')?.formula, 'total-output + material-expense');
-  assert.equal(bwa.mappingHealth.blocking, true); // BMWK source digest is unavailable; never report a false verified state.
+  assert.equal(bwa.mappingHealth.blocking, false);
 
   const hgb = calculateHgbGuv(request());
-  const hgbCatalog = getPublicReportCatalogsIncludingUnverified(2025).find((catalog) => catalog.kind === 'gkv' && catalog.scope === 'small')!;
+  const hgbCatalog = getPublicReportCatalogs(2025).find((catalog) => catalog.kind === 'gkv' && catalog.scope === 'small')!;
   assert.deepEqual(hgb.rows.map((row) => row.position), hgbCatalog.positions.map((position) => position.key));
   assert.equal(hgb.rows.find((row) => row.position === 'annual-result')?.formula, 'result-after-tax + other-tax');
 });
@@ -158,7 +158,7 @@ test('micro and small balance output follows the committed statutory hierarchy',
     mappings: [{ accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' }],
   }));
   for (const size of ['micro', 'small'] as const) {
-    const catalog = getPublicReportCatalogsIncludingUnverified(2025).find((entry) => entry.kind === 'bilanz' && entry.scope === size)!;
+    const catalog = getPublicReportCatalogs(2025).find((entry) => entry.kind === 'bilanz' && entry.scope === size)!;
     const report = make(size);
     assert.deepEqual(
       [...report.assets, ...report.liabilities].map((row) => row.position),

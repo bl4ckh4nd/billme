@@ -14,6 +14,7 @@ import {
   type ProAccountingDataAdapter,
 } from './services/mockBookingStore';
 import { Account, BookingDraft, Transaction, UserRole } from './types';
+import { reportTabsForBusinessProfile, type BusinessReportingProfile } from './domain/reportTypes';
 
 type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos';
 
@@ -22,6 +23,7 @@ export interface ProAccountingSeed {
   accounts?: Account[];
   drafts?: BookingDraft[];
   chartFramework?: 'SKR03' | 'SKR04';
+  businessReportingProfile?: BusinessReportingProfile;
   bankAccountNumber?: string;
   bankAccountNumberByTransactionId?: Record<string, string>;
   seedVersion?: string | number;
@@ -163,6 +165,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
             <ReportsView
               dataAdapter={dataAdapter}
               chartFramework={seed?.chartFramework}
+              availableTabs={reportTabsForBusinessProfile(seed?.businessReportingProfile)}
               role={role}
               onOpenTransaction={handleOpenTransaction}
             />

@@ -878,6 +878,7 @@ export default function App() {
       bankAccountNumber: bankAccountNumbers.length === 1 ? bankAccountNumbers[0] : undefined,
       bankAccountNumberByTransactionId,
       chartFramework: data.accountingPolicy.activeChart,
+      businessReportingProfile: data.settings?.businessReportingProfile,
       seedVersion: `${data.accountingTransactions.length}:${data.accountingDrafts.length}:${data.workflowEntries.length}:${data.ledgerAccounts.length}:${data.accountingPolicy.updatedAt}`,
     } satisfies ProAccountingSeed;
   }, [client, data]);

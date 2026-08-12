@@ -2,6 +2,13 @@ export type ReportTabId = 'eur' | 'susa' | 'bwa01' | 'management_guv' | 'hgb_guv
 export type ReportProfile = 'all' | 'standard' | 'management' | 'tax';
 export type ReportPeriodPreset = 'current' | 'ytd' | 'prev_year';
 
+export interface BusinessReportingProfile {
+  legalForm: 'sole_proprietor' | 'gmbh';
+  profitDetermination: 'eur' | 'double_entry';
+  fiscalYearStart?: string;
+  chart?: 'SKR03' | 'SKR04';
+}
+
 export interface ReportFilterState {
   chart: 'SKR03' | 'SKR04';
   mandantId: string;
@@ -150,6 +157,18 @@ export const reportTabsForProfile = (profile: ReportProfile): ReportTabId[] => {
   if (profile === 'tax') return ['eur', 'hgb_guv', 'bilanz', 'susa'];
   if (profile === 'standard') return ['susa', 'hgb_guv', 'bilanz'];
   return REPORT_TABS.map((tab) => tab.id);
+};
+
+/** Fail closed when onboarding has not supplied the canonical legal/reporting profile. */
+export const reportTabsForBusinessProfile = (profile?: BusinessReportingProfile): ReportTabId[] => {
+  if (!profile) return ['susa'];
+  if (profile.legalForm === 'sole_proprietor' && profile.profitDetermination === 'eur') {
+    return ['eur', 'susa', 'bwa01', 'management_guv'];
+  }
+  if (profile.legalForm === 'gmbh' && profile.profitDetermination === 'double_entry') {
+    return ['susa', 'bwa01', 'hgb_guv', 'bilanz'];
+  }
+  return ['susa'];
 };
 
 export interface ReportDrilldownSelection {

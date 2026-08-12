@@ -103,6 +103,10 @@ describe('TransactionMatchingView EÜR integration', () => {
 
     renderView('eur');
 
+    expect(screen.queryByText(/Manuelle steuerliche Korrekturen/)).toBeNull();
+    expect(screen.queryByText(/AVEÜR|SZ/)).toBeNull();
+    expect(screen.queryByPlaceholderText(/AVEÜR|SZ/)).toBeNull();
+
     const rowBtn = await screen.findByRole('button', { name: /Hosting GmbH/i });
     await userEvent.click(rowBtn);
 

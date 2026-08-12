@@ -32,7 +32,6 @@ type SourceType = 'transaction' | 'invoice';
 type VatMode = 'none' | 'default';
 type QueueStatus = 'all' | 'unclassified' | 'classified' | 'excluded';
 type QueueSort = 'date_desc' | 'amount_desc' | 'counterparty_asc';
-type TaxCorrectionType = 'manual' | 'AVEÜR' | 'SZ';
 
 type SuggestionLayer = 'rule' | 'counterparty' | 'bayes' | 'keyword';
 
@@ -126,11 +125,6 @@ export const EurView: React.FC = () => {
   const [selectedKeys, setSelectedKeys] = React.useState<Set<string>>(new Set());
   const [isApplying, setIsApplying] = React.useState(false);
   const [lastUndo, setLastUndo] = React.useState<{ label: string; changes: UndoChange[] } | null>(null);
-  const [taxCorrectionType, setTaxCorrectionType] = React.useState<TaxCorrectionType>('manual');
-  const [taxCorrectionLabel, setTaxCorrectionLabel] = React.useState('');
-  const [taxCorrectionAmount, setTaxCorrectionAmount] = React.useState('');
-  const [taxCorrectionNote, setTaxCorrectionNote] = React.useState('');
-  const [taxCorrections, setTaxCorrections] = React.useState<Array<{ id: string; type: TaxCorrectionType; label: string; amount: number; note: string }>>([]);
 
   const [showRulesModal, setShowRulesModal] = React.useState(false);
   const [showToast, setShowToast] = React.useState(false);
@@ -358,25 +352,6 @@ export const EurView: React.FC = () => {
     }
   };
 
-  const addTaxCorrection = () => {
-    const amount = Number(taxCorrectionAmount);
-    if (!taxCorrectionLabel.trim() || !Number.isFinite(amount) || amount === 0 || !taxCorrectionNote.trim()) {
-      showNotification('Bezeichnung, Betrag und Begründung sind für eine steuerliche Korrektur erforderlich.', 'error');
-      return;
-    }
-    setTaxCorrections((current) => [...current, {
-      id: crypto.randomUUID(),
-      type: taxCorrectionType,
-      label: taxCorrectionLabel.trim(),
-      amount: Math.round(amount * 100) / 100,
-      note: taxCorrectionNote.trim(),
-    }]);
-    setTaxCorrectionLabel('');
-    setTaxCorrectionAmount('');
-    setTaxCorrectionNote('');
-    showNotification('Steuerliche Korrektur als Vorschau ergänzt.', 'info');
-  };
-
   return (
     <div className="bg-white rounded-[2.5rem] p-6 min-h-full shadow-sm">
       {/* Header */}
@@ -437,24 +412,6 @@ export const EurView: React.FC = () => {
           </Button>
         </div>
       )}
-
-      <section className="mb-4 rounded-2xl border border-border bg-surface-muted p-4" aria-labelledby="tax-corrections-title">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 id="tax-corrections-title" className="font-bold text-foreground">Manuelle steuerliche Korrekturen</h3>
-            <p className="mt-1 text-xs text-muted">AVEÜR und SZ werden als prüfbare Vorschau geführt und ersetzen keine Buchung.</p>
-          </div>
-          <span className="rounded-full border border-warning-border bg-warning-bg px-2 py-1 text-xs font-semibold text-warning">Vorschau</span>
-        </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-4">
-          <label className="text-xs font-semibold text-muted">Typ<select aria-label="Korrekturtyp" value={taxCorrectionType} onChange={(event) => setTaxCorrectionType(event.target.value as TaxCorrectionType)} className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm"><option value="manual">Manuelle Korrektur</option><option value="AVEÜR">AVEÜR</option><option value="SZ">SZ</option></select></label>
-          <label className="text-xs font-semibold text-muted">Bezeichnung<input aria-label="Korrekturbezeichnung" value={taxCorrectionLabel} onChange={(event) => setTaxCorrectionLabel(event.target.value)} className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm" placeholder="z. B. Privatanteil" /></label>
-          <label className="text-xs font-semibold text-muted">Betrag<input aria-label="Korrekturbetrag" type="number" step="0.01" value={taxCorrectionAmount} onChange={(event) => setTaxCorrectionAmount(event.target.value)} className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm" /></label>
-          <label className="text-xs font-semibold text-muted">Begründung<input aria-label="Korrekturbegründung" value={taxCorrectionNote} onChange={(event) => setTaxCorrectionNote(event.target.value)} className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm" /></label>
-        </div>
-        <Button type="button" size="sm" variant="secondary" className="mt-3" onClick={addTaxCorrection}>Korrektur hinzufügen</Button>
-        {taxCorrections.length ? <ul className="mt-3 space-y-1 text-xs text-muted">{taxCorrections.map((correction) => <li key={correction.id} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface px-2 py-1.5"><span><strong>{correction.type}</strong> · {correction.label} · {formatCurrency(correction.amount)} · {correction.note}</span><button type="button" className="font-semibold text-error" onClick={() => setTaxCorrections((current) => current.filter((item) => item.id !== correction.id))}>Entfernen</button></li>)}</ul> : null}
-      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Queue Panel */}
@@ -771,7 +728,7 @@ export const EurView: React.FC = () => {
               </div>
 
               <label className="block text-xs font-bold text-gray-700">Steuerliche Korrektur / Begründung
-                <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm" placeholder="z. B. AVEÜR geprüft" />
+                <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm" placeholder="z. B. privater Anteil" />
               </label>
 
               {/* VAT Mode Select */}

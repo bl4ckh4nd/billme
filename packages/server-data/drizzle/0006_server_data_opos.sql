@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS incoming_invoices (
   accounting_journal_entry_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  accounting_posted_at TEXT,
   UNIQUE (tenant_id, number)
 );
 CREATE TABLE IF NOT EXISTS incoming_invoice_lines (
@@ -136,7 +137,8 @@ CREATE TABLE IF NOT EXISTS accounting_backfill_runs (
   result_json TEXT,
   created_at TEXT NOT NULL,
   confirmed_at TEXT,
-  completed_at TEXT
+  completed_at TEXT,
+  config_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_open_items_tenant_status ON open_items (tenant_id, status, due_date);
 CREATE INDEX IF NOT EXISTS idx_open_item_payments_tenant_date ON open_item_payments (tenant_id, payment_date);
@@ -180,3 +182,19 @@ DROP TRIGGER IF EXISTS invoices_posted_immutable ON invoices;
 CREATE TRIGGER invoices_posted_immutable BEFORE UPDATE OR DELETE ON invoices FOR EACH ROW EXECUTE FUNCTION billme_protect_posted_document();
 DROP TRIGGER IF EXISTS incoming_invoices_posted_immutable ON incoming_invoices;
 CREATE TRIGGER incoming_invoices_posted_immutable BEFORE UPDATE OR DELETE ON incoming_invoices FOR EACH ROW EXECUTE FUNCTION billme_protect_posted_document();
+
+
+CREATE OR REPLACE FUNCTION billme_protect_posted_incoming_invoice_lines() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM incoming_invoices
+    WHERE id = CASE WHEN TG_OP = 'DELETE' THEN OLD.incoming_invoice_id ELSE NEW.incoming_invoice_id END
+      AND tenant_id = CASE WHEN TG_OP = 'DELETE' THEN OLD.tenant_id ELSE NEW.tenant_id END
+      AND accounting_status IN ('posted','reversed')
+  ) THEN
+    RAISE EXCEPTION 'posted incoming invoice lines are immutable';
+  END IF;
+  RETURN COALESCE(NEW, OLD);
+END $$;
+DROP TRIGGER IF EXISTS incoming_invoice_lines_posted_immutable ON incoming_invoice_lines;
+CREATE TRIGGER incoming_invoice_lines_posted_immutable BEFORE INSERT OR UPDATE OR DELETE ON incoming_invoice_lines FOR EACH ROW EXECUTE FUNCTION billme_protect_posted_incoming_invoice_lines();

@@ -1841,17 +1841,21 @@ export const runMigrations = (db: Database.Database): void => {
   tryAddColumn(db, 'import_batches', 'rolled_back_at', 'TEXT');
   tryAddColumn(db, 'import_batches', 'rollback_reason', 'TEXT');
   tryAddColumn(db, 'eur_classifications', 'vat_rate', 'REAL');
+  tryAddColumn(db, 'eur_lines', 'provider_path', "TEXT NOT NULL DEFAULT 'main'");
+  tryAddColumn(db, 'eur_lines', 'computed_terms_json', 'TEXT');
 
   db.exec(`
       CREATE TABLE IF NOT EXISTS eur_lines (
         id TEXT PRIMARY KEY,
         tax_year INTEGER NOT NULL,
+        provider_path TEXT NOT NULL DEFAULT 'main',
         kennziffer TEXT,
         label TEXT NOT NULL,
         kind TEXT NOT NULL CHECK (kind IN ('income', 'expense', 'computed')),
         exportable INTEGER NOT NULL DEFAULT 1 CHECK (exportable IN (0, 1)),
         sort_order INTEGER NOT NULL,
         computed_from_json TEXT,
+        computed_terms_json TEXT,
         source_version TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -1860,8 +1864,8 @@ export const runMigrations = (db: Database.Database): void => {
       CREATE INDEX IF NOT EXISTS idx_eur_lines_year_sort
         ON eur_lines(tax_year, sort_order);
 
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_kennziffer
-        ON eur_lines(tax_year, kennziffer)
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_provider_kennziffer
+        ON eur_lines(tax_year, provider_path, kennziffer)
         WHERE kennziffer IS NOT NULL AND TRIM(kennziffer) <> '';
 
       CREATE TABLE IF NOT EXISTS eur_classifications (
@@ -1883,6 +1887,13 @@ export const runMigrations = (db: Database.Database): void => {
 
       CREATE INDEX IF NOT EXISTS idx_eur_classifications_year
         ON eur_classifications(tax_year);
+    `);
+
+  db.exec(`
+      DROP INDEX IF EXISTS idx_eur_lines_year_kennziffer;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_provider_kennziffer
+        ON eur_lines(tax_year, provider_path, kennziffer)
+        WHERE kennziffer IS NOT NULL AND TRIM(kennziffer) <> '';
     `);
 
   db.exec(`

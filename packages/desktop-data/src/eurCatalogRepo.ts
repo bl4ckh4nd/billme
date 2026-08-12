@@ -3,6 +3,7 @@ import { asc, eq } from 'drizzle-orm';
 import {
   EUR_SOURCE_VERSION_2025,
   getCatalogForYear,
+  type EurComputedTerm,
   type EurLineDef,
   type EurLineKind,
 } from '@billme/desktop-services/eurCatalog';
@@ -11,12 +12,14 @@ import { createDrizzle, schema } from './drizzle';
 export interface EurLine {
   id: string;
   taxYear: number;
+  providerPath?: string;
   kennziffer?: string;
   label: string;
   kind: EurLineKind;
   exportable: boolean;
   sortOrder: number;
   computedFromIds: string[];
+  computedTerms?: EurComputedTerm[];
   sourceVersion: string;
 }
 
@@ -37,12 +40,14 @@ export const seedEurCatalog = (db: Database.Database, year: number): number => {
     drizzle.insert(schema.eurLines).values({
       id: line.id,
       taxYear: year,
+      providerPath: line.providerPath ?? 'main',
       kennziffer: line.kennziffer ?? null,
       label: line.label,
       kind: line.kind,
       exportable: line.exportable ? 1 : 0,
       sortOrder: idx,
       computedFromJson: JSON.stringify(line.computedFromIds ?? []),
+      computedTermsJson: JSON.stringify(line.computedTerms ?? []),
       sourceVersion: sourceVersionForYear(year),
       createdAt: now,
       updatedAt: now,
@@ -50,12 +55,14 @@ export const seedEurCatalog = (db: Database.Database, year: number): number => {
       target: schema.eurLines.id,
       set: {
         taxYear: year,
+        providerPath: line.providerPath ?? 'main',
         kennziffer: line.kennziffer ?? null,
         label: line.label,
         kind: line.kind,
         exportable: line.exportable ? 1 : 0,
         sortOrder: idx,
         computedFromJson: JSON.stringify(line.computedFromIds ?? []),
+        computedTermsJson: JSON.stringify(line.computedTerms ?? []),
         sourceVersion: sourceVersionForYear(year),
         updatedAt: now,
       },
@@ -73,12 +80,14 @@ export const listEurLines = (db: Database.Database, taxYear: number): EurLine[] 
     .select({
       id: schema.eurLines.id,
       taxYear: schema.eurLines.taxYear,
+      providerPath: schema.eurLines.providerPath,
       kennziffer: schema.eurLines.kennziffer,
       label: schema.eurLines.label,
       kind: schema.eurLines.kind,
       exportable: schema.eurLines.exportable,
       sortOrder: schema.eurLines.sortOrder,
       computedFromJson: schema.eurLines.computedFromJson,
+      computedTermsJson: schema.eurLines.computedTermsJson,
       sourceVersion: schema.eurLines.sourceVersion,
     })
     .from(schema.eurLines)
@@ -89,12 +98,14 @@ export const listEurLines = (db: Database.Database, taxYear: number): EurLine[] 
   return rows.map((row) => ({
     id: row.id,
     taxYear: row.taxYear!,
+    providerPath: row.providerPath ?? 'main',
     kennziffer: row.kennziffer ?? undefined,
     label: row.label,
     kind: row.kind as EurLineKind,
     exportable: row.exportable === 1,
     sortOrder: row.sortOrder!,
     computedFromIds: parseComputedFrom(row.computedFromJson),
+    computedTerms: parseComputedTerms(row.computedTermsJson),
     sourceVersion: row.sourceVersion!,
   }));
 };
@@ -109,6 +120,22 @@ const parseComputedFrom = (value: string | null): string[] => {
     const parsed = JSON.parse(value);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((v): v is string => typeof v === 'string');
+  } catch {
+    return [];
+  }
+};
+
+const parseComputedTerms = (value: string | null): EurComputedTerm[] => {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((term): term is EurComputedTerm =>
+      typeof term === 'object'
+      && term !== null
+      && typeof term.id === 'string'
+      && (term.sign === 1 || term.sign === -1),
+    );
   } catch {
     return [];
   }

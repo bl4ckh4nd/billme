@@ -208,20 +208,22 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE TABLE IF NOT EXISTS eur_lines (
   id TEXT PRIMARY KEY,
   tax_year INTEGER NOT NULL,
+  provider_path TEXT NOT NULL DEFAULT 'main',
   kennziffer TEXT,
   label TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('income', 'expense', 'computed')),
   exportable INTEGER NOT NULL DEFAULT 1 CHECK (exportable IN (0, 1)),
   sort_order INTEGER NOT NULL,
   computed_from_json TEXT,
+  computed_terms_json TEXT,
   source_version TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_eur_lines_year_sort ON eur_lines(tax_year, sort_order);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_kennziffer
-  ON eur_lines(tax_year, kennziffer)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_provider_kennziffer
+  ON eur_lines(tax_year, provider_path, kennziffer)
   WHERE kennziffer IS NOT NULL AND TRIM(kennziffer) <> '';
 
 CREATE TABLE IF NOT EXISTS eur_classifications (

@@ -57,6 +57,48 @@ const mockLines = [
     computedFromIds: ['E2025_KZ280', 'E2025_KZ183'],
     sourceVersion: 'BMF-2025-2025-08-29',
   },
+  {
+    id: 'E2025_KZ290',
+    taxYear: 2025,
+    kennziffer: '290',
+    label: 'Korrigierter Gewinn/Verlust',
+    kind: 'computed',
+    exportable: true,
+    sortOrder: 5,
+    computedFromIds: ['E2025_KZ112'],
+    computedTerms: [
+      { id: 'E2025_KZ112', sign: 1 },
+      { id: 'E2025_KZ280', sign: -1 },
+    ],
+    sourceVersion: 'BMF-2025-2025-08-29',
+  },
+  {
+    id: 'E2025_KZ293',
+    taxYear: 2025,
+    kennziffer: '293',
+    label: 'Steuerpflichtiger Gewinn/Verlust vor Anwendung des § 4 Abs. 4a EStG',
+    kind: 'computed',
+    exportable: true,
+    sortOrder: 6,
+    computedFromIds: [],
+    computedTerms: [
+      { id: 'E2025_KZ290', sign: 1 },
+      { id: 'E2025_KZ183', sign: -1 },
+    ],
+    sourceVersion: 'BMF-2025-2025-08-29',
+  },
+  {
+    id: 'E2025_KZ219',
+    taxYear: 2025,
+    kennziffer: '219',
+    label: 'Steuerpflichtiger Gewinn/Verlust',
+    kind: 'computed',
+    exportable: true,
+    sortOrder: 7,
+    computedFromIds: [],
+    computedTerms: [{ id: 'E2025_KZ293', sign: 1 }, { id: 'E2025_KZ280', sign: 1 }],
+    sourceVersion: 'BMF-2025-2025-08-29',
+  },
 ] as const;
 
 let mockClassificationMap = new Map<string, any>();
@@ -209,6 +251,20 @@ describe('eurReport integration (service boundary)', () => {
     expect(income?.total).toBe(100);
     expect(expense?.total).toBe(50);
     expect(report.unclassifiedCount).toBe(0);
+  });
+
+  it('preserves signed terms in computed report lines', () => {
+    const db = buildFakeDb();
+    mockClassificationMap = new Map([
+      ['invoice:inv-1', { id: 'c1', sourceType: 'invoice', sourceId: 'inv-1', taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z' }],
+      ['transaction:tx-1', { id: 'c2', sourceType: 'transaction', sourceId: 'tx-1', taxYear: 2025, eurLineId: 'E2025_KZ280', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z' }],
+      ['transaction:tx-2', { id: 'c3', sourceType: 'transaction', sourceId: 'tx-2', taxYear: 2025, eurLineId: 'E2025_KZ183', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z' }],
+    ]);
+
+    const report = getEurReport(db, { taxYear: 2025, settings: makeSettings() as any });
+    expect(report.rows.find((row) => row.lineId === 'E2025_KZ290')?.total).toBe(59.5);
+    expect(report.rows.find((row) => row.lineId === 'E2025_KZ293')?.total).toBe(29.5);
+    expect(report.rows.find((row) => row.lineId === 'E2025_KZ219')?.total).toBe(89);
   });
 
   it('keeps each OPOS allocation tax snapshot and emits residual separately', () => {

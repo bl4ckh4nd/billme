@@ -215,7 +215,10 @@ export const getEurReport = (db: Database.Database, params: EurReportParams): Eu
       return direct;
     }
 
-    const value = round2((line.computedFromIds ?? []).reduce((sum, childId) => sum + resolveTotal(childId), 0));
+    const terms = line.computedTerms?.length
+      ? line.computedTerms.map((term) => [term.id, term.sign] as const)
+      : (line.computedFromIds ?? []).map((childId) => [childId, 1] as const);
+    const value = round2(terms.reduce((sum, [childId, sign]) => sum + sign * resolveTotal(childId), 0));
     computedMemo.set(lineId, value);
     totals.set(lineId, value);
     return value;
@@ -228,6 +231,7 @@ export const getEurReport = (db: Database.Database, params: EurReportParams): Eu
   const rows: EurReportRow[] = lines.map((line) => ({
     lineId: line.id,
     kennziffer: line.kennziffer,
+    providerPath: line.providerPath,
     label: line.label,
     kind: line.kind,
     exportable: line.exportable,

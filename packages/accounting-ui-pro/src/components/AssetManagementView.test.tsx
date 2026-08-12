@@ -33,6 +33,17 @@ const scheduleEntry: AssetDepreciationScheduleEntry = {
 };
 
 describe('AssetManagementView productive mutations', () => {
+  it('locks status edits after an asset has been activated', async () => {
+    render(<AssetManagementView dataAdapter={{ listAssets: vi.fn(async () => [asset]), upsertAsset: vi.fn() }} />);
+
+    await screen.findAllByText('Server');
+    fireEvent.click(screen.getByRole('button', { name: 'Bearbeiten' }));
+    await screen.findByText('Anlage bearbeiten');
+
+    expect((screen.getByRole('combobox', { name: /Status/ }) as HTMLSelectElement).disabled).toBe(true);
+    expect(screen.getByText(/Gebuchte Anlagen behalten ihren Accounting-Status/)).toBeTruthy();
+  });
+
   it('surfaces an adapter rejection without refreshing or replacing canonical data', async () => {
     const listAssets = vi.fn(async () => [asset]);
     const upsertAsset = vi.fn(async () => { throw new Error('Anlagen-Backend abgelehnt'); });

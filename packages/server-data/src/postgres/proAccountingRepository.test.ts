@@ -175,6 +175,44 @@ test('asset-owned journal entries stay behind asset correction guards', async ()
   assert.match(source, /ASSET_CORRECTION_REQUIRED/);
 });
 
+test('asset ownership migration guards direct status changes after activation', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const migration = await readFile(new URL('../../drizzle/0012_server_data_asset_ownership_guard.sql', import.meta.url), 'utf8');
+  assert.match(migration, /CREATE OR REPLACE FUNCTION billme_protect_asset_accounting/);
+  assert.match(migration, /assets_accounting_ownership_guard/);
+  assert.match(migration, /asset status is immutable after accounting ownership/);
+  assert.match(migration, /asset disposal fields are immutable outside the disposal flow/);
+});
+
+test('real Postgres keeps activated asset status immutable while allowing metadata replay', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tenantId = `asset-ownership-${suffix}`;
+  const assetId = `asset-${suffix}`;
+  const now = new Date().toISOString();
+  const scope = createSingleTenantScope(tenantId, 'pro');
+  try {
+    await runDrizzleMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'Asset ownership test', now]);
+    await pool.query(`INSERT INTO assets (id,tenant_id,asset_number,name,asset_class,status,activation_date,acquisition_cost,useful_life_years,depreciation_method,cost_center,location,receipt_linked,asset_account_number,activation_journal_entry_id,created_at,updated_at) VALUES ($1,$2,'A-OWN-001','Server','IT-Hardware','aktiv','2026-01-01',1200,3,'linear','IT','Berlin',TRUE,'0480','activation-journal',$3,$3)`, [assetId, tenantId, now]);
+    await pool.query(`INSERT INTO asset_movements (id,tenant_id,asset_id,type,movement_date,amount,reason,created_at) VALUES ($1,$2,$3,'activation','2026-01-01',1200,'activation',$4)`, [`movement-${suffix}`, tenantId, assetId, now]);
+    const repository = createPostgresProAccountingRepository(pool);
+    const replay = await repository.upsertAsset(scope, {
+      id: assetId, assetNumber: 'A-OWN-001', name: 'Renamed server', assetClass: 'IT-Hardware', status: 'aktiv', activationDate: '2026-01-01', acquisitionCost: 1200, usefulLifeYears: 3, depreciationMethod: 'linear', costCenter: 'IT', location: 'Munich', receiptLinked: true, assetAccountNumber: '0480',
+    }, 'metadata replay');
+    assert.equal(replay.name, 'Renamed server');
+    await assert.rejects(() => repository.upsertAsset(scope, {
+      id: assetId, assetNumber: 'A-OWN-001', name: 'Renamed server', assetClass: 'IT-Hardware', status: 'entwurf', activationDate: '2026-01-01', acquisitionCost: 1200, usefulLifeYears: 3, depreciationMethod: 'linear', costCenter: 'IT', location: 'Munich', receiptLinked: true, assetAccountNumber: '0480',
+    }, 'invalid status replay'), /ACCOUNTING_ASSET_STATUS_IMMUTABLE/);
+    await assert.rejects(() => pool.query(`UPDATE assets SET status='entwurf' WHERE tenant_id=$1 AND id=$2`, [tenantId, assetId]), /asset status is immutable after accounting ownership/);
+  } finally {
+    await pool.query('ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete').catch(() => undefined);
+    await pool.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]).catch(() => undefined);
+    await pool.query('ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete').catch(() => undefined);
+    await pool.end();
+  }
+});
+
 test('real Postgres DATEV exports return the exact persisted bytes after source changes', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
   const tenantId = `datev-bytes-${Date.now()}-${Math.random().toString(16).slice(2)}`;

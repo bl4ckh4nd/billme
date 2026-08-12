@@ -402,7 +402,9 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       const method = resolveDepreciationMethod(assetInputFor(input));
       const schedule = buildDepreciationSchedule({ ...assetInputFor(input), method });
       const oldSchedule = existing ? await assetSchedule(tx, scope, id) : [];
-      if (existing && (oldSchedule.some((entry) => entry.status === 'posted') || (await q<any>(tx, `SELECT 1 FROM asset_movements WHERE tenant_id=$1 AND asset_id=$2 LIMIT 1`, [t, id]))[0])) {
+      const financiallyOwned = Boolean(existing?.activation_journal_entry_id) || oldSchedule.some((entry) => entry.status === 'posted') || Boolean((await q<any>(tx, `SELECT 1 FROM asset_movements WHERE tenant_id=$1 AND asset_id=$2 LIMIT 1`, [t, id]))[0]);
+      if (existing && financiallyOwned) {
+        if (input.status !== existing.status) throw new Error('ACCOUNTING_ASSET_STATUS_IMMUTABLE');
         const financialChanged = input.assetNumber !== existing.asset_number || input.assetClass !== existing.asset_class || input.activationDate !== existing.activation_date || round(input.acquisitionCost) !== round(existing.acquisition_cost) || (input.usefulLifeYears ?? null) !== existing.useful_life_years || method !== existing.depreciation_method || input.assetAccountNumber !== existing.asset_account_number || (input.acquisitionOffsetAccountNumber !== undefined && input.acquisitionOffsetAccountNumber !== existing.acquisition_offset_account_number) || (input.sourceIncomingInvoiceId !== undefined && input.sourceIncomingInvoiceId !== existing.source_incoming_invoice_id);
         if (financialChanged) throw new Error('ACCOUNTING_ASSET_FIELDS_IMMUTABLE');
       }

@@ -85,6 +85,13 @@
       "when": 1786527693003,
       "tag": "0011_server_data_tax_case_mapping_tenancy",
       "breakpoints": false
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786538400000,
+      "tag": "0012_server_data_asset_ownership_guard",
+      "breakpoints": false
     }
   ]
 }

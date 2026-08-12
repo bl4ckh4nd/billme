@@ -121,7 +121,7 @@ type AssetFormState = {
   assetNumber: string;
   name: string;
   assetClass: string;
-  status: 'entwurf' | 'aktiv';
+  status: AssetStatus;
   activationDate: string;
   acquisitionCost: string;
   usefulLifeYears: string;
@@ -145,7 +145,7 @@ function formFromAsset(asset?: AssetItem, activate = false): AssetFormState {
     assetNumber: asset?.assetNumber ?? '',
     name: asset?.name ?? '',
     assetClass: asset?.assetClass ?? '',
-    status: activate ? 'aktiv' : asset?.status === 'aktiv' ? 'aktiv' : 'entwurf',
+    status: activate ? 'aktiv' : asset?.status ?? 'entwurf',
     activationDate: asset?.activationDate ?? today(),
     acquisitionCost: asset ? String(asset.acquisitionCost) : '',
     usefulLifeYears: asset?.usefulLifeYears ? String(asset.usefulLifeYears) : '',
@@ -169,6 +169,7 @@ interface AssetEditorProps {
 }
 
 function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorProps) {
+  const accountingOwned = Boolean(form.id && form.status !== 'entwurf');
   const input = (key: keyof AssetFormState) => (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const value = event.currentTarget.type === 'checkbox'
       ? (event.currentTarget as HTMLInputElement).checked
@@ -229,12 +230,16 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
               <option value="pool">Pool</option>
             </select>
           </label>
-          <label className="space-y-1 text-sm font-semibold text-foreground">
+          <label htmlFor="asset-status" className="space-y-1 text-sm font-semibold text-foreground">
             <span>Status *</span>
-            <select value={form.status} onChange={input('status')} required className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm">
+            <select id="asset-status" value={form.status} onChange={input('status')} required disabled={accountingOwned} aria-describedby={accountingOwned ? 'asset-status-ownership-note' : undefined} className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60">
               <option value="entwurf">Entwurf</option>
               <option value="aktiv">Aktiv</option>
+              <option value="voll_abgeschrieben">Voll abgeschrieben</option>
+              <option value="verkauft">Verkauft</option>
+              <option value="stillgelegt">Stillgelegt</option>
             </select>
+            {accountingOwned && <span id="asset-status-ownership-note" className="block text-xs font-medium text-muted">Gebuchte Anlagen behalten ihren Accounting-Status. Für eine Korrektur bitte den Anlagen-Korrekturfluss verwenden.</span>}
           </label>
         </div>
         <label className="flex items-center gap-2 text-sm font-semibold text-foreground">

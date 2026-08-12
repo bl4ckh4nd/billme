@@ -1176,7 +1176,10 @@ export const runDepreciation = (
       entityId: asset.id,
       action: "depreciation_posted",
       reason: args.overrideReason?.trim() || args.reason,
-      before: { schedule: auditSchedule(scheduleBefore) },
+      before: {
+        asset: assetSnapshot(asset),
+        schedule: auditSchedule(scheduleBefore),
+      },
       after: {
         schedule: auditSchedule(scheduleAfter),
         asset: assetSnapshot(assetAfter),
@@ -1404,24 +1407,22 @@ export const disposeAsset = (
       )
       .run();
     const scheduleAfter = getDepreciationSchedule(db, row.id, scope);
+    const assetAfter = getAssetRow(db, tenantId, row.id);
     appendAuditLog(db, {
       entityType: "asset",
       entityId: row.id,
       action: "dispose",
       reason: args.overrideReason?.trim() || args.reason,
-      before: assetSnapshot(row),
+      before: {
+        asset: assetSnapshot(row),
+        schedule: auditSchedule(scheduleBefore),
+      },
       after: {
-        ...assetSnapshot({
-          ...row,
-          status: args.proceeds > 0 ? "verkauft" : "stillgelegt",
-          disposal_date: args.disposalDate,
-          disposal_proceeds: args.proceeds,
-        }),
+        asset: assetSnapshot(assetAfter),
+        schedule: auditSchedule(scheduleAfter),
         residualBookValue,
         gainLoss,
         journalEntryId,
-        scheduleBefore: auditSchedule(scheduleBefore),
-        scheduleAfter: auditSchedule(scheduleAfter),
       },
       actor: "pro",
     });

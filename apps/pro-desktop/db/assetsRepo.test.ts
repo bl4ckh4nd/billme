@@ -243,6 +243,15 @@ describe.skipIf(!canRunNativeSqlite)('asset migrations and repository', () => {
     }, scope);
     expect(noAfaResult.residualBookValue).toBe(1000);
     expect(noAfaResult.gainLoss).toBe(-900);
+    const disposalAudit = noAfaDb.prepare("SELECT before_json, after_json FROM audit_log WHERE entity_id = ? AND action = 'dispose' ORDER BY sequence DESC LIMIT 1").get(noAfa.id) as { before_json: string; after_json: string };
+    expect(JSON.parse(disposalAudit.before_json)).toMatchObject({
+      asset: expect.objectContaining({ id: noAfa.id, status: 'aktiv' }),
+      schedule: expect.arrayContaining([expect.objectContaining({ status: 'planned' })]),
+    });
+    expect(JSON.parse(disposalAudit.after_json)).toMatchObject({
+      asset: expect.objectContaining({ id: noAfa.id, status: 'verkauft', disposalDate: '2026-06-30' }),
+      schedule: expect.arrayContaining([expect.objectContaining({ status: 'cancelled' })]),
+    });
     const noAfaRetry = disposeAsset(noAfaDb, {
       assetId: noAfa.id,
       disposalDate: 'not-a-date',

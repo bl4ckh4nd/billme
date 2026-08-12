@@ -36,7 +36,8 @@ test('buildServerModeProTenantSeed adds accounting fixtures', () => {
     now: '2026-03-20T09:00:00.000Z',
   });
 
-  assert.equal(seed.ledgerAccounts.length, 3);
+  assert.equal(seed.ledgerAccounts.length, 4);
+  assert.ok(seed.ledgerAccounts.some((account) => account.accountNumber === '1776'));
   assert.equal(seed.taxCases.length, 2);
   assert.equal(seed.accountKeywords.length, 1);
   assert.equal(seed.articles.length, 2);
@@ -81,13 +82,13 @@ test('applyServerModeProTenantSeed persists accounting fixtures after billing da
   await applyServerModeProTenantSeed(db, seed);
   const counts = await db.query<{ ledger: string; articles: string; accounts: string; templates: string; workflow: string }>(
     `SELECT
-       (SELECT COUNT(*) FROM ledger_accounts WHERE chart = 'SKR03' AND account_number IN ('1200', '3125', '8400')) AS ledger,
+       (SELECT COUNT(*) FROM ledger_accounts WHERE chart = 'SKR03' AND account_number IN ('1200', '3125', '8400', '1776')) AS ledger,
        (SELECT COUNT(*) FROM articles WHERE tenant_id = $1) AS articles,
        (SELECT COUNT(*) FROM accounts WHERE tenant_id = $1) AS accounts,
        (SELECT COUNT(*) FROM templates WHERE tenant_id = $1) AS templates,
        (SELECT COUNT(*) FROM pro_workflow_entries WHERE tenant_id = $1) AS workflow`,
     [seed.tenantId],
   );
-  assert.deepEqual(counts.rows[0], { ledger: '3', articles: '2', accounts: '1', templates: '2', workflow: '1' });
+  assert.deepEqual(counts.rows[0], { ledger: '4', articles: '2', accounts: '1', templates: '2', workflow: '1' });
   await db.end();
 });

@@ -16,19 +16,43 @@ export type TaxFilingAdapterOptions = {
   requestApproval?: (input: { snapshot: TaxFilingSnapshot; operation: 'submit' }) => Promise<TaxFilingApprovalGrant | null>;
 };
 
-const canonicalSnapshot = (snapshot: TaxFilingSnapshot): Record<string, unknown> => ({
-  kind: snapshot.kind,
-  periodStart: snapshot.periodStart,
-  periodEnd: snapshot.periodEnd,
-  payload: snapshot.payload,
-});
+const canonicalSnapshot = (snapshot: TaxFilingSnapshot): Record<string, unknown> => {
+  // Report snapshots use the same source form as server-mode reporting:
+  // `{reportType,args,payload}`.  Keep this branch in the shared adapter so
+  // desktop records and server records have one immutable identity.  The
+  // fallback remains for provider-only snapshots that are not report-backed.
+  if (
+    snapshot.payload.reportType !== undefined
+    && snapshot.payload.args !== undefined
+    && snapshot.payload.payload !== undefined
+  ) {
+    return {
+      reportType: snapshot.payload.reportType,
+      args: snapshot.payload.args,
+      payload: snapshot.payload.payload,
+    };
+  }
+  return {
+    kind: snapshot.kind,
+    periodStart: snapshot.periodStart,
+    periodEnd: snapshot.periodEnd,
+    payload: snapshot.payload,
+  };
+};
 
 /** The server's immutable source identity uses deterministic JSON; mirror it without trusting caller hash. */
 export const sourceHash = (snapshot: TaxFilingSnapshot): string => createHash('sha256').update(stableStringify(canonicalSnapshot(snapshot))).digest('hex');
 const stableStringify = (value: unknown): string => {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`).join(',')}}`;
+  return `{${Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`).join(',')}}`;
+};
+
+const reportPayload = (snapshot: TaxFilingSnapshot): Record<string, unknown> => {
+  const nested = snapshot.payload.payload;
+  return nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : snapshot.payload;
 };
 
 const validateSnapshot = (snapshot: TaxFilingSnapshot): TaxFilingResult['issues'] => {
@@ -36,9 +60,27 @@ const validateSnapshot = (snapshot: TaxFilingSnapshot): TaxFilingResult['issues'
   if (snapshot.kind === 'euer' && !snapshot.periodStart.startsWith('2025-')) {
     issues.push({ code: 'EÜR_2025_REQUIRED', message: 'EÜR filing is limited to the approved 2025 report snapshot.' });
   }
+  if (snapshot.kind === 'euer') {
+    const filing = reportPayload(snapshot).filing;
+    if (!filing || typeof filing !== 'object') {
+      issues.push({ code: 'EÜR_CATALOG_PROVENANCE_REQUIRED', message: 'EÜR requires catalog, Kennziffer and provider-path provenance.' });
+    } else {
+      const catalog = (filing as { catalog?: unknown }).catalog;
+      const elsterReady = catalog && typeof catalog === 'object'
+        && (catalog as { delivery?: unknown }).delivery === 'elster-ready'
+        && (catalog as { elsterReady?: unknown }).elsterReady === true;
+      if (!elsterReady) {
+        issues.push({ code: 'EUR_ELSTER_CATALOG_UNAVAILABLE', message: 'EÜR can only be sent with the verified ELSTER catalog; the available catalog is print-form-only.' });
+      }
+    }
+  }
   if (snapshot.kind === 'e_bilanz') {
     const taxonomy = snapshot.payload.taxonomyVersion ?? snapshot.payload.taxonomy;
     if (taxonomy !== '6.9') issues.push({ code: 'TAXONOMY_6_9_REQUIRED', message: 'E-Bilanz requires taxonomy 6.9.' });
+    issues.push({ code: 'E_BILANZ_TAXONOMY_CATALOG_UNAVAILABLE', message: 'E-Bilanz submission is unavailable until a verified taxonomy 6.9 provider catalog is bundled.' });
+  }
+  if (snapshot.kind === 'unternehmensregister') {
+    issues.push({ code: 'UNTERNEHMENSREGISTER_PROVIDER_CONTRACT_UNAVAILABLE', message: 'Unternehmensregister submission is unavailable until a verified provider contract is bundled.' });
   }
   return issues;
 };

@@ -66,8 +66,14 @@ const reportingFiscalYear = async (db: PostgresQueryable, t: string, postingDate
   fiscalYearForPostingDate(postingDate, await reportingFiscalYearStart(db, t));
 
 const snapshotPositions = (payload: unknown): Array<{ positionKey: string; positionLabel: string; amount: number; debitAmount: number; creditAmount: number; metadataJson: string }> => {
-  if (!payload || typeof payload !== 'object' || !Array.isArray((payload as { rows?: unknown[] }).rows)) return [];
-  return (payload as { rows: unknown[] }).rows.flatMap((raw) => {
+  if (!payload || typeof payload !== 'object') return [];
+  const source = payload as { rows?: unknown[]; assets?: unknown[]; liabilities?: unknown[] };
+  const rows = [
+    ...(Array.isArray(source.rows) ? source.rows : []),
+    ...(Array.isArray(source.assets) ? source.assets.map((row) => ({ ...(row as object), side: 'asset' })) : []),
+    ...(Array.isArray(source.liabilities) ? source.liabilities.map((row) => ({ ...(row as object), side: 'liability' })) : []),
+  ];
+  return rows.flatMap((raw) => {
     if (!raw || typeof raw !== 'object') return [];
     const row = raw as Record<string, unknown>;
     const positionKey = String(row.positionKey ?? row.position ?? row.accountNumber ?? '').trim();
@@ -81,7 +87,7 @@ const snapshotPositions = (payload: unknown): Array<{ positionKey: string; posit
       amount: Number.isFinite(amount) ? amount : 0,
       debitAmount: Number.isFinite(debitAmount) ? debitAmount : 0,
       creditAmount: Number.isFinite(creditAmount) ? creditAmount : 0,
-      metadataJson: JSON.stringify({ accountRefs: row.accountRefs ?? row.accountNumbers ?? [] }),
+      metadataJson: JSON.stringify({ accountRefs: row.accountRefs ?? row.accountNumbers ?? [], side: row.side }),
     }];
   });
 };

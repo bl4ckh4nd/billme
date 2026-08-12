@@ -154,10 +154,13 @@ const bilanzMicroKeys = new Set([
   'assets.non-current',
   'assets.current',
   'assets.prepaid',
+  'assets.deferred-tax',
+  'assets.offset',
   'equity',
   'provisions',
   'liabilities',
   'liabilities.prepaid',
+  'liabilities.deferred-tax',
 ]);
 const bilanzSmallPositions = bilanzPositions.filter((entry) => bilanzSmallKeys.has(entry.key));
 const bilanzMicroPositions = bilanzPositions.filter((entry) => bilanzMicroKeys.has(entry.key));
@@ -216,7 +219,7 @@ const catalog = (
   return result;
 };
 
-export const PUBLIC_HGB_BILANZ_MICRO_2025 = catalog('hgb-bilanz-micro-2025', 'HGB-Bilanz – Kleinstkapitalgesellschaften (Mindestgliederung)', 'bilanz', 'micro', HGB_BILANZ, bilanzMicroPositions);
+export const PUBLIC_HGB_BILANZ_MICRO_2025 = catalog('hgb-bilanz-micro-2025', 'HGB-Bilanz – Kleinstkapitalgesellschaften (Mindestgliederung A–E)', 'bilanz', 'micro', HGB_BILANZ, bilanzMicroPositions);
 export const PUBLIC_HGB_BILANZ_SMALL_2025 = catalog('hgb-bilanz-small-2025', 'HGB-Bilanz – kleine Kapitalgesellschaften (Buchstaben und römische Ziffern)', 'bilanz', 'small', HGB_BILANZ, bilanzSmallPositions);
 export const PUBLIC_HGB_GKV_MICRO_2025 = catalog('hgb-gkv-micro-2025', 'HGB-Gewinn- und Verlustrechnung (Gesamtkostenverfahren) – Kleinstkapitalgesellschaften', 'gkv', 'micro', HGB_GKV, gkvPositions);
 export const PUBLIC_HGB_GKV_SMALL_2025 = catalog('hgb-gkv-small-2025', 'HGB-Gewinn- und Verlustrechnung (Gesamtkostenverfahren) – kleine Kapitalgesellschaften', 'gkv', 'small', HGB_GKV, gkvPositions);

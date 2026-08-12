@@ -29,7 +29,8 @@ test('HGB balance scopes expose only statutory minimum detail', () => {
   const micro = catalogs.find((catalog) => catalog.id === 'hgb-bilanz-micro-2025');
   const small = catalogs.find((catalog) => catalog.id === 'hgb-bilanz-small-2025');
   assert.deepEqual(micro?.positions.map((position) => position.key), [
-    'assets.non-current', 'assets.current', 'assets.prepaid', 'equity', 'provisions', 'liabilities', 'liabilities.prepaid',
+    'assets.non-current', 'assets.current', 'assets.prepaid', 'assets.deferred-tax', 'assets.offset',
+    'equity', 'provisions', 'liabilities', 'liabilities.prepaid', 'liabilities.deferred-tax',
   ]);
   assert.deepEqual(small?.positions.map((position) => position.key), [
     'assets.non-current', 'assets.non-current.intangible', 'assets.non-current.tangible', 'assets.non-current.financial',

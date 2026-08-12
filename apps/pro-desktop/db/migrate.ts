@@ -609,7 +609,6 @@ export const runMigrations = (db: Database.Database): void => {
     SELECT tenant_id, id, account_id, source_transaction_id
     FROM bank_transactions ORDER BY tenant_id, created_at, id
   `).all() as Array<{ tenant_id: string; id: string; account_id: string; source_transaction_id: string | null }>;
-  const seenSources = new Map<string, string>();
   const hasIdentityAudit = (entityId: string, action: string): boolean => Boolean(db.prepare(
     'SELECT 1 FROM audit_log WHERE entity_type = ? AND entity_id = ? AND action = ? LIMIT 1',
   ).get('bank_transaction', entityId, action));
@@ -627,7 +626,27 @@ export const runMigrations = (db: Database.Database): void => {
     });
   };
 
+  type BankIdentityPlan = {
+    bank: (typeof bankRows)[number];
+    txById?: { id: string; dedup_hash: string | null };
+    txBySource?: { id: string; dedup_hash: string | null };
+    normalized: string;
+    resolvedSource: string;
+    blocked: boolean;
+  };
+
+  // Read every current owner before changing a single row.  In particular,
+  // do not let iteration order turn `a -> c` into a unique-index failure when
+  // another legacy row already owns `c`.
+  const currentOwners = new Map<string, string>();
   for (const bank of bankRows) {
+    const source = bank.source_transaction_id?.trim();
+    if (source && !currentOwners.has(`${bank.tenant_id}:${source}`)) {
+      currentOwners.set(`${bank.tenant_id}:${source}`, bank.id);
+    }
+  }
+
+  const plans: BankIdentityPlan[] = bankRows.map((bank) => {
     const txById = db.prepare(
       'SELECT id, dedup_hash FROM transactions WHERE id = ? AND account_id = ? LIMIT 1',
     ).get(bank.id, bank.account_id) as { id: string; dedup_hash: string | null } | undefined;
@@ -637,31 +656,71 @@ export const runMigrations = (db: Database.Database): void => {
       ).get(bank.account_id, bank.source_transaction_id.trim()) as { id: string; dedup_hash: string | null } | undefined
       : undefined;
     const normalized = (txById?.dedup_hash?.trim() || txBySource?.dedup_hash?.trim() || bank.source_transaction_id?.trim() || bank.id);
-    const sourceKey = `${bank.tenant_id}:${normalized}`;
-    let resolvedSource = normalized;
-    const previousBankId = seenSources.get(sourceKey);
-    if (previousBankId && previousBankId !== bank.id) {
-      resolvedSource = `legacy-conflict:${normalized}:${bank.id}`;
-      while (seenSources.has(`${bank.tenant_id}:${resolvedSource}`)) resolvedSource += '-1';
-      auditIdentity(bank, 'source_identity_conflict', 'Legacy duplicate source identity quarantined without overwrite', resolvedSource);
-    }
-    seenSources.set(`${bank.tenant_id}:${resolvedSource}`, bank.id);
+    return { bank, txById, txBySource, normalized, resolvedSource: normalized, blocked: false };
+  });
 
+  // A planned target may also collide with another row whose current source
+  // was read above.  Quarantine duplicate legacy sources, but preserve the
+  // original source for a mismatched row that points at an existing owner:
+  // that row is intentionally left in a reconciliation-required state.
+  const plannedOwners = new Map<string, string>();
+  const blockedBankIds = new Set<string>();
+  for (const plan of plans) {
+    const { bank, normalized } = plan;
+    const targetKey = `${bank.tenant_id}:${normalized}`;
+    const currentSource = bank.source_transaction_id?.trim() || null;
+    const currentOwner = currentOwners.get(targetKey);
+    const plannedOwner = plannedOwners.get(targetKey);
+
+    if (currentOwner && currentOwner !== bank.id) {
+      if (currentSource === normalized) {
+        // Two rows already claim the same source. Keep one canonical owner
+        // and give the other a stable quarantine identity.
+        plan.resolvedSource = `legacy-conflict:${normalized}:${bank.id}`;
+        while (currentOwners.has(`${bank.tenant_id}:${plan.resolvedSource}`)
+          || plannedOwners.has(`${bank.tenant_id}:${plan.resolvedSource}`)) {
+          plan.resolvedSource += '-1';
+        }
+        auditIdentity(bank, 'source_identity_conflict', 'Legacy duplicate source identity quarantined without overwrite', plan.resolvedSource);
+      } else {
+        // Never rewrite a source to an identity owned by another bank row.
+        // Audit + unchanged source is the explicit reconciliation-required
+        // state consumed by import details/rollback preflight.
+        plan.resolvedSource = currentSource || bank.id;
+        plan.blocked = true;
+        blockedBankIds.add(bank.id);
+        auditIdentity(bank, 'source_identity_conflict', 'Legacy source identity is owned by another bank row; reconciliation required', normalized);
+      }
+    } else if (plannedOwner && plannedOwner !== bank.id) {
+      plan.resolvedSource = `legacy-conflict:${normalized}:${bank.id}`;
+      while (currentOwners.has(`${bank.tenant_id}:${plan.resolvedSource}`)
+        || plannedOwners.has(`${bank.tenant_id}:${plan.resolvedSource}`)) {
+        plan.resolvedSource += '-1';
+      }
+      auditIdentity(bank, 'source_identity_conflict', 'Legacy duplicate planned source identity quarantined without overwrite', plan.resolvedSource);
+    }
+
+    if (!plan.blocked) plannedOwners.set(`${bank.tenant_id}:${plan.resolvedSource}`, bank.id);
+  }
+
+  for (const plan of plans) {
+    const { bank, normalized, resolvedSource } = plan;
+    if (plan.blocked) continue;
     if (bank.source_transaction_id !== resolvedSource) {
       db.prepare('UPDATE bank_transactions SET source_transaction_id = ? WHERE tenant_id = ? AND id = ?')
         .run(resolvedSource, bank.tenant_id, bank.id);
-      if (!previousBankId) {
+      if (resolvedSource === normalized) {
         auditIdentity(bank, 'source_identity_repair', 'Legacy bank source normalized to transaction dedup identity', resolvedSource);
       }
     }
 
     // A legacy transaction can have the bank row id but a durable dedup hash.
     // Fill only a missing hash; never overwrite another transaction's hash.
-    if (txById && (!txById.dedup_hash || !txById.dedup_hash.trim()) && resolvedSource === normalized) {
+    if (plan.txById && (!plan.txById.dedup_hash || !plan.txById.dedup_hash.trim()) && resolvedSource === normalized) {
       const owner = db.prepare(
         'SELECT id FROM transactions WHERE account_id = ? AND dedup_hash = ? AND id <> ? LIMIT 1',
-      ).get(bank.account_id, resolvedSource, txById.id) as { id: string } | undefined;
-      if (!owner) db.prepare('UPDATE transactions SET dedup_hash = ? WHERE id = ?').run(resolvedSource, txById.id);
+      ).get(bank.account_id, resolvedSource, plan.txById.id) as { id: string } | undefined;
+      if (!owner) db.prepare('UPDATE transactions SET dedup_hash = ? WHERE id = ?').run(resolvedSource, plan.txById.id);
       else auditIdentity(bank, 'source_identity_conflict', 'Legacy transaction dedup identity already belongs to another row', resolvedSource);
     }
   }
@@ -688,6 +747,7 @@ export const runMigrations = (db: Database.Database): void => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
   `);
   for (const bank of normalizedBanks) {
+    if (blockedBankIds.has(bank.id)) continue;
     if (!db.prepare('SELECT 1 FROM accounts WHERE id = ? LIMIT 1').get(bank.account_id)) continue;
     const existing = db.prepare(
       'SELECT id FROM transactions WHERE account_id = ? AND dedup_hash = ? LIMIT 1',

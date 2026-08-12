@@ -78,6 +78,43 @@ describe('Pro finance import', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM bank_transactions WHERE source_transaction_id IS NOT NULL').get()).toEqual({ count: 2 });
   });
 
+  it('preflights all legacy source owners before quarantining a dedup collision', () => {
+    const db = new Database(':memory:');
+    db.exec(bootstrapSql);
+    db.prepare("INSERT INTO accounts (id, name, iban, balance, type, color) VALUES ('bank', 'Bank', '', 0, 'bank', '')").run();
+    db.prepare(`INSERT INTO import_batches
+      (id, account_id, profile, file_name, file_sha256, mapping_json, imported_count, skipped_count, error_count, created_at)
+      VALUES ('collision-batch', 'bank', 'generic', 'legacy.csv', 'sha', '{}', 1, 0, 0, datetime('now'))`).run();
+    // Bank a would normalize to c through its compatibility transaction, but
+    // bank b already owns c. Migration must not update a before discovering b.
+    db.prepare(`INSERT INTO transactions
+      (id, account_id, date, amount, type, counterparty, purpose, status, dedup_hash, import_batch_id)
+      VALUES ('a', 'bank', '2025-01-03', 10, 'income', 'Acme', 'Legacy', 'booked', 'c', 'collision-batch')`).run();
+    const insertBank = db.prepare(`INSERT INTO bank_transactions
+      (id, tenant_id, account_id, date, amount, type, counterparty, purpose, status, source_transaction_id, created_at, updated_at)
+      VALUES (?, 'default', 'bank', '2025-01-03', 10, 'income', 'Acme', 'Legacy', 'booked', ?, datetime('now'), datetime('now'))`);
+    insertBank.run('a', 'a');
+    insertBank.run('b', 'c');
+
+    runMigrations(db);
+    expect(db.prepare('SELECT source_transaction_id FROM bank_transactions ORDER BY id').all()).toEqual([
+      { source_transaction_id: 'a' }, { source_transaction_id: 'c' },
+    ]);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE action = 'source_identity_conflict' AND entity_id = 'a'").get()).toEqual({ count: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM transactions WHERE dedup_hash = 'a'").get()).toEqual({ count: 0 });
+    expect(getProImportBatchDetails(db, 'collision-batch').canRollback).toBe(false);
+    expect(() => rollbackProImportBatch(db, 'collision-batch', 'collision correction')).toThrow('IMPORT_RECONCILIATION_REQUIRED');
+    expect(db.prepare('SELECT deleted_at FROM transactions WHERE id = ?').get('a')).toEqual({ deleted_at: null });
+    expect(db.prepare('SELECT deleted_at FROM bank_transactions WHERE id = ?').get('a')).toEqual({ deleted_at: null });
+
+    const conflicts = db.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE action = 'source_identity_conflict'").get() as { count: number };
+    runMigrations(db);
+    expect(db.prepare('SELECT source_transaction_id FROM bank_transactions ORDER BY id').all()).toEqual([
+      { source_transaction_id: 'a' }, { source_transaction_id: 'c' },
+    ]);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE action = 'source_identity_conflict'").get()).toEqual(conflicts);
+  });
+
   it('normalizes legacy id/dedup pairs and blocks rollback on the resolved bank draft', () => {
     const db = new Database(':memory:');
     db.exec(bootstrapSql);

@@ -34,12 +34,23 @@ describe('calculateReconciliationTotals', () => {
   it('derives the bank account instead of assuming SKR03 1200', () => {
     const skr04Draft = draft(100);
     skr04Draft.lines[0] = { ...skr04Draft.lines[0], accountId: '1800', accountName: 'Bank' };
-    expect(getBankAccountNumber(skr04Draft, [{ id: '1800', number: '1800', name: 'Bank', type: 'Asset' }])).toBe('1800');
-    expect(calculateReconciliationTotals(skr04Draft, 100, [{ id: '1800', number: '1800', name: 'Bank', type: 'Asset' }])).toMatchObject({
+    expect(getBankAccountNumber(skr04Draft, [{ id: '1800', number: '1800', name: 'Geldtransit', type: 'Asset' }], '1800')).toBe('1800');
+    expect(calculateReconciliationTotals(skr04Draft, 100, [{ id: '1800', number: '1800', name: 'Geldtransit', type: 'Asset' }], '1800')).toMatchObject({
       bank: 100,
       counterpart: 100,
       difference: 0,
       bankAccountNumber: '1800',
+    });
+  });
+
+  it('uses an authoritative custom bank GL even when its name is not a bank heuristic', () => {
+    const customDraft = draft(100);
+    customDraft.lines[0] = { ...customDraft.lines[0], accountId: '1999', accountName: 'Geldtransit' };
+    expect(calculateReconciliationTotals(customDraft, 100, [], '1999')).toMatchObject({
+      bank: 100,
+      counterpart: 100,
+      difference: 0,
+      bankAccountNumber: '1999',
     });
   });
 });

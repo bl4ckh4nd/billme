@@ -177,7 +177,7 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden xl:flex-row">
-      <div className="flex min-h-0 flex-col border-b border-gray-100 xl:basis-[34rem] xl:min-w-[24rem] xl:max-w-[34rem] xl:border-b-0 xl:border-r">
+      <div className="flex min-h-0 flex-col border-b border-gray-100 xl:w-96 xl:min-w-96 xl:max-w-96 xl:border-b-0 xl:border-r">
         <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-black text-accent flex items-center justify-center shrink-0">
@@ -202,7 +202,7 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
             </div>
           </div>
 
-          <div className="grid grid-cols-[1fr_auto] gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={13} />
               <input
@@ -340,7 +340,7 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-6 grid grid-cols-1 gap-6 min-[1700px]:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+            <div className="min-h-0 flex-1 overflow-y-auto p-6 grid grid-cols-1 gap-6 min-[1700px]:grid-cols-2">
               <section className="min-w-0 space-y-4">
                 <div className="rounded-2xl border border-gray-200 bg-white p-5">
                   <div className="text-sm font-bold text-gray-900 mb-3">{activeTab}</div>

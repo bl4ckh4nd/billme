@@ -16,7 +16,7 @@ import {
   saveDraft,
 } from '../services/mockBookingStore';
 import AccountCombobox from './AccountCombobox';
-import { getBankAccountNumber } from './ReconciliationWorkbench';
+import { getConfiguredBankAccountNumber } from './ReconciliationWorkbench';
 import { Account, BookingAction, BookingDraft, Transaction, UserRole } from '../types';
 import InboxQueueTabs from './InboxQueueTabs';
 import IssueBadges from './IssueBadges';
@@ -24,6 +24,8 @@ import IssueBadges from './IssueBadges';
 interface InboxViewProps {
   role: UserRole;
   accounts?: Account[];
+  bankAccountNumber?: string;
+  bankAccountNumberByTransactionId?: Record<string, string>;
   transactions: Transaction[];
   onOpenTransaction: (transactionId: string) => void;
   onRefresh: () => void;
@@ -50,6 +52,8 @@ function nextActionLabel(action: BookingAction | undefined) {
 export default function InboxView({
   role,
   accounts,
+  bankAccountNumber: configuredBankAccountNumber,
+  bankAccountNumberByTransactionId,
   transactions,
   onOpenTransaction,
   onRefresh,
@@ -66,6 +70,8 @@ export default function InboxView({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const permissionCtx = permissionContextForRole(role);
+  const bankAccountNumberForTransaction = (transactionId: string) =>
+    bankAccountNumberByTransactionId?.[transactionId] ?? configuredBankAccountNumber;
   const queueCounts = useMemo(() => getQueueCounts(transactions), [transactions]);
   const filtered = useMemo(
     () => transactions.filter((tx) => txMatchesQueue(tx, activeQueue)),
@@ -74,7 +80,14 @@ export default function InboxView({
 
   const previewTx = previewId ? filtered.find((tx) => tx.id === previewId) ?? null : null;
   const previewDraft = previewTx ? getBookingDraftByTransactionId(previewTx.id) : undefined;
-  const previewBankAccountNumber = previewDraft ? getBankAccountNumber(previewDraft, accountOptions) : undefined;
+  const previewBankAccountNumber = previewDraft
+    ? getConfiguredBankAccountNumber(
+        previewDraft,
+        accounts ?? [],
+        bankAccountNumberForTransaction(previewDraft.transactionId),
+        accounts === undefined,
+      )
+    : undefined;
   const previewCounterLine = previewDraft?.lines.find((line) => line.accountId !== previewBankAccountNumber) ?? previewDraft?.lines[0];
   const previewAccountEditable = !!previewDraft && !['posted', 'reversed'].includes(previewDraft.workflowStatus);
 
@@ -163,7 +176,12 @@ export default function InboxView({
       if (!draft || ['posted', 'reversed'].includes(draft.workflowStatus)) { skipped += 1; continue; }
       try {
         const nextLines = [...draft.lines];
-        const bankAccountNumber = getBankAccountNumber(draft, accountOptions);
+        const bankAccountNumber = getConfiguredBankAccountNumber(
+          draft,
+          accounts ?? [],
+          bankAccountNumberForTransaction(draft.transactionId),
+          accounts === undefined,
+        );
         const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
         const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
         const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
@@ -203,7 +221,12 @@ export default function InboxView({
     const draft = getBookingDraftByTransactionId(txId);
     if (!draft) return;
     const nextLines = [...draft.lines];
-    const bankAccountNumber = getBankAccountNumber(draft, accountOptions);
+    const bankAccountNumber = getConfiguredBankAccountNumber(
+      draft,
+      accounts ?? [],
+      bankAccountNumberForTransaction(draft.transactionId),
+      accounts === undefined,
+    );
     const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
     const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
@@ -226,7 +249,12 @@ export default function InboxView({
     const draft = getBookingDraftByTransactionId(txId);
     if (!draft) return;
     const nextLines = [...draft.lines];
-    const bankAccountNumber = getBankAccountNumber(draft, accountOptions);
+    const bankAccountNumber = getConfiguredBankAccountNumber(
+      draft,
+      accounts ?? [],
+      bankAccountNumberForTransaction(draft.transactionId),
+      accounts === undefined,
+    );
     const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
     const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
@@ -294,7 +322,7 @@ export default function InboxView({
                 <span className="font-bold">{selectedIds.length}</span> Vorgänge markiert für Sammelverarbeitung
               </div>
               <div className="flex flex-wrap gap-2">
-                <div className="min-w-[16rem] max-w-[18rem]">
+                <div className="min-w-64 max-w-72">
                   <AccountCombobox
                     accounts={accountOptions}
                     valueAccountId={batchAccountSelection?.id ?? ''}
@@ -372,11 +400,11 @@ export default function InboxView({
                     className="rounded border-gray-300"
                   />
                 </th>
-                <th scope="col" className="px-3 py-3 w-[128px]">STATUS</th>
-                <th scope="col" className="px-3 py-3 w-[90px]">DATUM</th>
+                <th scope="col" className="px-3 py-3 w-32">STATUS</th>
+                <th scope="col" className="px-3 py-3 w-24">DATUM</th>
                 <th scope="col" className="px-3 py-3">EMPFÄNGER / ZWECK</th>
-                <th scope="col" className="px-3 py-3 text-right w-[180px]">ISSUES</th>
-                <th scope="col" className="px-3 py-3 text-right w-[130px]">BETRAG</th>
+                <th scope="col" className="px-3 py-3 text-right w-44">ISSUES</th>
+                <th scope="col" className="px-3 py-3 text-right w-32">BETRAG</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -451,7 +479,7 @@ export default function InboxView({
       {/* ── RIGHT: editing sidebar ── */}
       <aside
         className={`shrink-0 flex flex-col h-full border-l border-gray-100 transition-all duration-300 overflow-hidden ${
-          !sidebarCollapsed ? 'w-80 xl:w-[22rem] opacity-100' : 'w-0 opacity-0 pointer-events-none'
+          !sidebarCollapsed ? 'w-80 xl:w-80 opacity-100' : 'w-0 opacity-0 pointer-events-none'
         }`}
         aria-hidden={sidebarCollapsed}
       >

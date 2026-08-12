@@ -101,10 +101,6 @@ export default function GuvView({ report, onSelectLine }: GuvViewProps) {
 
         <div className="max-h-[32rem] overflow-auto">
           <table className="w-full text-sm table-fixed">
-            <colgroup>
-              <col className="w-[55%]" />
-              <col className="w-[15%]" />
-            </colgroup>
             <thead className="sticky top-0 bg-gray-50 z-10">
               <tr className="text-xs uppercase tracking-wide text-gray-500">
                 <th scope="col" className="px-3 py-3 text-left font-bold">Position</th>

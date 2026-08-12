@@ -158,8 +158,9 @@ const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 
 
 const toCents = (value: unknown): number | null => {
   const amount = Number(value);
-  if (!Number.isFinite(amount) || !Number.isInteger(amount * 100)) return null;
-  return Math.round(amount * 100);
+  if (!Number.isFinite(amount)) return null;
+  const cents = Math.round(amount * 100);
+  return Math.abs(amount - cents / 100) <= 1e-9 ? cents : null;
 };
 
 const isIsoDate = (value: unknown): value is string => {
@@ -641,6 +642,13 @@ const getActiveChart = (db: Database.Database, tenantId: string): 'SKR03' | 'SKR
   return byChart.SKR03 >= byChart.SKR04 ? 'SKR03' : 'SKR04';
 };
 
+const getPostingChart = (db: Database.Database, tenantId: string): 'SKR03' | 'SKR04' | null => {
+  const chart = getAccountingPolicy(db, tenantId).activeChart;
+  const countForChart = createDrizzle(db).select({ c: count() }).from(schema.ledgerAccounts)
+    .where(eq(schema.ledgerAccounts.chart, chart)).get()?.c ?? 0;
+  return Number(countForChart) > 0 ? chart : null;
+};
+
 const resolveFallbackBankLedgerAccount = (
   db: Database.Database,
   chart: 'SKR03' | 'SKR04',
@@ -833,10 +841,11 @@ export const saveDraft = (
       : 'incomplete'
     : normalized.workflowStatus;
 
-  createDrizzle(db).insert(schema.bookingDrafts).values({ id: normalized.id, tenantId, transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus, draftJson: JSON.stringify(normalized), updatedAt: now })
-    .onConflictDoUpdate({ target: schema.bookingDrafts.id, set: { transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus, draftJson: JSON.stringify(normalized), updatedAt: now } }).run();
-
-  saveDraftLinesAndIssues(db, normalized);
+  db.transaction(() => {
+    createDrizzle(db).insert(schema.bookingDrafts).values({ id: normalized.id, tenantId, transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus, draftJson: JSON.stringify(normalized), updatedAt: now })
+      .onConflictDoUpdate({ target: schema.bookingDrafts.id, set: { transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus, draftJson: JSON.stringify(normalized), updatedAt: now } }).run();
+    saveDraftLinesAndIssues(db, normalized);
+  })();
   return normalized;
 };
 
@@ -1008,18 +1017,21 @@ export const postDraft = (
 ): { entry: JournalEntryEntity; issues: DraftValidationIssue[] } => {
   const tenantId = getTenantId(scope);
   const drizzle = createDrizzle(db);
-  const row = drizzle.select({ draft_json: schema.bookingDrafts.draftJson }).from(schema.bookingDrafts)
-    .where(and(eq(schema.bookingDrafts.tenantId, tenantId), eq(schema.bookingDrafts.id, draftId))).get() as { draft_json: string } | undefined;
+  const row = drizzle.select({ draft_json: schema.bookingDrafts.draftJson, workflow_status: schema.bookingDrafts.workflowStatus }).from(schema.bookingDrafts)
+    .where(and(eq(schema.bookingDrafts.tenantId, tenantId), eq(schema.bookingDrafts.id, draftId))).get() as {
+      draft_json: string;
+      workflow_status: BookingDraftEntity['workflowStatus'];
+    } | undefined;
   if (!row) throw new Error('Draft not found');
 
   const sourceKey = options.idempotencyKey?.trim() || `booking-draft:${draftId}`;
   const existingSource = drizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
-    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceKey, sourceKey))).get();
+    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, 'booking_draft'), eq(schema.journalEntries.sourceKey, sourceKey))).get();
   const existingDraft = drizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
     .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceDraftId, draftId))).get();
   const existingId = existingSource?.id ?? existingDraft?.id;
   if (existingId) {
-    const existing = listJournalEntries(db, { limit: 1, offset: 0 }, scope).find((entry) => entry.id === existingId);
+    const existing = listJournalEntries(db, { limit: 5000, offset: 0 }, scope).find((entry) => entry.id === existingId);
     if (existing) return { entry: existing, issues: [] };
   }
 
@@ -1033,8 +1045,19 @@ export const postDraft = (
 
   ensurePeriodExists(db, period, fiscalYear, tenantId);
   const periodStatus = loadPeriodStatus(db, period, tenantId);
-  const validated = saveDraft(db, { ...draft, postingDate, period, fiscalYear, workflowStatus: 'approved' }, scope);
-  const blockingIssues = validated.validationIssues.filter((issue) => issue.blocking);
+  const chart = getPostingChart(db, tenantId);
+  if (!chart) {
+    return {
+      entry: emptyJournalEntry(tenantId, postingDate, period, fiscalYear),
+      issues: [{ id: randomUUID(), code: 'CHART_UNAVAILABLE', severity: 'error', message: `Aktiver Kontenrahmen ${getAccountingPolicy(db, tenantId).activeChart} enthält keine Konten.`, blocking: true, source: 'system' }],
+    };
+  }
+  const draftForPosting = { ...draft, postingDate, period, fiscalYear };
+  const validationIssues = validateDraft(db, draftForPosting, periodStatus, chart);
+  if (row.workflow_status !== 'approved') {
+    validationIssues.push({ id: randomUUID(), code: 'DRAFT_NOT_APPROVED', severity: 'error', message: 'Nur freigegebene Buchungsentwürfe dürfen gebucht werden.', blocking: true, source: 'system' });
+  }
+  const blockingIssues = validationIssues.filter((issue) => issue.blocking);
   const softLockOverride = options.softLockOverride ?? options.allowSoftLocked ?? false;
   const overrideReason = (options.overrideReason ?? options.reason ?? '').trim();
   if (periodStatus === 'soft_locked' && (!softLockOverride || !overrideReason)) {
@@ -1044,10 +1067,13 @@ export const postDraft = (
     blockingIssues.push({ id: randomUUID(), code: 'POSTING_DATE_IN_CLOSED_PERIOD', severity: 'error', message: 'Periode ist geschlossen.', blocking: true, source: 'system' });
   }
   if (!isOpenOrSoftLocked(periodStatus) || blockingIssues.length > 0) {
-    return { entry: emptyJournalEntry(tenantId, postingDate, period, fiscalYear), issues: [...validated.validationIssues, ...blockingIssues.filter((issue) => !validated.validationIssues.some((existing) => existing.code === issue.code))] };
+    return {
+      entry: emptyJournalEntry(tenantId, postingDate, period, fiscalYear),
+      issues: [...validationIssues, ...blockingIssues.filter((issue) => !validationIssues.some((existing) => existing.code === issue.code))],
+    };
   }
 
-  const chart = getActiveChart(db, tenantId);
+  const validated = saveDraft(db, draftForPosting, scope);
   const postingLines: JournalLineEntity[] = [];
   validated.lines.forEach((line) => {
     const taxCaseKey = normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode);
@@ -1069,7 +1095,7 @@ export const postDraft = (
   db.transaction(() => {
     const txDrizzle = createDrizzle(db);
     const duplicate = txDrizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
-      .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceKey, sourceKey))).get();
+      .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, 'booking_draft'), eq(schema.journalEntries.sourceKey, sourceKey))).get();
     if (duplicate) return;
     // Allocation deliberately occurs inside the same SQLite transaction as the
     // insert; SQLite serializes writers and the unique index is the final guard.
@@ -1088,13 +1114,13 @@ export const postDraft = (
     for (const pair of buildPostingPairs(postingLines)) {
       txDrizzle.insert(schema.journalPostingPairs).values({ id: randomUUID(), tenantId, entryId, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: round2(pair.amount), taxCaseKey: pair.taxCaseKey ?? null, datevBuKey: resolveDatevBuKeyForTaxCase(db, chart, pair.taxCaseKey) ?? null, createdAt }).run();
     }
-    txDrizzle.update(schema.bookingDrafts).set({ workflowStatus: 'posted', updatedAt: createdAt }).where(and(eq(schema.bookingDrafts.id, validated.id), eq(schema.bookingDrafts.tenantId, tenantId))).run();
+    txDrizzle.update(schema.bookingDrafts).set({ workflowStatus: 'posted', draftJson: JSON.stringify({ ...validated, workflowStatus: 'posted', updatedAt: createdAt }), updatedAt: createdAt }).where(and(eq(schema.bookingDrafts.id, validated.id), eq(schema.bookingDrafts.tenantId, tenantId))).run();
     txDrizzle.update(schema.bankTransactions).set({ status: 'booked', updatedAt: createdAt }).where(and(eq(schema.bankTransactions.id, validated.transactionId), eq(schema.bankTransactions.tenantId, tenantId))).run();
     appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: entryId, action: 'post', reason: overrideReason || 'Draft posted', before: null, after: { entryNumber, postingDate, period, fiscalYear, sourceDraftId: validated.id, sourceKey }, actor: 'pro' });
   })();
 
   if (entryNumber === 0) {
-    const existing = listJournalEntries(db, { limit: 1, offset: 0 }, scope).find((entry) => entry.sourceKey === sourceKey);
+    const existing = listJournalEntries(db, { limit: 5000, offset: 0 }, scope).find((entry) => entry.sourceType === 'booking_draft' && entry.sourceKey === sourceKey);
     if (existing) return { entry: existing, issues: [] };
   }
   return { entry: { id: entryId, tenantId, entryNumber, postingDate, documentDate: validated.documentDate, bookingText: validated.bookingText, reference: validated.reference, period, fiscalYear, status: 'posted', sourceDraftId: validated.id, sourceType: 'booking_draft', sourceKey, createdAt, lines: postingLines }, issues: validated.validationIssues };
@@ -1170,13 +1196,28 @@ export const reverseJournalEntry = (
       .from(schema.journalEntries).where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.id, entryId))).get() as { status: string; reversedEntryId: string | null } | undefined;
     if (!current || current.status === 'reversed' || current.reversedEntryId) throw new Error('Journal entry cannot be reversed again');
     const duplicate = txDrizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
-      .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceKey, sourceKey))).get();
+      .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, 'reversal'), eq(schema.journalEntries.sourceKey, sourceKey))).get();
     if (duplicate) throw new Error('Journal entry already reversed');
     reversalNumber = getNextEntryNumber(db, tenantId);
     txDrizzle.insert(schema.journalEntries).values({ id: reversalEntryId, tenantId, entryNumber: reversalNumber, postingDate, documentDate: entry.document_date, bookingText: `Storno ${entry.entry_number}: ${entry.booking_text}`, reference: cleanReason, period, fiscalYear, status: 'posted', sourceDraftId: null, sourceType: 'reversal', sourceKey, reversedEntryId: entryId, createdAt: now }).run();
-    lines.forEach((line, idx) => {
-      txDrizzle.insert(schema.journalLines).values({ id: randomUUID(), tenantId, entryId: reversalEntryId, lineNo: idx + 1, accountNumber: line.account_number, debitAmount: round2(Number(line.credit_amount || 0)), creditAmount: round2(Number(line.debit_amount || 0)), taxCode: line.tax_code, taxCaseKey: line.tax_case_key, taxRate: line.tax_rate, netAmount: line.net_amount === null ? null : -Number(line.net_amount), taxAmount: line.tax_amount === null ? null : -Number(line.tax_amount), grossAmount: line.gross_amount === null ? null : -Number(line.gross_amount), countryCode: line.country_code, counterpartyVatId: line.counterparty_vat_id, evidenceType: line.evidence_type, evidenceReference: line.evidence_reference, costCenter: line.cost_center, memo: line.memo }).run();
+    const reversalLines: JournalLineEntity[] = lines.map((line) => ({
+      id: randomUUID(), accountNumber: line.account_number,
+      debitAmount: round2(Number(line.credit_amount || 0)), creditAmount: round2(Number(line.debit_amount || 0)),
+      taxCode: line.tax_code ?? undefined, taxCaseKey: line.tax_case_key ?? undefined, taxRate: line.tax_rate ?? undefined,
+      netAmount: line.net_amount === null ? undefined : -Number(line.net_amount),
+      taxAmount: line.tax_amount === null ? undefined : -Number(line.tax_amount),
+      grossAmount: line.gross_amount === null ? undefined : -Number(line.gross_amount),
+      countryCode: line.country_code ?? undefined, counterpartyVatId: line.counterparty_vat_id ?? undefined,
+      evidenceType: line.evidence_type ?? undefined, evidenceReference: line.evidence_reference ?? undefined,
+      costCenter: line.cost_center ?? undefined, memo: line.memo ?? undefined,
+    }));
+    reversalLines.forEach((line, idx) => {
+      txDrizzle.insert(schema.journalLines).values({ id: line.id, tenantId, entryId: reversalEntryId, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: line.debitAmount, creditAmount: line.creditAmount, taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
     });
+    const chart = getActiveChart(db, tenantId);
+    for (const pair of buildPostingPairs(reversalLines)) {
+      txDrizzle.insert(schema.journalPostingPairs).values({ id: randomUUID(), tenantId, entryId: reversalEntryId, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: pair.amount, taxCaseKey: pair.taxCaseKey ?? null, datevBuKey: resolveDatevBuKeyForTaxCase(db, chart, pair.taxCaseKey) ?? null, createdAt: now }).run();
+    }
     txDrizzle.update(schema.journalEntries).set({ status: 'reversed', reversedEntryId: reversalEntryId })
       .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.id, entryId))).run();
     appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: entryId, action: 'reverse', reason: cleanReason, before: { status: 'posted' }, after: { status: 'reversed', reversalEntryId, postingDate, period, fiscalYear }, actor: 'pro' });

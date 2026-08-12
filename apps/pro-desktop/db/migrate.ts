@@ -343,6 +343,9 @@ export const runMigrations = (db: Database.Database): void => {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source
       ON journal_entries(tenant_id, source_type, source_key)
       WHERE source_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source_draft
+      ON journal_entries(tenant_id, source_draft_id)
+      WHERE source_draft_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_journal_entries_tenant_posting_date
       ON journal_entries(tenant_id, posting_date DESC);
 
@@ -655,6 +658,9 @@ export const runMigrations = (db: Database.Database): void => {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source
       ON journal_entries(tenant_id, source_type, source_key)
       WHERE source_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_source_draft
+      ON journal_entries(tenant_id, source_draft_id)
+      WHERE source_draft_id IS NOT NULL;
     DROP TRIGGER IF EXISTS journal_entries_protect_core_fields;
     CREATE TRIGGER journal_entries_protect_core_fields
     BEFORE UPDATE ON journal_entries

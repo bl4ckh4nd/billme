@@ -392,6 +392,7 @@ export const journalEntries = sqliteTable(
     byTenantEntryNo: uniqueIndex('idx_journal_entries_tenant_entry_number').on(t.tenantId, t.entryNumber),
     byTenantPostingDate: index('idx_journal_entries_tenant_posting_date').on(t.tenantId, t.postingDate),
     byTenantSource: uniqueIndex('idx_journal_entries_tenant_source').on(t.tenantId, t.sourceType, t.sourceKey),
+    byTenantSourceDraft: uniqueIndex('idx_journal_entries_tenant_source_draft').on(t.tenantId, t.sourceDraftId),
   }),
 );
 

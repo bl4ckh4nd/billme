@@ -21,16 +21,26 @@ function setFreezeForm(from: string, to: string) {
 }
 
 describe('ReportsView EÜR snapshots', () => {
-  it('rejects a partial 2025 period instead of claiming a full-year snapshot', async () => {
+  it('keeps the native EÜR snapshot locked to the full 2025 period', async () => {
     const saveReportSnapshot = vi.fn(async () => ({ id: 'snapshot-1', reportType: 'eur', args: {}, payload: {}, createdAt: '2025-05-31T23:00:00.000Z', sourceHash: 'a'.repeat(64) }));
     render(<ReportsView dataAdapter={{ getEurReport: vi.fn(async () => eurReport), saveReportSnapshot }} availableTabs={['eur']} />);
 
     await screen.findByLabelText('Audit-Grund für EÜR-Snapshot');
+    expect(screen.getByLabelText('Zeitraum')).toHaveProperty('disabled', true);
+    expect(screen.getByLabelText('Stichtag')).toHaveProperty('disabled', true);
+    expect(screen.getByLabelText('Periode von')).toHaveProperty('disabled', true);
+    expect(screen.getByLabelText('Periode bis')).toHaveProperty('disabled', true);
     setFreezeForm('2025-03', '2025-05');
+    expect((screen.getByLabelText('Periode von') as HTMLInputElement).value).toBe('2025-01');
+    expect((screen.getByLabelText('Periode bis') as HTMLInputElement).value).toBe('2025-12');
     fireEvent.click(await screen.findByRole('button', { name: 'Snapshot einfrieren' }));
 
-    expect((await screen.findByRole('alert')).textContent).toContain('vollständiger EÜR-2025-Zeitraum');
-    expect(saveReportSnapshot).not.toHaveBeenCalled();
+    await waitFor(() => expect(saveReportSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      reportType: 'eur',
+      reason: 'Abschlussprüfung EÜR 2025',
+      args: expect.objectContaining({ periodFrom: '2025-01', periodTo: '2025-12', periodFromDate: '2025-01-01', periodToDate: '2025-12-31' }),
+    })));
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('requires the exact calendar year and reports success as a status notice', async () => {

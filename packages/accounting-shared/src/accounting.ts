@@ -196,6 +196,18 @@ export interface AccountingPeriod {
   updatedAt: string;
 }
 
+export interface DatevExportSourceSnapshot {
+  from?: string;
+  to?: string;
+  recordCount: number;
+  consultantNumber?: string;
+  clientNumber?: string;
+  fiscalYearStart?: string;
+  accountLength?: number;
+  encoding?: 'cp1252' | 'utf8-bom';
+  chart?: LedgerChart;
+}
+
 export interface DatevExportResult {
   id: string;
   filePath: string;

@@ -154,12 +154,21 @@ test('Pro web client exposes DATEV export receipt metadata and history', async (
   }) as typeof fetch;
   try {
     const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
-    const exported = await client.exportDatevCsv({ from: '2026-08-01', to: '2026-08-31', reason: 'Export geprüft' });
+    const exported = await client.exportDatevCsv({
+      from: '2026-08-01',
+      to: '2026-08-31',
+      consultantNumber: '1001',
+      clientNumber: '7',
+      fiscalYearStart: '2026-01-01',
+      accountLength: 5,
+      encoding: 'utf8-bom',
+      reason: 'Export geprüft',
+    });
     assert.equal(exported.exportId, 'datev-1');
     assert.equal(exported.recordCount, 1);
     const history = await client.listDatevExports(20);
     assert.equal(history[0]?.id, 'datev-1');
-    assert.match(calls[0] ?? '', /datev\/export\.csv\?from=2026-08-01&to=2026-08-31&reason=Export\+gepr%C3%BCft$/);
+    assert.match(calls[0] ?? '', /datev\/export\.csv\?from=2026-08-01&to=2026-08-31&consultantNumber=1001&clientNumber=7&fiscalYearStart=2026-01-01&accountLength=5&encoding=utf8-bom&reason=Export\+gepr%C3%BCft$/);
     assert.match(calls[1] ?? '', /datev\/exports$/);
   } finally {
     globalThis.fetch = previousFetch;

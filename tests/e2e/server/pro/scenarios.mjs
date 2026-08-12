@@ -371,10 +371,17 @@ export const runProAccountingScenario = async (page) => {
   const datevExport = await requestText(state, session, '/api/v1/pro/accounting/datev/export.csv', {
     from: '2026-03-05',
     to: '2026-03-05',
+    consultantNumber: '1001',
+    clientNumber: '7',
+    fiscalYearStart: '2026-01-01',
+    accountLength: 5,
+    encoding: 'utf8-bom',
     reason: 'Playwright immutable DATEV export',
   });
-  expect(datevExport.body).toContain('date;belegfeld1;buchungstext;konto;gegenkonto');
+  expect(datevExport.body).toContain('"EXTF";700;21;"Buchungsstapel";13;');
+  expect(datevExport.body).toContain(';1001;7;20260101;5;20260305;20260305;');
   expect(datevExport.body).toContain('Playwright canonical persisted booking');
+  expect(datevExport.headers.get('content-type')).toContain('charset=utf-8');
   const datevExportId = datevExport.headers.get('x-billme-datev-export-id');
   const datevContentHash = datevExport.headers.get('x-billme-datev-content-sha256');
   expect(datevExportId).toBeTruthy();
@@ -393,6 +400,7 @@ export const runProAccountingScenario = async (page) => {
   );
   expect(datevRefetched.body).toBe(datevExport.body);
   expect(datevRefetched.headers.get('x-billme-datev-content-sha256')).toBe(datevContentHash);
+  expect(datevRefetched.headers.get('content-type')).toContain('charset=utf-8');
 
   const mappingRequests = [
     ['accounts_receivable', '1200'],

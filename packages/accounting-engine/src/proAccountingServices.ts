@@ -27,6 +27,7 @@ import type {
   AccountSuggestionRule,
   BookingDraftEntity,
   DatevExportResult,
+  DatevExportSourceSnapshot,
   DatevExportContent,
   JournalEntryEntity,
   LedgerAccount,
@@ -99,7 +100,7 @@ export interface ProAccountingService {
   getDatevExportContent(scope: TenantScope, exportId: string): Promise<DatevExportContent>;
   insertDatevExport(
     scope: TenantScope,
-    args: { id?: string; filePath: string; recordCount: number; content?: Uint8Array; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: { from?: string; to?: string; recordCount: number }; sha256?: string; byteSize?: number; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshotHash?: string; manifestJson?: string; status?: string; validationJson?: string; mutation?: AccountingMutationContext },
+    args: { id?: string; filePath: string; recordCount: number; content?: Uint8Array; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: DatevExportSourceSnapshot; sha256?: string; byteSize?: number; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshotHash?: string; manifestJson?: string; status?: string; validationJson?: string; mutation?: AccountingMutationContext },
   ): Promise<DatevExportResult>;
   getAccountingHealth(scope: TenantScope): Promise<AccountingHealthSnapshot>;
   getVatSummary(scope: TenantScope, args?: ReportRangeOptions): Promise<{
@@ -153,7 +154,7 @@ export interface BoundProAccountingService {
   getBilanzReport(args?: LedgerBalanceOptions): Promise<BilanzReport>;
   listDatevExports(): Promise<DatevExportResult[]>;
   getDatevExportContent(exportId: string): Promise<DatevExportContent>;
-  insertDatevExport(args: { id?: string; filePath: string; recordCount: number; content?: Uint8Array; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: { from?: string; to?: string; recordCount: number }; sha256?: string; byteSize?: number; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshotHash?: string; manifestJson?: string; status?: string; validationJson?: string; mutation?: AccountingMutationContext }): Promise<DatevExportResult>;
+  insertDatevExport(args: { id?: string; filePath: string; recordCount: number; content?: Uint8Array; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: DatevExportSourceSnapshot; sha256?: string; byteSize?: number; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshotHash?: string; manifestJson?: string; status?: string; validationJson?: string; mutation?: AccountingMutationContext }): Promise<DatevExportResult>;
   getAccountingHealth(): Promise<AccountingHealthSnapshot>;
   getVatSummary(args?: ReportRangeOptions): Promise<{
     from?: string;

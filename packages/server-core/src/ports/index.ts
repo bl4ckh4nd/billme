@@ -3,6 +3,7 @@ import type {
   AccountSuggestionRule,
   BookingDraftEntity,
   DatevExportResult,
+  DatevExportSourceSnapshot,
   DatevExportContent,
   JournalEntryEntity,
   LedgerAccount,
@@ -500,7 +501,7 @@ export interface ProAccountingRepository {
       validationJson?: string;
       content?: Uint8Array;
       contentSha256?: string;
-      sourceSnapshot?: { from?: string; to?: string; recordCount: number };
+      sourceSnapshot?: DatevExportSourceSnapshot;
       mutation?: AccountingMutationContext;
     },
   ): Promise<DatevExportResult>;

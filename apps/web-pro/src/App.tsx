@@ -1006,6 +1006,11 @@ export default function App() {
         const exported = await client.exportDatevCsv({
           from: args.from,
           to: args.to,
+          consultantNumber: args.consultantNumber,
+          clientNumber: args.clientNumber,
+          fiscalYearStart: args.fiscalYearStart,
+          accountLength: args.accountLength,
+          encoding: args.encoding,
           reason: 'DATEV-Buchungsstapel exportiert',
         });
         if (!exported.exportId) throw new Error('DATEV-Export ohne Serverbeleg-ID.');

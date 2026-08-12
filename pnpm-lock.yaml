@@ -629,6 +629,9 @@ importers:
       '@billme/server-core':
         specifier: workspace:*
         version: link:../server-core
+      iconv-lite:
+        specifier: ^0.6.3
+        version: 0.6.3
 
   packages/accounting-shared: {}
 

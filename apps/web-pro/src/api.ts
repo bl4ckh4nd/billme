@@ -477,10 +477,27 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     }) {
       return requestJson({ method: 'POST', body: args, parser: assetDisposalResultSchema }, `/api/v1/pro/accounting/assets/${encodeURIComponent(args.assetId)}/dispose`);
     },
-    downloadDatevCsv(query?: { from?: string; to?: string }) {
+    downloadDatevCsv(query?: {
+      from?: string;
+      to?: string;
+      consultantNumber?: string;
+      clientNumber?: string;
+      fiscalYearStart?: string;
+      accountLength?: number;
+      encoding?: 'cp1252' | 'utf8-bom';
+    }) {
       return requestBlob('/api/v1/pro/accounting/datev/export.csv', query);
     },
-    exportDatevCsv(query: { from?: string; to?: string; reason?: string }) {
+    exportDatevCsv(query: {
+      from: string;
+      to: string;
+      consultantNumber: string;
+      clientNumber: string;
+      fiscalYearStart: string;
+      accountLength: number;
+      encoding: 'cp1252' | 'utf8-bom';
+      reason?: string;
+    }) {
       return requestBlobWithHeaders('/api/v1/pro/accounting/datev/export.csv', query).then(({ blob, headers }) => ({
         blob,
         exportId: headers.get('x-billme-datev-export-id') ?? '',

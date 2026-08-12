@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { createHash } from 'node:crypto';
 import { createProAccountingAssetService, createProAccountingService } from '@billme/accounting-engine';
+import { buildDatevBuchungsstapelCsv } from '@billme/accounting-engine/datev-export';
 import type {
   AccountingMutationContext,
   ProDraftActionRequest,
@@ -44,9 +45,17 @@ const idParams = z.object({ id: z.string().min(1) });
 const transactionParams = z.object({ transactionId: z.string().min(1) });
 const draftParams = z.object({ draftId: z.string().min(1) });
 const reportRange = z.object({ from: z.string().optional(), to: z.string().optional() });
-const datevExportQuery = reportRange.extend({
+export const datevExportQuerySchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   reason: reasonSchema.default('DATEV-Buchungsstapel exportiert'),
+  consultantNumber: z.string().regex(/^(?:\d{4,6}|\d{7})$/),
+  clientNumber: z.string().regex(/^\d{1,5}$/),
+  fiscalYearStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  accountLength: z.coerce.number().int().min(4).max(8),
+  encoding: z.enum(['cp1252', 'utf8-bom']).default('cp1252'),
 });
+const datevExportQuery = datevExportQuerySchema;
 const asOfDate = z.object({ asOfDate: z.string().optional() });
 export const csvEscape = (value: unknown): string => {
   const text = String(value ?? '');
@@ -406,10 +415,21 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     async handler({ request, reply, query }) {
       const session = await requireMutationSession(app, request.headers.authorization);
       const service = serviceFor(app);
-      const rows = await service.buildDatevRows(session.scope, query);
-      const columns = ['date', 'belegfeld1', 'buchungstext', 'konto', 'gegenkonto', 'sollHabenKennzeichen', 'buSchluessel', 'umsatz'];
-      const csv = [columns.join(';'), ...rows.map((row) => columns.map((column) => csvEscape(row[column as keyof typeof row])).join(';'))].join('\n') + '\n';
-      const contentSha256 = createHash('sha256').update(csv, 'utf8').digest('hex');
+      const policy = await service.getAccountingPolicy(session.scope);
+      const rows = await service.buildDatevRows(session.scope, { from: query.from, to: query.to });
+      const content = buildDatevBuchungsstapelCsv(rows, {
+        consultantNumber: query.consultantNumber,
+        clientNumber: query.clientNumber,
+        fiscalYearStart: query.fiscalYearStart,
+        accountLength: query.accountLength,
+        chart: policy.activeChart,
+        from: query.from,
+        to: query.to,
+        encoding: query.encoding,
+        createdAt: new Date(),
+        stackName: `Buchungsstapel ${query.from.slice(0, 7)}`,
+      });
+      const contentSha256 = createHash('sha256').update(content).digest('hex');
       const filePath = `datev-export/${contentSha256}`;
       const existing = (await service.listDatevExports(session.scope)).find((entry) => entry.filePath === filePath);
       const receipt = existing ?? await service.insertDatevExport(session.scope, {
@@ -417,17 +437,31 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         recordCount: rows.length,
         fromDate: query.from,
         toDate: query.to,
-        content: new TextEncoder().encode(csv),
+        content,
         mutation: mutationFor(session, query.reason),
         contentSha256,
-        sourceSnapshot: { from: query.from, to: query.to, recordCount: rows.length },
+        encoding: query.encoding,
+        headerVersion: 700,
+        formatVersion: 13,
+        chart: policy.activeChart,
+        sourceSnapshot: {
+          from: query.from,
+          to: query.to,
+          recordCount: rows.length,
+          consultantNumber: query.consultantNumber,
+          clientNumber: query.clientNumber,
+          fiscalYearStart: query.fiscalYearStart,
+          accountLength: query.accountLength,
+          encoding: query.encoding,
+          chart: policy.activeChart,
+        },
       });
       reply.header('x-billme-datev-export-id', receipt.id);
       reply.header('x-billme-datev-content-sha256', contentSha256);
       reply.header('x-billme-datev-record-count', String(rows.length));
-      reply.header('content-type', 'text/csv; charset=utf-8');
+      reply.header('content-type', query.encoding === 'utf8-bom' ? 'text/csv; charset=utf-8' : 'text/csv; charset=windows-1252');
       reply.header('content-disposition', 'attachment; filename="datev-buchungsstapel.csv"');
-      return csv;
+      reply.send(Buffer.from(content));
     },
   });
 
@@ -441,7 +475,8 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       reply.header('x-billme-datev-export-id', exportSnapshot.id);
       reply.header('x-billme-datev-content-sha256', exportSnapshot.contentSha256);
       reply.header('x-billme-datev-record-count', String(exportSnapshot.recordCount));
-      reply.header('content-type', 'text/csv; charset=utf-8');
+      const encoding = exportSnapshot.encoding ?? 'cp1252';
+      reply.header('content-type', encoding === 'utf8-bom' ? 'text/csv; charset=utf-8' : 'text/csv; charset=windows-1252');
       reply.header('content-disposition', 'attachment; filename="datev-buchungsstapel.csv"');
       reply.send(Buffer.from(exportSnapshot.content));
     },

@@ -347,7 +347,7 @@ export const BusinessReportingProfileSchema = z
     }
   });
 
-export const SettingsSchema = z.object({
+const SettingsBaseSchema = z.object({
   businessReportingProfile: BusinessReportingProfileSchema.optional(),
   company: CompanySettingsSchema,
   finance: FinanceSettingsSchema,
@@ -385,6 +385,24 @@ export const SettingsSchema = z.object({
     topClientsLimit: 5,
   }),
   onboardingCompleted: z.boolean().optional(),
+});
+
+export const SettingsSchema = SettingsBaseSchema.transform((settings) => {
+  const businessReportingProfile = settings.businessReportingProfile ?? {
+    jurisdiction: 'DE' as const,
+    legalForm: 'sole_proprietor' as const,
+    profitDetermination: 'eur' as const,
+    fiscalYearStart: '01-01',
+    vatMethod: settings.legal.taxAccountingMethod,
+  };
+  return {
+    ...settings,
+    businessReportingProfile,
+    legal: {
+      ...settings.legal,
+      taxAccountingMethod: businessReportingProfile.vatMethod,
+    },
+  };
 });
 
 // Tags schema (for clients)

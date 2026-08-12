@@ -56,17 +56,17 @@ export function getStatusPresentation(status: BookingWorkflowStatus): {
   className: string;
 } {
   const map: Record<BookingWorkflowStatus, { label: string; className: string }> = {
-    imported: { label: 'Neu', className: 'bg-gray-100 text-gray-700' },
-    suggested: { label: 'Vorschlag', className: 'bg-blue-100 text-blue-700' },
-    incomplete: { label: 'Unvollständig', className: 'bg-amber-100 text-amber-800' },
-    ready_for_review: { label: 'Zur Prüfung', className: 'bg-indigo-100 text-indigo-700' },
-    pending_approval: { label: 'Freigabe offen', className: 'bg-violet-100 text-violet-700' },
-    approved: { label: 'Freigegeben', className: 'bg-cyan-100 text-cyan-700' },
-    posted: { label: 'Gebucht', className: 'bg-emerald-100 text-emerald-800' },
-    reversed: { label: 'Storniert', className: 'bg-rose-100 text-rose-700' },
-    corrected: { label: 'Korrigiert', className: 'bg-orange-100 text-orange-700' },
-    period_locked: { label: 'Periode gesperrt', className: 'bg-red-100 text-red-700' },
-    integration_error: { label: 'Integrationsfehler', className: 'bg-red-100 text-red-800' },
+    imported: { label: 'Neu', className: 'bg-surface-muted text-muted' },
+    suggested: { label: 'Vorschlag', className: 'bg-info-bg text-info' },
+    incomplete: { label: 'Unvollständig', className: 'bg-warning-bg text-warning' },
+    ready_for_review: { label: 'Zur Prüfung', className: 'bg-info-bg text-info' },
+    pending_approval: { label: 'Freigabe offen', className: 'bg-warning-bg text-warning' },
+    approved: { label: 'Freigegeben', className: 'bg-success-bg text-success' },
+    posted: { label: 'Gebucht', className: 'bg-success-bg text-success' },
+    reversed: { label: 'Storniert', className: 'bg-error-bg text-error' },
+    corrected: { label: 'Korrigiert', className: 'bg-info-bg text-info' },
+    period_locked: { label: 'Periode gesperrt', className: 'bg-error-bg text-error' },
+    integration_error: { label: 'Integrationsfehler', className: 'bg-error-bg text-error' },
   };
   return map[status];
 }
@@ -80,4 +80,3 @@ export function getFlagLabel(flag: TransactionFlag): string {
   };
   return labels[flag];
 }
-

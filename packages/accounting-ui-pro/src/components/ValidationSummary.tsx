@@ -40,7 +40,7 @@ export default function ValidationSummary({ issues }: ValidationSummaryProps) {
                         severity === 'error'
                           ? 'bg-error'
                           : severity === 'warning'
-                            ? 'bg-warning-bg0'
+                            ? 'bg-warning'
                             : 'bg-muted'
                       }`}
                     />
@@ -55,4 +55,3 @@ export default function ValidationSummary({ issues }: ValidationSummaryProps) {
     </div>
   );
 }
-

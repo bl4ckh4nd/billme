@@ -195,7 +195,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                               issue.severity === 'error'
                                 ? 'bg-error'
                                 : issue.severity === 'warning'
-                                  ? 'bg-warning-bg0'
+                                  ? 'bg-warning'
                                   : 'bg-muted'
                             }`}
                           />

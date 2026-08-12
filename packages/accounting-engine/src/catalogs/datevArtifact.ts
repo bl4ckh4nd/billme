@@ -62,4 +62,3 @@ export const importDatevArtifact = async <T>(input: {
 }): Promise<T> => input.parse(await loadPrivateDatevArtifact(input));
 
 export const loadDatevLicensedArtifact = loadPrivateDatevArtifact;
-

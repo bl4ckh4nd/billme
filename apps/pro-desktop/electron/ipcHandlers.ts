@@ -83,6 +83,8 @@ import {
 } from '@billme/accounting-engine';
 import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import { eq } from 'drizzle-orm';
+import { registerTaxFilingIpcHandlers } from '@billme/desktop-core/electron/tax-filing/ipc';
+import { createProTaxFilingAdapter } from './taxFilingAdapter';
 import { PRODUCT_PROFILE } from '../productProfile';
 import { importSkrCharts } from '../services/skrImport';
 import {
@@ -179,6 +181,7 @@ export const registerIpcHandlers = (
   const requireDb = deps.requireDb;
   const getUserDataPath = deps.getUserDataPath;
   const getMainWindow = deps.getMainWindow;
+  registerTaxFilingIpcHandlers(ipcMain, { getUserDataPath, resourcesPath: process.resourcesPath, binaryPath: process.env.BILLME_ERIC_BINARY, adapter: createProTaxFilingAdapter(getUserDataPath) });
   const getProScope = () => resolveRuntimeProTenantScope();
   const getProAccountingService = () =>
     bindProAccountingScope(

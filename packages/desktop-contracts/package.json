@@ -27,6 +27,10 @@
     "./schemas": {
       "types": "./src/schemas.ts",
       "default": "./src/schemas.ts"
+    },
+    "./taxFiling": {
+      "types": "./src/taxFiling.ts",
+      "default": "./src/taxFiling.ts"
     }
   }
 }

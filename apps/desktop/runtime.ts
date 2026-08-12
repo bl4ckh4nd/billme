@@ -1,4 +1,4 @@
-export type BillmeNavigationPage = 'dashboard' | 'clients' | 'projects' | 'documents' | 'finance' | 'articles';
+export type BillmeNavigationPage = 'dashboard' | 'clients' | 'projects' | 'documents' | 'finance' | 'articles' | 'tax-filing';
 
 export type BillmeRuntimeConfig = {
   shell?: 'desktop' | 'web';

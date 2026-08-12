@@ -503,6 +503,9 @@ importers:
 
   apps/server-worker:
     dependencies:
+      '@billme/accounting-engine':
+        specifier: workspace:*
+        version: link:../../packages/accounting-engine
       '@billme/desktop-core':
         specifier: workspace:*
         version: link:../../packages/desktop-core
@@ -689,6 +692,9 @@ importers:
 
   packages/desktop-core:
     dependencies:
+      '@billme/desktop-contracts':
+        specifier: workspace:*
+        version: link:../desktop-contracts
       electron:
         specifier: '>=37.0.0'
         version: 37.10.3
@@ -707,6 +713,9 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.2.4(react@19.2.4)
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
       zustand:
         specifier: ^5.0.10
         version: 5.0.11(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))

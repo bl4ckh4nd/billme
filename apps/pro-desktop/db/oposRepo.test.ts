@@ -381,6 +381,7 @@ describe('OPOS accounting', () => {
   it('rejects a stale backfill preview before changing any record', () => {
     const db = createDb();
     db.prepare(`INSERT INTO invoices (id, client_id, number, client, client_email, date, due_date, amount, status, created_at, updated_at) VALUES ('inv-stale', 'client-stale', 'RE-S', 'Acme', '', '2026-08-01', '2026-08-31', 119, 'open', datetime('now'), datetime('now'))`).run();
+    db.prepare("INSERT INTO number_reservations (id, kind, number, counter_value, status, document_id, created_at, updated_at) VALUES ('reservation-stale', 'invoice', 'RE-S', 1, 'finalized', 'inv-stale', datetime('now'), datetime('now'))").run();
     const preview = previewAccountingBackfill(db, scope);
     db.prepare("UPDATE invoices SET number = 'RE-S2' WHERE id = 'inv-stale'").run();
     expect(() => confirmAccountingBackfill(db, scope, { runId: preview.runId, confirmationHash: preview.confirmationHash, reason: 'bestätigt' })).toThrow('BACKFILL_STALE_PREVIEW');

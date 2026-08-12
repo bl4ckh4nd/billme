@@ -1,10 +1,17 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import type { TaxFilingRecord, TaxFilingSnapshot } from '@billme/accounting-shared';
 import type { TaxFilingRepository, TenantScope } from '@billme/server-core';
-import type { PostgresQueryable } from './connection.js';
+import type { Pool } from 'pg';
+import { withPostgresTransaction, type PostgresQueryable } from './connection.js';
 import { createDrizzle, schema } from './drizzle.js';
-import { createTaxSubmission, enqueueTaxSubmissionJob, getTaxSubmission, type TaxSubmissionRecord } from './taxSubmission.js';
+import {
+  createTaxSubmission,
+  enqueueTaxSubmissionJob,
+  getTaxSubmission,
+  recordTaxSubmissionReceipt,
+  type TaxSubmissionRecord,
+} from './taxSubmission.js';
 
 /**
  * Adapter over the canonical tax_submissions persistence (migration 0015).
@@ -18,6 +25,8 @@ interface TaxFilingEnvelope {
   snapshotHash: string;
   provider: TaxFilingRecord['provider'];
   idempotencyKey: string;
+  approvalRequestedByActorId?: string;
+  approvalRequestedAt?: string;
   validatedByActorId?: string;
   frozenByActorId?: string;
   approvedByActorId?: string;
@@ -52,6 +61,8 @@ const envelopeFor = (record: TaxFilingRecord): TaxFilingEnvelope => ({
   snapshotHash: record.snapshotHash,
   provider: record.provider,
   idempotencyKey: record.idempotencyKey,
+  ...(record.approvalRequestedByActorId ? { approvalRequestedByActorId: record.approvalRequestedByActorId } : {}),
+  ...(record.approvalRequestedAt ? { approvalRequestedAt: record.approvalRequestedAt } : {}),
   ...(record.validatedByActorId ? { validatedByActorId: record.validatedByActorId } : {}),
   ...(record.frozenByActorId ? { frozenByActorId: record.frozenByActorId } : {}),
   ...(record.approvedByActorId ? { approvedByActorId: record.approvedByActorId } : {}),
@@ -101,6 +112,36 @@ const recordFromSubmission = (submission: TaxSubmissionRecord): TaxFilingRecord 
 };
 
 const dbFor = (db: PostgresQueryable) => createDrizzle(db as never);
+
+/** Repository calls made with a Pool must make multi-table evidence writes
+ * transactional; API callers pass a transaction client and stay in that
+ * outer transaction. */
+const atomically = async <T>(
+  db: PostgresQueryable,
+  work: (connection: PostgresQueryable) => Promise<T>,
+): Promise<T> => {
+  const candidate = db as PostgresQueryable & { connect?: () => Promise<unknown> };
+  if (typeof candidate.connect === 'function') {
+    return withPostgresTransaction(db as unknown as Pool, (client) => work(client));
+  }
+  return work(db);
+};
+
+const rowRecord = (row: typeof schema.taxSubmissions.$inferSelect): TaxFilingRecord => recordFromSubmission({
+  id: row.id!,
+  tenantId: row.tenantId!,
+  submissionType: row.submissionType!,
+  taxYear: row.taxYear!,
+  period: row.period!,
+  status: row.status!,
+  payloadJson: row.payloadJson!,
+  sourceSnapshotId: row.sourceSnapshotId ?? undefined,
+  idempotencyKey: row.idempotencyKey!,
+  createdBy: row.createdBy!,
+  createdAt: row.createdAt!,
+  updatedAt: row.updatedAt!,
+  submittedAt: row.submittedAt ?? undefined,
+});
 
 const findByIdempotencyKey = async (db: PostgresQueryable, scope: TenantScope, idempotencyKey: string) => {
   const row = (await dbFor(db).select().from(schema.taxSubmissions)
@@ -184,30 +225,125 @@ export const createPostgresTaxFilingRepository = (db: PostgresQueryable): TaxFil
       idempotencyKey,
     });
   },
-  async recordProviderResult(scope, input) {
-    const current = await getTaxSubmission(db, scope, input.id);
-    if (!current) throw new Error('TAX_SUBMISSION_NOT_FOUND');
-    const record = recordFromSubmission(current);
-    const envelope = envelopeFor({
-      ...record,
-      providerSubmissionId: input.result.providerSubmissionId ?? record.providerSubmissionId,
-      providerReference: input.result.providerReference ?? record.providerReference,
-      failureCode: input.result.status === 'accepted' ? undefined : input.result.failureCode,
-      failureMessage: input.result.status === 'accepted' ? undefined : input.result.message,
-      lastMutationIdempotencyKey: input.idempotencyKey,
-      lastMutationAction: 'accept',
-      updatedAt: input.now ?? new Date().toISOString(),
+  async recordApproval(scope, input) {
+    return atomically(db, async (connection) => {
+      const current = await getTaxSubmission(connection, scope, input.id);
+      if (!current) throw new Error('TAX_SUBMISSION_NOT_FOUND');
+      const currentRecord = recordFromSubmission(current);
+      if (
+        currentRecord.lastMutationIdempotencyKey === input.record.lastMutationIdempotencyKey &&
+        currentRecord.lastMutationAction === 'approve'
+      ) {
+        return currentRecord;
+      }
+      if (currentRecord.status !== 'pending_second_approval') {
+        throw new Error('TAX_FILING_CONCURRENT_UPDATE');
+      }
+      if (
+        currentRecord.snapshotHash !== input.record.snapshotHash ||
+        JSON.stringify(currentRecord.snapshot) !== JSON.stringify(input.record.snapshot)
+      ) {
+        throw new Error('TAX_FILING_SNAPSHOT_IMMUTABLE');
+      }
+      if (currentRecord.approvalRequestedByActorId !== input.requesterId) {
+        throw new Error('TAX_FILING_APPROVAL_REQUESTER_MISMATCH');
+      }
+      if (input.approverId === currentRecord.createdByActorId || input.approverId === input.requesterId) {
+        throw new Error('TAX_SUBMISSION_CREATOR_CANNOT_APPROVE');
+      }
+
+      const createdAt = input.now ?? new Date().toISOString();
+      const approvalId = `tax-filing-approval-${createHash('sha256')
+        .update(`${scope.tenantId}:${input.id}:${input.idempotencyKey}`)
+        .digest('hex')}`;
+      const database = dbFor(connection);
+      await database.insert(schema.taxSubmissionApprovals).values({
+        id: approvalId,
+        tenantId: scope.tenantId,
+        submissionId: input.id,
+        requesterId: input.requesterId,
+        approverId: input.approverId,
+        decision: 'approved',
+        reason: input.reason,
+        createdAt,
+      }).onConflictDoNothing();
+      const updated = await database.update(schema.taxSubmissions).set({
+        status: input.record.status,
+        payloadJson: JSON.stringify(envelopeFor(input.record)),
+        updatedAt: input.record.updatedAt || createdAt,
+      }).where(and(
+        eq(schema.taxSubmissions.tenantId, scope.tenantId),
+        eq(schema.taxSubmissions.id, input.id),
+        eq(schema.taxSubmissions.status, 'pending_second_approval'),
+      )).returning();
+      if (!updated[0]) throw new Error('TAX_FILING_CONCURRENT_UPDATE');
+      return rowRecord(updated[0]);
     });
-    const updated = await dbFor(db).update(schema.taxSubmissions).set({
-      payloadJson: JSON.stringify(envelope),
-      updatedAt: input.now ?? new Date().toISOString(),
-    }).where(and(eq(schema.taxSubmissions.tenantId, scope.tenantId), eq(schema.taxSubmissions.id, input.id), eq(schema.taxSubmissions.status, record.status))).returning();
-    if (!updated[0]) throw new Error('TAX_FILING_CONCURRENT_UPDATE');
-    return recordFromSubmission({
-      id: updated[0].id!, tenantId: updated[0].tenantId!, submissionType: updated[0].submissionType!, taxYear: updated[0].taxYear!, period: updated[0].period!,
-      status: updated[0].status!, payloadJson: updated[0].payloadJson!, sourceSnapshotId: updated[0].sourceSnapshotId ?? undefined,
-      idempotencyKey: updated[0].idempotencyKey!, createdBy: updated[0].createdBy!, createdAt: updated[0].createdAt!, updatedAt: updated[0].updatedAt!,
-      submittedAt: updated[0].submittedAt ?? undefined,
+  },
+  async recordProviderResult(scope, input) {
+    return atomically(db, async (connection) => {
+      const current = await getTaxSubmission(connection, scope, input.id);
+      if (!current) throw new Error('TAX_SUBMISSION_NOT_FOUND');
+      const currentRecord = recordFromSubmission(current);
+      if (
+        currentRecord.lastMutationIdempotencyKey === input.record.lastMutationIdempotencyKey &&
+        currentRecord.lastMutationAction === input.action &&
+        currentRecord.status === input.record.status
+      ) {
+        return currentRecord;
+      }
+      if (currentRecord.status !== 'transmitting') {
+        throw new Error('TAX_FILING_CONCURRENT_UPDATE');
+      }
+      if (
+        currentRecord.snapshotHash !== input.record.snapshotHash ||
+        JSON.stringify(currentRecord.snapshot) !== JSON.stringify(input.record.snapshot)
+      ) {
+        throw new Error('TAX_FILING_SNAPSHOT_IMMUTABLE');
+      }
+      const updatedAt = input.now ?? input.record.updatedAt ?? new Date().toISOString();
+      const persisted: TaxFilingRecord = {
+        ...input.record,
+        providerSubmissionId: input.result.providerSubmissionId ?? input.record.providerSubmissionId,
+        providerReference: input.result.providerReference ?? input.record.providerReference,
+        failureCode: input.result.status === 'accepted' ? undefined : input.result.failureCode,
+        failureMessage: input.result.status === 'accepted' ? undefined : input.result.message,
+        updatedAt,
+      };
+      const database = dbFor(connection);
+      const updated = await database.update(schema.taxSubmissions).set({
+        status: persisted.status,
+        payloadJson: JSON.stringify(envelopeFor(persisted)),
+        updatedAt,
+        submittedAt: persisted.transmittingAt ?? updatedAt,
+      }).where(and(
+        eq(schema.taxSubmissions.tenantId, scope.tenantId),
+        eq(schema.taxSubmissions.id, input.id),
+        eq(schema.taxSubmissions.status, 'transmitting'),
+      )).returning();
+      if (!updated[0]) throw new Error('TAX_FILING_CONCURRENT_UPDATE');
+
+      // Use a deterministic id so an exactly repeated result is a no-op and
+      // the immutable receipt can always be recovered by this call.
+      const receiptId = `tax-filing-receipt-${createHash('sha256')
+        .update(`${scope.tenantId}:${input.id}:${input.idempotencyKey}`)
+        .digest('hex')}`;
+      await recordTaxSubmissionReceipt(connection, scope, {
+        id: receiptId,
+        submissionId: input.id,
+        receiptType: 'tax_filing_provider_result',
+        receiptNumber: input.result.providerReference ?? input.result.providerSubmissionId ?? input.idempotencyKey,
+        receiptJson: JSON.stringify({
+          action: input.action,
+          status: input.result.status,
+          providerSubmissionId: input.result.providerSubmissionId,
+          providerReference: input.result.providerReference,
+          failureCode: input.result.failureCode,
+          message: input.result.message,
+        }),
+        receivedAt: updatedAt,
+      });
+      return rowRecord(updated[0]);
     });
   },
 });

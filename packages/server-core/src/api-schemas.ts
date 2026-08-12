@@ -120,6 +120,8 @@ export const taxFilingSchema = z.object({
   snapshotHash: z.string().regex(/^[a-f0-9]{64}$/),
   idempotencyKey: z.string().min(1),
   createdByActorId: z.string().min(1),
+  approvalRequestedByActorId: z.string().min(1).optional(),
+  approvalRequestedAt: z.string().min(1).optional(),
   validatedByActorId: z.string().min(1).optional(),
   frozenByActorId: z.string().min(1).optional(),
   approvedByActorId: z.string().min(1).optional(),

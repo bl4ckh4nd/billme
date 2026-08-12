@@ -647,8 +647,19 @@ export interface TaxFilingRepository {
   enqueueSubmissionJob?(scope: TenantScope, filingId: string, idempotencyKey: string): MaybePromise<void>;
   recordProviderResult?(scope: TenantScope, input: {
     id: string;
+    record: TaxFilingRecord;
     result: TaxFilingProviderResult;
+    action: TaxFilingAction;
     actorId: string;
+    reason: string;
+    idempotencyKey: string;
+    now?: string;
+  }): MaybePromise<TaxFilingRecord>;
+  recordApproval?(scope: TenantScope, input: {
+    id: string;
+    record: TaxFilingRecord;
+    requesterId: string;
+    approverId: string;
     reason: string;
     idempotencyKey: string;
     now?: string;

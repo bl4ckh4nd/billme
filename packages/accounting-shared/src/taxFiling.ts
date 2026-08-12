@@ -51,6 +51,8 @@ export interface TaxFilingRecord {
   lastMutationIdempotencyKey?: string;
   lastMutationAction?: TaxFilingAction;
   createdByActorId: string;
+  approvalRequestedByActorId?: string;
+  approvalRequestedAt?: string;
   validatedByActorId?: string;
   frozenByActorId?: string;
   approvedByActorId?: string;

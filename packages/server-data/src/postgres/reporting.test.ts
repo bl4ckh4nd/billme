@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { createTaxFilingRecord, transitionTaxFiling } from "@billme/accounting-engine";
 import { createSingleTenantScope } from "@billme/server-core";
 import { createPostgresPool } from "./connection.js";
 import { runDrizzleMigrations } from "./migrations.js";
@@ -19,6 +20,7 @@ import {
   putEncryptedTaxCredential,
   recordTaxSubmissionReceipt,
 } from "./taxSubmission.js";
+import { createPostgresTaxFilingRepository } from "./taxFilingRepository.js";
 
 test("reporting and filing migration is additive, tenant-scoped, and guarded", async () => {
   const sql = await readFile(new URL("../../drizzle/0015_server_data_reporting_tax_submissions.sql", import.meta.url), "utf8");
@@ -57,6 +59,94 @@ test("reporting and tax submission persistence is tenant-safe and evidence is im
     await assert.rejects(() => approveTaxSubmission(pool, scopeA, { submissionId: submission.id, requesterId: "creator", approverId: "creator", decision: "approved", reason: "same user" }), /CREATOR_CANNOT_APPROVE/);
     await approveTaxSubmission(pool, scopeA, { submissionId: submission.id, requesterId: "creator", approverId: "approver", decision: "approved", reason: "reviewed" });
     await recordTaxSubmissionReceipt(pool, scopeA, { submissionId: submission.id, receiptType: "ack", receiptNumber: `receipt-${suffix}`, receiptJson: "{}", receivedAt: now });
+
+    const filingRepository = createPostgresTaxFilingRepository(pool);
+    let filing = createTaxFilingRecord({
+      id: `filing-${suffix}`,
+      tenantId: tenantA,
+      provider: "eric_e_bilanz",
+      snapshot: {
+        kind: "e_bilanz",
+        periodStart: "2025-01-01",
+        periodEnd: "2025-12-31",
+        payload: {
+          taxYear: 2025,
+          taxonomy: "6.9",
+          facts: [{ key: "revenue", value: 100 }],
+          reportSnapshotId: "filing-report",
+          sourceSnapshotHash: "a".repeat(64),
+        },
+      },
+      idempotencyKey: `filing-create-${suffix}`,
+      actorId: "creator",
+      now,
+    });
+    filing = await filingRepository.create(scopeA, filing);
+    for (const [action, actorId] of [
+      ["validate", "creator"],
+      ["freeze", "creator"],
+      ["request_second_approval", "creator"],
+    ] as const) {
+      const next = transitionTaxFiling(filing, action, {
+        actorId,
+        reason: action,
+        idempotencyKey: `${action}-${suffix}`,
+        now,
+      }).record;
+      filing = await filingRepository.update(scopeA, next, filing.status);
+    }
+    const approved = transitionTaxFiling(filing, "approve", {
+      actorId: "approver",
+      reason: "second review",
+      idempotencyKey: `approve-${suffix}`,
+      now,
+    }).record;
+    filing = await filingRepository.recordApproval!(scopeA, {
+      id: filing.id,
+      record: approved,
+      requesterId: "creator",
+      approverId: "approver",
+      reason: "second review",
+      idempotencyKey: `approve-${suffix}`,
+      now,
+    });
+    const approvalRows = await pool.query(
+      `SELECT requester_id, approver_id, reason FROM tax_submission_approvals WHERE tenant_id=$1 AND submission_id=$2`,
+      [tenantA, filing.id],
+    );
+    assert.deepEqual(approvalRows.rows, [{ requester_id: "creator", approver_id: "approver", reason: "second review" }]);
+    for (const [action, actorId] of [["queue", "approver"], ["transmitting", "worker"]] as const) {
+      const next = transitionTaxFiling(filing, action, {
+        actorId,
+        reason: action,
+        idempotencyKey: `${action}-${suffix}`,
+        now,
+      }).record;
+      filing = await filingRepository.update(scopeA, next, filing.status);
+    }
+    const accepted = transitionTaxFiling(filing, "accept", {
+      actorId: "worker",
+      reason: "provider accepted",
+      idempotencyKey: `accept-${suffix}`,
+      now,
+    }).record;
+    filing = await filingRepository.recordProviderResult!(scopeA, {
+      id: filing.id,
+      record: accepted,
+      result: { status: "accepted", providerReference: `provider-${suffix}` },
+      action: "accept",
+      actorId: "worker",
+      reason: "provider accepted",
+      idempotencyKey: `receipt-${suffix}`,
+      now,
+    });
+    assert.equal(filing.status, "accepted");
+    const receiptRows = await pool.query(
+      `SELECT receipt_type, receipt_number FROM tax_submission_receipts WHERE tenant_id=$1 AND submission_id=$2`,
+      [tenantA, filing.id],
+    );
+    assert.deepEqual(receiptRows.rows, [{ receipt_type: "tax_filing_provider_result", receipt_number: `provider-${suffix}` }]);
+
     const credential = await putEncryptedTaxCredential(pool, scopeA, { provider: "elster", credentialKey: "org", encryptionAlgorithm: "AES-256-GCM", keyVersion: "v1", metadataJson: "{\"key\":\"redacted\"}", encryptedBlob: new Uint8Array([1, 2, 3]), createdBy: "creator" });
     assert.equal((await listTaxCredentialMetadata(pool, scopeA))[0]?.id, credential.id);
     const job = await enqueueTaxSubmissionJob(pool, scopeA, { submissionId: submission.id, jobType: "submit", idempotencyKey: `job-${suffix}` });

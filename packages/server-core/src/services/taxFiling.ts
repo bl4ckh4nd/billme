@@ -198,7 +198,22 @@ export const createTaxFilingService = (dependencies: TaxFilingServiceDependencie
     if (result.replayed) return result.record;
     let saved: TaxFilingRecord;
     try {
-      saved = await dependencies.repository.update(scope, result.record, current.status);
+      if (action === 'approve' && dependencies.repository.recordApproval) {
+        if (!current.approvalRequestedByActorId) {
+          throw new TaxFilingServiceError('INVALID_TRANSITION', 'Tax filing approval requester is missing');
+        }
+        saved = await dependencies.repository.recordApproval(scope, {
+          id: result.record.id,
+          record: result.record,
+          requesterId: current.approvalRequestedByActorId,
+          approverId: input.actorId,
+          reason: input.reason,
+          idempotencyKey: input.idempotencyKey,
+          now: input.now,
+        });
+      } else {
+        saved = await dependencies.repository.update(scope, result.record, current.status);
+      }
     } catch (error) {
       if (error instanceof Error && error.message === 'TAX_FILING_CONCURRENT_UPDATE') {
         throw new TaxFilingServiceError('CONCURRENT_UPDATE', 'Tax filing changed in another request');
@@ -246,31 +261,48 @@ export const createTaxFilingService = (dependencies: TaxFilingServiceDependencie
       };
     }
 
-  const action: TaxFilingAction = providerResult.status === 'accepted'
+    const action: TaxFilingAction = providerResult.status === 'accepted'
       ? 'accept'
       : providerResult.status === 'rejected'
         ? 'reject'
         : 'fail_retryable';
-    let completed = await transition(scope, id, action, {
+    const completionMutation = {
       actorId,
       reason,
       idempotencyKey: `${key}:${action}`,
       now: input.now,
-    });
-    // The canonical submission receipt/reference is only persisted when the
-    // repository provides that capability. Otherwise leave the provider
-    // result fail-closed rather than pretending it is durable/auditable.
+    };
+    let completed: TaxFilingRecord;
     if (dependencies.repository.recordProviderResult) {
-      const beforeReceipt = completed;
+      // Compute the terminal transition first, but let the repository persist
+      // that transition and its immutable provider receipt in one transaction.
+      // This avoids an accepted/rejected status without the corresponding
+      // provider evidence if receipt persistence fails.
+      const completion = dependencies.stateMachine.transition(transmitting, action, completionMutation);
+      if (completion.replayed) return completion.record;
       completed = await dependencies.repository.recordProviderResult(scope, {
-        id: completed.id,
+        id: transmitting.id,
+        record: completion.record,
         result: providerResult,
+        action,
         actorId,
         reason,
         idempotencyKey: `${key}:receipt`,
         now: input.now,
       });
-      await appendAudit(dependencies.auditLog, scope, actorId, 'tax_filing.provider_receipt', reason, beforeReceipt, completed);
+      await appendAudit(dependencies.auditLog, scope, actorId, `tax_filing.${action}`, reason, transmitting, completed);
+      await appendAudit(dependencies.auditLog, scope, actorId, 'tax_filing.provider_receipt', reason, transmitting, completed);
+    } else {
+      // A repository without the atomic receipt capability remains supported
+      // for lightweight adapters, but cannot claim durable provider evidence.
+      const transitioned = await transition(scope, id, action, completionMutation);
+      completed = {
+        ...transitioned,
+        providerSubmissionId: providerResult.providerSubmissionId,
+        providerReference: providerResult.providerReference,
+        failureCode: providerResult.status === 'accepted' ? undefined : providerResult.failureCode,
+        failureMessage: providerResult.status === 'accepted' ? undefined : providerResult.message,
+      };
     }
     return completed;
   };

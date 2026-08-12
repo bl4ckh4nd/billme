@@ -121,6 +121,76 @@ test('provider-unavailable submission never reports success and can be retried',
   assert.notEqual(failed.status, 'accepted');
 });
 
+test('provider rejection persists the matching terminal action and evidence seam', async () => {
+  const memory = memoryRepository();
+  const calls: Array<{ action: TaxFilingAction; result: { status: string } }> = [];
+  const repository: TaxFilingRepository = {
+    ...memory.repository,
+    async recordProviderResult(_scope, input) {
+      calls.push({ action: input.action, result: input.result });
+      const saved = {
+        ...input.record,
+        providerReference: input.result.providerReference,
+        failureCode: input.result.failureCode,
+        failureMessage: input.result.message,
+      };
+      memory.records.set(saved.id, saved);
+      return saved;
+    },
+  };
+  const resultStateMachine = {
+    ...stateMachine,
+    transition(record: TaxFilingRecord, action: TaxFilingAction, mutation: { actorId: string; idempotencyKey: string; now?: string }) {
+      const result = stateMachine.transition(record, action, mutation);
+      if (action === 'reject') result.record.status = 'rejected';
+      if (action === 'fail_retryable') result.record.status = 'retryable_failed';
+      result.record.lastMutationAction = action;
+      result.record.lastMutationIdempotencyKey = mutation.idempotencyKey;
+      return result;
+    },
+  };
+  const service = createTaxFilingService({
+    repository,
+    stateMachine: resultStateMachine,
+    providers: {
+      get: () => ({
+        provider: 'eric_euer',
+        async submit() {
+          return { status: 'rejected', providerReference: 'provider-rejection', failureCode: 'PROVIDER_REJECTED', message: 'invalid filing' };
+        },
+      }),
+    },
+  });
+  let filing = await service.create(scope, {
+    id: 'filing-provider-reject',
+    kind: 'euer',
+    periodStart: snapshot.periodStart,
+    periodEnd: snapshot.periodEnd,
+    payload: snapshot.payload,
+    idempotencyKey: 'create-provider-reject',
+    actorId: 'user-a',
+    reason: 'prepare',
+  });
+  for (const [action, actorId] of [
+    ['validate', 'user-a'],
+    ['freeze', 'user-a'],
+    ['request_second_approval', 'user-a'],
+    ['approve', 'user-b'],
+    ['queue', 'user-b'],
+  ] as const) {
+    filing = await service.transition(scope, filing.id, action, {
+      actorId,
+      reason: action,
+      idempotencyKey: `${action}-provider-reject`,
+    });
+  }
+  const rejected = await service.submit(scope, filing.id);
+  assert.equal(rejected.status, 'rejected');
+  assert.equal(rejected.failureCode, 'PROVIDER_REJECTED');
+  assert.equal(calls[0]?.action, 'reject');
+  assert.equal(calls[0]?.result.status, 'rejected');
+});
+
 test('validation requires a tenant-owned immutable report snapshot match', async () => {
   const memory = memoryRepository();
   const service = createTaxFilingService({

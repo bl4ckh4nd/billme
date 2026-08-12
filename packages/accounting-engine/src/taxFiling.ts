@@ -17,7 +17,8 @@ export type TaxFilingErrorCode =
   | 'IDEMPOTENCY_KEY_REQUIRED'
   | 'IDEMPOTENCY_CONFLICT'
   | 'CONCURRENT_UPDATE'
-  | 'REASON_REQUIRED';
+  | 'REASON_REQUIRED'
+  | 'EUR_ELSTER_CATALOG_UNAVAILABLE';
 
 export class TaxFilingError extends Error {
   readonly code: TaxFilingErrorCode;
@@ -70,9 +71,11 @@ export const validateTaxFilingSnapshot = (snapshot: TaxFilingSnapshot): void => 
     throw new TaxFilingError('VALIDATION_FAILED', 'Tax filing must reference a report snapshot id');
   }
   if (snapshot.kind === 'euer') {
-    if (payload.eurVersion !== '2025' || !Array.isArray(payload.lines)) {
-      throw new TaxFilingError('VALIDATION_FAILED', 'EÜR requires the 2025 line contract');
-    }
+    // The bundled EÜR catalog is print-form-only. It is not an ELSTER/ERiC
+    // provider contract, so accepting this state would falsely imply that a
+    // filing can be transmitted. Keep the provider seam fail-closed until a
+    // verified catalog and signed ERiC adapter are installed.
+    throw new TaxFilingError('EUR_ELSTER_CATALOG_UNAVAILABLE', 'EÜR ELSTER catalog/provider is unavailable');
   } else if (snapshot.kind === 'e_bilanz') {
     if (payload.taxonomy !== '6.9' || !Array.isArray(payload.facts)) {
       throw new TaxFilingError('VALIDATION_FAILED', 'E-Bilanz requires taxonomy 6.9 facts');
@@ -180,7 +183,10 @@ export const transitionTaxFiling = (
     validateTaxFilingSnapshot(record.snapshot);
   }
 
-  if (action === 'approve' && mutation.actorId === record.createdByActorId) {
+  if (
+    action === 'approve' &&
+    (mutation.actorId === record.createdByActorId || mutation.actorId === record.approvalRequestedByActorId)
+  ) {
     throw new TaxFilingError('SELF_APPROVAL_FORBIDDEN', 'The filing creator cannot approve the same filing');
   }
 
@@ -223,6 +229,8 @@ export const transitionTaxFiling = (
       next.completedByActorId = mutation.actorId;
       break;
     case 'request_second_approval':
+      next.approvalRequestedByActorId = mutation.actorId;
+      next.approvalRequestedAt = now;
       break;
   }
   return { record: next, replayed: false };

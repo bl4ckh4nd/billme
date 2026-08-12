@@ -32,6 +32,13 @@ const { mockIpc, mockProduct } = vi.hoisted(() => ({
       summary: { incomeTotal: 0, expenseTotal: 0, surplus: 0 },
       unclassifiedCount: 0,
       warnings: [],
+      catalog: {
+        id: 'anlage-euer-2025',
+        version: 'BMF-2025-2025-08-29',
+        sourceHash: 'b'.repeat(64),
+        delivery: 'print-form-only',
+        elsterReady: false,
+      },
     })),
     listItems: vi.fn<(...args: any[]) => Promise<any[]>>(async () => []),
     upsertClassification: vi.fn(async (payload: any) => ({

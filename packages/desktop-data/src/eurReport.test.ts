@@ -65,6 +65,13 @@ describe('eurReport CSV export', () => {
       },
       unclassifiedCount: 0,
       warnings: [],
+      catalog: {
+        id: 'anlage-euer-2025',
+        version: 'BMF-2025-2025-08-29',
+        sourceHash: 'b'.repeat(64),
+        delivery: 'print-form-only',
+        elsterReady: false,
+      },
     });
 
     expect(csv.startsWith('\uFEFFKennziffer;Bezeichnung;Betrag')).toBe(true);

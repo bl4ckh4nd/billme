@@ -260,6 +260,7 @@ export const eurClassificationSchema = z.object({
 export const eurReportRowSchema = z.object({
   lineId: z.string(),
   kennziffer: z.string().optional(),
+  providerPath: z.string().optional(),
   label: z.string(),
   kind: z.enum(['income', 'expense', 'computed']),
   exportable: z.boolean(),
@@ -279,6 +280,13 @@ export const eurReportResultSchema = z.object({
   }),
   unclassifiedCount: z.number().int(),
   warnings: z.array(z.string()),
+  catalog: z.object({
+    id: z.string().min(1),
+    version: z.string().min(1),
+    sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    delivery: z.enum(['print-form-only', 'elster-ready']),
+    elsterReady: z.boolean(),
+  }),
 });
 
 export const eurListItemsArgsSchema = z.object({

@@ -97,6 +97,20 @@ export interface GuvReport {
     mappingStatus?: 'healthy' | 'warning' | 'blocked';
     mappingNotes?: string[];
   };
+  filing?: ReportFilingProvenance;
+}
+
+export interface ReportFilingProvenance {
+  kind: 'euer';
+  taxYear: number;
+  catalog: {
+    id: string;
+    version: string;
+    sourceHash: string;
+    delivery: 'print-form-only' | 'elster-ready';
+    elsterReady: boolean;
+  };
+  lineProvenance: Array<{ lineId: string; kennziffer?: string; providerPath?: string; exportable: boolean }>;
 }
 
 export interface ReportUnmappedAccount {

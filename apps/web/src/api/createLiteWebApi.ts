@@ -157,6 +157,13 @@ const buildEmptyEurReport = (args: IpcArgs<'eur:getReport'>): IpcResult<'eur:get
     },
     unclassifiedCount: 0,
     warnings: [UNSUPPORTED_MESSAGE],
+    catalog: {
+      id: 'anlage-euer-2025',
+      version: 'BMF-2025-2025-08-29',
+      sourceHash: 'b69b5cf0a982d28cbce20644e67677a36be0bc494bed4fae2310dc08230a1599',
+      delivery: 'print-form-only',
+      elsterReady: false,
+    },
   });
 };
 

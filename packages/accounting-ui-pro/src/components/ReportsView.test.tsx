@@ -143,4 +143,34 @@ describe('ReportsView drilldown ranges', () => {
       to: '2026-12-31',
     })));
   });
+
+  it('freezes only an EÜR-2025 report with an explicit audit reason', async () => {
+    const saveReportSnapshot = vi.fn(async () => ({ id: 'snapshot-1', reportType: 'eur', args: {}, payload: {}, createdAt: '2025-12-31T23:00:00.000Z', sourceHash: 'a'.repeat(64) }));
+    const getEurReport = vi.fn(async () => ({
+      lines: [],
+      totals: { revenue: 10, expenses: 2, result: 8 },
+      quality: { unmappedAccounts: [], warnings: 0, generatedAt: '', source: 'live' as const },
+      filing: {
+        kind: 'euer' as const,
+        taxYear: 2025,
+        catalog: { id: 'anlage-euer-2025', version: 'BMF-2025-2025-08-29', sourceHash: 'b'.repeat(64), delivery: 'print-form-only' as const, elsterReady: false },
+        lineProvenance: [{ lineId: 'E2025_KZ111', kennziffer: '111', providerPath: 'income', exportable: true }],
+      },
+    }));
+    render(<ReportsView dataAdapter={{ getEurReport, saveReportSnapshot }} availableTabs={['eur']} />);
+
+    await screen.findByText('Einnahmenüberschussrechnung');
+    fireEvent.change(screen.getByLabelText('Periode von'), { target: { value: '2025-01' } });
+    fireEvent.change(screen.getByLabelText('Periode bis'), { target: { value: '2025-12' } });
+    fireEvent.change(screen.getByLabelText('Audit-Grund für EÜR-Snapshot'), { target: { value: 'Abschlussprüfung EÜR 2025' } });
+    const freezeButton = await screen.findByRole('button', { name: 'Snapshot einfrieren' });
+    await waitFor(() => expect(freezeButton).not.toHaveProperty('disabled', true));
+    fireEvent.click(freezeButton);
+
+    await waitFor(() => expect(saveReportSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      reportType: 'eur',
+      reason: 'Abschlussprüfung EÜR 2025',
+      args: expect.objectContaining({ periodFrom: '2025-01', periodTo: '2025-12' }),
+    })));
+  });
 });

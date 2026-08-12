@@ -54,6 +54,25 @@ interface ReportsViewProps {
   onOpenJournalEntry?: (journalEntryId: string) => void;
 }
 
+const hasEurFilingProvenance = (report: unknown): boolean => {
+  if (!report || typeof report !== 'object') return false;
+  const filing = (report as { filing?: unknown }).filing;
+  if (!filing || typeof filing !== 'object') return false;
+  const value = filing as { kind?: unknown; taxYear?: unknown; catalog?: unknown; lineProvenance?: unknown };
+  if (value.kind !== 'euer' || value.taxYear !== 2025 || !Array.isArray(value.lineProvenance) || value.lineProvenance.length === 0) return false;
+  const catalog = value.catalog;
+  if (!catalog || typeof catalog !== 'object') return false;
+  const sourceHash = (catalog as { sourceHash?: unknown }).sourceHash;
+  return typeof sourceHash === 'string' && /^[a-f0-9]{64}$/i.test(sourceHash)
+    && value.lineProvenance.every((line) => {
+      if (!line || typeof line !== 'object') return false;
+      const row = line as { lineId?: unknown; exportable?: unknown; kennziffer?: unknown; providerPath?: unknown };
+      return typeof row.lineId === 'string'
+        && typeof row.exportable === 'boolean'
+        && (!row.exportable || (typeof row.kennziffer === 'string' && typeof row.providerPath === 'string'));
+    });
+};
+
 export default function ReportsView({ dataAdapter, chartFramework, businessReportingProfile, profile = 'all', availableTabs, role = 'admin', onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
   const visibleTabs = useMemo(() => {
     if (availableTabs) return availableTabs;
@@ -211,6 +230,12 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
             ? managementGuvReport
             : hgbGuvReport;
   const activeQuality = activeReport?.quality;
+  const activeQualityBlocksFreeze = activeTab === 'eur' && Boolean(activeQuality && (
+    reportIsMappingBlocked(activeQuality)
+    || ('warnings' in activeQuality && typeof activeQuality.warnings === 'number' && activeQuality.warnings > 0)
+    || ('source' in activeQuality && activeQuality.source !== 'live')
+    || !hasEurFilingProvenance(activeReport)
+  ));
 
   const exportReport = async (format: 'pdf' | 'csv') => {
     if (!dataAdapter) return;
@@ -234,7 +259,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   };
 
   const freezeCurrentReport = async () => {
-    if (!canMutate || !dataAdapter?.saveReportSnapshot || !activeReport || activeTab !== 'eur') return;
+    if (!canMutate || !dataAdapter?.saveReportSnapshot || !activeReport || activeTab !== 'eur' || activeQualityBlocksFreeze) return;
     const range = reportDateRange(filters);
     if (range.from !== '2025-01-01' || range.to !== '2025-12-31') {
       setReportsNotice(null);
@@ -338,9 +363,10 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
                 maxLength={500}
               />
             </label>
-            <Button type="button" variant="secondary" onClick={() => void freezeCurrentReport()} disabled={freezing || !activeReport || !freezeReason.trim()} aria-busy={freezing}>
+            <Button type="button" variant="secondary" onClick={() => void freezeCurrentReport()} disabled={freezing || !activeReport || activeQualityBlocksFreeze || !freezeReason.trim()} aria-busy={freezing}>
               {freezing ? 'Friere ein…' : 'Snapshot einfrieren'}
             </Button>
+            {activeQualityBlocksFreeze ? <p className="basis-full text-xs text-error" role="status">Snapshot kann wegen unvollständiger oder nicht-live Reportdaten nicht eingefroren werden.</p> : null}
           </div>
         ) : <div className="rounded-xl border border-border bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann EÜR-Snapshots nur lesen.</div> : null}
         {reportsNotice ? <div className="rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success" role="status" aria-live="polite">{reportsNotice}</div> : null}

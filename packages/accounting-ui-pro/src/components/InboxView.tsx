@@ -70,6 +70,7 @@ export default function InboxView({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const permissionCtx = permissionContextForRole(role);
+  const canMutate = permissionCtx.canMutate;
   const bankAccountNumberForTransaction = (transactionId: string) =>
     bankAccountNumberByTransactionId?.[transactionId] ?? configuredBankAccountNumber;
   const queueCounts = useMemo(() => getQueueCounts(transactions), [transactions]);
@@ -160,6 +161,7 @@ export default function InboxView({
   };
 
   const assignBatchAccount = async () => {
+    if (!canMutate) return;
     if (!batchAccountSelection) {
       setBatchMessage('Bitte wählen Sie zuerst ein Konto für die Sammelzuweisung.');
       return;
@@ -212,6 +214,10 @@ export default function InboxView({
   };
 
   const saveInboxDraft = async (nextDraft: BookingDraft) => {
+    if (!canMutate) {
+      setBatchMessage('Diese Rolle darf Buchungen nur lesen.');
+      return;
+    }
     if (['posted', 'reversed'].includes(nextDraft.workflowStatus)) {
       setBatchMessage('POSTED_DRAFT_IMMUTABLE: Storno oder Korrektur erforderlich.');
       return;
@@ -351,30 +357,35 @@ export default function InboxView({
                 </div>
                 <button
                   onClick={assignBatchAccount}
+                  disabled={!canMutate}
                   className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Konto zuweisen
                 </button>
                 <button
                   onClick={() => runBatchAction('request_receipt')}
+                  disabled={!canMutate}
                   className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Beleg anfordern
                 </button>
                 <button
                   onClick={() => runBatchAction('submit_for_review')}
+                  disabled={!canMutate}
                   className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Zur Prüfung
                 </button>
                 <button
                   onClick={() => runBatchAction('approve')}
+                  disabled={!canMutate}
                   className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Freigeben
                 </button>
                 <button
                   onClick={() => runBatchAction('post')}
+                  disabled={!canMutate}
                   className="h-9 px-3 rounded-full bg-dark-base text-background text-xs font-bold hover:bg-dark-2 transition-colors"
                 >
                   Sammel-Buchen
@@ -580,7 +591,7 @@ export default function InboxView({
                       accounts={accountOptions}
                       valueAccountId={previewCounterLine?.accountId ?? ''}
                       valueAccountName={previewCounterLine?.accountName ?? ''}
-                      disabled={!previewAccountEditable || !previewBankAccountNumber}
+                      disabled={!previewAccountEditable || !previewBankAccountNumber || !canMutate}
                       onSelect={(account) =>
                         updateInboxAccount(previewTx.id, account.number, account.name, account.defaultTaxCode)
                       }
@@ -591,7 +602,7 @@ export default function InboxView({
                     <label className="block text-xs font-bold text-muted mb-1">Steuerfall</label>
                     <select
                       value={normalizeTaxCaseKey(previewCounterLine?.taxCaseKey ?? previewCounterLine?.taxCode) ?? ''}
-                      disabled={!previewAccountEditable || !previewBankAccountNumber}
+                      disabled={!previewAccountEditable || !previewBankAccountNumber || !canMutate}
                       onChange={(e) => updateInboxTaxCase(previewTx.id, e.target.value)}
                       className="h-10 w-full border border-border rounded-xl px-3 py-2 text-sm bg-surface disabled:bg-surface-muted"
                     >
@@ -611,6 +622,7 @@ export default function InboxView({
                       onChange={(e) =>
                         setNotesEdits((prev) => ({ ...prev, [previewTx.id]: e.target.value }))
                       }
+                      disabled={!previewAccountEditable || !canMutate}
                       placeholder="Optionale Notiz..."
                       rows={3}
                       className="w-full border border-border rounded-xl px-3 py-2 text-sm resize-none"
@@ -622,7 +634,7 @@ export default function InboxView({
                     <input
                       type="text"
                       value={bookingTextEdits[previewTx.id] ?? previewDraft.bookingText ?? ''}
-                      disabled={!previewAccountEditable}
+                      disabled={!previewAccountEditable || !canMutate}
                       onChange={(e) =>
                         setBookingTextEdits((prev) => ({ ...prev, [previewTx.id]: e.target.value }))
                       }

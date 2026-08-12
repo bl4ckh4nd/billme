@@ -4,7 +4,8 @@ import { Button } from '@billme/ui';
 import type { AssetDepreciationScheduleEntry, AssetItem, AssetStatus } from '../domain/assetTypes';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
 import type { AssetUpsertInput } from '../domain/assetTypes';
-import type { UserRole } from '../types';
+import { permissionContextForRole } from '../mocks/users';
+import { toAccountingActorRole, type UserRole } from '../types';
 
 const mockAssets: AssetItem[] = [
   {
@@ -254,6 +255,8 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
 }
 
 export default function AssetManagementView({ dataAdapter, role = 'admin' }: { dataAdapter?: ProAccountingDataAdapter; role?: UserRole }) {
+  const canMutate = permissionContextForRole(role).canMutate;
+  const accountingActorRole = toAccountingActorRole(role);
   const [assets, setAssets] = useState<AssetItem[]>(() => (dataAdapter ? [] : mockAssets));
   const [schedule, setSchedule] = useState<AssetDepreciationScheduleEntry[]>([]);
   const [assetsError, setAssetsError] = useState<string | null>(null);
@@ -389,7 +392,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
   };
 
   const submitAsset = async () => {
-    if (!editForm || !dataAdapter?.upsertAsset) return;
+    if (!canMutate || !editForm || !dataAdapter?.upsertAsset) return;
     const acquisitionCost = Number(editForm.acquisitionCost.replace(',', '.'));
     const usefulLifeYears = editForm.usefulLifeYears.trim() ? Number(editForm.usefulLifeYears) : undefined;
     if (!editForm.reason.trim()) {
@@ -433,7 +436,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
   };
 
   const postDepreciation = async () => {
-    if (!selected || !dataAdapter?.runDepreciation) return;
+    if (!canMutate || !selected || !dataAdapter?.runDepreciation) return;
     const year = Number(depreciationYear);
     if (!depreciationReason.trim()) {
       setMutationError('Bitte einen Audit-Grund für die AfA-Buchung angeben.');
@@ -452,7 +455,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
         year,
         postingDate,
         reason: depreciationReason.trim(),
-        actorRole: role,
+        actorRole: accountingActorRole,
       });
       await reloadCanonical(result.asset.id);
       setMutationMessage(`AfA ${year} gebucht${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.`);
@@ -465,7 +468,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
   };
 
   const dispose = async () => {
-    if (!selected || !dataAdapter?.disposeAsset) return;
+    if (!canMutate || !selected || !dataAdapter?.disposeAsset) return;
     const proceeds = Number(disposalProceeds.replace(',', '.'));
     const taxRate = Number(disposalTaxRate);
     if (!disposalConfirmed) {
@@ -491,7 +494,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
         taxRate: taxRate as 0 | 7 | 19,
         proceedsAccountNumber: proceedsAccountNumber.trim() || undefined,
         reason: disposalReason.trim(),
-        actorRole: role,
+        actorRole: accountingActorRole,
       });
       await reloadCanonical(result.asset.id);
       setMutationMessage(`Anlage ${result.asset.status === 'verkauft' ? 'verkauft' : 'stillgelegt'}; Ergebnis ${euro(result.gainLoss)}${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.`);
@@ -525,7 +528,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2">
                 <h1 className="text-sm font-black tracking-tight text-foreground leading-tight">Anlagenverwaltung</h1>
-                {dataAdapter?.upsertAsset && (
+                {canMutate && dataAdapter?.upsertAsset && (
                   <Button
                     type="button"
                     onClick={() => { if (busyAction !== null) return; setMutationError(null); setMutationMessage(null); setEditForm(formFromAsset()); }}
@@ -663,7 +666,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                     {selected.assetClass} • {selected.costCenter} • {selected.location}
                   </p>
                 </div>
-                {dataAdapter?.upsertAsset && ['entwurf', 'aktiv'].includes(selected.status) && (
+                {canMutate && dataAdapter?.upsertAsset && ['entwurf', 'aktiv'].includes(selected.status) && (
                   <div className="flex flex-wrap justify-end gap-2">
                     <Button type="button" onClick={() => { if (busyAction !== null) return; setMutationError(null); setMutationMessage(null); setEditForm(formFromAsset(selected)); }} disabled={busyAction !== null} variant="secondary" size="sm" className="h-8 px-3 text-xs">Bearbeiten</Button>
                     {selected.status === 'entwurf' && <Button type="button" onClick={() => { if (busyAction !== null) return; setMutationError(null); setMutationMessage(null); setEditForm(formFromAsset(selected, true)); }} disabled={busyAction !== null} variant="dark" size="sm" className="h-8 px-3 text-xs">Aktivieren</Button>}
@@ -773,7 +776,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
               </section>
 
               <section className="min-w-0 space-y-4">
-                {dataAdapter?.runDepreciation && selected.status === 'aktiv' && (
+                {canMutate && dataAdapter?.runDepreciation && selected.status === 'aktiv' && (
                   <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" onSubmit={(event) => { event.preventDefault(); void postDepreciation(); }} aria-busy={busyAction === 'depreciation'}>
                     <div>
                       <h3 className="text-sm font-bold text-foreground">Abschreibung buchen</h3>
@@ -788,7 +791,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                   </form>
                 )}
 
-                {dataAdapter?.disposeAsset && !['verkauft', 'stillgelegt'].includes(selected.status) && (
+                {canMutate && dataAdapter?.disposeAsset && !['verkauft', 'stillgelegt'].includes(selected.status) && (
                   <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" onSubmit={(event) => { event.preventDefault(); void dispose(); }} aria-busy={busyAction === 'disposal'}>
                     <div>
                       <h3 className="text-sm font-bold text-foreground">Anlage ausbuchen</h3>

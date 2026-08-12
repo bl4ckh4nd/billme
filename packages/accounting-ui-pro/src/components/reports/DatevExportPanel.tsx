@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { FileDown, LockKeyhole } from 'lucide-react';
 import { Button, Input } from '@billme/ui';
 import type { DatevExportResult, ProAccountingDataAdapter } from '../../services/mockBookingStore';
+import { permissionContextForRole } from '../../mocks/users';
+import type { UserRole } from '../../types';
 
 type DatevEncoding = 'cp1252' | 'utf8-bom';
 
@@ -18,6 +20,7 @@ interface DatevExportValues {
 interface DatevExportPanelProps {
   dataAdapter?: ProAccountingDataAdapter;
   chartFramework?: 'SKR03' | 'SKR04';
+  role?: UserRole;
 }
 
 function pad(value: number) {
@@ -68,7 +71,7 @@ function exportLabel(exportItem: DatevExportResult) {
   return `${period}, ${exportItem.recordCount} Buchungen`;
 }
 
-export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03' }: DatevExportPanelProps) {
+export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03', role = 'admin' }: DatevExportPanelProps) {
   const [values, setValues] = useState<DatevExportValues>(defaultValues);
   const [history, setHistory] = useState<DatevExportResult[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -76,7 +79,7 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<DatevExportResult | null>(null);
 
-  const canExport = Boolean(dataAdapter?.exportDatevBuchungsstapel);
+  const canExport = permissionContextForRole(role).canMutate && Boolean(dataAdapter?.exportDatevBuchungsstapel);
   const canListHistory = Boolean(dataAdapter?.listDatevExports);
 
   const loadHistory = useCallback(async () => {

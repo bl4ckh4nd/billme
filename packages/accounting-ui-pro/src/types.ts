@@ -72,10 +72,20 @@ export interface ActivityEvent {
   metadata?: Record<string, string | number | boolean | null>;
 }
 
-export type UserRole = 'bookkeeper' | 'reviewer' | 'accountant' | 'admin' | 'auditor';
+// Includes the server-mode roles so the shared workspace can render the
+// authenticated Web Pro session without pretending every user is an admin.
+export type UserRole = 'bookkeeper' | 'reviewer' | 'accountant' | 'admin' | 'auditor' | 'owner' | 'sales' | 'viewer';
+export type AccountingActorRole = Exclude<UserRole, 'owner' | 'sales' | 'viewer'>;
+
+export const toAccountingActorRole = (role: UserRole): AccountingActorRole => {
+  if (role === 'owner') return 'admin';
+  if (role === 'sales' || role === 'viewer') return 'bookkeeper';
+  return role;
+};
 
 export interface UiPermissionContext {
   role: UserRole;
+  canMutate: boolean;
   canApprove: boolean;
   canPost: boolean;
   canReverse: boolean;

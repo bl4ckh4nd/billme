@@ -14,9 +14,9 @@ export function getAllowedActions(
   validationIssues: ValidationIssue[],
 ): BookingAction[] {
   const blocking = hasBlockingIssues(validationIssues);
-  const actions: BookingAction[] = ['save_draft'];
+  const actions: BookingAction[] = permissionCtx.canMutate ? ['save_draft'] : [];
 
-  if (status === 'incomplete' || status === 'suggested' || status === 'ready_for_review') {
+  if (permissionCtx.canMutate && (status === 'incomplete' || status === 'suggested' || status === 'ready_for_review')) {
     actions.push('submit_for_review');
   }
 
@@ -32,7 +32,7 @@ export function getAllowedActions(
     actions.push('reverse', 'create_correction');
   }
 
-  if (status !== 'posted' && status !== 'reversed') {
+  if (permissionCtx.canMutate && status !== 'posted' && status !== 'reversed') {
     actions.push('request_receipt');
   }
 
@@ -53,6 +53,7 @@ export function canTransition(
   permissionCtx: UiPermissionContext,
   validationIssues: ValidationIssue[],
 ): boolean {
+  if (!permissionCtx.canMutate) return false;
   const blocking = hasBlockingIssues(validationIssues);
   const status = draft.workflowStatus;
 

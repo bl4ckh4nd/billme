@@ -18,6 +18,7 @@ import {
   getSusaReport,
 } from '../services/mockReportService';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
+import type { UserRole } from '../types';
 import ReportToolbar from './reports/ReportToolbar';
 import ReportTabSwitch from './reports/ReportTabSwitch';
 import SusaTable from './reports/SusaTable';
@@ -52,13 +53,14 @@ function buildDefaultFilters(chart: 'SKR03' | 'SKR04' = 'SKR03'): ReportFilterSt
 interface ReportsViewProps {
   dataAdapter?: ProAccountingDataAdapter;
   chartFramework?: 'SKR03' | 'SKR04';
+  role?: UserRole;
   onOpenTransaction?: (transactionId: string) => void;
   onOpenInvoice?: (invoiceId: string) => void;
   onOpenIncomingInvoice?: (invoiceId: string) => void;
   onOpenJournalEntry?: (journalEntryId: string) => void;
 }
 
-export default function ReportsView({ dataAdapter, chartFramework, onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
+export default function ReportsView({ dataAdapter, chartFramework, role = 'admin', onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
   const [activeTab, setActiveTab] = useState<'susa' | 'guv' | 'bilanz'>('susa');
   const [filters, setFilters] = useState<ReportFilterState>(() => buildDefaultFilters(chartFramework));
 
@@ -260,7 +262,7 @@ export default function ReportsView({ dataAdapter, chartFramework, onOpenTransac
               )}
             </div>
         </div>
-        <DatevExportPanel dataAdapter={dataAdapter} chartFramework={filters.chart} />
+        <DatevExportPanel dataAdapter={dataAdapter} chartFramework={filters.chart} role={role} />
       </div>
     </div>
   );

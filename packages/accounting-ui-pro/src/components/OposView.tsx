@@ -7,6 +7,8 @@ import type {
   VendorEntity,
 } from '@billme/accounting-shared';
 import type { OposBankTransaction, ProAccountingDataAdapter } from '../services/mockBookingStore';
+import { permissionContextForRole } from '../mocks/users';
+import type { UserRole } from '../types';
 
 const euro = (value: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -15,9 +17,10 @@ const invoiceId = () => `incoming-${crypto.randomUUID()}`;
 
 type OposViewProps = {
   dataAdapter?: ProAccountingDataAdapter;
+  role?: UserRole;
 };
 
-export default function OposView({ dataAdapter }: OposViewProps) {
+export default function OposView({ dataAdapter, role = 'admin' }: OposViewProps) {
   const [items, setItems] = useState<OpenItemEntity[]>([]);
   const [bankTransactions, setBankTransactions] = useState<OposBankTransaction[]>([]);
   const [vendors, setVendors] = useState<VendorEntity[]>([]);
@@ -47,6 +50,7 @@ export default function OposView({ dataAdapter }: OposViewProps) {
   const runInFlightRef = useRef(false);
   const allocationEventRef = useRef<string | null>(null);
   const remainingEventRef = useRef<string | null>(null);
+  const canMutate = permissionContextForRole(role).canMutate;
 
   const refresh = useCallback(async () => {
     if (!dataAdapter?.listOpenItems || !dataAdapter.listBankTransactions || !dataAdapter.listVendors || !dataAdapter.listIncomingInvoices) {
@@ -101,7 +105,7 @@ export default function OposView({ dataAdapter }: OposViewProps) {
   };
 
   const allocate = () => {
-    if (!selectedItem || !dataAdapter?.allocateOpenItemPayment) return;
+    if (!canMutate || !selectedItem || !dataAdapter?.allocateOpenItemPayment) return;
     if (!selectedBankTransaction || !eligibleBankTransactions.some((transaction) => transaction.id === selectedBankTransaction.id) || !reason.trim()) {
       setError('Bitte eine importierte, noch nicht gebuchte Bankzahlung und eine Begründung auswählen.');
       return;
@@ -136,7 +140,7 @@ export default function OposView({ dataAdapter }: OposViewProps) {
   };
 
   const allocateRemaining = () => {
-    if (!lastPayment || !remainingItemId || !dataAdapter?.allocateRemainingOpenItemPayment || !reason.trim()) {
+    if (!canMutate || !lastPayment || !remainingItemId || !dataAdapter?.allocateRemainingOpenItemPayment || !reason.trim()) {
       setError('Ziel, Betrag und Begründung sind Pflichtfelder.');
       return;
     }
@@ -157,7 +161,7 @@ export default function OposView({ dataAdapter }: OposViewProps) {
   };
 
   const saveInvoice = () => {
-    if (!dataAdapter?.upsertIncomingInvoice || !dataAdapter?.upsertVendor || !invoiceReason.trim() || !invoiceNumber.trim() || !lineDescription.trim()) {
+    if (!canMutate || !dataAdapter?.upsertIncomingInvoice || !dataAdapter?.upsertVendor || !invoiceReason.trim() || !invoiceNumber.trim() || !lineDescription.trim()) {
       setError('Rechnungsnummer, Position und Begründung sind Pflichtfelder.');
       return;
     }
@@ -206,7 +210,7 @@ export default function OposView({ dataAdapter }: OposViewProps) {
   };
 
   const postInvoice = () => {
-    if (!selectedInvoice || !dataAdapter?.postIncomingInvoiceAccounting || !invoiceReason.trim() || (softLockOverride && !overrideReason.trim())) {
+    if (!canMutate || !selectedInvoice || !dataAdapter?.postIncomingInvoiceAccounting || !invoiceReason.trim() || (softLockOverride && !overrideReason.trim())) {
       setError(softLockOverride ? 'Bitte eine Override-Begründung angeben.' : 'Bitte zuerst einen Entwurf auswählen und eine Begründung angeben.');
       return;
     }
@@ -227,6 +231,7 @@ export default function OposView({ dataAdapter }: OposViewProps) {
       {busy ? <div className="mb-3 text-sm text-muted" aria-live="polite" aria-busy="true">Speichere Änderung…</div> : null}
       {error ? <div className="mb-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">{error}</div> : null}
       {message ? <div className="mb-3 rounded-lg border border-success-border bg-success-bg px-3 py-2 text-sm text-success" role="status" aria-live="polite">{message}</div> : null}
+      {!canMutate ? <div className="mb-3 rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann OPOS-Daten nur lesen.</div> : null}
       <div className="grid gap-5 xl:grid-cols-2">
         <section className="rounded-xl border border-border p-4" aria-labelledby="open-items-heading">
           <h3 id="open-items-heading" className="mb-3 text-base font-bold">Offene Posten</h3>
@@ -239,16 +244,17 @@ export default function OposView({ dataAdapter }: OposViewProps) {
             </div>
           )}
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label className="text-sm sm:col-span-2">Importierte Bankzahlung<select aria-label="Bankzahlung" className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={selectedBankTransactionId} onChange={(e) => { setSelectedBankTransactionId(e.target.value); allocationEventRef.current = null; }} disabled={!selectedItem}><option value="">Noch nicht gebuchte Zahlung auswählen</option>{eligibleBankTransactions.map((transaction) => <option key={transaction.id} value={transaction.id}>{transaction.date} · {transaction.counterparty || 'Unbekannt'} · {transaction.purpose || 'Ohne Verwendungszweck'} · {euro(Math.abs(transaction.amount))}</option>)}</select></label>
+            <label className="text-sm sm:col-span-2">Importierte Bankzahlung<select aria-label="Bankzahlung" className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={selectedBankTransactionId} onChange={(e) => { setSelectedBankTransactionId(e.target.value); allocationEventRef.current = null; }} disabled={!canMutate || !selectedItem}><option value="">Noch nicht gebuchte Zahlung auswählen</option>{eligibleBankTransactions.map((transaction) => <option key={transaction.id} value={transaction.id}>{transaction.date} · {transaction.counterparty || 'Unbekannt'} · {transaction.purpose || 'Ohne Verwendungszweck'} · {euro(Math.abs(transaction.amount))}</option>)}</select></label>
             {selectedBankTransaction ? <p className="text-sm text-muted sm:col-span-2">Bankkonto {selectedBankTransaction.bankAccountNumber} · {selectedBankTransaction.date} · {euro(Math.abs(selectedBankTransaction.amount))}</p> : null}
-            <label className="text-sm sm:col-span-2">Begründung<input className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="z. B. Kontoauszug geprüft" /></label>
+            <label className="text-sm sm:col-span-2">Begründung<input disabled={!canMutate} className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="z. B. Kontoauszug geprüft" /></label>
           </div>
-          <button type="button" className="mt-3 rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-50" disabled={busy || !selectedItem || !selectedBankTransaction} onClick={allocate}>Zahlung zuordnen</button>
-          {lastPayment && lastPayment.residualAmount > 0 ? <div className="mt-4 rounded-lg border border-warning-border bg-warning-bg p-3"><p className="text-sm font-semibold">Restzahlung: {euro(lastPayment.residualAmount)}</p><div className="mt-2 grid gap-2 sm:grid-cols-2"><select className="rounded-lg border border-border px-3 py-2 text-sm" value={remainingItemId} onChange={(e) => setRemainingItemId(e.target.value)}><option value="">Weiteren offenen Posten wählen</option>{items.filter((item) => item.id !== selectedItemId && item.partyType === lastPayment.partyType).map((item) => <option key={item.id} value={item.id}>{item.documentNumber} ({euro(item.residualAmount)})</option>)}</select><input type="number" min="0.01" step="0.01" className="rounded-lg border border-border px-3 py-2 text-sm" value={remainingAmount} onChange={(e) => setRemainingAmount(e.target.value)} placeholder={String(lastPayment.residualAmount)} /></div><button type="button" className="mt-2 rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={busy} onClick={allocateRemaining}>Restbetrag zuordnen</button></div> : null}
+          <button type="button" className="mt-3 rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-50" disabled={!canMutate || busy || !selectedItem || !selectedBankTransaction} onClick={allocate}>Zahlung zuordnen</button>
+          {lastPayment && lastPayment.residualAmount > 0 ? <div className="mt-4 rounded-lg border border-warning-border bg-warning-bg p-3"><p className="text-sm font-semibold">Restzahlung: {euro(lastPayment.residualAmount)}</p><div className="mt-2 grid gap-2 sm:grid-cols-2"><select disabled={!canMutate} className="rounded-lg border border-border px-3 py-2 text-sm" value={remainingItemId} onChange={(e) => setRemainingItemId(e.target.value)}><option value="">Weiteren offenen Posten wählen</option>{items.filter((item) => item.id !== selectedItemId && item.partyType === lastPayment.partyType).map((item) => <option key={item.id} value={item.id}>{item.documentNumber} ({euro(item.residualAmount)})</option>)}</select><input disabled={!canMutate} type="number" min="0.01" step="0.01" className="rounded-lg border border-border px-3 py-2 text-sm" value={remainingAmount} onChange={(e) => setRemainingAmount(e.target.value)} placeholder={String(lastPayment.residualAmount)} /></div><button type="button" className="mt-2 rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy} onClick={allocateRemaining}>Restbetrag zuordnen</button></div> : null}
         </section>
 
         <section className="rounded-xl border border-border p-4" aria-labelledby="incoming-heading">
           <h3 id="incoming-heading" className="mb-3 text-base font-bold">Eingangsrechnungen</h3>
+          <fieldset disabled={!canMutate} className="contents">
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-sm">Rechnungsnummer<input className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} /></label>
             <label className="text-sm">Kreditor<select className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={vendorId} onChange={(e) => setVendorId(e.target.value)}><option value="">Neuen Kreditor anlegen</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}</select></label>
@@ -260,10 +266,11 @@ export default function OposView({ dataAdapter }: OposViewProps) {
             <label className="text-sm">Steuersatz<input type="number" min="0" step="1" className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={taxRate} onChange={(e) => setTaxRate(e.target.value)} /></label>
             <label className="text-sm sm:col-span-2">Begründung<input className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={invoiceReason} onChange={(e) => setInvoiceReason(e.target.value)} placeholder="z. B. Eingangsbeleg geprüft" /></label>
           </div>
+          </fieldset>
           <p className="mt-2 text-sm text-muted">Brutto: {euro(Number.isFinite(grossAmount) ? grossAmount : 0)}</p>
-          <div className="mt-3 flex flex-wrap gap-2"><button type="button" className="rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-50" disabled={busy} onClick={saveInvoice}>Entwurf speichern</button><select className="rounded-lg border border-border px-3 py-2 text-sm" value={selectedInvoiceId} onChange={(e) => { setSelectedInvoiceId(e.target.value); setPreview(null); }}><option value="">Gespeicherten Beleg wählen</option>{invoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.number} · {invoice.accountingStatus}</option>)}</select><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={busy || !selectedInvoice} onClick={previewInvoice}>Vorschau</button><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={busy || !selectedInvoice} onClick={postInvoice}>Buchen</button></div>
-          <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={softLockOverride} onChange={(e) => setSoftLockOverride(e.target.checked)} /> Soft-Lock übersteuern</label>
-          {softLockOverride ? <label className="mt-2 block text-sm">Override-Begründung<input className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></label> : null}
+          <div className="mt-3 flex flex-wrap gap-2"><button type="button" className="rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-50" disabled={!canMutate || busy} onClick={saveInvoice}>Entwurf speichern</button><select className="rounded-lg border border-border px-3 py-2 text-sm" value={selectedInvoiceId} onChange={(e) => { setSelectedInvoiceId(e.target.value); setPreview(null); }}><option value="">Gespeicherten Beleg wählen</option>{invoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.number} · {invoice.accountingStatus}</option>)}</select><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={busy || !selectedInvoice} onClick={previewInvoice}>Vorschau</button><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy || !selectedInvoice} onClick={postInvoice}>Buchen</button></div>
+          <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={softLockOverride} disabled={!canMutate} onChange={(e) => setSoftLockOverride(e.target.checked)} /> Soft-Lock übersteuern</label>
+          {softLockOverride ? <label className="mt-2 block text-sm">Override-Begründung<input disabled={!canMutate} className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></label> : null}
           {preview ? <div className="mt-3 rounded-lg bg-surface-muted p-3 text-sm" role="status" aria-live="polite"><strong>Vorschau: {preview.status === 'ready' ? 'bereit' : 'nicht bereit'}</strong>{preview.issues.map((issue) => <p key={issue.code} className="mt-1 text-error">{issue.message}</p>)}</div> : null}
         </section>
       </div>

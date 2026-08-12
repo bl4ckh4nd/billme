@@ -131,7 +131,7 @@ export default function ReconciliationWorkbench({
   }, [storeDraft?.id, storeDraft?.activity.length]);
 
   const draft = localDraft ?? storeDraft;
-  const draftReadOnly = !!draft && ['posted', 'reversed'].includes(draft.workflowStatus);
+  const draftReadOnly = !permissionCtx.canMutate || (!!draft && ['posted', 'reversed'].includes(draft.workflowStatus));
   const allowed = draft ? getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues) : [];
   const primary = getPrimaryAction(allowed);
   const bankAccountNumber = draft

@@ -6,7 +6,7 @@ import { replaceMockAccounts } from '../mocks/accounts';
 import { mockBookingDrafts } from '../mocks/bookings';
 import { mockTransactions } from '../mocks/transactions';
 import { permissionContextForRole } from '../mocks/users';
-import { Account, BookingAction, BookingDraft, Transaction, UserRole } from '../types';
+import { Account, AccountingActorRole, BookingAction, BookingDraft, Transaction, UserRole } from '../types';
 import type {
   BalanceSheetPreview,
   GuvReport,
@@ -100,7 +100,7 @@ export interface ProAccountingDataAdapter {
     year: number;
     postingDate: string;
     reason: string;
-    actorRole: UserRole;
+    actorRole: AccountingActorRole;
   }) => Promise<{ asset: AssetItem; scheduleEntry: AssetDepreciationScheduleEntry; journalEntryId: string }>;
   disposeAsset?: (args: {
     assetId: string;
@@ -109,7 +109,7 @@ export interface ProAccountingDataAdapter {
     taxRate: 0 | 7 | 19;
     proceedsAccountNumber?: string;
     reason: string;
-    actorRole: UserRole;
+    actorRole: AccountingActorRole;
   }) => Promise<{ asset: AssetItem; residualBookValue: number; gainLoss: number; journalEntryId?: string }>;
   exportDatevBuchungsstapel?: (args: {
     from: string;
@@ -121,6 +121,7 @@ export interface ProAccountingDataAdapter {
     encoding: 'cp1252' | 'utf8-bom';
   }) => Promise<DatevExportResult>;
   listDatevExports?: (limit?: number) => Promise<DatevExportResult[]>;
+  getDatevExportContent?: (exportId: string) => Promise<Blob>;
   listOpenItems?: () => Promise<OpenItemEntity[]>;
   listBankTransactions?: () => Promise<OposBankTransaction[]>;
   allocateOpenItemPayment?: (input: OpenItemPaymentInput) => Promise<OpenItemPaymentEntity>;

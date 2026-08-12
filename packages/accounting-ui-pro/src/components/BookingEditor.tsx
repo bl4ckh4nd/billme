@@ -158,6 +158,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
   const activeTransactionId = transaction.id;
 
   const readOnly =
+    !permissionCtx.canMutate ||
     draft.workflowStatus === 'posted' ||
     draft.workflowStatus === 'reversed' ||
     (draft.workflowStatus === 'pending_approval' && role === 'bookkeeper');

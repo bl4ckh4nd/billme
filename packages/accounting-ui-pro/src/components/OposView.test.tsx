@@ -17,6 +17,15 @@ const baseAdapter = (): ProAccountingDataAdapter => ({
 });
 
 describe('OposView', () => {
+  it('renders viewer OPOS as read-only before the server authorization boundary', async () => {
+    const adapter = baseAdapter();
+    render(<OposView dataAdapter={adapter} role="viewer" />);
+    await screen.findByText('RE-1');
+    expect(screen.getByText('Diese Rolle kann OPOS-Daten nur lesen.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Zahlung zuordnen' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Entwurf speichern' }).hasAttribute('disabled')).toBe(true);
+  });
+
   it('reuses one allocation event id when a partial allocation is retried', async () => {
     const adapter = baseAdapter();
     const allocate = vi.fn()

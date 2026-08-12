@@ -12,11 +12,12 @@ export function getUserByRole(role: UserRole): User {
 }
 
 export function permissionContextForRole(role: UserRole): UiPermissionContext {
+  const canMutate = !['sales', 'viewer', 'auditor'].includes(role);
   return {
     role,
-    canApprove: role === 'reviewer' || role === 'accountant' || role === 'admin',
-    canPost: role === 'accountant' || role === 'admin',
-    canReverse: role === 'accountant' || role === 'admin',
+    canMutate,
+    canApprove: canMutate && (role === 'reviewer' || role === 'accountant' || role === 'admin' || role === 'owner'),
+    canPost: canMutate && (role === 'accountant' || role === 'admin' || role === 'owner'),
+    canReverse: canMutate && (role === 'accountant' || role === 'admin' || role === 'owner'),
   };
 }
-

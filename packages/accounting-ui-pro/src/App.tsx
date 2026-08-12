@@ -30,17 +30,16 @@ export interface ProAccountingSeed {
 export interface ProAccountingWorkspaceProps {
   seed?: ProAccountingSeed;
   dataAdapter?: ProAccountingDataAdapter;
+  role?: UserRole;
+  assetsAvailable?: boolean;
   busy?: boolean;
   onPersistEntry?: (entry: { transaction: Transaction; draft: BookingDraft }) => void | Promise<void>;
 }
 
-export default function App({ seed, dataAdapter, busy = false, onPersistEntry }: ProAccountingWorkspaceProps) {
+export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, onPersistEntry }: ProAccountingWorkspaceProps) {
   const [currentView, setCurrentView] = useState<AppView>('inbox');
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
   const [inboxPreviewTransactionId, setInboxPreviewTransactionId] = useState<string | null>(null);
-  // Desktop authorization is enforced by the main process. The renderer only
-  // uses the owner-capability context to decide which controls to present.
-  const role: UserRole = 'admin';
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
@@ -99,7 +98,7 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
               { view: 'inbox', label: 'Inbox' },
               { view: 'reconciliation', label: 'Abgleich' },
               { view: 'exceptions', label: 'Exceptions' },
-              { view: 'assets', label: 'Anlagen' },
+              ...(assetsAvailable ? [{ view: 'assets' as const, label: 'Anlagen' }] : []),
               { view: 'reports', label: 'Auswertungen' },
               { view: 'opos', label: 'OPOS' },
             ] as { view: AppView; label: string }[]
@@ -155,7 +154,7 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
           ) : currentView === 'exceptions' ? (
             <ExceptionCenter
               role={role}
-              canMutateExceptions={!dataAdapter}
+              canMutateExceptions={!dataAdapter && role !== 'viewer' && role !== 'sales' && role !== 'auditor'}
               transactions={transactions}
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}
@@ -164,12 +163,15 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
             <ReportsView
               dataAdapter={dataAdapter}
               chartFramework={seed?.chartFramework}
+              role={role}
               onOpenTransaction={handleOpenTransaction}
             />
           ) : currentView === 'opos' ? (
-            <OposView dataAdapter={dataAdapter} />
+            <OposView dataAdapter={dataAdapter} role={role} />
+          ) : currentView === 'assets' && !assetsAvailable ? (
+            <div className="p-6 text-sm text-muted">Anlagen sind in dieser Verbindung nicht verfügbar.</div>
           ) : (
-            <AssetManagementView dataAdapter={dataAdapter} />
+            <AssetManagementView dataAdapter={dataAdapter} role={role} />
           )}
         </div>
       </main>

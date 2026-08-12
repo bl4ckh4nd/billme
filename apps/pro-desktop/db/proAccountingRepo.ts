@@ -981,7 +981,25 @@ interface PostingPairSeed {
   datevBuKey?: string;
 }
 
+const validatePostingLinesForDatev = (lines: JournalLineEntity[]): void => {
+  const lineIds = new Set<string>();
+  for (const line of lines) {
+    if (lineIds.has(line.id)) throw new Error('DATEV Export blockiert: Buchungszeilen enthalten doppelte IDs.');
+    lineIds.add(line.id);
+    const debit = Number(line.debitAmount ?? 0);
+    const credit = Number(line.creditAmount ?? 0);
+    const validAmount = (value: number) => Number.isFinite(value) && value >= 0 && Math.abs(value * 100 - Math.round(value * 100)) <= 1e-9;
+    if (!validAmount(debit) || !validAmount(credit) || (debit > 0) === (credit > 0)) {
+      throw new Error('DATEV Export blockiert: Jede Buchungszeile muss genau eine positive Soll- oder Habenseite mit Centgenauigkeit enthalten.');
+    }
+    if (!line.accountNumber || !/^\d+$/.test(line.accountNumber) || /^0+$/.test(line.accountNumber)) {
+      throw new Error('DATEV Export blockiert: Buchungszeile enthält ein ungültiges Konto.');
+    }
+  }
+};
+
 const buildPostingPairs = (lines: JournalLineEntity[]): PostingPairSeed[] => {
+  validatePostingLinesForDatev(lines);
   type RemainingLine = JournalLineEntity & { remaining: number };
   const debits: RemainingLine[] = lines
     .filter((line) => Number(line.debitAmount || 0) > 0)
@@ -1248,7 +1266,7 @@ export const reverseJournalEntry = (
 
 export const listJournalEntries = (
   db: Database.Database,
-  args: { from?: string; to?: string; accountNumbers?: string[]; limit?: number; offset?: number } = {},
+  args: { from?: string; to?: string; accountNumbers?: string[]; status?: Array<'posted' | 'reversed'>; limit?: number; offset?: number } = {},
   scope: TenantScope,
 ): JournalEntryEntity[] => {
   const tenantId = getTenantId(scope);
@@ -1263,6 +1281,7 @@ export const listJournalEntries = (
     if (ids.length === 0) return [];
     conditions.push(inArray(schema.journalEntries.id, ids));
   }
+  if (args.status?.length) conditions.push(inArray(schema.journalEntries.status, args.status));
   const rows = drizzle.select({
     id: schema.journalEntries.id, tenant_id: schema.journalEntries.tenantId, entry_number: schema.journalEntries.entryNumber,
     posting_date: schema.journalEntries.postingDate, document_date: schema.journalEntries.documentDate,
@@ -1280,8 +1299,14 @@ export const listJournalEntries = (
       source_draft_id: string | null; source_type: string; source_key: string | null; reversed_entry_id: string | null; created_at: string;
     }>;
 
-  const getLines = (entryId: string) => drizzle.select({
-    id: schema.journalLines.id, account_number: schema.journalLines.accountNumber,
+  type JournalLineRow = {
+    id: string; entry_id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
+    tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
+    gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null;
+    evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
+  };
+  const lineRows = rows.length ? drizzle.select({
+    id: schema.journalLines.id, entry_id: schema.journalLines.entryId, account_number: schema.journalLines.accountNumber,
     debit_amount: schema.journalLines.debitAmount, credit_amount: schema.journalLines.creditAmount,
     tax_code: schema.journalLines.taxCode, tax_case_key: schema.journalLines.taxCaseKey,
     tax_rate: schema.journalLines.taxRate, net_amount: schema.journalLines.netAmount, tax_amount: schema.journalLines.taxAmount,
@@ -1289,13 +1314,10 @@ export const listJournalEntries = (
     counterparty_vat_id: schema.journalLines.counterpartyVatId, evidence_type: schema.journalLines.evidenceType,
     evidence_reference: schema.journalLines.evidenceReference, cost_center: schema.journalLines.costCenter,
     memo: schema.journalLines.memo,
-  }).from(schema.journalLines).where(and(eq(schema.journalLines.tenantId, tenantId), eq(schema.journalLines.entryId, entryId)))
-    .orderBy(asc(schema.journalLines.lineNo)).all() as Array<{
-      id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
-      tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
-      gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null;
-      evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
-    }>;
+  }).from(schema.journalLines).where(and(eq(schema.journalLines.tenantId, tenantId), inArray(schema.journalLines.entryId, rows.map((row) => row.id))))
+    .orderBy(asc(schema.journalLines.entryId), asc(schema.journalLines.lineNo)).all() as JournalLineRow[] : [];
+  const linesByEntry = new Map<string, JournalLineRow[]>();
+  for (const line of lineRows) linesByEntry.set(line.entry_id, [...(linesByEntry.get(line.entry_id) ?? []), line]);
 
   return rows.map((row) => ({
     id: row.id,
@@ -1313,7 +1335,7 @@ export const listJournalEntries = (
     sourceKey: row.source_key ?? undefined,
     reversedEntryId: row.reversed_entry_id ?? undefined,
     createdAt: row.created_at,
-    lines: getLines(row.id).map((line) => ({
+    lines: (linesByEntry.get(row.id) ?? []).map((line) => ({
       id: line.id,
       accountNumber: line.account_number,
       debitAmount: Number(line.debit_amount || 0),
@@ -1332,6 +1354,26 @@ export const listJournalEntries = (
       memo: line.memo ?? undefined,
     })),
   }));
+};
+
+/**
+ * DATEV is deliberately independent of the UI listing cap. The normal journal
+ * listing is capped at 5,000 rows, while DATEV permits 99,999 booking rows and
+ * must observe the overflow instead of silently exporting a truncated prefix.
+ */
+const listDatevJournalEntries = (
+  db: Database.Database,
+  args: { from: string; to: string },
+  scope: TenantScope,
+): JournalEntryEntity[] => {
+  const pageSize = 5_000;
+  const entries: JournalEntryEntity[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const page = listJournalEntries(db, { ...args, status: ['posted', 'reversed'], limit: pageSize, offset }, scope);
+    entries.push(...page);
+    if (page.length < pageSize || entries.length > DATEV_MAX_ROWS) break;
+  }
+  return entries;
 };
 
 // Idempotent mutations must not depend on the paginated journal listing.
@@ -1835,6 +1877,51 @@ const resolveDatevBuKeyForPosting = (
   return key?.padStart(4, '0');
 };
 
+interface DatevTaxDetails {
+  euLandUstId?: string;
+  euSteuersatz?: number;
+  sachverhaltLl?: string;
+}
+
+/**
+ * DATEV's extended tax fields are not inferred from a BU key. They are built
+ * only from the persisted tax/evidence values on the journal line; incomplete
+ * EU or §13b evidence blocks the complete export instead of emitting a
+ * misleading booking.
+ */
+const resolveDatevTaxDetails = (
+  line: JournalLineEntity,
+  taxCaseKey: string | undefined,
+): DatevTaxDetails => {
+  const normalized = normalizeTaxCaseKey(taxCaseKey ?? line.taxCaseKey ?? line.taxCode);
+  if (!normalized) return {};
+  if (normalized.startsWith('EU_')) {
+    const country = line.countryCode;
+    const vatId = line.counterpartyVatId;
+    if (!country || !/^[A-Z]{2}$/.test(country) || !vatId || !/^[A-Z0-9]+$/.test(vatId)) {
+      throw new Error(`DATEV Export blockiert: EU-Land und USt-IdNr. fehlen für ${normalized}.`);
+    }
+    if (vatId.length > 13 || (vatId.length >= 2 && /^[A-Z]{2}/.test(vatId) && !vatId.startsWith(country))) {
+      throw new Error(`DATEV Export blockiert: EU-USt-IdNr. ist ungültig für ${normalized}.`);
+    }
+    const combinedVatId = vatId.startsWith(country) ? vatId : `${country}${vatId}`;
+    if (combinedVatId.length > 15) throw new Error(`DATEV Export blockiert: EU-USt-IdNr. ist zu lang für ${normalized}.`);
+    const rate = Number(line.taxRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate >= 100 || Math.abs(rate * 100 - Math.round(rate * 100)) > 1e-9) {
+      throw new Error(`DATEV Export blockiert: EU-Steuersatz fehlt oder ist ungültig für ${normalized}.`);
+    }
+    return { euLandUstId: combinedVatId, euSteuersatz: rate };
+  }
+  if (['DE_RC_13B_DOMESTIC', 'EU_B2B_SERVICE_RC', 'EU_IGE_GOODS_RC', 'NON_EU_SERVICE_RC'].includes(normalized)) {
+    const fact = line.evidenceReference;
+    if (!fact || !/^[1-9]\d{0,2}$/.test(fact)) {
+      throw new Error(`DATEV Export blockiert: Sachverhalt L+L (§13b) fehlt für ${normalized}.`);
+    }
+    return { sachverhaltLl: fact };
+  }
+  return {};
+};
+
 export const buildDatevRows = (
   db: Database.Database,
   args: { from?: string; to?: string } = {},
@@ -1847,6 +1934,9 @@ export const buildDatevRows = (
   gegenkonto: string;
   sollHabenKennzeichen: 'S' | 'H';
   buSchluessel?: string;
+  euLandUstId?: string;
+  euSteuersatz?: number;
+  sachverhaltLl?: string;
   umsatz: number;
 }> => {
   if (!args.from || !args.to || !isIsoDate(args.from) || !isIsoDate(args.to) || args.from > args.to) {
@@ -1855,8 +1945,7 @@ export const buildDatevRows = (
   if (periodForDate(args.from) !== periodForDate(args.to)) throw new Error('DATEV Export darf genau eine Buchungsperiode enthalten.');
   const tenantId = getTenantId(scope);
   const chart = getActiveChart(db, tenantId);
-  const entries = listJournalEntries(db, { from: args.from, to: args.to, limit: DATEV_MAX_ROWS + 1, offset: 0 }, scope)
-    .filter((entry) => entry.status === 'posted' || entry.status === 'reversed');
+  const entries = listDatevJournalEntries(db, { from: args.from, to: args.to }, scope);
   if (entries.length === 0) return [];
   const entryIds = entries.map((entry) => entry.id);
   const storedPairs = createDrizzle(db).select({
@@ -1875,7 +1964,9 @@ export const buildDatevRows = (
   for (const pair of storedPairs) byEntry.set(pair.entry_id, [...(byEntry.get(pair.entry_id) ?? []), pair]);
 
   const exportTransaction = db.transaction(() => entries.flatMap((entry) => {
-    let pairs = byEntry.get(entry.id) ?? [];
+    validatePostingLinesForDatev(entry.lines);
+    const lines = new Map(entry.lines.map((line) => [line.id, line]));
+    let pairs = [...(byEntry.get(entry.id) ?? [])];
     if (pairs.length === 0) {
       const seeds = buildPostingPairs(entry.lines);
       const debitTotal = round2(entry.lines.reduce((sum, line) => sum + Number(line.debitAmount || 0), 0));
@@ -1891,7 +1982,14 @@ export const buildDatevRows = (
         return { id, entry_id: entry.id, debit_line_id: pair.debitLineId, credit_line_id: pair.creditLineId, amount: pair.amount, tax_case_key: pair.taxCaseKey ?? null, datev_bu_key: datevBuKey };
       });
     }
-    const lines = new Map(entry.lines.map((line) => [line.id, line]));
+    // Pair rows are persisted with UUIDs. Sort by the stable journal line
+    // order instead of UUID insertion order so a repeat export is byte-identical.
+    const lineOrder = new Map(entry.lines.map((line, index) => [line.id, index]));
+    pairs.sort((a, b) => (lineOrder.get(a.debit_line_id) ?? Number.MAX_SAFE_INTEGER) - (lineOrder.get(b.debit_line_id) ?? Number.MAX_SAFE_INTEGER)
+      || (lineOrder.get(a.credit_line_id) ?? Number.MAX_SAFE_INTEGER) - (lineOrder.get(b.credit_line_id) ?? Number.MAX_SAFE_INTEGER)
+      || String(a.tax_case_key ?? '').localeCompare(String(b.tax_case_key ?? ''))
+      || String(a.datev_bu_key ?? '').localeCompare(String(b.datev_bu_key ?? ''))
+      || Number(a.amount) - Number(b.amount));
     const pairTotal = round2(pairs.reduce((sum, pair) => sum + Number(pair.amount || 0), 0));
     const debitTotal = round2(entry.lines.reduce((sum, line) => sum + Number(line.debitAmount || 0), 0));
     if (pairTotal !== debitTotal) throw new Error(`DATEV Export blockiert: Persistierte Paare für Buchung ${entry.entryNumber} sind unvollständig.`);
@@ -1909,11 +2007,18 @@ export const buildDatevRows = (
     return pairs.map((pair) => {
       const debit = lines.get(pair.debit_line_id);
       const credit = lines.get(pair.credit_line_id);
-      if (!debit || !credit || Number(pair.amount) <= 0) throw new Error(`DATEV Export blockiert: Buchung ${entry.entryNumber} enthält ein ungültiges Paar.`);
+      const pairAmount = Number(pair.amount);
+      if (!debit || !credit || debit.id === credit.id || debit.accountNumber === credit.accountNumber || !Number.isFinite(pairAmount) || pairAmount <= 0 || Math.abs(pairAmount * 100 - Math.round(pairAmount * 100)) > 1e-9) {
+        throw new Error(`DATEV Export blockiert: Buchung ${entry.entryNumber} enthält ein ungültiges Paar.`);
+      }
       const persistedBuKey = pair.datev_bu_key;
       if (persistedBuKey !== null && !/^\d{1,4}$/.test(persistedBuKey)) throw new Error(`DATEV BU-Schlüssel ist ungültig für Buchung ${entry.entryNumber}.`);
-      const buKey = resolveDatevBuKeyForPosting(db, chart, pair.tax_case_key ?? debit.taxCaseKey ?? debit.taxCode, entry.postingDate)
+      const taxCaseKey = pair.tax_case_key ?? debit.taxCaseKey ?? credit.taxCaseKey ?? debit.taxCode ?? credit.taxCode;
+      const buKey = resolveDatevBuKeyForPosting(db, chart, taxCaseKey, entry.postingDate)
         ?? persistedBuKey?.padStart(4, '0');
+      const debitTaxCase = normalizeTaxCaseKey(debit.taxCaseKey ?? debit.taxCode);
+      const taxLine = debitTaxCase === normalizeTaxCaseKey(taxCaseKey) ? debit : credit;
+      const taxDetails = resolveDatevTaxDetails(taxLine, taxCaseKey);
       return {
         date: entry.documentDate ?? entry.postingDate,
         belegfeld1: entry.reference ?? String(entry.entryNumber),
@@ -1922,7 +2027,8 @@ export const buildDatevRows = (
         gegenkonto: credit.accountNumber,
         sollHabenKennzeichen: 'S' as const,
         buSchluessel: buKey,
-        umsatz: round2(Number(pair.amount)),
+        ...taxDetails,
+        umsatz: round2(pairAmount),
       };
     });
   }));

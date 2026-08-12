@@ -14,6 +14,7 @@ import {
   reverseJournalEntry,
   saveDraft,
   getVatSummary,
+  buildDatevRows,
 } from './proAccountingRepo';
 import { ensureTaxCaseSeedData } from './taxCasesRepo';
 import { createProTenantScope } from '../tenantScope';
@@ -60,6 +61,20 @@ const seedBankTransaction = (db: Database.Database, id: string, date: string, am
 };
 
 describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', () => {
+  it('keeps canonical Drizzle DATEV manifest migration immutable on a fresh schema', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE datev_exports (
+      id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, file_path TEXT NOT NULL,
+      record_count INTEGER NOT NULL, from_date TEXT, to_date TEXT, created_at TEXT NOT NULL
+    )`);
+    const migrationPath = path.resolve(process.cwd(), 'drizzle/0002_datev_manifest.sql');
+    const migration = fs.readFileSync(fs.existsSync(migrationPath) ? migrationPath : path.resolve(process.cwd(), 'apps/pro-desktop/drizzle/0002_datev_manifest.sql'), 'utf8');
+    for (const statement of migration.split('--> statement-breakpoint')) db.exec(statement);
+    db.prepare(`INSERT INTO datev_exports (id, tenant_id, file_path, record_count, created_at) VALUES ('fresh', 'default', '/tmp/fresh.csv', 1, '2026-03-01T00:00:00.000Z')`).run();
+    expect(() => db.prepare("UPDATE datev_exports SET file_path = '/tmp/tampered.csv' WHERE id = 'fresh'").run()).toThrow(/immutable/i);
+    expect(() => db.prepare("DELETE FROM datev_exports WHERE id = 'fresh'").run()).toThrow(/immutable/i);
+  });
+
   const validDraft = (db: Database.Database, id: string, date = '2026-03-01') => {
     const scope = createProTenantScope('default');
     seedBankTransaction(db, id, date);
@@ -216,6 +231,35 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     expect(replay.entry.id).toBe(first.entry.id);
     expect(replay.issues).toEqual([]);
   });
+
+  it('detects DATEV overflow after the 5,000-entry listing page without creating an export manifest', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const entryInsert = db.prepare(`
+      INSERT INTO journal_entries
+        (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, source_type, source_key, reversed_entry_id, created_at)
+      VALUES (?, 'default', ?, '2026-03-01', '2026-03-01', 'Overflow', ?, '2026-03', 2026, 'posted', NULL, 'manual', NULL, NULL, ?)
+    `);
+    const lineInsert = db.prepare(`
+      INSERT INTO journal_lines
+        (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount, tax_code, tax_case_key, tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id, evidence_type, evidence_reference, cost_center, memo)
+      VALUES (?, 'default', ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+    `);
+    db.transaction(() => {
+      for (let entryNo = 1; entryNo <= 5_001; entryNo += 1) {
+        const entryId = `datev-overflow-entry-${entryNo}`;
+        entryInsert.run(entryId, entryNo, `overflow-${entryNo}`, `2026-03-01T00:00:${String(entryNo % 60).padStart(2, '0')}.000Z`);
+        for (let pairNo = 1; pairNo <= 20; pairNo += 1) {
+          lineInsert.run(`${entryId}-debit-${pairNo}`, entryId, pairNo * 2 - 1, '6000', 1, 0);
+          lineInsert.run(`${entryId}-credit-${pairNo}`, entryId, pairNo * 2, '1200', 0, 1);
+        }
+      }
+    })();
+
+    expect(() => buildDatevRows(db, { from: '2026-03-01', to: '2026-03-31' }, scope)).toThrow(/99999/);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM datev_exports').get() as { c: number }).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM journal_posting_pairs').get() as { c: number }).c).toBe(100_020);
+  }, 30_000);
 
   it('accepts decimal cent values without floating-point false positives', () => {
     const db = createDb();

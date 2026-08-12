@@ -88,4 +88,28 @@ describe('datevExport', () => {
       date: '2026-03-03', belegfeld1: '1001', buchungstext: 'bad\ntext', konto: '1200', gegenkonto: '8400', umsatz: 1,
     }], options)).toThrow();
   });
+
+  it('writes EU and §13b facts at the official field positions and accepts one-digit-longer person accounts', () => {
+    const buf = buildDatevBuchungsstapelCsv([{
+      date: '2026-03-03', belegfeld1: '1001', buchungstext: 'EU-Leistung', konto: '10000', gegenkonto: '8400',
+      buSchluessel: '0094', euLandUstId: 'FR12345678901', euSteuersatz: 20, sachverhaltLl: '13', umsatz: 1,
+    }], options);
+    const row = new TextDecoder('windows-1252').decode(buf).split('\r\n')[2]!.split(';');
+    expect(row).toHaveLength(125);
+    expect(row[8]).toBe('"0094"');
+    expect(row[39]).toBe('"FR12345678901"');
+    expect(row[40]).toBe('20,00');
+    expect(row[42]).toBe('13');
+    for (const buSchluessel of ['0041', '0042', '0043']) {
+      expect(() => buildDatevBuchungsstapelCsv([{
+        date: '2026-03-03', belegfeld1: '1001', buchungstext: 'BU', konto: '1200', gegenkonto: '8400', buSchluessel, umsatz: 1,
+      }], options)).not.toThrow();
+    }
+  });
+
+  it('rejects a document date outside the declared fiscal year', () => {
+    expect(() => buildDatevBuchungsstapelCsv([{
+      date: '2025-12-31', belegfeld1: '1001', buchungstext: 'boundary', konto: '1200', gegenkonto: '8400', umsatz: 1,
+    }], options)).toThrow(/Wirtschaftsjahres/);
+  });
 });

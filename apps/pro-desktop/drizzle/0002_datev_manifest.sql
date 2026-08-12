@@ -17,3 +17,15 @@ ALTER TABLE `datev_exports` ADD `manifest_json` text;
 ALTER TABLE `datev_exports` ADD `status` text;
 --> statement-breakpoint
 ALTER TABLE `datev_exports` ADD `validation_json` text;
+--> statement-breakpoint
+CREATE TRIGGER `datev_exports_no_update`
+BEFORE UPDATE ON `datev_exports`
+FOR EACH ROW BEGIN
+  SELECT RAISE(ABORT, 'datev_exports are immutable');
+END;
+--> statement-breakpoint
+CREATE TRIGGER `datev_exports_no_delete`
+BEFORE DELETE ON `datev_exports`
+FOR EACH ROW BEGIN
+  SELECT RAISE(ABORT, 'datev_exports are immutable');
+END;

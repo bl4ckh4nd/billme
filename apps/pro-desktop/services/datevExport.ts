@@ -22,6 +22,12 @@ export interface DatevBuchungsstapelRow {
   sollHabenKennzeichen?: 'S' | 'H';
   /** DATEV field 9 is four quoted digits in format version 13. */
   buSchluessel?: string;
+  /** DATEV field 40, only when persisted EU destination evidence is present. */
+  euLandUstId?: string;
+  /** DATEV field 41, percentage in the destination EU country. */
+  euSteuersatz?: number;
+  /** DATEV field 43, non-zero §13b UStG fact code. */
+  sachverhaltLl?: string;
   umsatz: number;
 }
 
@@ -121,11 +127,16 @@ const validateDatevOptions = (options: DatevBuchungsstapelOptions): void => {
   const client = String(options.clientNumber);
   if (!/^(?:\d{4,6}|\d{7})$/.test(consultant) || Number(consultant) < 1001) throw new Error('DATEV Beraternummer fehlt oder ist ungültig.');
   if (!/^\d{1,5}$/.test(client) || Number(client) < 1) throw new Error('DATEV Mandantennummer fehlt oder ist ungültig.');
-  parseDate(options.fiscalYearStart);
+  const fiscalStart = parseDate(options.fiscalYearStart);
   parseDate(options.from);
   parseDate(options.to);
   if (options.from > options.to) throw new Error('DATEV-Zeitraum ist umgekehrt.');
   if (options.from.slice(0, 7) !== options.to.slice(0, 7)) throw new Error('DATEV Buchungsstapel muss genau eine Periode enthalten.');
+  const fiscalEnd = new Date(Date.UTC(fiscalStart.getUTCFullYear() + 1, fiscalStart.getUTCMonth(), fiscalStart.getUTCDate()));
+  fiscalEnd.setUTCDate(fiscalEnd.getUTCDate() - 1);
+  const from = parseDate(options.from);
+  const to = parseDate(options.to);
+  if (from < fiscalStart || to > fiscalEnd) throw new Error('DATEV Zeitraum liegt außerhalb des Wirtschaftsjahres.');
   if (!Number.isInteger(options.accountLength) || options.accountLength < 4 || options.accountLength > 8) throw new Error('DATEV Sachkontenlänge muss 4 bis 8 sein.');
   if (!['SKR03', 'SKR04'].includes(options.chart)) throw new Error('DATEV Kontenrahmen fehlt oder ist ungültig.');
   if (options.origin !== undefined && !/^\w{0,2}$/.test(options.origin)) throw new Error('DATEV Herkunft ist ungültig.');
@@ -135,21 +146,36 @@ const validateDatevOptions = (options: DatevBuchungsstapelOptions): void => {
   if (options.dictationCode !== undefined && !/^(?:[A-Z]{2}){0,2}$/.test(options.dictationCode)) throw new Error('DATEV Diktatkürzel ist ungültig.');
 };
 
-export const validateDatevRows = (rows: DatevBuchungsstapelRow[], options?: Pick<DatevBuchungsstapelOptions, 'accountLength'>): void => {
+export const validateDatevRows = (rows: DatevBuchungsstapelRow[], options?: Pick<DatevBuchungsstapelOptions, 'accountLength' | 'fiscalYearStart'>): void => {
   if (rows.length > DATEV_MAX_ROWS) throw new Error(`DATEV Buchungsstapel darf höchstens ${DATEV_MAX_ROWS} Buchungen enthalten.`);
   const accountLength = options?.accountLength;
   if (accountLength !== undefined && (!Number.isInteger(accountLength) || accountLength < 4 || accountLength > 8)) throw new Error('DATEV Sachkontenlänge muss 4 bis 8 sein.');
+  const fiscalStart = options?.fiscalYearStart ? parseDate(options.fiscalYearStart) : undefined;
+  const fiscalEnd = fiscalStart ? new Date(Date.UTC(fiscalStart.getUTCFullYear() + 1, fiscalStart.getUTCMonth(), fiscalStart.getUTCDate())) : undefined;
+  fiscalEnd?.setUTCDate(fiscalEnd.getUTCDate() - 1);
+  const validAccount = (value: string): boolean => /^\d+$/.test(value) && !/^0+$/.test(value)
+    && (accountLength === undefined ? value.length >= 1 && value.length <= 9 : value.length === accountLength || value.length === accountLength + 1);
   rows.forEach((row, idx) => {
     const rowNo = idx + 1;
-    parseDate(row.date);
-    if (!/^\d+$/.test(String(row.konto)) || /^0+$/.test(String(row.konto)) || (accountLength !== undefined ? String(row.konto).length !== accountLength : String(row.konto).length < 1 || String(row.konto).length > 9)) throw new Error(`Zeile ${rowNo}: Konto passt nicht zur Sachkontenlänge.`);
-    if (!/^\d+$/.test(String(row.gegenkonto)) || /^0+$/.test(String(row.gegenkonto)) || (accountLength !== undefined ? String(row.gegenkonto).length !== accountLength : String(row.gegenkonto).length < 1 || String(row.gegenkonto).length > 9)) throw new Error(`Zeile ${rowNo}: Gegenkonto passt nicht zur Sachkontenlänge.`);
+    const rowDate = parseDate(row.date);
+    if (fiscalStart && fiscalEnd && (rowDate < fiscalStart || rowDate > fiscalEnd)) throw new Error(`Zeile ${rowNo}: Belegdatum liegt außerhalb des Wirtschaftsjahres.`);
+    if (!validAccount(String(row.konto))) throw new Error(`Zeile ${rowNo}: Konto passt nicht zur Sachkontenlänge.`);
+    if (!validAccount(String(row.gegenkonto))) throw new Error(`Zeile ${rowNo}: Gegenkonto passt nicht zur Sachkontenlänge.`);
     if (row.sollHabenKennzeichen !== undefined && !['S', 'H'].includes(row.sollHabenKennzeichen)) throw new Error(`Zeile ${rowNo}: Soll/Haben-Kennzeichen ist ungültig.`);
     if (row.buSchluessel !== undefined) normalizeBuKey(row.buSchluessel);
     amount(row.umsatz, rowNo);
     const reference = validateText(row.belegfeld1, `Zeile ${rowNo} Belegfeld 1`, 36);
     if (!/^[\w$&%*+\-/]*$/.test(reference)) throw new Error(`Zeile ${rowNo}: Belegfeld 1 enthält unzulässige Zeichen.`);
     validateText(row.buchungstext, `Zeile ${rowNo} Buchungstext`, 60);
+    if ((row.euLandUstId === undefined) !== (row.euSteuersatz === undefined)) throw new Error(`Zeile ${rowNo}: EU-Land/USt-IdNr. und EU-Steuersatz müssen gemeinsam angegeben werden.`);
+    if (row.euLandUstId !== undefined) {
+      validateText(row.euLandUstId, `Zeile ${rowNo} EU-Land/USt-IdNr.`, 15);
+      if (!/^[A-Z]{2}[A-Z0-9]{0,13}$/.test(row.euLandUstId)) throw new Error(`Zeile ${rowNo}: EU-Land/USt-IdNr. ist ungültig.`);
+    }
+    if (row.euSteuersatz !== undefined) {
+      if (!Number.isFinite(row.euSteuersatz) || row.euSteuersatz < 0 || row.euSteuersatz >= 100 || Math.abs(row.euSteuersatz * 100 - Math.round(row.euSteuersatz * 100)) > 1e-9) throw new Error(`Zeile ${rowNo}: EU-Steuersatz ist ungültig.`);
+    }
+    if (row.sachverhaltLl !== undefined && !/^[1-9]\d{0,2}$/.test(row.sachverhaltLl)) throw new Error(`Zeile ${rowNo}: Sachverhalt L+L ist ungültig.`);
   });
 };
 
@@ -171,11 +197,18 @@ const buildHeader = (options: DatevBuchungsstapelOptions): string => {
   return fields.join(';');
 };
 
-const buildDataRow = (row: DatevBuchungsstapelRow): string => [
+const buildDataRow = (row: DatevBuchungsstapelRow): string => {
+  const fields = [
   amount(row.umsatz, 0), quote(row.sollHabenKennzeichen ?? 'S'), quote('EUR'), '', '', '', String(row.konto), String(row.gegenkonto),
   row.buSchluessel === undefined ? '' : quote(normalizeBuKey(row.buSchluessel)), toDatevDate(row.date), quote(row.belegfeld1), quote(''), '',
   quote(row.buchungstext), '', quote(''), '', '', '', quote(''), ...Array.from({ length: 105 }, () => ''),
-].join(';');
+  ];
+  // DATEV field numbers are one-based; the CSV array is zero-based.
+  fields[39] = row.euLandUstId === undefined ? '' : quote(row.euLandUstId);
+  fields[40] = row.euSteuersatz === undefined ? '' : row.euSteuersatz.toFixed(2).replace('.', ',');
+  fields[42] = row.sachverhaltLl ?? '';
+  return fields.join(';');
+};
 
 export const buildDatevBuchungsstapelCsv = (
   rows: DatevBuchungsstapelRow[],

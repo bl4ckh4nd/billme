@@ -21,6 +21,8 @@ export interface ProAccountingSeed {
   accounts?: Account[];
   drafts?: BookingDraft[];
   chartFramework?: 'SKR03' | 'SKR04';
+  bankAccountNumber?: string;
+  bankAccountNumberByTransactionId?: Record<string, string>;
   seedVersion?: string | number;
 }
 
@@ -47,9 +49,11 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
       drafts: seed.drafts,
       accounts: seed.accounts,
       chartFramework: seed.chartFramework,
+      bankAccountNumber: seed.bankAccountNumber,
+      bankAccountNumberByTransactionId: seed.bankAccountNumberByTransactionId,
     });
     setVersion((v) => v + 1);
-  }, [seed?.seedVersion, seed?.transactions, seed?.drafts, seed?.accounts, seed?.chartFramework]);
+  }, [seed?.seedVersion, seed?.transactions, seed?.drafts, seed?.accounts, seed?.chartFramework, seed?.bankAccountNumber, seed?.bankAccountNumberByTransactionId]);
 
   useEffect(() => {
     configureStorePersistence({
@@ -127,6 +131,8 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
             <InboxView
               role={role}
               accounts={accounts}
+              bankAccountNumber={seed?.bankAccountNumber}
+              bankAccountNumberByTransactionId={seed?.bankAccountNumberByTransactionId}
               transactions={transactions}
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}
@@ -144,6 +150,8 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
             <ReconciliationWorkbench
               role={role}
               accounts={accounts}
+              bankAccountNumber={seed?.bankAccountNumber}
+              bankAccountNumberByTransactionId={seed?.bankAccountNumberByTransactionId}
               transactions={transactions}
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}
@@ -159,6 +167,7 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
           ) : currentView === 'reports' ? (
             <ReportsView
               dataAdapter={dataAdapter}
+              chartFramework={seed?.chartFramework}
               onOpenTransaction={handleOpenTransaction}
               onOpenReceipt={handleOpenInboxTransaction}
             />

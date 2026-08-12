@@ -25,7 +25,7 @@ export default function ReportDrilldownPanel({
   if (!selection) return null;
 
   return (
-    <aside className="w-full xl:w-[25rem] shrink-0 rounded-2xl border border-gray-200 bg-white flex flex-col min-h-[20rem]">
+    <aside className="w-full xl:w-96 shrink-0 rounded-2xl border border-gray-200 bg-white flex flex-col min-h-[20rem]">
       <div className="px-4 h-12 border-b border-gray-100 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">{selection.reportType}</div>

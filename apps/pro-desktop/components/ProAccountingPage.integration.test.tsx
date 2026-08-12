@@ -9,6 +9,7 @@ const {
   workspaceState,
   mockUseProLedgerStatsQuery,
   mockUseProLedgerAccountsQuery,
+  mockUseAccountsQuery,
   mockUseImportSkrMutation,
   mockImportSkrMutateAsync,
   mockIpc,
@@ -19,6 +20,7 @@ const {
   },
   mockUseProLedgerStatsQuery: vi.fn(),
   mockUseProLedgerAccountsQuery: vi.fn(),
+  mockUseAccountsQuery: vi.fn(),
   mockImportSkrMutateAsync: vi.fn(async () => ({ imported: 1 })),
   mockUseImportSkrMutation: vi.fn(),
   mockOnRulesChangedTrigger: vi.fn(),
@@ -65,6 +67,10 @@ vi.mock('../hooks/useProLedger', () => ({
   useProLedgerStatsQuery: mockUseProLedgerStatsQuery,
   useProLedgerAccountsQuery: mockUseProLedgerAccountsQuery,
   useImportSkrMutation: mockUseImportSkrMutation,
+}));
+
+vi.mock('../hooks/useAccounts', () => ({
+  useAccountsQuery: mockUseAccountsQuery,
 }));
 
 vi.mock('@billme/accounting-ui-pro', () => ({
@@ -169,6 +175,7 @@ describe('ProAccountingPage integration', () => {
         { accountNumber: '1200', name: 'Bank', keywords: [] },
       ],
     });
+    mockUseAccountsQuery.mockReturnValue({ data: [] });
     mockUseImportSkrMutation.mockReturnValue({
       mutateAsync: mockImportSkrMutateAsync,
       isPending: false,
@@ -288,6 +295,56 @@ describe('ProAccountingPage integration', () => {
         }),
       );
     });
+  });
+
+  it('loads the active SKR04 catalog and carries a configured custom bank GL into the workspace', async () => {
+    mockUseProLedgerStatsQuery.mockReturnValue({
+      data: { total: 1, byChart: { SKR03: 0, SKR04: 1 } },
+    });
+    mockUseProLedgerAccountsQuery.mockReturnValue({
+      data: [
+        { id: 'skr04-1999', chart: 'SKR04', accountNumber: '1999', name: 'Geldtransit', keywords: ['Bankkonto'] },
+        { id: 'skr04-7000', chart: 'SKR04', accountNumber: '7000', name: 'Erlöse custom', keywords: [] },
+      ],
+    });
+    mockUseAccountsQuery.mockReturnValue({
+      data: [{ id: 'bank-1', defaultSkrAccountNumber: '1999' }],
+    });
+    mockIpc.pro.listBankTransactions.mockResolvedValueOnce([
+      {
+        id: 'tx-skr04',
+        accountId: 'bank-1',
+        date: '2026-01-10',
+        counterparty: 'Kunde',
+        purpose: 'Zahlung',
+        amount: 100,
+        status: 'open',
+        linkedInvoiceId: null,
+      },
+    ]);
+    mockIpc.pro.getDraftByTransactionId.mockResolvedValueOnce({
+      id: 'draft-skr04',
+      tenantId: 'default',
+      transactionId: 'tx-skr04',
+      workflowStatus: 'suggested',
+      postingDate: '2026-01-10',
+      documentDate: '2026-01-10',
+      bookingText: 'Zahlung',
+      reference: 'TX-SKR04',
+      lines: [
+        { id: 'bank-line', accountNumber: '1999', debitAmount: 100, creditAmount: 0 },
+        { id: 'counter-line', accountNumber: '7000', debitAmount: 0, creditAmount: 100 },
+      ],
+      validationIssues: [],
+      updatedAt: new Date().toISOString(),
+    });
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await waitFor(() => expect(workspaceState.lastProps?.seed?.chartFramework).toBe('SKR04'));
+    expect(workspaceState.lastProps.seed.bankAccountNumber).toBe('1999');
+    expect(workspaceState.lastProps.seed.drafts[0].lines[0]).toEqual(
+      expect.objectContaining({ accountId: '1999', accountName: 'Geldtransit' }),
+    );
   });
 
   it('opens rules modal from pro page and handles rule-change callback flow', async () => {

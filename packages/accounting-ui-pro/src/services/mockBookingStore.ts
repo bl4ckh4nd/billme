@@ -292,6 +292,8 @@ export interface MockStoreSeed {
   drafts?: BookingDraft[];
   accounts?: Account[];
   chartFramework?: 'SKR03' | 'SKR04';
+  bankAccountNumber?: string;
+  bankAccountNumberByTransactionId?: Record<string, string>;
 }
 
 const deriveAccountSuggestion = (tx: Transaction, accounts: Account[]): Account | undefined => {
@@ -312,11 +314,13 @@ const buildSeedDraft = (
   index: number,
   accounts: Account[],
   chartFramework: 'SKR03' | 'SKR04',
+  bankAccountNumber?: string,
 ): BookingDraft => {
   const amount = Math.abs(Number(tx.amount) || 0);
   const suggestedAccount = deriveAccountSuggestion(tx, accounts);
   const clearingAccount =
-    accounts.find((account) => /bank|giro|konto/i.test(`${account.name} ${account.keywords?.join(' ') ?? ''}`)) ??
+    (bankAccountNumber ? accounts.find((account) => account.number === bankAccountNumber) : undefined) ??
+    (bankAccountNumber ? undefined : accounts.find((account) => /bank|giro|konto/i.test(`${account.name} ${account.keywords?.join(' ') ?? ''}`))) ??
     accounts.find((account) => account.type === 'Asset') ??
     accounts[0];
   const fallbackText = tx.amount >= 0 ? 'Einnahme' : 'Ausgabe';
@@ -396,7 +400,7 @@ export function hydrateMockStore(seed: MockStoreSeed) {
   if (seed.transactions && seed.transactions.length > 0) {
     const chartFramework = seed.chartFramework ?? 'SKR03';
     const currentAccounts = seed.accounts && seed.accounts.length > 0 ? seed.accounts : [];
-    drafts = seed.transactions.map((tx, idx) => buildSeedDraft(tx, idx, currentAccounts, chartFramework));
+    drafts = seed.transactions.map((tx, idx) => buildSeedDraft(tx, idx, currentAccounts, chartFramework, seed.bankAccountNumber));
     syncAll();
   }
 }

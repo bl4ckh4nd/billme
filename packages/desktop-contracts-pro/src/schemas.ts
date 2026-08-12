@@ -58,12 +58,16 @@ export const invoiceTaxMetaSchema = z.object({
   buyerVatId: z.string().optional(),
   sellerVatId: z.string().optional(),
   defaultVatRate: z.number().min(0).max(100).optional(),
+  destinationVatRate: z.number().min(0).max(99.99).optional(),
   buyerCountryCode: z.string().length(2).optional(),
   sellerCountryCode: z.string().length(2).optional(),
   buyerType: z.enum(['business', 'consumer']).optional(),
   vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
   vatIdValidationAt: z.string().optional(),
   taxRuleConfirmed: z.boolean().optional(),
+  datevSachverhaltLl: z.string().regex(/^[1-9]\d{0,2}$/).optional(),
+  datevEvidenceType: z.string().min(1).optional(),
+  datevEvidenceReference: z.string().min(1).optional(),
 });
 
 export const invoiceTaxSnapshotSchema = z.object({

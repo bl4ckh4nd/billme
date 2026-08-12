@@ -111,6 +111,7 @@ export interface JournalLineEntity {
   netAmount?: number;
   taxAmount?: number;
   grossAmount?: number;
+  datevSachverhaltLl?: string;
   countryCode?: string;
   counterpartyVatId?: string;
   evidenceType?: string;
@@ -1139,7 +1140,7 @@ export const postDraft = (
     entryNumber = getNextEntryNumber(db, tenantId);
     txDrizzle.insert(schema.journalEntries).values({ id: entryId, tenantId, entryNumber, postingDate, documentDate: validated.documentDate ?? null, bookingText: validated.bookingText, reference: validated.reference ?? null, period, fiscalYear, status: 'posted', sourceDraftId: validated.id, sourceType: 'booking_draft', sourceKey, reversedEntryId: null, createdAt }).run();
     postingLines.forEach((line, idx) => {
-      txDrizzle.insert(schema.journalLines).values({ id: line.id, tenantId, entryId, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: round2(line.debitAmount), creditAmount: round2(line.creditAmount), taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
+      txDrizzle.insert(schema.journalLines).values({ id: line.id, tenantId, entryId, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: round2(line.debitAmount), creditAmount: round2(line.creditAmount), taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, datevSachverhaltLl: line.datevSachverhaltLl ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
     });
     for (const line of postingLines) {
       const taxCase = getTaxCaseByKey(db, line.taxCaseKey ?? line.taxCode);
@@ -1209,7 +1210,7 @@ export const reverseJournalEntry = (
     tax_code: schema.journalLines.taxCode, tax_case_key: schema.journalLines.taxCaseKey,
     tax_rate: schema.journalLines.taxRate, net_amount: schema.journalLines.netAmount,
     tax_amount: schema.journalLines.taxAmount, gross_amount: schema.journalLines.grossAmount,
-    country_code: schema.journalLines.countryCode, counterparty_vat_id: schema.journalLines.counterpartyVatId,
+    country_code: schema.journalLines.countryCode, datev_sachverhalt_ll: schema.journalLines.datevSachverhaltLl, counterparty_vat_id: schema.journalLines.counterpartyVatId,
     evidence_type: schema.journalLines.evidenceType, evidence_reference: schema.journalLines.evidenceReference,
     cost_center: schema.journalLines.costCenter, memo: schema.journalLines.memo,
   };
@@ -1218,7 +1219,7 @@ export const reverseJournalEntry = (
     .orderBy(asc(schema.journalLines.lineNo)).all() as Array<{
       id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
       tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
-      gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null;
+    gross_amount: number | null; country_code: string | null; datev_sachverhalt_ll: string | null; counterparty_vat_id: string | null;
       evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
     }>;
   if (!lines.length) throw new Error('Journal entry has no lines');
@@ -1246,11 +1247,12 @@ export const reverseJournalEntry = (
       taxAmount: line.tax_amount === null ? undefined : -Number(line.tax_amount),
       grossAmount: line.gross_amount === null ? undefined : -Number(line.gross_amount),
       countryCode: line.country_code ?? undefined, counterpartyVatId: line.counterparty_vat_id ?? undefined,
+      datevSachverhaltLl: line.datev_sachverhalt_ll ?? undefined,
       evidenceType: line.evidence_type ?? undefined, evidenceReference: line.evidence_reference ?? undefined,
       costCenter: line.cost_center ?? undefined, memo: line.memo ?? undefined,
     }));
     reversalLines.forEach((line, idx) => {
-      txDrizzle.insert(schema.journalLines).values({ id: line.id, tenantId, entryId: reversalEntryId, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: line.debitAmount, creditAmount: line.creditAmount, taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
+      txDrizzle.insert(schema.journalLines).values({ id: line.id, tenantId, entryId: reversalEntryId, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: line.debitAmount, creditAmount: line.creditAmount, taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, datevSachverhaltLl: line.datevSachverhaltLl ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
     });
     const chart = getActiveChart(db, tenantId);
     for (const pair of buildPostingPairs(reversalLines)) {
@@ -1303,14 +1305,14 @@ export const listJournalEntries = (
     id: string; entry_id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
     tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
     gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null;
-    evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
+    datev_sachverhalt_ll: string | null; evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
   };
   const lineRows = rows.length ? drizzle.select({
     id: schema.journalLines.id, entry_id: schema.journalLines.entryId, account_number: schema.journalLines.accountNumber,
     debit_amount: schema.journalLines.debitAmount, credit_amount: schema.journalLines.creditAmount,
     tax_code: schema.journalLines.taxCode, tax_case_key: schema.journalLines.taxCaseKey,
     tax_rate: schema.journalLines.taxRate, net_amount: schema.journalLines.netAmount, tax_amount: schema.journalLines.taxAmount,
-    gross_amount: schema.journalLines.grossAmount, country_code: schema.journalLines.countryCode,
+    gross_amount: schema.journalLines.grossAmount, country_code: schema.journalLines.countryCode, datev_sachverhalt_ll: schema.journalLines.datevSachverhaltLl,
     counterparty_vat_id: schema.journalLines.counterpartyVatId, evidence_type: schema.journalLines.evidenceType,
     evidence_reference: schema.journalLines.evidenceReference, cost_center: schema.journalLines.costCenter,
     memo: schema.journalLines.memo,
@@ -1346,6 +1348,7 @@ export const listJournalEntries = (
       netAmount: line.net_amount ?? undefined,
       taxAmount: line.tax_amount ?? undefined,
       grossAmount: line.gross_amount ?? undefined,
+      datevSachverhaltLl: line.datev_sachverhalt_ll ?? undefined,
       countryCode: line.country_code ?? undefined,
       counterpartyVatId: line.counterparty_vat_id ?? undefined,
       evidenceType: line.evidence_type ?? undefined,
@@ -1409,7 +1412,7 @@ function getJournalEntryById(
     debit_amount: schema.journalLines.debitAmount, credit_amount: schema.journalLines.creditAmount,
     tax_code: schema.journalLines.taxCode, tax_case_key: schema.journalLines.taxCaseKey,
     tax_rate: schema.journalLines.taxRate, net_amount: schema.journalLines.netAmount, tax_amount: schema.journalLines.taxAmount,
-    gross_amount: schema.journalLines.grossAmount, country_code: schema.journalLines.countryCode,
+    gross_amount: schema.journalLines.grossAmount, country_code: schema.journalLines.countryCode, datev_sachverhalt_ll: schema.journalLines.datevSachverhaltLl,
     counterparty_vat_id: schema.journalLines.counterpartyVatId, evidence_type: schema.journalLines.evidenceType,
     evidence_reference: schema.journalLines.evidenceReference, cost_center: schema.journalLines.costCenter,
     memo: schema.journalLines.memo,
@@ -1419,7 +1422,7 @@ function getJournalEntryById(
   )).orderBy(asc(schema.journalLines.lineNo)).all() as Array<{
     id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
     tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
-    gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null;
+      gross_amount: number | null; country_code: string | null; datev_sachverhalt_ll: string | null; counterparty_vat_id: string | null;
     evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
   }>;
 
@@ -1450,6 +1453,7 @@ function getJournalEntryById(
       netAmount: line.net_amount ?? undefined,
       taxAmount: line.tax_amount ?? undefined,
       grossAmount: line.gross_amount ?? undefined,
+      datevSachverhaltLl: line.datev_sachverhalt_ll ?? undefined,
       countryCode: line.country_code ?? undefined,
       counterpartyVatId: line.counterparty_vat_id ?? undefined,
       evidenceType: line.evidence_type ?? undefined,
@@ -1890,36 +1894,48 @@ interface DatevTaxDetails {
  * misleading booking.
  */
 const resolveDatevTaxDetails = (
+  db: Database.Database,
   line: JournalLineEntity,
   taxCaseKey: string | undefined,
 ): DatevTaxDetails => {
   const normalized = normalizeTaxCaseKey(taxCaseKey ?? line.taxCaseKey ?? line.taxCode);
   if (!normalized) return {};
-  if (normalized.startsWith('EU_')) {
+  const taxCase = getTaxCaseByKey(db, normalized);
+  if (!taxCase) throw new Error(`DATEV Steuerfall-Mapping fehlt für ${normalized}.`);
+  const euDestinationCases = new Set(['EU_B2C_OSS', 'DE_TRIANGULAR_25B', 'EU_B2B_SERVICE_RC', 'EU_IGL_GOODS_0', 'EU_IGE_GOODS_RC'] as const);
+  const needsEuDestination = euDestinationCases.has(normalized as typeof euDestinationCases extends Set<infer Key> ? Key : never);
+  const details: DatevTaxDetails = {};
+  if (needsEuDestination) {
     const country = line.countryCode;
     const vatId = line.counterpartyVatId;
-    if (!country || !/^[A-Z]{2}$/.test(country) || !vatId || !/^[A-Z0-9]+$/.test(vatId)) {
-      throw new Error(`DATEV Export blockiert: EU-Land und USt-IdNr. fehlen für ${normalized}.`);
+    if (!country || !/^[A-Z]{2}$/.test(country)) {
+      throw new Error(`DATEV Export blockiert: EU-Land fehlt für ${normalized}.`);
     }
-    if (vatId.length > 13 || (vatId.length >= 2 && /^[A-Z]{2}/.test(vatId) && !vatId.startsWith(country))) {
+    // OSS is a B2C case: the canonical tax case intentionally does not
+    // require a counterparty VAT ID. Other EU cases persist one as evidence.
+    if (taxCase.requiresCounterpartyVatId && (!vatId || !/^[A-Z0-9]+$/.test(vatId))) {
+      throw new Error(`DATEV Export blockiert: EU-USt-IdNr. fehlt für ${normalized}.`);
+    }
+    if (vatId && (vatId.length > 13 || (vatId.length >= 2 && /^[A-Z]{2}/.test(vatId) && !vatId.startsWith(country)))) {
       throw new Error(`DATEV Export blockiert: EU-USt-IdNr. ist ungültig für ${normalized}.`);
     }
-    const combinedVatId = vatId.startsWith(country) ? vatId : `${country}${vatId}`;
+    const combinedVatId = !vatId ? country : vatId.startsWith(country) ? vatId : `${country}${vatId}`;
     if (combinedVatId.length > 15) throw new Error(`DATEV Export blockiert: EU-USt-IdNr. ist zu lang für ${normalized}.`);
     const rate = Number(line.taxRate);
     if (!Number.isFinite(rate) || rate < 0 || rate >= 100 || Math.abs(rate * 100 - Math.round(rate * 100)) > 1e-9) {
       throw new Error(`DATEV Export blockiert: EU-Steuersatz fehlt oder ist ungültig für ${normalized}.`);
     }
-    return { euLandUstId: combinedVatId, euSteuersatz: rate };
+    details.euLandUstId = combinedVatId;
+    details.euSteuersatz = rate;
   }
   if (['DE_RC_13B_DOMESTIC', 'EU_B2B_SERVICE_RC', 'EU_IGE_GOODS_RC', 'NON_EU_SERVICE_RC'].includes(normalized)) {
-    const fact = line.evidenceReference;
+    const fact = line.datevSachverhaltLl ?? line.evidenceReference;
     if (!fact || !/^[1-9]\d{0,2}$/.test(fact)) {
       throw new Error(`DATEV Export blockiert: Sachverhalt L+L (§13b) fehlt für ${normalized}.`);
     }
-    return { sachverhaltLl: fact };
+    details.sachverhaltLl = fact;
   }
-  return {};
+  return details;
 };
 
 export const buildDatevRows = (
@@ -2018,7 +2034,7 @@ export const buildDatevRows = (
         ?? persistedBuKey?.padStart(4, '0');
       const debitTaxCase = normalizeTaxCaseKey(debit.taxCaseKey ?? debit.taxCode);
       const taxLine = debitTaxCase === normalizeTaxCaseKey(taxCaseKey) ? debit : credit;
-      const taxDetails = resolveDatevTaxDetails(taxLine, taxCaseKey);
+      const taxDetails = resolveDatevTaxDetails(db, taxLine, taxCaseKey);
       return {
         date: entry.documentDate ?? entry.postingDate,
         belegfeld1: entry.reference ?? String(entry.entryNumber),

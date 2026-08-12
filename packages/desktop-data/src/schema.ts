@@ -592,6 +592,7 @@ export const journalLines = sqliteTable(
     netAmount: real('net_amount'),
     taxAmount: real('tax_amount'),
     grossAmount: real('gross_amount'),
+    datevSachverhaltLl: text('datev_sachverhalt_ll'),
     countryCode: text('country_code'),
     counterpartyVatId: text('counterparty_vat_id'),
     evidenceType: text('evidence_type'),

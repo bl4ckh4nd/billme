@@ -204,6 +204,7 @@ export const runMigrations = (db: Database.Database): void => {
   tryAddColumn(db, 'journal_lines', 'net_amount', 'REAL');
   tryAddColumn(db, 'journal_lines', 'tax_amount', 'REAL');
   tryAddColumn(db, 'journal_lines', 'gross_amount', 'REAL');
+  tryAddColumn(db, 'journal_lines', 'datev_sachverhalt_ll', 'TEXT');
   tryAddColumn(db, 'journal_lines', 'country_code', 'TEXT');
   tryAddColumn(db, 'journal_lines', 'counterparty_vat_id', 'TEXT');
   tryAddColumn(db, 'journal_lines', 'evidence_type', 'TEXT');

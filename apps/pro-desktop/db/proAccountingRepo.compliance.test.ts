@@ -66,10 +66,12 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     db.exec(`CREATE TABLE datev_exports (
       id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, file_path TEXT NOT NULL,
       record_count INTEGER NOT NULL, from_date TEXT, to_date TEXT, created_at TEXT NOT NULL
-    )`);
+    ); CREATE TABLE journal_lines (id TEXT PRIMARY KEY);`);
     const migrationPath = path.resolve(process.cwd(), 'drizzle/0002_datev_manifest.sql');
     const migration = fs.readFileSync(fs.existsSync(migrationPath) ? migrationPath : path.resolve(process.cwd(), 'apps/pro-desktop/drizzle/0002_datev_manifest.sql'), 'utf8');
     for (const statement of migration.split('--> statement-breakpoint')) db.exec(statement);
+    db.exec(fs.readFileSync(path.resolve(process.cwd(), 'drizzle/0003_datev_evidence.sql'), 'utf8'));
+    expect((db.prepare('PRAGMA table_info(journal_lines)').all() as Array<{ name: string }>).map((column) => column.name)).toContain('datev_sachverhalt_ll');
     db.prepare(`INSERT INTO datev_exports (id, tenant_id, file_path, record_count, created_at) VALUES ('fresh', 'default', '/tmp/fresh.csv', 1, '2026-03-01T00:00:00.000Z')`).run();
     expect(() => db.prepare("UPDATE datev_exports SET file_path = '/tmp/tampered.csv' WHERE id = 'fresh'").run()).toThrow(/immutable/i);
     expect(() => db.prepare("DELETE FROM datev_exports WHERE id = 'fresh'").run()).toThrow(/immutable/i);

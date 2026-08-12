@@ -358,6 +358,7 @@ CREATE TABLE IF NOT EXISTS journal_lines (
   net_amount REAL,
   tax_amount REAL,
   gross_amount REAL,
+  datev_sachverhalt_ll TEXT,
   country_code TEXT,
   counterparty_vat_id TEXT,
   evidence_type TEXT,

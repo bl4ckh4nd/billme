@@ -18,7 +18,7 @@ import {
   upsertIncomingInvoice,
   upsertVendor,
 } from './oposRepo';
-import { getVatSummary } from './proAccountingRepo';
+import { buildDatevRows, getVatSummary } from './proAccountingRepo';
 import { finalizeOutgoingInvoice, upsertInvoice, getInvoice } from './invoicesRepo';
 
 const scope = createProTenantScope('default');
@@ -84,10 +84,29 @@ describe('OPOS accounting', () => {
     const insert = db.prepare(`INSERT INTO invoices (id, client_id, number, client, client_email, date, due_date, amount, status, tax_mode, tax_snapshot_json, created_at, updated_at) VALUES (?, ?, ?, 'Acme', '', '2026-08-01', '2026-08-31', 100, 'open', ?, ?, datetime('now'), datetime('now'))`);
     insert.run('inv-ku', 'client-ku', 'RE-KU', 'small_business_19_ustg', JSON.stringify({ netAmount: 100, vatAmount: 0, grossAmount: 100, einvoiceCategoryCode: 'E' }));
     insert.run('inv-rc', 'client-rc', 'RE-RC', 'reverse_charge_13b', JSON.stringify({ netAmount: 100, vatAmount: 0, grossAmount: 100, einvoiceCategoryCode: 'AE' }));
+    db.prepare("UPDATE invoices SET tax_meta_json = ? WHERE id = 'inv-ku'").run(JSON.stringify({ datevEvidenceType: 'exemption', datevEvidenceReference: '§19 UStG' }));
+    db.prepare("UPDATE invoices SET tax_meta_json = ? WHERE id = 'inv-rc'").run(JSON.stringify({ datevEvidenceType: 'reverse_charge', datevEvidenceReference: '13' }));
     postOutgoingInvoice(db, scope, 'inv-ku');
     postOutgoingInvoice(db, scope, 'inv-rc');
     const rows = db.prepare("SELECT i.id, jl.tax_case_key FROM invoices i JOIN journal_entries je ON je.id = i.accounting_journal_entry_id JOIN journal_lines jl ON jl.entry_id = je.id WHERE i.id IN ('inv-ku', 'inv-rc') AND jl.account_number = '8400' ORDER BY i.id").all();
     expect(rows).toEqual([{ id: 'inv-ku', tax_case_key: 'DE_KU19' }, { id: 'inv-rc', tax_case_key: 'DE_RC_13B_DOMESTIC' }]);
+    db.close();
+  });
+
+  it('carries persisted EU evidence from an invoice into DATEV fields 40, 41 and 43', () => {
+    const db = createDb();
+    db.prepare(`INSERT INTO invoices (id, client_id, number, client, client_email, date, due_date, amount, status, tax_mode, tax_meta_json, tax_snapshot_json, created_at, updated_at) VALUES ('inv-eu-rc', 'client-eu', 'RE-EU', 'EU GmbH', '', '2026-08-01', '2026-08-31', 100, 'open', 'intra_eu_service_reverse_charge', ?, ?, datetime('now'), datetime('now'))`).run(
+      JSON.stringify({ buyerCountryCode: 'AT', buyerVatId: 'ATU12345678', destinationVatRate: 19, taxRuleConfirmed: true, datevEvidenceType: 'reverse_charge', datevEvidenceReference: 'invoice-proof-1', datevSachverhaltLl: '13' }),
+      JSON.stringify({ netAmount: 100, vatAmount: 0, grossAmount: 100, einvoiceCategoryCode: 'AE' }),
+    );
+    db.prepare(`INSERT INTO invoice_items (invoice_id, position, description, quantity, price, total, tax_rate) VALUES ('inv-eu-rc', 0, 'EU service', 1, 100, 100, 0)`);
+    expect(postOutgoingInvoice(db, scope, 'inv-eu-rc').status).toBe('ready');
+    expect(db.prepare("SELECT country_code, counterparty_vat_id, evidence_type, evidence_reference, datev_sachverhalt_ll FROM journal_lines WHERE entry_id = (SELECT accounting_journal_entry_id FROM invoices WHERE id = 'inv-eu-rc') AND tax_case_key = 'EU_B2B_SERVICE_RC'").get()).toEqual({ country_code: 'AT', counterparty_vat_id: 'ATU12345678', evidence_type: 'reverse_charge', evidence_reference: 'invoice-proof-1', datev_sachverhalt_ll: '13' });
+    expect(db.prepare("SELECT country_code, counterparty_vat_id, evidence_type, evidence_reference FROM vat_evidence WHERE entry_id = (SELECT accounting_journal_entry_id FROM invoices WHERE id = 'inv-eu-rc')").get()).toEqual({ country_code: 'AT', counterparty_vat_id: 'ATU12345678', evidence_type: 'reverse_charge', evidence_reference: 'invoice-proof-1' });
+    const rows = buildDatevRows(db, { from: '2026-08-01', to: '2026-08-31' }, scope);
+    expect(rows).toEqual(expect.arrayContaining([expect.objectContaining({ euLandUstId: 'ATU12345678', euSteuersatz: 19, sachverhaltLl: '13', buSchluessel: '0094' })]));
+    reverseDocumentAccounting(db, scope, { documentType: 'outgoing_invoice', documentId: 'inv-eu-rc', reason: 'Korrektur', postingDate: '2026-08-02' });
+    expect(db.prepare("SELECT datev_sachverhalt_ll, evidence_reference FROM journal_lines WHERE entry_id = (SELECT reversed_entry_id FROM journal_entries WHERE id = (SELECT accounting_journal_entry_id FROM invoices WHERE id = 'inv-eu-rc')) AND tax_case_key = 'EU_B2B_SERVICE_RC'").get()).toEqual({ datev_sachverhalt_ll: '13', evidence_reference: 'invoice-proof-1' });
     db.close();
   });
 
@@ -129,6 +148,9 @@ describe('OPOS accounting', () => {
     const rows7 = db.prepare("SELECT account_number FROM journal_lines WHERE entry_id = (SELECT accounting_journal_entry_id FROM incoming_invoices WHERE id = 'in-7') ORDER BY line_no").all();
     expect(rows7.map((row) => (row as { account_number: string }).account_number)).toEqual(['4900', '1571', '1600']);
     expect(db.prepare("SELECT tax_case_key, datev_bu_key FROM journal_posting_pairs WHERE entry_id = (SELECT accounting_journal_entry_id FROM incoming_invoices WHERE id = 'in-7') AND tax_case_key IS NOT NULL").all()).toEqual([{ tax_case_key: 'DE_STD_7', datev_bu_key: '2' }, { tax_case_key: 'DE_STD_7', datev_bu_key: '2' }]);
+    const incomingRc = upsertIncomingInvoice(db, scope, { id: 'in-non-eu-rc', tenantId: 'default', vendorId: vendor.id, number: 'ER-RC', invoiceDate: '2026-08-04', dueDate: '2026-08-31', netAmount: 100, taxAmount: 0, grossAmount: 100, taxRate: 0, taxCaseKey: 'NON_EU_SERVICE_RC', status: 'draft', accountingStatus: 'unposted', lines: [{ id: 'line-non-eu-rc', incomingInvoiceId: 'in-non-eu-rc', position: 0, description: 'Drittland service', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 0, taxAmount: 0, grossAmount: 100 }], createdAt: '', updatedAt: '' });
+    expect(postIncomingInvoice(db, scope, incomingRc.id).status).toBe('unresolved');
+    expect((db.prepare("SELECT COUNT(*) AS c FROM journal_entries WHERE source_key = 'incoming-invoice:in-non-eu-rc'").get() as { c: number }).c).toBe(0);
     db.close();
   });
 

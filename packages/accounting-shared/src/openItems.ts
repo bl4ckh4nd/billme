@@ -73,6 +73,9 @@ export interface AccountingSnapshot {
     taxRate?: number;
     taxAmount?: number;
     grossAmount?: number;
+    datevSachverhaltLl?: string;
+    countryCode?: string;
+    counterpartyVatId?: string;
     evidenceType?: string;
     evidenceReference?: string;
     memo?: string;

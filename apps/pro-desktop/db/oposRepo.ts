@@ -20,7 +20,7 @@ import type { TenantScope } from '@billme/server-core';
 import { appendAuditLog } from './audit';
 import { getTenantId } from '../tenantScope';
 import { getAccountingPolicy, reverseJournalEntry } from './proAccountingRepo';
-import { resolveDatevBuKeyForTaxCase, resolveTaxAccountsForCase } from './taxCasesRepo';
+import { getTaxCaseByKey, resolveDatevBuKeyForTaxCase, resolveTaxAccountsForCase } from './taxCasesRepo';
 
 export type AccountingRole = AccountingAccountMapping['role'];
 export type AccountingChart = 'SKR03' | 'SKR04';
@@ -35,6 +35,15 @@ type InvoiceRow = {
 
 type RawLine = {
   id: number; description: string; quantity: number; price: number; total: number; tax_rate: number | null; line_meta_json?: string | null; article_id?: string | null; category?: string | null; unit?: string | null; discount_percent?: number | null;
+};
+
+type DatevTaxEvidence = {
+  buyerCountryCode?: string;
+  buyerVatId?: string;
+  destinationVatRate?: number;
+  datevSachverhaltLl?: string;
+  datevEvidenceType?: string;
+  datevEvidenceReference?: string;
 };
 
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -149,7 +158,7 @@ const insertJournal = (
   if (periodStatus === 'soft_locked' && (!(options.softLockOverride) || !(options.overrideReason ?? '').trim())) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED');
   const chartHasRows = Number((db.prepare('SELECT COUNT(*) AS c FROM ledger_accounts WHERE chart = ?').get(options.chart) as { c: number }).c) > 0;
   if (!chartHasRows) throw new Error('CHART_UNAVAILABLE');
-  const entryLines = lines.map((line, index) => ({ ...line, id: randomUUID(), index }));
+  const entryLines = lines.map((line, index) => ({ ...line, id: randomUUID(), index })) as Array<AccountingSnapshot['lines'][number] & { id: string; index: number; countryCode?: string; counterpartyVatId?: string; datevSachverhaltLl?: string }>;
   if (!entryLines.length) throw new Error('EMPTY_ENTRY');
   for (const line of entryLines) {
     const debit = cents(line.debitAmount); const credit = cents(line.creditAmount);
@@ -168,10 +177,10 @@ const insertJournal = (
     periodKey, fiscalYear(postingDate), sourceType, sourceKey, timestamp,
   );
   const insertLine = db.prepare(`INSERT INTO journal_lines
-    (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount, tax_code, tax_case_key, tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id, evidence_type, evidence_reference, cost_center, memo)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount, tax_code, tax_case_key, tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id, evidence_type, evidence_reference, datev_sachverhalt_ll, cost_center, memo)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   for (const line of entryLines) {
-    insertLine.run(line.id, tenantId, id, line.index + 1, line.accountNumber, amount(line.debitAmount), amount(line.creditAmount), null, line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, null, null, line.evidenceType ?? null, line.evidenceReference ?? null, null, line.memo ?? null);
+    insertLine.run(line.id, tenantId, id, line.index + 1, line.accountNumber, amount(line.debitAmount), amount(line.creditAmount), null, line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, line.evidenceType ?? null, line.evidenceReference ?? null, line.datevSachverhaltLl ?? null, null, line.memo ?? null);
   }
   const pairTaxCase = (line: AccountingSnapshot['lines'][number]): string | undefined => line.taxCaseKey
     ?? (line.memo?.startsWith('Vorsteuer ') ? line.memo.slice('Vorsteuer '.length) : undefined)
@@ -191,8 +200,8 @@ const insertJournal = (
       creditLine.remaining = amount(creditLine.remaining - pairAmount);
     }
   }
-  for (const line of entryLines.filter((candidate) => cents(candidate.taxAmount ?? 0) > 0)) {
-    db.prepare('INSERT INTO vat_evidence (id, tenant_id, draft_id, entry_id, line_id, tax_case_key, evidence_type, evidence_reference, country_code, counterparty_vat_id, captured_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?)').run(randomUUID(), tenantId, sourceKey, id, line.id, line.taxCaseKey ?? 'standard_vat', sourceKey, timestamp);
+  for (const line of entryLines.filter((candidate) => cents(candidate.taxAmount ?? 0) > 0 || Boolean(candidate.taxCaseKey && (candidate.countryCode || candidate.counterpartyVatId || candidate.evidenceType || candidate.evidenceReference)))) {
+    db.prepare('INSERT INTO vat_evidence (id, tenant_id, draft_id, entry_id, line_id, tax_case_key, evidence_type, evidence_reference, country_code, counterparty_vat_id, captured_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), tenantId, sourceKey, id, line.id, line.taxCaseKey ?? 'standard_vat', line.evidenceType ?? null, line.evidenceReference ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, timestamp);
   }
   appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: id, action: 'post', reason: options.overrideReason?.trim() || 'OPOS posting', before: null, after: { sourceType, sourceKey, entryNumber, postingDate }, actor: 'pro' });
   return id;
@@ -205,6 +214,7 @@ const outgoingSourceVersion = (row: InvoiceRow, lines: RawLine[]): string => sha
 
 const deriveTaxSnapshot = (db: Database.Database, row: InvoiceRow, lines: RawLine[], chart: AccountingChart, vatMethod: VatAccountingMethod): { snapshot?: AccountingSnapshot; issues: AccountingPostingPreview['issues'] } => {
   const explicit = json<{ netAmount?: number; vatAmount?: number; grossAmount?: number; vatBreakdown?: Array<{ rate: number; netAmount: number; vatAmount: number }>; einvoiceCategoryCode?: string }>(row.tax_snapshot_json);
+  const taxEvidence = json<DatevTaxEvidence>(row.tax_meta_json) ?? {};
   let net = Number(explicit?.netAmount);
   let tax = Number(explicit?.vatAmount);
   let gross = Number(explicit?.grossAmount);
@@ -240,7 +250,36 @@ const deriveTaxSnapshot = (db: Database.Database, row: InvoiceRow, lines: RawLin
   const linesOut: AccountingSnapshot['lines'] = [{ accountNumber: mapping.accounts_receivable, debitAmount: gross, creditAmount: 0, memo: `Debitor ${row.number}` }];
   for (const entry of breakdown) {
     const taxCaseKey = taxCaseForRate(entry.rate, row.tax_mode, explicit?.einvoiceCategoryCode);
-    const basisMetadata = vatMethod === 'soll' || entry.vatAmount <= 0 ? { taxCaseKey, netAmount: entry.netAmount, taxRate: entry.rate, taxAmount: entry.vatAmount, grossAmount: amount(entry.netAmount + entry.vatAmount) } : {};
+    const isEuDestinationCase = ['EU_B2C_OSS', 'DE_TRIANGULAR_25B', 'EU_B2B_SERVICE_RC', 'EU_IGL_GOODS_0', 'EU_IGE_GOODS_RC'].includes(taxCaseKey);
+    const destinationRate = isEuDestinationCase ? Number(taxEvidence.destinationVatRate) : entry.rate;
+    const taxCase = getTaxCaseByKey(db, taxCaseKey);
+    const needsEvidence = taxCase?.requiresEvidence || taxCase?.requiresCounterpartyVatId || taxCase?.requiresCountry;
+    const evidenceReference = taxEvidence.datevEvidenceReference ?? taxEvidence.datevSachverhaltLl;
+    if (needsEvidence && taxCase?.requiresCountry && (!taxEvidence.buyerCountryCode || !/^[A-Z]{2}$/.test(taxEvidence.buyerCountryCode))) {
+      return { issues: [{ code: 'MISSING_TAX_COUNTRY', message: `Ländercode fehlt für Steuerfall ${taxCaseKey}.`, blocking: true }] };
+    }
+    if (needsEvidence && taxCase?.requiresCounterpartyVatId && (!taxEvidence.buyerVatId || !/^[A-Z0-9]+$/i.test(taxEvidence.buyerVatId))) {
+      return { issues: [{ code: 'MISSING_COUNTERPARTY_VAT_ID', message: `USt-IdNr. fehlt für Steuerfall ${taxCaseKey}.`, blocking: true }] };
+    }
+    if (needsEvidence && taxCase?.requiresEvidence && (!taxEvidence.datevEvidenceType || !evidenceReference)) {
+      return { issues: [{ code: 'MISSING_TAX_EVIDENCE', message: `Steuernachweis fehlt für Steuerfall ${taxCaseKey}.`, blocking: true }] };
+    }
+    if (isEuDestinationCase && (!Number.isFinite(destinationRate) || destinationRate < 0 || destinationRate >= 100)) {
+      return { issues: [{ code: 'MISSING_DESTINATION_VAT_RATE', message: `EU-Bestimmungsland-Steuersatz fehlt für Steuerfall ${taxCaseKey}.`, blocking: true }] };
+    }
+    const requiresDatevLl = ['DE_RC_13B_DOMESTIC', 'EU_B2B_SERVICE_RC', 'EU_IGE_GOODS_RC', 'NON_EU_SERVICE_RC'].includes(taxCaseKey);
+    const datevSachverhaltLl = taxEvidence.datevSachverhaltLl ?? (taxEvidence.datevEvidenceReference && /^[1-9]\d{0,2}$/.test(taxEvidence.datevEvidenceReference) ? taxEvidence.datevEvidenceReference : undefined);
+    if (requiresDatevLl && !datevSachverhaltLl) {
+      return { issues: [{ code: 'MISSING_DATEV_SACHVERHALT', message: `DATEV Sachverhalt L+L fehlt für Steuerfall ${taxCaseKey}.`, blocking: true }] };
+    }
+    const evidenceMetadata = {
+      countryCode: taxEvidence.buyerCountryCode?.trim().toUpperCase(),
+      counterpartyVatId: taxEvidence.buyerVatId?.trim().toUpperCase(),
+      evidenceType: taxEvidence.datevEvidenceType,
+      evidenceReference,
+      datevSachverhaltLl,
+    };
+    const basisMetadata = vatMethod === 'soll' || entry.vatAmount <= 0 ? { taxCaseKey, netAmount: entry.netAmount, taxRate: destinationRate, taxAmount: entry.vatAmount, grossAmount: amount(entry.netAmount + entry.vatAmount), ...evidenceMetadata } : {};
     linesOut.push({ accountNumber: mapping.revenue, debitAmount: 0, creditAmount: entry.netAmount, memo: vatMethod === 'ist' ? `UStBasis ${taxCaseKey}` : undefined, ...basisMetadata });
     if (entry.vatAmount > 0) {
       const fallbackTaxAccount = vatMethod === 'ist' ? mapping.output_vat_deferred : mapping.output_vat;
@@ -411,12 +450,34 @@ export const previewIncomingInvoice = (db: Database.Database, scope: TenantScope
   const computedNet = amount(invoice.lines.reduce((sum, line) => sum + line.netAmount, 0));
   const computedTax = amount(invoice.lines.reduce((sum, line) => sum + line.taxAmount, 0));
   if (invoice.lines.length && (Math.abs(computedNet - invoice.netAmount) > 0.01 || Math.abs(computedTax - invoice.taxAmount) > 0.01)) issues.push({ code: 'INCOMING_LINES_TOTAL_MISMATCH', message: 'Zeilensummen stimmen nicht mit dem Beleg überein.', blocking: true });
+  // Incoming invoices currently have no persisted tax-evidence seam. Resolve
+  // the requirement from the canonical tax-case definitions across the invoice
+  // and its lines, then refuse to post before creating an unexportable journal.
+  const incomingTaxCaseKeys = new Set<string>();
+  if (invoice.taxCaseKey) incomingTaxCaseKeys.add(invoice.taxCaseKey);
+  for (const line of invoice.lines) {
+    const lineTaxCase = invoice.taxCaseKey ?? taxCaseForRate(line.taxRate);
+    if (lineTaxCase) incomingTaxCaseKeys.add(lineTaxCase);
+  }
+  const incomingMissingDatevEvidence = [...incomingTaxCaseKeys].some((taxCaseKey) => {
+    const definition = getTaxCaseByKey(db, taxCaseKey);
+    return Boolean(definition && (definition.requiresCountry || definition.requiresCounterpartyVatId || definition.requiresEvidence));
+  });
+  if (incomingMissingDatevEvidence) {
+    issues.push({ code: 'INCOMING_DATEV_EVIDENCE_REQUIRED', message: 'Dieser Steuerfall benötigt persistierte DATEV-Steuer- und Nachweisdaten vor der Buchung.', blocking: true });
+  }
   const lines: AccountingSnapshot['lines'] = [];
   const inputVatByCase = new Map<string, number>();
   for (const line of invoice.lines) {
     const accountNumber = line.assetAccountNumber || line.accountNumber || mappings.expense;
     if (!accountExists(db, policy.activeChart, accountNumber)) issues.push({ code: 'UNKNOWN_ACCOUNT', message: `Konto ${accountNumber} fehlt im ${policy.activeChart}.`, blocking: true });
-    const taxCaseKey = line.taxAmount > 0 ? (invoice.taxCaseKey ?? taxCaseForRate(line.taxRate)) : undefined;
+    const candidateTaxCase = invoice.taxCaseKey ?? taxCaseForRate(line.taxRate);
+    const definition = getTaxCaseByKey(db, candidateTaxCase);
+    const carriesDatevCase = Boolean(definition && (definition.mechanism === 'reverse_charge' || definition.requiresCountry || definition.requiresEvidence));
+    // Preserve the tax case even when the stated VAT is zero (notably
+    // NON_EU_SERVICE_RC); the evidence guard above still prevents posting until
+    // the incoming document model can carry the required facts.
+    const taxCaseKey = line.taxAmount > 0 || carriesDatevCase ? candidateTaxCase : undefined;
     lines.push({ accountNumber, debitAmount: line.netAmount, creditAmount: 0, taxCaseKey, netAmount: line.taxAmount > 0 ? line.netAmount : undefined, taxRate: line.taxAmount > 0 ? line.taxRate : undefined, taxAmount: line.taxAmount > 0 ? line.taxAmount : undefined, grossAmount: line.taxAmount > 0 ? line.grossAmount : undefined, memo: line.description });
     if (taxCaseKey) inputVatByCase.set(taxCaseKey, amount((inputVatByCase.get(taxCaseKey) ?? 0) + line.taxAmount));
   }

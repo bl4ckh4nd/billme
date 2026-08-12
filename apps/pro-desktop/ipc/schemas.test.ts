@@ -27,6 +27,7 @@ import {
   eurExportPdfResultSchema,
   templateSchema,
   templateKindSchema,
+  invoiceTaxMetaSchema,
 } from './schemas';
 import { ipcRoutes } from './contract';
 
@@ -64,6 +65,13 @@ describe('Pro IPC route schemas', () => {
 
   it('accepts the Ist-USt deferred output VAT mapping role', () => {
     expect(ipcRoutes['pro:upsertAccountingAccountMapping'].args.parse({ chart: 'SKR03', role: 'output_vat_deferred', accountNumber: '1780' })).toMatchObject({ role: 'output_vat_deferred', accountNumber: '1780' });
+  });
+
+  it('preserves DATEV EU evidence fields at the IPC contract boundary', () => {
+    expect(invoiceTaxMetaSchema.parse({
+      buyerCountryCode: 'AT', buyerVatId: 'ATU12345678', destinationVatRate: 19,
+      datevSachverhaltLl: '13', datevEvidenceType: 'reverse_charge', datevEvidenceReference: '13',
+    })).toMatchObject({ destinationVatRate: 19, datevSachverhaltLl: '13', datevEvidenceReference: '13' });
   });
 
   it('requires an audited reason for document soft-lock overrides', () => {

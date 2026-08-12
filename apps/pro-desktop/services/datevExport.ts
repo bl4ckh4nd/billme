@@ -205,7 +205,7 @@ const buildDataRow = (row: DatevBuchungsstapelRow): string => {
   ];
   // DATEV field numbers are one-based; the CSV array is zero-based.
   fields[39] = row.euLandUstId === undefined ? '' : quote(row.euLandUstId);
-  fields[40] = row.euSteuersatz === undefined ? '' : row.euSteuersatz.toFixed(2).replace('.', ',');
+  fields[40] = row.euSteuersatz === undefined ? '' : row.euSteuersatz.toFixed(2).padStart(5, '0').replace('.', ',');
   fields[42] = row.sachverhaltLl ?? '';
   return fields.join(';');
 };

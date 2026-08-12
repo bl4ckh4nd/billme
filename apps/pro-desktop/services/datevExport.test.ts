@@ -107,6 +107,29 @@ describe('datevExport', () => {
     }
   });
 
+  it('formats a one-digit EU rate with the required two integer digits and allows OSS without a VAT ID', () => {
+    const buf = buildDatevBuchungsstapelCsv([{
+      date: '2026-03-03', belegfeld1: 'OSS-1', buchungstext: 'OSS', konto: '8400', gegenkonto: '1200',
+      euLandUstId: 'FR', euSteuersatz: 7, umsatz: 1,
+    }], options);
+    const row = new TextDecoder('windows-1252').decode(buf).split('\r\n')[2]!.split(';');
+    expect(row[39]).toBe('"FR"');
+    expect(row[40]).toBe('07,00');
+    expect(row[42]).toBe('');
+  });
+
+  it('keeps triangular EU evidence with BU 42 in the same official columns', () => {
+    const buf = buildDatevBuchungsstapelCsv([{
+      date: '2026-03-03', belegfeld1: 'TRI-1', buchungstext: 'Dreieck', konto: '8400', gegenkonto: '1200',
+      buSchluessel: '0042', euLandUstId: 'NL123456789B01', euSteuersatz: 21, umsatz: 1,
+    }], options);
+    const row = new TextDecoder('windows-1252').decode(buf).split('\r\n')[2]!.split(';');
+    expect(row[8]).toBe('"0042"');
+    expect(row[39]).toBe('"NL123456789B01"');
+    expect(row[40]).toBe('21,00');
+    expect(row[42]).toBe('');
+  });
+
   it('rejects a document date outside the declared fiscal year', () => {
     expect(() => buildDatevBuchungsstapelCsv([{
       date: '2025-12-31', belegfeld1: '1001', buchungstext: 'boundary', konto: '1200', gegenkonto: '8400', umsatz: 1,

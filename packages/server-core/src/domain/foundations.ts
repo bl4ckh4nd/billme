@@ -126,6 +126,8 @@ export const invoiceTaxMetaSchema = z.object({
   sellerVatId: z.string().optional(),
   /** Optional document-level rate. Position rates remain explicit exceptions. */
   defaultVatRate: z.number().min(0).max(100).optional(),
+  /** Destination-country rate for DATEV EU booking-batch field #41. */
+  destinationVatRate: z.number().min(0).max(99.99).optional(),
   buyerCountryCode: z.string().length(2).optional(),
   sellerCountryCode: z.string().length(2).optional(),
   buyerType: z.enum(['business', 'consumer']).optional(),
@@ -133,6 +135,10 @@ export const invoiceTaxMetaSchema = z.object({
   vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
   vatIdValidationAt: isoDateTimeSchema.optional(),
   taxRuleConfirmed: z.boolean().optional(),
+  /** Persisted DATEV evidence for EU/§13b booking-batch fields. */
+  datevSachverhaltLl: z.string().regex(/^[1-9]\d{0,2}$/).optional(),
+  datevEvidenceType: z.string().min(1).optional(),
+  datevEvidenceReference: z.string().min(1).optional(),
 });
 export type InvoiceTaxMeta = z.infer<typeof invoiceTaxMetaSchema>;
 

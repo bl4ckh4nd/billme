@@ -38,6 +38,11 @@ interface FieldErrors {
   client?: string;
   buyerVatId?: string;
   taxRule?: string;
+  destinationVatRate?: string;
+  taxCountry?: string;
+  datevEvidenceType?: string;
+  datevEvidenceReference?: string;
+  datevSachverhaltLl?: string;
   items: Record<number, string>;
 }
 
@@ -152,12 +157,20 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   }, [formData.projectId, projects]);
   const selectedClientLabel = clients.find((client) => client.id === selectedClientId)?.company ?? formData.client;
   const resolvedTaxMode = resolveInvoiceTaxMode(formData.taxMode, effectiveSettings);
+  const datevTaxMeta = formData.taxMeta as (typeof formData.taxMeta & { destinationVatRate?: number; datevEvidenceType?: string; datevEvidenceReference?: string; datevSachverhaltLl?: string }) | undefined;
+  // Keep these flags aligned with the canonical DATEV tax-case definitions
+  // used by the posting seam.  UI mode names are the renderer contract, while
+  // the backend resolves them to the corresponding tax-case key.
+  const requiresTaxCountry = ['intra_eu_supply_6a', 'intra_eu_service_reverse_charge', 'export_third_country', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
+  const requiresDestinationRate = ['intra_eu_supply_6a', 'intra_eu_service_reverse_charge'].includes(resolvedTaxMode);
+  const requiresDatevEvidence = ['small_business_19_ustg', 'reverse_charge_13b', 'intra_eu_supply_6a', 'intra_eu_service_reverse_charge', 'export_third_country', 'vat_exempt_4_ustg', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
+  const requiresDatevSachverhaltLl = ['reverse_charge_13b', 'intra_eu_service_reverse_charge', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
   const requiresBuyerVatId = getInvoiceTaxModeDefinition(resolvedTaxMode).requiresBuyerVatId;
   const sellerCountryCode = effectiveSettings.legal.countryCode ?? 'DE';
   const buyerCountryCode = normalizeCountry(
-    formData.billingAddressJson && typeof formData.billingAddressJson === 'object'
+    formData.taxMeta?.buyerCountryCode ?? (formData.billingAddressJson && typeof formData.billingAddressJson === 'object'
       ? (formData.billingAddressJson as { country?: string }).country
-      : undefined,
+      : undefined),
   );
   const validateBuyerVatId = useCallback(async () => {
     const vatNumber = formData.taxMeta?.buyerVatId?.trim();
@@ -272,9 +285,18 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     if (requiresBuyerVatId && formData.taxMeta?.vatIdValidation === 'invalid') {
       errors.buyerVatId = 'Die Käufer-USt-IdNr. wurde als ungültig gemeldet.';
     }
+    if (requiresTaxCountry && !/^[A-Z]{2}$/.test(datevTaxMeta?.buyerCountryCode ?? buyerCountryCode)) {
+      errors.taxCountry = 'Ländercode des Leistungs-/Bestimmungslandes ist erforderlich.';
+    }
+    if (requiresDestinationRate && (!Number.isFinite(datevTaxMeta?.destinationVatRate) || Number(datevTaxMeta?.destinationVatRate) < 0 || Number(datevTaxMeta?.destinationVatRate) >= 100)) {
+      errors.destinationVatRate = 'EU-Steuersatz im Bestimmungsland ist erforderlich.';
+    }
+    if (requiresDatevEvidence && !datevTaxMeta?.datevEvidenceType?.trim()) errors.datevEvidenceType = 'Nachweistyp ist erforderlich.';
+    if (requiresDatevEvidence && !datevTaxMeta?.datevEvidenceReference?.trim()) errors.datevEvidenceReference = 'Nachweisreferenz ist erforderlich.';
+    if (requiresDatevSachverhaltLl && !/^[1-9]\d{0,2}$/.test(datevTaxMeta?.datevSachverhaltLl ?? '')) errors.datevSachverhaltLl = 'DATEV-Sachverhalt L+L ist erforderlich.';
     setFieldErrors(errors);
     return errors;
-  }, [buyerCountryCode, effectiveSettings, formData, requiresBuyerVatId, sellerCountryCode]);
+  }, [buyerCountryCode, datevTaxMeta, effectiveSettings, formData, requiresBuyerVatId, requiresDatevEvidence, requiresDatevSachverhaltLl, requiresDestinationRate, requiresTaxCountry, sellerCountryCode]);
 
   const focusValidationError = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -286,7 +308,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
 
   const handleSave = useCallback(() => {
     const errors = validate();
-    if (errors.number || errors.date || errors.client || errors.buyerVatId || errors.taxRule || Object.keys(errors.items).length > 0) {
+    if (errors.number || errors.date || errors.client || errors.buyerVatId || errors.taxRule || errors.taxCountry || errors.destinationVatRate || errors.datevEvidenceType || errors.datevEvidenceReference || errors.datevSachverhaltLl || Object.keys(errors.items).length > 0) {
       setSaveError('Bitte korrigiere die markierten Pflichtfelder.');
       setView('edit');
       focusValidationError();
@@ -364,6 +386,10 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     buyerCountryCode,
     sellerCountryCode,
     requiresBuyerVatId,
+    requiresTaxCountry,
+    requiresDestinationVatRate: requiresDestinationRate,
+    requiresDatevEvidence,
+    requiresDatevSachverhaltLl,
     vatValidationPending,
     onValidateBuyerVatId: onValidateVatId ? () => void validateBuyerVatId() : undefined,
     onTemplateTextChange: onTemplateElementsChange ? handleTemplateTextChange : undefined,
@@ -381,6 +407,10 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     onTemplateElementsChange,
     projects,
     requiresBuyerVatId,
+    requiresDatevEvidence,
+    requiresDatevSachverhaltLl,
+    requiresDestinationRate,
+    requiresTaxCountry,
     resolvedTaxMode,
     selectedClientId,
     selectedClientLabel,

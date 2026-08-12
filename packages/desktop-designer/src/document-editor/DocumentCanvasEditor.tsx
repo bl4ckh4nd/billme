@@ -55,6 +55,11 @@ export interface DocumentCanvasDocumentFields {
     client?: string;
     buyerVatId?: string;
     taxRule?: string;
+    taxCountry?: string;
+    destinationVatRate?: string;
+    datevEvidenceType?: string;
+    datevEvidenceReference?: string;
+    datevSachverhaltLl?: string;
   };
   taxModeOptions?: Array<{ value: string; label: string }>;
   taxRateOptions?: number[];
@@ -64,6 +69,10 @@ export interface DocumentCanvasDocumentFields {
   buyerCountryCode?: string;
   sellerCountryCode?: string;
   requiresBuyerVatId?: boolean;
+  requiresTaxCountry?: boolean;
+  requiresDestinationVatRate?: boolean;
+  requiresDatevEvidence?: boolean;
+  requiresDatevSachverhaltLl?: boolean;
   vatValidationPending?: boolean;
   onValidateBuyerVatId?: () => void;
   /** Existing template persistence seam. No callback means template text stays read-only. */
@@ -304,6 +313,7 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ elements, f
   const set = (updater: (previous: DocumentDraft) => DocumentDraft, coalesce = true) => fields.onChange(updater, { coalesce });
   const address = document.clientAddress ?? '';
   const taxMode = document.taxMode ?? fields.resolvedTaxMode ?? '';
+  const datevTaxMeta = document.taxMeta as (typeof document.taxMeta & { destinationVatRate?: number; datevEvidenceType?: string; datevEvidenceReference?: string; datevSachverhaltLl?: string }) | undefined;
   const defaultRate = defaultTaxRate;
   const dateInput = (value: string | undefined, onChange: (next: string) => void, ariaLabel: string) => (
     <input
@@ -374,6 +384,10 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ elements, f
               <label className="flex items-center gap-1"><span className="text-muted">USt</span><select aria-label="Standardsatz" value={defaultRate} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, defaultVatRate: Number(event.target.value), taxRuleConfirmed: true } }))} className={documentInputClass}>{(fields.taxRateOptions?.length ? fields.taxRateOptions : [0, 7, 19]).map((rate) => <option key={rate} value={rate}>{rate}%</option>)}</select></label>
             </div>
             {fields.requiresBuyerVatId ? <div className="mt-1" data-field-error={fields.fieldErrors?.buyerVatId ? true : undefined}><label className="text-[10px] text-muted">Käufer-USt-IdNr.</label><div className="flex gap-1"><input value={document.taxMeta?.buyerVatId ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, buyerVatId: event.target.value, buyerType: 'business', vatIdValidation: undefined, vatIdValidationAt: undefined } }))} aria-label="USt-IdNr. des Kunden" className={documentInputClass} />{fields.onValidateBuyerVatId ? <button type="button" aria-label="VIES prüfen" onClick={fields.onValidateBuyerVatId} disabled={fields.vatValidationPending || !document.taxMeta?.buyerVatId} className="shrink-0 border border-border px-1 text-[9px] font-bold text-muted disabled:opacity-50">{fields.vatValidationPending ? 'Prüfe…' : 'VIES prüfen'}</button> : null}</div>{document.taxMeta?.vatIdValidation ? <p className="mt-0.5 text-[9px] text-muted">VIES: {document.taxMeta.vatIdValidation}</p> : null}{error(fields.fieldErrors?.buyerVatId)}</div> : null}
+            {fields.requiresTaxCountry ? <div className="mt-1" data-field-error={fields.fieldErrors?.taxCountry ? true : undefined}><label className="flex items-center gap-1"><span className="text-[10px] text-muted">Land</span><input maxLength={2} value={document.taxMeta?.buyerCountryCode ?? fields.buyerCountryCode ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, buyerCountryCode: event.target.value.toUpperCase(), taxRuleConfirmed: true } }))} aria-label="DATEV Land" className={documentInputClass} /></label>{error(fields.fieldErrors?.taxCountry)}</div> : null}
+            {fields.requiresDestinationVatRate ? <div className="mt-1" data-field-error={fields.fieldErrors?.destinationVatRate ? true : undefined}><label className="flex items-center gap-1"><span className="text-[10px] text-muted">EU-Satz</span><input type="number" min="0" max="99.99" step="0.01" value={datevTaxMeta?.destinationVatRate ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, destinationVatRate: event.target.value === '' ? undefined : Number(event.target.value), taxRuleConfirmed: true } }))} aria-label="EU-Steuersatz im Bestimmungsland" className={documentInputClass} /></label>{error(fields.fieldErrors?.destinationVatRate)}</div> : null}
+            {fields.requiresDatevEvidence ? <div className="mt-1 grid grid-cols-2 gap-1"><label className="flex items-center gap-1" data-field-error={fields.fieldErrors?.datevEvidenceType ? true : undefined}><span className="text-[10px] text-muted">Nachweis</span><input value={datevTaxMeta?.datevEvidenceType ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, datevEvidenceType: event.target.value } }))} aria-label="DATEV Nachweistyp" className={documentInputClass} />{error(fields.fieldErrors?.datevEvidenceType)}</label><label className="flex items-center gap-1" data-field-error={fields.fieldErrors?.datevEvidenceReference ? true : undefined}><span className="text-[10px] text-muted">Referenz</span><input value={datevTaxMeta?.datevEvidenceReference ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, datevEvidenceReference: event.target.value } }))} aria-label="DATEV Nachweisreferenz" className={documentInputClass} />{error(fields.fieldErrors?.datevEvidenceReference)}</label></div> : null}
+            {fields.requiresDatevSachverhaltLl ? <label className="mt-1 flex items-center gap-1" data-field-error={fields.fieldErrors?.datevSachverhaltLl ? true : undefined}><span className="text-[10px] text-muted">L+L</span><input inputMode="numeric" maxLength={3} value={datevTaxMeta?.datevSachverhaltLl ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, datevSachverhaltLl: event.target.value } }))} aria-label="DATEV Sachverhalt L+L" className={documentInputClass} />{error(fields.fieldErrors?.datevSachverhaltLl)}</label> : null}
             {fields.fieldErrors?.taxRule ? <p className="mt-1 text-[9px] text-error">{fields.fieldErrors.taxRule}</p> : null}
             {fields.buyerCountryCode && fields.sellerCountryCode && fields.buyerCountryCode !== fields.sellerCountryCode && fields.taxRecommendation && fields.taxRecommendation.mode !== fields.resolvedTaxMode ? <button type="button" aria-label={fields.taxRecommendationLabel ?? fields.taxRecommendation.mode} className="mt-1 text-left text-[9px] font-bold text-accent underline" onClick={() => set((previous) => ({ ...previous, taxMode: fields.taxRecommendation?.mode as DocumentDraft['taxMode'], taxMeta: { ...previous.taxMeta, taxRuleConfirmed: true } }))}>{fields.taxRecommendationLabel ?? fields.taxRecommendation.mode} <span className="font-normal no-underline">({fields.taxRecommendation.reason})</span></button> : null}
           </div>

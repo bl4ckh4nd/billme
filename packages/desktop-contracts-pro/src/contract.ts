@@ -604,13 +604,19 @@ const proListJournalEntriesArgsSchema = z.object({
 
 const proGetLedgerBalancesArgsSchema = z.object({
   asOfDate: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
 });
 
 const proGetSusaReportArgsSchema = z.object({
   asOfDate: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
 });
 
 const proGetSusaReportResultSchema = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
   asOfDate: z.string(),
   rows: z.array(ledgerBalanceRowSchema),
   totals: z.object({
@@ -618,6 +624,8 @@ const proGetSusaReportResultSchema = z.object({
     credit: z.number(),
     balance: z.number(),
   }),
+  unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
+  blocking: z.boolean().optional(),
 });
 
 const proGetGuvReportArgsSchema = z.object({
@@ -636,6 +644,8 @@ const proGetGuvReportResultSchema = z.object({
     }),
   ),
   netResult: z.number(),
+  unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
+  blocking: z.boolean().optional(),
 });
 
 const proGetBilanzReportArgsSchema = z.object({
@@ -661,6 +671,8 @@ const proGetBilanzReportResultSchema = z.object({
     liabilities: z.number(),
     delta: z.number(),
   }),
+  unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
+  blocking: z.boolean().optional(),
 });
 
 const proUpsertAssetArgsSchema = z.object({
@@ -709,6 +721,8 @@ const proGetAccountingHealthResultSchema = z.object({
   reversedCount: z.number().int(),
   unbalancedDraftCount: z.number().int(),
   unmappedAccountCount: z.number().int(),
+  unmappedAccounts: z.array(z.string()).optional(),
+  blocking: z.boolean().optional(),
   lastDatevExportAt: z.string().optional(),
 });
 

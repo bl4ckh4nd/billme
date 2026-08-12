@@ -74,6 +74,11 @@ export interface LedgerBalance {
   closingBalance: number;
 }
 
+export interface ReportUnmappedAccount {
+  accountNumber: string;
+  amount: number;
+}
+
 export interface ReportGenerationContext {
   mandantId: string;
   chart: 'SKR03' | 'SKR04';

@@ -8,6 +8,7 @@ import type {
   LedgerAccountStats,
   LedgerBalance,
   ListLedgerAccountsArgs,
+  ReportUnmappedAccount,
   ProBankTransaction,
   ProWorkflowEntry,
   TaxCaseAccountMapping,
@@ -356,6 +357,8 @@ export interface ListJournalEntriesOptions {
 
 export interface LedgerBalanceOptions {
   asOfDate?: string;
+  from?: string;
+  to?: string;
 }
 
 export interface ReportRangeOptions {
@@ -364,6 +367,8 @@ export interface ReportRangeOptions {
 }
 
 export interface SusaReport {
+  from?: string;
+  to?: string;
   asOfDate: string;
   rows: LedgerBalance[];
   totals: {
@@ -371,6 +376,8 @@ export interface SusaReport {
     credit: number;
     balance: number;
   };
+  unmappedAccounts?: ReportUnmappedAccount[];
+  blocking?: boolean;
 }
 
 export interface GuvReport {
@@ -382,6 +389,8 @@ export interface GuvReport {
     amount: number;
   }>;
   netResult: number;
+  unmappedAccounts?: ReportUnmappedAccount[];
+  blocking?: boolean;
 }
 
 export interface BilanzReport {
@@ -399,6 +408,8 @@ export interface BilanzReport {
     liabilities: number;
     delta: number;
   };
+  unmappedAccounts?: ReportUnmappedAccount[];
+  blocking?: boolean;
 }
 
 export interface AccountingHealthSnapshot {
@@ -407,6 +418,8 @@ export interface AccountingHealthSnapshot {
   reversedCount: number;
   unbalancedDraftCount: number;
   unmappedAccountCount: number;
+  unmappedAccounts?: string[];
+  blocking?: boolean;
   lastDatevExportAt?: string;
 }
 

@@ -1465,102 +1465,204 @@ function getJournalEntryById(
   };
 }
 
+type ReportJournalLineRow = {
+  account_number: string;
+  posting_date: string;
+  debit_amount: number | null;
+  credit_amount: number | null;
+};
+
+type HgbMappingRow = {
+  account_number: string;
+  statement_type: 'guv' | 'bilanz';
+  position_key: string;
+  position_label: string;
+  balance_side: 'asset' | 'liability' | null;
+};
+
+const centsForReport = (value: unknown): number => Math.round(Number(value || 0) * 100);
+const amountForReport = (cents: number): number => cents === 0 ? 0 : cents / 100;
+
+const loadReportJournalLines = (
+  db: Database.Database,
+  tenantId: string,
+  args: { from?: string; to?: string } = {},
+): ReportJournalLineRow[] => {
+  const conditions = [
+    eq(schema.journalLines.tenantId, tenantId),
+    eq(schema.journalEntries.tenantId, tenantId),
+    inArray(schema.journalEntries.status, ['posted', 'reversed']),
+  ];
+  if (args.from) conditions.push(gte(schema.journalEntries.postingDate, args.from));
+  if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
+  return createDrizzle(db).select({
+    account_number: schema.journalLines.accountNumber,
+    posting_date: schema.journalEntries.postingDate,
+    debit_amount: schema.journalLines.debitAmount,
+    credit_amount: schema.journalLines.creditAmount,
+  }).from(schema.journalLines)
+    .innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
+    .where(and(...conditions)).all() as ReportJournalLineRow[];
+};
+
+const loadHgbMappings = (
+  db: Database.Database,
+  tenantId: string,
+  chart: 'SKR03' | 'SKR04',
+): HgbMappingRow[] => {
+  const conditions = [
+    eq(schema.accountMappingsHgb.tenantId, tenantId),
+    eq(schema.accountMappingsHgb.chart, chart),
+  ];
+  return createDrizzle(db).select({
+    account_number: schema.accountMappingsHgb.accountNumber,
+    statement_type: schema.accountMappingsHgb.statementType,
+    position_key: schema.accountMappingsHgb.positionKey,
+    position_label: schema.accountMappingsHgb.positionLabel,
+    balance_side: schema.accountMappingsHgb.balanceSide,
+  }).from(schema.accountMappingsHgb).where(and(...conditions)).all() as HgbMappingRow[];
+};
+
+const defaultHgbMappings: Record<'SKR03' | 'SKR04', Array<{
+  accountNumber: string;
+  statementType: 'guv' | 'bilanz';
+  positionKey: string;
+  positionLabel: string;
+  balanceSide?: 'asset' | 'liability';
+}>> = {
+  SKR03: [
+    { accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatzerlöse' },
+    { accountNumber: '4900', statementType: 'guv', positionKey: 'expense', positionLabel: 'Aufwendungen' },
+    { accountNumber: '1200', statementType: 'bilanz', positionKey: 'bank', positionLabel: 'Bank', balanceSide: 'asset' },
+    { accountNumber: '1400', statementType: 'bilanz', positionKey: 'receivables', positionLabel: 'Forderungen', balanceSide: 'asset' },
+    { accountNumber: '1576', statementType: 'bilanz', positionKey: 'input_vat', positionLabel: 'Vorsteuer', balanceSide: 'asset' },
+    { accountNumber: '0480', statementType: 'bilanz', positionKey: 'fixed_assets', positionLabel: 'Sachanlagen', balanceSide: 'asset' },
+    { accountNumber: '1600', statementType: 'bilanz', positionKey: 'payables', positionLabel: 'Verbindlichkeiten', balanceSide: 'liability' },
+    { accountNumber: '1776', statementType: 'bilanz', positionKey: 'output_vat', positionLabel: 'Umsatzsteuer', balanceSide: 'liability' },
+    { accountNumber: '1780', statementType: 'bilanz', positionKey: 'output_vat_deferred', positionLabel: 'Umsatzsteuer nicht fällig', balanceSide: 'liability' },
+    { accountNumber: '9000', statementType: 'bilanz', positionKey: 'equity', positionLabel: 'Eigenkapital', balanceSide: 'liability' },
+  ],
+  SKR04: [
+    { accountNumber: '4400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatzerlöse' },
+    { accountNumber: '6300', statementType: 'guv', positionKey: 'expense', positionLabel: 'Aufwendungen' },
+    { accountNumber: '1800', statementType: 'bilanz', positionKey: 'bank', positionLabel: 'Bank', balanceSide: 'asset' },
+    { accountNumber: '1200', statementType: 'bilanz', positionKey: 'receivables', positionLabel: 'Forderungen', balanceSide: 'asset' },
+    { accountNumber: '1406', statementType: 'bilanz', positionKey: 'input_vat', positionLabel: 'Vorsteuer', balanceSide: 'asset' },
+    { accountNumber: '0670', statementType: 'bilanz', positionKey: 'fixed_assets', positionLabel: 'Sachanlagen', balanceSide: 'asset' },
+    { accountNumber: '3300', statementType: 'bilanz', positionKey: 'payables', positionLabel: 'Verbindlichkeiten', balanceSide: 'liability' },
+    { accountNumber: '3806', statementType: 'bilanz', positionKey: 'output_vat', positionLabel: 'Umsatzsteuer', balanceSide: 'liability' },
+    { accountNumber: '3810', statementType: 'bilanz', positionKey: 'output_vat_deferred', positionLabel: 'Umsatzsteuer nicht fällig', balanceSide: 'liability' },
+    { accountNumber: '2900', statementType: 'bilanz', positionKey: 'equity', positionLabel: 'Eigenkapital', balanceSide: 'liability' },
+  ],
+};
+
+const ensureDefaultMappings = (
+  db: Database.Database,
+  tenantId: string,
+  chart = getAccountingPolicy(db, tenantId).activeChart,
+): void => {
+  const drizzle = createDrizzle(db);
+  const now = new Date().toISOString();
+  for (const mapping of defaultHgbMappings[chart]) {
+    drizzle.insert(schema.accountMappingsHgb).values({
+      id: randomUUID(), tenantId, chart, accountNumber: mapping.accountNumber,
+      statementType: mapping.statementType, positionKey: mapping.positionKey,
+      positionLabel: mapping.positionLabel, balanceSide: mapping.balanceSide ?? null, updatedAt: now,
+    }).onConflictDoNothing().run();
+  }
+};
+
+const aggregateUnmapped = (
+  rows: ReportJournalLineRow[],
+  mappedAccounts: Set<string>,
+  amount: (row: ReportJournalLineRow) => number,
+): Array<{ accountNumber: string; amount: number }> => {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    if (mappedAccounts.has(row.account_number)) continue;
+    totals.set(row.account_number, (totals.get(row.account_number) ?? 0) + amount(row));
+  }
+  return [...totals.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([accountNumber, cents]) => ({ accountNumber, amount: amountForReport(cents) }));
+};
+
 export const getLedgerBalances = (
   db: Database.Database,
-  args: { asOfDate?: string } = {},
+  args: { from?: string; to?: string; asOfDate?: string } = {},
   scope: TenantScope,
 ): LedgerBalanceRow[] => {
   const tenantId = getTenantId(scope);
-  const drizzle = createDrizzle(db);
-  const conditions = [eq(schema.journalLines.tenantId, tenantId), eq(schema.journalEntries.tenantId, tenantId),
-    inArray(schema.journalEntries.status, ['posted', 'reversed'])];
-  if (args.asOfDate) conditions.push(lte(schema.journalEntries.postingDate, args.asOfDate));
-  const rows = drizzle.select({ account_number: schema.journalLines.accountNumber,
-    debit_turnover: sum(schema.journalLines.debitAmount), credit_turnover: sum(schema.journalLines.creditAmount) })
-    .from(schema.journalLines).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
-    .where(and(...conditions)).groupBy(schema.journalLines.accountNumber).orderBy(asc(schema.journalLines.accountNumber)).all() as Array<{
-      account_number: string; debit_turnover: number | null; credit_turnover: number | null;
-    }>;
+  const upperDate = args.to ?? args.asOfDate;
+  const rows = loadReportJournalLines(db, tenantId);
+  const balances = new Map<string, { opening: number; debit: number; credit: number }>();
 
-  return rows.map((row) => {
-    const debit = Number(row.debit_turnover || 0);
-    const credit = Number(row.credit_turnover || 0);
-    return {
-      accountNumber: row.account_number,
-      openingBalance: 0,
-      debitTurnover: round2(debit),
-      creditTurnover: round2(credit),
-      closingBalance: round2(debit - credit),
-    };
-  });
+  for (const row of rows) {
+    if (upperDate && row.posting_date > upperDate) continue;
+    const current = balances.get(row.account_number) ?? { opening: 0, debit: 0, credit: 0 };
+    const debit = centsForReport(row.debit_amount);
+    const credit = centsForReport(row.credit_amount);
+    if (args.from && row.posting_date < args.from) current.opening += debit - credit;
+    else {
+      current.debit += debit;
+      current.credit += credit;
+    }
+    balances.set(row.account_number, current);
+  }
+
+  return [...balances.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([accountNumber, value]) => ({
+    accountNumber,
+    openingBalance: amountForReport(value.opening),
+    debitTurnover: amountForReport(value.debit),
+    creditTurnover: amountForReport(value.credit),
+    closingBalance: amountForReport(value.opening + value.debit - value.credit),
+  }));
 };
 
 export const getSusaReport = (
   db: Database.Database,
-  args: { asOfDate?: string } = {},
+  args: { from?: string; to?: string; asOfDate?: string } = {},
   scope: TenantScope,
 ): {
+  from?: string;
+  to?: string;
   asOfDate: string;
   rows: LedgerBalanceRow[];
   totals: { debit: number; credit: number; balance: number };
+  unmappedAccounts: Array<{ accountNumber: string; amount: number }>;
+  blocking: boolean;
 } => {
   const tenantId = getTenantId(scope);
+  const chart = getAccountingPolicy(db, tenantId).activeChart;
+  ensureDefaultMappings(db, tenantId, chart);
+  const upperDate = args.to ?? args.asOfDate;
   const rows = getLedgerBalances(db, args, scope);
+  const allRows = loadReportJournalLines(db, tenantId, upperDate ? { to: upperDate } : {});
+  const mappings = loadHgbMappings(db, tenantId, chart);
+  const knownAccounts = new Set(mappings.map((mapping) => mapping.account_number));
+  const unmappedAccounts = aggregateUnmapped(allRows, knownAccounts, (row) => centsForReport(row.debit_amount) - centsForReport(row.credit_amount));
   const totals = rows.reduce(
     (acc, row) => {
-      acc.debit += row.debitTurnover;
-      acc.credit += row.creditTurnover;
-      acc.balance += row.closingBalance;
+      acc.debit += centsForReport(row.debitTurnover);
+      acc.credit += centsForReport(row.creditTurnover);
+      acc.balance += centsForReport(row.closingBalance);
       return acc;
     },
     { debit: 0, credit: 0, balance: 0 },
   );
-
   return {
-    asOfDate: args.asOfDate ?? new Date().toISOString().slice(0, 10),
+    from: args.from,
+    to: upperDate,
+    asOfDate: upperDate ?? new Date().toISOString().slice(0, 10),
     rows,
     totals: {
-      debit: round2(totals.debit),
-      credit: round2(totals.credit),
-      balance: round2(totals.balance),
+      debit: amountForReport(totals.debit),
+      credit: amountForReport(totals.credit),
+      balance: amountForReport(totals.balance),
     },
+    unmappedAccounts,
+    blocking: unmappedAccounts.length > 0,
   };
-};
-
-const ensureDefaultMappings = (db: Database.Database, tenantId: string): void => {
-  const drizzle = createDrizzle(db);
-  const row = drizzle.select({ c: count() }).from(schema.accountMappingsHgb)
-    .where(eq(schema.accountMappingsHgb.tenantId, tenantId)).get() as { c: number };
-  if (row.c > 0) return;
-
-  const accounts = drizzle.select({ chart: schema.ledgerAccounts.chart, account_number: schema.ledgerAccounts.accountNumber })
-    .from(schema.ledgerAccounts).orderBy(asc(schema.ledgerAccounts.chart), asc(schema.ledgerAccounts.accountNumber)).all() as Array<{ chart: string; account_number: string }>;
-  if (!accounts.length) return;
-
-  const now = new Date().toISOString();
-  const insert = (values: typeof schema.accountMappingsHgb['$inferInsert']) => drizzle.insert(schema.accountMappingsHgb).values(values)
-    .onConflictDoUpdate({ target: [schema.accountMappingsHgb.tenantId, schema.accountMappingsHgb.chart,
-      schema.accountMappingsHgb.accountNumber, schema.accountMappingsHgb.statementType],
-      set: { positionKey: values.positionKey, positionLabel: values.positionLabel, balanceSide: values.balanceSide ?? null, updatedAt: now } }).run();
-
-  for (const account of accounts) {
-    const first = account.account_number[0] ?? '';
-    if (['8', '9'].includes(first)) {
-      insert({ id: randomUUID(), tenantId, chart: account.chart, accountNumber: account.account_number, statementType: 'guv',
-        positionKey: 'revenue', positionLabel: 'Umsatzerloese', balanceSide: null, updatedAt: now });
-    } else if (['4', '5', '6', '7'].includes(first)) {
-      insert({ id: randomUUID(), tenantId, chart: account.chart, accountNumber: account.account_number, statementType: 'guv',
-        positionKey: 'expense', positionLabel: 'Aufwendungen', balanceSide: null, updatedAt: now });
-    }
-
-    if (['0', '1'].includes(first)) {
-      insert({ id: randomUUID(), tenantId, chart: account.chart, accountNumber: account.account_number, statementType: 'bilanz',
-        positionKey: 'assets', positionLabel: 'Aktiva', balanceSide: 'asset', updatedAt: now });
-    } else if (['2', '3'].includes(first)) {
-      insert({ id: randomUUID(), tenantId, chart: account.chart, accountNumber: account.account_number, statementType: 'bilanz',
-        positionKey: 'liabilities', positionLabel: 'Passiva', balanceSide: 'liability', updatedAt: now });
-    }
-  }
 };
 
 export const getGuvReport = (
@@ -1572,100 +1674,89 @@ export const getGuvReport = (
   to?: string;
   rows: Array<{ positionKey: string; positionLabel: string; amount: number }>;
   netResult: number;
+  unmappedAccounts: Array<{ accountNumber: string; amount: number }>;
+  blocking: boolean;
 } => {
   const tenantId = getTenantId(scope);
-  ensureDefaultMappings(db, tenantId);
-
-  const conditions = [eq(schema.journalLines.tenantId, tenantId), eq(schema.journalEntries.tenantId, tenantId),
-    inArray(schema.journalEntries.status, ['posted', 'reversed']), eq(schema.accountMappingsHgb.tenantId, tenantId), eq(schema.accountMappingsHgb.statementType, 'guv')];
-  if (args.from) conditions.push(gte(schema.journalEntries.postingDate, args.from));
-  if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
-  const sourceRows = createDrizzle(db).select({ position_key: schema.accountMappingsHgb.positionKey,
-    position_label: schema.accountMappingsHgb.positionLabel, debit: schema.journalLines.debitAmount, credit: schema.journalLines.creditAmount })
-    .from(schema.journalLines).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
-    .innerJoin(schema.accountMappingsHgb, and(eq(schema.accountMappingsHgb.accountNumber, schema.journalLines.accountNumber),
-      eq(schema.accountMappingsHgb.tenantId, schema.journalLines.tenantId), eq(schema.accountMappingsHgb.statementType, 'guv')))
-    .where(and(...conditions)).all();
-  const grouped = new Map<string, { position_key: string; position_label: string; amount: number }>();
+  const chart = getAccountingPolicy(db, tenantId).activeChart;
+  ensureDefaultMappings(db, tenantId, chart);
+  const sourceRows = loadReportJournalLines(db, tenantId, args);
+  const mappings = loadHgbMappings(db, tenantId, chart);
+  const guvMappings = new Map(mappings.filter((mapping) => mapping.statement_type === 'guv').map((mapping) => [mapping.account_number, mapping]));
+  const knownAccounts = new Set(mappings.map((mapping) => mapping.account_number));
+  const unmappedAccounts = aggregateUnmapped(sourceRows, knownAccounts, (row) => centsForReport(row.credit_amount) - centsForReport(row.debit_amount));
+  const grouped = new Map<string, { positionKey: string; positionLabel: string; amount: number }>();
   for (const row of sourceRows) {
-    const key = row.position_key;
-    const current = grouped.get(key) ?? { position_key: key, position_label: row.position_label, amount: 0 };
-    current.amount += Number(row.credit ?? 0) - Number(row.debit ?? 0);
-    grouped.set(key, current);
+    const mapping = guvMappings.get(row.account_number);
+    if (!mapping) continue;
+    const current = grouped.get(mapping.position_key) ?? { positionKey: mapping.position_key, positionLabel: mapping.position_label, amount: 0 };
+    current.amount += centsForReport(row.credit_amount) - centsForReport(row.debit_amount);
+    grouped.set(mapping.position_key, current);
   }
-  const rows = [...grouped.values()].sort((a, b) => a.position_key.localeCompare(b.position_key));
-
-  const mapped = rows.map((row) => ({
-    positionKey: row.position_key,
-    positionLabel: row.position_label,
-    amount: round2(Number(row.amount || 0)),
+  const rows = [...grouped.values()].sort((left, right) => left.positionKey.localeCompare(right.positionKey)).map((row) => ({
+    ...row,
+    amount: amountForReport(row.amount),
   }));
-
-  const revenue = mapped
-    .filter((row) => row.positionKey === 'revenue')
-    .reduce((sum, row) => sum + row.amount, 0);
-  const expense = mapped
-    .filter((row) => row.positionKey === 'expense')
-    .reduce((sum, row) => sum + Math.abs(row.amount), 0);
-
+  const revenue = rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + centsForReport(row.amount), 0);
+  const expenses = rows.filter((row) => row.positionKey === 'expense').reduce((sum, row) => sum + centsForReport(row.amount), 0);
   return {
     from: args.from,
     to: args.to,
-    rows: mapped,
-    netResult: round2(revenue - expense),
+    rows,
+    netResult: amountForReport(revenue + expenses),
+    unmappedAccounts,
+    blocking: unmappedAccounts.length > 0,
   };
 };
 
 export const getBilanzReport = (
   db: Database.Database,
-  args: { asOfDate?: string } = {},
+  args: { asOfDate?: string; to?: string } = {},
   scope: TenantScope,
 ): {
   asOfDate: string;
   assets: Array<{ accountNumber: string; amount: number }>;
   liabilities: Array<{ accountNumber: string; amount: number }>;
   totals: { assets: number; liabilities: number; delta: number };
+  unmappedAccounts: Array<{ accountNumber: string; amount: number }>;
+  blocking: boolean;
 } => {
   const tenantId = getTenantId(scope);
-  ensureDefaultMappings(db, tenantId);
-
-  const conditions = [eq(schema.journalLines.tenantId, tenantId), eq(schema.journalEntries.tenantId, tenantId),
-    inArray(schema.journalEntries.status, ['posted', 'reversed']), eq(schema.accountMappingsHgb.tenantId, tenantId), eq(schema.accountMappingsHgb.statementType, 'bilanz')];
-  if (args.asOfDate) conditions.push(lte(schema.journalEntries.postingDate, args.asOfDate));
-  const sourceRows = createDrizzle(db).select({ balance_side: schema.accountMappingsHgb.balanceSide,
-    account_number: schema.journalLines.accountNumber, debit: schema.journalLines.debitAmount, credit: schema.journalLines.creditAmount })
-    .from(schema.journalLines).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
-    .innerJoin(schema.accountMappingsHgb, and(eq(schema.accountMappingsHgb.accountNumber, schema.journalLines.accountNumber),
-      eq(schema.accountMappingsHgb.tenantId, schema.journalLines.tenantId), eq(schema.accountMappingsHgb.statementType, 'bilanz')))
-    .where(and(...conditions)).all();
-  const grouped = new Map<string, { balance_side: 'asset' | 'liability' | null; account_number: string; amount: number }>();
+  const chart = getAccountingPolicy(db, tenantId).activeChart;
+  ensureDefaultMappings(db, tenantId, chart);
+  const upperDate = args.to ?? args.asOfDate;
+  const sourceRows = loadReportJournalLines(db, tenantId, upperDate ? { to: upperDate } : {});
+  const mappings = loadHgbMappings(db, tenantId, chart);
+  const balanceMappings = new Map(mappings.filter((mapping) => mapping.statement_type === 'bilanz').map((mapping) => [mapping.account_number, mapping]));
+  const knownAccounts = new Set(mappings.map((mapping) => mapping.account_number));
+  const unmappedAccounts = aggregateUnmapped(sourceRows, knownAccounts, (row) => centsForReport(row.debit_amount) - centsForReport(row.credit_amount));
+  const grouped = new Map<string, { balanceSide: 'asset' | 'liability'; amount: number }>();
   for (const row of sourceRows) {
-    const key = row.account_number;
-    const current = grouped.get(key) ?? { balance_side: row.balance_side as 'asset' | 'liability' | null, account_number: key, amount: 0 };
-    current.amount += Number(row.debit ?? 0) - Number(row.credit ?? 0);
-    grouped.set(key, current);
+    const mapping = balanceMappings.get(row.account_number);
+    if (!mapping || !mapping.balance_side) continue;
+    const current = grouped.get(row.account_number) ?? { balanceSide: mapping.balance_side, amount: 0 };
+    current.amount += centsForReport(row.debit_amount) - centsForReport(row.credit_amount);
+    grouped.set(row.account_number, current);
   }
-  const rows = [...grouped.values()].sort((a, b) => a.account_number.localeCompare(b.account_number));
-
-  const assets = rows
-    .filter((row) => row.balance_side === 'asset')
-    .map((row) => ({ accountNumber: row.account_number, amount: round2(Number(row.amount || 0)) }));
-  const liabilities = rows
-    .filter((row) => row.balance_side === 'liability')
-    .map((row) => ({ accountNumber: row.account_number, amount: round2(Math.abs(Number(row.amount || 0))) }));
-
-  const totalAssets = round2(assets.reduce((sum, row) => sum + row.amount, 0));
-  const totalLiabilities = round2(liabilities.reduce((sum, row) => sum + row.amount, 0));
-
+  const assets = [...grouped.entries()].filter(([, row]) => row.balanceSide === 'asset')
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([accountNumber, row]) => ({ accountNumber, amount: amountForReport(row.amount) }));
+  const liabilities = [...grouped.entries()].filter(([, row]) => row.balanceSide === 'liability')
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([accountNumber, row]) => ({ accountNumber, amount: amountForReport(-row.amount) }));
+  const totalAssets = assets.reduce((sum, row) => sum + centsForReport(row.amount), 0);
+  const totalLiabilities = liabilities.reduce((sum, row) => sum + centsForReport(row.amount), 0);
   return {
-    asOfDate: args.asOfDate ?? new Date().toISOString().slice(0, 10),
+    asOfDate: upperDate ?? new Date().toISOString().slice(0, 10),
     assets,
     liabilities,
     totals: {
-      assets: totalAssets,
-      liabilities: totalLiabilities,
-      delta: round2(totalAssets - totalLiabilities),
+      assets: amountForReport(totalAssets),
+      liabilities: amountForReport(totalLiabilities),
+      delta: amountForReport(totalAssets - totalLiabilities),
     },
+    unmappedAccounts,
+    blocking: unmappedAccounts.length > 0,
   };
 };
 
@@ -1778,6 +1869,8 @@ export const getAccountingHealth = (
   reversedCount: number;
   unbalancedDraftCount: number;
   unmappedAccountCount: number;
+  unmappedAccounts: string[];
+  blocking: boolean;
   lastDatevExportAt?: string;
 } => {
   const tenantId = getTenantId(scope);
@@ -1790,11 +1883,12 @@ export const getAccountingHealth = (
     .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.status, 'reversed'))).get()?.c ?? 0);
   const unbalancedDraftCount = Number(drizzle.select({ c: count() }).from(schema.draftValidationIssues)
     .where(and(eq(schema.draftValidationIssues.tenantId, tenantId), eq(schema.draftValidationIssues.code, 'UNBALANCED_ENTRY'))).get()?.c ?? 0);
-  const lineAccounts = new Set(drizzle.select({ accountNumber: schema.journalLines.accountNumber }).from(schema.journalLines)
-    .where(eq(schema.journalLines.tenantId, tenantId)).all().map((row) => row.accountNumber));
-  const mappedAccounts = new Set(drizzle.select({ accountNumber: schema.accountMappingsHgb.accountNumber }).from(schema.accountMappingsHgb)
-    .where(eq(schema.accountMappingsHgb.tenantId, tenantId)).all().map((row) => row.accountNumber));
-  const unmappedAccountCount = [...lineAccounts].filter((accountNumber) => !mappedAccounts.has(accountNumber)).length;
+  const activeChart = getAccountingPolicy(db, tenantId).activeChart;
+  ensureDefaultMappings(db, tenantId, activeChart);
+  const lineAccounts = new Set(loadReportJournalLines(db, tenantId).map((row) => row.account_number));
+  const mappedAccounts = new Set(loadHgbMappings(db, tenantId, activeChart).map((row) => row.account_number));
+  const unmappedAccounts = [...lineAccounts].filter((accountNumber) => !mappedAccounts.has(accountNumber)).sort();
+  const unmappedAccountCount = unmappedAccounts.length;
   const lastDatevExport = drizzle.select({ created_at: schema.datevExports.createdAt }).from(schema.datevExports)
     .where(eq(schema.datevExports.tenantId, tenantId)).orderBy(desc(schema.datevExports.createdAt)).limit(1).get() as { created_at: string } | undefined;
 
@@ -1804,6 +1898,8 @@ export const getAccountingHealth = (
     reversedCount,
     unbalancedDraftCount,
     unmappedAccountCount,
+    unmappedAccounts,
+    blocking: unmappedAccountCount > 0,
     lastDatevExportAt: lastDatevExport?.created_at,
   };
 };

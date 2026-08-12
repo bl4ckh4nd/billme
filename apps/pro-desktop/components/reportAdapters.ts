@@ -50,8 +50,8 @@ export const mapSusaReport = (
       },
     ),
     quality: {
-      unmappedAccounts: rows.filter((row) => !names.has(row.accountNumber)).length,
-      warnings: 0,
+      unmappedAccounts: report.unmappedAccounts?.length ?? rows.filter((row) => !names.has(row.accountNumber)).length,
+      warnings: report.blocking ? report.unmappedAccounts?.length ?? 0 : 0,
       generatedAt: new Date().toISOString(),
       source: 'live',
     },
@@ -59,10 +59,12 @@ export const mapSusaReport = (
 };
 
 export const mapGuvReport = (report: IpcResult<'pro:getGuvReport'>): GuvReport => {
-  const revenue = report.rows.filter((row) => row.amount > 0).reduce((sum, row) => sum + row.amount, 0);
-  const expenses = Math.abs(
-    report.rows.filter((row) => row.amount < 0).reduce((sum, row) => sum + row.amount, 0),
-  );
+  const revenue = report.rows
+    .filter((row) => row.positionKey === 'revenue')
+    .reduce((sum, row) => sum + row.amount, 0);
+  const expenses = Math.abs(report.rows
+    .filter((row) => row.positionKey === 'expense')
+    .reduce((sum, row) => sum + row.amount, 0));
   return {
     lines: [
       ...report.rows.map((row) => ({
@@ -83,8 +85,8 @@ export const mapGuvReport = (report: IpcResult<'pro:getGuvReport'>): GuvReport =
     ],
     totals: { revenue: round2(revenue), expenses: round2(expenses), result: report.netResult },
     quality: {
-      unmappedAccounts: 0,
-      warnings: 0,
+      unmappedAccounts: report.unmappedAccounts?.length ?? 0,
+      warnings: report.blocking ? report.unmappedAccounts?.length ?? 0 : 0,
       generatedAt: new Date().toISOString(),
       source: 'live',
     },
@@ -120,8 +122,11 @@ export const mapBalanceSheetPreview = (
       difference: report.totals.delta,
     },
     quality: {
-      status: missingNames.length ? 'warning' : report.totals.delta === 0 ? 'ok' : 'warning',
-      notes: missingNames.length ? [`Fehlende Kontonamen: ${missingNames.join(', ')}`] : [],
+      status: report.blocking || missingNames.length ? 'warning' : report.totals.delta === 0 ? 'ok' : 'warning',
+      notes: [
+        ...(report.unmappedAccounts?.length ? report.unmappedAccounts.map((row) => `Nicht zugeordnet: ${row.accountNumber} (${row.amount.toFixed(2)} EUR)`) : []),
+        ...(missingNames.length ? [`Fehlende Kontonamen: ${missingNames.join(', ')}`] : []),
+      ],
       generatedAt: new Date().toISOString(),
       source: 'live',
     },
@@ -147,11 +152,15 @@ export const mapReportDrilldownEntries = (
         debit: line.debitAmount,
         credit: line.creditAmount,
         amount: round2(line.debitAmount - line.creditAmount),
-        source: /afa|abschreibung/i.test(entry.bookingText)
+        source: /afa|abschreibung/i.test(entry.bookingText) || entry.sourceType === 'depreciation'
           ? 'AfA' as const
-          : entry.sourceDraftId
-            ? 'Inbox' as const
-            : 'Manuell' as const,
+          : entry.sourceType === 'payment'
+            ? 'Abgleich' as const
+            : entry.sourceType === 'incoming_invoice' || entry.sourceType === 'booking_draft' || entry.sourceDraftId
+              ? 'Inbox' as const
+              : entry.sourceType === 'outgoing_invoice'
+                ? 'Abgleich' as const
+                : 'Manuell' as const,
       })),
   );
 };

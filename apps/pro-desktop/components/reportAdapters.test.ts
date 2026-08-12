@@ -85,6 +85,33 @@ describe('reportAdapters', () => {
     expect(report.totals.difference).toBe(50);
   });
 
+  it('preserves OPOS source identity in drilldowns', () => {
+    const entries = [
+      {
+        id: 'payment-entry', tenantId: 'default', entryNumber: 1, postingDate: '2026-03-01',
+        bookingText: 'Kundenzahlung', period: '2026-03', fiscalYear: 2026, status: 'posted' as const,
+        sourceType: 'payment' as const, createdAt: '2026-03-01T00:00:00.000Z',
+        lines: [{ id: 'payment-line', accountNumber: '1200', debitAmount: 100, creditAmount: 0 }],
+      },
+      {
+        id: 'incoming-entry', tenantId: 'default', entryNumber: 2, postingDate: '2026-03-02',
+        bookingText: 'Eingangsrechnung', period: '2026-03', fiscalYear: 2026, status: 'posted' as const,
+        sourceType: 'incoming_invoice' as const, createdAt: '2026-03-02T00:00:00.000Z',
+        lines: [{ id: 'incoming-line', accountNumber: '4900', debitAmount: 50, creditAmount: 0 }],
+      },
+      {
+        id: 'outgoing-entry', tenantId: 'default', entryNumber: 3, postingDate: '2026-03-03',
+        bookingText: 'Ausgangsrechnung', period: '2026-03', fiscalYear: 2026, status: 'posted' as const,
+        sourceType: 'outgoing_invoice' as const, createdAt: '2026-03-03T00:00:00.000Z',
+        lines: [{ id: 'outgoing-line', accountNumber: '8400', debitAmount: 0, creditAmount: 100 }],
+      },
+    ];
+    const result = mapReportDrilldownEntries(entries, {
+      reportType: 'susa', targetId: '1200', targetLabel: 'Bank', accountNumbers: ['1200', '4900', '8400'],
+    });
+    expect(result.map((entry) => entry.source)).toEqual(['Abgleich', 'Inbox', 'Abgleich']);
+  });
+
   it('maps empty report and drilldown results', () => {
     expect(
       mapSusaReport(

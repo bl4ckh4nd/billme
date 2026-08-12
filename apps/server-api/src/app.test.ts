@@ -136,6 +136,44 @@ test('product tokens cannot cross product boundaries', async () => {
   });
 });
 
+test('canonical Pro accounting routes enforce product scope before the database', async () => {
+  await withServerApi(async (app) => {
+    const lite = await bootstrap(app, 'lite');
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/pro/accounting/transactions',
+      headers: { authorization: `Bearer ${lite.token}` },
+    });
+    assert.equal(response.statusCode, 403);
+    assert.match(response.body, /not authorized for pro/i);
+  });
+});
+
+test('canonical Pro accounting mutations require a reason and an accounting role', async () => {
+  await withServerApi(async (app) => {
+    const pro = await bootstrap(app, 'pro');
+    const invalid = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/pro/accounting/policy',
+      headers: { authorization: `Bearer ${pro.token}` },
+      payload: { activeChart: 'SKR03', vatMethod: 'soll' },
+    });
+    assert.equal(invalid.statusCode, 400);
+
+    const viewerToken = app.tokenService.sign({
+      ...app.tokenService.verify(pro.token)!,
+      role: 'viewer',
+    });
+    const forbidden = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/pro/accounting/policy',
+      headers: { authorization: `Bearer ${viewerToken}` },
+      payload: { reason: 'test', activeChart: 'SKR03', vatMethod: 'soll' },
+    });
+    assert.equal(forbidden.statusCode, 403);
+  });
+});
+
 test('protected lite and pro billing routes require DATABASE_URL after auth succeeds', async () => {
   await withServerApi(async (app) => {
     const liteBootstrap = await bootstrap(app, 'lite');

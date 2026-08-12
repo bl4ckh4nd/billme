@@ -8,6 +8,7 @@ import {
 } from '@billme/ui';
 import {
   ProAccountingWorkspace,
+  type ProAccountingDataAdapter,
   type Account as WorkspaceAccount,
   type BookingDraft as WorkspaceBookingDraft,
   type ProAccountingSeed,
@@ -38,6 +39,8 @@ type AppData = {
     offer: Awaited<ReturnType<ProWebClient['getActiveTemplate']>>;
   };
   workflowEntries: Awaited<ReturnType<ProWebClient['listWorkflowEntries']>>;
+  accountingTransactions: Awaited<ReturnType<ProWebClient['listAccountingTransactions']>>;
+  accountingDrafts: Awaited<ReturnType<ProWebClient['listAccountingDrafts']>>;
   ledgerStats: Awaited<ReturnType<ProWebClient['getLedgerStats']>>;
   ledgerAccounts: Awaited<ReturnType<ProWebClient['listLedgerAccounts']>>;
   taxCases: Awaited<ReturnType<ProWebClient['listTaxCases']>>;
@@ -340,21 +343,6 @@ const mapWorkflowDraftToWorkspace = (
   };
 };
 
-const mapWorkspaceTransactionToEntity = (transaction: WorkspaceTransaction) => {
-  return {
-    id: transaction.id,
-    date: transaction.date,
-    amount: transaction.amount,
-    type: transaction.amount >= 0 ? 'income' : 'expense',
-    counterparty: transaction.payee,
-    purpose: transaction.description,
-    linkedInvoiceId: transaction.hasReceipt ? transaction.id : undefined,
-    status: transaction.workflowStatus === 'posted' ? 'booked' : 'pending',
-    suggestedAccountNumber: transaction.suggestion,
-    suggestionConfidence: transaction.suggestionConfidence,
-  };
-};
-
 const mapWorkspaceDraftToEntity = (
   draft: WorkspaceBookingDraft,
   tenantId: string,
@@ -418,6 +406,42 @@ const readWorkflowSeed = (client: ProWebClient, workflowEntries: AppData['workfl
   return {
     transactions,
     drafts,
+  };
+};
+
+const readCanonicalSeed = (
+  transactions: AppData['accountingTransactions'],
+  drafts: AppData['accountingDrafts'],
+): ProAccountingSeed => {
+  const draftByTransactionId = new Map(
+    drafts.filter((draft): draft is NonNullable<typeof draft> => draft !== null).map((draft) => [draft.transactionId, draft]),
+  );
+  return {
+    transactions: transactions.map((row) => {
+      const draft = draftByTransactionId.get(row.id);
+      const workflowStatus: WorkspaceTransaction['workflowStatus'] = draft
+        ? draft.workflowStatus
+        : row.status === 'booked'
+          ? 'posted'
+          : 'imported';
+      return {
+        id: row.id,
+        date: row.date,
+        payee: row.counterparty || 'Unbekannt',
+        description: row.purpose || 'Banktransaktion',
+        amount: Number(row.amount || 0),
+        currency: 'EUR',
+        workflowStatus,
+        suggestion: row.suggestedAccountNumber,
+        suggestionConfidence: row.suggestionConfidence,
+        hasReceipt: Boolean(row.linkedInvoiceId),
+        issueCounts: { errors: 0, warnings: row.linkedInvoiceId ? 0 : 1, infos: 0 },
+        flags: row.linkedInvoiceId ? [] : ['missing_receipt'],
+        bookingDraftId: draft?.id ?? `draft-${row.id}`,
+        owner: 'Server accounting',
+      } satisfies WorkspaceTransaction;
+    }),
+    drafts: drafts.filter((draft): draft is NonNullable<typeof draft> => draft !== null).map(mapWorkflowDraftToWorkspace),
   };
 };
 
@@ -644,6 +668,7 @@ export default function App() {
     setLoading(true);
     setLoadError('');
     try {
+      const accountingTransactionsPromise = client.listAccountingTransactions();
       const [
         health,
         capabilities,
@@ -659,6 +684,8 @@ export default function App() {
         activeInvoiceTemplate,
         activeOfferTemplate,
         workflowEntries,
+        accountingTransactions,
+        accountingDrafts,
         ledgerStats,
         ledgerAccounts,
         taxCases,
@@ -679,6 +706,8 @@ export default function App() {
         client.getActiveTemplate('invoice'),
         client.getActiveTemplate('offer'),
         client.listWorkflowEntries(),
+        accountingTransactionsPromise,
+        accountingTransactionsPromise.then((rows) => client.listAccountingDrafts(rows.map((row) => row.id))),
         client.getLedgerStats(),
         client.listLedgerAccounts({ chart: 'SKR03', limit: 5000 }),
         client.listTaxCases({ activeOnly: false }),
@@ -703,6 +732,8 @@ export default function App() {
           offer: activeOfferTemplate,
         },
         workflowEntries,
+        accountingTransactions,
+        accountingDrafts,
         ledgerStats,
         ledgerAccounts,
         taxCases,
@@ -784,14 +815,44 @@ export default function App() {
     if (!data) {
       return undefined;
     }
-    const base = readWorkflowSeed(client, data.workflowEntries);
+    const canonical = readCanonicalSeed(data.accountingTransactions, data.accountingDrafts);
+    const base = data.accountingTransactions.length > 0
+      ? canonical
+      : readWorkflowSeed(client, data.workflowEntries);
     return {
       ...base,
       accounts: mapLedgerAccountsToWorkspace(data.ledgerAccounts),
       chartFramework: data.ledgerStats.byChart.SKR03 > 0 ? 'SKR03' : 'SKR04',
-      seedVersion: `${data.workflowEntries.length}:${data.ledgerAccounts.length}`,
+      seedVersion: `${data.accountingTransactions.length}:${data.accountingDrafts.length}:${data.workflowEntries.length}:${data.ledgerAccounts.length}`,
     } satisfies ProAccountingSeed;
   }, [client, data]);
+
+  const accountingDataAdapter = React.useMemo<ProAccountingDataAdapter | undefined>(() => {
+    if (!accountingSeed) return undefined;
+    let transactions = structuredClone(accountingSeed.transactions ?? []);
+    let drafts = structuredClone(accountingSeed.drafts ?? []);
+    return {
+      hydrate(seed) {
+        transactions = structuredClone(seed.transactions ?? []);
+        drafts = structuredClone(seed.drafts ?? []);
+      },
+      listTransactions() {
+        return structuredClone(transactions);
+      },
+      listBookingDrafts() {
+        return structuredClone(drafts);
+      },
+      getTransactionById(id) {
+        return structuredClone(transactions.find((row) => row.id === id));
+      },
+      getBookingDraftByTransactionId(transactionId) {
+        return structuredClone(drafts.find((row) => row.transactionId === transactionId));
+      },
+      // Mutations go through the awaited parent persistence hook below. The
+      // adapter intentionally exposes only canonical reads to avoid optimistic
+      // writes that could diverge from the server journal.
+    };
+  }, [accountingSeed]);
 
   const handleSaveSettings = async () => {
     await runAction(async () => {
@@ -974,16 +1035,14 @@ export default function App() {
   };
 
   const handlePersistWorkflowEntry = async (entry: { transaction: WorkspaceTransaction; draft: WorkspaceBookingDraft }) => {
-    if (!data) {
+    if (!data || data.accountingTransactions.length === 0) {
       return;
     }
     try {
-      await client.upsertWorkflowEntry({
-        transactionId: entry.transaction.id,
-        transactionJson: JSON.stringify(mapWorkspaceTransactionToEntity(entry.transaction)),
-        draftJson: JSON.stringify(mapWorkspaceDraftToEntity(entry.draft, data.sessionInfo.tenantId)),
-        updatedAt: new Date().toISOString(),
-      });
+      await client.saveAccountingDraft(
+        mapWorkspaceDraftToEntity(entry.draft, data.sessionInfo.tenantId),
+        'Workflow-Entwurf im Web gespeichert',
+      );
       await refreshData();
       setNotice(createNotice('success', `Workflow ${entry.transaction.id} synchronisiert.`));
     } catch (error) {
@@ -1768,7 +1827,11 @@ export default function App() {
               <SectionCard eyebrow="Workspace" title="Geteilte Pro-Accounting-Oberfläche im Browser">
                 {accountingSeed ? (
                   <div className="workspace-frame">
-                    <ProAccountingWorkspace seed={accountingSeed} onPersistEntry={handlePersistWorkflowEntry} />
+                    <ProAccountingWorkspace
+                      seed={accountingSeed}
+                      dataAdapter={accountingDataAdapter}
+                      onPersistEntry={data?.accountingTransactions.length ? handlePersistWorkflowEntry : undefined}
+                    />
                   </div>
                 ) : (
                   <EmptyState title="Workspace noch leer" body="Sobald Workflow-Snapshots vorhanden sind, wird die Pro-Workspace-UI hier direkt aus dem Shared Package gemountet." />

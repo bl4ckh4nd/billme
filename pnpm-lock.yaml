@@ -451,6 +451,12 @@ importers:
 
   apps/server-api:
     dependencies:
+      '@billme/accounting-engine':
+        specifier: workspace:*
+        version: link:../../packages/accounting-engine
+      '@billme/accounting-shared':
+        specifier: workspace:*
+        version: link:../../packages/accounting-shared
       '@billme/desktop-contracts-pro':
         specifier: workspace:*
         version: link:../../packages/desktop-contracts-pro

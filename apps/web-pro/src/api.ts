@@ -19,6 +19,16 @@ import {
   appSettingsSchema,
   articleSchema,
   bookingDraftEntitySchema,
+  accountingPostingPreviewSchema,
+  accountingPolicySchema,
+  accountingAccountMappingSchema,
+  accountingBackfillPreviewSchema,
+  accountingBackfillResultSchema,
+  incomingInvoiceSchema,
+  journalEntryEntitySchema,
+  ledgerBalanceRowSchema,
+  openItemSchema,
+  vendorSchema,
   ledgerAccountSchema,
   proListAccountSuggestionRulesArgsSchema,
   proListTaxCaseAccountMappingsArgsSchema,
@@ -277,6 +287,135 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     },
     listWorkflowEntries() {
       return requestJson({ parser: parseArray(proWorkflowEntrySchema) }, '/api/v1/pro/workflow');
+    },
+    listAccountingTransactions() {
+      return requestJson({ parser: parseArray(transactionSchema) }, '/api/v1/pro/accounting/transactions');
+    },
+    listAccountingDrafts(transactionIds: string[]) {
+      return Promise.all(
+        transactionIds.map((transactionId) =>
+          requestJson(
+            { parser: (input) => (input === null ? null : bookingDraftEntitySchema.parse(input)) },
+            `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}`,
+          ),
+        ),
+      );
+    },
+    saveAccountingDraft(draft: unknown, reason: string) {
+      return requestJson(
+        {
+          method: 'POST',
+          body: { reason, draft: bookingDraftEntitySchema.parse(draft) },
+          parser: bookingDraftEntitySchema,
+        },
+        '/api/v1/pro/accounting/drafts',
+      );
+    },
+    dispatchAccountingDraftAction(transactionId: string, action: string, reason: string, rejectReason?: string) {
+      return requestJson(
+        {
+          method: 'POST',
+          body: { reason, action, rejectReason },
+          parser: bookingDraftEntitySchema,
+        },
+        `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}/action`,
+      );
+    },
+    postAccountingDraft(draftId: string, options: Record<string, unknown> & { reason: string }) {
+      return requestJson(
+        {
+          method: 'POST',
+          body: options,
+          parser: (input) => input,
+        },
+        `/api/v1/pro/accounting/drafts/${encodeURIComponent(draftId)}/post`,
+      );
+    },
+    reverseAccountingJournalEntry(entryId: string, options: Record<string, unknown> & { reason: string }) {
+      return requestJson(
+        {
+          method: 'POST',
+          body: options,
+          parser: (input) => input,
+        },
+        `/api/v1/pro/accounting/journal/${encodeURIComponent(entryId)}/reverse`,
+      );
+    },
+    listAccountingJournalEntries(query?: unknown) {
+      const normalized = query && isRecord(query) ? query : undefined;
+      return requestJson(
+        { parser: parseArray(journalEntryEntitySchema), query: normalized as Record<string, string | number | boolean | null | undefined> | undefined },
+        '/api/v1/pro/accounting/journal',
+      );
+    },
+    getAccountingBalances(asOfDate?: string) {
+      return requestJson({ parser: parseArray(ledgerBalanceRowSchema), query: { asOfDate } }, '/api/v1/pro/accounting/balances');
+    },
+    getAccountingHealth() {
+      return requestJson({ parser: (input) => input }, '/api/v1/pro/accounting/health');
+    },
+    getVatSummary(query?: unknown) {
+      return requestJson({ parser: (input) => input, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/vat/summary');
+    },
+    getSusaReport(asOfDate?: string) {
+      return requestJson({ parser: (input) => input, query: { asOfDate } }, '/api/v1/pro/accounting/reports/susa');
+    },
+    getGuvReport(query?: unknown) {
+      return requestJson({ parser: (input) => input, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/guv');
+    },
+    getBilanzReport(asOfDate?: string) {
+      return requestJson({ parser: (input) => input, query: { asOfDate } }, '/api/v1/pro/accounting/reports/bilanz');
+    },
+    getAccountingPolicy() {
+      return requestJson({ parser: accountingPolicySchema }, '/api/v1/pro/accounting/policy');
+    },
+    setAccountingPolicy(input: unknown, reason: string) {
+      return requestJson({ method: 'PUT', body: { ...accountingPolicySchema.omit({ tenantId: true, periodPolicy: true, updatedAt: true }).parse(input), reason }, parser: accountingPolicySchema }, '/api/v1/pro/accounting/policy');
+    },
+    listAccountingMappings(chart?: 'SKR03' | 'SKR04') {
+      return requestJson({ parser: parseArray(accountingAccountMappingSchema), query: { chart } }, '/api/v1/pro/accounting/mappings');
+    },
+    saveAccountingMapping(mapping: unknown, reason: string) {
+      return requestJson({ method: 'POST', body: { ...(isRecord(mapping) ? mapping : {}), reason }, parser: accountingAccountMappingSchema }, '/api/v1/pro/accounting/mappings');
+    },
+    listAccountingVendors() {
+      return requestJson({ parser: parseArray(vendorSchema) }, '/api/v1/pro/accounting/vendors');
+    },
+    saveAccountingVendor(vendor: unknown, reason: string) {
+      return requestJson({ method: 'POST', body: { vendor, reason }, parser: vendorSchema }, '/api/v1/pro/accounting/vendors');
+    },
+    listIncomingInvoices() {
+      return requestJson({ parser: parseArray(incomingInvoiceSchema) }, '/api/v1/pro/accounting/incoming-invoices');
+    },
+    saveIncomingInvoice(invoice: unknown, reason: string) {
+      return requestJson({ method: 'POST', body: { invoice, reason }, parser: incomingInvoiceSchema }, '/api/v1/pro/accounting/incoming-invoices');
+    },
+    listOpenItems() {
+      return requestJson({ parser: parseArray(openItemSchema) }, '/api/v1/pro/accounting/open-items');
+    },
+    previewOutgoingInvoice(invoiceId: string, reason = 'Vorschau') {
+      return requestJson({ method: 'POST', body: { invoiceId, reason }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/outgoing-invoices/preview');
+    },
+    postOutgoingInvoice(invoiceId: string, reason: string, options: Record<string, unknown> = {}) {
+      return requestJson({ method: 'POST', body: { invoiceId, reason, ...options }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/outgoing-invoices/post');
+    },
+    previewIncomingInvoice(invoiceId: string, reason = 'Vorschau') {
+      return requestJson({ method: 'POST', body: { invoiceId, reason }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/incoming-invoices/preview');
+    },
+    postIncomingInvoice(invoiceId: string, reason: string, options: Record<string, unknown> = {}) {
+      return requestJson({ method: 'POST', body: { invoiceId, reason, ...options }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/incoming-invoices/post');
+    },
+    allocateOpenItemPayment(payment: unknown, reason: string) {
+      return requestJson({ method: 'POST', body: { payment, reason }, parser: (input) => input }, '/api/v1/pro/accounting/open-items/payments');
+    },
+    reverseDocumentAccounting(input: unknown, reason: string) {
+      return requestJson({ method: 'POST', body: { ...input as Record<string, unknown>, reason }, parser: (payload) => payload }, '/api/v1/pro/accounting/documents/reverse');
+    },
+    previewAccountingBackfill() {
+      return requestJson({ parser: accountingBackfillPreviewSchema }, '/api/v1/pro/accounting/backfill/preview');
+    },
+    confirmAccountingBackfill(input: unknown) {
+      return requestJson({ method: 'POST', body: input, parser: accountingBackfillResultSchema }, '/api/v1/pro/accounting/backfill/confirm');
     },
     upsertWorkflowEntry(entry: unknown) {
       return requestJson(

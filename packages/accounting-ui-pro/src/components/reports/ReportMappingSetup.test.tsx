@@ -8,6 +8,16 @@ const positions = [
   { key: 'assets.current.cash', label: 'Kassenbestand', side: 'asset' as const, kind: 'line' as const },
 ];
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function adapter(overrides: Partial<ProAccountingDataAdapter> = {}): ProAccountingDataAdapter {
   return {
     getReportMappingHealth: vi.fn(async () => ({ chart: 'SKR03' as const, unmapped: [
@@ -21,6 +31,77 @@ function adapter(overrides: Partial<ProAccountingDataAdapter> = {}): ProAccounti
 }
 
 describe('ReportMappingSetup', () => {
+  it('ignores stale health and position results after an as-of-date refresh', async () => {
+    const oldHealth = deferred<{ chart: 'SKR03'; unmapped: [{ accountNumber: string; statement: 'hgb-guv' }] }>();
+    const newHealth = deferred<{ chart: 'SKR03'; unmapped: [{ accountNumber: string; statement: 'hgb-guv' }] }>();
+    const oldPositions = deferred<typeof positions>();
+    const newPositions = deferred<typeof positions>();
+    const getReportMappingHealth = vi.fn()
+      .mockImplementationOnce(() => oldHealth.promise)
+      .mockImplementationOnce(() => newHealth.promise);
+    const listReportMappingPositions = vi.fn(({ asOfDate }: { asOfDate: string }) => (
+      asOfDate === '2026-01-31' ? newPositions.promise : oldPositions.promise
+    ));
+    const dataAdapter = adapter({ getReportMappingHealth, listReportMappingPositions });
+
+    const { rerender } = render(
+      <ReportMappingSetup
+        dataAdapter={dataAdapter}
+        chart="SKR03"
+        role="admin"
+        statements={['hgb-guv']}
+        asOfDate="2025-12-31"
+      />,
+    );
+    await waitFor(() => expect(getReportMappingHealth).toHaveBeenCalledTimes(1));
+    rerender(
+      <ReportMappingSetup
+        dataAdapter={dataAdapter}
+        chart="SKR03"
+        role="admin"
+        statements={['hgb-guv']}
+        asOfDate="2026-01-31"
+      />,
+    );
+    await waitFor(() => expect(getReportMappingHealth).toHaveBeenCalledTimes(2));
+
+    newHealth.resolve({ chart: 'SKR03', unmapped: [{ accountNumber: '8600', statement: 'hgb-guv' }] });
+    await waitFor(() => expect(listReportMappingPositions).toHaveBeenCalledTimes(1));
+    newPositions.resolve([positions[0]]);
+    expect(await screen.findByText('8600')).toBeTruthy();
+
+    oldHealth.resolve({ chart: 'SKR03', unmapped: [{ accountNumber: '8400', statement: 'hgb-guv' }] });
+    await waitFor(() => expect(listReportMappingPositions).toHaveBeenCalledTimes(2));
+    oldPositions.resolve([positions[1]]);
+    await waitFor(() => expect(screen.queryByText('8400')).toBeNull());
+    expect(screen.getByText('8600')).toBeTruthy();
+  });
+
+  it('ignores stale refresh failures after the latest mapping load succeeds', async () => {
+    const stale = deferred<{ chart: 'SKR03'; unmapped: [{ accountNumber: string; statement: 'hgb-guv' }] }>();
+    const fresh = deferred<{ chart: 'SKR03'; unmapped: [{ accountNumber: string; statement: 'hgb-guv' }] }>();
+    const getReportMappingHealth = vi.fn()
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => fresh.promise);
+    const listReportMappingPositions = vi.fn(async () => [positions[0]]);
+    const dataAdapter = adapter({ getReportMappingHealth, listReportMappingPositions });
+
+    const { rerender } = render(
+      <ReportMappingSetup dataAdapter={dataAdapter} chart="SKR03" role="admin" statements={['hgb-guv']} asOfDate="2025-12-31" />,
+    );
+    await waitFor(() => expect(getReportMappingHealth).toHaveBeenCalledTimes(1));
+    rerender(
+      <ReportMappingSetup dataAdapter={dataAdapter} chart="SKR03" role="admin" statements={['hgb-guv']} asOfDate="2025-12-31" refreshKey={1} />,
+    );
+    await waitFor(() => expect(getReportMappingHealth).toHaveBeenCalledTimes(2));
+
+    fresh.resolve({ chart: 'SKR03', unmapped: [{ accountNumber: '8600', statement: 'hgb-guv' }] });
+    expect(await screen.findByText('8600')).toBeTruthy();
+    stale.reject(new Error('veralteter Mapping-Fehler'));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.getByText('8600')).toBeTruthy();
+  });
+
   it('shows report-specific missing accounts and only catalog positions', async () => {
     const dataAdapter = adapter();
     render(<ReportMappingSetup dataAdapter={dataAdapter} chart="SKR03" role="admin" asOfDate="2025-12-31" />);

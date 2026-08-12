@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@billme/ui';
 import type { ProAccountingDataAdapter } from '../../services/mockBookingStore';
 import { permissionContextForRole } from '../../mocks/users';
@@ -46,8 +46,11 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const loadRequestId = useRef(0);
+  const mounted = useRef(true);
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestId.current;
     if (!enabled || !dataAdapter?.getReportMappingHealth || !dataAdapter.listReportMappingPositions) return;
     setLoading(true);
     setError(null);
@@ -62,6 +65,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
         statement,
         await dataAdapter.listReportMappingPositions!({ statement, asOfDate }),
       ] as const));
+      if (!mounted.current || requestId !== loadRequestId.current) return;
       setHealth(nextHealth);
       setPositions(Object.fromEntries(loaded));
       setSelections((current) => Object.fromEntries(nextHealth.unmapped.map((entry) => {
@@ -70,17 +74,26 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
         return [id, old?.statement === entry.statement ? old : { statement: entry.statement, position: '' }];
       })));
     } catch (loadError) {
+      if (!mounted.current || requestId !== loadRequestId.current) return;
       setHealth(null);
       setPositions({});
       setError(loadError instanceof Error ? loadError.message : 'Mapping-Health konnte nicht geladen werden.');
     } finally {
-      setLoading(false);
+      if (mounted.current && requestId === loadRequestId.current) setLoading(false);
     }
   }, [asOfDate, chart, dataAdapter, enabled, statements]);
 
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      loadRequestId.current += 1;
+    };
+  }, []);
 
   const mutationDisabled = !canMutate || loading || Boolean(saving) || !reason.trim();
 

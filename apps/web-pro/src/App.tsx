@@ -1076,7 +1076,8 @@ export default function App() {
       async getSusaReport(filters: ReportFilterState): Promise<SusaReport> {
         const report = await client.getSusaReport(reportFilter(filters));
         const names = new Map(data.ledgerAccounts.map((account) => [account.accountNumber, account.name]));
-        const openingBalance = report.rows.reduce((sum, row) => sum + row.openingBalance, 0);
+        const openingDebit = report.rows.reduce((sum, row) => sum + Math.max(0, row.openingBalance), 0);
+        const openingCredit = report.rows.reduce((sum, row) => sum + Math.max(0, -row.openingBalance), 0);
         const warnings = report.rows.filter((row) => Boolean((row as { hasWarnings?: boolean }).hasWarnings)).length;
         return {
           rows: report.rows.map((row) => ({
@@ -1085,8 +1086,8 @@ export default function App() {
             normalBalance: row.closingBalance >= 0 ? 'debit' : 'credit',
           })),
           totals: {
-            openingDebit: Math.max(0, openingBalance),
-            openingCredit: Math.max(0, -openingBalance),
+            openingDebit,
+            openingCredit,
             turnoverDebit: report.totals.debit,
             turnoverCredit: report.totals.credit,
             closingDebit: Math.max(0, report.totals.balance),

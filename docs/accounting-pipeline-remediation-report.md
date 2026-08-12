@@ -1,7 +1,7 @@
 # Abschlussreport Buchungspipeline
 
 **Stand:** 12.08.2026 · **Codebasis:** Branch
-`fix/accounting-pipeline-hardening`, Codebaseline `2e829e1` (danach folgt nur
+`fix/accounting-pipeline-hardening`, Codebaseline `dbaafc7` (danach folgt nur
 diese Report-Aktualisierung)
 
 Dieser Report bewertet den technischen Stand der Pro-Buchungspipeline nach der

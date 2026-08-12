@@ -452,7 +452,7 @@ export interface ProAccountingRepository {
   dispatchDraftAction(scope: TenantScope, args: ProDraftActionRequest): Promise<BookingDraftEntity>;
   validateTaxCompliance(
     scope: TenantScope,
-    args: { draftId?: string; transactionId?: string },
+    args: { draftId?: string; transactionId?: string; mutation?: AccountingMutationContext },
   ): Promise<{ ok: boolean; issues: ValidationIssue[] }>;
   postDraft(scope: TenantScope, draftId: string, options?: PostDraftOptions): Promise<{
     entry: JournalEntryEntity;
@@ -467,7 +467,15 @@ export interface ProAccountingRepository {
   listDatevExports(scope: TenantScope): Promise<DatevExportResult[]>;
   insertDatevExport(
     scope: TenantScope,
-    args: { filePath: string; recordCount: number; fromDate?: string; toDate?: string },
+    args: {
+      filePath: string;
+      recordCount: number;
+      fromDate?: string;
+      toDate?: string;
+      contentSha256?: string;
+      sourceSnapshot?: { from?: string; to?: string; recordCount: number };
+      mutation?: AccountingMutationContext;
+    },
   ): Promise<DatevExportResult>;
   getAccountingHealth(scope: TenantScope): Promise<AccountingHealthSnapshot>;
   getVatSummary(scope: TenantScope, args?: ReportRangeOptions): Promise<VatSummary>;

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createHash } from 'node:crypto';
 import { createProAccountingService } from '@billme/accounting-engine';
 import type {
+  AccountingMutationContext,
   ProDraftActionRequest,
   TenantScope,
 } from '@billme/server-core';
@@ -9,7 +10,6 @@ import type {
   AccountingBackfillConfirmation,
   AccountingAccountMapping,
   IncomingInvoiceEntity,
-  OpenItemPaymentInput,
 } from '@billme/accounting-shared';
 import { createPostgresProAccountingRepository } from '@billme/server-data';
 import {
@@ -147,6 +147,11 @@ const backfillBody = z.object({
 const requireProSession = async (app: FastifyInstance, authHeader: string | undefined) =>
   requireSession(app, 'pro', authHeader);
 
+const mutationFor = (session: Awaited<ReturnType<typeof requireProSession>>, reason: string): AccountingMutationContext => ({
+  reason,
+  actor: { type: 'user', id: session.user.id, displayName: session.user.fullName },
+});
+
 const requireMutationSession = async (app: FastifyInstance, authHeader: string | undefined) => {
   const session = await requireProSession(app, authHeader);
   if (!['owner', 'admin', 'accountant'].includes(session.role)) {
@@ -205,7 +210,10 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       if (CLIENT_CONTROLLED_WORKFLOW_STATUSES.has(body.draft.workflowStatus)) {
         throw new ApiError(400, 'workflowStatus is server controlled; use the draft action or post route');
       }
-      const saved = await serviceFor(app).saveDraft(session.scope, tenantDraft(session.scope, body.draft), { reason: body.reason });
+      const saved = await serviceFor(app).saveDraft(session.scope, {
+        ...tenantDraft(session.scope, body.draft),
+        mutation: mutationFor(session, body.reason),
+      });
       return saved;
     },
   });
@@ -222,7 +230,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         transactionId: params.transactionId,
         action: body.action,
         rejectReason: body.rejectReason,
-        reason: body.reason,
+        mutation: mutationFor(session, body.reason),
       };
       const saved = await serviceFor(app).dispatchDraftAction(session.scope, action);
       return saved;
@@ -236,7 +244,13 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     body: postDraftBody,
     async handler({ request, params, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const posted = await serviceFor(app).postDraft(session.scope, params.draftId, body);
+      const posted = await serviceFor(app).postDraft(session.scope, params.draftId, {
+        postingDate: body.postingDate,
+        idempotencyKey: body.idempotencyKey,
+        softLockOverride: body.softLockOverride,
+        overrideReason: body.overrideReason,
+        mutation: mutationFor(session, body.reason),
+      });
       return posted;
     },
   });
@@ -261,7 +275,12 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     body: reverseBody,
     async handler({ request, params, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const reversed = await serviceFor(app).reverseJournalEntry(session.scope, params.id, body.reason, body);
+      const reversed = await serviceFor(app).reverseJournalEntry(session.scope, params.id, body.reason, {
+        postingDate: body.postingDate,
+        softLockOverride: body.softLockOverride,
+        overrideReason: body.overrideReason,
+        mutation: mutationFor(session, body.reason),
+      });
       return reversed;
     },
   });
@@ -374,7 +393,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         recordCount: rows.length,
         fromDate: query.from,
         toDate: query.to,
-        reason: query.reason,
+        mutation: mutationFor(session, query.reason),
         contentSha256,
         sourceSnapshot: { from: query.from, to: query.to, recordCount: rows.length },
       });
@@ -393,7 +412,11 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     body: z.object({ reason: reasonSchema, draftId: z.string().min(1).optional(), transactionId: z.string().min(1).optional() }).refine((value) => value.draftId || value.transactionId, 'draftId or transactionId is required'),
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      return serviceFor(app).validateTaxCompliance(session.scope, body, { reason: body.reason });
+      return serviceFor(app).validateTaxCompliance(session.scope, {
+        draftId: body.draftId,
+        transactionId: body.transactionId,
+        mutation: mutationFor(session, body.reason),
+      });
     },
   });
 
@@ -407,7 +430,8 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       return serviceFor(app).validateTaxCompliance(session.scope, {
         draftId: params.draftId,
         transactionId: body.transactionId,
-      }, { reason: body.reason });
+        mutation: mutationFor(session, body.reason),
+      });
     },
   });
 
@@ -428,7 +452,11 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     response: accountingPolicySchema,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const policy = await serviceFor(app).setAccountingPolicy(session.scope, body);
+      const policy = await serviceFor(app).setAccountingPolicy(session.scope, {
+        activeChart: body.activeChart,
+        vatMethod: body.vatMethod,
+        mutation: mutationFor(session, body.reason),
+      });
       return policy;
     },
   });
@@ -456,7 +484,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         chart: body.chart,
         role: body.role,
         accountNumber: body.accountNumber,
-        reason: body.reason,
+        mutation: mutationFor(session, body.reason),
       };
       const mapping = await serviceFor(app).upsertAccountingAccountMapping(session.scope, input);
       return mapping;
@@ -482,7 +510,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       const session = await requireMutationSession(app, request.headers.authorization);
       const vendor = await serviceFor(app).upsertVendor(session.scope, {
         ...body.vendor,
-        reason: body.reason,
+        mutation: mutationFor(session, body.reason),
       });
       return vendor;
     },
@@ -506,11 +534,12 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
       const now = new Date().toISOString();
-      const invoice: IncomingInvoiceEntity = {
+      const invoice: IncomingInvoiceEntity & { mutation?: AccountingMutationContext } = {
         ...body.invoice,
         tenantId: session.scope.tenantId,
         createdAt: now,
         updatedAt: now,
+        mutation: mutationFor(session, body.reason),
       };
       const saved = await serviceFor(app).upsertIncomingInvoice(session.scope, invoice);
       return saved;
@@ -536,8 +565,10 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
       const posted = await serviceFor(app).postOutgoingInvoice(session.scope, body.invoiceId, {
-        ...body,
-        requireFinalizedReservation: true,
+        softLockOverride: body.softLockOverride,
+        overrideReason: body.overrideReason,
+        reservationId: body.reservationId,
+        mutation: mutationFor(session, body.reason),
       });
       return posted;
     },
@@ -561,7 +592,11 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     response: accountingPostingPreviewSchema,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const posted = await serviceFor(app).postIncomingInvoice(session.scope, body.invoiceId, body);
+      const posted = await serviceFor(app).postIncomingInvoice(session.scope, body.invoiceId, {
+        softLockOverride: body.softLockOverride,
+        overrideReason: body.overrideReason,
+        mutation: mutationFor(session, body.reason),
+      });
       return posted;
     },
   });
@@ -582,7 +617,10 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     body: paymentBody,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const payment = await serviceFor(app).allocateOpenItemPayment(session.scope, { ...body.payment, reason: body.reason } as OpenItemPaymentInput & { reason: string });
+      const payment = await serviceFor(app).allocateOpenItemPayment(session.scope, {
+        ...body.payment,
+        mutation: mutationFor(session, body.reason),
+      });
       return payment;
     },
   });
@@ -594,7 +632,13 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     body: remainingPaymentBody,
     async handler({ request, params, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const payment = await serviceFor(app).allocateRemainingOpenItemPayment(session.scope, params.paymentId, body.allocations, { reason: body.reason });
+      const payment = await serviceFor(app).allocateRemainingOpenItemPayment(
+        session.scope,
+        params.paymentId,
+        body.allocations,
+        undefined,
+        mutationFor(session, body.reason),
+      );
       return payment;
     },
   });
@@ -605,7 +649,10 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     body: reverseDocumentBody,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const reversed = await serviceFor(app).reverseDocumentAccounting(session.scope, body);
+      const reversed = await serviceFor(app).reverseDocumentAccounting(session.scope, {
+        ...body,
+        mutation: mutationFor(session, body.reason),
+      });
       return reversed;
     },
   });

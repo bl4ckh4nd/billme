@@ -206,3 +206,47 @@ test('HGB balance blocks when the current HGB GuV mapping is missing', () => {
   assert.deepEqual(report.assets, []);
   assert.ok(report.mappingHealth.warnings.some((warning) => warning.includes('HGB-GuV')));
 });
+
+test('micro balance folds an open HGB result into the statutory equity heading', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'micro', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 1600, creditTurnover: 0 },
+      { accountNumber: '3000', openingBalance: -1000, debitTurnover: 0, creditTurnover: 0 },
+      { accountNumber: '4000', openingBalance: 0, debitTurnover: 400, creditTurnover: 0 },
+      { accountNumber: '8000', openingBalance: 0, debitTurnover: 0, creditTurnover: 1000 },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' },
+      { accountNumber: '3000', statement: 'hgb-bilanz', position: 'equity', side: 'liability' },
+      { accountNumber: '4000', statement: 'hgb-guv', position: 'material' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.mappingHealth.blocking, false);
+  assert.deepEqual(report.totals, { assets: 1600, liabilities: 1600, delta: 0 });
+  assert.equal(report.liabilities.find((row) => row.position === 'equity')?.amount, 1600);
+});
+
+test('micro closed equity.result evidence is folded once and is idempotent', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'micro', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 1600, creditTurnover: 0 },
+      { accountNumber: '3000', openingBalance: -1000, debitTurnover: 0, creditTurnover: 0 },
+      { accountNumber: '3100', openingBalance: -600, debitTurnover: 0, creditTurnover: 0 },
+      { accountNumber: '4000', openingBalance: 0, debitTurnover: 400, creditTurnover: 0 },
+      { accountNumber: '8000', openingBalance: 0, debitTurnover: 0, creditTurnover: 1000 },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' },
+      { accountNumber: '3000', statement: 'hgb-bilanz', position: 'equity', side: 'liability' },
+      { accountNumber: '3100', statement: 'hgb-bilanz', position: 'equity.result', side: 'liability' },
+      { accountNumber: '4000', statement: 'hgb-guv', position: 'material' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.mappingHealth.blocking, false);
+  assert.deepEqual(report.totals, { assets: 1600, liabilities: 1600, delta: 0 });
+  assert.equal(report.liabilities.find((row) => row.position === 'equity')?.amount, 1600);
+});

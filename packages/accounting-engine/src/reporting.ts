@@ -260,7 +260,11 @@ function balanceValues(
     }
     const position = mapping.position;
     const catalogPosition = catalog.positions.find((entry) => entry.key === position);
-    if (!catalogPosition) {
+    // §266 micro only publishes the letter-level equity heading.  A licensed
+    // explicit equity.result mapping is still accepted as closing evidence,
+    // but is folded into that heading rather than emitted as a private row.
+    const microClosedResult = context.profile.size === 'micro' && position === 'equity.result';
+    if (!catalogPosition && !microClosedResult) {
       invalidAccounts.add(row.accountNumber);
       warnings.push(`${row.accountNumber} uses unknown hgb-bilanz position ${mapping.position}`);
       continue;
@@ -271,10 +275,11 @@ function balanceValues(
       warnings.push(`${row.accountNumber} has an inconsistent balance side for ${position}`);
       continue;
     }
-    const current = values.get(catalogPosition.key) ?? { amount: 0, accounts: new Set<string>() };
+    const valueKey = microClosedResult ? 'equity.result' : catalogPosition.key;
+    const current = values.get(valueKey) ?? { amount: 0, accounts: new Set<string>() };
     current.amount += expectedSide === 'asset' ? balance(row) : -balance(row);
     current.accounts.add(row.accountNumber);
-    values.set(catalogPosition.key, current);
+    values.set(valueKey, current);
   }
   const unmappedAccounts = [...new Set([...context.mappingHealth.unmappedAccounts, ...invalidAccounts])].sort();
   return {
@@ -521,6 +526,13 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
   const catalog = catalogFor('bilanz', context.profile.size);
   const prepared = balanceValues(context, catalog);
   const hasClosedResult = prepared.values.has('equity.result');
+  if (hasClosedResult && context.profile.size === 'micro') {
+    const result = prepared.values.get('equity.result')!;
+    const equity = prepared.values.get('equity') ?? { amount: 0, accounts: new Set<string>() };
+    equity.amount += result.amount;
+    for (const accountNumber of result.accounts) equity.accounts.add(accountNumber);
+    prepared.values.set('equity', equity);
+  }
   let mappingHealth = prepared.mappingHealth;
   if (!hasClosedResult) {
     const guv = calculateHgbGuv(request);
@@ -537,6 +549,11 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
       if (resultPosition) {
         const accountNumbers = guv.rows.flatMap((row) => row.accountNumbers);
         prepared.values.set('equity.result', { amount: cents(guv.netResult), accounts: new Set(accountNumbers) });
+      } else if (context.profile.size === 'micro') {
+        const equity = prepared.values.get('equity') ?? { amount: 0, accounts: new Set<string>() };
+        equity.amount += cents(guv.netResult);
+        for (const accountNumber of guv.rows.flatMap((row) => row.accountNumbers)) equity.accounts.add(accountNumber);
+        prepared.values.set('equity', equity);
       }
     }
   }

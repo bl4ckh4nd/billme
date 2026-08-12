@@ -34,6 +34,7 @@ const {
       getGuvReport: vi.fn(async () => ({ netResult: 0 })),
       getBilanzReport: vi.fn(async () => ({ totals: { delta: 0 } })),
       getAccountingHealth: vi.fn(async () => ({ postedCount: 0, draftCount: 0 })),
+      getAccountingPolicy: vi.fn(async () => ({ activeChart: 'SKR03' })),
       saveDraft: vi.fn(async () => ({ ok: true })),
       dispatchDraftAction: vi.fn(async () => ({
         id: 'draft-1',
@@ -176,6 +177,7 @@ describe('ProAccountingPage integration', () => {
       ],
     });
     mockUseAccountsQuery.mockReturnValue({ data: [] });
+    mockIpc.pro.getAccountingPolicy.mockResolvedValue({ activeChart: 'SKR03' });
     mockUseImportSkrMutation.mockReturnValue({
       mutateAsync: mockImportSkrMutateAsync,
       isPending: false,
@@ -301,6 +303,7 @@ describe('ProAccountingPage integration', () => {
     mockUseProLedgerStatsQuery.mockReturnValue({
       data: { total: 1, byChart: { SKR03: 0, SKR04: 1 } },
     });
+    mockIpc.pro.getAccountingPolicy.mockResolvedValue({ activeChart: 'SKR04' });
     mockUseProLedgerAccountsQuery.mockReturnValue({
       data: [
         { id: 'skr04-1999', chart: 'SKR04', accountNumber: '1999', name: 'Geldtransit', keywords: ['Bankkonto'] },
@@ -341,6 +344,7 @@ describe('ProAccountingPage integration', () => {
 
     render(<ProAccountingPage />, { wrapper: createWrapper() });
     await waitFor(() => expect(workspaceState.lastProps?.seed?.chartFramework).toBe('SKR04'));
+    expect(mockUseProLedgerAccountsQuery).toHaveBeenCalledWith(expect.objectContaining({ chart: 'SKR04' }));
     expect(workspaceState.lastProps.seed.bankAccountNumber).toBe('1999');
     expect(workspaceState.lastProps.seed.drafts[0].lines[0]).toEqual(
       expect.objectContaining({ accountId: '1999', accountName: 'Geldtransit' }),

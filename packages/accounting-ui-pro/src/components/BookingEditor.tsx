@@ -97,11 +97,14 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
           return;
         }
         if (e.key === 'Tab') {
-          const focusable = Array.from(
-            shortcutDialogRef.current?.querySelectorAll<HTMLElement>(
-              'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-            ) ?? [],
-          ).filter((element) => !element.hasAttribute('disabled'));
+          const dialogFocusable = shortcutDialogRef.current?.querySelectorAll<HTMLElement>(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+          );
+          const focusable: HTMLElement[] = [];
+          dialogFocusable?.forEach((element) => {
+            const htmlElement = element as HTMLElement;
+            if (!htmlElement.hasAttribute('disabled')) focusable.push(htmlElement);
+          });
           if (focusable.length === 0) return;
           const first = focusable[0];
           const last = focusable[focusable.length - 1];

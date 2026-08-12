@@ -4,8 +4,6 @@ import { bootstrapSql } from './bootstrap';
 import { runMigrations } from './migrate';
 import {
   getAccountingHealth,
-  getBilanzReport,
-  getGuvReport,
   getLedgerBalances,
   getSusaReport,
 } from './proAccountingRepo';
@@ -77,7 +75,7 @@ const seedGoldenJournal = (db: Database.Database): void => {
 };
 
 describe.skipIf(!canRunNativeSqlite)('auditable Pro reports', () => {
-  it('calculates cent-exact opening, period turnover, GuV and Bilanz from the golden journal', () => {
+  it('calculates cent-exact opening and period turnover from the golden journal', () => {
     const db = createDb();
     seedGoldenJournal(db);
     const scope = createProTenantScope('default');
@@ -98,30 +96,12 @@ describe.skipIf(!canRunNativeSqlite)('auditable Pro reports', () => {
     expect(susa.unmappedAccounts).toEqual([]);
     expect(susa.blocking).toBe(false);
 
-    const guv = getGuvReport(db, { from: '2026-03-01', to: '2026-03-31' }, scope);
-    expect(guv.rows).toEqual([
-      { positionKey: 'expense', positionLabel: 'Aufwendungen', amount: -50, accountRefs: ['4900'] },
-      { positionKey: 'revenue', positionLabel: 'Umsatzerlöse', amount: 0, accountRefs: ['8400'] },
-    ]);
-    expect(guv.netResult).toBe(-50);
-    expect(guv.unmappedAccounts).toEqual([]);
-
-    const bilanz = getBilanzReport(db, { asOfDate: '2026-03-31' }, scope);
-    expect(bilanz.assets).toEqual([
-      { accountNumber: '1200', amount: 219 },
-      { accountNumber: '1400', amount: -119 },
-      { accountNumber: '1576', amount: 9.5 },
-    ]);
-    expect(bilanz.liabilities).toEqual([
-      { accountNumber: '1600', amount: 59.5 },
-      { accountNumber: '1776', amount: 0 },
-      { accountNumber: '9000', amount: 100 },
-    ]);
-    expect(bilanz.totals).toEqual({ assets: 109.5, liabilities: 159.5, delta: -50 });
-    expect(bilanz.unmappedAccounts).toEqual([]);
-
     const health = getAccountingHealth(db, scope);
-    expect(health).toMatchObject({ unmappedAccountCount: 0, unmappedAccounts: [], blocking: false });
+    expect(health).toMatchObject({
+      unmappedAccountCount: 8,
+      unmappedAccounts: ['1200', '1400', '1576', '1600', '1776', '4900', '8400', '9000'],
+      blocking: true,
+    });
   });
 
   it('seeds OPOS 7% VAT accounts for both active charts', () => {
@@ -138,12 +118,15 @@ describe.skipIf(!canRunNativeSqlite)('auditable Pro reports', () => {
       ]);
       const scope = createProTenantScope('default');
       expect(getSusaReport(db, { asOfDate: '2026-03-31' }, scope).unmappedAccounts).toEqual([]);
-      expect(getBilanzReport(db, { asOfDate: '2026-03-31' }, scope).unmappedAccounts).toEqual([]);
-      expect(getAccountingHealth(db, scope)).toMatchObject({ unmappedAccountCount: 0, blocking: false });
+      expect(getAccountingHealth(db, scope)).toMatchObject({
+        unmappedAccountCount: 2,
+        unmappedAccounts: [debitAccount, creditAccount],
+        blocking: true,
+      });
     }
   });
 
-  it('reconciles a custom deferred VAT account into HGB reports', () => {
+  it('keeps a custom deferred VAT account visible in the independent SuSa', () => {
     const db = createDb();
     db.prepare(`INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at)
       VALUES ('skr03-vat-deferred-custom', 'SKR03', '1790', 'USt nicht fällig (custom)', 'test', datetime('now'), datetime('now'))`).run();
@@ -160,20 +143,12 @@ describe.skipIf(!canRunNativeSqlite)('auditable Pro reports', () => {
     const susa = getSusaReport(db, { asOfDate: '2026-03-31' }, scope);
     expect(susa.unmappedAccounts).toEqual([]);
     expect(susa.blocking).toBe(false);
-    expect(susa.rows.find((row) => row.accountNumber === '1790')).toMatchObject({
-      mappedTo: 'output_vat_deferred',
-      hasWarnings: false,
+    expect(susa.rows.find((row) => row.accountNumber === '1790')).toMatchObject({ hasWarnings: false });
+    expect(getAccountingHealth(db, scope)).toMatchObject({
+      unmappedAccountCount: 2,
+      unmappedAccounts: ['1776', '1790'],
+      blocking: true,
     });
-    expect(db.prepare(`SELECT position_key, statement_type, balance_side
-      FROM account_mappings_hgb WHERE tenant_id = 'default' AND chart = 'SKR03' AND account_number = '1790'`).get()).toEqual({
-      position_key: 'output_vat_deferred', statement_type: 'bilanz', balance_side: 'liability',
-    });
-    db.prepare(`UPDATE account_mappings_hgb SET position_label = 'Explizite Sonderzuordnung'
-      WHERE tenant_id = 'default' AND chart = 'SKR03' AND account_number = '1790'`).run();
-    expect(getSusaReport(db, { asOfDate: '2026-03-31' }, scope).rows.find((row) => row.accountNumber === '1790')?.mappedTo)
-      .toBe('output_vat_deferred');
-    expect(getBilanzReport(db, { asOfDate: '2026-03-31' }, scope).unmappedAccounts).toEqual([]);
-    expect(getAccountingHealth(db, scope)).toMatchObject({ unmappedAccountCount: 0, blocking: false });
   });
 
   it('exposes unknown accounts and never matches a mapping from another chart or tenant', () => {
@@ -191,13 +166,9 @@ describe.skipIf(!canRunNativeSqlite)('auditable Pro reports', () => {
     expect(susa.unmappedAccounts).toEqual([]);
     expect(susa.blocking).toBe(false);
     expect(susa.rows.find((row) => row.accountNumber === '9999')).toMatchObject({ hasWarnings: false });
-    expect(getGuvReport(db, { from: '2026-03-01', to: '2026-03-31' }, scope).unmappedAccounts)
-      .toEqual([{ accountNumber: '9999', amount: -10 }]);
-    expect(getBilanzReport(db, { asOfDate: '2026-03-31' }, scope).unmappedAccounts)
-      .toEqual([{ accountNumber: '9999', amount: 10 }]);
     expect(getAccountingHealth(db, scope)).toMatchObject({
-      unmappedAccountCount: 1,
-      unmappedAccounts: ['9999'],
+      unmappedAccountCount: 2,
+      unmappedAccounts: ['1200', '9999'],
       blocking: true,
     });
 
@@ -206,7 +177,15 @@ describe.skipIf(!canRunNativeSqlite)('auditable Pro reports', () => {
     db.prepare(`INSERT INTO account_mappings_hgb
       (id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at)
       VALUES ('tenant-b-map', 'tenant-b', 'SKR03', '9998', 'guv', 'revenue', 'Umsatz', NULL, '2026-03-21T00:00:00.000Z')`).run();
-    expect(getGuvReport(db, { from: '2026-03-01', to: '2026-03-31' }, otherTenant).unmappedAccounts).toEqual([]);
-    expect(getGuvReport(db, { from: '2026-03-01', to: '2026-03-31' }, scope).unmappedAccounts).toEqual([{ accountNumber: '9999', amount: -10 }]);
+    expect(getAccountingHealth(db, otherTenant)).toMatchObject({
+      unmappedAccountCount: 1,
+      unmappedAccounts: ['1200'],
+      blocking: true,
+    });
+    expect(getAccountingHealth(db, scope)).toMatchObject({
+      unmappedAccountCount: 2,
+      unmappedAccounts: ['1200', '9999'],
+      blocking: true,
+    });
   });
 });

@@ -416,7 +416,7 @@ export const incomingInvoices = pgTable("incoming_invoices", {
   netAmount: numeric("net_amount"), taxAmount: numeric("tax_amount"), grossAmount: numeric("gross_amount"),
   status: text("status"), taxRate: numeric("tax_rate"), taxCaseKey: text("tax_case_key"), notes: text("notes"),
   accountingStatus: text("accounting_status"), accountingSnapshotJson: text("accounting_snapshot_json"),
-  accountingJournalEntryId: text("accounting_journal_entry_id"), createdAt: text("created_at"), updatedAt: text("updated_at"),
+  accountingJournalEntryId: text("accounting_journal_entry_id"), accountingPostedAt: text("accounting_posted_at"), createdAt: text("created_at"), updatedAt: text("updated_at"),
 });
 
 export const incomingInvoiceLines = pgTable("incoming_invoice_lines", {
@@ -438,7 +438,7 @@ export const openItemAllocations = pgTable("open_item_allocations", {
 });
 
 export const accountingBackfillRuns = pgTable("accounting_backfill_runs", {
-  id: text("id"), tenantId: text("tenant_id"), status: text("status"), candidatesJson: text("candidates_json"), confirmationHash: text("confirmation_hash"), resultJson: text("result_json"), createdAt: text("created_at"), confirmedAt: text("confirmed_at"), completedAt: text("completed_at"),
+  id: text("id"), tenantId: text("tenant_id"), status: text("status"), candidatesJson: text("candidates_json"), confirmationHash: text("confirmation_hash"), resultJson: text("result_json"), createdAt: text("created_at"), confirmedAt: text("confirmed_at"), completedAt: text("completed_at"), configJson: text("config_json"),
 });
 
 export const journalLines = pgTable("journal_lines", {

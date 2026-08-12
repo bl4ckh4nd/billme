@@ -138,5 +138,26 @@
       "E2025_KZ176",
       "E2025_KZ139"
     ]
-  }
+  },
+  { "year": 2025, "id": "E2025_KZ240", "kennziffer": "240", "label": "Steuerfreie Einnahmen nach § 3 Nr. 26, 26a und 26b EStG", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ241", "kennziffer": "241", "label": "Steuerfreie Einnahmen nach § 3 EStG (ohne Nr. 26, 26a, 26b und Teileinkünfteverfahren)", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ242", "kennziffer": "242", "label": "Steuerfreie Einnahmen nach § 3a EStG", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ243", "kennziffer": "243", "label": "Nicht abziehbare Betriebsausgaben im Zusammenhang mit steuerfreien Einnahmen nach § 3 Nr. 26, 26a und 26b EStG", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ244", "kennziffer": "244", "label": "Nicht abziehbare Betriebsausgaben nach § 3c Abs. 1 EStG", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ245", "kennziffer": "245", "label": "Nicht abziehbare Betriebsausgaben nach § 3c Abs. 4 EStG", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ180", "kennziffer": "180", "label": "Hinzurechnung der Investitionsabzugsbeträge nach § 7g Abs. 2 Satz 1 EStG aus 2022", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ181", "kennziffer": "181", "label": "Hinzurechnung der Investitionsabzugsbeträge nach § 7g Abs. 2 Satz 1 EStG aus 2023", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ182", "kennziffer": "182", "label": "Hinzurechnung der Investitionsabzugsbeträge nach § 7g Abs. 2 Satz 1 EStG aus 2024", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ123", "kennziffer": "123", "label": "Gewinnzuschlag nach § 6c in Verbindung mit § 6b Abs. 7 und 10 EStG", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ187", "kennziffer": "187", "label": "Investitionsabzugsbeträge nach § 7g Abs. 1 EStG", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ250", "kennziffer": "250", "label": "Hinzurechnungen und Abrechnungen bei Wechsel der Gewinnermittlungsart", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ255", "kennziffer": "255", "label": "Ergebnisanteile aus Beteiligungen an Personengesellschaften (auch Kostenträgergemeinschaften)", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ290", "kennziffer": "290", "label": "Korrigierter Gewinn/Verlust", "kind": "computed", "exportable": true, "role": "tax_result", "computedTerms": [{ "id": "E2025_KZ159", "sign": 1 }, { "id": "E2025_KZ199", "sign": -1 }, { "id": "E2025_KZ240", "sign": -1 }, { "id": "E2025_KZ241", "sign": -1 }, { "id": "E2025_KZ242", "sign": -1 }, { "id": "E2025_KZ243", "sign": 1 }, { "id": "E2025_KZ244", "sign": 1 }, { "id": "E2025_KZ245", "sign": 1 }, { "id": "E2025_KZ180", "sign": 1 }, { "id": "E2025_KZ181", "sign": 1 }, { "id": "E2025_KZ182", "sign": 1 }, { "id": "E2025_KZ123", "sign": -1 }, { "id": "E2025_KZ187", "sign": -1 }, { "id": "E2025_KZ250", "sign": 1 }, { "id": "E2025_KZ255", "sign": 1 }] },
+  { "year": 2025, "id": "E2025_KZ263", "kennziffer": "263", "label": "Bereits berücksichtigte Beträge, für die Steuerbefreiungen nach dem InvStG gelten – Gesamtbetrag", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ264", "kennziffer": "264", "label": "Bereits berücksichtigte Beträge, für die Steuerbefreiungen nach dem InvStG gelten – Korrekturbetrag", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ261", "kennziffer": "261", "label": "Bereits berücksichtigte Beträge, für die das Teileinkünfteverfahren bzw. § 8b KStG gilt – Gesamtbetrag", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ262", "kennziffer": "262", "label": "Bereits berücksichtigte Beträge, für die das Teileinkünfteverfahren bzw. § 8b KStG gilt – Korrekturbetrag", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ293", "kennziffer": "293", "label": "Steuerpflichtiger Gewinn/Verlust vor Anwendung des § 4 Abs. 4a EStG", "kind": "computed", "exportable": true, "role": "tax_result", "computedTerms": [{ "id": "E2025_KZ290", "sign": 1 }, { "id": "E2025_KZ263", "sign": 1 }, { "id": "E2025_KZ264", "sign": -1 }, { "id": "E2025_KZ261", "sign": 1 }, { "id": "E2025_KZ262", "sign": -1 }] },
+  { "year": 2025, "id": "E2025_KZ271", "kennziffer": "271", "label": "Hinzurechnungsbetrag nach § 4 Abs. 4a EStG", "kind": "computed", "exportable": true, "role": "tax_adjustment" },
+  { "year": 2025, "id": "E2025_KZ219", "kennziffer": "219", "label": "Steuerpflichtiger Gewinn/Verlust", "kind": "computed", "exportable": true, "role": "tax_result", "computedTerms": [{ "id": "E2025_KZ293", "sign": 1 }, { "id": "E2025_KZ271", "sign": 1 }] }
 ]

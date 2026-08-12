@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { MOCK_SETTINGS } from '@billme/desktop-services/mockData';
+import type { HgbBilanzReport, ReportResult } from '@billme/accounting-shared';
 import { bootstrapSql } from './bootstrap';
 import {
   fiscalYearForPostingDate,
@@ -78,6 +79,34 @@ describe('Pro reporting repository invariants', () => {
 
     await expect(getReportingReport(db, { kind: 'management-guv' }, createProTenantScope('default'))).resolves.toMatchObject({ kind: 'management-guv' });
     await expect(getReportingReport(db, { kind: 'bwa01' }, createProTenantScope('default'))).resolves.toMatchObject({ kind: 'bwa01' });
+  });
+
+  it('splits desktop balance snapshots at FY start and derives current/prior HGB results', async () => {
+    const db = createDb();
+    insertGmbhSettings(db);
+    db.exec(`
+      INSERT INTO journal_entries (id, tenant_id, entry_number, posting_date, document_date, booking_text, period, fiscal_year, status, created_at)
+      VALUES ('fy-2025', 'default', 1, '2025-12-31', '2025-12-31', 'Prior', '2025-12', 2025, 'posted', '2025-12-31T00:00:00.000Z'),
+             ('fy-2026', 'default', 2, '2026-12-31', '2026-12-31', 'Current', '2026-12', 2026, 'posted', '2026-12-31T00:00:00.000Z');
+      INSERT INTO journal_lines (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount)
+      VALUES ('fy-2025-a', 'default', 'fy-2025', 1, '1000', 100, 0),
+             ('fy-2025-r', 'default', 'fy-2025', 2, '8000', 0, 100),
+             ('fy-2026-a', 'default', 'fy-2026', 1, '1000', 50, 0),
+             ('fy-2026-r', 'default', 'fy-2026', 2, '8000', 0, 50);
+      INSERT INTO account_mappings_hgb (id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at)
+      VALUES ('fy-map-a', 'default', 'SKR03', '1000', 'hgb-bilanz', 'assets.current.cash', 'Kasse', 'asset', '2026-12-31T00:00:00.000Z'),
+             ('fy-map-r', 'default', 'SKR03', '8000', 'hgb-guv', 'revenue', 'Umsatz', NULL, '2026-12-31T00:00:00.000Z');
+    `);
+    const report = await getReportingReport(
+      db,
+      { kind: 'hgb-bilanz', asOfDate: '2026-12-31' },
+      createProTenantScope('default'),
+    );
+    const bilanz = report as ReportResult<HgbBilanzReport>;
+    expect(bilanz).toMatchObject({ kind: 'hgb-bilanz', mappingHealth: { blocking: false } });
+    expect(bilanz.liabilities.find((row) => row.position === 'equity.result')?.amount).toBe(50);
+    expect(bilanz.liabilities.find((row) => row.position === 'equity.profit-loss-forward')?.amount).toBe(100);
+    expect(bilanz.totals).toEqual({ assets: 150, liabilities: 150, delta: 0 });
   });
 
   it('keeps HGB reports GmbH-only for a sole-proprietor EÜR profile', async () => {

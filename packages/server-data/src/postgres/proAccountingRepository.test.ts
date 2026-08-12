@@ -161,6 +161,37 @@ test('BWA01 uses explicit mapped positions, catalog order, and blocking unmapped
   assert.equal(report.mappingHealth.blocking, true);
 });
 
+test('server HGB balance report splits balance snapshots at the fiscal-year start', async () => {
+  const calls: Array<{ text: string; values: unknown[] }> = [];
+  const tenantId = 'hgb-balance-split-test';
+  const db = {
+    query: async (text: string, values?: unknown[]) => {
+      calls.push({ text, values: values ?? [] });
+      if (text.includes('accounting_policies')) return { rows: [{ active_chart: 'SKR04', vat_method: 'soll' }] };
+      if (text.includes('server_settings')) return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', fiscalYearStart: '01-01', hgbSizeClass: 'small', chart: 'SKR04', vatMethod: 'soll' } }) }] };
+      if (text.includes('journal_lines')) return { rows: [
+        { account_number: '1000', opening_balance: '0', debit_turnover: '150', credit_turnover: '0' },
+        { account_number: '8000', opening_balance: '-100', debit_turnover: '0', credit_turnover: '50' },
+      ] };
+      if (text.includes('report_account_mappings')) return { rows: [
+        { account_number: '1000', report_type: 'hgb-bilanz', position_key: 'assets.current', position_label: 'Kasse' },
+        { account_number: '8000', report_type: 'hgb-guv', position_key: 'revenue', position_label: 'Umsatz' },
+      ] };
+      throw new Error(`unexpected query: ${text}`);
+    },
+  } as unknown as PostgresQueryable;
+  const report = await createPostgresProAccountingRepository(db).getBilanzReport(
+    createSingleTenantScope(tenantId, 'pro'),
+    { asOfDate: '2026-12-31' },
+  );
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 50);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.profit-loss-forward')?.amount, 100);
+  assert.deepEqual(report.totals, { assets: 150, liabilities: 150, delta: 0 });
+  assert.equal(report.mappingHealth.blocking, false);
+  const balancesQuery = calls.find((call) => call.text.includes('journal_lines'));
+  assert.deepEqual(balancesQuery?.values, [tenantId, '2026-12-31', '2026-01-01']);
+});
+
 test('server allows ledger reports for sole-proprietor EÜR and blocks HGB reports', async () => {
   let call = 0;
   const db = {

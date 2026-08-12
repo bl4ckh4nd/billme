@@ -238,6 +238,54 @@ test('balance sheet carries cumulative pre-FY P&L into the 2026 profit forward',
   assert.equal(report.mappingHealth.blocking, false);
 });
 
+test('balance snapshots use opening P&L as forward and turnover as current result', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: '2026-01-01',
+    to: '2026-12-31',
+    asOfDate: '2026-12-31',
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 150, creditTurnover: 0 },
+      { accountNumber: '8000', openingBalance: -100, debitTurnover: 0, creditTurnover: 50 },
+    ] },
+  }));
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 50);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.profit-loss-forward')?.amount, 100);
+  assert.deepEqual(report.totals, { assets: 150, liabilities: 150, delta: 0 });
+  assert.equal(report.mappingHealth.blocking, false);
+});
+
+test('unsplit balance snapshots fail closed instead of pretending an all-time result is current', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    asOfDate: '2026-12-31',
+    from: undefined,
+    to: undefined,
+    ledger: { balances: [{ accountNumber: '8000', openingBalance: -100, debitTurnover: 0, creditTurnover: 50 }] },
+  }));
+  assert.equal(report.mappingHealth.blocking, true);
+  assert.ok(report.mappingHealth.warnings.some((warning) => warning.includes('expliziten Geschäftsjahres-Split')));
+  assert.deepEqual(report.assets, []);
+  assert.deepEqual(report.liabilities, []);
+});
+
+test('balance snapshots honor a non-calendar fiscal-year split', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '04-15', hgbGuvMethod: 'gkv' },
+    from: '2026-04-15',
+    to: '2026-06-30',
+    asOfDate: '2026-06-30',
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 150, creditTurnover: 0 },
+      { accountNumber: '8000', openingBalance: -100, debitTurnover: 0, creditTurnover: 50 },
+    ] },
+  }));
+  assert.equal(report.snapshot.fiscalYear, 2026);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 50);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.profit-loss-forward')?.amount, 100);
+  assert.deepEqual(report.totals, { assets: 150, liabilities: 150, delta: 0 });
+});
+
 test('balance sheet derives open result from a non-calendar fiscal year only', () => {
   const report = calculateHgbBilanz(request({
     profile: { size: 'small', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
@@ -350,6 +398,9 @@ test('micro aggregate equity with prior open P&L fails closed as ambiguous', () 
 test('materially unbalanced HGB balance payloads fail closed', () => {
   const report = calculateHgbBilanz(request({
     profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: '2025-01-01',
+    to: '2025-12-31',
+    asOfDate: '2025-12-31',
     ledger: { balances: [{ accountNumber: '1000', openingBalance: 0, debitTurnover: 100, creditTurnover: 0 }] },
     mappings: [{ accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' }],
   }));
@@ -362,6 +413,9 @@ test('materially unbalanced HGB balance payloads fail closed', () => {
 test('micro and small balance output follows the committed statutory hierarchy', () => {
   const make = (size: 'micro' | 'small') => calculateHgbBilanz(request({
     profile: { size, fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: '2025-01-01',
+    to: '2025-12-31',
+    asOfDate: '2025-12-31',
     ledger: { balances: [
       { accountNumber: '1000', openingBalance: 0, debitTurnover: 100, creditTurnover: 0 },
       { accountNumber: '3000', openingBalance: -100, debitTurnover: 0, creditTurnover: 0 },

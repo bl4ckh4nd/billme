@@ -520,6 +520,14 @@ function balancePositionValue(catalog: PublicReportCatalog, values: Map<string, 
 
 export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBilanzReport> {
   const context = makeContext(request);
+  const balanceSnapshot = (request.ledger.entries?.length ?? 0) === 0 && (request.ledger.balances?.length ?? 0) > 0;
+  if (balanceSnapshot && (!context.from || !context.asOfDate || context.from !== context.snapshot.fiscalYearRange?.start)) {
+    return envelope(context, 'hgb-bilanz', { assets: [], liabilities: [], totals: { assets: 0, liabilities: 0, delta: 0 } }, {
+      ...context.mappingHealth,
+      warnings: [...context.mappingHealth.warnings, 'HGB-Bilanz benötigt bei Bilanz-Salden einen expliziten Geschäftsjahres-Split (from/asOfDate)'],
+      blocking: true,
+    });
+  }
   const catalog = catalogFor('bilanz', context.profile.size, context.snapshot.fiscalYear);
   const prepared = balanceValues(context, catalog);
   const hasClosedResult = prepared.values.has('equity.result');
@@ -573,10 +581,21 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
         : microEquityPosition && !microAggregateEquity
           ? microEquityPosition
           : undefined;
-      if ((priorResultPosition || microAggregateEquity) && context.snapshot.fiscalYearRange && (request.ledger.entries?.length ?? 0) > 0) {
+      if ((priorResultPosition || microAggregateEquity) && context.snapshot.fiscalYearRange) {
         const priorRange = fiscalYearRange(context.snapshot.fiscalYear - 1, context.profile.fiscalYearStart);
+        const priorLedger = balanceSnapshot
+          ? {
+            balances: (request.ledger.balances ?? []).map((balance) => ({
+              accountNumber: balance.accountNumber,
+              openingBalance: 0,
+              debitTurnover: Math.max(0, Number(balance.openingBalance ?? 0)),
+              creditTurnover: Math.max(0, -Number(balance.openingBalance ?? 0)),
+            })),
+          }
+          : request.ledger;
         const priorGuv = calculateHgbGuv({
           ...request,
+          ledger: priorLedger,
           // No closing-flow assumption: carry the cumulative P&L of every
           // ledger period before the current FY, not only the immediately
           // preceding year.

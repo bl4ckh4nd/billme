@@ -10,6 +10,7 @@ import {
 } from '@billme/accounting-engine';
 import {
   fiscalYearForDate,
+  fiscalYearRange,
 } from '@billme/accounting-shared';
 import type {
   AccountingAccountMapping, AccountingBackfillConfirmation, AccountingBackfillPreview, AccountingBackfillResult,
@@ -174,11 +175,16 @@ const calculateDatabaseReport = async <T extends DatabaseReportType>(db: Postgre
   if (args.chart && args.chart !== p.activeChart) throw new Error('REPORT_CHART_MISMATCH');
   const fromDate = args.from;
   const toDate = args.to ?? args.asOfDate;
-  const balances = await q<any>(db, `SELECT jl.account_number,COALESCE(SUM(CASE WHEN $3::text IS NOT NULL AND je.posting_date < $3 THEN jl.debit_amount-jl.credit_amount ELSE 0 END),0) opening_balance,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.debit_amount ELSE 0 END),0) debit_turnover,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.credit_amount ELSE 0 END),0) credit_turnover FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND ($2::text IS NULL OR je.posting_date <= $2) GROUP BY jl.account_number ORDER BY jl.account_number`, [tenant(scope), toDate ?? null, fromDate ?? null]);
+  const reportTo = toDate ?? (reportType === 'hgb-bilanz' ? undefined : now().slice(0, 10));
   const chart = args.chart ?? p.activeChart;
-  const profile = await reportProfile(db, tenant(scope), chart, reportType);
-  const mappings = await reportMappings(db, scope, chart, toDate);
-  return calculateReport({ kind: reportKindFor(reportType), profile, ledger: { balances: balances.map((row) => ({ accountNumber: String(row.account_number), openingBalance: Number(row.opening_balance), debitTurnover: Number(row.debit_turnover), creditTurnover: Number(row.credit_turnover), closingBalance: Number(row.opening_balance) + Number(row.debit_turnover) - Number(row.credit_turnover) })) }, mappings, from: fromDate, to: toDate, asOfDate: args.asOfDate ?? toDate }) as DatabaseReportFor<T>;
+  const balanceProfile = reportType === 'hgb-bilanz' ? await reportProfile(db, tenant(scope), chart, reportType) : undefined;
+  const ledgerFromDate = reportType === 'hgb-bilanz' && !fromDate && reportTo && balanceProfile
+    ? fiscalYearRange(fiscalYearForDate(reportTo, balanceProfile.fiscalYearStart), balanceProfile.fiscalYearStart).start
+    : fromDate;
+  const queriedBalances = await q<any>(db, `SELECT jl.account_number,COALESCE(SUM(CASE WHEN $3::text IS NOT NULL AND je.posting_date < $3 THEN jl.debit_amount-jl.credit_amount ELSE 0 END),0) opening_balance,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.debit_amount ELSE 0 END),0) debit_turnover,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.credit_amount ELSE 0 END),0) credit_turnover FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND ($2::text IS NULL OR je.posting_date <= $2) GROUP BY jl.account_number ORDER BY jl.account_number`, [tenant(scope), reportTo ?? null, ledgerFromDate ?? null]);
+  const profile = balanceProfile ?? await reportProfile(db, tenant(scope), chart, reportType);
+  const mappings = await reportMappings(db, scope, chart, reportTo);
+  return calculateReport({ kind: reportKindFor(reportType), profile, ledger: { balances: queriedBalances.map((row) => ({ accountNumber: String(row.account_number), openingBalance: Number(row.opening_balance), debitTurnover: Number(row.debit_turnover), creditTurnover: Number(row.credit_turnover), closingBalance: Number(row.opening_balance) + Number(row.debit_turnover) - Number(row.credit_turnover) })) }, mappings, from: ledgerFromDate, to: reportTo, asOfDate: args.asOfDate ?? reportTo }) as DatabaseReportFor<T>;
 };
 
 type ReportMappingType = 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz';

@@ -15,7 +15,7 @@ import type {
   ReportingStatement,
 } from '@billme/accounting-shared';
 import { calculateReport, listReportMappingPositions } from '@billme/accounting-engine';
-import { fiscalYearForDate } from '@billme/accounting-shared';
+import { fiscalYearForDate, fiscalYearRange } from '@billme/accounting-shared';
 import { appendAuditLog } from './audit';
 import { getSettings } from './settingsRepo';
 import { listAccountSuggestionRules } from './accountSuggestionRulesRepo';
@@ -2080,6 +2080,12 @@ export const getReportingReport = async (
     currency: 'EUR',
     hgbGuvMethod: 'gkv',
   };
+  const ledgerFrom = kind === 'hgb-bilanz' && !args.from && (args.to ?? args.asOfDate)
+    ? fiscalYearRange(
+      fiscalYearForDate(args.to ?? args.asOfDate!, calculationProfile.fiscalYearStart),
+      calculationProfile.fiscalYearStart,
+    ).start
+    : args.from;
   const reportSpecificStatements: ReportingStatement[] = [
     'bwa01', 'management-guv', 'hgb-guv', 'hgb-gkv', 'hgb-bilanz', 'hgb-balance', 'eur',
   ];
@@ -2094,7 +2100,8 @@ export const getReportingReport = async (
       label: mapping.position_label,
       ...(mapping.balance_side ? { side: mapping.balance_side } : {}),
     }));
-  const balances = getLedgerBalances(db, { from: args.from, to: args.to ?? args.asOfDate }, scope);
+  const reportTo = args.to ?? args.asOfDate ?? (kind === 'hgb-bilanz' ? undefined : new Date().toISOString().slice(0, 10));
+  const balances = getLedgerBalances(db, { from: ledgerFrom, to: reportTo }, scope);
   return calculateReport({
     kind: args.kind,
     profile: calculationProfile,
@@ -2106,9 +2113,9 @@ export const getReportingReport = async (
       closingBalance: balance.closingBalance,
     })) },
     mappings,
-    from: args.from,
-    to: args.to ?? args.asOfDate,
-    asOfDate: args.asOfDate ?? args.to,
+    from: ledgerFrom,
+    to: reportTo,
+    asOfDate: args.asOfDate ?? reportTo,
   });
 };
 

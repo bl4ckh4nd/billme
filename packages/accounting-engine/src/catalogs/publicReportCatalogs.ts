@@ -25,6 +25,23 @@ const HGB_GKV: CatalogProvenance = {
   sourceHashStatus: 'verified',
 };
 
+// The BMJ pages were rechecked on 2026-08-12.  Their §266/§275 structures
+// remain unchanged, but the report catalog is still versioned by applicable
+// year so a later legal change cannot silently reuse this snapshot.
+const HGB_BILANZ_2026: CatalogProvenance = {
+  ...HGB_BILANZ,
+  version: 'HGB-2026-01-01',
+  validFrom: '2026-01-01',
+  validTo: '2026-12-31',
+};
+
+const HGB_GKV_2026: CatalogProvenance = {
+  ...HGB_GKV,
+  version: 'HGB-2026-01-01',
+  validFrom: '2026-01-01',
+  validTo: '2026-12-31',
+};
+
 const BWA01: CatalogProvenance = {
   version: 'BMWi-GründerZeiten-23-2021-01',
   validFrom: '2021-01-01',
@@ -32,6 +49,17 @@ const BWA01: CatalogProvenance = {
   sourceUrl: 'https://www.existenzgruendungsportal.de/Redaktion/DE/Downloads/DE/GruenderZeiten/GruenderZeiten-23.pdf?__blob=publicationFile',
   sourceSha256: '28976588a6a429db8b6c457c07225dae55e10d271ffc1ae37d6d25fc60b60163',
   sourceHashStatus: 'verified',
+};
+
+// BWA 01 is a non-statutory controlling layout, not a tax or HGB form.  The
+// 2021 source remains the evidence; this immutable 2026 applicability
+// snapshot deliberately does not present it as a new legal publication.
+const BWA01_2026: CatalogProvenance = {
+  ...BWA01,
+  version: 'BMWi-GründerZeiten-23-2021-01-applicable-2026',
+  validFrom: '2026-01-01',
+  validTo: '2026-12-31',
+  sourceName: `${BWA01.sourceName} (nicht gesetzliche Orientierungsstruktur)`,
 };
 
 const both = ['micro', 'small'] as const;
@@ -197,6 +225,42 @@ const bwaPositions: PublicReportPosition[] = [
   position('BWA01_29', 'preliminary-result', 'Vorläufiges Ergebnis', 29, 'result'),
 ];
 
+// Internal management reporting is intentionally separate from the statutory
+// HGB catalogues and from the public BWA source.  Its formulas stay in the
+// engine, while this catalog owns the complete, explicit position set.
+export const managementGuvPositions: PublicReportPosition[] = [
+  position('MGMT_GUV_01', 'revenue', 'Betriebliche Erlöse', 1, 'line'),
+  position('MGMT_GUV_02', 'variable-costs', 'Variable Kosten', 2, 'line'),
+  position('MGMT_GUV_03', 'contribution-margin', 'Deckungsbeitrag', 3, 'subtotal'),
+  position('MGMT_GUV_04', 'personnel-costs', 'Personalkosten', 4, 'line'),
+  position('MGMT_GUV_05', 'fixed-costs', 'Fixkosten', 5, 'line'),
+  position('MGMT_GUV_06', 'ebitda', 'EBITDA', 6, 'subtotal'),
+  position('MGMT_GUV_07', 'depreciation', 'Abschreibungen', 7, 'line'),
+  position('MGMT_GUV_08', 'ebit', 'EBIT', 8, 'subtotal'),
+  position('MGMT_GUV_09', 'financial-result', 'Finanzergebnis', 9, 'line'),
+  position('MGMT_GUV_10', 'taxes', 'Steuern', 10, 'line'),
+  position('MGMT_GUV_11', 'net-result', 'Managementergebnis', 11, 'result'),
+];
+
+const MANAGEMENT_GUV_2025: CatalogProvenance = {
+  version: 'BillMe-Management-GuV-2025-01-01',
+  validFrom: '2025-01-01',
+  validTo: '2025-12-31',
+  sourceName: 'BillMe – interne Management-GuV (nicht gesetzliche Steuerungsrechnung)',
+  sourceUrl: 'https://github.com/bl4ckh4nd/billme',
+  // SHA-256 of the canonical position manifest in this module.  This is an
+  // internal model digest, not a claim that the layout is statutory.
+  sourceSha256: '15e6bf6310e87568d91cda4b99fb4a26a17f6e589e6461127cf401866f3f564e',
+  sourceHashStatus: 'verified',
+};
+
+const MANAGEMENT_GUV_2026: CatalogProvenance = {
+  ...MANAGEMENT_GUV_2025,
+  version: 'BillMe-Management-GuV-2026-01-01',
+  validFrom: '2026-01-01',
+  validTo: '2026-12-31',
+};
+
 const catalog = (
   id: string,
   title: string,
@@ -226,16 +290,46 @@ export const PUBLIC_HGB_GKV_SMALL_2025 = catalog('hgb-gkv-small-2025', 'HGB-Gewi
 export const PUBLIC_BWA01_MICRO_2021 = catalog('bwa01-micro-2021', 'BWA 01 – öffentliche Positionsstruktur für Kleinstunternehmen (Stand Januar 2021)', 'bwa01', 'micro', BWA01, bwaPositions);
 export const PUBLIC_BWA01_SMALL_2021 = catalog('bwa01-small-2021', 'BWA 01 – öffentliche Positionsstruktur für kleine Unternehmen (Stand Januar 2021)', 'bwa01', 'small', BWA01, bwaPositions);
 
+export const PUBLIC_HGB_BILANZ_MICRO_2026 = catalog('hgb-bilanz-micro-2026', 'HGB-Bilanz – Kleinstkapitalgesellschaften (Mindestgliederung A–E)', 'bilanz', 'micro', HGB_BILANZ_2026, bilanzMicroPositions);
+export const PUBLIC_HGB_BILANZ_SMALL_2026 = catalog('hgb-bilanz-small-2026', 'HGB-Bilanz – kleine Kapitalgesellschaften (Buchstaben und römische Ziffern)', 'bilanz', 'small', HGB_BILANZ_2026, bilanzSmallPositions);
+export const PUBLIC_HGB_GKV_MICRO_2026 = catalog('hgb-gkv-micro-2026', 'HGB-Gewinn- und Verlustrechnung (Gesamtkostenverfahren) – Kleinstkapitalgesellschaften', 'gkv', 'micro', HGB_GKV_2026, gkvPositions);
+export const PUBLIC_HGB_GKV_SMALL_2026 = catalog('hgb-gkv-small-2026', 'HGB-Gewinn- und Verlustrechnung (Gesamtkostenverfahren) – kleine Kapitalgesellschaften', 'gkv', 'small', HGB_GKV_2026, gkvPositions);
+export const PUBLIC_BWA01_MICRO_2026 = catalog('bwa01-micro-2026', 'BWA 01 – öffentliche Positionsstruktur für Kleinstunternehmen (nicht gesetzliche Orientierungsstruktur, 2026)', 'bwa01', 'micro', BWA01_2026, bwaPositions);
+export const PUBLIC_BWA01_SMALL_2026 = catalog('bwa01-small-2026', 'BWA 01 – öffentliche Positionsstruktur für kleine Unternehmen (nicht gesetzliche Orientierungsstruktur, 2026)', 'bwa01', 'small', BWA01_2026, bwaPositions);
+
+export const PUBLIC_MANAGEMENT_GUV_MICRO_2025 = catalog('management-guv-micro-2025', 'Interne Management-GuV – Kleinstunternehmen (nicht gesetzliche Steuerungsrechnung)', 'management-guv', 'micro', MANAGEMENT_GUV_2025, managementGuvPositions);
+export const PUBLIC_MANAGEMENT_GUV_SMALL_2025 = catalog('management-guv-small-2025', 'Interne Management-GuV – kleine Unternehmen (nicht gesetzliche Steuerungsrechnung)', 'management-guv', 'small', MANAGEMENT_GUV_2025, managementGuvPositions);
+export const PUBLIC_MANAGEMENT_GUV_MICRO_2026 = catalog('management-guv-micro-2026', 'Interne Management-GuV – Kleinstunternehmen (nicht gesetzliche Steuerungsrechnung, 2026)', 'management-guv', 'micro', MANAGEMENT_GUV_2026, managementGuvPositions);
+export const PUBLIC_MANAGEMENT_GUV_SMALL_2026 = catalog('management-guv-small-2026', 'Interne Management-GuV – kleine Unternehmen (nicht gesetzliche Steuerungsrechnung, 2026)', 'management-guv', 'small', MANAGEMENT_GUV_2026, managementGuvPositions);
+
 export const getPublicReportCatalogs = (year: number): PublicReportCatalog[] => {
-  if (year !== 2025) throw new Error(`PUBLIC_REPORT_CATALOG_UNAVAILABLE:${year}`);
-  return [
-    PUBLIC_HGB_BILANZ_MICRO_2025,
-    PUBLIC_HGB_BILANZ_SMALL_2025,
-    PUBLIC_HGB_GKV_MICRO_2025,
-    PUBLIC_HGB_GKV_SMALL_2025,
-    PUBLIC_BWA01_MICRO_2021,
-    PUBLIC_BWA01_SMALL_2021,
-  ];
+  if (year === 2025) {
+    return [
+      PUBLIC_HGB_BILANZ_MICRO_2025,
+      PUBLIC_HGB_BILANZ_SMALL_2025,
+      PUBLIC_HGB_GKV_MICRO_2025,
+      PUBLIC_HGB_GKV_SMALL_2025,
+      PUBLIC_BWA01_MICRO_2021,
+      PUBLIC_BWA01_SMALL_2021,
+    ];
+  }
+  if (year === 2026) {
+    return [
+      PUBLIC_HGB_BILANZ_MICRO_2026,
+      PUBLIC_HGB_BILANZ_SMALL_2026,
+      PUBLIC_HGB_GKV_MICRO_2026,
+      PUBLIC_HGB_GKV_SMALL_2026,
+      PUBLIC_BWA01_MICRO_2026,
+      PUBLIC_BWA01_SMALL_2026,
+    ];
+  }
+  throw new Error(`PUBLIC_REPORT_CATALOG_UNAVAILABLE:${year}`);
+};
+
+export const getManagementReportCatalogs = (year: number): PublicReportCatalog[] => {
+  if (year === 2025) return [PUBLIC_MANAGEMENT_GUV_MICRO_2025, PUBLIC_MANAGEMENT_GUV_SMALL_2025];
+  if (year === 2026) return [PUBLIC_MANAGEMENT_GUV_MICRO_2026, PUBLIC_MANAGEMENT_GUV_SMALL_2026];
+  throw new Error(`PUBLIC_REPORT_CATALOG_UNAVAILABLE:${year}`);
 };
 
 // Compatibility name retained for report consumers; all returned catalogs are verified.

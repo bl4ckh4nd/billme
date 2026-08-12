@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getPublicReportCatalogs, getPublicReportCatalogsIncludingUnverified, PUBLIC_BWA01_MICRO_2021 } from './publicReportCatalogs';
+import {
+  getManagementReportCatalogs,
+  getPublicReportCatalogs,
+  getPublicReportCatalogsIncludingUnverified,
+  PUBLIC_BWA01_MICRO_2021,
+} from './publicReportCatalogs';
 import { loadPrivateDatevArtifact } from './datevArtifact';
 import { getEurAnnexCatalog, validateEurAnnexCatalog } from '../../../desktop-services/src/eur/annexCatalog';
 import { assertEurElsterReady, EUR_CATALOG_MANIFEST_2025, getCatalogForYear } from '../../../desktop-services/src/eurCatalog';
@@ -74,6 +79,21 @@ test('BWA01 ordered keys match the verified GründerZeiten 23 source', () => {
   assert.equal(PUBLIC_BWA01_MICRO_2021.provenance.sourceSha256, '28976588a6a429db8b6c457c07225dae55e10d271ffc1ae37d6d25fc60b60163');
   assert.equal(getPublicReportCatalogs(2025).filter((catalog) => catalog.kind === 'bwa01').length, 2);
   assert.equal(getPublicReportCatalogsIncludingUnverified(2025).filter((catalog) => catalog.kind === 'bwa01').length, 2);
+});
+
+test('2026 report catalogs are explicit, verified snapshots', () => {
+  const catalogs = [...getPublicReportCatalogs(2026), ...getManagementReportCatalogs(2026)];
+  assert.equal(catalogs.length, 8);
+  for (const catalog of catalogs) {
+    assert.match(catalog.id, /2026$/);
+    assert.equal(catalog.provenance.validFrom, '2026-01-01');
+    assert.equal(catalog.provenance.validTo, '2026-12-31');
+    assert.match(catalog.provenance.version, /2026/);
+    assert.equal(catalog.provenance.sourceHashStatus, 'verified');
+    assert.match(catalog.provenance.sourceSha256 ?? '', /^[a-f0-9]{64}$/);
+  }
+  assert.throws(() => getPublicReportCatalogs(2027), /PUBLIC_REPORT_CATALOG_UNAVAILABLE:2027/);
+  assert.throws(() => getManagementReportCatalogs(2027), /PUBLIC_REPORT_CATALOG_UNAVAILABLE:2027/);
 });
 
 test('EÜR 2025 exposes sole-proprietor AVEÜR and SZ DAGs', () => {

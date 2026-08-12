@@ -22,6 +22,7 @@ import type {
   EurLedgerReconciliationReport,
 } from '@billme/accounting-shared';
 import {
+  getManagementReportCatalogs,
   getPublicReportCatalogsIncludingUnverified,
 } from './catalogs/publicReportCatalogs.js';
 import type { PublicReportCatalog, PublicReportPosition } from './catalogs/types.js';
@@ -83,6 +84,11 @@ function periodOf(request: ReportRequest): { from?: string; to?: string; asOfDat
 
 function statements(mapping: ReportingMapping): string[] {
   return typeof mapping.statement === 'string' ? [mapping.statement] : [...mapping.statement];
+}
+
+function hasBalancePositionMapping(context: ReportingContext, position: string): boolean {
+  return [...context.mappings.values()].some((mappings) => mappings.some((mapping) =>
+    statements(mapping).some((statement) => isExplicitStatement(statement, 'hgb-bilanz')) && mapping.position === position));
 }
 
 function isExplicitStatement(statement: string, requested: ReportStatement): boolean {
@@ -328,8 +334,11 @@ function formulaValue(values: Map<string, PositionValue>, key: string, parts: re
   return parts.some((part) => values.has(part)) ? parts.reduce((sum, part) => sum + valueOf(values, part), 0) : valueOf(values, key);
 }
 
-function catalogFor(kind: PublicReportCatalog['kind'], size: ReportingCalculationProfile['size']): PublicReportCatalog {
-  const catalog = getPublicReportCatalogsIncludingUnverified(2025).find((entry) => entry.kind === kind && entry.scope === size);
+function catalogFor(kind: PublicReportCatalog['kind'], size: ReportingCalculationProfile['size'], year: number): PublicReportCatalog {
+  const catalogs = kind === 'management-guv'
+    ? getManagementReportCatalogs(year)
+    : getPublicReportCatalogsIncludingUnverified(year);
+  const catalog = catalogs.find((entry) => entry.kind === kind && entry.scope === size);
   if (!catalog) throw new Error(`PUBLIC_REPORT_CATALOG_UNAVAILABLE:${kind}:${size}`);
   return catalog;
 }
@@ -378,7 +387,7 @@ const bwaCostKeys = [
 
 export function calculateBwa01(request: ReportRequest): ReportResult<Bwa01Report> {
   const context = makeContext(request);
-  const catalog = catalogFor('bwa01', context.profile.size);
+  const catalog = catalogFor('bwa01', context.profile.size, context.snapshot.fiscalYear);
   const allowed = new Set(catalog.positions.map((position) => position.key));
   const prepared = positionValues(context, 'bwa01', allowed);
   const mappingHealth = catalog.provenance.sourceHashStatus === 'unavailable'
@@ -428,22 +437,10 @@ export function calculateBwa01(request: ReportRequest): ReportResult<Bwa01Report
   }, mappingHealth);
 }
 
-const managementPositions = [
-  { key: 'revenue', label: 'Betriebliche Erlöse', kind: 'line' as const },
-  { key: 'variable-costs', label: 'Variable Kosten', kind: 'line' as const },
-  { key: 'contribution-margin', label: 'Deckungsbeitrag', kind: 'subtotal' as const },
-  { key: 'personnel-costs', label: 'Personalkosten', kind: 'line' as const },
-  { key: 'fixed-costs', label: 'Fixkosten', kind: 'line' as const },
-  { key: 'ebitda', label: 'EBITDA', kind: 'subtotal' as const },
-  { key: 'depreciation', label: 'Abschreibungen', kind: 'line' as const },
-  { key: 'ebit', label: 'EBIT', kind: 'subtotal' as const },
-  { key: 'financial-result', label: 'Finanzergebnis', kind: 'line' as const },
-  { key: 'taxes', label: 'Steuern', kind: 'line' as const },
-  { key: 'net-result', label: 'Managementergebnis', kind: 'result' as const },
-] as const;
-
 export function calculateManagementGuv(request: ReportRequest): ReportResult<ManagementGuvReport> {
   const context = makeContext(request);
+  const catalog = catalogFor('management-guv', context.profile.size, context.snapshot.fiscalYear);
+  const managementPositions = catalog.positions;
   const allowed = new Set(managementPositions.map((position) => position.key));
   const prepared = positionValues(context, 'management-guv', allowed);
   if (prepared.hardBlock) return envelope(context, 'management-guv', { rows: [], netResult: 0 }, prepared.mappingHealth);
@@ -480,7 +477,7 @@ const hgbFormulaParts: ReadonlyMap<string, readonly string[]> = new Map([
 
 export function calculateHgbGuv(request: ReportRequest): ReportResult<HgbGuvReport> {
   const context = makeContext(request);
-  const catalog = catalogFor('gkv', context.profile.size);
+  const catalog = catalogFor('gkv', context.profile.size, context.snapshot.fiscalYear);
   const allowed = new Set(catalog.positions.map((position) => position.key));
   const prepared = positionValues(context, 'hgb-guv', allowed);
   if (prepared.hardBlock) return envelope(context, 'hgb-guv', { method: 'gkv', rows: [], netResult: 0 }, prepared.mappingHealth);
@@ -523,7 +520,7 @@ function balancePositionValue(catalog: PublicReportCatalog, values: Map<string, 
 
 export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBilanzReport> {
   const context = makeContext(request);
-  const catalog = catalogFor('bilanz', context.profile.size);
+  const catalog = catalogFor('bilanz', context.profile.size, context.snapshot.fiscalYear);
   const prepared = balanceValues(context, catalog);
   const hasClosedResult = prepared.values.has('equity.result');
   if (hasClosedResult && context.profile.size === 'micro') {
@@ -535,7 +532,24 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
   }
   let mappingHealth = prepared.mappingHealth;
   if (!hasClosedResult) {
-    const guv = calculateHgbGuv(request);
+    // An as-of balance sheet needs the open result from the current fiscal
+    // year only.  Without an explicit period, the shared ledger context is
+    // intentionally all-time, so derive the FY start instead of letting old
+    // revenue/expense entries leak into the current annual result.
+    const guvRequest = context.asOfDate
+      ? {
+        ...request,
+        from: context.snapshot.fiscalYearRange?.start,
+        to: context.asOfDate,
+        asOfDate: context.asOfDate,
+        period: {
+          from: context.snapshot.fiscalYearRange?.start,
+          to: context.asOfDate,
+          asOfDate: context.asOfDate,
+        },
+      }
+      : request;
+    const guv = calculateHgbGuv(guvRequest);
     if (guv.mappingHealth.blocking) {
       mappingHealth = {
         mappedAccounts: Math.min(mappingHealth.mappedAccounts, guv.mappingHealth.mappedAccounts),
@@ -545,6 +559,41 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
         blocking: true,
       };
     } else {
+      const forwardPosition = catalog.positions.find((position) => position.key === 'equity.profit-loss-forward');
+      const microEquityPosition = context.profile.size === 'micro'
+        ? catalog.positions.find((position) => position.key === 'equity')
+        : undefined;
+      const priorResultPosition = forwardPosition && (!hasBalancePositionMapping(context, forwardPosition.key) || !prepared.values.has(forwardPosition.key))
+        ? forwardPosition
+        : microEquityPosition && (!hasBalancePositionMapping(context, microEquityPosition.key) || !prepared.values.has(microEquityPosition.key))
+          ? microEquityPosition
+          : undefined;
+      if (priorResultPosition && context.snapshot.fiscalYearRange) {
+        const priorRange = fiscalYearRange(context.snapshot.fiscalYear - 1, context.profile.fiscalYearStart);
+        const priorGuv = calculateHgbGuv({
+          ...request,
+          from: priorRange.start,
+          to: priorRange.end,
+          // Keep the current request year for catalog selection; only the
+          // ledger period is prior-year data.
+          asOfDate: context.asOfDate,
+          period: { from: priorRange.start, to: priorRange.end, asOfDate: context.asOfDate },
+        });
+        if (priorGuv.mappingHealth.blocking) {
+          mappingHealth = {
+            mappedAccounts: Math.min(mappingHealth.mappedAccounts, priorGuv.mappingHealth.mappedAccounts),
+            inferredAccounts: 0,
+            unmappedAccounts: [...new Set([...mappingHealth.unmappedAccounts, ...priorGuv.mappingHealth.unmappedAccounts])].sort(),
+            warnings: [...new Set([...mappingHealth.warnings, ...priorGuv.mappingHealth.warnings, 'HGB-Bilanz benötigt eine vollständige HGB-GuV-Zuordnung für den Gewinnvortrag'])],
+            blocking: true,
+          };
+        } else if (priorGuv.netResult !== 0) {
+          prepared.values.set(priorResultPosition.key, {
+            amount: cents(priorGuv.netResult),
+            accounts: new Set(priorGuv.rows.flatMap((row) => row.accountNumbers)),
+          });
+        }
+      }
       const resultPosition = catalog.positions.find((position) => position.key === 'equity.result');
       if (resultPosition) {
         const accountNumbers = guv.rows.flatMap((row) => row.accountNumbers);

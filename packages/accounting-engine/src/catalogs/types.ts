@@ -1,4 +1,4 @@
-export type PublicReportKind = 'bilanz' | 'gkv' | 'bwa01';
+export type PublicReportKind = 'bilanz' | 'gkv' | 'bwa01' | 'management-guv';
 export type PublicReportScope = 'micro' | 'small';
 export type PublicReportPositionKind = 'heading' | 'line' | 'subtotal' | 'result';
 
@@ -53,7 +53,7 @@ export const validateCatalogProvenance = (provenance: CatalogProvenance): void =
 
 export const validatePublicReportCatalog = (catalog: PublicReportCatalog): void => {
   if (!catalog.id.trim() || !catalog.title.trim()) throw new Error('Report catalog requires id and title');
-  if (!['bilanz', 'gkv', 'bwa01'].includes(catalog.kind)) throw new Error(`Invalid report catalog kind: ${catalog.id}`);
+  if (!['bilanz', 'gkv', 'bwa01', 'management-guv'].includes(catalog.kind)) throw new Error(`Invalid report catalog kind: ${catalog.id}`);
   if (!['micro', 'small'].includes(catalog.scope)) throw new Error(`Invalid report catalog scope: ${catalog.id}`);
   if (catalog.mappingStatus !== 'public-structure-only') throw new Error(`Private account mappings are not allowed in ${catalog.id}`);
   validateCatalogProvenance(catalog.provenance);

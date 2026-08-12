@@ -56,7 +56,7 @@ export const fiscalYearForPostingDate = (postingDate: string, fiscalYearStart = 
 const reportingFiscalYearStart = async (db: PostgresQueryable, t: string): Promise<string> => {
   const rows = await q<any>(db, `SELECT settings_json FROM server_settings WHERE tenant_id=$1 LIMIT 1`, [t]);
   const settings = parse<Record<string, unknown>>(rows[0]?.settings_json, {});
-  const profile = parse<Record<string, unknown>>(settings.businessReportingProfile ?? settings.business_reporting_profile ?? settings.reportingProfile, {});
+  const profile = parse<Record<string, unknown>>(settings.businessReportingProfile ?? settings.business_reporting_profile ?? settings.reportingProfile ?? settings, {});
   if (profile.profitDetermination === 'eur') return '01-01';
   const fiscalYearStart = profile.fiscalYearStart;
   return typeof fiscalYearStart === 'string' && /^\d{2}-\d{2}$/.test(fiscalYearStart) ? fiscalYearStart : '01-01';

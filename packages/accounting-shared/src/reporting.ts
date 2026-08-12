@@ -142,7 +142,22 @@ export interface CashInput {
   entries: CashInputEntry[];
 }
 
-export type ReportingStatement = 'bwa' | 'guv' | 'bilanz' | 'eur';
+/**
+ * Report mappings are statement-scoped.  The short names remain accepted for
+ * old persisted mappings, but the calculators treat them as compatibility
+ * input and never use them as an implicit mapping for another statement.
+ */
+export type ReportingStatement =
+  | 'bwa01'
+  | 'management-guv'
+  | 'hgb-guv'
+  | 'hgb-gkv'
+  | 'hgb-bilanz'
+  | 'hgb-balance'
+  | 'eur'
+  | 'bwa'
+  | 'guv'
+  | 'bilanz';
 export type ReportingBalanceSide = 'asset' | 'liability';
 
 /** Explicit account-to-report mapping. Amounts remain owned by the ledger. */
@@ -220,6 +235,13 @@ export interface ReportingLine {
   label: string;
   amount: number;
   accountNumbers: string[];
+  /** API-facing alias retained for report drilldowns. */
+  accountRefs?: string[];
+  /** Public catalog hierarchy metadata. */
+  kind?: 'heading' | 'line' | 'subtotal' | 'result';
+  parentPosition?: string;
+  /** Human-readable formula for derived subtotal/result rows. */
+  formula?: string;
 }
 
 export interface Bwa01Report {

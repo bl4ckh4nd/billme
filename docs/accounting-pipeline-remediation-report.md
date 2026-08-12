@@ -1,7 +1,7 @@
 # Abschlussreport Buchungspipeline
 
 **Stand:** 12.08.2026 · **Codebasis:** Branch
-`fix/accounting-pipeline-hardening`, Codebaseline `67a65a3` (danach folgt nur
+`fix/accounting-pipeline-hardening`, Codebaseline `f089e6e` (danach folgt nur
 diese Report-Aktualisierung)
 
 Dieser Report bewertet den technischen Stand der Pro-Buchungspipeline nach der
@@ -19,11 +19,51 @@ SuSa/GuV/Bilanz, DATEV sowie SQLite-zu-Postgres-Import.
 
 Der abschließende Full-Pro-E2E lief gegen einen frisch migrierten Postgres-Stack
 grün. Alle sieben Szenarien bestanden; das Artefakt liegt unter
-`test-results/server-mode/billme-e2e-msq2ya38-1tlad`. Das EU-B2B-Szenario
-`EU_B2B_SERVICE_RC` prüft dabei unbedingt die Persistenz und den DATEV-Export
-der Felder 40/41/43. Damit ist die technische Pipeline releasefähig; die
-fachliche Steuerprüfung, ein Kanzlei-DATEV-Import und ein Produktivdeployment
-bleiben externe Gates.
+`test-results/server-mode/billme-e2e-msqejbh0-2ftmn` und der Stack wurde im
+Teardown zerstört. Das EU-B2B-Szenario `EU_B2B_SERVICE_RC` prüft dabei
+unbedingt die Persistenz und den DATEV-Export der Felder 40/41/43. Damit ist
+die technische Pipeline im vereinbarten Umfang releasefähig; die fachliche
+Steuerprüfung, ein Kanzlei-DATEV-Import und ein Produktivdeployment bleiben
+externe Gates.
+
+## Berichtsprofile und Kataloge
+
+Die Profile sind fachlich getrennt und werden nicht aus einem beliebigen
+generischen GuV-Ergebnis abgeleitet:
+
+| Profil | Verfügbare Auswertungen | Bewusste Grenze |
+|---|---|---|
+| Einzelunternehmen · EÜR | native EÜR 2025, SuSa, BWA01, Management-GuV | keine HGB-Bilanz und keine HGB-GKV |
+| GmbH · micro/small · Doppik | SuSa, BWA01, Management-GuV, HGB-GuV nach GKV, HGB-Bilanz | keine EÜR |
+
+Die Kataloge sind explizit und unveränderlich versioniert:
+
+| Kategorie | Kanonischer Umfang |
+|---|---|
+| EÜR | **107** kanonische Zeilen für 2025; Kz **290/293/219** sind `signed computed`, also vorzeichenbehaftete berechnete Kennzahlen und keine frei editierbaren Summen |
+| BWA01 | exakt **29** Positionen; betriebswirtschaftliche Orientierungsstruktur, keine gesetzliche Bilanz oder Steuerform ([BMWi/BMWK-Existenzgründungsportal](https://www.existenzgruendungsportal.de/Redaktion/DE/Downloads/DE/GruenderZeiten/GruenderZeiten-23.pdf?__blob=publicationFile), [BWA-Checkliste](https://www.existenzgruendungsportal.de/Redaktion/DE/Downloads/DE/Checklisten-Uebersichten/Controlling/06-check-Betriebswirtschaftliche-Auswertung.pdf?__blob=publicationFile)) |
+| Management-GuV | exakt **11** interne Steuerungspositionen |
+| HGB-GuV | **17** GKV-Gruppen einschließlich der gesetzlich vorgesehenen a/b-Untergliederungen nach [§ 275 HGB](https://www.gesetze-im-internet.de/hgb/__275.html) |
+| HGB-Bilanz | micro: Mindestgliederung **A–E**; small: Buchstaben und römische Ziffern nach [§ 266 HGB](https://www.gesetze-im-internet.de/hgb/__266.html) |
+
+Für BWA01, Management-GuV, HGB-GKV und HGB-Bilanz existieren getrennte
+Katalogsnapshots für **2025 und 2026**. Ein Aufruf für **2027** schlägt mit
+`PUBLIC_REPORT_CATALOG_UNAVAILABLE` fehl; es gibt keinen stillen Fallback. Die
+EÜR bleibt bewusst auf den fest definierten **2025**-Katalog beschränkt. Die
+amtliche Referenz ist die [BMF-Anlage EÜR 2025](https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2025-08-29-anlage-EUER-2025.html),
+nicht der interne Katalog allein.
+
+Positionsbasierte Reports verlangen für jedes relevante Konto ein explizites,
+zum Berichtsdatum gültiges Mapping. Fehlende, mehrdeutige oder nicht zum
+Katalog passende Mappings blockieren den Report (fail closed); Konten werden
+nicht geraten, abgeschnitten oder aus einem Mock-/Legacy-Report übernommen.
+Die **SuSa ist mapping-unabhängig** und basiert ausschließlich auf den
+Kontensalden sowie Soll-/Haben-Umsätzen.
+
+Mehrjährige Bilanzberechnungen trennen das laufende Ergebnis vom
+Gewinn-/Verlustvortrag. Eine nicht auflösbare Micro-Bilanz-Mehrdeutigkeit oder
+eine unausgeglichene Bilanz wird ebenfalls fail closed statt durch eine
+implizite Ergebnisbuchung scheinbar ausgeglichen.
 
 ## State Ownership und Invarianten
 
@@ -124,11 +164,17 @@ Die Kerninvarianten sind damit explizit:
 - Importläufe sind tenant-sicher, idempotent und behalten einen sichtbaren
   Fehlerstatus. ID-Kollisionen mit fremden Mandanten werden nicht als Erfolg
   gezählt.
+- Effective-dated Report-Mappings bleiben beim Desktop-zu-Postgres-Import mit
+  ihren 2025-/2026-Gültigkeiten erhalten. Generische Legacy-Mappings werden
+  separat als Legacy-Provenienz importiert und nicht still in einen
+  2025-/2026-Katalog umgedeutet.
 - Die additive Postgres-Migrationskette ist vollständig:
   `0006` OPOS, `0007` OPOS-Härtung, `0008` Anlagenbuchhaltung,
   `0009` DATEV-Bytes, `0010` Ausgangsrechnungs-Postingmetadaten,
   `0011` tenant-scoped Steuerkonten-Mappings mit globalem Fallback,
-  `0012` Asset-Guard, `0013` Asset-Härtung und `0014` DATEV-Steuer-Evidenz.
+  `0012` Asset-Guard, `0013` Asset-Härtung, `0014` DATEV-Steuer-Evidenz,
+  `0015` Reporting/Tax-Submissions, `0016` EÜR-Metadaten und `0017` kanonischer
+  107-Zeilen-EÜR-Katalog.
 
 ## UI/UX-Stand
 
@@ -182,31 +228,49 @@ Diese Punkte sind keine offenen Integritätsfehler:
 
 | Scope | Ergebnis |
 |---|---:|
-| Full Pro Server E2E gegen frisch migrierten Postgres-Stack (`test-results/server-mode/billme-e2e-msq2ya38-1tlad`) | **7/7 Szenarien bestanden**, inklusive unbedingter `EU_B2B_SERVICE_RC`-Persistenz-/DATEV-Felder-40/41/43-Prüfung |
-| Pro Desktop | **286/286 Tests**, Typecheck und Build bestanden |
-| Accounting UI Pro | **36/36 Tests bestanden** |
-| Accounting Engine | **5/5 Tests bestanden** |
-| Desktop Data | **50/50 Tests bestanden** |
-| Server API | **26/26 Tests**, Typecheck bestanden |
-| Server Data am finalen HEAD ohne DB-URL | **33 bestanden, 13 erwartete DB-Skips**, Typecheck bestanden |
-| SQLite-Import-Paritätsfixture gegen frisches Postgres | **bestanden** |
-| Web Pro | **10/10 direkte Tests**, Typecheck und Build bestanden |
-| Server Core | **23/23 Tests**, Typecheck bestanden |
-| DATEV-Repository-Test gegen echtes Postgres | **1/1 bestanden** |
+| Full Pro Server E2E gegen frisch migrierten Postgres-Stack (`test-results/server-mode/billme-e2e-msqejbh0-2ftmn`) | **7/7 Szenarien bestanden**, inklusive unbedingter `EU_B2B_SERVICE_RC`-Persistenz-/DATEV-Felder-40/41/43-Prüfung; Stack im Teardown zerstört |
+| Accounting Engine | **39/39 Tests**, Typecheck bestanden |
+| Accounting UI Pro | **65/65 Tests**, Typecheck und Build bestanden |
+| Desktop Data | **63/63 Tests**, Typecheck bestanden |
+| Lite Desktop | **200/200 Tests**, Typecheck und Build bestanden |
+| Pro Desktop | **309/309 Tests**, Typecheck und Build bestanden |
+| Server API | **37/37 Tests**, Typecheck bestanden |
+| Server Data am finalen HEAD ohne DB-URL | **53 bestanden, 19 erwartete DB-Skips**, Typecheck bestanden |
+| SQLite-zu-Postgres-Import gegen echtes Postgres | **12/12 Tests bestanden** |
+| Server Core | **32/32 Tests**, Typecheck bestanden |
+| Lite Web | **1/1 Test**, Typecheck und Build bestanden |
+| Web Pro | **14/14 Tests**, Typecheck und Build bestanden |
+
+Zum Prüfzeitpunkt war der getrackte Arbeitsbaum sauber; einzig das
+benutzerseitige, nicht zu versionierende `.test-artifacts/` blieb erhalten.
 
 Der Full-Pro-E2E deckt Stack-Smoke, Pro-Smoke, Session-Wiederherstellung,
 Katalog, kanonischen Entwurf/Post, Ausgangs- und Eingangsrechnung, OPOS mit
 Retry, Backfill mit Retry, Dokumentstorno, GuV/SuSa/Bilanz, unveränderlichen
 DATEV-Download, Produkt-/Routengrenzen und Worker-Flows ab.
 
+## Bewusste fachliche Grenzen
+
+- Die native EÜR 2025 ist eine Management-/Druckausgabe und **keine
+  vollständige offizielle ELSTER-/Anlage-EÜR-Übermittlung**. Die amtliche
+  elektronische Übermittlung nach [EStH § 60 Abs. 4 EStDV](https://ao.bundesfinanzministerium.de/esth/2025/A-Einkommensteuergesetz/III-Veranlagung-25-30/Paragraf-25/estdv-60.html)
+  benötigt einen verifizierten Datensatz-/Providervertrag, der hier bewusst
+  nicht behauptet wird.
+- AVEÜR und SZ sind als EÜR-Metadaten-/DAG-Strukturen vorhanden, aber noch
+  **keine vollständige persistente offizielle Filing-Pipeline**.
+- E-Bilanz-/Taxonomie- und Unternehmensregister-Provider sind nicht verfügbar;
+  die betreffenden Übergänge schlagen typed und fail closed fehl, statt eine
+  nicht übermittelbare Einreichung zu simulieren.
+
 ## Offene externe Gates
 
 1. Eine Steuerberatung muss Steuerfälle, Kontierungen, Ist-USt, Perioden- und
-   Stornoregeln fachlich abnehmen.
+   Stornoregeln fachlich abnehmen; dieser Report ist keine Steuer-/Rechts- oder
+   GoBD-Zertifizierung.
 2. Eine DATEV-Kanzlei muss repräsentative Soll-/Ist-, EU-, OSS- und
    Reverse-Charge-Exporte in ihrer Zielumgebung importieren.
-3. Produktivdeployment, Live-Container-SHA und Produktions-Smoke wurden nicht
-   durchgeführt und sind nicht Bestandteil dieses Reports.
+3. Es gab kein Produktivdeployment, keinen Live-Container-SHA und keinen
+   Produktions-Smoke; diese Gates sind nicht Bestandteil dieses Reports.
 
 ## Gesamturteil
 

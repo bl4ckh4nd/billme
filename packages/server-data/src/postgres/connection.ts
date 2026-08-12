@@ -16,8 +16,10 @@ export const createPostgresPool = (config: string | PoolConfig): Pool => {
 export type PostgresQueryable = Pick<Pool, 'query'> | Pick<PoolClient, 'query'>;
 export type PostgresTransactionClient = PoolClient;
 
-const SERIALIZABLE_TRANSACTION_MAX_ATTEMPTS = 3;
-const SERIALIZABLE_TRANSACTION_RETRY_DELAY_MS = 5;
+const SERIALIZABLE_TRANSACTION_MAX_ATTEMPTS = 5;
+const SERIALIZABLE_TRANSACTION_RETRY_DELAY_MS = 25;
+const SERIALIZABLE_TRANSACTION_MAX_RETRY_DELAY_MS = 250;
+const SERIALIZABLE_TRANSACTION_RETRY_JITTER_MS = 25;
 const MAX_POSTGRES_ERROR_CAUSE_DEPTH = 8;
 
 const isRetryableSerializableTransactionError = (error: unknown): boolean => {
@@ -40,6 +42,14 @@ const isRetryableSerializableTransactionError = (error: unknown): boolean => {
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const serializableTransactionRetryDelay = (attempt: number): number => {
+  const exponential = Math.min(
+    SERIALIZABLE_TRANSACTION_MAX_RETRY_DELAY_MS - SERIALIZABLE_TRANSACTION_RETRY_JITTER_MS,
+    SERIALIZABLE_TRANSACTION_RETRY_DELAY_MS * 2 ** (attempt - 1),
+  );
+  return exponential + Math.floor(Math.random() * SERIALIZABLE_TRANSACTION_RETRY_JITTER_MS);
+};
 
 export const withPostgresTransaction = async <T>(
   pool: Pool,
@@ -90,7 +100,7 @@ export const withSerializablePostgresTransaction = async <T>(
       client.release();
     }
 
-    if (retry) await delay(SERIALIZABLE_TRANSACTION_RETRY_DELAY_MS);
+    if (retry) await delay(serializableTransactionRetryDelay(attempt));
   }
 
   throw new Error('Serializable transaction exhausted retry attempts');

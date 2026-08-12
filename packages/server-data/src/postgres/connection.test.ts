@@ -78,3 +78,23 @@ test('does not retry non-transaction errors', async () => {
   assert.deepEqual(client.queries, ['BEGIN ISOLATION LEVEL SERIALIZABLE', 'ROLLBACK']);
   assert.equal(client.released, true);
 });
+
+test('handles repeated serialization contention within the retry bound', async () => {
+  const clients = Array.from({ length: 5 }, () => createClient(async () => undefined));
+  const pool = createPool(clients);
+  let workCalls = 0;
+
+  const result = await withSerializablePostgresTransaction(pool, async () => {
+    workCalls += 1;
+    if (workCalls < clients.length) {
+      throw Object.assign(new Error('serialization failure'), { code: '40001' });
+    }
+    return 'committed';
+  });
+
+  assert.equal(result, 'committed');
+  assert.equal(workCalls, clients.length);
+  for (const client of clients) {
+    assert.equal(client.released, true);
+  }
+});

@@ -85,6 +85,9 @@ jobs:
       - name: Server data and migration tests
         run: pnpm -C packages/server-data test
 
+      - name: Lite web EÜR adapter tests
+        run: pnpm -C apps/web test
+
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 

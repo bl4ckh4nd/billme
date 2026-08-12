@@ -15,6 +15,16 @@ import type {
   TaxCaseKey,
   UpsertAccountSuggestionRuleInput,
   ValidationIssue,
+  AccountingAccountMapping,
+  AccountingBackfillConfirmation,
+  AccountingBackfillPreview,
+  AccountingBackfillResult,
+  AccountingPostingPreview,
+  IncomingInvoiceEntity,
+  OpenItemEntity,
+  OpenItemPaymentEntity,
+  OpenItemPaymentInput,
+  VendorEntity,
 } from '@billme/accounting-shared';
 import type {
   DunningEmailProvider,
@@ -450,6 +460,22 @@ export interface ProAccountingRepository {
   getAccountingHealth(scope: TenantScope): Promise<AccountingHealthSnapshot>;
   getVatSummary(scope: TenantScope, args?: ReportRangeOptions): Promise<VatSummary>;
   buildDatevRows(scope: TenantScope, args?: ReportRangeOptions): Promise<DatevPostingRow[]>;
+  getAccountingPolicy(scope: TenantScope): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
+  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist' }): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
+  listAccountingAccountMappings(scope: TenantScope, chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
+  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string }): Promise<AccountingAccountMapping>;
+  listVendors(scope: TenantScope): Promise<VendorEntity[]>;
+  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<VendorEntity>;
+  listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
+  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
+  previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
+  allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
+  previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
+  confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(scope: TenantScope): Promise<void>;
 }
 

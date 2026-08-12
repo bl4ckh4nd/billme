@@ -99,7 +99,6 @@ import {
   runDepreciation,
   upsertAsset,
 } from '../db/assetsRepo';
-
 /**
  * Resolves the document's tax mode against the business settings and stores the
  * resulting snapshot alongside the gross amount. Pro must use the same shared
@@ -330,9 +329,12 @@ export const registerIpcHandlers = (
     return releaseNumber(db, reservationId);
   });
 
-  register(ipcMain, 'numbers:finalize', ({ reservationId, documentId }) => {
+  register(ipcMain, 'numbers:finalize', async ({ reservationId, documentId }) => {
     const db = requireDb();
-    return finalizeNumber(db, reservationId, documentId);
+    const result = finalizeNumber(db, reservationId, documentId);
+    const reservation = db.prepare('SELECT kind FROM number_reservations WHERE id = ?').get(reservationId) as { kind: string } | undefined;
+    if (reservation?.kind === 'invoice') await getProAccountingService().postOutgoingInvoice(documentId);
+    return result;
   });
 
   register(ipcMain, 'documents:createFromClient', ({ kind, clientId }) => {
@@ -1273,6 +1275,23 @@ export const registerIpcHandlers = (
   register(ipcMain, 'pro:upsertWorkflowEntry', ({ transactionId, transactionJson, draftJson }) => {
     return getProWorkflowService().upsert({ transactionId, transactionJson, draftJson });
   });
+
+  register(ipcMain, 'pro:getAccountingPolicy', () => getProAccountingService().getAccountingPolicy());
+  register(ipcMain, 'pro:setAccountingPolicy', (input) => getProAccountingService().setAccountingPolicy(input));
+  register(ipcMain, 'pro:listAccountingAccountMappings', ({ chart }) => getProAccountingService().listAccountingAccountMappings(chart));
+  register(ipcMain, 'pro:upsertAccountingAccountMapping', (input) => getProAccountingService().upsertAccountingAccountMapping(input));
+  register(ipcMain, 'pro:listVendors', () => getProAccountingService().listVendors());
+  register(ipcMain, 'pro:upsertVendor', ({ vendor }) => getProAccountingService().upsertVendor(vendor));
+  register(ipcMain, 'pro:listIncomingInvoices', () => getProAccountingService().listIncomingInvoices());
+  register(ipcMain, 'pro:upsertIncomingInvoice', ({ invoice }) => getProAccountingService().upsertIncomingInvoice(invoice));
+  register(ipcMain, 'pro:previewOutgoingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewOutgoingInvoice(invoiceId));
+  register(ipcMain, 'pro:postOutgoingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().postOutgoingInvoice(invoiceId));
+  register(ipcMain, 'pro:previewIncomingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewIncomingInvoice(invoiceId));
+  register(ipcMain, 'pro:postIncomingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().postIncomingInvoice(invoiceId));
+  register(ipcMain, 'pro:listOpenItems', () => getProAccountingService().listOpenItems());
+  register(ipcMain, 'pro:allocateOpenItemPayment', ({ payment }) => getProAccountingService().allocateOpenItemPayment(payment));
+  register(ipcMain, 'pro:previewAccountingBackfill', () => getProAccountingService().previewAccountingBackfill());
+  register(ipcMain, 'pro:confirmAccountingBackfill', (input) => getProAccountingService().confirmAccountingBackfill(input));
 
   register(ipcMain, 'updater:getStatus', () => {
     return getCurrentUpdateStatus();

@@ -904,52 +904,55 @@ export const runMigrations = (db: Database.Database): void => {
         COALESCE(NEW.activation_journal_entry_id, '') != COALESCE(OLD.activation_journal_entry_id, '') OR
         COALESCE(NEW.accounting_repair_required, 0) != COALESCE(OLD.accounting_repair_required, 0) OR
         COALESCE(NEW.accounting_repair_reason, '') != COALESCE(OLD.accounting_repair_reason, '') OR
-        (
-          (COALESCE(NEW.status, '') != COALESCE(OLD.status, '') OR
-           COALESCE(NEW.disposal_date, '') != COALESCE(OLD.disposal_date, '') OR
-           COALESCE(NEW.disposal_proceeds, -1) != COALESCE(OLD.disposal_proceeds, -1))
-          AND NOT (
-            OLD.status IN ('aktiv', 'voll_abgeschrieben') AND OLD.disposal_date IS NULL AND
-            NEW.status IN ('verkauft', 'stillgelegt') AND NEW.disposal_date IS NOT NULL AND
-            EXISTS (
-              SELECT 1 FROM asset_movements m
-              WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id
-                AND m.type = 'disposal' AND m.source_type = 'asset_disposal'
-                AND m.source_key = 'asset_disposal:' || OLD.id
-                AND m.journal_entry_id IS NOT NULL
-                AND m.movement_date = NEW.disposal_date
-                AND COALESCE(m.proceeds, -1) = COALESCE(NEW.disposal_proceeds, -1)
-                AND ((m.proceeds > 0 AND NEW.status = 'verkauft') OR
-                     (COALESCE(m.proceeds, 0) = 0 AND NEW.status = 'stillgelegt'))
-                AND EXISTS (SELECT 1 FROM journal_entries j
-                            WHERE j.id = m.journal_entry_id AND j.tenant_id = OLD.tenant_id)
-            )
-          )
-        ) OR
-        (
-          OLD.accounting_repair_required = 1 AND NEW.accounting_repair_required = 0 AND
-          NEW.status = OLD.status AND
-          COALESCE(NEW.disposal_date, '') = COALESCE(OLD.disposal_date, '') AND
-          COALESCE(NEW.disposal_proceeds, -1) = COALESCE(OLD.disposal_proceeds, -1) AND
-          NEW.asset_number = OLD.asset_number AND NEW.asset_class = OLD.asset_class AND
-          NEW.activation_date = OLD.activation_date AND NEW.acquisition_cost = OLD.acquisition_cost AND
-          COALESCE(NEW.useful_life_years, -1) = COALESCE(OLD.useful_life_years, -1) AND
-          NEW.depreciation_method = OLD.depreciation_method AND
-          NEW.asset_account_number = OLD.asset_account_number AND
-          COALESCE(NEW.acquisition_offset_account_number, '') = COALESCE(OLD.acquisition_offset_account_number, '') AND
-          NEW.activation_journal_entry_id IS NOT NULL AND
-          EXISTS (
-            SELECT 1 FROM asset_movements m
-            JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
-            WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id AND m.type = 'activation'
-              AND m.journal_entry_id = NEW.activation_journal_entry_id
-              AND m.source_type IN ('asset_activation', 'incoming_invoice')
-              AND m.source_key IS NOT NULL
-              AND j.source_type = m.source_type AND j.source_key = m.source_key
-              AND (NEW.source_incoming_invoice_id IS NULL OR
-                   (m.source_type = 'incoming_invoice' AND
-                    m.source_key = 'incoming-invoice:' || NEW.source_incoming_invoice_id))
-          )
+        COALESCE(NEW.status, '') != COALESCE(OLD.status, '') OR
+        COALESCE(NEW.disposal_date, '') != COALESCE(OLD.disposal_date, '') OR
+        COALESCE(NEW.disposal_proceeds, -1) != COALESCE(OLD.disposal_proceeds, -1)
+      )
+      AND NOT (
+        OLD.status = 'aktiv' AND NEW.status = 'voll_abgeschrieben' AND
+        NEW.disposal_date IS NULL AND OLD.disposal_date IS NULL AND
+        NOT EXISTS (SELECT 1 FROM asset_depreciation_schedule s
+                    WHERE s.asset_id = OLD.id AND s.tenant_id = OLD.tenant_id AND s.status = 'planned') AND
+        COALESCE((SELECT SUM(s.amount) FROM asset_depreciation_schedule s
+                  WHERE s.asset_id = OLD.id AND s.tenant_id = OLD.tenant_id AND s.status = 'posted'), 0) >= OLD.acquisition_cost AND
+        EXISTS (SELECT 1 FROM asset_movements m
+                WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id
+                  AND m.type = 'depreciation' AND m.source_type = 'asset_depreciation'
+                  AND m.journal_entry_id IS NOT NULL)
+      )
+      AND NOT (
+        OLD.accounting_repair_required = 1 AND NEW.accounting_repair_required = 0 AND
+        NEW.status = OLD.status AND COALESCE(NEW.disposal_date, '') = COALESCE(OLD.disposal_date, '') AND
+        COALESCE(NEW.disposal_proceeds, -1) = COALESCE(OLD.disposal_proceeds, -1) AND
+        NEW.asset_number = OLD.asset_number AND NEW.asset_class = OLD.asset_class AND
+        NEW.activation_date = OLD.activation_date AND NEW.acquisition_cost = OLD.acquisition_cost AND
+        COALESCE(NEW.useful_life_years, -1) = COALESCE(OLD.useful_life_years, -1) AND
+        NEW.depreciation_method = OLD.depreciation_method AND NEW.asset_account_number = OLD.asset_account_number AND
+        COALESCE(NEW.acquisition_offset_account_number, '') = COALESCE(OLD.acquisition_offset_account_number, '') AND
+        NEW.activation_journal_entry_id IS NOT NULL AND NEW.source_incoming_invoice_id IS NOT NULL AND
+        EXISTS (
+          SELECT 1 FROM asset_movements m
+          JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
+          WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id AND m.type = 'activation'
+            AND m.journal_entry_id = NEW.activation_journal_entry_id AND m.source_type = 'incoming_invoice'
+            AND m.source_key = 'incoming-invoice:' || NEW.source_incoming_invoice_id
+            AND j.source_type = m.source_type AND j.source_key = m.source_key
+        )
+      )
+      AND NOT (
+        OLD.status IN ('aktiv', 'voll_abgeschrieben') AND OLD.disposal_date IS NULL AND
+        NEW.status IN ('verkauft', 'stillgelegt') AND NEW.disposal_date IS NOT NULL AND
+        EXISTS (
+          SELECT 1 FROM asset_movements m
+          JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
+          WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id
+            AND m.type = 'disposal' AND m.source_type = 'asset_disposal'
+            AND m.source_key = 'asset_disposal:' || OLD.id AND m.journal_entry_id IS NOT NULL
+            AND m.movement_date = NEW.disposal_date
+            AND COALESCE(m.proceeds, -1) = COALESCE(NEW.disposal_proceeds, -1)
+            AND ((m.proceeds > 0 AND NEW.status = 'verkauft') OR
+                 (COALESCE(m.proceeds, 0) = 0 AND NEW.status = 'stillgelegt'))
+            AND j.source_type = m.source_type AND j.source_key = m.source_key
         )
       )
     BEGIN SELECT RAISE(ABORT, 'accounting-affecting asset fields are immutable'); END;
@@ -979,7 +982,8 @@ export const runMigrations = (db: Database.Database): void => {
           AND COALESCE(NEW.gain_loss, -1) = COALESCE(OLD.gain_loss, -1)
           AND NEW.reason = OLD.reason AND NEW.created_at = OLD.created_at
           AND NEW.type = 'activation' AND NEW.journal_entry_id IS NOT NULL
-          AND NEW.source_type IN ('asset_activation', 'incoming_invoice')
+          AND OLD.journal_entry_id IS NULL AND OLD.source_type IS NULL AND OLD.source_key IS NULL
+          AND NEW.source_type = 'incoming_invoice'
           AND NEW.source_key IS NOT NULL
           AND j.source_type = NEW.source_type AND j.source_key = NEW.source_key
       )

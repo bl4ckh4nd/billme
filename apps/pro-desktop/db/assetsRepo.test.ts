@@ -6,6 +6,7 @@ import {
   disposeAsset,
   getDepreciationSchedule,
   listAssets,
+  repairLegacyAssetActivation,
   runDepreciation,
   upsertAsset,
 } from './assetsRepo';
@@ -104,6 +105,46 @@ describe.skipIf(!canRunNativeSqlite)('asset migrations and repository', () => {
       postingDate: '2025-12-31',
       reason: 'Legacy AfA',
     }, createProTenantScope('default'))).toThrow('ASSET_ACTIVATION_REPAIR_REQUIRED');
+    existing.exec(`
+      INSERT INTO vendors (id, tenant_id, name, created_at, updated_at)
+      VALUES ('legacy-vendor', 'default', 'Legacy vendor', datetime('now'), datetime('now'));
+      INSERT INTO incoming_invoices (
+        id, tenant_id, vendor_id, number, invoice_date, due_date, net_amount,
+        tax_amount, gross_amount, tax_rate, status, accounting_status,
+        accounting_journal_entry_id, created_at, updated_at
+      ) VALUES ('legacy-invoice', 'default', 'legacy-vendor', 'LEG-1', '2025-01-01',
+        '2025-01-31', 100, 0, 100, 0, 'draft', 'unposted', 'legacy-journal',
+        datetime('now'), datetime('now'));
+      INSERT INTO incoming_invoice_lines (
+        id, tenant_id, incoming_invoice_id, position, description, quantity,
+        unit_price, net_amount, tax_rate, tax_amount, gross_amount, asset_account_number
+      ) VALUES ('legacy-invoice-line', 'default', 'legacy-invoice', 1, 'Legacy asset', 1,
+        100, 100, 0, 0, 100, '0440');
+      INSERT INTO journal_entries (
+        id, tenant_id, entry_number, posting_date, booking_text, period, fiscal_year,
+        status, source_draft_id, source_type, source_key, created_at
+      ) VALUES ('legacy-journal', 'default', 2, '2025-01-01', 'Legacy source', '2025-01',
+        2025, 'posted', 'legacy-draft', 'incoming_invoice',
+        'incoming-invoice:legacy-invoice', datetime('now'));
+      INSERT INTO journal_lines (
+        id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount
+      ) VALUES
+        ('legacy-journal-debit', 'default', 'legacy-journal', 1, '0440', 100, 0),
+        ('legacy-journal-credit', 'default', 'legacy-journal', 2, '1600', 0, 100);
+      UPDATE incoming_invoices SET status = 'posted', accounting_status = 'posted' WHERE id = 'legacy-invoice';
+    `);
+    const repaired = repairLegacyAssetActivation(existing, {
+      assetId: 'legacy-asset',
+      sourceIncomingInvoiceId: 'legacy-invoice',
+      reason: 'Legacy source verified',
+    }, createProTenantScope('default'));
+    expect(repaired.activationJournalEntryId).toBe('legacy-journal');
+    expect(repaired.accountingRepairRequired).toBe(false);
+    expect(existing.prepare('SELECT source_type, source_key, journal_entry_id FROM asset_movements WHERE id = ?').get('legacy-movement')).toEqual({
+      source_type: 'incoming_invoice',
+      source_key: 'incoming-invoice:legacy-invoice',
+      journal_entry_id: 'legacy-journal',
+    });
     runMigrations(existing);
     expect(tableNames(existing)).toEqual(['asset_depreciation_schedule', 'asset_movements', 'assets']);
   });
@@ -145,10 +186,12 @@ describe.skipIf(!canRunNativeSqlite)('asset migrations and repository', () => {
     expect(result.journalEntryId).toBeTruthy();
     expect(result.scheduleEntry.status).toBe('posted');
     expect(listAssets(db, scope)[0].residualValue).toBe(933.33);
-    const depreciationAudit = db.prepare("SELECT after_json FROM audit_log WHERE entity_id = ? AND action = 'depreciation_posted' ORDER BY sequence DESC LIMIT 1").get(asset.id) as { after_json: string };
+    const depreciationAudit = db.prepare("SELECT before_json, after_json FROM audit_log WHERE entity_id = ? AND action = 'depreciation_posted' ORDER BY sequence DESC LIMIT 1").get(asset.id) as { before_json: string; after_json: string };
+    expect(JSON.parse(depreciationAudit.before_json)).toMatchObject({
+      schedule: expect.arrayContaining([expect.objectContaining({ year: 2026, status: 'planned' })]),
+    });
     expect(JSON.parse(depreciationAudit.after_json)).toMatchObject({
-      scheduleBefore: expect.any(Array),
-      scheduleAfter: expect.any(Array),
+      schedule: expect.arrayContaining([expect.objectContaining({ year: 2026, status: 'posted' })]),
     });
   });
 
@@ -222,6 +265,7 @@ describe.skipIf(!canRunNativeSqlite)('asset migrations and repository', () => {
       postingDate: '2026-12-31',
       reason: 'Full AfA',
     }, scope);
+    expect((fullAfaDb.prepare('SELECT status FROM assets WHERE id = ?').get(fullAfa.id) as { status: string }).status).toBe('voll_abgeschrieben');
     const fullResult = disposeAsset(fullAfaDb, {
       assetId: fullAfa.id,
       disposalDate: '2027-01-15',

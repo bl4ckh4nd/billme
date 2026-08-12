@@ -386,6 +386,8 @@ export const listAssets = (
         schema.assets.acquisitionOffsetAccountNumber,
       source_incoming_invoice_id: schema.assets.sourceIncomingInvoiceId,
       activation_journal_entry_id: schema.assets.activationJournalEntryId,
+      accounting_repair_required: schema.assets.accountingRepairRequired,
+      accounting_repair_reason: schema.assets.accountingRepairReason,
       disposal_date: schema.assets.disposalDate,
       disposal_proceeds: schema.assets.disposalProceeds,
     })
@@ -1158,20 +1160,31 @@ export const runDepreciation = (
       .onConflictDoNothing()
       .run();
     const scheduleAfter = getDepreciationSchedule(db, asset.id, scope);
+    const completed = scheduleAfter.length > 0 &&
+      scheduleAfter.every((entry) => entry.status === "posted") &&
+      amount(scheduleAfter.reduce((sum, entry) => sum + entry.amount, 0)) >= amount(asset.acquisition_cost);
+    if (completed) {
+      drizzle
+        .update(schema.assets)
+        .set({ status: "voll_abgeschrieben", updatedAt: postedAt })
+        .where(and(eq(schema.assets.tenantId, tenantId), eq(schema.assets.id, asset.id)))
+        .run();
+    }
+    const assetAfter = getAssetRow(db, tenantId, asset.id);
     appendAuditLog(db, {
       entityType: "asset",
       entityId: asset.id,
       action: "depreciation_posted",
       reason: args.overrideReason?.trim() || args.reason,
-      before: null,
+      before: { schedule: auditSchedule(scheduleBefore) },
       after: {
+        schedule: auditSchedule(scheduleAfter),
+        asset: assetSnapshot(assetAfter),
         year: args.year,
         amount: scheduleEntry.amount,
         journalEntryId,
         sourceType: "asset_depreciation",
         sourceKey,
-        scheduleBefore: auditSchedule(scheduleBefore),
-        scheduleAfter: auditSchedule(scheduleAfter),
       },
       actor: "pro",
     });

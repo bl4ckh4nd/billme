@@ -265,6 +265,7 @@ export const eurClassificationSchema = z.object({
 export const eurReportRowSchema = z.object({
   lineId: z.string(),
   kennziffer: z.string().optional(),
+  providerPath: z.string().optional(),
   label: z.string(),
   kind: z.enum(['income', 'expense', 'computed']),
   exportable: z.boolean(),
@@ -284,6 +285,13 @@ export const eurReportResultSchema = z.object({
   }),
   unclassifiedCount: z.number().int(),
   warnings: z.array(z.string()),
+  catalog: z.object({
+    id: z.string().min(1),
+    version: z.string().min(1),
+    sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    delivery: z.enum(['print-form-only', 'elster-ready']),
+    elsterReady: z.boolean(),
+  }),
 });
 
 export const eurListItemsArgsSchema = z.object({
@@ -1082,3 +1090,48 @@ export const setActiveTemplatePayloadSchema = z.object({
   kind: templateKindSchema,
   templateId: z.string().nullable(),
 });
+
+export const reportSnapshotRecordSchema = z.object({
+  id: z.string().min(1),
+  reportType: z.string().min(1),
+  args: z.unknown(),
+  payload: z.unknown(),
+  createdAt: z.string().datetime(),
+  sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+export const listReportSnapshotsArgsSchema = z.object({
+  reportType: z.string().min(1).optional(),
+});
+
+export const saveReportSnapshotArgsSchema = z.object({
+  reportType: z.string().min(1),
+  args: z.unknown().optional(),
+  payload: z.unknown(),
+  reason: z.string().trim().min(1),
+});
+
+export const proGetReportingReportArgsSchema = z.object({
+  kind: z.enum(['bwa01', 'management-guv', 'hgb-guv']),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  asOfDate: z.string().optional(),
+});
+
+export const proGetReportingReportResultSchema = z.object({
+  kind: z.enum(['bwa01', 'management-guv', 'hgb-guv']),
+  snapshot: z.object({
+    fiscalYear: z.number().int(),
+    fiscalYearStart: z.string(),
+    ledgerEntryCount: z.number().int().nonnegative(),
+    ledgerAccountCount: z.number().int().nonnegative(),
+    cashEntryCount: z.number().int().nonnegative(),
+  }).passthrough(),
+  mappingHealth: z.object({
+    mappedAccounts: z.number().int().nonnegative(),
+    inferredAccounts: z.number().int().nonnegative(),
+    unmappedAccounts: z.array(z.string()),
+    warnings: z.array(z.string()),
+    blocking: z.boolean(),
+  }),
+}).passthrough();

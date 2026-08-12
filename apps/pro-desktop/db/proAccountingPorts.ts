@@ -107,7 +107,7 @@ export const createSqliteProAccountingRepository = (db: Database.Database): ProA
   listReportSnapshots: typeof readReportSnapshots;
   saveReportSnapshot: typeof persistReportSnapshot;
   getReportMappingHealth: typeof readReportMappingHealth;
-  getReportingReport: typeof runReportingReport;
+  getReportingReport: (scope: TenantScope, args: Parameters<typeof runReportingReport>[1]) => ReturnType<typeof runReportingReport>;
   upsertReportMappingOverride: typeof persistReportMappingOverride;
 } => ({
   listBankTransactions: async (scope) => listBankTransactions(db, scope),

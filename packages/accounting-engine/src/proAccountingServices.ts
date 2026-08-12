@@ -51,6 +51,8 @@ import type {
   OpenItemEntity,
   OpenItemPaymentEntity,
   OpenItemPaymentInput,
+  ReportKind,
+  ReportResult,
   VendorEntity,
 } from '@billme/accounting-shared';
 import type { TenantScope } from '@billme/server-core';
@@ -75,7 +77,9 @@ export interface ProAccountingOposRepository {
   previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
 }
-type ProAccountingRepositoryWithOpos = ProAccountingRepository & ProAccountingOposRepository;
+type ProAccountingRepositoryWithOpos = ProAccountingRepository & ProAccountingOposRepository & {
+  getReportingReport?: (scope: TenantScope, args: { kind: ReportKind; from?: string; to?: string; asOfDate?: string }) => Promise<ReportResult<object>>;
+};
 
 export interface ProAccountingService {
   listBankTransactions(scope: TenantScope): Promise<ProBankTransaction[]>;
@@ -96,6 +100,7 @@ export interface ProAccountingService {
   getSusaReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<SusaReport>;
   getGuvReport(scope: TenantScope, args?: ReportRangeOptions): Promise<GuvReport>;
   getBilanzReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<BilanzReport>;
+  getReportingReport(scope: TenantScope, args: { kind: ReportKind; from?: string; to?: string; asOfDate?: string }): Promise<ReportResult<object>>;
   listDatevExports(scope: TenantScope): Promise<DatevExportResult[]>;
   getDatevExportContent(scope: TenantScope, exportId: string): Promise<DatevExportContent>;
   insertDatevExport(
@@ -152,6 +157,7 @@ export interface BoundProAccountingService {
   getSusaReport(args?: LedgerBalanceOptions): Promise<SusaReport>;
   getGuvReport(args?: ReportRangeOptions): Promise<GuvReport>;
   getBilanzReport(args?: LedgerBalanceOptions): Promise<BilanzReport>;
+  getReportingReport(args: { kind: ReportKind; from?: string; to?: string; asOfDate?: string }): Promise<ReportResult<object>>;
   listDatevExports(): Promise<DatevExportResult[]>;
   getDatevExportContent(exportId: string): Promise<DatevExportContent>;
   insertDatevExport(args: { id?: string; filePath: string; recordCount: number; content?: Uint8Array; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: DatevExportSourceSnapshot; sha256?: string; byteSize?: number; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshotHash?: string; manifestJson?: string; status?: string; validationJson?: string; mutation?: AccountingMutationContext }): Promise<DatevExportResult>;
@@ -290,6 +296,9 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   getSusaReport: (scope, args) => repository.getSusaReport(scope, args),
   getGuvReport: (scope, args) => repository.getGuvReport(scope, args),
   getBilanzReport: (scope, args) => repository.getBilanzReport(scope, args),
+  getReportingReport: (scope, args) => repository.getReportingReport
+    ? repository.getReportingReport(scope, args)
+    : Promise.reject(new Error('PRO_REPORTING_ROUTE_UNAVAILABLE')),
   listDatevExports: (scope) => repository.listDatevExports(scope),
   getDatevExportContent: async (scope, exportId) => {
     if (!repository.getDatevExportContent) throw new Error('DATEV_EXPORT_CONTENT_UNAVAILABLE');
@@ -346,6 +355,7 @@ export const bindProAccountingScope = (
   getSusaReport: (args) => service.getSusaReport(scope, args),
   getGuvReport: (args) => service.getGuvReport(scope, args),
   getBilanzReport: (args) => service.getBilanzReport(scope, args),
+  getReportingReport: (args) => service.getReportingReport(scope, args),
   listDatevExports: () => service.listDatevExports(scope),
   getDatevExportContent: (exportId) => service.getDatevExportContent(scope, exportId),
   insertDatevExport: (args) => service.insertDatevExport(scope, args),

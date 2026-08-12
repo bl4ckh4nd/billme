@@ -1247,6 +1247,10 @@ export const registerIpcHandlers = (
     return getProAccountingService().getBilanzReport({ asOfDate });
   });
 
+  register(ipcMain, 'pro:getReportingReport', ({ kind, from, to, asOfDate }) => {
+    return getProAccountingService().getReportingReport({ kind, from, to, asOfDate });
+  });
+
   register(ipcMain, 'pro:listReportSnapshots', ({ reportType }) => {
     return listReportSnapshots(requireDb(), getProScope(), reportType);
   });

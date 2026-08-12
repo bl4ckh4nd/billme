@@ -42,15 +42,6 @@ import {
 const reportPeriodRange = (filters: ReportFilterState): { from?: string; to?: string } =>
   reportDateRange(filters);
 
-type ReportingIpc = {
-  getReportingReport?: (args: {
-    kind: ReportKind;
-    from?: string;
-    to?: string;
-    asOfDate?: string;
-  }) => Promise<ReportResult<object>>;
-};
-
 /**
  * Reporting tabs must consume the shared, report-specific engine route. Do
  * not fall back to getGuvReport here: that would make BWA01, management GuV,
@@ -60,9 +51,7 @@ const runReportingReport = async (
   kind: Extract<ReportKind, 'bwa01' | 'management-guv' | 'hgb-guv'>,
   range: { from?: string; to?: string },
 ): Promise<ReportResult<object>> => {
-  const route = (ipc.pro as unknown as ReportingIpc).getReportingReport;
-  if (!route) throw new Error('PRO_REPORTING_ROUTE_UNAVAILABLE');
-  return route({ kind, ...range });
+  return ipc.pro.getReportingReport({ kind, ...range });
 };
 
 type DatevExportArgs = {

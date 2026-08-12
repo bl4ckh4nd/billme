@@ -67,6 +67,11 @@ import {
   accountingPostingPreviewSchema,
   accountingBackfillPreviewSchema,
   accountingBackfillResultSchema,
+  listReportSnapshotsArgsSchema,
+  reportSnapshotRecordSchema,
+  saveReportSnapshotArgsSchema,
+  proGetReportingReportArgsSchema,
+  proGetReportingReportResultSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -1126,6 +1131,21 @@ export const ipcRoutes = {
     channel: 'pro:getBilanzReport',
     args: proGetBilanzReportArgsSchema,
     result: proGetBilanzReportResultSchema,
+  },
+  'pro:getReportingReport': {
+    channel: 'pro:getReportingReport',
+    args: proGetReportingReportArgsSchema,
+    result: proGetReportingReportResultSchema,
+  },
+  'pro:listReportSnapshots': {
+    channel: 'pro:listReportSnapshots',
+    args: listReportSnapshotsArgsSchema,
+    result: z.array(reportSnapshotRecordSchema),
+  },
+  'pro:saveReportSnapshot': {
+    channel: 'pro:saveReportSnapshot',
+    args: saveReportSnapshotArgsSchema,
+    result: reportSnapshotRecordSchema,
   },
   'pro:listAssets': {
     channel: 'pro:listAssets',

@@ -24,7 +24,14 @@ const amountValue = (amount: number | string) => {
   return Number.isFinite(value) ? Math.abs(value) : 0;
 };
 
-export function getBankAccountNumber(draft: BookingDraft, accounts: Account[] = []): string | undefined {
+export function getBankAccountNumber(
+  draft: BookingDraft,
+  accounts: Account[] = [],
+  configuredBankAccountNumber?: string,
+  allowMockHeuristic = accounts.length === 0,
+): string | undefined {
+  if (configuredBankAccountNumber) return configuredBankAccountNumber;
+  if (!allowMockHeuristic) return undefined;
   const bankAccounts = new Set(
     accounts
       .filter((account) => /bank|giro|konto/i.test(`${account.name} ${account.keywords?.join(' ') ?? ''}`))
@@ -34,12 +41,16 @@ export function getBankAccountNumber(draft: BookingDraft, accounts: Account[] = 
     ?? draft.lines.find((line) => /bank|giro|konto/i.test(line.accountName))?.accountId;
 }
 
+export const getConfiguredBankAccountNumber = getBankAccountNumber;
+
 export function calculateReconciliationTotals(
   draft: BookingDraft,
   transactionAmount: number,
   accounts: Account[] = [],
+  configuredBankAccountNumber?: string,
+  allowMockHeuristic = accounts.length === 0,
 ): ReconciliationTotals {
-  const bankAccountNumber = getBankAccountNumber(draft, accounts);
+  const bankAccountNumber = getBankAccountNumber(draft, accounts, configuredBankAccountNumber, allowMockHeuristic);
   const bankLines = bankAccountNumber ? draft.lines.filter((line) => line.accountId === bankAccountNumber) : [];
   const counterpartLines = bankAccountNumber
     ? draft.lines.filter((line) => line.accountId !== bankAccountNumber)
@@ -60,6 +71,8 @@ export function calculateReconciliationTotals(
 interface ReconciliationWorkbenchProps {
   role: UserRole;
   accounts?: Account[];
+  bankAccountNumber?: string;
+  bankAccountNumberByTransactionId?: Record<string, string>;
   transactions: Transaction[];
   onOpenTransaction: (transactionId: string) => void;
   onRefresh: () => void;
@@ -91,6 +104,8 @@ function actionLabel(action: BookingAction): string {
 export default function ReconciliationWorkbench({
   role,
   accounts,
+  bankAccountNumber: configuredBankAccountNumber,
+  bankAccountNumberByTransactionId,
   transactions,
   onOpenTransaction,
   onRefresh,
@@ -120,8 +135,23 @@ export default function ReconciliationWorkbench({
   const draft = localDraft ?? storeDraft;
   const allowed = draft ? getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues) : [];
   const primary = getPrimaryAction(allowed);
-  const bankAccountNumber = draft ? getBankAccountNumber(draft, accountOptions) : undefined;
-  const totals = draft && selectedTx ? calculateReconciliationTotals(draft, selectedTx.amount, accountOptions) : null;
+  const bankAccountNumber = draft
+    ? getConfiguredBankAccountNumber(
+        draft,
+        accounts ?? [],
+        bankAccountNumberByTransactionId?.[draft.transactionId] ?? configuredBankAccountNumber,
+        accounts === undefined,
+      )
+    : undefined;
+  const totals = draft && selectedTx
+    ? calculateReconciliationTotals(
+        draft,
+        selectedTx.amount,
+        accounts ?? [],
+        bankAccountNumberByTransactionId?.[selectedTx.id] ?? configuredBankAccountNumber,
+        accounts === undefined,
+      )
+    : null;
   const targetTotal = totals?.target ?? 0;
   const splitDifference = totals?.difference ?? 0;
   const expectedBankType = selectedTx ? (selectedTx.amount >= 0 ? 'Soll' : 'Haben') : null;
@@ -234,7 +264,7 @@ export default function ReconciliationWorkbench({
 
   return (
     <div className="flex">
-      <div className="w-[28rem] shrink-0 border-r border-gray-100 flex flex-col">
+      <div className="w-96 shrink-0 border-r border-gray-100 flex flex-col">
         <div className="px-4 py-3 border-b border-gray-100">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-black text-accent flex items-center justify-center shrink-0">
@@ -293,12 +323,12 @@ export default function ReconciliationWorkbench({
         {!selectedTx || !draft ? (
             <div className="text-gray-500">Keine Position ausgewählt.</div>
           ) : (
-            <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-6">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <section className="space-y-4">
               {mutationError && <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">{mutationError}</div>}
               <div className="border border-gray-200 rounded-2xl bg-white p-5">
                 <div className="text-xs uppercase tracking-wider text-gray-400 font-bold">Bankbewegung</div>
-                <div className="mt-2 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-3 items-start">
+                <div className="mt-2 grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
                   <div className="min-w-0">
                     <div className="font-bold text-base text-gray-900">{selectedTx.payee}</div>
                     <div className="text-sm text-gray-500 line-clamp-2">{selectedTx.description}</div>

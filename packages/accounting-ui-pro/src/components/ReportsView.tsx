@@ -35,10 +35,10 @@ const BILANZ_ACCOUNT_MAP: Record<string, string[]> = {
   'p-2-2': ['1740', '1800'],
 };
 
-function buildDefaultFilters(): ReportFilterState {
+function buildDefaultFilters(chart: 'SKR03' | 'SKR04' = 'SKR03'): ReportFilterState {
   const now = new Date();
   return {
-    chart: 'SKR03',
+    chart,
     mandantId: 'demo-gmbh',
     asOfDate: now.toISOString().slice(0, 10),
     periodFrom: `${now.getFullYear()}-01`,
@@ -50,13 +50,19 @@ function buildDefaultFilters(): ReportFilterState {
 
 interface ReportsViewProps {
   dataAdapter?: ProAccountingDataAdapter;
+  chartFramework?: 'SKR03' | 'SKR04';
   onOpenTransaction?: (transactionId: string) => void;
   onOpenReceipt?: (transactionId: string) => void;
 }
 
-export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenReceipt }: ReportsViewProps) {
+export default function ReportsView({ dataAdapter, chartFramework, onOpenTransaction, onOpenReceipt }: ReportsViewProps) {
   const [activeTab, setActiveTab] = useState<'susa' | 'guv' | 'bilanz'>('susa');
-  const [filters, setFilters] = useState<ReportFilterState>(() => buildDefaultFilters());
+  const [filters, setFilters] = useState<ReportFilterState>(() => buildDefaultFilters(chartFramework));
+
+  useEffect(() => {
+    if (!chartFramework) return;
+    setFilters((current) => (current.chart === chartFramework ? current : { ...current, chart: chartFramework }));
+  }, [chartFramework]);
   const [susaReport, setSusaReport] = useState<SusaReport | null>(null);
   const [guvReport, setGuvReport] = useState<GuvReport | null>(null);
   const [balanceSheetPreview, setBalanceSheetPreview] = useState<BalanceSheetPreview | null>(null);
@@ -227,7 +233,7 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenRece
               )}
             </div>
 
-            <div className={`transition-all duration-200 ${drilldownSelection ? 'xl:w-[25rem] w-full' : 'xl:w-0 w-full'}`}>
+            <div className={`transition-all duration-200 ${drilldownSelection ? 'xl:w-96 w-full' : 'xl:w-0 w-full'}`}>
               {drilldownSelection ? (
                 <ReportDrilldownPanel
                   selection={drilldownSelection}

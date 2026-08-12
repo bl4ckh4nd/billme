@@ -80,7 +80,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
 
   return (
     <div className="flex h-full">
-      <div className="w-[26rem] shrink-0 border-r border-gray-100 flex flex-col">
+      <div className="w-96 shrink-0 border-r border-gray-100 flex flex-col">
         <div className="px-4 py-3 border-b border-gray-100">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-black text-accent flex items-center justify-center shrink-0">
@@ -163,7 +163,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
         {!selectedTx || !selectedDraft ? (
           <div className="text-gray-500">Keine Exception ausgewählt.</div>
         ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_1fr] gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <div className="space-y-4">
               <div className="border border-gray-200 rounded-2xl bg-white p-5">
                 <div className="flex items-center justify-between">

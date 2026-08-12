@@ -50,7 +50,7 @@ export default function ReportToolbar({ filters, onChange }: ReportToolbarProps)
           <button
             onClick={() =>
               onChange({
-                chart: 'SKR03',
+                chart: filters.chart,
                 mandantId: 'demo-gmbh',
                 asOfDate: new Date().toISOString().slice(0, 10),
                 periodFrom: `${new Date().getFullYear()}-01`,

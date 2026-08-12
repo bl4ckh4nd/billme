@@ -11,6 +11,7 @@ import {
   type BookingDraft as ProUiBookingDraft,
 } from '@billme/accounting-ui-pro';
 import { ipc } from '../ipc/client';
+import { useAccountsQuery } from '../hooks/useAccounts';
 import { useImportSkrMutation, useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
 import type { IpcArgs, IpcResult } from '../ipc/contract';
 import { ProAccountRulesModal } from './ProAccountRulesModal';
@@ -41,6 +42,10 @@ const mapLedgerAccounts = (
     keywords: row.keywords && row.keywords.length > 0 ? row.keywords : [row.name],
   }));
 };
+
+const mapLedgerAccountNames = (
+  rows: Awaited<ReturnType<typeof ipc.pro.listLedgerAccounts>>,
+): ReadonlyMap<string, string> => new Map(rows.map((row) => [row.accountNumber, row.name]));
 
 const mapTransactions = (
   rows: Awaited<ReturnType<typeof ipc.pro.listBankTransactions>>,
@@ -79,6 +84,8 @@ const mapTransactions = (
 
 const mapEntityDraftToUiDraft = (
   draft: NonNullable<IpcResult<'pro:getDraftByTransactionId'>>,
+  accountNames: ReadonlyMap<string, string> = new Map(),
+  chartFramework: 'SKR03' | 'SKR04' = 'SKR03',
 ): ProUiBookingDraft => {
   return {
     id: draft.id,
@@ -89,14 +96,14 @@ const mapEntityDraftToUiDraft = (
     serviceDate: draft.documentDate,
     bookingText: draft.bookingText,
     externalReference: draft.reference,
-    chartFramework: 'SKR03',
+    chartFramework,
     lines: draft.lines.map((line) => {
       const hasDebit = Number(line.debitAmount || 0) > 0;
       const amount = hasDebit ? Number(line.debitAmount || 0) : Number(line.creditAmount || 0);
       return {
         id: line.id,
         accountId: line.accountNumber,
-        accountName: line.accountNumber,
+        accountName: accountNames.get(line.accountNumber) ?? line.accountNumber,
         type: hasDebit ? 'Soll' : 'Haben',
         amount,
         taxCode: line.taxCode,
@@ -178,10 +185,12 @@ const mapUiDraftToEntityDraft = (
 export const ProAccountingPage: React.FC = () => {
   const queryClient = useQueryClient();
   const { data: ledgerStats, isError: ledgerStatsError, error: ledgerStatsLoadError } = useProLedgerStatsQuery();
+  const activeChart =
+    (ledgerStats?.byChart.SKR03 ?? 0) >= (ledgerStats?.byChart.SKR04 ?? 0) ? 'SKR03' : 'SKR04';
   const { data: ledgerAccounts = [], isError: ledgerAccountsError, error: ledgerAccountsLoadError } = useProLedgerAccountsQuery({
-    chart: 'SKR03',
-    limit: 3000,
+    limit: 10_000,
   });
+  const { data: bankAccounts = [], isError: bankAccountsError, error: bankAccountsLoadError } = useAccountsQuery();
   const txQuery = useQuery({
     queryKey: ['pro-accounting', 'transactions'],
     queryFn: () => ipc.pro.listBankTransactions(),
@@ -207,22 +216,37 @@ export const ProAccountingPage: React.FC = () => {
   const seed = React.useMemo<ProAccountingSeed>(() => {
     const draftMap = new Map<string, ProUiBookingDraft>();
     const draftRows = draftQuery.data ?? [];
+    const activeLedgerAccounts = ledgerAccounts.filter((row) => !row.chart || row.chart === activeChart);
+    const accountNames = mapLedgerAccountNames(activeLedgerAccounts);
     for (const draft of draftRows) {
-      draftMap.set(draft.transactionId, mapEntityDraftToUiDraft(draft));
+      draftMap.set(draft.transactionId, mapEntityDraftToUiDraft(draft, accountNames, activeChart));
     }
 
     const baseTransactions = mapTransactions(txQuery.data ?? []);
     const mergedTransactions = baseTransactions;
-    const chartFramework =
-      (ledgerStats?.byChart.SKR03 ?? 0) > 0 ? 'SKR03' : 'SKR04';
+    const bankAccountNumberByTransactionId = Object.fromEntries(
+      (txQuery.data ?? []).flatMap((tx) => {
+        const account = bankAccounts.find((candidate) => candidate.id === tx.accountId);
+        return account?.defaultSkrAccountNumber ? [[tx.id, account.defaultSkrAccountNumber]] : [];
+      }),
+    );
     return {
       transactions: mergedTransactions,
-      accounts: mapLedgerAccounts(ledgerAccounts),
+      accounts: mapLedgerAccounts(activeLedgerAccounts),
       drafts: Array.from(draftMap.values()),
-      chartFramework: chartFramework as 'SKR03' | 'SKR04',
-      seedVersion: `${txQuery.data?.length ?? 0}:${draftRows.length}:${ledgerAccounts.length}:${chartFramework}`,
+      chartFramework: activeChart,
+      bankAccountNumber: Object.values(bankAccountNumberByTransactionId).length === 1
+        ? Object.values(bankAccountNumberByTransactionId)[0]
+        : undefined,
+      bankAccountNumberByTransactionId,
+      seedVersion: `${txQuery.data?.length ?? 0}:${draftRows.length}:${ledgerAccounts.length}:${activeChart}:${Object.values(bankAccountNumberByTransactionId).join(',')}`,
     };
-  }, [txQuery.data, draftQuery.data, ledgerAccounts, ledgerStats?.byChart.SKR03]);
+  }, [txQuery.data, draftQuery.data, ledgerAccounts, activeChart, bankAccounts]);
+
+  const accountNames = React.useMemo(
+    () => mapLedgerAccountNames(ledgerAccounts.filter((row) => !row.chart || row.chart === activeChart)),
+    [ledgerAccounts, activeChart],
+  );
 
   const adapterTransactionsRef = React.useRef<ProUiTransaction[]>([]);
   const adapterDraftsRef = React.useRef<Map<string, ProUiBookingDraft>>(new Map());
@@ -302,7 +326,7 @@ export const ProAccountingPage: React.FC = () => {
       async saveDraft(draft) {
         return runMutation(async () => {
           const saved = await ipc.pro.saveDraft({ draft: mapUiDraftToEntityDraft(draft) });
-          const resolvedDraft = mapEntityDraftToUiDraft(saved);
+          const resolvedDraft = mapEntityDraftToUiDraft(saved, accountNames, activeChart);
           adapterDraftsRef.current.set(draft.transactionId, resolvedDraft);
           return structuredClone(resolvedDraft);
         });
@@ -316,7 +340,7 @@ export const ProAccountingPage: React.FC = () => {
             action,
             rejectReason: options?.rejectReason,
           });
-          let resolvedDraft = mapEntityDraftToUiDraft(dispatched);
+          let resolvedDraft = mapEntityDraftToUiDraft(dispatched, accountNames, activeChart);
 
           if (action === 'post') {
             const postResult = await ipc.pro.postDraft({
@@ -352,7 +376,7 @@ export const ProAccountingPage: React.FC = () => {
           }
 
           const authoritative = await ipc.pro.getDraftByTransactionId({ transactionId });
-          if (authoritative) resolvedDraft = mapEntityDraftToUiDraft(authoritative);
+          if (authoritative) resolvedDraft = mapEntityDraftToUiDraft(authoritative, accountNames, activeChart);
           adapterDraftsRef.current.set(transactionId, resolvedDraft);
           setTxWorkflowStatus(transactionId, resolvedDraft.workflowStatus);
           return structuredClone(resolvedDraft);
@@ -408,7 +432,7 @@ export const ProAccountingPage: React.FC = () => {
         return ipc.pro.disposeAsset(args);
       },
     };
-  }, [invalidateProQueries, runMutation]);
+  }, [accountNames, activeChart, invalidateProQueries, runMutation]);
 
   if (txQuery.isLoading || draftQuery.isLoading) {
     return (
@@ -418,10 +442,10 @@ export const ProAccountingPage: React.FC = () => {
     );
   }
 
-  if (txQuery.isError || draftQuery.isError || ledgerStatsError || ledgerAccountsError) {
+  if (txQuery.isError || draftQuery.isError || ledgerStatsError || ledgerAccountsError || bankAccountsError) {
     return (
       <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-red-700" role="alert">
-        Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error ?? ledgerStatsLoadError ?? ledgerAccountsLoadError)}
+        Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error ?? ledgerStatsLoadError ?? ledgerAccountsLoadError ?? bankAccountsLoadError)}
       </div>
     );
   }

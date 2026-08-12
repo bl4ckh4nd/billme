@@ -57,6 +57,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
   const [busy, setBusy] = useState(false);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
   const shortcutCloseRef = useRef<HTMLButtonElement>(null);
+  const shortcutDialogRef = useRef<HTMLDivElement>(null);
   const shortcutPreviousFocusRef = useRef<HTMLElement | null>(null);
   const [announceMessage, setAnnounceMessage] = useState('');
 
@@ -93,9 +94,29 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         if (e.key === 'Escape') {
           e.preventDefault();
           setShowShortcutHelp(false);
+          return;
+        }
+        if (e.key === 'Tab') {
+          const focusable = Array.from(
+            shortcutDialogRef.current?.querySelectorAll<HTMLElement>(
+              'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+            ) ?? [],
+          ).filter((element) => !element.hasAttribute('disabled'));
+          if (focusable.length === 0) return;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
         }
         return;
       }
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]') || target?.isContentEditable) return;
       if (e.key === '?') {
         e.preventDefault();
         setShowShortcutHelp((v) => !v);
@@ -282,7 +303,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
       </div>
 
       <div className="flex flex-1 overflow-hidden p-5 gap-5">
-        <div className="flex flex-col gap-4 w-[22rem] shrink-0">
+        <div className="flex flex-col gap-4 w-80 shrink-0">
           <div className="border border-gray-200 rounded-2xl overflow-hidden">
             <div className="p-4 border-b border-gray-100 bg-gray-50/50 flex items-center justify-between">
               <h3 className="text-sm font-bold text-gray-900">Transaktion & Meta</h3>
@@ -610,7 +631,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-1 2xl:grid-cols-[1fr_20rem] gap-4">
+          <div className="mt-4 grid grid-cols-1 2xl:grid-cols-2 gap-4">
             <div className="bg-black rounded-2xl p-5 text-white">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex gap-8">
@@ -639,7 +660,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
       {showShortcutHelp && (
         <div className="absolute inset-0 bg-gray-900/40 flex items-center justify-center p-6" role="presentation">
-          <div className="w-full max-w-lg bg-white rounded-2xl border border-gray-200 shadow-xl p-6" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title">
+          <div ref={shortcutDialogRef} className="w-full max-w-lg bg-white rounded-2xl border border-gray-200 shadow-xl p-6" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title">
             <div className="flex items-center justify-between mb-4">
               <h3 id="shortcut-help-title" className="text-lg font-bold text-gray-900">Tastenkürzel</h3>
               <button ref={shortcutCloseRef} onClick={() => setShowShortcutHelp(false)} className="text-sm font-bold text-gray-600">

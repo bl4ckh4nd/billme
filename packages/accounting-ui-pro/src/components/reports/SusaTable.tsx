@@ -59,14 +59,14 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
         <div className="max-h-[32rem] overflow-auto">
           <table className="w-full text-sm table-fixed">
             <colgroup>
-              <col className="w-[110px]" />
-              <col className="w-[280px]" />
-              <col className="w-[130px]" />
-              <col className="w-[130px]" />
-              <col className="w-[130px]" />
-              <col className="w-[130px]" />
-              <col className="w-[190px]" />
-              <col className="w-[120px]" />
+              <col className="w-28" />
+              <col className="w-72" />
+              <col className="w-32" />
+              <col className="w-32" />
+              <col className="w-32" />
+              <col className="w-32" />
+              <col className="w-48" />
+              <col className="w-32" />
             </colgroup>
             <thead className="sticky top-0 bg-gray-50 z-10">
               <tr className="text-xs uppercase tracking-wide text-gray-500">

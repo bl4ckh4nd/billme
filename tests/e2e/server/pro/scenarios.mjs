@@ -945,7 +945,7 @@ export const runProAccountingScenario = async (page) => {
       asOfDate: '2026-03-31',
     });
     expect(mappingHealth).toMatchObject({ chart: 'SKR03', reportType: reportAssertion.reportType, unmapped: [] });
-    const reportPositions = await requestJson(state, session, '/api/v1/pro/accounting/mappings/positions', { reportType: reportAssertion.reportType });
+    const reportPositions = await requestJson(state, session, '/api/v1/pro/accounting/mappings/positions', { reportType: reportAssertion.reportType, asOfDate: '2026-03-31' });
     for (const key of reportAssertion.keys) expect(reportPositions).toEqual(expect.arrayContaining([expect.objectContaining({ key })]));
 
     const report = await requestJson(state, session, reportAssertion.path, reportAssertion.query);

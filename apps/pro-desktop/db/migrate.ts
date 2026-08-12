@@ -757,6 +757,8 @@ export const runMigrations = (db: Database.Database): void => {
       source_id TEXT NOT NULL,
       allocated_amount REAL NOT NULL DEFAULT 0,
       residual_amount REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      journal_entry_id TEXT,
       created_at TEXT NOT NULL
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_open_item_payments_tenant_source ON open_item_payments(tenant_id, source_type, source_id);
@@ -778,6 +780,7 @@ export const runMigrations = (db: Database.Database): void => {
       status TEXT NOT NULL,
       candidates_json TEXT NOT NULL,
       confirmation_hash TEXT NOT NULL,
+      result_json TEXT,
       confirmed_at TEXT,
       completed_at TEXT,
       created_at TEXT NOT NULL
@@ -785,16 +788,78 @@ export const runMigrations = (db: Database.Database): void => {
     CREATE INDEX IF NOT EXISTS idx_accounting_backfill_runs_tenant_status ON accounting_backfill_runs(tenant_id, status);
   `);
 
+  // These columns were added after the first OPOS migration.  Keep old local
+  // databases compatible without rebuilding the tables (which would risk
+  // losing user data).
+  tryAddColumn(db, 'open_item_payments', 'status', "TEXT NOT NULL DEFAULT 'open'");
+  tryAddColumn(db, 'open_item_payments', 'journal_entry_id', 'TEXT');
+  tryAddColumn(db, 'accounting_backfill_runs', 'result_json', 'TEXT');
+  db.exec(`
+    DROP TRIGGER IF EXISTS invoices_protect_posted_accounting;
+    CREATE TRIGGER invoices_protect_posted_accounting
+    BEFORE UPDATE ON invoices
+    FOR EACH ROW WHEN OLD.accounting_status = 'posted' AND (
+      NEW.number != OLD.number OR NEW.date != OLD.date OR NEW.due_date != OLD.due_date OR
+      NEW.amount != OLD.amount OR COALESCE(NEW.tax_snapshot_json, '') != COALESCE(OLD.tax_snapshot_json, '') OR
+      COALESCE(NEW.accounting_snapshot_json, '') != COALESCE(OLD.accounting_snapshot_json, '') OR
+      COALESCE(NEW.accounting_journal_entry_id, '') != COALESCE(OLD.accounting_journal_entry_id, '') OR
+      COALESCE(NEW.accounting_posted_at, '') != COALESCE(OLD.accounting_posted_at, '')
+    ) BEGIN SELECT RAISE(ABORT, 'posted invoice accounting fields are immutable'); END;
+    DROP TRIGGER IF EXISTS invoices_protect_posted_delete;
+    CREATE TRIGGER invoices_protect_posted_delete
+    BEFORE DELETE ON invoices FOR EACH ROW WHEN OLD.accounting_status = 'posted'
+    BEGIN SELECT RAISE(ABORT, 'posted invoice cannot be deleted'); END;
+    DROP TRIGGER IF EXISTS invoice_items_protect_posted;
+    DROP TRIGGER IF EXISTS invoice_items_insert_posted;
+    CREATE TRIGGER invoice_items_insert_posted
+    BEFORE INSERT ON invoice_items FOR EACH ROW WHEN EXISTS (SELECT 1 FROM invoices WHERE id = NEW.invoice_id AND accounting_status = 'posted')
+    BEGIN SELECT RAISE(ABORT, 'posted invoice lines are immutable'); END;
+    CREATE TRIGGER invoice_items_protect_posted
+    BEFORE UPDATE ON invoice_items FOR EACH ROW WHEN EXISTS (SELECT 1 FROM invoices WHERE id = OLD.invoice_id AND accounting_status = 'posted')
+    BEGIN SELECT RAISE(ABORT, 'posted invoice lines are immutable'); END;
+    DROP TRIGGER IF EXISTS invoice_items_delete_posted;
+    CREATE TRIGGER invoice_items_delete_posted
+    BEFORE DELETE ON invoice_items FOR EACH ROW WHEN EXISTS (SELECT 1 FROM invoices WHERE id = OLD.invoice_id AND accounting_status = 'posted')
+    BEGIN SELECT RAISE(ABORT, 'posted invoice lines cannot be deleted'); END;
+    DROP TRIGGER IF EXISTS incoming_invoices_protect_posted_accounting;
+    CREATE TRIGGER incoming_invoices_protect_posted_accounting
+    BEFORE UPDATE ON incoming_invoices
+    FOR EACH ROW WHEN OLD.accounting_status = 'posted' AND (
+      NEW.vendor_id != OLD.vendor_id OR NEW.number != OLD.number OR NEW.invoice_date != OLD.invoice_date OR
+      NEW.due_date != OLD.due_date OR NEW.net_amount != OLD.net_amount OR NEW.tax_amount != OLD.tax_amount OR
+      NEW.gross_amount != OLD.gross_amount OR NEW.tax_rate != OLD.tax_rate OR
+      COALESCE(NEW.accounting_snapshot_json, '') != COALESCE(OLD.accounting_snapshot_json, '') OR
+      COALESCE(NEW.accounting_journal_entry_id, '') != COALESCE(OLD.accounting_journal_entry_id, '') OR
+      COALESCE(NEW.accounting_posted_at, '') != COALESCE(OLD.accounting_posted_at, '')
+    ) BEGIN SELECT RAISE(ABORT, 'posted incoming invoice accounting fields are immutable'); END;
+    DROP TRIGGER IF EXISTS incoming_invoices_protect_posted_delete;
+    CREATE TRIGGER incoming_invoices_protect_posted_delete
+    BEFORE DELETE ON incoming_invoices FOR EACH ROW WHEN OLD.accounting_status = 'posted'
+    BEGIN SELECT RAISE(ABORT, 'posted incoming invoice cannot be deleted'); END;
+    DROP TRIGGER IF EXISTS incoming_invoice_lines_protect_posted;
+    DROP TRIGGER IF EXISTS incoming_invoice_lines_insert_posted;
+    CREATE TRIGGER incoming_invoice_lines_insert_posted
+    BEFORE INSERT ON incoming_invoice_lines FOR EACH ROW WHEN EXISTS (SELECT 1 FROM incoming_invoices WHERE id = NEW.incoming_invoice_id AND accounting_status = 'posted')
+    BEGIN SELECT RAISE(ABORT, 'posted incoming invoice lines are immutable'); END;
+    CREATE TRIGGER incoming_invoice_lines_protect_posted
+    BEFORE UPDATE ON incoming_invoice_lines FOR EACH ROW WHEN EXISTS (SELECT 1 FROM incoming_invoices WHERE id = OLD.incoming_invoice_id AND accounting_status = 'posted')
+    BEGIN SELECT RAISE(ABORT, 'posted incoming invoice lines are immutable'); END;
+    DROP TRIGGER IF EXISTS incoming_invoice_lines_delete_posted;
+    CREATE TRIGGER incoming_invoice_lines_delete_posted
+    BEFORE DELETE ON incoming_invoice_lines FOR EACH ROW WHEN EXISTS (SELECT 1 FROM incoming_invoices WHERE id = OLD.incoming_invoice_id AND accounting_status = 'posted')
+    BEGIN SELECT RAISE(ABORT, 'posted incoming invoice lines cannot be deleted'); END;
+  `);
+
   // Conservative defaults cover both German charts. Posting still validates
   // every configured account against the selected chart before writing.
   const mappingDefaults: Record<'SKR03' | 'SKR04', Record<string, string>> = {
     SKR03: {
       accounts_receivable: '1400', accounts_payable: '1600', bank: '1200',
-      revenue: '8400', expense: '4900', asset: '0480', output_vat: '1776', input_vat: '1576',
+      revenue: '8400', expense: '4900', asset: '0480', output_vat: '1776', output_vat_deferred: '1780', input_vat: '1576',
     },
     SKR04: {
       accounts_receivable: '1200', accounts_payable: '3300', bank: '1800',
-      revenue: '4400', expense: '6300', asset: '0670', output_vat: '3806', input_vat: '1406',
+      revenue: '4400', expense: '6300', asset: '0670', output_vat: '3806', output_vat_deferred: '3810', input_vat: '1406',
     },
   };
   const insertMapping = db.prepare(`

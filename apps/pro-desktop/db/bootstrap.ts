@@ -315,6 +315,7 @@ CREATE TABLE IF NOT EXISTS accounting_periods (
 CREATE TABLE IF NOT EXISTS accounting_policies (
   tenant_id TEXT PRIMARY KEY,
   active_chart TEXT NOT NULL DEFAULT 'SKR03' CHECK (active_chart IN ('SKR03', 'SKR04')),
+  vat_method TEXT NOT NULL DEFAULT 'soll' CHECK (vat_method IN ('soll', 'ist')),
   period_policy TEXT NOT NULL DEFAULT 'calendar_month' CHECK (period_policy IN ('calendar_month')),
   updated_at TEXT NOT NULL
 );
@@ -875,6 +876,8 @@ CREATE TABLE IF NOT EXISTS open_item_payments (
   source_id TEXT NOT NULL,
   allocated_amount REAL NOT NULL DEFAULT 0,
   residual_amount REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  journal_entry_id TEXT,
   created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_open_item_payments_tenant_source
@@ -899,6 +902,7 @@ CREATE TABLE IF NOT EXISTS accounting_backfill_runs (
   status TEXT NOT NULL,
   candidates_json TEXT NOT NULL,
   confirmation_hash TEXT NOT NULL,
+  result_json TEXT,
   confirmed_at TEXT,
   completed_at TEXT,
   created_at TEXT NOT NULL

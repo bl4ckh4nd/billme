@@ -10,7 +10,7 @@ import {
 import { finalizeNumber, releaseNumber, reserveNumber } from './numberingRepo';
 import { getSettings } from './settingsRepo';
 import { postOutgoingInvoice } from './oposRepo';
-import { createProTenantScope } from '../tenantScope';
+import { createProTenantScope, resolveRuntimeProTenantScope } from '../tenantScope';
 
 const PRODUCT = 'pro' as const;
 
@@ -27,8 +27,29 @@ export const upsertInvoice = (
   invoice: Invoice,
   reason: string,
 ): Invoice => {
-  return upsertSharedInvoice(db, PRODUCT, invoice, reason) as Invoice;
+  const scope = resolveRuntimeProTenantScope();
+  if (scope.tenantId !== 'default') throw new Error('DESKTOP_SINGLE_TENANT_ONLY');
+  const before = getSharedInvoice(db, PRODUCT, invoice.id) as Invoice | null;
+  const accounting = db.prepare('SELECT accounting_status FROM invoices WHERE id = ?').get(invoice.id) as { accounting_status: string } | undefined;
+  if (accounting?.accounting_status === 'posted' && before && JSON.stringify({ number: before.number, date: before.date, dueDate: before.dueDate, amount: before.amount, taxSnapshot: before.taxSnapshot, items: before.items }) !== JSON.stringify({ number: invoice.number, date: invoice.date, dueDate: invoice.dueDate, amount: invoice.amount, taxSnapshot: invoice.taxSnapshot, items: invoice.items })) throw new Error('POSTED_DOCUMENT_IMMUTABLE');
+  const finalize = before?.status === 'draft' && invoice.status === 'open';
+  return db.transaction(() => {
+    const saved = upsertSharedInvoice(db, PRODUCT, invoice, reason) as Invoice;
+    if (finalize) {
+      const result = postOutgoingInvoice(db, scope, invoice.id);
+      if (result.status !== 'ready') throw new Error(`ACCOUNTING_UNRESOLVED:${result.issues[0]?.code ?? 'unknown'}`);
+    }
+    return saved;
+  })();
 };
+
+/** Number finalization and accounting posting are one SQLite transaction. */
+export const finalizeOutgoingInvoice = (db: Database.Database, reservationId: string, documentId: string): { ok: true } => db.transaction(() => {
+  finalizeNumber(db, reservationId, documentId);
+  const result = postOutgoingInvoice(db, createProTenantScope('default'), documentId);
+  if (result.status !== 'ready') throw new Error(`ACCOUNTING_UNRESOLVED:${result.issues[0]?.code ?? 'unknown'}`);
+  return { ok: true as const };
+})();
 
 export const deleteInvoice = (db: Database.Database, id: string, reason: string) => {
   return deleteSharedInvoice(db, PRODUCT, id, reason);
@@ -57,7 +78,8 @@ export const createInvoiceFromOffer = (
       }) as Invoice;
 
       finalizeNumber(db, numberReservation.reservationId, newInvoiceId);
-      postOutgoingInvoice(db, createProTenantScope('default'), newInvoiceId);
+      const posted = postOutgoingInvoice(db, createProTenantScope('default'), newInvoiceId);
+      if (posted.status !== 'ready') throw new Error(`ACCOUNTING_UNRESOLVED:${posted.issues[0]?.code ?? 'unknown'}`);
       return invoice;
     } catch (error) {
       releaseNumber(db, numberReservation.reservationId);

@@ -9,8 +9,11 @@ import {
 export * from '@billme/desktop-data/transactionsRepo';
 export const findInvoiceMatches = (db: Database.Database, transaction: Transaction) =>
   findSharedInvoiceMatches(db, transaction, 'pro');
-export const linkTransactionToInvoice = (db: Database.Database, transactionId: string, invoiceId: string) =>
-  linkSharedTransaction(db, transactionId, invoiceId, 'pro');
+export const linkTransactionToInvoice = (db: Database.Database, transactionId: string, invoiceId: string) => {
+  const posted = db.prepare('SELECT accounting_status FROM invoices WHERE id = ?').get(invoiceId) as { accounting_status: string } | undefined;
+  if (posted?.accounting_status === 'posted') throw new Error('Posted accounting invoices require OPOS payment allocation');
+  return linkSharedTransaction(db, transactionId, invoiceId, 'pro');
+};
 export const unlinkTransactionFromInvoice = (db: Database.Database, transactionId: string) => {
   const linked = db.prepare(`SELECT linked_invoice_id FROM transactions WHERE id = ?`).get(transactionId) as { linked_invoice_id: string | null } | undefined;
   if (linked?.linked_invoice_id) {

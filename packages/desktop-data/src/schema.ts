@@ -503,6 +503,8 @@ export const openItemPayments = sqliteTable(
     sourceId: text('source_id').notNull(),
     allocatedAmount: real('allocated_amount').notNull().default(0),
     residualAmount: real('residual_amount').notNull(),
+    status: text('status').notNull().default('open'),
+    journalEntryId: text('journal_entry_id'),
     createdAt: text('created_at').notNull(),
   },
   (t) => ({
@@ -534,6 +536,7 @@ export const accountingBackfillRuns = sqliteTable(
     status: text('status').notNull(),
     candidatesJson: text('candidates_json').notNull(),
     confirmationHash: text('confirmation_hash').notNull(),
+    resultJson: text('result_json'),
     confirmedAt: text('confirmed_at'),
     completedAt: text('completed_at'),
     createdAt: text('created_at').notNull(),

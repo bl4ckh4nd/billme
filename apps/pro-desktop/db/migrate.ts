@@ -782,11 +782,104 @@ export const runMigrations = (db: Database.Database): void => {
   tryAddColumn(db, 'assets', 'acquisition_offset_account_number', 'TEXT');
   tryAddColumn(db, 'assets', 'source_incoming_invoice_id', 'TEXT');
   tryAddColumn(db, 'assets', 'activation_journal_entry_id', 'TEXT');
+  tryAddColumn(db, 'assets', 'accounting_repair_required', 'INTEGER NOT NULL DEFAULT 0');
+  tryAddColumn(db, 'assets', 'accounting_repair_reason', 'TEXT');
   tryAddColumn(db, 'asset_depreciation_schedule', 'source_type', 'TEXT');
   tryAddColumn(db, 'asset_depreciation_schedule', 'source_key', 'TEXT');
   tryAddColumn(db, 'asset_movements', 'journal_entry_id', 'TEXT');
   tryAddColumn(db, 'asset_movements', 'source_type', 'TEXT');
   tryAddColumn(db, 'asset_movements', 'source_key', 'TEXT');
+
+  // Legacy Pro databases may contain an activation movement without the
+  // immutable source projection introduced later. Reuse the posted journal's
+  // source identity when it is unambiguous; otherwise leave the asset in an
+  // explicit repair state instead of allowing AfA to strand it.
+  db.exec(`
+    DROP TRIGGER IF EXISTS assets_protect_accounting_fields;
+    DROP TRIGGER IF EXISTS asset_movements_no_update;
+    UPDATE asset_movements
+    SET source_type = (
+      SELECT j.source_type FROM journal_entries j
+      WHERE j.tenant_id = asset_movements.tenant_id
+        AND j.id = asset_movements.journal_entry_id
+        AND j.source_type IN ('asset_activation', 'incoming_invoice')
+        AND j.source_key IS NOT NULL
+    ),
+    source_key = (
+      SELECT j.source_key FROM journal_entries j
+      WHERE j.tenant_id = asset_movements.tenant_id
+        AND j.id = asset_movements.journal_entry_id
+        AND j.source_type IN ('asset_activation', 'incoming_invoice')
+        AND j.source_key IS NOT NULL
+    )
+    WHERE asset_movements.type = 'activation'
+      AND asset_movements.journal_entry_id IS NOT NULL
+      AND (asset_movements.source_type IS NULL OR asset_movements.source_key IS NULL)
+      AND EXISTS (
+        SELECT 1 FROM journal_entries j
+        WHERE j.tenant_id = asset_movements.tenant_id
+          AND j.id = asset_movements.journal_entry_id
+          AND j.source_type IN ('asset_activation', 'incoming_invoice')
+          AND j.source_key IS NOT NULL
+      );
+    UPDATE assets
+    SET activation_journal_entry_id = (
+      SELECT m.journal_entry_id FROM asset_movements m
+      JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
+      WHERE m.tenant_id = assets.tenant_id AND m.asset_id = assets.id
+        AND m.type = 'activation' AND m.journal_entry_id IS NOT NULL
+        AND m.source_type IN ('asset_activation', 'incoming_invoice')
+        AND m.source_key IS NOT NULL
+        AND j.source_type = m.source_type AND j.source_key = m.source_key
+      ORDER BY m.created_at ASC, m.id ASC LIMIT 1
+    )
+    WHERE assets.status IN ('aktiv', 'voll_abgeschrieben')
+      AND assets.activation_journal_entry_id IS NULL
+      AND EXISTS (
+        SELECT 1 FROM asset_movements m
+        JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
+        WHERE m.tenant_id = assets.tenant_id AND m.asset_id = assets.id
+          AND m.type = 'activation' AND m.journal_entry_id IS NOT NULL
+          AND m.source_type IN ('asset_activation', 'incoming_invoice')
+          AND m.source_key IS NOT NULL
+          AND j.source_type = m.source_type AND j.source_key = m.source_key
+      );
+    UPDATE assets
+    SET source_incoming_invoice_id = (
+      SELECT substr(m.source_key, 18) FROM asset_movements m
+      WHERE m.tenant_id = assets.tenant_id AND m.asset_id = assets.id
+        AND m.type = 'activation' AND m.source_type = 'incoming_invoice'
+        AND m.source_key LIKE 'incoming-invoice:%'
+      ORDER BY m.created_at ASC, m.id ASC LIMIT 1
+    )
+    WHERE assets.source_incoming_invoice_id IS NULL
+      AND EXISTS (
+        SELECT 1 FROM asset_movements m
+        WHERE m.tenant_id = assets.tenant_id AND m.asset_id = assets.id
+          AND m.type = 'activation' AND m.source_type = 'incoming_invoice'
+          AND m.source_key LIKE 'incoming-invoice:%'
+      );
+    UPDATE assets
+    SET accounting_repair_required = CASE WHEN EXISTS (
+      SELECT 1 FROM asset_movements m
+      JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
+      WHERE m.tenant_id = assets.tenant_id AND m.asset_id = assets.id
+        AND m.type = 'activation' AND m.journal_entry_id IS NOT NULL
+        AND m.source_type IN ('asset_activation', 'incoming_invoice')
+        AND m.source_key IS NOT NULL
+        AND j.source_type = m.source_type AND j.source_key = m.source_key
+    ) THEN 0 ELSE 1 END,
+    accounting_repair_reason = CASE WHEN EXISTS (
+      SELECT 1 FROM asset_movements m
+      JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
+      WHERE m.tenant_id = assets.tenant_id AND m.asset_id = assets.id
+        AND m.type = 'activation' AND m.journal_entry_id IS NOT NULL
+        AND m.source_type IN ('asset_activation', 'incoming_invoice')
+        AND m.source_key IS NOT NULL
+        AND j.source_type = m.source_type AND j.source_key = m.source_key
+    ) THEN NULL ELSE 'LEGACY_ACTIVATION_LINK_REQUIRED' END
+    WHERE assets.status IN ('aktiv', 'voll_abgeschrieben');
+  `);
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_asset_movements_tenant_asset_date
@@ -799,7 +892,8 @@ export const runMigrations = (db: Database.Database): void => {
     CREATE TRIGGER assets_protect_accounting_fields
     BEFORE UPDATE ON assets FOR EACH ROW
     WHEN (EXISTS (SELECT 1 FROM asset_movements m WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id)
-      OR EXISTS (SELECT 1 FROM asset_depreciation_schedule s WHERE s.asset_id = OLD.id AND s.tenant_id = OLD.tenant_id AND s.status = 'posted'))
+      OR EXISTS (SELECT 1 FROM asset_depreciation_schedule s WHERE s.asset_id = OLD.id AND s.tenant_id = OLD.tenant_id AND s.status = 'posted')
+      OR COALESCE(OLD.accounting_repair_required, 0) = 1)
       AND (
         NEW.asset_number != OLD.asset_number OR NEW.asset_class != OLD.asset_class OR
         NEW.activation_date != OLD.activation_date OR NEW.acquisition_cost != OLD.acquisition_cost OR
@@ -808,6 +902,8 @@ export const runMigrations = (db: Database.Database): void => {
         COALESCE(NEW.acquisition_offset_account_number, '') != COALESCE(OLD.acquisition_offset_account_number, '') OR
         COALESCE(NEW.source_incoming_invoice_id, '') != COALESCE(OLD.source_incoming_invoice_id, '') OR
         COALESCE(NEW.activation_journal_entry_id, '') != COALESCE(OLD.activation_journal_entry_id, '') OR
+        COALESCE(NEW.accounting_repair_required, 0) != COALESCE(OLD.accounting_repair_required, 0) OR
+        COALESCE(NEW.accounting_repair_reason, '') != COALESCE(OLD.accounting_repair_reason, '') OR
         (
           (COALESCE(NEW.status, '') != COALESCE(OLD.status, '') OR
            COALESCE(NEW.disposal_date, '') != COALESCE(OLD.disposal_date, '') OR
@@ -829,6 +925,31 @@ export const runMigrations = (db: Database.Database): void => {
                             WHERE j.id = m.journal_entry_id AND j.tenant_id = OLD.tenant_id)
             )
           )
+        ) OR
+        (
+          OLD.accounting_repair_required = 1 AND NEW.accounting_repair_required = 0 AND
+          NEW.status = OLD.status AND
+          COALESCE(NEW.disposal_date, '') = COALESCE(OLD.disposal_date, '') AND
+          COALESCE(NEW.disposal_proceeds, -1) = COALESCE(OLD.disposal_proceeds, -1) AND
+          NEW.asset_number = OLD.asset_number AND NEW.asset_class = OLD.asset_class AND
+          NEW.activation_date = OLD.activation_date AND NEW.acquisition_cost = OLD.acquisition_cost AND
+          COALESCE(NEW.useful_life_years, -1) = COALESCE(OLD.useful_life_years, -1) AND
+          NEW.depreciation_method = OLD.depreciation_method AND
+          NEW.asset_account_number = OLD.asset_account_number AND
+          COALESCE(NEW.acquisition_offset_account_number, '') = COALESCE(OLD.acquisition_offset_account_number, '') AND
+          NEW.activation_journal_entry_id IS NOT NULL AND
+          EXISTS (
+            SELECT 1 FROM asset_movements m
+            JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
+            WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id AND m.type = 'activation'
+              AND m.journal_entry_id = NEW.activation_journal_entry_id
+              AND m.source_type IN ('asset_activation', 'incoming_invoice')
+              AND m.source_key IS NOT NULL
+              AND j.source_type = m.source_type AND j.source_key = m.source_key
+              AND (NEW.source_incoming_invoice_id IS NULL OR
+                   (m.source_type = 'incoming_invoice' AND
+                    m.source_key = 'incoming-invoice:' || NEW.source_incoming_invoice_id))
+          )
         )
       )
     BEGIN SELECT RAISE(ABORT, 'accounting-affecting asset fields are immutable'); END;
@@ -846,6 +967,23 @@ export const runMigrations = (db: Database.Database): void => {
     BEGIN SELECT RAISE(ABORT, 'asset movement requires a valid journal source'); END;
     DROP TRIGGER IF EXISTS asset_movements_no_update;
     CREATE TRIGGER asset_movements_no_update BEFORE UPDATE ON asset_movements FOR EACH ROW
+    WHEN NOT (
+      EXISTS (
+        SELECT 1 FROM assets a
+        JOIN journal_entries j ON j.tenant_id = a.tenant_id AND j.id = NEW.journal_entry_id
+        WHERE a.id = OLD.asset_id AND a.tenant_id = OLD.tenant_id
+          AND a.accounting_repair_required = 1
+          AND NEW.id = OLD.id AND NEW.asset_id = OLD.asset_id AND NEW.type = OLD.type
+          AND NEW.movement_date = OLD.movement_date AND NEW.amount = OLD.amount
+          AND COALESCE(NEW.proceeds, -1) = COALESCE(OLD.proceeds, -1)
+          AND COALESCE(NEW.gain_loss, -1) = COALESCE(OLD.gain_loss, -1)
+          AND NEW.reason = OLD.reason AND NEW.created_at = OLD.created_at
+          AND NEW.type = 'activation' AND NEW.journal_entry_id IS NOT NULL
+          AND NEW.source_type IN ('asset_activation', 'incoming_invoice')
+          AND NEW.source_key IS NOT NULL
+          AND j.source_type = NEW.source_type AND j.source_key = NEW.source_key
+      )
+    )
     BEGIN SELECT RAISE(ABORT, 'asset movements are immutable'); END;
     DROP TRIGGER IF EXISTS asset_movements_no_delete;
     CREATE TRIGGER asset_movements_no_delete BEFORE DELETE ON asset_movements FOR EACH ROW

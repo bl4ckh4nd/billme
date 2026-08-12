@@ -45,6 +45,8 @@ export interface AssetRecord {
   acquisitionOffsetAccountNumber?: string;
   sourceIncomingInvoiceId?: string;
   activationJournalEntryId?: string;
+  accountingRepairRequired?: boolean;
+  accountingRepairReason?: string;
   disposalDate?: string;
   disposalProceeds?: number;
 }
@@ -57,6 +59,8 @@ export interface AssetUpsertInput extends Omit<
   | "nextDepreciation"
   | "disposalDate"
   | "disposalProceeds"
+  | "accountingRepairRequired"
+  | "accountingRepairReason"
 > {
   id?: string;
   softLockOverride?: boolean;
@@ -95,6 +99,8 @@ type AssetRow = {
   acquisition_offset_account_number: string | null;
   source_incoming_invoice_id: string | null;
   activation_journal_entry_id: string | null;
+  accounting_repair_required: number;
+  accounting_repair_reason: string | null;
   disposal_date: string | null;
   disposal_proceeds: number | null;
 };
@@ -156,6 +162,8 @@ const getAssetRow = (
         schema.assets.acquisitionOffsetAccountNumber,
       source_incoming_invoice_id: schema.assets.sourceIncomingInvoiceId,
       activation_journal_entry_id: schema.assets.activationJournalEntryId,
+      accounting_repair_required: schema.assets.accountingRepairRequired,
+      accounting_repair_reason: schema.assets.accountingRepairReason,
       disposal_date: schema.assets.disposalDate,
       disposal_proceeds: schema.assets.disposalProceeds,
     })
@@ -221,6 +229,8 @@ const assetSnapshot = (
       acquisitionOffsetAccountNumber: row.acquisition_offset_account_number,
       sourceIncomingInvoiceId: row.source_incoming_invoice_id,
       activationJournalEntryId: row.activation_journal_entry_id,
+      accountingRepairRequired: Boolean(row.accounting_repair_required),
+      accountingRepairReason: row.accounting_repair_reason,
       disposalDate: row.disposal_date,
       disposalProceeds: row.disposal_proceeds,
     };
@@ -244,6 +254,14 @@ const assetSnapshot = (
     acquisitionOffsetAccountNumber: row.acquisitionOffsetAccountNumber ?? null,
     sourceIncomingInvoiceId: row.sourceIncomingInvoiceId ?? null,
     activationJournalEntryId: row.activationJournalEntryId ?? null,
+    accountingRepairRequired:
+      "accountingRepairRequired" in row
+        ? row.accountingRepairRequired ?? false
+        : false,
+    accountingRepairReason:
+      "accountingRepairReason" in row
+        ? row.accountingRepairReason ?? null
+        : null,
     disposalDate: "disposalDate" in row ? (row.disposalDate ?? null) : null,
     disposalProceeds:
       "disposalProceeds" in row ? (row.disposalProceeds ?? null) : null,
@@ -280,6 +298,20 @@ export const getDepreciationSchedule = (
       postedAt: row.postedAt ?? undefined,
     }));
 };
+
+const auditSchedule = (schedule: AssetScheduleEntry[]): Record<string, unknown>[] =>
+  schedule.map((entry) => ({
+    id: entry.id,
+    assetId: entry.assetId,
+    year: entry.year,
+    amount: entry.amount,
+    months: entry.months,
+    status: entry.status,
+    journalEntryId: entry.journalEntryId ?? null,
+    sourceType: entry.sourceType ?? null,
+    sourceKey: entry.sourceKey ?? null,
+    postedAt: entry.postedAt ?? null,
+  }));
 
 const mapAsset = (
   db: Database.Database,
@@ -318,6 +350,8 @@ const mapAsset = (
       row.acquisition_offset_account_number ?? undefined,
     sourceIncomingInvoiceId: row.source_incoming_invoice_id ?? undefined,
     activationJournalEntryId: row.activation_journal_entry_id ?? undefined,
+    accountingRepairRequired: Boolean(row.accounting_repair_required),
+    accountingRepairReason: row.accounting_repair_reason ?? undefined,
     disposalDate: row.disposal_date ?? undefined,
     disposalProceeds:
       row.disposal_proceeds === null
@@ -508,6 +542,7 @@ const postAssetJournal = (
     lines: BookingDraftEntity["lines"];
     options: { softLockOverride?: boolean; overrideReason?: string };
     trustedSourceType?: string;
+    inTransaction?: boolean;
   },
 ): string => {
   const draft: BookingDraftEntity = {
@@ -527,6 +562,7 @@ const postAssetJournal = (
   };
   saveDraft(db, draft, scope, {
     trustedSourceType: args.trustedSourceType,
+    inTransaction: args.inTransaction,
   });
   const posted = postDraft(
     db,
@@ -538,6 +574,7 @@ const postAssetJournal = (
       softLockOverride: args.options.softLockOverride,
       overrideReason: args.options.overrideReason,
       trustedSourceType: args.trustedSourceType,
+      inTransaction: args.inTransaction,
     },
     scope,
   );
@@ -587,6 +624,97 @@ const insertSchedule = (
   }
 };
 
+export const repairLegacyAssetActivation = (
+  db: Database.Database,
+  args: { assetId: string; sourceIncomingInvoiceId: string; reason: string },
+  scope: TenantScope,
+): AssetRecord => {
+  const tenantId = getTenantId(scope);
+  const row = getAssetRow(db, tenantId, args.assetId);
+  if (!row.accounting_repair_required)
+    throw new Error("ASSET_ACTIVATION_REPAIR_NOT_REQUIRED");
+  if (!args.sourceIncomingInvoiceId?.trim())
+    throw new Error("ASSET_ACTIVATION_REPAIR_SOURCE_REQUIRED");
+  const linked = matchingPostedIncomingInvoice(
+    db,
+    tenantId,
+    args.sourceIncomingInvoiceId.trim(),
+    row.asset_account_number,
+    row.acquisition_cost,
+  );
+  const existingMovement = db
+    .prepare(
+      "SELECT id, journal_entry_id FROM asset_movements WHERE tenant_id = ? AND asset_id = ? AND type = 'activation' ORDER BY created_at ASC, id ASC LIMIT 1",
+    )
+    .get(tenantId, row.id) as
+    | { id: string; journal_entry_id: string | null }
+    | undefined;
+  if (existingMovement?.journal_entry_id && existingMovement.journal_entry_id !== linked.journalEntryId)
+    throw new Error("ASSET_ACTIVATION_REPAIR_CONFLICT");
+  const scheduleBefore = getDepreciationSchedule(db, row.id, scope);
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    if (existingMovement) {
+      db.prepare(
+        `UPDATE asset_movements
+         SET journal_entry_id = ?, source_type = 'incoming_invoice', source_key = ?
+         WHERE tenant_id = ? AND id = ?`,
+      ).run(linked.journalEntryId, linked.sourceKey, tenantId, existingMovement.id);
+    } else {
+      createDrizzle(db)
+        .insert(schema.assetMovements)
+        .values({
+          id: randomUUID(),
+          tenantId,
+          assetId: row.id,
+          type: "activation",
+          movementDate: row.activation_date,
+          amount: amount(row.acquisition_cost),
+          proceeds: null,
+          gainLoss: null,
+          journalEntryId: linked.journalEntryId,
+          sourceType: "incoming_invoice",
+          sourceKey: linked.sourceKey,
+          reason: args.reason,
+          createdAt: now,
+        })
+        .run();
+    }
+    createDrizzle(db)
+      .update(schema.assets)
+      .set({
+        activationJournalEntryId: linked.journalEntryId,
+        sourceIncomingInvoiceId: args.sourceIncomingInvoiceId.trim(),
+        accountingRepairRequired: 0,
+        accountingRepairReason: null,
+        updatedAt: now,
+      })
+      .where(and(eq(schema.assets.tenantId, tenantId), eq(schema.assets.id, row.id)))
+      .run();
+    insertSchedule(db, tenantId, row.id, buildDepreciationSchedule({
+      ...scheduleInput(row),
+      method: row.depreciation_method,
+    }));
+    const repaired = getAssetRow(db, tenantId, row.id);
+    appendAuditLog(db, {
+      entityType: "asset",
+      entityId: row.id,
+      action: "legacy_activation_repaired",
+      reason: args.reason,
+      before: {
+        ...assetSnapshot(row),
+        schedule: auditSchedule(scheduleBefore),
+      },
+      after: {
+        ...assetSnapshot(repaired),
+        schedule: auditSchedule(getDepreciationSchedule(db, row.id, scope)),
+      },
+      actor: "pro",
+    });
+  })();
+  return mapAsset(db, getAssetRow(db, tenantId, row.id), scope);
+};
+
 export const upsertAsset = (
   db: Database.Database,
   input: AssetUpsertInput,
@@ -613,7 +741,17 @@ export const upsertAsset = (
     .from(schema.assets)
     .where(and(eq(schema.assets.tenantId, tenantId), eq(schema.assets.id, id)))
     .get()?.id;
-  const existingRow = existingId ? getAssetRow(db, tenantId, id) : undefined;
+  let existingRow = existingId ? getAssetRow(db, tenantId, id) : undefined;
+  if (existingRow?.accounting_repair_required) {
+    if (input.status !== "aktiv" || !input.sourceIncomingInvoiceId)
+      throw new Error("ASSET_ACTIVATION_REPAIR_REQUIRED");
+    repairLegacyAssetActivation(db, {
+      assetId: id,
+      sourceIncomingInvoiceId: input.sourceIncomingInvoiceId,
+      reason,
+    }, scope);
+    existingRow = getAssetRow(db, tenantId, id);
+  }
   const retryingActivation = Boolean(
     input.status === "aktiv" && existingRow?.activation_journal_entry_id,
   );
@@ -652,6 +790,9 @@ export const upsertAsset = (
       : existingRow?.source_incoming_invoice_id ?? null;
   let activationSourceType: string | null = null;
   let activationSourceKey: string | null = null;
+  const scheduleBefore = existingRow
+    ? getDepreciationSchedule(db, id, scope)
+    : [];
   const tx = db.transaction(() => {
     const drizzle = createDrizzle(db);
     drizzle
@@ -722,11 +863,11 @@ export const upsertAsset = (
         activationJournalEntryId = existingMovement.journal_entry_id;
         activationSourceType = existingMovement.source_type;
         activationSourceKey = existingMovement.source_key;
-      } else if (input.sourceIncomingInvoiceId) {
+      } else if (sourceIncomingInvoiceId) {
         const linked = matchingPostedIncomingInvoice(
           db,
           tenantId,
-          input.sourceIncomingInvoiceId,
+          sourceIncomingInvoiceId,
           input.assetAccountNumber,
           input.acquisitionCost,
         );
@@ -780,6 +921,7 @@ export const upsertAsset = (
             },
           ],
           options: input,
+          inTransaction: true,
         });
         acquisitionOffsetAccountNumber = offset;
         activationSourceType = "asset_activation";
@@ -820,19 +962,25 @@ export const upsertAsset = (
       insertSchedule(db, tenantId, id, schedule);
     }
 
+    const scheduleAfter = getDepreciationSchedule(db, id, scope);
     appendAuditLog(db, {
       entityType: "asset",
       entityId: id,
       action: existingRow ? "update" : "create",
       reason: input.overrideReason?.trim() || reason,
-      before: existingRow ? assetSnapshot(existingRow) : null,
-        after: assetSnapshot({
+      before: existingRow
+        ? { ...assetSnapshot(existingRow), schedule: auditSchedule(scheduleBefore) }
+        : { schedule: auditSchedule(scheduleBefore) },
+      after: {
+        ...assetSnapshot({
           ...input,
           id,
           acquisitionOffsetAccountNumber: acquisitionOffsetAccountNumber ?? undefined,
           sourceIncomingInvoiceId: sourceIncomingInvoiceId ?? undefined,
           activationJournalEntryId: activationJournalEntryId ?? undefined,
-      }),
+        }),
+        schedule: auditSchedule(scheduleAfter),
+      },
       actor: "pro",
     });
   });
@@ -857,14 +1005,29 @@ const sourceJournalId = (
 const postedAssetAmount = (
   db: Database.Database,
   tenantId: string,
-  assetId: string,
+  asset: AssetRow,
 ): number => {
-  const row = db
+  const schedule = db
     .prepare(
       "SELECT COALESCE(SUM(amount), 0) AS amount FROM asset_depreciation_schedule WHERE tenant_id = ? AND asset_id = ? AND status = 'posted'",
     )
-    .get(tenantId, assetId) as { amount: number };
-  return Number(row.amount);
+    .get(tenantId, asset.id) as { amount: number };
+  const journals = db
+    .prepare(
+      `SELECT COALESCE(SUM(l.credit_amount - l.debit_amount), 0) AS amount
+       FROM asset_movements m
+       JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
+       JOIN journal_lines l ON l.tenant_id = j.tenant_id AND l.entry_id = j.id
+       WHERE m.tenant_id = ? AND m.asset_id = ? AND m.type = 'depreciation'
+         AND j.status = 'posted' AND j.source_type = 'asset_depreciation'
+         AND l.account_number = ?`,
+    )
+    .get(tenantId, asset.id, asset.asset_account_number) as { amount: number };
+  const scheduledCents = cents(Number(schedule.amount));
+  const journalCents = cents(Number(journals.amount));
+  if (scheduledCents !== journalCents)
+    throw new Error("ASSET_DEPRECIATION_PROJECTION_MISMATCH");
+  return Number(journals.amount);
 };
 
 const carryingAmount = (
@@ -872,7 +1035,7 @@ const carryingAmount = (
   tenantId: string,
   row: AssetRow,
 ): number =>
-  Math.max(0, amount(Number(row.acquisition_cost) - postedAssetAmount(db, tenantId, row.id)));
+  Math.max(0, amount(Number(row.acquisition_cost) - postedAssetAmount(db, tenantId, row)));
 
 export const runDepreciation = (
   db: Database.Database,
@@ -892,7 +1055,10 @@ export const runDepreciation = (
 } => {
   const tenantId = getTenantId(scope);
   const asset = getAssetRow(db, tenantId, args.assetId);
-  const scheduleEntry = getDepreciationSchedule(db, asset.id, scope).find(
+  if (asset.accounting_repair_required)
+    throw new Error("ASSET_ACTIVATION_REPAIR_REQUIRED");
+  const scheduleBefore = getDepreciationSchedule(db, asset.id, scope);
+  const scheduleEntry = scheduleBefore.find(
     (entry) => entry.year === args.year,
   );
   if (!scheduleEntry) throw new Error("Depreciation schedule entry not found");
@@ -920,39 +1086,41 @@ export const runDepreciation = (
     !accountExists(db, chart, asset.asset_account_number)
   )
     throw new Error("DEPRECIATION_ACCOUNT_NOT_IN_CHART");
-  const journalEntryId = postAssetJournal(db, scope, {
-    draftId: `asset-depreciation:${asset.id}:${args.year}`,
-    sourceType: "asset_depreciation",
-    sourceKey,
-    postingDate: args.postingDate,
-    bookingText: `AfA ${asset.asset_number} ${args.year}`,
-    reference: asset.asset_number,
-    tenantId,
-    lines: [
-      {
-        id: `${asset.id}-expense-${args.year}`,
-        accountNumber: expenseAccount,
-        debitAmount: scheduleEntry.amount,
-        creditAmount: 0,
-        evidenceType: "asset_depreciation",
-        evidenceReference: asset.invoice_ref ?? asset.asset_number,
-        costCenter: asset.cost_center,
-        memo: args.reason,
-      },
-      {
-        id: `${asset.id}-asset-${args.year}`,
-        accountNumber: asset.asset_account_number,
-        debitAmount: 0,
-        creditAmount: scheduleEntry.amount,
-        costCenter: asset.cost_center,
-        memo: args.reason,
-      },
-    ],
-    options: args,
-    trustedSourceType: "asset_depreciation",
-  });
+  let journalEntryId = "";
   const postedAt = new Date().toISOString();
   db.transaction(() => {
+    journalEntryId = postAssetJournal(db, scope, {
+      draftId: `asset-depreciation:${asset.id}:${args.year}`,
+      sourceType: "asset_depreciation",
+      sourceKey,
+      postingDate: args.postingDate,
+      bookingText: `AfA ${asset.asset_number} ${args.year}`,
+      reference: asset.asset_number,
+      tenantId,
+      lines: [
+        {
+          id: `${asset.id}-expense-${args.year}`,
+          accountNumber: expenseAccount,
+          debitAmount: scheduleEntry.amount,
+          creditAmount: 0,
+          evidenceType: "asset_depreciation",
+          evidenceReference: asset.invoice_ref ?? asset.asset_number,
+          costCenter: asset.cost_center,
+          memo: args.reason,
+        },
+        {
+          id: `${asset.id}-asset-${args.year}`,
+          accountNumber: asset.asset_account_number,
+          debitAmount: 0,
+          creditAmount: scheduleEntry.amount,
+          costCenter: asset.cost_center,
+          memo: args.reason,
+        },
+      ],
+      options: args,
+      trustedSourceType: "asset_depreciation",
+      inTransaction: true,
+    });
     const drizzle = createDrizzle(db);
     drizzle
       .update(schema.assetDepreciationSchedule)
@@ -987,7 +1155,9 @@ export const runDepreciation = (
         reason: args.overrideReason?.trim() || args.reason,
         createdAt: postedAt,
       })
+      .onConflictDoNothing()
       .run();
+    const scheduleAfter = getDepreciationSchedule(db, asset.id, scope);
     appendAuditLog(db, {
       entityType: "asset",
       entityId: asset.id,
@@ -1000,6 +1170,8 @@ export const runDepreciation = (
         journalEntryId,
         sourceType: "asset_depreciation",
         sourceKey,
+        scheduleBefore: auditSchedule(scheduleBefore),
+        scheduleAfter: auditSchedule(scheduleAfter),
       },
       actor: "pro",
     });
@@ -1072,6 +1244,8 @@ export const disposeAsset = (
     assertPostingPeriod(db, tenantId, args.disposalDate, args);
   if (row.depreciation_method === "pool")
     throw new Error("POOL_INDIVIDUAL_DISPOSAL_NOT_SUPPORTED");
+  if (row.accounting_repair_required)
+    throw new Error("ASSET_ACTIVATION_REPAIR_REQUIRED");
   if (row.status === "entwurf" || !row.activation_journal_entry_id)
     throw new Error("ASSET_NOT_ACTIVE");
   if (row.disposal_date) throw new Error("ASSET_ALREADY_DISPOSED");
@@ -1158,19 +1332,22 @@ export const disposeAsset = (
       grossAmount: gross,
       memo: `USt ${args.taxRate}%`,
     });
-  const journalEntryId = postAssetJournal(db, scope, {
-    draftId: `asset-disposal:${row.id}`,
-    sourceType: "asset_disposal",
-    sourceKey,
-    postingDate: args.disposalDate,
-    bookingText: `${args.proceeds > 0 ? "Anlagenverkauf" : "Anlagenabgang"} ${row.asset_number}`,
-    reference: row.asset_number,
-    tenantId,
-    lines,
-    options: args,
-  });
+  const scheduleBefore = getDepreciationSchedule(db, row.id, scope);
+  let journalEntryId = "";
   const now = new Date().toISOString();
   db.transaction(() => {
+    journalEntryId = postAssetJournal(db, scope, {
+      draftId: `asset-disposal:${row.id}`,
+      sourceType: "asset_disposal",
+      sourceKey,
+      postingDate: args.disposalDate,
+      bookingText: `${args.proceeds > 0 ? "Anlagenverkauf" : "Anlagenabgang"} ${row.asset_number}`,
+      reference: row.asset_number,
+      tenantId,
+      lines,
+      options: args,
+      inTransaction: true,
+    });
     const drizzle = createDrizzle(db);
     drizzle
       .insert(schema.assetMovements)
@@ -1213,6 +1390,7 @@ export const disposeAsset = (
         ),
       )
       .run();
+    const scheduleAfter = getDepreciationSchedule(db, row.id, scope);
     appendAuditLog(db, {
       entityType: "asset",
       entityId: row.id,
@@ -1229,6 +1407,8 @@ export const disposeAsset = (
         residualBookValue,
         gainLoss,
         journalEntryId,
+        scheduleBefore: auditSchedule(scheduleBefore),
+        scheduleAfter: auditSchedule(scheduleAfter),
       },
       actor: "pro",
     });

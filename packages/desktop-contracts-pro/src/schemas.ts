@@ -697,6 +697,8 @@ export const assetSchema = z.object({
   acquisitionOffsetAccountNumber: z.string().optional(),
   sourceIncomingInvoiceId: z.string().optional(),
   activationJournalEntryId: z.string().optional(),
+  accountingRepairRequired: z.boolean().optional(),
+  accountingRepairReason: z.string().optional(),
 });
 
 export const assetUpsertSchema = assetSchema
@@ -706,6 +708,8 @@ export const assetUpsertSchema = assetSchema
     nextDepreciation: true,
     disposalDate: true,
     disposalProceeds: true,
+    accountingRepairRequired: true,
+    accountingRepairReason: true,
   })
   .extend({
     id: z.string().optional(),

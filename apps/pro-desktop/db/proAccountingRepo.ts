@@ -840,7 +840,7 @@ export const saveDraft = (
   db: Database.Database,
   draft: BookingDraftEntity,
   scope: TenantScope,
-  options: { trustedSourceType?: string } = {},
+  options: { trustedSourceType?: string; inTransaction?: boolean } = {},
 ): BookingDraftEntity => {
   const tenantId = getTenantId(scope);
   const now = new Date().toISOString();
@@ -881,11 +881,13 @@ export const saveDraft = (
       : 'incomplete'
     : normalized.workflowStatus;
 
-  db.transaction(() => {
+  const persist = () => {
     createDrizzle(db).insert(schema.bookingDrafts).values({ id: normalized.id, tenantId, transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus, draftJson: JSON.stringify(normalized), updatedAt: now })
       .onConflictDoUpdate({ target: schema.bookingDrafts.id, set: { transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus, draftJson: JSON.stringify(normalized), updatedAt: now } }).run();
     saveDraftLinesAndIssues(db, normalized);
-  })();
+  };
+  if (options.inTransaction) persist();
+  else db.transaction(persist)();
   return normalized;
 };
 
@@ -1067,6 +1069,7 @@ export const postDraft = (
     idempotencyKey?: string;
     sourceType?: string;
     trustedSourceType?: string;
+    inTransaction?: boolean;
     softLockOverride?: boolean;
     overrideReason?: string;
     // Compatibility aliases for callers that used the wording in the policy.
@@ -1142,6 +1145,7 @@ export const postDraft = (
 
   const validated = saveDraft(db, draftForPosting, scope, {
     trustedSourceType: options.trustedSourceType,
+    inTransaction: options.inTransaction,
   });
   const postingLines: JournalLineEntity[] = [];
   validated.lines.forEach((line) => {
@@ -1162,7 +1166,7 @@ export const postDraft = (
   const createdAt = new Date().toISOString();
   let entryNumber = 0;
   let duplicateEntryId: string | undefined;
-  db.transaction(() => {
+  const persistPosting = () => {
     const txDrizzle = createDrizzle(db);
     const duplicate = txDrizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
       .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, sourceType), eq(schema.journalEntries.sourceKey, sourceKey))).get();
@@ -1190,7 +1194,9 @@ export const postDraft = (
     txDrizzle.update(schema.bookingDrafts).set({ workflowStatus: 'posted', draftJson: JSON.stringify({ ...validated, workflowStatus: 'posted', updatedAt: createdAt }), updatedAt: createdAt }).where(and(eq(schema.bookingDrafts.id, validated.id), eq(schema.bookingDrafts.tenantId, tenantId))).run();
     txDrizzle.update(schema.bankTransactions).set({ status: 'booked', updatedAt: createdAt }).where(and(eq(schema.bankTransactions.id, validated.transactionId), eq(schema.bankTransactions.tenantId, tenantId))).run();
     appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: entryId, action: 'post', reason: overrideReason || 'Draft posted', before: null, after: { entryNumber, postingDate, period, fiscalYear, sourceDraftId: validated.id, sourceKey }, actor: 'pro' });
-  })();
+  };
+  if (options.inTransaction) persistPosting();
+  else db.transaction(persistPosting)();
 
   if (duplicateEntryId) {
     const existing = getJournalEntryById(db, duplicateEntryId, scope);

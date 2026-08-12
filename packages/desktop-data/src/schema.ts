@@ -633,6 +633,8 @@ export const assets = sqliteTable(
     acquisitionOffsetAccountNumber: text('acquisition_offset_account_number'),
     sourceIncomingInvoiceId: text('source_incoming_invoice_id'),
     activationJournalEntryId: text('activation_journal_entry_id'),
+    accountingRepairRequired: integer('accounting_repair_required').notNull().default(0),
+    accountingRepairReason: text('accounting_repair_reason'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },

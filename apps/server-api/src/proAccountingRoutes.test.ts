@@ -4,6 +4,7 @@ import {
   csvEscape,
   datevExportQuerySchema,
   mappingOverrideBodySchema,
+  mappingHealthQuerySchema,
   reportSnapshotBodySchema,
   reportSnapshotQuerySchema,
   susaReportQuerySchema,
@@ -75,5 +76,12 @@ test('EÜR uses its native report endpoint and calendar-year snapshot type', () 
 
 test('mapping overrides require an explicit reason and never accept arbitrary statement types', () => {
   assert.throws(() => mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz' }));
-  assert.equal(mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }).balanceSide, undefined);
+  assert.throws(() => mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }));
+  assert.equal(mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'management-guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }).balanceSide, undefined);
+  assert.equal(mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '1200', statementType: 'hgb-bilanz', positionKey: 'cash', positionLabel: 'Bank', balanceSide: 'asset', reason: 'Kontenplan geprüft' }).statementType, 'hgb-bilanz');
+});
+
+test('mapping health can scope unmapped accounts to one canonical report', () => {
+  assert.deepEqual(mappingHealthQuerySchema.parse({ chart: 'SKR04', reportType: 'hgb-bilanz' }), { chart: 'SKR04', reportType: 'hgb-bilanz' });
+  assert.throws(() => mappingHealthQuerySchema.parse({ reportType: 'guv' }));
 });

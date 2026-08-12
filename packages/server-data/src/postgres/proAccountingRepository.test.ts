@@ -54,6 +54,22 @@ test('SuSa report maps inclusive from/to bounds into ledger opening and turnover
   assert.equal(report.asOfDate, '2026-12-31');
 });
 
+test('report adapters fail closed when the persisted profile or chart is not compatible', async () => {
+  const calls: Array<{ text: string; values: unknown[] }> = [];
+  const db = {
+    query: async (text: string, values?: unknown[]) => {
+      calls.push({ text, values: values ?? [] });
+      return { rows: [{ active_chart: 'SKR04', vat_method: 'soll' }] };
+    },
+  } as unknown as PostgresQueryable;
+  const repository = createPostgresProAccountingRepository(db);
+  await assert.rejects(
+    () => repository.getGuvReport(createSingleTenantScope('report-profile-test', 'pro'), { chart: 'SKR03' }),
+    /REPORT_CHART_MISMATCH/,
+  );
+  assert.equal(calls.length, 1);
+});
+
 test('EÜR server report fails closed until the native 2025 catalog/classification path is available', async () => {
   const repository = createPostgresProAccountingRepository({ query: async () => ({ rows: [] }) } as unknown as PostgresQueryable);
   await assert.rejects(() => repository.getEurReport(createSingleTenantScope('eur-report-test', 'pro'), { from: '2025-01-01', to: '2025-12-31' }), /EUR_SERVER_REPORT_UNAVAILABLE/);
@@ -66,7 +82,7 @@ test('GuV report preserves account references and surfaces unmapped accounts', a
       calls.push({ text, values: values ?? [] });
       if (calls.length === 1) return { rows: [{ active_chart: 'SKR04', vat_method: 'soll', updated_at: '2026-12-01' }] };
       if (calls.length === 2) return { rows: [{ account_number: '8400', opening_balance: '0', debit_turnover: '0', credit_turnover: '100' }, { account_number: '9999', opening_balance: '0', debit_turnover: '20', credit_turnover: '0' }] };
-      if (calls.length === 3) return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { fiscalYearStart: '01-01', hgbSizeClass: 'small' } }) }] };
+      if (calls.length === 3) return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', fiscalYearStart: '01-01', hgbSizeClass: 'small', chart: 'SKR04', vatMethod: 'soll' } }) }] };
       return { rows: [{ account_number: '8400', report_type: 'management-guv', position_key: 'revenue', position_label: 'Umsatz' }] };
     },
   } as unknown as PostgresQueryable;
@@ -90,7 +106,7 @@ test('BWA01 uses explicit mapped positions, catalog order, and blocking unmapped
       call += 1;
       if (call === 1) return { rows: [{ active_chart: 'SKR04', vat_method: 'soll', updated_at: '2026-12-01' }] };
       if (call === 2) return { rows: [{ account_number: '4400', opening_balance: '0', debit_turnover: '0', credit_turnover: '100' }, { account_number: '5400', opening_balance: '0', debit_turnover: '30', credit_turnover: '0' }, { account_number: '9999', opening_balance: '0', debit_turnover: '5', credit_turnover: '0' }] };
-      if (call === 3) return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { fiscalYearStart: '01-01' } }) }] };
+      if (call === 3) return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', fiscalYearStart: '01-01', hgbSizeClass: 'micro', chart: 'SKR04', vatMethod: 'soll' } }) }] };
       assert.match(text, /report_type/);
       return { rows: [{ account_number: '4400', report_type: 'bwa01', position_key: 'revenue', position_label: 'Umsatz' }, { account_number: '5400', report_type: 'bwa01', position_key: 'material-expense', position_label: 'Material' }] };
     },
@@ -101,6 +117,28 @@ test('BWA01 uses explicit mapped positions, catalog order, and blocking unmapped
   assert.equal(report.totals.operatingResult, 0);
   assert.deepEqual(report.mappingHealth.unmappedAccounts, ['9999']);
   assert.equal(report.mappingHealth.blocking, true);
+});
+
+test('mapping health is requested per report and ignores unrelated account families', async () => {
+  const calls: Array<{ text: string; values: unknown[] }> = [];
+  const db = {
+    query: async (text: string, values?: unknown[]) => {
+      calls.push({ text, values: values ?? [] });
+      if (calls.length === 1) return { rows: [{ active_chart: 'SKR04', vat_method: 'soll' }] };
+      return { rows: [{ account_number: '8400', statement_type: 'hgb-bilanz' }] };
+    },
+  } as unknown as PostgresQueryable;
+  const health = await createPostgresProAccountingRepository(db).getAccountMappingHealth(
+    createSingleTenantScope('mapping-health-test', 'pro'),
+    'SKR04',
+    'hgb-bilanz',
+  );
+
+  assert.equal(health.reportType, 'hgb-bilanz');
+  assert.deepEqual(health.unmapped, [{ accountNumber: '8400', statementType: 'hgb-bilanz' }]);
+  assert.deepEqual(calls[1]?.values, ['mapping-health-test', 'SKR04', 'hgb-bilanz', ['hgb-bilanz']]);
+  assert.match(calls[1]?.text ?? '', /report_account_mappings relevant/);
+  assert.match(calls[1]?.text ?? '', /current_mapping/);
 });
 
 test('double-entry fiscal year honors a non-calendar 04-15 boundary', () => {

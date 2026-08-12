@@ -52,6 +52,40 @@ test('Pro web client sends inclusive SuSa date bounds', async () => {
   }
 });
 
+test('Pro web client scopes mapping health and overrides to canonical report types', async () => {
+  const previousFetch = globalThis.fetch;
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input, init) => {
+    calls.push({ input: String(input), init });
+    return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    await client.getAccountMappingHealth('SKR04', 'hgb-bilanz');
+    await client.saveAccountMappingOverride({
+      chart: 'SKR04',
+      accountNumber: '1200',
+      statementType: 'hgb-bilanz',
+      positionKey: 'assets.current.cash',
+      positionLabel: 'Bank',
+      balanceSide: 'asset',
+      reason: 'Kontenplan geprüft',
+    });
+    assert.match(calls[0]?.input ?? '', /mappings\/health\?chart=SKR04&reportType=hgb-bilanz$/);
+    assert.deepEqual(JSON.parse(String(calls[1]?.init?.body)), {
+      chart: 'SKR04',
+      accountNumber: '1200',
+      statementType: 'hgb-bilanz',
+      positionKey: 'assets.current.cash',
+      positionLabel: 'Bank',
+      balanceSide: 'asset',
+      reason: 'Kontenplan geprüft',
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('Pro web client rethrows canonical accounting mutation failures', async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = (async () =>

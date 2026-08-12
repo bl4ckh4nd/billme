@@ -510,10 +510,10 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     createReportSnapshot(input: { reportType: 'susa' | 'eur' | 'guv' | 'management-guv' | 'hgb-guv' | 'bilanz' | 'hgb-bilanz' | 'bwa01'; from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string; reason: string }) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/snapshots');
     },
-    getAccountMappingHealth(chart?: 'SKR03' | 'SKR04') {
-      return requestJson({ parser: (input) => input, query: chart ? { chart } : undefined }, '/api/v1/pro/accounting/mappings/health');
+    getAccountMappingHealth(chart?: 'SKR03' | 'SKR04', reportType?: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz') {
+      return requestJson({ parser: (input) => input, query: chart || reportType ? { chart, reportType } : undefined }, '/api/v1/pro/accounting/mappings/health');
     },
-    saveAccountMappingOverride(input: { chart: 'SKR03' | 'SKR04'; accountNumber: string; statementType: 'guv' | 'bilanz'; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; reason: string }) {
+    saveAccountMappingOverride(input: { chart: 'SKR03' | 'SKR04'; accountNumber: string; statementType: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz'; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; reason: string }) {
       return requestJson({ method: 'PUT', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/mappings/overrides');
     },
     getAccountingPolicy() {

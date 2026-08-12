@@ -87,12 +87,13 @@ export const reportSnapshotBodySchema = z.object({
   profile: z.string().trim().min(1).optional(),
   reason: reasonSchema,
 });
-export const mappingHealthQuerySchema = z.object({ chart: z.enum(['SKR03', 'SKR04']).optional() });
+export const reportMappingTypeSchema = z.enum(['bwa01', 'management-guv', 'hgb-guv', 'hgb-bilanz']);
+export const mappingHealthQuerySchema = z.object({ chart: z.enum(['SKR03', 'SKR04']).optional(), reportType: reportMappingTypeSchema.optional() });
 export const mappingOverrideBodySchema = z.object({
   reason: reasonSchema,
   chart: z.enum(['SKR03', 'SKR04']),
   accountNumber: z.string().trim().min(1),
-  statementType: z.enum(['guv', 'bilanz']),
+  statementType: reportMappingTypeSchema,
   positionKey: z.string().trim().min(1),
   positionLabel: z.string().trim().min(1),
   balanceSide: z.enum(['asset', 'liability']).optional(),
@@ -434,7 +435,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     query: reportRange,
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
-      return repositoryFor(app).getGuvReport(session.scope, { ...query, profile: 'guv' });
+      return repositoryFor(app).getGuvReport(session.scope, { ...query, profile: 'management-guv' });
     },
   });
 
@@ -518,7 +519,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
           ? await repository.getBilanzReport(session.scope, { asOfDate: body.asOfDate, chart: body.chart })
           : body.reportType === 'bwa01'
             ? await repository.getBwa01Report(session.scope, { from: body.from, to: body.to, chart: body.chart, profile: body.profile })
-            : await repository.getGuvReport(session.scope, { from: body.from, to: body.to, profile: body.reportType === 'management-guv' || body.reportType === 'hgb-guv' ? body.reportType : 'guv' });
+            : await repository.getGuvReport(session.scope, { from: body.from, to: body.to, profile: body.reportType === 'management-guv' || body.reportType === 'hgb-guv' ? body.reportType : 'management-guv' });
       return repository.saveReportSnapshot(session.scope, {
         reportType: body.reportType,
         args,
@@ -712,7 +713,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     query: mappingHealthQuery,
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
-      return repositoryFor(app).getAccountMappingHealth(session.scope, query.chart);
+      return repositoryFor(app).getAccountMappingHealth(session.scope, query.chart, query.reportType);
     },
   });
 

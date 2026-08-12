@@ -53,4 +53,13 @@ describe('calculateReconciliationTotals', () => {
       bankAccountNumber: '1999',
     });
   });
+
+  it('does not guess a counterpart when production has no bank GL mapping', () => {
+    expect(calculateReconciliationTotals(draft(100), 100, [], undefined, false)).toMatchObject({
+      bank: 0,
+      counterpart: 0,
+      bankLineCount: 0,
+      bankAccountNumber: undefined,
+    });
+  });
 });

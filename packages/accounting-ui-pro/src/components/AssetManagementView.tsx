@@ -340,7 +340,7 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-6 grid grid-cols-1 gap-6 min-[1700px]:grid-cols-2">
+            <div className="min-h-0 flex-1 overflow-y-auto p-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
               <section className="min-w-0 space-y-4">
                 <div className="rounded-2xl border border-gray-200 bg-white p-5">
                   <div className="text-sm font-bold text-gray-900 mb-3">{activeTab}</div>

@@ -29,9 +29,14 @@ import type {
   OpenItemPaymentEntity,
   OpenItemPaymentInput,
   VendorEntity,
+  TaxFilingAction,
+  TaxFilingMutation,
+  TaxFilingProviderResult,
+  TaxFilingRecord,
 } from '@billme/accounting-shared';
 
 export type { AccountingMutationContext } from '@billme/accounting-shared';
+export type { TaxFilingAction, TaxFilingMutation, TaxFilingProviderResult, TaxFilingRecord } from '@billme/accounting-shared';
 import type {
   DunningEmailProvider,
   DunningHistoryEntry,
@@ -630,6 +635,40 @@ export interface ProAccountingAssetRepository {
   getDepreciationSchedule(scope: TenantScope, assetId: string): Promise<AssetDepreciationScheduleEntry[]>;
   runDepreciation(scope: TenantScope, input: AssetDepreciationInput): Promise<AssetDepreciationResult>;
   disposeAsset(scope: TenantScope, input: AssetDisposalInput): Promise<AssetDisposalResult>;
+}
+
+/** Tenant-scoped persistence for immutable, auditable tax filing snapshots. */
+export interface TaxFilingRepository {
+  list(scope: TenantScope): MaybePromise<TaxFilingRecord[]>;
+  getById(scope: TenantScope, id: string): MaybePromise<TaxFilingRecord | null>;
+  getByIdempotencyKey(scope: TenantScope, idempotencyKey: string): MaybePromise<TaxFilingRecord | null>;
+  create(scope: TenantScope, record: TaxFilingRecord): MaybePromise<TaxFilingRecord>;
+  update(scope: TenantScope, record: TaxFilingRecord, expectedStatus?: TaxFilingRecord['status']): MaybePromise<TaxFilingRecord>;
+  enqueueSubmissionJob?(scope: TenantScope, filingId: string, idempotencyKey: string): MaybePromise<void>;
+  recordProviderResult?(scope: TenantScope, input: {
+    id: string;
+    result: TaxFilingProviderResult;
+    actorId: string;
+    reason: string;
+    idempotencyKey: string;
+    now?: string;
+  }): MaybePromise<TaxFilingRecord>;
+}
+
+export interface TaxFilingStateMachinePort {
+  create(input: {
+    id: string;
+    tenantId: string;
+    provider: TaxFilingRecord['provider'];
+    snapshot: TaxFilingRecord['snapshot'];
+    idempotencyKey: string;
+    actorId: string;
+    now: string;
+  }): TaxFilingRecord;
+  transition(record: TaxFilingRecord, action: TaxFilingAction, mutation: TaxFilingMutation): {
+    record: TaxFilingRecord;
+    replayed: boolean;
+  };
 }
 
 export interface ProWorkflowRepository {

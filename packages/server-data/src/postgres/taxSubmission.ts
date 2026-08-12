@@ -169,15 +169,54 @@ export const enqueueTaxSubmissionJob = async (db: PostgresQueryable, scope: Tena
 };
 
 export const claimTaxSubmissionJob = async (db: PostgresQueryable, scope: TenantScope, jobType?: string): Promise<TaxSubmissionJobRecord | null> => {
-  const database = dbFor(db);
-  const conditions = [eq(schema.taxSubmissionJobs.tenantId, scope.tenantId), eq(schema.taxSubmissionJobs.status, "pending"), lte(schema.taxSubmissionJobs.availableAt, now())];
-  if (jobType) conditions.push(eq(schema.taxSubmissionJobs.jobType, jobType));
-  const row = (await database.select().from(schema.taxSubmissionJobs).where(and(...conditions)).orderBy(asc(schema.taxSubmissionJobs.availableAt), asc(schema.taxSubmissionJobs.createdAt)).limit(1))[0];
-  if (!row) return null;
   const stamp = now();
-  await database.update(schema.taxSubmissionJobs).set({ status: "running", attempts: (row.attempts ?? 0) + 1, lockedAt: stamp, updatedAt: stamp }).where(and(eq(schema.taxSubmissionJobs.tenantId, scope.tenantId), eq(schema.taxSubmissionJobs.id, row.id!), eq(schema.taxSubmissionJobs.status, "pending")));
-  const claimed = (await database.select().from(schema.taxSubmissionJobs).where(and(eq(schema.taxSubmissionJobs.tenantId, scope.tenantId), eq(schema.taxSubmissionJobs.id, row.id!))).limit(1))[0];
-  return claimed ? jobFromRow(claimed) : null;
+  const values: unknown[] = [scope.tenantId, stamp];
+  const jobFilter = jobType ? "AND job_type = $3" : "";
+  if (jobType) values.push(jobType);
+  const result = await db.query<{
+    id: string;
+    tenant_id: string;
+    submission_id: string;
+    job_type: string;
+    idempotency_key: string;
+    status: string;
+    attempts: number;
+    available_at: string;
+    locked_at: string | null;
+    completed_at: string | null;
+    last_error: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `UPDATE tax_submission_jobs
+     SET status = 'running', attempts = attempts + 1, locked_at = $2, updated_at = $2
+     WHERE id = (
+       SELECT id FROM tax_submission_jobs
+       WHERE tenant_id = $1 AND status = 'pending' AND available_at <= $2 ${jobFilter}
+       ORDER BY available_at, created_at
+       FOR UPDATE SKIP LOCKED
+       LIMIT 1
+     )
+     RETURNING id, tenant_id, submission_id, job_type, idempotency_key, status, attempts,
+       available_at, locked_at, completed_at, last_error, created_at, updated_at`,
+    values,
+  );
+  const row = result.rows[0];
+  return row ? {
+    id: row.id,
+    tenantId: row.tenant_id,
+    submissionId: row.submission_id,
+    jobType: row.job_type,
+    idempotencyKey: row.idempotency_key,
+    status: row.status,
+    attempts: row.attempts,
+    availableAt: row.available_at,
+    lockedAt: row.locked_at ?? undefined,
+    completedAt: row.completed_at ?? undefined,
+    lastError: row.last_error ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  } : null;
 };
 
 export const completeTaxSubmissionJob = async (db: PostgresQueryable, scope: TenantScope, id: string): Promise<TaxSubmissionJobRecord> => updateTaxSubmissionJob(db, scope, id, { status: "completed", completedAt: now(), lockedAt: null, lastError: null });

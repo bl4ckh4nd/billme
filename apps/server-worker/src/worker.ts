@@ -33,6 +33,7 @@ const envSchema = z.object({
   WORKER_RECURRING_INTERVAL_MS: z.coerce.number().int().positive().default(15 * 60_000),
   WORKER_DUNNING_INTERVAL_MS: z.coerce.number().int().positive().default(15 * 60_000),
   WORKER_EMAIL_QUEUE_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  WORKER_TAX_FILING_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   WORKER_PORTAL_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   WORKER_MAINTENANCE_INTERVAL_MS: z.coerce.number().int().positive().default(24 * 60 * 60_000),
 });
@@ -70,6 +71,12 @@ const supportedJobs: SupportedJob[] = [
     intervalMs: env.WORKER_EMAIL_QUEUE_INTERVAL_MS,
     runOnStart: true,
     execute: () => runtime.runQueuedEmailJob(),
+  },
+  {
+    name: 'tax-filing-submission',
+    intervalMs: env.WORKER_TAX_FILING_INTERVAL_MS,
+    runOnStart: true,
+    execute: () => runtime.runTaxFilingSubmissionJob(),
   },
   {
     name: 'offer-portal-sync',

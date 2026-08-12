@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { createTaxFilingRecord, transitionTaxFiling } from '@billme/accounting-engine';
 import { SettingsSchema } from '@billme/desktop-data/validation-schemas';
 import { sendEmail } from '@billme/desktop-core/services/emailService';
 import { isRetryableEmailError } from '@billme/desktop-core/utils/retry';
@@ -15,6 +16,11 @@ import {
   createPostgresOfferRepository,
   createPostgresPool,
   createPostgresRecurringProfileRepository,
+  createPostgresTaxFilingRepository,
+  claimTaxSubmissionJob,
+  completeTaxSubmissionJob,
+  failTaxSubmissionJob,
+  getReportSnapshot,
   createPostgresTenantRepository,
   createDefaultTenantScope,
   getServerSettings,
@@ -38,6 +44,7 @@ import {
   shouldRunScheduledDunning,
   shouldRunScheduledRecurring,
   syncPublishedOfferDecisionFromPortal,
+  createTaxFilingService,
   type AuditActor,
   type AuditEntry,
   type AuditEntryDraft,
@@ -53,6 +60,9 @@ import {
 } from '@billme/server-core';
 import type { WorkerLogger } from './logger.js';
 import { dispatchQueuedEmailBatch } from './emailQueue.js';
+import { submitQueuedTaxFilings } from './taxFilingSubmission.js';
+
+const taxFilingStateMachine = { create: createTaxFilingRecord, transition: transitionTaxFiling };
 
 type WorkerSettings = z.infer<typeof SettingsSchema>;
 
@@ -403,6 +413,39 @@ export class ServerWorkerRuntime {
       status: 'completed',
       message: 'Queued email dispatch finished',
       details: { ...batch },
+    };
+  }
+
+  async runTaxFilingSubmissionJob(): Promise<WorkerTaskResult> {
+    const resolved = await this.resolveScope();
+    if (!resolved) {
+      return { status: 'skipped', message: 'No primary tenant is bootstrapped yet' };
+    }
+
+    const result = await submitQueuedTaxFilings({
+      scope: resolved.scope,
+      service: createTaxFilingService({
+        repository: createPostgresTaxFilingRepository(this.currentQueryable()),
+        stateMachine: taxFilingStateMachine,
+        auditLog: createPostgresAuditLogPort(this.currentQueryable()),
+        reportSnapshot: { get: async (scope, id) => {
+          const snapshot = await getReportSnapshot(this.currentQueryable(), scope, id);
+          return snapshot ? { id: snapshot.id, tenantId: snapshot.tenantId, sourceHash: snapshot.sourceHash } : null;
+        } },
+      }),
+      jobs: {
+        claim: async (scope) => {
+          const job = await claimTaxSubmissionJob(this.currentQueryable(), scope, 'tax-filing');
+          return job ? { id: job.id, submissionId: job.submissionId } : null;
+        },
+        complete: (scope, id) => completeTaxSubmissionJob(this.currentQueryable(), scope, id),
+        fail: (scope, id, error) => failTaxSubmissionJob(this.currentQueryable(), scope, id, error),
+      },
+    });
+    return {
+      status: result.retryableFailed > 0 && result.accepted === 0 && result.rejected === 0 ? 'blocked' : 'completed',
+      message: 'Tax filing submission run finished',
+      details: { ...result },
     };
   }
 

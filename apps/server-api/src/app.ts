@@ -69,6 +69,7 @@ import { createAuthStore, type AuthStore } from './authStore.js';
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
 import { registerServerApiOrpc } from './orpc.js';
 import { registerProAccountingRoutes } from './proAccountingRoutes.js';
+import { registerTaxFilingRoutes } from './taxFilingRoutes.js';
 
 type Pool = ReturnType<typeof createPostgresPool>;
 type AppSettings = z.infer<typeof appSettingsSchema>;
@@ -1320,6 +1321,7 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
   registerBillingRoutes(app, 'pro', '/api/v1/pro');
   registerProRoutes(app);
   registerProAccountingRoutes(app);
+  registerTaxFilingRoutes(app);
 
   typedRoute(app, {
     method: 'POST',

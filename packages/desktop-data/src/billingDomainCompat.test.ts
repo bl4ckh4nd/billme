@@ -20,7 +20,12 @@ const createSchema = (db: Database.Database) => db.exec(`
     client_address TEXT, billing_address_json TEXT, shipping_address_json TEXT,
     tax_mode TEXT NOT NULL, tax_meta_json TEXT, tax_snapshot_json TEXT,
     date TEXT NOT NULL, due_date TEXT NOT NULL, service_period TEXT,
-    amount REAL NOT NULL, status TEXT NOT NULL, dunning_level INTEGER NOT NULL DEFAULT 0,
+    amount REAL NOT NULL, status TEXT NOT NULL,
+    accounting_status TEXT NOT NULL DEFAULT 'unposted',
+    accounting_snapshot_json TEXT,
+    accounting_journal_entry_id TEXT,
+    accounting_posted_at TEXT,
+    dunning_level INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
   CREATE TABLE invoice_items (

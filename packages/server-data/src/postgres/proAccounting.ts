@@ -272,11 +272,13 @@ export interface ServerEurLineRecord {
   id: string;
   taxYear: number;
   kennziffer?: string;
+  providerPath?: string;
   label: string;
   kind: string;
   exportable: boolean;
   sortOrder: number;
   computedFromJson?: string;
+  computedTermsJson?: string;
   sourceVersion: string;
   createdAt: string;
   updatedAt: string;
@@ -291,6 +293,7 @@ export interface ServerEurClassificationRecord {
   eurLineId?: string;
   excluded: boolean;
   vatMode: string;
+  vatRate?: number;
   note?: string;
   updatedAt: string;
 }
@@ -572,12 +575,12 @@ export const saveServerImportBatch = async (db: PostgresQueryable, record: Serve
   return record;
 };
 export const saveServerEurLine = async (db: PostgresQueryable, record: ServerEurLineRecord): Promise<ServerEurLineRecord> => {
-  const values = { id: record.id, taxYear: record.taxYear, kennziffer: record.kennziffer ?? null, label: record.label, kind: record.kind, exportable: record.exportable, sortOrder: record.sortOrder, computedFromJson: record.computedFromJson ?? null, sourceVersion: record.sourceVersion, createdAt: record.createdAt, updatedAt: record.updatedAt };
+  const values = { id: record.id, taxYear: record.taxYear, kennziffer: record.kennziffer ?? null, providerPath: record.providerPath ?? 'main', label: record.label, kind: record.kind, exportable: record.exportable, sortOrder: record.sortOrder, computedFromJson: record.computedFromJson ?? null, computedTermsJson: record.computedTermsJson ?? null, sourceVersion: record.sourceVersion, createdAt: record.createdAt, updatedAt: record.updatedAt };
   await upsert(db, schema.eurLines, values, schema.eurLines.id, values);
   return record;
 };
 export const saveServerEurClassification = async (db: PostgresQueryable, record: ServerEurClassificationRecord): Promise<ServerEurClassificationRecord> => {
-  const values = { id: record.id, tenantId: record.tenantId, sourceType: record.sourceType, sourceId: record.sourceId, taxYear: record.taxYear, eurLineId: record.eurLineId ?? null, excluded: record.excluded, vatMode: record.vatMode, note: record.note ?? null, updatedAt: record.updatedAt };
+  const values = { id: record.id, tenantId: record.tenantId, sourceType: record.sourceType, sourceId: record.sourceId, taxYear: record.taxYear, eurLineId: record.eurLineId ?? null, excluded: record.excluded, vatMode: record.vatMode, vatRate: record.vatRate ?? null, note: record.note ?? null, updatedAt: record.updatedAt };
   await upsert(db, schema.eurClassifications, values, schema.eurClassifications.id, values);
   return record;
 };

@@ -2,9 +2,11 @@ import type Database from 'better-sqlite3';
 import { and, asc, eq, gte, isNull, lte, or } from 'drizzle-orm';
 import { listEurClassificationsMap, type EurClassification, type EurSourceType, upsertEurClassification } from './eurClassificationRepo';
 import { listEurLines, type EurLine } from './eurCatalogRepo';
+import { EUR_CATALOG_MANIFEST_2025 } from '@billme/desktop-services/eurCatalog';
 import type { AppSettings } from '@billme/desktop-core/types';
 import { buildPipelineContext, classifyItem, type SuggestionLayer } from './eurClassificationPipeline';
 import { createDrizzle, schema } from './drizzle';
+import { calculateEurRows } from '@billme/accounting-shared';
 
 export interface EurReportParams {
   taxYear: number;
@@ -17,11 +19,20 @@ export interface EurReportParams {
 export interface EurReportRow {
   lineId: string;
   kennziffer?: string;
+  providerPath?: string;
   label: string;
   kind: 'income' | 'expense' | 'computed';
   exportable: boolean;
   total: number;
   sortOrder: number;
+}
+
+export interface EurReportCatalogProvenance {
+  id: string;
+  version: string;
+  sourceHash: string;
+  delivery: 'print-form-only' | 'elster-ready';
+  elsterReady: boolean;
 }
 
 export interface EurReportResult {
@@ -36,6 +47,7 @@ export interface EurReportResult {
   };
   unclassifiedCount: number;
   warnings: string[];
+  catalog: EurReportCatalogProvenance;
 }
 
 export interface EurListItem {
@@ -156,15 +168,6 @@ export const listEurItems = (db: Database.Database, params: EurListItemsParams):
 export const getEurReport = (db: Database.Database, params: EurReportParams): EurReportResult => {
   const { from, to } = fallbackDateRange(params.taxYear, params.from, params.to);
   const lines = listEurLines(db, params.taxYear);
-  const linesById = new Map(lines.map((line) => [line.id, line]));
-  const totals = new Map<string, number>();
-  const warnings: string[] = [];
-  let unclassifiedCount = 0;
-
-  for (const line of lines) {
-    totals.set(line.id, 0);
-  }
-
   const items = listEurItems(db, {
     taxYear: params.taxYear,
     from,
@@ -173,74 +176,25 @@ export const getEurReport = (db: Database.Database, params: EurReportParams): Eu
     product: params.product,
   });
 
-  for (const item of items) {
-    if (item.vatWarning) warnings.push(item.vatWarning);
-    const cls = item.classification;
-    if (cls?.excluded) continue;
-    if (!cls?.eurLineId) {
-      unclassifiedCount += 1;
-      continue;
-    }
-
-    const line = linesById.get(cls.eurLineId);
-    if (!line) {
-      warnings.push(`Unknown EÜR line for ${item.sourceType}:${item.sourceId}: ${cls.eurLineId}`);
-      unclassifiedCount += 1;
-      continue;
-    }
-
-    if (line.kind === 'computed') {
-      warnings.push(`Computed line cannot be used for classification: ${line.id}`);
-      unclassifiedCount += 1;
-      continue;
-    }
-
-    if (line.kind !== item.flowType) {
-      warnings.push(`Flow mismatch for ${item.sourceType}:${item.sourceId}: line ${line.id} is ${line.kind}`);
-      unclassifiedCount += 1;
-      continue;
-    }
-
-    totals.set(line.id, round2((totals.get(line.id) ?? 0) + item.amountNet));
-  }
-
-  const computedMemo = new Map<string, number>();
-  const resolveTotal = (lineId: string): number => {
-    if (computedMemo.has(lineId)) return computedMemo.get(lineId)!;
-    const line = linesById.get(lineId);
-    if (!line) return 0;
-    if (line.kind !== 'computed') {
-      const direct = totals.get(lineId) ?? 0;
-      computedMemo.set(lineId, direct);
-      return direct;
-    }
-
-    const terms = line.computedTerms?.length
-      ? line.computedTerms.map((term) => [term.id, term.sign] as const)
-      : (line.computedFromIds ?? []).map((childId) => [childId, 1] as const);
-    const value = round2(terms.reduce((sum, [childId, sign]) => sum + sign * resolveTotal(childId), 0));
-    computedMemo.set(lineId, value);
-    totals.set(lineId, value);
-    return value;
-  };
-
-  for (const line of lines) {
-    resolveTotal(line.id);
-  }
-
-  const rows: EurReportRow[] = lines.map((line) => ({
+  const calculation = calculateEurRows(lines, items.map((item) => ({
+    sourceType: item.sourceType,
+    sourceId: item.sourceId,
+    amountNet: item.amountNet,
+    flowType: item.flowType,
+    lineId: item.classification?.eurLineId,
+    excluded: item.classification?.excluded,
+    warning: item.vatWarning,
+  })));
+  const rows: EurReportRow[] = calculation.rows.map((line) => ({
     lineId: line.id,
     kennziffer: line.kennziffer,
     providerPath: line.providerPath,
     label: line.label,
     kind: line.kind,
     exportable: line.exportable,
-    total: round2(totals.get(line.id) ?? 0),
+    total: line.total,
     sortOrder: line.sortOrder,
   }));
-
-  const incomeTotal = round2(rows.filter((row) => row.kind === 'income').reduce((sum, row) => sum + row.total, 0));
-  const expenseTotal = round2(rows.filter((row) => row.kind === 'expense').reduce((sum, row) => sum + row.total, 0));
 
   return {
     taxYear: params.taxYear,
@@ -248,12 +202,19 @@ export const getEurReport = (db: Database.Database, params: EurReportParams): Eu
     to,
     rows,
     summary: {
-      incomeTotal,
-      expenseTotal,
-      surplus: round2(incomeTotal - expenseTotal),
+      incomeTotal: calculation.summary.incomeTotal,
+      expenseTotal: calculation.summary.expenseTotal,
+      surplus: calculation.summary.surplus,
     },
-    unclassifiedCount,
-    warnings,
+    unclassifiedCount: calculation.unclassifiedCount,
+    warnings: calculation.warnings,
+    catalog: {
+      id: EUR_CATALOG_MANIFEST_2025.id,
+      version: EUR_CATALOG_MANIFEST_2025.version,
+      sourceHash: EUR_CATALOG_MANIFEST_2025.sha256,
+      delivery: EUR_CATALOG_MANIFEST_2025.delivery,
+      elsterReady: EUR_CATALOG_MANIFEST_2025.elsterReady,
+    },
   };
 };
 

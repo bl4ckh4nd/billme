@@ -52,6 +52,33 @@ test('Pro web client sends inclusive SuSa date bounds', async () => {
   }
 });
 
+test('Pro web client reads native 2025 EÜR rows without a ledger reconciliation DTO', async () => {
+  const previousFetch = globalThis.fetch;
+  let requestUrl = '';
+  globalThis.fetch = (async (input) => {
+    requestUrl = String(input);
+    return new Response(JSON.stringify({
+      taxYear: 2025,
+      from: '2025-01-01',
+      to: '2025-12-31',
+      rows: [{ id: 'E2025_KZ112', kennziffer: '112', providerPath: 'income', label: 'Einnahmen', kind: 'income', exportable: true, sortOrder: 1, total: 100 }],
+      summary: { incomeTotal: 100, expenseTotal: 0, surplus: 100 },
+      unclassifiedCount: 0,
+      warnings: [],
+      catalog: { id: 'anlage-euer-2025', version: 'BMF-2025-2025-08-29', sourceHash: 'a'.repeat(64), delivery: 'print-form-only', elsterReady: false },
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    const report = await client.getEurReport();
+    assert.equal(report.rows[0]?.kennziffer, '112');
+    assert.equal(report.rows[0]?.providerPath, 'income');
+    assert.match(requestUrl, /reports\/eur$/);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('Pro web client scopes mapping health and overrides to canonical report types', async () => {
   const previousFetch = globalThis.fetch;
   const calls: Array<{ input: string; init?: RequestInit }> = [];

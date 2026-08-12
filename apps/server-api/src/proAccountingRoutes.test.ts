@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   csvEscape,
   datevExportQuerySchema,
+  eurReportQuerySchema,
   mappingOverrideBodySchema,
   mappingHealthQuerySchema,
   reportSnapshotBodySchema,
@@ -65,6 +66,8 @@ test('report snapshots accept distinct canonical report profiles', () => {
 });
 
 test('EÜR uses its native report endpoint and calendar-year snapshot type', () => {
+  assert.deepEqual(eurReportQuerySchema.parse({}), { from: '2025-01-01', to: '2025-12-31' });
+  assert.throws(() => eurReportQuerySchema.parse({ from: '2026-01-01' }));
   assert.equal(reportSnapshotQuerySchema.parse({ reportType: 'eur' }).reportType, 'eur');
   assert.deepEqual(reportSnapshotBodySchema.parse({ reportType: 'eur', from: '2025-01-01', to: '2025-12-31', reason: 'EÜR 2025' }), {
     reportType: 'eur',

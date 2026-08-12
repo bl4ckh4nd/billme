@@ -113,6 +113,13 @@
       "when": 1786538400003,
       "tag": "0015_server_data_reporting_tax_submissions",
       "breakpoints": false
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786538400004,
+      "tag": "0016_server_data_eur_native",
+      "breakpoints": false
     }
   ]
 }

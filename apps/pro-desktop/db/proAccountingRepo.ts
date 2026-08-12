@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
 import { and, asc, count, desc, eq, gte, inArray, isNotNull, lte, max, sum } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/sqlite-core';
 import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import type { TenantScope } from '@billme/server-core';
 import { appendAuditLog } from './audit';
@@ -13,9 +12,11 @@ import {
 } from '../services/accountSuggestionPipeline';
 import { seedAccountKeywords } from '../services/accountKeywordSeed';
 import { getTenantId } from '../tenantScope';
+import { DATEV_MAX_ROWS } from '../services/datevExport';
 import {
   ensureTaxCaseSeedData,
   getTaxCaseByKey,
+  listTaxCaseAccountMappings,
   normalizeTaxCaseKey,
   resolveTaxAccountsForCase,
   resolveDatevBuKeyForTaxCase,
@@ -152,6 +153,16 @@ export interface DatevExportResult {
   fromDate?: string;
   toDate?: string;
   createdAt: string;
+  sha256?: string;
+  byteSize?: number;
+  encoding?: 'cp1252' | 'utf8-bom';
+  headerVersion?: number;
+  formatVersion?: number;
+  chart?: 'SKR03' | 'SKR04';
+  sourceSnapshotHash?: string;
+  manifestJson?: string;
+  status?: string;
+  validationJson?: string;
 }
 
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -1615,9 +1626,17 @@ export const listDatevExports = (db: Database.Database, scope: TenantScope): Dat
   const tenantId = getTenantId(scope);
   const rows = createDrizzle(db).select({ id: schema.datevExports.id, file_path: schema.datevExports.filePath,
     record_count: schema.datevExports.recordCount, from_date: schema.datevExports.fromDate,
-    to_date: schema.datevExports.toDate, created_at: schema.datevExports.createdAt }).from(schema.datevExports)
+    to_date: schema.datevExports.toDate, created_at: schema.datevExports.createdAt,
+    sha256: schema.datevExports.sha256, byte_size: schema.datevExports.byteSize, encoding: schema.datevExports.encoding,
+    header_version: schema.datevExports.headerVersion, format_version: schema.datevExports.formatVersion,
+    chart: schema.datevExports.chart, source_snapshot_hash: schema.datevExports.sourceSnapshotHash,
+    manifest_json: schema.datevExports.manifestJson, status: schema.datevExports.status,
+    validation_json: schema.datevExports.validationJson }).from(schema.datevExports)
     .where(eq(schema.datevExports.tenantId, tenantId)).orderBy(desc(schema.datevExports.createdAt)).all() as Array<{
       id: string; file_path: string; record_count: number; from_date: string | null; to_date: string | null; created_at: string;
+      sha256: string | null; byte_size: number | null; encoding: string | null; header_version: number | null;
+      format_version: number | null; chart: 'SKR03' | 'SKR04' | null; source_snapshot_hash: string | null;
+      manifest_json: string | null; status: string | null; validation_json: string | null;
     }>;
 
   return rows.map((row) => ({
@@ -1627,34 +1646,61 @@ export const listDatevExports = (db: Database.Database, scope: TenantScope): Dat
     fromDate: row.from_date ?? undefined,
     toDate: row.to_date ?? undefined,
     createdAt: row.created_at,
+    sha256: row.sha256 ?? undefined,
+    byteSize: row.byte_size ?? undefined,
+    encoding: row.encoding === 'cp1252' || row.encoding === 'utf8-bom' ? row.encoding : undefined,
+    headerVersion: row.header_version ?? undefined,
+    formatVersion: row.format_version ?? undefined,
+    chart: row.chart ?? undefined,
+    sourceSnapshotHash: row.source_snapshot_hash ?? undefined,
+    manifestJson: row.manifest_json ?? undefined,
+    status: row.status ?? undefined,
+    validationJson: row.validation_json ?? undefined,
   }));
 };
 
 export const insertDatevExport = (
   db: Database.Database,
-  args: { filePath: string; recordCount: number; fromDate?: string; toDate?: string },
+  args: {
+    id?: string;
+    filePath: string;
+    recordCount: number;
+    fromDate?: string;
+    toDate?: string;
+    sha256?: string;
+    byteSize?: number;
+    encoding?: 'cp1252' | 'utf8-bom';
+    headerVersion?: number;
+    formatVersion?: number;
+    chart?: 'SKR03' | 'SKR04';
+    sourceSnapshotHash?: string;
+    manifestJson?: string;
+    status?: string;
+    validationJson?: string;
+  },
   scope: TenantScope,
 ): DatevExportResult => {
   const tenantId = getTenantId(scope);
-  const id = randomUUID();
+  const id = args.id ?? randomUUID();
   const createdAt = new Date().toISOString();
-  createDrizzle(db).insert(schema.datevExports).values({ id, tenantId, filePath: args.filePath, recordCount: args.recordCount,
-    fromDate: args.fromDate ?? null, toDate: args.toDate ?? null, createdAt, metaJson: '{}' }).run();
+  db.transaction(() => {
+    createDrizzle(db).insert(schema.datevExports).values({ id, tenantId, filePath: args.filePath, recordCount: args.recordCount,
+      fromDate: args.fromDate ?? null, toDate: args.toDate ?? null, createdAt, metaJson: args.manifestJson ?? '{}',
+      sha256: args.sha256 ?? null, byteSize: args.byteSize ?? null, encoding: args.encoding ?? null,
+      headerVersion: args.headerVersion ?? null, formatVersion: args.formatVersion ?? null, chart: args.chart ?? null,
+      sourceSnapshotHash: args.sourceSnapshotHash ?? null, manifestJson: args.manifestJson ?? null,
+      status: args.status ?? 'validated', validationJson: args.validationJson ?? null }).run();
 
-  appendAuditLog(db, {
-    entityType: 'pro_datev_export',
-    entityId: id,
-    action: 'export',
-    reason: 'DATEV Buchungsstapel generated',
-    before: null,
-    after: {
-      filePath: args.filePath,
-      recordCount: args.recordCount,
-      fromDate: args.fromDate ?? null,
-      toDate: args.toDate ?? null,
-    },
-    actor: 'pro',
-  });
+    appendAuditLog(db, {
+      entityType: 'pro_datev_export',
+      entityId: id,
+      action: 'export',
+      reason: 'DATEV Buchungsstapel generated',
+      before: null,
+      after: { ...args, id },
+      actor: 'pro',
+    });
+  })();
 
   return {
     id,
@@ -1663,6 +1709,16 @@ export const insertDatevExport = (
     fromDate: args.fromDate,
     toDate: args.toDate,
     createdAt,
+    sha256: args.sha256,
+    byteSize: args.byteSize,
+    encoding: args.encoding,
+    headerVersion: args.headerVersion,
+    formatVersion: args.formatVersion,
+    chart: args.chart,
+    sourceSnapshotHash: args.sourceSnapshotHash,
+    manifestJson: args.manifestJson,
+    status: args.status ?? 'validated',
+    validationJson: args.validationJson,
   };
 };
 
@@ -1757,6 +1813,28 @@ export const getVatSummary = (
   };
 };
 
+const resolveDatevBuKeyForPosting = (
+  db: Database.Database,
+  chart: 'SKR03' | 'SKR04',
+  taxCaseKey: string | undefined,
+  postingDate: string,
+): string | undefined => {
+  const normalized = normalizeTaxCaseKey(taxCaseKey);
+  if (!normalized) return undefined;
+  const candidates = listTaxCaseAccountMappings(db, { chart, taxCaseKey: normalized })
+    .filter((mapping) => mapping.role === 'datev_bu')
+    .filter((mapping) => (!mapping.validFrom || mapping.validFrom <= postingDate) && (!mapping.validTo || mapping.validTo >= postingDate))
+    .sort((a, b) => (b.validFrom ?? '').localeCompare(a.validFrom ?? '') || b.updatedAt.localeCompare(a.updatedAt));
+  const key = candidates[0]?.datevBuKey;
+  const taxCase = getTaxCaseByKey(db, normalized);
+  if (!taxCase) throw new Error(`DATEV Steuerfall-Mapping fehlt für ${normalized}.`);
+  if (!key && taxCase && taxCase.mechanism !== 'exempt' && taxCase.mechanism !== 'zero_rate') {
+    throw new Error(`DATEV BU-Schlüssel fehlt für Steuerfall ${normalized} am ${postingDate}.`);
+  }
+  if (key !== undefined && !/^\d{1,4}$/.test(key)) throw new Error(`DATEV BU-Schlüssel ist ungültig für Steuerfall ${normalized}.`);
+  return key?.padStart(4, '0');
+};
+
 export const buildDatevRows = (
   db: Database.Database,
   args: { from?: string; to?: string } = {},
@@ -1771,55 +1849,86 @@ export const buildDatevRows = (
   buSchluessel?: string;
   umsatz: number;
 }> => {
-  const tenantId = getTenantId(scope);
-  const conditions = [eq(schema.journalPostingPairs.tenantId, tenantId), eq(schema.journalEntries.tenantId, tenantId),
-    inArray(schema.journalEntries.status, ['posted', 'reversed'])];
-  if (args.from) conditions.push(gte(schema.journalEntries.postingDate, args.from));
-  if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
-  const debit = alias(schema.journalLines, 'debit');
-  const credit = alias(schema.journalLines, 'credit');
-  const pairedRows = createDrizzle(db).select({ posting_date: schema.journalEntries.postingDate,
-    entry_number: schema.journalEntries.entryNumber, booking_text: schema.journalEntries.bookingText,
-    debit_account: debit.accountNumber, credit_account: credit.accountNumber,
-    amount: schema.journalPostingPairs.amount, datev_bu_key: schema.journalPostingPairs.datevBuKey })
-    .from(schema.journalPostingPairs).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalPostingPairs.entryId))
-    .innerJoin(debit, eq(debit.id, schema.journalPostingPairs.debitLineId))
-    .innerJoin(credit, eq(credit.id, schema.journalPostingPairs.creditLineId))
-    .where(and(...conditions)).orderBy(asc(schema.journalEntries.postingDate), asc(schema.journalEntries.entryNumber), asc(schema.journalPostingPairs.id)).all() as Array<{
-      posting_date: string; entry_number: number; booking_text: string; debit_account: string; credit_account: string;
-      amount: number; datev_bu_key: string | null;
-    }>;
-
-  if (pairedRows.length > 0) {
-    return pairedRows.map((row) => ({
-      date: row.posting_date,
-      belegfeld1: String(row.entry_number),
-      buchungstext: row.booking_text,
-      konto: row.debit_account,
-      gegenkonto: row.credit_account,
-      sollHabenKennzeichen: 'S' as const,
-      buSchluessel: row.datev_bu_key ?? undefined,
-      umsatz: round2(Number(row.amount || 0)),
-    }));
+  if (!args.from || !args.to || !isIsoDate(args.from) || !isIsoDate(args.to) || args.from > args.to) {
+    throw new Error('DATEV Export benötigt einen gültigen, geschlossenen Zeitraum.');
   }
+  if (periodForDate(args.from) !== periodForDate(args.to)) throw new Error('DATEV Export darf genau eine Buchungsperiode enthalten.');
+  const tenantId = getTenantId(scope);
+  const chart = getActiveChart(db, tenantId);
+  const entries = listJournalEntries(db, { from: args.from, to: args.to, limit: DATEV_MAX_ROWS + 1, offset: 0 }, scope)
+    .filter((entry) => entry.status === 'posted' || entry.status === 'reversed');
+  if (entries.length === 0) return [];
+  const entryIds = entries.map((entry) => entry.id);
+  const storedPairs = createDrizzle(db).select({
+    id: schema.journalPostingPairs.id,
+    entry_id: schema.journalPostingPairs.entryId,
+    debit_line_id: schema.journalPostingPairs.debitLineId,
+    credit_line_id: schema.journalPostingPairs.creditLineId,
+    amount: schema.journalPostingPairs.amount,
+    tax_case_key: schema.journalPostingPairs.taxCaseKey,
+    datev_bu_key: schema.journalPostingPairs.datevBuKey,
+  }).from(schema.journalPostingPairs).where(and(eq(schema.journalPostingPairs.tenantId, tenantId), inArray(schema.journalPostingPairs.entryId, entryIds)))
+    .orderBy(asc(schema.journalPostingPairs.id)).all() as Array<{
+      id: string; entry_id: string; debit_line_id: string; credit_line_id: string; amount: number; tax_case_key: string | null; datev_bu_key: string | null;
+    }>;
+  const byEntry = new Map<string, typeof storedPairs>();
+  for (const pair of storedPairs) byEntry.set(pair.entry_id, [...(byEntry.get(pair.entry_id) ?? []), pair]);
 
-  // Fallback for legacy entries without persisted posting pairs.
-  return listJournalEntries(db, { from: args.from, to: args.to, limit: 100_000, offset: 0 }, scope)
-    .filter((entry) => entry.status === 'posted' || entry.status === 'reversed')
-    .flatMap((entry) => {
-      const debitLines = entry.lines.filter((line) => Number(line.debitAmount || 0) > 0);
-      const creditLines = entry.lines.filter((line) => Number(line.creditAmount || 0) > 0);
-      return debitLines.map((debitLine) => ({
-        date: entry.postingDate,
-        belegfeld1: String(entry.entryNumber),
+  const exportTransaction = db.transaction(() => entries.flatMap((entry) => {
+    let pairs = byEntry.get(entry.id) ?? [];
+    if (pairs.length === 0) {
+      const seeds = buildPostingPairs(entry.lines);
+      const debitTotal = round2(entry.lines.reduce((sum, line) => sum + Number(line.debitAmount || 0), 0));
+      const creditTotal = round2(entry.lines.reduce((sum, line) => sum + Number(line.creditAmount || 0), 0));
+      const pairTotal = round2(seeds.reduce((sum, pair) => sum + pair.amount, 0));
+      if (debitTotal <= 0 || debitTotal !== creditTotal || pairTotal !== debitTotal || seeds.length === 0) {
+        throw new Error(`DATEV Export blockiert: Buchung ${entry.entryNumber} ist ungepaart oder unausgeglichen.`);
+      }
+      pairs = seeds.map((pair) => {
+        const id = randomUUID();
+        const datevBuKey = resolveDatevBuKeyForPosting(db, chart, pair.taxCaseKey, entry.postingDate) ?? null;
+        createDrizzle(db).insert(schema.journalPostingPairs).values({ id, tenantId, entryId: entry.id, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: pair.amount, taxCaseKey: pair.taxCaseKey ?? null, datevBuKey, createdAt: new Date().toISOString() }).run();
+        return { id, entry_id: entry.id, debit_line_id: pair.debitLineId, credit_line_id: pair.creditLineId, amount: pair.amount, tax_case_key: pair.taxCaseKey ?? null, datev_bu_key: datevBuKey };
+      });
+    }
+    const lines = new Map(entry.lines.map((line) => [line.id, line]));
+    const pairTotal = round2(pairs.reduce((sum, pair) => sum + Number(pair.amount || 0), 0));
+    const debitTotal = round2(entry.lines.reduce((sum, line) => sum + Number(line.debitAmount || 0), 0));
+    if (pairTotal !== debitTotal) throw new Error(`DATEV Export blockiert: Persistierte Paare für Buchung ${entry.entryNumber} sind unvollständig.`);
+    const debitPaired = new Map<string, number>();
+    const creditPaired = new Map<string, number>();
+    for (const pair of pairs) {
+      debitPaired.set(pair.debit_line_id, round2((debitPaired.get(pair.debit_line_id) ?? 0) + Number(pair.amount || 0)));
+      creditPaired.set(pair.credit_line_id, round2((creditPaired.get(pair.credit_line_id) ?? 0) + Number(pair.amount || 0)));
+    }
+    for (const line of entry.lines) {
+      const expected = Number(line.debitAmount || 0) > 0 ? debitPaired.get(line.id) : creditPaired.get(line.id);
+      const actual = Number(line.debitAmount || line.creditAmount || 0);
+      if (round2(expected ?? 0) !== round2(actual)) throw new Error(`DATEV Export blockiert: Persistierte Paare für Buchung ${entry.entryNumber} stimmen nicht mit den Buchungszeilen überein.`);
+    }
+    return pairs.map((pair) => {
+      const debit = lines.get(pair.debit_line_id);
+      const credit = lines.get(pair.credit_line_id);
+      if (!debit || !credit || Number(pair.amount) <= 0) throw new Error(`DATEV Export blockiert: Buchung ${entry.entryNumber} enthält ein ungültiges Paar.`);
+      const persistedBuKey = pair.datev_bu_key;
+      if (persistedBuKey !== null && !/^\d{1,4}$/.test(persistedBuKey)) throw new Error(`DATEV BU-Schlüssel ist ungültig für Buchung ${entry.entryNumber}.`);
+      const buKey = resolveDatevBuKeyForPosting(db, chart, pair.tax_case_key ?? debit.taxCaseKey ?? debit.taxCode, entry.postingDate)
+        ?? persistedBuKey?.padStart(4, '0');
+      return {
+        date: entry.documentDate ?? entry.postingDate,
+        belegfeld1: entry.reference ?? String(entry.entryNumber),
         buchungstext: entry.bookingText,
-        konto: debitLine.accountNumber,
-        gegenkonto: creditLines[0]?.accountNumber ?? '',
+        konto: debit.accountNumber,
+        gegenkonto: credit.accountNumber,
         sollHabenKennzeichen: 'S' as const,
-        buSchluessel: resolveDatevBuKeyForTaxCase(db, getActiveChart(db, getTenantId(scope)), debitLine.taxCaseKey ?? debitLine.taxCode),
-        umsatz: round2(debitLine.debitAmount),
-      }));
+        buSchluessel: buKey,
+        umsatz: round2(Number(pair.amount)),
+      };
     });
+  }));
+  const result = exportTransaction();
+  if (result.length > DATEV_MAX_ROWS) throw new Error(`DATEV Buchungsstapel darf höchstens ${DATEV_MAX_ROWS} Buchungen enthalten.`);
+  return result;
 };
 
 export const ensureProAccountingSeedData = (db: Database.Database, scope: TenantScope): void => {

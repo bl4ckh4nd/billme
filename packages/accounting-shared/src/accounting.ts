@@ -181,6 +181,16 @@ export interface DatevExportResult {
   fromDate?: string;
   toDate?: string;
   createdAt: string;
+  sha256?: string;
+  byteSize?: number;
+  encoding?: 'cp1252' | 'utf8-bom';
+  headerVersion?: number;
+  formatVersion?: number;
+  chart?: LedgerChart;
+  sourceSnapshotHash?: string;
+  manifestJson?: string;
+  status?: string;
+  validationJson?: string;
 }
 
 export interface ProWorkflowEntry {

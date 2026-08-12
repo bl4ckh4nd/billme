@@ -455,7 +455,23 @@ export interface ProAccountingRepository {
   listDatevExports(scope: TenantScope): Promise<DatevExportResult[]>;
   insertDatevExport(
     scope: TenantScope,
-    args: { filePath: string; recordCount: number; fromDate?: string; toDate?: string },
+    args: {
+      id?: string;
+      filePath: string;
+      recordCount: number;
+      fromDate?: string;
+      toDate?: string;
+      sha256?: string;
+      byteSize?: number;
+      encoding?: 'cp1252' | 'utf8-bom';
+      headerVersion?: number;
+      formatVersion?: number;
+      chart?: 'SKR03' | 'SKR04';
+      sourceSnapshotHash?: string;
+      manifestJson?: string;
+      status?: string;
+      validationJson?: string;
+    },
   ): Promise<DatevExportResult>;
   getAccountingHealth(scope: TenantScope): Promise<AccountingHealthSnapshot>;
   getVatSummary(scope: TenantScope, args?: ReportRangeOptions): Promise<VatSummary>;

@@ -114,6 +114,7 @@ export const buildTaxAuditExportPackage = (
   const datasets: Array<{ name: string; table: string; orderBy: string }> = [
     { name: 'journal-entries.jsonl', table: 'journal_entries', orderBy: 'posting_date ASC, entry_number ASC' },
     { name: 'journal-lines.jsonl', table: 'journal_lines', orderBy: 'entry_id ASC, line_no ASC' },
+    { name: 'journal-posting-pairs.jsonl', table: 'journal_posting_pairs', orderBy: 'entry_id ASC, id ASC' },
     { name: 'accounting-periods.jsonl', table: 'accounting_periods', orderBy: 'period ASC' },
     { name: 'account-mappings-hgb.jsonl', table: 'account_mappings_hgb', orderBy: 'statement_type ASC, account_number ASC' },
     { name: 'bank-transactions.jsonl', table: 'bank_transactions', orderBy: 'date ASC, id ASC' },

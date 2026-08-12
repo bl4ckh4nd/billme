@@ -116,6 +116,18 @@ export const runMigrations = (db: Database.Database): void => {
     tryAddColumn(db, 'invoices', 'accounting_journal_entry_id', 'TEXT');
     tryAddColumn(db, 'invoices', 'accounting_posted_at', 'TEXT');
     tryAddColumn(db, 'accounting_policies', 'vat_method', "TEXT NOT NULL DEFAULT 'soll'");
+    // DATEV manifests were added after the original desktop schema. Keep all
+    // columns nullable so existing export history remains readable.
+    tryAddColumn(db, 'datev_exports', 'sha256', 'TEXT');
+    tryAddColumn(db, 'datev_exports', 'byte_size', 'INTEGER');
+    tryAddColumn(db, 'datev_exports', 'encoding', 'TEXT');
+    tryAddColumn(db, 'datev_exports', 'header_version', 'INTEGER');
+    tryAddColumn(db, 'datev_exports', 'format_version', 'INTEGER');
+    tryAddColumn(db, 'datev_exports', 'chart', 'TEXT');
+    tryAddColumn(db, 'datev_exports', 'source_snapshot_hash', 'TEXT');
+    tryAddColumn(db, 'datev_exports', 'manifest_json', 'TEXT');
+    tryAddColumn(db, 'datev_exports', 'status', 'TEXT');
+    tryAddColumn(db, 'datev_exports', 'validation_json', 'TEXT');
 
     // Documents: project assignment
     tryAddColumn(db, 'invoices', 'project_id', 'TEXT');
@@ -553,7 +565,17 @@ export const runMigrations = (db: Database.Database): void => {
       from_date TEXT,
       to_date TEXT,
       created_at TEXT NOT NULL,
-      meta_json TEXT NOT NULL
+      meta_json TEXT NOT NULL,
+      sha256 TEXT,
+      byte_size INTEGER,
+      encoding TEXT,
+      header_version INTEGER,
+      format_version INTEGER,
+      chart TEXT,
+      source_snapshot_hash TEXT,
+      manifest_json TEXT,
+      status TEXT,
+      validation_json TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_datev_exports_tenant_created

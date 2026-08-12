@@ -500,7 +500,17 @@ CREATE TABLE IF NOT EXISTS datev_exports (
   from_date TEXT,
   to_date TEXT,
   created_at TEXT NOT NULL,
-  meta_json TEXT NOT NULL
+  meta_json TEXT NOT NULL,
+  sha256 TEXT,
+  byte_size INTEGER,
+  encoding TEXT,
+  header_version INTEGER,
+  format_version INTEGER,
+  chart TEXT,
+  source_snapshot_hash TEXT,
+  manifest_json TEXT,
+  status TEXT,
+  validation_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_datev_exports_tenant_created

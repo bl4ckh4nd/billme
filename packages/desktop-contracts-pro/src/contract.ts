@@ -691,6 +691,11 @@ const proDisposeAssetArgsSchema = z.object({
 const proExportDatevBuchungsstapelArgsSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
+  consultantNumber: z.union([z.string(), z.number().int()]).optional(),
+  clientNumber: z.union([z.string(), z.number().int()]).optional(),
+  fiscalYearStart: z.string().optional(),
+  accountLength: z.number().int().min(4).max(8).optional(),
+  encoding: z.enum(['cp1252', 'utf8-bom']).optional(),
   actorRole: proActorRoleSchema.optional(),
 });
 

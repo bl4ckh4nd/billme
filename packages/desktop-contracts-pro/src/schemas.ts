@@ -719,6 +719,16 @@ export const datevExportResultSchema = z.object({
   fromDate: z.string().optional(),
   toDate: z.string().optional(),
   createdAt: z.string(),
+  sha256: z.string().optional(),
+  byteSize: z.number().int().nonnegative().optional(),
+  encoding: z.enum(['cp1252', 'utf8-bom']).optional(),
+  headerVersion: z.number().int().optional(),
+  formatVersion: z.number().int().optional(),
+  chart: ledgerChartSchema.optional(),
+  sourceSnapshotHash: z.string().optional(),
+  manifestJson: z.string().optional(),
+  status: z.string().optional(),
+  validationJson: z.string().optional(),
 });
 
 export const recurringProfileSchema = z.object({

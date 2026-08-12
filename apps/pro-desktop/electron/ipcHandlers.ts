@@ -1232,22 +1232,77 @@ export const registerIpcHandlers = (
     return disposeAsset(requireDb(), args, getProScope());
   });
 
-  register(ipcMain, 'pro:exportDatevBuchungsstapel', ({ from, to }) => {
+  register(ipcMain, 'pro:exportDatevBuchungsstapel', (args) => {
     assertLocalOwner('pro:exportDatevBuchungsstapel');
-    return getProAccountingService().buildDatevRows({ from, to }).then((rows) => {
-      const userDataPath = getUserDataPath();
-      const exportDir = path.join(userDataPath, 'exports', 'datev');
-      fs.mkdirSync(exportDir, { recursive: true });
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const exportPath = path.join(exportDir, `datev-buchungsstapel-${timestamp}.csv`);
-      const csvBuffer = buildDatevBuchungsstapelCsv(rows);
-      fs.writeFileSync(exportPath, csvBuffer);
-      return getProAccountingService().insertDatevExport({
-        filePath: exportPath,
-        recordCount: rows.length,
-        fromDate: from,
-        toDate: to,
+    const { from, to } = args;
+    if (!from || !to || args.consultantNumber === undefined || args.clientNumber === undefined || !args.fiscalYearStart || args.accountLength === undefined) {
+      throw new Error('DATEV Export benötigt Beraternummer, Mandantennummer, Wirtschaftsjahresbeginn, Kontenlänge und einen Zeitraum.');
+    }
+    return getProAccountingService().buildDatevRows({ from, to }).then(async (rows) => {
+      const policy = await getProAccountingService().getAccountingPolicy();
+      const createdAt = new Date();
+      const csvBuffer = buildDatevBuchungsstapelCsv(rows, {
+        consultantNumber: args.consultantNumber!,
+        clientNumber: args.clientNumber!,
+        fiscalYearStart: args.fiscalYearStart!,
+        accountLength: args.accountLength!,
+        chart: policy.activeChart,
+        from: from!,
+        to: to!,
+        encoding: args.encoding ?? 'cp1252',
+        createdAt,
+        stackName: `Buchungsstapel ${from!.slice(0, 7)}`,
       });
+      const exportId = crypto.randomUUID();
+      const exportDir = path.join(getUserDataPath(), 'exports', 'datev');
+      const exportPath = path.join(exportDir, `EXTF_Buchungsstapel-${from!.slice(0, 7)}-${exportId}.CSV`);
+      const temporaryPath = path.join(exportDir, `.${exportId}.tmp`);
+      const sourceSnapshotHash = crypto.createHash('sha256').update(JSON.stringify({ from, to, rows })).digest('hex');
+      const manifest = JSON.stringify({
+        id: exportId,
+        sourceSnapshotHash,
+        sha256: crypto.createHash('sha256').update(csvBuffer).digest('hex'),
+        byteSize: csvBuffer.byteLength,
+        encoding: args.encoding ?? 'cp1252',
+        headerVersion: 700,
+        formatVersion: 13,
+        chart: policy.activeChart,
+        from,
+        to,
+        recordCount: rows.length,
+        createdAt: createdAt.toISOString(),
+        status: 'validated',
+      });
+      let finalCreated = false;
+      try {
+        fs.mkdirSync(exportDir, { recursive: true });
+        fs.writeFileSync(temporaryPath, csvBuffer, { flag: 'wx' });
+        const fd = fs.openSync(temporaryPath, 'r');
+        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        fs.renameSync(temporaryPath, exportPath);
+        finalCreated = true;
+        return await getProAccountingService().insertDatevExport({
+          id: exportId,
+          filePath: exportPath,
+          recordCount: rows.length,
+          fromDate: from,
+          toDate: to,
+          sha256: JSON.parse(manifest).sha256,
+          byteSize: csvBuffer.byteLength,
+          encoding: args.encoding ?? 'cp1252',
+          headerVersion: 700,
+          formatVersion: 13,
+          chart: policy.activeChart,
+          sourceSnapshotHash,
+          manifestJson: manifest,
+          status: 'validated',
+          validationJson: JSON.stringify({ ok: true }),
+        });
+      } catch (error) {
+        try { if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath); } catch { /* cleanup is best effort */ }
+        try { if (finalCreated && fs.existsSync(exportPath)) fs.unlinkSync(exportPath); } catch { /* cleanup is best effort */ }
+        throw error;
+      }
     });
   });
 

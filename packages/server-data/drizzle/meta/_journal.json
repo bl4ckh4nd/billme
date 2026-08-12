@@ -106,6 +106,13 @@
       "when": 1786538400002,
       "tag": "0014_server_data_datev_tax_evidence",
       "breakpoints": false
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1786538400003,
+      "tag": "0015_server_data_reporting_tax_submissions",
+      "breakpoints": false
     }
   ]
 }

@@ -490,7 +490,136 @@ export const reportSnapshots = pgTable("report_snapshots", {
   reportType: text("report_type"),
   argsJson: text("args_json"),
   payloadJson: text("payload_json"),
+  sourceHash: text("source_hash"),
+  fromDate: text("from_date"),
+  toDate: text("to_date"),
+  asOfDate: text("as_of_date"),
   createdAt: text("created_at"),
+});
+
+export const reportSnapshotPositions = pgTable("report_snapshot_positions", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  snapshotId: text("snapshot_id"),
+  positionKey: text("position_key"),
+  positionLabel: text("position_label"),
+  amount: numeric("amount"),
+  debitAmount: numeric("debit_amount"),
+  creditAmount: numeric("credit_amount"),
+  metadataJson: text("metadata_json"),
+  createdAt: text("created_at"),
+});
+
+export const reportAccountMappings = pgTable("report_account_mappings", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  reportType: text("report_type"),
+  chart: text("chart"),
+  accountNumber: text("account_number"),
+  positionKey: text("position_key"),
+  positionLabel: text("position_label"),
+  validFrom: text("valid_from"),
+  validTo: text("valid_to"),
+  version: integer("version"),
+  source: text("source"),
+  sourceHash: text("source_hash"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+export const reportCatalogRefs = pgTable("report_catalog_refs", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  reportType: text("report_type"),
+  catalogKey: text("catalog_key"),
+  catalogVersion: text("catalog_version"),
+  sourceHash: text("source_hash"),
+  payloadJson: text("payload_json"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+export const taxAdjustments = pgTable("tax_adjustments", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  submissionId: text("submission_id"),
+  taxYear: integer("tax_year"),
+  period: text("period"),
+  adjustmentType: text("adjustment_type"),
+  amount: numeric("amount"),
+  taxCode: text("tax_code"),
+  reason: text("reason"),
+  sourceJson: text("source_json"),
+  idempotencyKey: text("idempotency_key"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+export const taxSubmissions = pgTable("tax_submissions", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  submissionType: text("submission_type"),
+  taxYear: integer("tax_year"),
+  period: text("period"),
+  status: text("status"),
+  payloadJson: text("payload_json"),
+  sourceSnapshotId: text("source_snapshot_id"),
+  idempotencyKey: text("idempotency_key"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+  submittedAt: text("submitted_at"),
+});
+
+export const taxSubmissionApprovals = pgTable("tax_submission_approvals", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  submissionId: text("submission_id"),
+  requesterId: text("requester_id"),
+  approverId: text("approver_id"),
+  decision: text("decision"),
+  reason: text("reason"),
+  createdAt: text("created_at"),
+});
+
+export const taxSubmissionReceipts = pgTable("tax_submission_receipts", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  submissionId: text("submission_id"),
+  receiptType: text("receipt_type"),
+  receiptNumber: text("receipt_number"),
+  receiptJson: text("receipt_json"),
+  receivedAt: text("received_at"),
+});
+
+export const taxCredentials = pgTable("tax_credentials", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  provider: text("provider"),
+  credentialKey: text("credential_key"),
+  version: integer("version"),
+  encryptionAlgorithm: text("encryption_algorithm"),
+  keyVersion: text("key_version"),
+  metadataJson: text("metadata_json"),
+  encryptedBlob: bytea("encrypted_blob"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+export const taxSubmissionJobs = pgTable("tax_submission_jobs", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  submissionId: text("submission_id"),
+  jobType: text("job_type"),
+  idempotencyKey: text("idempotency_key"),
+  status: text("status"),
+  attempts: integer("attempts"),
+  availableAt: text("available_at"),
+  lockedAt: text("locked_at"),
+  completedAt: text("completed_at"),
+  lastError: text("last_error"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
 });
 
 export const datevExports = pgTable("datev_exports", {

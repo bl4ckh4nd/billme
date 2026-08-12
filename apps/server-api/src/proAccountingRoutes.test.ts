@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { csvEscape, datevExportQuerySchema } from './proAccountingRoutes.js';
+import { csvEscape, datevExportQuerySchema, susaReportQuerySchema } from './proAccountingRoutes.js';
 
 test('DATEV CSV escaping protects semicolons, quotes, and line breaks', () => {
   assert.equal(csvEscape('plain'), 'plain');
@@ -30,4 +30,12 @@ test('DATEV export query validates the full EXTF parameter set at the API bounda
     accountLength: 5,
     encoding: 'utf8-bom',
   });
+});
+
+test('SuSa route accepts inclusive range bounds alongside legacy asOfDate', () => {
+  assert.deepEqual(susaReportQuerySchema.parse({ from: '2026-12-01', to: '2026-12-31' }), {
+    from: '2026-12-01',
+    to: '2026-12-31',
+  });
+  assert.equal(susaReportQuerySchema.parse({ asOfDate: '2026-12-31' }).asOfDate, '2026-12-31');
 });

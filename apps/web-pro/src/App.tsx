@@ -1074,7 +1074,7 @@ export default function App() {
         });
       },
       async getSusaReport(filters: ReportFilterState): Promise<SusaReport> {
-        const report = await client.getSusaReport(filters.asOfDate);
+        const report = await client.getSusaReport(reportDateRange(filters));
         const names = new Map(data.ledgerAccounts.map((account) => [account.accountNumber, account.name]));
         return {
           rows: report.rows.map((row) => ({

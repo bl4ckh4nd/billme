@@ -25,6 +25,29 @@ test('journal posting-pair insert binds every persisted column', async () => {
   assert.equal(captured.values.length, 9);
 });
 
+test('SuSa report maps inclusive from/to bounds into ledger opening and turnover dates', async () => {
+  const calls: Array<{ text: string; values: unknown[] }> = [];
+  const db = {
+    query: async (text: string, values?: unknown[]) => {
+      calls.push({ text, values: values ?? [] });
+      return { rows: [{ account_number: '8400', opening_debit: '0', opening_credit: '0', debit: '0', credit: '100' }] };
+    },
+  } as unknown as PostgresQueryable;
+  const tenantId = 'susa-range-test';
+  const report = await createPostgresProAccountingRepository(db).getSusaReport(
+    createSingleTenantScope(tenantId, 'pro'),
+    { from: '2026-12-01', to: '2026-12-31' },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0]?.values, [tenantId, '2026-12-31', '2026-12-01']);
+  assert.match(calls[0]?.text ?? '', /posting_date <= \$2/);
+  assert.match(calls[0]?.text ?? '', /posting_date >= \$3/);
+  assert.equal(report.from, '2026-12-01');
+  assert.equal(report.to, '2026-12-31');
+  assert.equal(report.asOfDate, '2026-12-31');
+});
+
 test('OPOS import is tenant-safe and idempotent without global conflict drops', async () => {
   const rows = new Map<string, Record<string, unknown>>();
   const client = {

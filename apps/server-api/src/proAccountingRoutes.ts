@@ -45,6 +45,7 @@ const idParams = z.object({ id: z.string().min(1) });
 const transactionParams = z.object({ transactionId: z.string().min(1) });
 const draftParams = z.object({ draftId: z.string().min(1) });
 const reportRange = z.object({ from: z.string().optional(), to: z.string().optional() });
+export const susaReportQuerySchema = reportRange.extend({ asOfDate: z.string().optional() });
 export const datevExportQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -343,10 +344,14 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
   typedRoute(app, {
     method: 'GET',
     url: `${prefix}/reports/susa`,
-    query: asOfDate,
+    query: susaReportQuerySchema,
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
-      return serviceFor(app).getSusaReport(session.scope, query);
+      return serviceFor(app).getSusaReport(session.scope, {
+        ...query,
+        fromDate: query.from,
+        asOfDate: query.to ?? query.asOfDate,
+      });
     },
   });
 

@@ -33,6 +33,25 @@ test('Pro web client reads canonical accounting transactions', async () => {
   }
 });
 
+test('Pro web client sends inclusive SuSa date bounds', async () => {
+  const previousFetch = globalThis.fetch;
+  let requestUrl = '';
+  globalThis.fetch = (async (input) => {
+    requestUrl = String(input);
+    return new Response(JSON.stringify({ asOfDate: '2026-12-31', rows: [], totals: { debit: 0, credit: 0, balance: 0 } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    await client.getSusaReport({ from: '2026-12-01', to: '2026-12-31' });
+    assert.match(requestUrl, /reports\/susa\?from=2026-12-01&to=2026-12-31$/);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('Pro web client rethrows canonical accounting mutation failures', async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = (async () =>

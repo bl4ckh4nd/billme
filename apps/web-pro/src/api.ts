@@ -424,8 +424,8 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     getVatSummary(query?: unknown) {
       return requestJson({ parser: (input) => input, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/vat/summary');
     },
-    getSusaReport(asOfDate?: string) {
-      return requestJson({ parser: susaReportSchema, query: { asOfDate } }, '/api/v1/pro/accounting/reports/susa');
+    getSusaReport(query?: { from?: string; to?: string; asOfDate?: string }) {
+      return requestJson({ parser: susaReportSchema, query }, '/api/v1/pro/accounting/reports/susa');
     },
     getGuvReport(query?: unknown) {
       return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/guv');

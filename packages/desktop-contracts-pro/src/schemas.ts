@@ -529,7 +529,7 @@ export const accountingPostingPreviewSchema = z.object({
   snapshot: accountingSnapshotSchema.optional(),
   issues: z.array(z.object({ code: z.string(), message: z.string(), blocking: z.boolean() })),
 });
-export const accountingPolicySchema = z.object({ tenantId: z.string(), activeChart: ledgerChartSchema, vatMethod: z.enum(['soll', 'ist']), periodPolicy: z.literal('calendar_month'), updatedAt: z.string() });
+export const accountingPolicySchema = z.object({ tenantId: z.string(), activeChart: ledgerChartSchema, vatMethod: z.enum(['soll', 'ist']).optional(), periodPolicy: z.literal('calendar_month'), updatedAt: z.string() });
 export const accountingAccountMappingSchema = z.object({ id: z.string(), tenantId: z.string(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat']), accountNumber: z.string(), updatedAt: z.string() });
 export const vendorSchema = z.object({ id: z.string(), tenantId: z.string(), vendorNumber: z.string().optional(), name: z.string().min(1), email: z.string().optional(), address: z.string().optional(), vatId: z.string().optional(), iban: z.string().optional(), defaultExpenseAccount: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
 const incomingInvoiceLineSchema = z.object({ id: z.string(), incomingInvoiceId: z.string(), position: z.number().int(), description: z.string(), quantity: z.number(), unitPrice: z.number(), netAmount: z.number(), taxRate: z.number(), taxAmount: z.number(), grossAmount: z.number(), accountNumber: z.string().optional(), assetAccountNumber: z.string().optional() });

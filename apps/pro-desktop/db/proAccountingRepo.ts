@@ -1195,6 +1195,7 @@ export const reverseJournalEntry = (
   if (!lines.length) throw new Error('Journal entry has no lines');
 
   const reversalEntryId = randomUUID();
+  const auditReason = overrideReason ? `${cleanReason} (soft-lock override: ${overrideReason})` : cleanReason;
   const sourceKey = `reversal:${entryId}`;
   const now = new Date().toISOString();
   let reversalNumber = 0;
@@ -1228,8 +1229,8 @@ export const reverseJournalEntry = (
     }
     txDrizzle.update(schema.journalEntries).set({ status: 'reversed', reversedEntryId: reversalEntryId })
       .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.id, entryId))).run();
-    appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: entryId, action: 'reverse', reason: cleanReason, before: { status: 'posted' }, after: { status: 'reversed', reversalEntryId, postingDate, period, fiscalYear }, actor: 'pro' });
-    appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: reversalEntryId, action: 'post_reversal', reason: cleanReason, before: null, after: { reversesEntryId: entryId, entryNumber: reversalNumber, postingDate, period, fiscalYear }, actor: 'pro' });
+    appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: entryId, action: 'reverse', reason: auditReason, before: { status: 'posted' }, after: { status: 'reversed', reversalEntryId, postingDate, period, fiscalYear, reversalReason: cleanReason, softLockOverrideReason: overrideReason || undefined }, actor: 'pro' });
+    appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: reversalEntryId, action: 'post_reversal', reason: auditReason, before: null, after: { reversesEntryId: entryId, entryNumber: reversalNumber, postingDate, period, fiscalYear, reversalReason: cleanReason, softLockOverrideReason: overrideReason || undefined }, actor: 'pro' });
   })();
   return { ok: true, reversalEntryId };
 };

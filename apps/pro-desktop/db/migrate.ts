@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { seedEurCatalog } from './eurCatalogRepo';
+import { ensureTaxCaseSeedData } from './taxCasesRepo';
 
 const getColumns = (db: Database.Database, table: string): Set<string> => {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
@@ -798,7 +799,7 @@ export const runMigrations = (db: Database.Database): void => {
     DROP TRIGGER IF EXISTS invoices_protect_posted_accounting;
     CREATE TRIGGER invoices_protect_posted_accounting
     BEFORE UPDATE ON invoices
-    FOR EACH ROW WHEN OLD.accounting_status = 'posted' AND (
+    FOR EACH ROW WHEN OLD.accounting_status IN ('posted', 'reversed') AND (
       NEW.accounting_status != OLD.accounting_status AND NOT (NEW.accounting_status = 'reversed' AND EXISTS (SELECT 1 FROM journal_entries WHERE id = OLD.accounting_journal_entry_id AND tenant_id = 'default' AND status = 'reversed')) OR
       COALESCE(NEW.client_id, '') != COALESCE(OLD.client_id, '') OR COALESCE(NEW.client, '') != COALESCE(OLD.client, '') OR COALESCE(NEW.client_email, '') != COALESCE(OLD.client_email, '') OR
       COALESCE(NEW.client_address, '') != COALESCE(OLD.client_address, '') OR COALESCE(NEW.billing_address_json, '') != COALESCE(OLD.billing_address_json, '') OR
@@ -811,24 +812,24 @@ export const runMigrations = (db: Database.Database): void => {
     ) BEGIN SELECT RAISE(ABORT, 'posted invoice accounting fields are immutable'); END;
     DROP TRIGGER IF EXISTS invoices_protect_posted_delete;
     CREATE TRIGGER invoices_protect_posted_delete
-    BEFORE DELETE ON invoices FOR EACH ROW WHEN OLD.accounting_status = 'posted'
+    BEFORE DELETE ON invoices FOR EACH ROW WHEN OLD.accounting_status IN ('posted', 'reversed')
     BEGIN SELECT RAISE(ABORT, 'posted invoice cannot be deleted'); END;
     DROP TRIGGER IF EXISTS invoice_items_protect_posted;
     DROP TRIGGER IF EXISTS invoice_items_insert_posted;
     CREATE TRIGGER invoice_items_insert_posted
-    BEFORE INSERT ON invoice_items FOR EACH ROW WHEN EXISTS (SELECT 1 FROM invoices WHERE id = NEW.invoice_id AND accounting_status = 'posted')
+    BEFORE INSERT ON invoice_items FOR EACH ROW WHEN EXISTS (SELECT 1 FROM invoices WHERE id = NEW.invoice_id AND accounting_status IN ('posted', 'reversed'))
     BEGIN SELECT RAISE(ABORT, 'posted invoice lines are immutable'); END;
     CREATE TRIGGER invoice_items_protect_posted
-    BEFORE UPDATE ON invoice_items FOR EACH ROW WHEN EXISTS (SELECT 1 FROM invoices WHERE id = OLD.invoice_id AND accounting_status = 'posted')
+    BEFORE UPDATE ON invoice_items FOR EACH ROW WHEN EXISTS (SELECT 1 FROM invoices WHERE id = OLD.invoice_id AND accounting_status IN ('posted', 'reversed'))
     BEGIN SELECT RAISE(ABORT, 'posted invoice lines are immutable'); END;
     DROP TRIGGER IF EXISTS invoice_items_delete_posted;
     CREATE TRIGGER invoice_items_delete_posted
-    BEFORE DELETE ON invoice_items FOR EACH ROW WHEN EXISTS (SELECT 1 FROM invoices WHERE id = OLD.invoice_id AND accounting_status = 'posted')
+    BEFORE DELETE ON invoice_items FOR EACH ROW WHEN EXISTS (SELECT 1 FROM invoices WHERE id = OLD.invoice_id AND accounting_status IN ('posted', 'reversed'))
     BEGIN SELECT RAISE(ABORT, 'posted invoice lines cannot be deleted'); END;
     DROP TRIGGER IF EXISTS incoming_invoices_protect_posted_accounting;
     CREATE TRIGGER incoming_invoices_protect_posted_accounting
     BEFORE UPDATE ON incoming_invoices
-    FOR EACH ROW WHEN OLD.accounting_status = 'posted' AND (
+    FOR EACH ROW WHEN OLD.accounting_status IN ('posted', 'reversed') AND (
       (NEW.accounting_status != OLD.accounting_status AND NOT (NEW.accounting_status = 'reversed' AND EXISTS (SELECT 1 FROM journal_entries WHERE id = OLD.accounting_journal_entry_id AND tenant_id = OLD.tenant_id AND status = 'reversed'))) OR
       NEW.vendor_id != OLD.vendor_id OR NEW.number != OLD.number OR NEW.invoice_date != OLD.invoice_date OR
       NEW.due_date != OLD.due_date OR NEW.net_amount != OLD.net_amount OR NEW.tax_amount != OLD.tax_amount OR
@@ -839,19 +840,19 @@ export const runMigrations = (db: Database.Database): void => {
     ) BEGIN SELECT RAISE(ABORT, 'posted incoming invoice accounting fields are immutable'); END;
     DROP TRIGGER IF EXISTS incoming_invoices_protect_posted_delete;
     CREATE TRIGGER incoming_invoices_protect_posted_delete
-    BEFORE DELETE ON incoming_invoices FOR EACH ROW WHEN OLD.accounting_status = 'posted'
+    BEFORE DELETE ON incoming_invoices FOR EACH ROW WHEN OLD.accounting_status IN ('posted', 'reversed')
     BEGIN SELECT RAISE(ABORT, 'posted incoming invoice cannot be deleted'); END;
     DROP TRIGGER IF EXISTS incoming_invoice_lines_protect_posted;
     DROP TRIGGER IF EXISTS incoming_invoice_lines_insert_posted;
     CREATE TRIGGER incoming_invoice_lines_insert_posted
-    BEFORE INSERT ON incoming_invoice_lines FOR EACH ROW WHEN EXISTS (SELECT 1 FROM incoming_invoices WHERE id = NEW.incoming_invoice_id AND accounting_status = 'posted')
+    BEFORE INSERT ON incoming_invoice_lines FOR EACH ROW WHEN EXISTS (SELECT 1 FROM incoming_invoices WHERE id = NEW.incoming_invoice_id AND accounting_status IN ('posted', 'reversed'))
     BEGIN SELECT RAISE(ABORT, 'posted incoming invoice lines are immutable'); END;
     CREATE TRIGGER incoming_invoice_lines_protect_posted
-    BEFORE UPDATE ON incoming_invoice_lines FOR EACH ROW WHEN EXISTS (SELECT 1 FROM incoming_invoices WHERE id = OLD.incoming_invoice_id AND accounting_status = 'posted')
+    BEFORE UPDATE ON incoming_invoice_lines FOR EACH ROW WHEN EXISTS (SELECT 1 FROM incoming_invoices WHERE id = OLD.incoming_invoice_id AND accounting_status IN ('posted', 'reversed'))
     BEGIN SELECT RAISE(ABORT, 'posted incoming invoice lines are immutable'); END;
     DROP TRIGGER IF EXISTS incoming_invoice_lines_delete_posted;
     CREATE TRIGGER incoming_invoice_lines_delete_posted
-    BEFORE DELETE ON incoming_invoice_lines FOR EACH ROW WHEN EXISTS (SELECT 1 FROM incoming_invoices WHERE id = OLD.incoming_invoice_id AND accounting_status = 'posted')
+    BEFORE DELETE ON incoming_invoice_lines FOR EACH ROW WHEN EXISTS (SELECT 1 FROM incoming_invoices WHERE id = OLD.incoming_invoice_id AND accounting_status IN ('posted', 'reversed'))
     BEGIN SELECT RAISE(ABORT, 'posted incoming invoice lines cannot be deleted'); END;
   `);
 
@@ -1462,7 +1463,8 @@ export const runMigrations = (db: Database.Database): void => {
 
       CREATE INDEX IF NOT EXISTS idx_account_suggestion_rules_tenant_chart_priority
         ON account_suggestion_rules(tenant_id, chart, priority);
-    `);
+  `);
+  ensureTaxCaseSeedData(db);
 
   seedEurCatalog(db, 2025);
 

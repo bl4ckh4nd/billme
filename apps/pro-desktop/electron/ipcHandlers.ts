@@ -1284,9 +1284,9 @@ export const registerIpcHandlers = (
   register(ipcMain, 'pro:listIncomingInvoices', () => getProAccountingService().listIncomingInvoices());
   register(ipcMain, 'pro:upsertIncomingInvoice', ({ invoice }) => getProAccountingService().upsertIncomingInvoice(invoice));
   register(ipcMain, 'pro:previewOutgoingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewOutgoingInvoice(invoiceId));
-  register(ipcMain, 'pro:postOutgoingInvoiceAccounting', ({ invoiceId, softLockOverride, overrideReason }) => {
+  register(ipcMain, 'pro:postOutgoingInvoiceAccounting', ({ invoiceId, reservationId, softLockOverride, overrideReason }) => {
     if (softLockOverride) assertLocalOwner('pro:postOutgoingInvoiceAccounting');
-    return getProAccountingService().postOutgoingInvoice(invoiceId, { softLockOverride, overrideReason });
+    return getProAccountingService().postOutgoingInvoice(invoiceId, { reservationId, requireFinalizedReservation: true, softLockOverride, overrideReason });
   });
   register(ipcMain, 'pro:previewIncomingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewIncomingInvoice(invoiceId));
   register(ipcMain, 'pro:postIncomingInvoiceAccounting', ({ invoiceId, softLockOverride, overrideReason }) => {

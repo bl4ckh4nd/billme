@@ -20,7 +20,7 @@ import type { TenantScope } from '@billme/server-core';
 import { appendAuditLog } from './audit';
 import { getTenantId } from '../tenantScope';
 import { getAccountingPolicy, reverseJournalEntry } from './proAccountingRepo';
-import { resolveTaxAccountsForCase } from './taxCasesRepo';
+import { resolveDatevBuKeyForTaxCase, resolveTaxAccountsForCase } from './taxCasesRepo';
 
 export type AccountingRole = AccountingAccountMapping['role'];
 export type AccountingChart = 'SKR03' | 'SKR04';
@@ -173,16 +173,20 @@ const insertJournal = (
   for (const line of entryLines) {
     insertLine.run(line.id, tenantId, id, line.index + 1, line.accountNumber, amount(line.debitAmount), amount(line.creditAmount), null, line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, null, null, line.evidenceType ?? null, line.evidenceReference ?? null, null, line.memo ?? null);
   }
-  const debits = entryLines.filter((line) => cents(line.debitAmount) > 0).map((line) => ({ id: line.id, remaining: amount(line.debitAmount), taxCaseKey: line.taxCaseKey }));
-  const credits = entryLines.filter((line) => cents(line.creditAmount) > 0).map((line) => ({ id: line.id, remaining: amount(line.creditAmount), taxCaseKey: line.taxCaseKey }));
-  const insertPair = db.prepare('INSERT INTO journal_posting_pairs (id, tenant_id, entry_id, debit_line_id, credit_line_id, amount, tax_case_key, datev_bu_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)');
+  const pairTaxCase = (line: AccountingSnapshot['lines'][number]): string | undefined => line.taxCaseKey
+    ?? (line.memo?.startsWith('Vorsteuer ') ? line.memo.slice('Vorsteuer '.length) : undefined)
+    ?? (line.memo?.startsWith('UStBasis ') ? line.memo.slice('UStBasis '.length) : undefined);
+  const debits = entryLines.filter((line) => cents(line.debitAmount) > 0).map((line) => ({ id: line.id, remaining: amount(line.debitAmount), taxCaseKey: pairTaxCase(line) }));
+  const credits = entryLines.filter((line) => cents(line.creditAmount) > 0).map((line) => ({ id: line.id, remaining: amount(line.creditAmount), taxCaseKey: pairTaxCase(line) }));
+  const insertPair = db.prepare('INSERT INTO journal_posting_pairs (id, tenant_id, entry_id, debit_line_id, credit_line_id, amount, tax_case_key, datev_bu_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   let creditCursor = 0;
   for (const debitLine of debits) {
     while (debitLine.remaining > 0.0001 && creditCursor < credits.length) {
       const creditLine = credits[creditCursor]!;
       if (creditLine.remaining <= 0.0001) { creditCursor += 1; continue; }
       const pairAmount = amount(Math.min(debitLine.remaining, creditLine.remaining));
-      insertPair.run(randomUUID(), tenantId, id, debitLine.id, creditLine.id, pairAmount, debitLine.taxCaseKey ?? creditLine.taxCaseKey ?? null, timestamp);
+      const taxCaseKey = debitLine.taxCaseKey ?? creditLine.taxCaseKey;
+      insertPair.run(randomUUID(), tenantId, id, debitLine.id, creditLine.id, pairAmount, taxCaseKey ?? null, resolveDatevBuKeyForTaxCase(db, options.chart, taxCaseKey) ?? null, timestamp);
       debitLine.remaining = amount(debitLine.remaining - pairAmount);
       creditLine.remaining = amount(creditLine.remaining - pairAmount);
     }
@@ -305,16 +309,25 @@ export const previewOutgoingInvoice = (db: Database.Database, scope: TenantScope
   for (const [index, line] of tax.snapshot.lines.entries()) {
     if (index === 0) line.accountNumber = mappings.accounts_receivable;
     else if (line.memo?.startsWith('USt ') && line.netAmount === undefined && line.taxAmount === undefined) {
-      line.accountNumber = policy.vatMethod === 'ist' ? mappings.output_vat_deferred : mappings.output_vat;
+      const taxCaseKey = line.memo.slice('USt '.length);
+      line.accountNumber = policy.vatMethod === 'ist'
+        ? mappings.output_vat_deferred
+        : resolveTaxAccountsForCase(db, policy.activeChart, taxCaseKey).outputTaxAccount ?? mappings.output_vat;
     } else line.accountNumber = mappings.revenue;
   }
   return { sourceType: 'outgoing_invoice', sourceId: invoiceId, status: 'ready', snapshot: tax.snapshot, issues: [] };
 };
 
-export const postOutgoingInvoice = (db: Database.Database, scope: TenantScope, invoiceId: string, options: { softLockOverride?: boolean; overrideReason?: string } = {}): AccountingPostingPreview => {
+export const postOutgoingInvoice = (db: Database.Database, scope: TenantScope, invoiceId: string, options: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean } = {}): AccountingPostingPreview => {
   const tenantId = assertDesktopTenant(scope);
   const existingRow = invoiceRow(db, tenantId, invoiceId);
   if (!existingRow) throw new Error('Invoice not found');
+  if (options.requireFinalizedReservation) {
+    if (existingRow.status === 'draft') throw new Error('INVOICE_MUST_BE_FINALIZED');
+    const reservation = db.prepare(`SELECT id FROM number_reservations
+      WHERE id = ? AND kind = 'invoice' AND status = 'finalized' AND document_id = ? AND number = ?`).get(options.reservationId ?? '', invoiceId, existingRow.number) as { id: string } | undefined;
+    if (!reservation) throw new Error('NUMBER_FINALIZATION_REQUIRED');
+  }
   if (existingRow.accounting_status === 'posted' && existingRow.accounting_snapshot_json) {
     const snapshot = json<AccountingSnapshot>(existingRow.accounting_snapshot_json);
     if (snapshot) return { sourceType: 'outgoing_invoice', sourceId: invoiceId, status: 'ready', snapshot, issues: [] };
@@ -395,14 +408,21 @@ export const previewIncomingInvoice = (db: Database.Database, scope: TenantScope
   const computedTax = amount(invoice.lines.reduce((sum, line) => sum + line.taxAmount, 0));
   if (invoice.lines.length && (Math.abs(computedNet - invoice.netAmount) > 0.01 || Math.abs(computedTax - invoice.taxAmount) > 0.01)) issues.push({ code: 'INCOMING_LINES_TOTAL_MISMATCH', message: 'Zeilensummen stimmen nicht mit dem Beleg überein.', blocking: true });
   const lines: AccountingSnapshot['lines'] = [];
+  const inputVatByCase = new Map<string, number>();
   for (const line of invoice.lines) {
     const accountNumber = line.assetAccountNumber || line.accountNumber || mappings.expense;
     if (!accountExists(db, policy.activeChart, accountNumber)) issues.push({ code: 'UNKNOWN_ACCOUNT', message: `Konto ${accountNumber} fehlt im ${policy.activeChart}.`, blocking: true });
-    lines.push({ accountNumber, debitAmount: line.netAmount, creditAmount: 0, taxCaseKey: line.taxAmount > 0 ? (invoice.taxCaseKey ?? taxCaseForRate(line.taxRate)) : undefined, netAmount: line.taxAmount > 0 ? line.netAmount : undefined, taxRate: line.taxAmount > 0 ? line.taxRate : undefined, taxAmount: line.taxAmount > 0 ? line.taxAmount : undefined, grossAmount: line.taxAmount > 0 ? line.grossAmount : undefined, memo: line.description });
+    const taxCaseKey = line.taxAmount > 0 ? (invoice.taxCaseKey ?? taxCaseForRate(line.taxRate)) : undefined;
+    lines.push({ accountNumber, debitAmount: line.netAmount, creditAmount: 0, taxCaseKey, netAmount: line.taxAmount > 0 ? line.netAmount : undefined, taxRate: line.taxAmount > 0 ? line.taxRate : undefined, taxAmount: line.taxAmount > 0 ? line.taxAmount : undefined, grossAmount: line.taxAmount > 0 ? line.grossAmount : undefined, memo: line.description });
+    if (taxCaseKey) inputVatByCase.set(taxCaseKey, amount((inputVatByCase.get(taxCaseKey) ?? 0) + line.taxAmount));
   }
   if (invoice.taxAmount > 0) {
-    issues.push(...validateMapping(db, policy.activeChart, mappings, ['input_vat']));
-    lines.push({ accountNumber: mappings.input_vat, debitAmount: invoice.taxAmount, creditAmount: 0 });
+    if (!inputVatByCase.size) inputVatByCase.set(invoice.taxCaseKey ?? taxCaseForRate(invoice.taxRate), invoice.taxAmount);
+    for (const [taxCaseKey, taxAmount] of inputVatByCase) {
+      const inputAccount = resolveTaxAccountsForCase(db, policy.activeChart, taxCaseKey).inputTaxAccount ?? mappings.input_vat;
+      if (!accountExists(db, policy.activeChart, inputAccount)) issues.push({ code: 'UNKNOWN_ACCOUNT', message: `Konto ${inputAccount} fehlt im ${policy.activeChart}.`, blocking: true });
+      lines.push({ accountNumber: inputAccount, debitAmount: taxAmount, creditAmount: 0, memo: `Vorsteuer ${taxCaseKey}` });
+    }
   }
   lines.push({ accountNumber: mappings.accounts_payable, debitAmount: 0, creditAmount: invoice.grossAmount, memo: `Kreditor ${invoice.number}` });
   const snapshot: AccountingSnapshot = { sourceType: 'incoming_invoice', sourceId: invoiceId, sourceVersion: incomingSourceVersion(invoice), chart: policy.activeChart, vatMethod: policy.vatMethod, netAmount: invoice.netAmount, taxAmount: invoice.taxAmount, grossAmount: invoice.grossAmount, lines, capturedAt: now() };
@@ -667,11 +687,13 @@ export const reverseDocumentAccounting = (db: Database.Database, scope: TenantSc
     if (!row || row.accounting_status !== 'posted' || !row.accounting_journal_entry_id) throw new Error('DOCUMENT_NOT_POSTED');
     const item = db.prepare('SELECT id FROM open_items WHERE tenant_id = ? AND source_type = ? AND source_id = ?').get(tenantId, input.documentType, input.documentId) as { id: string } | undefined;
     if (item && Number((db.prepare('SELECT COUNT(*) AS c FROM open_item_allocations WHERE tenant_id = ? AND open_item_id = ?').get(tenantId, item.id) as { c: number }).c) > 0) throw new Error('DOCUMENT_HAS_ALLOCATIONS');
-    const reversal = reverseJournalEntry(db, row.accounting_journal_entry_id, input.reason, scope, { postingDate: input.postingDate, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason ?? input.reason });
+    const reversal = reverseJournalEntry(db, row.accounting_journal_entry_id, input.reason, scope, { postingDate: input.postingDate, softLockOverride: input.softLockOverride, overrideReason: input.softLockOverride ? input.overrideReason : undefined });
     if (item) db.prepare("UPDATE open_items SET status = 'unresolved', residual_amount = 0, updated_at = ? WHERE tenant_id = ? AND id = ?").run(now(), tenantId, item.id);
     if (table === 'invoices') db.prepare("UPDATE invoices SET accounting_status = 'reversed', status = 'cancelled' WHERE id = ?").run(input.documentId);
     else db.prepare("UPDATE incoming_invoices SET accounting_status = 'reversed', status = 'cancelled' WHERE tenant_id = ? AND id = ?").run(tenantId, input.documentId);
-    appendAuditLog(db, { entityType: input.documentType, entityId: input.documentId, action: 'accounting_reverse', reason: input.reason, before: { accountingStatus: 'posted' }, after: reversal, actor: 'pro' });
+    const overrideReason = input.overrideReason?.trim();
+    const auditReason = overrideReason ? `${input.reason.trim()} (soft-lock override: ${overrideReason})` : input.reason.trim();
+    appendAuditLog(db, { entityType: input.documentType, entityId: input.documentId, action: 'accounting_reverse', reason: auditReason, before: { accountingStatus: 'posted' }, after: { ...reversal, reversalReason: input.reason.trim(), softLockOverrideReason: overrideReason || undefined }, actor: 'pro' });
     return reversal;
   })();
 };

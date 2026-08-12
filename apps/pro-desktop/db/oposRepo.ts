@@ -302,19 +302,23 @@ export const previewOutgoingInvoice = (db: Database.Database, scope: TenantScope
   const issues = validateMapping(db, policy.activeChart, mappings, ['accounts_receivable', 'revenue']);
   const tax = deriveTaxSnapshot(db, row, invoiceLines(db, invoiceId), policy.activeChart, policy.vatMethod);
   issues.push(...tax.issues);
+  // Resolve tenant-configured ledger accounts before validating the derived
+  // default snapshot. This keeps custom deferred VAT mappings valid even when
+  // the chart intentionally does not contain the built-in 1780/3810 account.
+  if (tax.snapshot) {
+    for (const [index, line] of tax.snapshot.lines.entries()) {
+      if (index === 0) line.accountNumber = mappings.accounts_receivable;
+      else if (line.memo?.startsWith('USt ') && line.netAmount === undefined && line.taxAmount === undefined) {
+        const taxCaseKey = line.memo.slice('USt '.length);
+        line.accountNumber = policy.vatMethod === 'ist'
+          ? mappings.output_vat_deferred
+          : resolveTaxAccountsForCase(db, policy.activeChart, taxCaseKey).outputTaxAccount ?? mappings.output_vat;
+      } else line.accountNumber = mappings.revenue;
+    }
+  }
   if (tax.snapshot?.taxAmount) issues.push(...validateMapping(db, policy.activeChart, mappings, [policy.vatMethod === 'ist' ? 'output_vat_deferred' : 'output_vat']));
   if (tax.snapshot) for (const line of tax.snapshot.lines) if (!accountExists(db, policy.activeChart, line.accountNumber)) issues.push({ code: 'UNKNOWN_ACCOUNT', message: `Konto ${line.accountNumber} fehlt im ${policy.activeChart}.`, blocking: true });
   if (issues.length || !tax.snapshot) return { sourceType: 'outgoing_invoice', sourceId: invoiceId, status: 'unresolved', issues };
-  // Respect tenant overrides after deriving the snapshot.
-  for (const [index, line] of tax.snapshot.lines.entries()) {
-    if (index === 0) line.accountNumber = mappings.accounts_receivable;
-    else if (line.memo?.startsWith('USt ') && line.netAmount === undefined && line.taxAmount === undefined) {
-      const taxCaseKey = line.memo.slice('USt '.length);
-      line.accountNumber = policy.vatMethod === 'ist'
-        ? mappings.output_vat_deferred
-        : resolveTaxAccountsForCase(db, policy.activeChart, taxCaseKey).outputTaxAccount ?? mappings.output_vat;
-    } else line.accountNumber = mappings.revenue;
-  }
   return { sourceType: 'outgoing_invoice', sourceId: invoiceId, status: 'ready', snapshot: tax.snapshot, issues: [] };
 };
 

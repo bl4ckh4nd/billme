@@ -9,10 +9,12 @@ import {
   listOpenItems,
   postIncomingInvoice,
   postOutgoingInvoice,
+  previewOutgoingInvoice,
   previewAccountingBackfill,
   confirmAccountingBackfill,
   reverseDocumentAccounting,
   setAccountingPolicyForPro,
+  upsertAccountingAccountMapping,
   upsertIncomingInvoice,
   upsertVendor,
 } from './oposRepo';
@@ -160,6 +162,22 @@ describe('OPOS accounting', () => {
     expect(complete.amount).toBe(19);
     expect(db.prepare("SELECT COUNT(*) AS c FROM journal_entries WHERE source_type = 'payment_vat'").get()).toEqual({ c: 2 });
     expect(getVatSummary(db, {}, scope).rows[0]).toMatchObject({ taxCaseKey: 'DE_STD_19', netAmount: 100, taxAmount: 19, grossAmount: 119 });
+    db.close();
+  });
+
+  it('uses a custom deferred VAT account when the chart omits the built-in account', () => {
+    const db = createDb();
+    db.prepare("INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at) VALUES ('skr03-vat-def-custom', 'SKR03', '1790', 'USt nicht fällig custom', 'test', datetime('now'), datetime('now'))").run();
+    setAccountingPolicyForPro(db, scope, { activeChart: 'SKR03', vatMethod: 'ist' });
+    upsertAccountingAccountMapping(db, scope, { chart: 'SKR03', role: 'output_vat_deferred', accountNumber: '1790' });
+    db.prepare(`INSERT INTO invoices (id, client_id, number, client, client_email, date, due_date, amount, status, tax_snapshot_json, created_at, updated_at) VALUES ('inv-ist-custom', 'client-ist-custom', 'RE-IST-CUSTOM', 'Acme', '', '2026-08-01', '2026-08-31', 119, 'open', ?, datetime('now'), datetime('now'))`).run(JSON.stringify({ netAmount: 100, vatAmount: 19, grossAmount: 119 }));
+    db.prepare("INSERT INTO invoice_items (invoice_id, position, description, quantity, price, total, tax_rate) VALUES ('inv-ist-custom', 0, 'Service', 1, 119, 119, 19)").run();
+    expect(previewOutgoingInvoice(db, scope, 'inv-ist-custom').snapshot?.lines.map((line) => line.accountNumber)).toEqual(['1400', '8400', '1790']);
+    postOutgoingInvoice(db, scope, 'inv-ist-custom');
+    const item = listOpenItems(db, scope)[0]!;
+    allocateOpenItemPayment(db, scope, { sourceType: 'manual', sourceId: 'custom-ist-payment', partyType: 'debtor', partyId: 'client-ist-custom', paymentDate: '2026-08-15', amount: 119, bankAccountNumber: '1200', allocations: [{ openItemId: item.id, amount: 119 }] });
+    expect(db.prepare("SELECT account_number FROM journal_lines WHERE entry_id = (SELECT accounting_journal_entry_id FROM invoices WHERE id = 'inv-ist-custom') ORDER BY line_no").all()).toEqual([{ account_number: '1400' }, { account_number: '8400' }, { account_number: '1790' }]);
+    expect(db.prepare("SELECT DISTINCT account_number FROM journal_lines WHERE entry_id IN (SELECT id FROM journal_entries WHERE source_type = 'payment_vat')").all()).toEqual(expect.arrayContaining([{ account_number: '1776' }, { account_number: '1790' }]));
     db.close();
   });
 

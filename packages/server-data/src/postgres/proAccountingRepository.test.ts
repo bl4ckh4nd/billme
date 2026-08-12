@@ -161,6 +161,67 @@ test('BWA01 uses explicit mapped positions, catalog order, and blocking unmapped
   assert.equal(report.mappingHealth.blocking, true);
 });
 
+test('report mappings use the latest effective override for the report date', async () => {
+  const dates: string[] = [];
+  const db = {
+    query: async (text: string, values?: unknown[]) => {
+      if (typeof text !== 'string') return { rows: [] };
+      if (text.includes('accounting_policies')) return { rows: [{ active_chart: 'SKR03', vat_method: 'soll' }] };
+      if (text.includes('server_settings')) return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', fiscalYearStart: '01-01', hgbSizeClass: 'small', chart: 'SKR03', vatMethod: 'soll' } }) }] };
+      if (text.includes('journal_lines')) return { rows: [{ account_number: '8400', opening_balance: '0', debit_turnover: '0', credit_turnover: '100' }] };
+      if (text.includes('report_account_mappings')) {
+        const date = String(values?.[2] ?? '');
+        dates.push(date);
+        return { rows: [{ account_number: '8400', report_type: 'hgb-guv', position_key: date === '2025-12-31' ? 'revenue' : 'material.services', position_label: date === '2025-12-31' ? 'Umsatz' : 'Material' }] };
+      }
+      throw new Error(`unexpected query: ${text}`);
+    },
+  } as unknown as PostgresQueryable;
+  const repository = createPostgresProAccountingRepository(db);
+  const scope = createSingleTenantScope('mapping-effective-date-test', 'pro');
+  const prior = await repository.getGuvReport(scope, { profile: 'hgb-guv', from: '2025-01-01', to: '2025-12-31' });
+  const current = await repository.getGuvReport(scope, { profile: 'hgb-guv', to: '2026-03-31' });
+
+  assert.equal(prior.rows.find((row) => row.position === 'revenue')?.amount, 100);
+  assert.equal(current.rows.find((row) => row.position === 'material.services')?.amount, 100);
+  assert.deepEqual(dates, ['2025-12-31', '2026-03-31']);
+});
+
+test('mapping overrides persist valid_from and replay same-date updates', async () => {
+  const inserts: unknown[][] = [];
+  let persisted: { id: string; version: number; positionKey: string; sourceHash: string } | undefined;
+  const db = {
+    query: async (text: string, values?: unknown[]) => {
+      if (typeof text !== 'string') return { rows: [] };
+      if (text.includes('accounting_policies')) return { rows: [{ active_chart: 'SKR03', vat_method: 'soll' }] };
+      if (text.includes('server_settings')) return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', fiscalYearStart: '01-01', hgbSizeClass: 'small', chart: 'SKR03', vatMethod: 'soll' } }) }] };
+      if (text.includes('SELECT id,version FROM report_account_mappings')) return { rows: persisted ? [{ id: persisted.id, version: persisted.version }] : [] };
+      if (text.includes('SELECT COALESCE(MAX(version)')) return { rows: [{ version: persisted ? persisted.version + 1 : 1 }] };
+      if (text.includes('INSERT INTO report_account_mappings')) {
+        const row = values ?? [];
+        inserts.push(row);
+        persisted = { id: String(row[0]), version: Number(row[8]), positionKey: String(row[5]), sourceHash: String(row[9]) };
+        return { rows: [] };
+      }
+      if (text.includes('SELECT id,tenant_id,report_type,chart,account_number,position_key')) {
+        return { rows: persisted ? [{ id: persisted.id, tenant_id: 'mapping-override-test', report_type: 'hgb-guv', chart: 'SKR03', account_number: '8400', position_key: persisted.positionKey, position_label: 'Umsatz', valid_from: '2026-03-31', valid_to: null, version: persisted.version, source: 'tenant_override', source_hash: persisted.sourceHash, created_by: null, created_at: '2026-03-31T00:00:00.000Z' }] : [] };
+      }
+      return { rows: [] };
+    },
+  } as unknown as PostgresQueryable;
+  const repository = createPostgresProAccountingRepository(db);
+  const scope = createSingleTenantScope('mapping-override-test', 'pro');
+  const input = { chart: 'SKR03' as const, asOfDate: '2026-03-31', accountNumber: '8400', statementType: 'hgb-guv' as const, positionKey: 'revenue', positionLabel: 'Umsatz', mutation: { reason: 'Kontenplan geprüft' } };
+  const first = await repository.upsertAccountMappingOverride(scope, input) as { validFrom?: string; sourceHash?: string };
+  const second = await repository.upsertAccountMappingOverride(scope, { ...input, positionKey: 'material.services', positionLabel: 'Material' }) as { validFrom?: string; sourceHash?: string };
+
+  assert.equal(inserts.length, 2);
+  assert.equal(inserts[0]?.[7], '2026-03-31');
+  assert.equal(inserts[1]?.[0], inserts[0]?.[0]);
+  assert.equal(second.validFrom, '2026-03-31');
+  assert.notEqual(second.sourceHash, first.sourceHash);
+});
+
 test('server HGB balance report splits balance snapshots at the fiscal-year start', async () => {
   const calls: Array<{ text: string; values: unknown[] }> = [];
   const tenantId = 'hgb-balance-split-test';

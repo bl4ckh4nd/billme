@@ -607,11 +607,12 @@ CREATE TABLE IF NOT EXISTS account_mappings_hgb (
   position_key TEXT NOT NULL,
   position_label TEXT NOT NULL,
   balance_side TEXT CHECK (balance_side IN ('asset', 'liability')),
+  valid_from TEXT,
   updated_at TEXT NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_account_mappings_unique
-  ON account_mappings_hgb(tenant_id, chart, account_number, statement_type);
+  ON account_mappings_hgb(tenant_id, chart, account_number, statement_type, valid_from);
 
 CREATE TABLE IF NOT EXISTS report_snapshots (
   id TEXT PRIMARY KEY,

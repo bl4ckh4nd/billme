@@ -93,8 +93,7 @@ const repairDuplicateJournalSourceDrafts = (db: Database.Database): number => {
 /** Expand legacy HGB mappings to the explicit report catalog namespaces. */
 const ensureReportMappingStatementSchema = (db: Database.Database): void => {
   const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'account_mappings_hgb'").get() as { sql?: string } | undefined;
-  if (!table?.sql || table.sql.includes("'bwa01'")) return;
-  db.exec(`
+  if (table?.sql && !table.sql.includes("'bwa01'")) db.exec(`
     BEGIN;
     DROP INDEX IF EXISTS idx_account_mappings_unique;
     ALTER TABLE account_mappings_hgb RENAME TO account_mappings_hgb_legacy;
@@ -107,15 +106,24 @@ const ensureReportMappingStatementSchema = (db: Database.Database): void => {
       position_key TEXT NOT NULL,
       position_label TEXT NOT NULL,
       balance_side TEXT CHECK (balance_side IN ('asset', 'liability')),
+      valid_from TEXT,
       updated_at TEXT NOT NULL
     );
-    INSERT INTO account_mappings_hgb (id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at)
-      SELECT id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at
+    INSERT INTO account_mappings_hgb (id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, valid_from, updated_at)
+      SELECT id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, NULL, updated_at
       FROM account_mappings_hgb_legacy;
     DROP TABLE account_mappings_hgb_legacy;
     CREATE UNIQUE INDEX idx_account_mappings_unique
-      ON account_mappings_hgb(tenant_id, chart, account_number, statement_type);
+      ON account_mappings_hgb(tenant_id, chart, account_number, statement_type, valid_from);
     COMMIT;
+  `);
+  if (!table?.sql) return;
+
+  tryAddColumn(db, 'account_mappings_hgb', 'valid_from', 'TEXT');
+  db.exec(`
+    DROP INDEX IF EXISTS idx_account_mappings_unique;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_account_mappings_unique
+      ON account_mappings_hgb(tenant_id, chart, account_number, statement_type, valid_from);
   `);
 };
 
@@ -582,11 +590,12 @@ export const runMigrations = (db: Database.Database): void => {
       position_key TEXT NOT NULL,
       position_label TEXT NOT NULL,
       balance_side TEXT CHECK (balance_side IN ('asset', 'liability')),
+      valid_from TEXT,
       updated_at TEXT NOT NULL
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_account_mappings_unique
-      ON account_mappings_hgb(tenant_id, chart, account_number, statement_type);
+      ON account_mappings_hgb(tenant_id, chart, account_number, statement_type, valid_from);
 
     CREATE TABLE IF NOT EXISTS report_snapshots (
       id TEXT PRIMARY KEY,

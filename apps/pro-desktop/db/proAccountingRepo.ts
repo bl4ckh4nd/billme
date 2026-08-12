@@ -1790,6 +1790,8 @@ type HgbMappingRow = {
   position_key: string;
   position_label: string;
   balance_side: 'asset' | 'liability' | null;
+  valid_from: string | null;
+  updated_at: string;
 };
 
 const centsForReport = (value: unknown): number => Math.round(Number(value || 0) * 100);
@@ -1821,18 +1823,35 @@ const loadHgbMappings = (
   db: Database.Database,
   tenantId: string,
   chart: 'SKR03' | 'SKR04',
+  asOfDate?: string,
 ): HgbMappingRow[] => {
   const conditions = [
     eq(schema.accountMappingsHgb.tenantId, tenantId),
     eq(schema.accountMappingsHgb.chart, chart),
   ];
-  return createDrizzle(db).select({
+  const rows = createDrizzle(db).select({
     account_number: schema.accountMappingsHgb.accountNumber,
     statement_type: schema.accountMappingsHgb.statementType,
     position_key: schema.accountMappingsHgb.positionKey,
     position_label: schema.accountMappingsHgb.positionLabel,
     balance_side: schema.accountMappingsHgb.balanceSide,
+    valid_from: schema.accountMappingsHgb.validFrom,
+    updated_at: schema.accountMappingsHgb.updatedAt,
   }).from(schema.accountMappingsHgb).where(and(...conditions)).all() as HgbMappingRow[];
+  const selected = new Map<string, HgbMappingRow>();
+  for (const row of rows) {
+    if (asOfDate && row.valid_from && row.valid_from > asOfDate) continue;
+    const key = `${row.account_number}:${row.statement_type}`;
+    const current = selected.get(key);
+    if (!current) {
+      selected.set(key, row);
+      continue;
+    }
+    const rowDate = row.valid_from ?? '';
+    const currentDate = current.valid_from ?? '';
+    if (rowDate > currentDate || (rowDate === currentDate && row.updated_at > current.updated_at)) selected.set(key, row);
+  }
+  return [...selected.values()];
 };
 
 const aggregateUnmapped = (
@@ -1903,7 +1922,7 @@ export const getSusaReport = (
   // SuSa is a ledger-level account list, not a categorized report. Category
   // mappings belong to GuV/Bilanz/BWA and must never hide or block accounts in
   // this statement.
-  const mappings = loadHgbMappings(db, tenantId, chart);
+  const mappings = loadHgbMappings(db, tenantId, chart, upperDate);
   const mappingByAccount = new Map(mappings.map((mapping) => [mapping.account_number, mapping]));
   const totals = rows.reduce(
     (acc, row) => {
@@ -1953,7 +1972,7 @@ export const getGuvReport = (
   const tenantId = getTenantId(scope);
   const chart = getAccountingPolicy(db, tenantId).activeChart;
   const sourceRows = loadReportJournalLines(db, tenantId, args);
-  const mappings = loadHgbMappings(db, tenantId, chart);
+  const mappings = loadHgbMappings(db, tenantId, chart, args.to);
   const guvMappings = new Map(mappings.filter((mapping) => mapping.statement_type === 'guv').map((mapping) => [mapping.account_number, mapping]));
   const knownAccounts = new Set(mappings.map((mapping) => mapping.account_number));
   const unmappedAccounts = aggregateUnmapped(sourceRows, knownAccounts, (row) => centsForReport(row.credit_amount) - centsForReport(row.debit_amount));
@@ -2002,7 +2021,7 @@ export const getBilanzReport = (
   const chart = getAccountingPolicy(db, tenantId).activeChart;
   const upperDate = args.to ?? args.asOfDate;
   const sourceRows = loadReportJournalLines(db, tenantId, upperDate ? { to: upperDate } : {});
-  const mappings = loadHgbMappings(db, tenantId, chart);
+  const mappings = loadHgbMappings(db, tenantId, chart, upperDate);
   const balanceMappings = new Map(mappings.filter((mapping) => mapping.statement_type === 'bilanz').map((mapping) => [mapping.account_number, mapping]));
   const knownAccounts = new Set(mappings.map((mapping) => mapping.account_number));
   const unmappedAccounts = aggregateUnmapped(sourceRows, knownAccounts, (row) => centsForReport(row.debit_amount) - centsForReport(row.credit_amount));
@@ -2090,7 +2109,8 @@ export const getReportingReport = async (
   const reportSpecificStatements: ReportingStatement[] = [
     'bwa01', 'management-guv', 'hgb-guv', 'hgb-gkv', 'hgb-bilanz', 'hgb-balance', 'eur',
   ];
-  const mappings = loadHgbMappings(db, tenantId, policy.activeChart)
+  const reportTo = args.to ?? args.asOfDate ?? (kind === 'hgb-bilanz' ? undefined : new Date().toISOString().slice(0, 10));
+  const mappings = loadHgbMappings(db, tenantId, policy.activeChart, reportTo)
     // Generic guv/bilanz rows predate the licensed report catalogs. Excluding
     // them makes legacy-only accounts visible as blocking until overridden.
     .filter((mapping) => reportSpecificStatements.includes(mapping.statement_type as ReportingStatement))
@@ -2101,7 +2121,6 @@ export const getReportingReport = async (
       label: mapping.position_label,
       ...(mapping.balance_side ? { side: mapping.balance_side } : {}),
     }));
-  const reportTo = args.to ?? args.asOfDate ?? (kind === 'hgb-bilanz' ? undefined : new Date().toISOString().slice(0, 10));
   const balances = getLedgerBalances(db, { from: ledgerFrom, to: reportTo }, scope);
   return calculateReport({
     kind: args.kind,
@@ -2380,7 +2399,7 @@ export const getReportMappingHealth = (
   const requestedStatement = args.statement ?? 'management-guv';
   const requested = canonicalStatement(requestedStatement) ?? requestedStatement;
   const mappingsByAccount = new Map<string, Set<ReportingStatement>>();
-  for (const mapping of loadHgbMappings(db, tenantId, chart)) {
+  for (const mapping of loadHgbMappings(db, tenantId, chart, args.asOfDate)) {
     const statement = canonicalStatement(mapping.statement_type);
     if (!statement) continue;
     const accountMappings = mappingsByAccount.get(mapping.account_number) ?? new Set<ReportingStatement>();
@@ -2438,7 +2457,7 @@ export const upsertReportMappingOverride = (
   const reason = input.reason?.trim();
   if (!reason) throw new Error('REPORT_MAPPING_REASON_REQUIRED');
   const definition = {
-    id: `report-override:${tenantId}:${input.chart}:${accountNumber}:${input.statement}`,
+    id: `report-override:${tenantId}:${input.chart}:${accountNumber}:${input.statement}:${input.asOfDate}`,
     tenantId,
     chart: input.chart,
     accountNumber,
@@ -2446,16 +2465,18 @@ export const upsertReportMappingOverride = (
     positionKey: position,
     positionLabel: input.label?.trim() || position,
     balanceSide: input.side ?? null,
+    validFrom: input.asOfDate,
     updatedAt: new Date().toISOString(),
   } as const;
   db.transaction(() => {
     createDrizzle(db).insert(schema.accountMappingsHgb).values(definition)
       .onConflictDoUpdate({
-        target: [schema.accountMappingsHgb.tenantId, schema.accountMappingsHgb.chart, schema.accountMappingsHgb.accountNumber, schema.accountMappingsHgb.statementType],
+        target: [schema.accountMappingsHgb.tenantId, schema.accountMappingsHgb.chart, schema.accountMappingsHgb.accountNumber, schema.accountMappingsHgb.statementType, schema.accountMappingsHgb.validFrom],
         set: {
           positionKey: definition.positionKey,
           positionLabel: definition.positionLabel,
           balanceSide: definition.balanceSide,
+          validFrom: definition.validFrom,
           updatedAt: definition.updatedAt,
         },
       }).run();

@@ -697,6 +697,7 @@ export const accountMappingsHgb = sqliteTable(
     positionKey: text('position_key').notNull(),
     positionLabel: text('position_label').notNull(),
     balanceSide: text('balance_side'),
+    validFrom: text('valid_from'),
     updatedAt: text('updated_at').notNull(),
   },
   (t) => ({
@@ -705,6 +706,7 @@ export const accountMappingsHgb = sqliteTable(
       t.chart,
       t.accountNumber,
       t.statementType,
+      t.validFrom,
     ),
   }),
 );

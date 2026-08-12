@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { MOCK_SETTINGS } from '@billme/desktop-services/mockData';
-import type { HgbBilanzReport, ReportResult } from '@billme/accounting-shared';
+import type { HgbBilanzReport, HgbGuvReport, ReportResult } from '@billme/accounting-shared';
 import { bootstrapSql } from './bootstrap';
 import {
   fiscalYearForPostingDate,
@@ -158,6 +158,40 @@ describe('Pro reporting repository invariants', () => {
     expect(getReportMappingHealth(db, createProTenantScope('default'), { statement: 'hgb-guv' }).unmappedAccounts).toEqual(['9999']);
     expect(getReportMappingHealth(db, createProTenantScope('default'), { statement: 'hgb-bilanz' }).unmappedAccounts).toEqual(['9999']);
     expect(getReportMappingHealth(db, createProTenantScope('default'), { statement: 'management-guv' }).unmappedAccounts).toEqual(['8400', '9999']);
+  });
+
+  it('applies report mapping overrides only from their effective date', async () => {
+    const db = createDb();
+    insertGmbhSettings(db);
+    db.exec(`
+      INSERT INTO journal_entries (id, tenant_id, entry_number, posting_date, document_date, booking_text, period, fiscal_year, status, created_at)
+      VALUES ('mapping-year-entry', 'default', 1, '2025-12-31', '2025-12-31', 'Mapping year', '2025-12', 2025, 'posted', '2025-12-31T00:00:00.000Z');
+      INSERT INTO journal_lines (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount)
+      VALUES ('mapping-year-line', 'default', 'mapping-year-entry', 1, '8400', 0, 100);
+    `);
+    const scope = createProTenantScope('default');
+    upsertReportMappingOverride(db, {
+      chart: 'SKR03', asOfDate: '2025-01-01', accountNumber: '8400', statement: 'hgb-guv', position: 'revenue', reason: '2025 mapping',
+    }, scope);
+    upsertReportMappingOverride(db, {
+      chart: 'SKR03', asOfDate: '2026-03-31', accountNumber: '8400', statement: 'hgb-guv', position: 'material.services', reason: '2026 mapping',
+    }, scope);
+
+    expect(db.prepare(`SELECT valid_from FROM account_mappings_hgb WHERE account_number = '8400' AND statement_type = 'hgb-guv' ORDER BY valid_from`).all()).toEqual([
+      { valid_from: '2025-01-01' },
+      { valid_from: '2026-03-31' },
+    ]);
+    const prior = await getReportingReport(db, { kind: 'hgb-guv', from: '2025-01-01', to: '2025-12-31' }, scope) as ReportResult<HgbGuvReport>;
+    const current = await getReportingReport(db, { kind: 'hgb-guv', to: '2026-03-31' }, scope) as ReportResult<HgbGuvReport>;
+    expect(prior.rows.find((row) => row.position === 'revenue')?.amount).toBe(100);
+    expect(prior.rows.find((row) => row.position === 'material.services')?.amount).toBe(0);
+    expect(current.rows.find((row) => row.position === 'material.services')?.amount).toBe(100);
+    expect(current.rows.find((row) => row.position === 'revenue')?.amount).toBe(0);
+
+    upsertReportMappingOverride(db, {
+      chart: 'SKR03', asOfDate: '2026-03-31', accountNumber: '8400', statement: 'hgb-guv', position: 'revenue', reason: '2026 retry',
+    }, scope);
+    expect(db.prepare(`SELECT COUNT(*) AS count, MAX(position_key) AS position_key FROM account_mappings_hgb WHERE account_number = '8400' AND statement_type = 'hgb-guv' AND valid_from = '2026-03-31'`).get()).toEqual({ count: 1, position_key: 'revenue' });
   });
 
   it('resolves double-entry fiscal years from the canonical settings profile at the boundary', () => {

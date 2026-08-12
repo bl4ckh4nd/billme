@@ -52,11 +52,11 @@ interface ReportsViewProps {
   dataAdapter?: ProAccountingDataAdapter;
   onOpenTransaction?: (transactionId: string) => void;
   onOpenInvoice?: (invoiceId: string) => void;
-  onOpenReceipt?: (transactionId: string) => void;
+  onOpenIncomingInvoice?: (invoiceId: string) => void;
   onOpenJournalEntry?: (journalEntryId: string) => void;
 }
 
-export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenInvoice, onOpenReceipt, onOpenJournalEntry }: ReportsViewProps) {
+export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
   const [activeTab, setActiveTab] = useState<'susa' | 'guv' | 'bilanz'>('susa');
   const [filters, setFilters] = useState<ReportFilterState>(() => buildDefaultFilters());
   const [susaReport, setSusaReport] = useState<SusaReport | null>(null);
@@ -238,7 +238,7 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenInvo
                   onClose={() => setDrilldownSelection(null)}
                   onOpenTransaction={onOpenTransaction}
                   onOpenInvoice={onOpenInvoice}
-                  onOpenReceipt={onOpenReceipt}
+                  onOpenIncomingInvoice={onOpenIncomingInvoice}
                   onOpenJournalEntry={onOpenJournalEntry}
                 />
               ) : (

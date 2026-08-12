@@ -12,7 +12,7 @@ interface ReportDrilldownPanelProps {
   onClose: () => void;
   onOpenTransaction?: (transactionId: string) => void;
   onOpenInvoice?: (invoiceId: string) => void;
-  onOpenReceipt?: (receiptId: string) => void;
+  onOpenIncomingInvoice?: (invoiceId: string) => void;
   onOpenJournalEntry?: (journalEntryId: string) => void;
 }
 
@@ -23,7 +23,7 @@ export default function ReportDrilldownPanel({
   onClose,
   onOpenTransaction,
   onOpenInvoice,
-  onOpenReceipt,
+  onOpenIncomingInvoice,
   onOpenJournalEntry,
 }: ReportDrilldownPanelProps) {
   if (!selection) return null;
@@ -79,7 +79,7 @@ export default function ReportDrilldownPanel({
                 </div>
                 {((entry.sourceType === 'bank_transaction' && onOpenTransaction) ||
                   (entry.sourceType === 'invoice' && onOpenInvoice) ||
-                  (entry.sourceType === 'receipt' && onOpenReceipt) ||
+                  (entry.sourceType === 'incoming_invoice' && onOpenIncomingInvoice) ||
                   ((entry.sourceType === 'payment' || entry.sourceType === 'journal_entry') && onOpenJournalEntry)) ? (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {entry.sourceType === 'bank_transaction' && onOpenTransaction ? (
@@ -98,12 +98,12 @@ export default function ReportDrilldownPanel({
                         Rechnung öffnen
                       </button>
                     ) : null}
-                    {entry.sourceType === 'receipt' && onOpenReceipt ? (
+                    {entry.sourceType === 'incoming_invoice' && onOpenIncomingInvoice ? (
                       <button
-                        onClick={() => onOpenReceipt(entry.sourceId)}
+                        onClick={() => onOpenIncomingInvoice(entry.sourceId)}
                         className="h-8 px-2.5 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
                       >
-                        Beleg öffnen
+                        Eingangsrechnung öffnen
                       </button>
                     ) : null}
                     {(entry.sourceType === 'payment' || entry.sourceType === 'journal_entry') && onOpenJournalEntry ? (

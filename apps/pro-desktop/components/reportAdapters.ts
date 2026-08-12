@@ -151,7 +151,7 @@ const reportSourceFromEntry = (
     return { sourceType: 'invoice', sourceId: key.slice('outgoing-invoice:'.length) };
   }
   if (entry.sourceType === 'incoming_invoice' && key?.startsWith('incoming-invoice:') && key.length > 'incoming-invoice:'.length) {
-    return { sourceType: 'receipt', sourceId: key.slice('incoming-invoice:'.length) };
+    return { sourceType: 'incoming_invoice', sourceId: key.slice('incoming-invoice:'.length) };
   }
   if (entry.sourceType === 'payment') {
     const match = key?.match(/^payment:([^:]+):(.+)$/);

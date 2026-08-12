@@ -154,7 +154,7 @@ describe('reportAdapters', () => {
       reportType: 'susa', targetId: '1200', targetLabel: 'Bank', accountNumbers: ['1200', '4900', '8400', '1776'],
     }, { from: '2026-03-02', to: '2026-03-04' });
     expect(result.map((entry) => entry.source)).toEqual(['Inbox', 'Abgleich', 'Abgleich']);
-    expect(result.map((entry) => entry.sourceType)).toEqual(['receipt', 'invoice', 'payment']);
+    expect(result.map((entry) => entry.sourceType)).toEqual(['incoming_invoice', 'invoice', 'payment']);
     expect(result.map((entry) => entry.sourceId)).toEqual(['invoice-7', 'invoice-8', 'payment-9']);
     expect(result.map((entry) => entry.journalEntryId)).toEqual(['incoming-entry', 'outgoing-entry', 'payment-vat-entry']);
     expect(result.every((entry) => entry.transactionId === undefined)).toBe(true);

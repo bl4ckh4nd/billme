@@ -42,6 +42,19 @@ describe('ReportDrilldownPanel', () => {
     expect(screen.queryByRole('button', { name: /öffnen/i })).toBeNull();
   });
 
+  it('does not route incoming invoices to the bank inbox when no invoice UI exists', () => {
+    render(
+      <ReportDrilldownPanel
+        selection={selection}
+        entries={[entry('incoming_invoice', 'incoming-42')]}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('drilldown-source-incoming_invoice-incoming-42')).toHaveTextContent('incoming_invoice · incoming-42');
+    expect(screen.queryByRole('button', { name: /Transaktion öffnen|Beleg öffnen|Eingangsrechnung öffnen/i })).toBeNull();
+  });
+
   it('routes only a bank source to the transaction handler', async () => {
     const onOpenTransaction = vi.fn();
     const user = userEvent.setup();

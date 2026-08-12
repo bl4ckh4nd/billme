@@ -72,13 +72,6 @@ export default function App({ seed, dataAdapter, onPersistEntry }: ProAccounting
     setCurrentView('editor');
   };
 
-  const handleOpenInboxTransaction = (transactionId: string) => {
-    setSelectedTransactionId(null);
-    setInboxPreviewTransactionId(transactionId);
-    setCurrentView('inbox');
-    refresh();
-  };
-
   const handleBackToInbox = () => {
     setCurrentView('inbox');
     setSelectedTransactionId(null);
@@ -162,7 +155,6 @@ export default function App({ seed, dataAdapter, onPersistEntry }: ProAccounting
             <ReportsView
               dataAdapter={dataAdapter}
               onOpenTransaction={handleOpenTransaction}
-              onOpenReceipt={handleOpenInboxTransaction}
             />
           ) : (
             <AssetManagementView dataAdapter={dataAdapter} />

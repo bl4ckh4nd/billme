@@ -106,7 +106,7 @@ export interface ReportDrilldownSelection {
   to?: string;
 }
 
-export type ReportDrilldownSourceType = 'bank_transaction' | 'invoice' | 'receipt' | 'payment' | 'journal_entry';
+export type ReportDrilldownSourceType = 'bank_transaction' | 'invoice' | 'incoming_invoice' | 'receipt' | 'payment' | 'journal_entry';
 
 export interface ReportDrilldownSource {
   sourceType: ReportDrilldownSourceType;

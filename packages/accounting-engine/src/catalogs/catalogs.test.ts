@@ -4,17 +4,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getPublicReportCatalogs, getPublicReportCatalogsIncludingUnverified, PUBLIC_BWA01_MICRO_2024 } from './publicReportCatalogs';
+import { getPublicReportCatalogs, getPublicReportCatalogsIncludingUnverified, PUBLIC_BWA01_MICRO_2021 } from './publicReportCatalogs';
 import { loadPrivateDatevArtifact } from './datevArtifact';
 import { getEurAnnexCatalog, validateEurAnnexCatalog } from '../../../desktop-services/src/eur/annexCatalog';
 import { assertEurElsterReady, EUR_CATALOG_MANIFEST_2025, getCatalogForYear } from '../../../desktop-services/src/eurCatalog';
 
 test('public report catalogs have provenance and no private account mapping', () => {
   const catalogs = getPublicReportCatalogs(2025);
-  assert.equal(catalogs.length, 4);
+  assert.equal(catalogs.length, 6);
   assert.deepEqual(
     catalogs.map((catalog) => catalog.id),
-    ['hgb-bilanz-micro-2025', 'hgb-bilanz-small-2025', 'hgb-gkv-micro-2025', 'hgb-gkv-small-2025'],
+    [
+      'hgb-bilanz-micro-2025',
+      'hgb-bilanz-small-2025',
+      'hgb-gkv-micro-2025',
+      'hgb-gkv-small-2025',
+      'bwa01-micro-2021',
+      'bwa01-small-2021',
+    ],
   );
   for (const catalog of catalogs) {
     assert.equal(catalog.provenance.sourceHashStatus, 'verified');
@@ -42,7 +49,7 @@ test('HGB balance scopes expose only statutory minimum detail', () => {
   assert.ok(!small?.positions.some((position) => position.key === 'assets.loss'));
 });
 
-test('BWA01 ordered keys match the public May 2024 source and remain unverified', () => {
+test('BWA01 ordered keys match the verified GründerZeiten 23 source', () => {
   const expected = [
     'revenue', 'total-output', 'material-expense', 'gross-profit', 'special-operating-income', 'operating-gross-profit',
     'personnel-expense', 'space-expense', 'operating-tax', 'insurance', 'special-cost', 'vehicle-expense', 'advertising-travel',
@@ -50,10 +57,11 @@ test('BWA01 ordered keys match the public May 2024 source and remain unverified'
     'other-neutral-expense', 'neutral-expense', 'interest-income', 'other-neutral-income', 'imputed-cost-offset', 'neutral-income',
     'result-before-tax', 'income-tax', 'preliminary-result',
   ];
-  assert.deepEqual(PUBLIC_BWA01_MICRO_2024.positions.map((position) => position.key), expected);
-  assert.equal(PUBLIC_BWA01_MICRO_2024.provenance.version, 'BMWK-BWA-2024-05');
-  assert.equal(PUBLIC_BWA01_MICRO_2024.provenance.sourceHashStatus, 'unavailable');
-  assert.equal(getPublicReportCatalogs(2025).some((catalog) => catalog.kind === 'bwa01'), false);
+  assert.deepEqual(PUBLIC_BWA01_MICRO_2021.positions.map((position) => position.key), expected);
+  assert.equal(PUBLIC_BWA01_MICRO_2021.provenance.version, 'BMWi-GründerZeiten-23-2021-01');
+  assert.equal(PUBLIC_BWA01_MICRO_2021.provenance.sourceHashStatus, 'verified');
+  assert.equal(PUBLIC_BWA01_MICRO_2021.provenance.sourceSha256, '28976588a6a429db8b6c457c07225dae55e10d271ffc1ae37d6d25fc60b60163');
+  assert.equal(getPublicReportCatalogs(2025).filter((catalog) => catalog.kind === 'bwa01').length, 2);
   assert.equal(getPublicReportCatalogsIncludingUnverified(2025).filter((catalog) => catalog.kind === 'bwa01').length, 2);
 });
 

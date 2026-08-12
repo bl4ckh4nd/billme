@@ -26,12 +26,12 @@ const HGB_GKV: CatalogProvenance = {
 };
 
 const BWA01: CatalogProvenance = {
-  version: 'BMWK-BWA-2024-05',
-  validFrom: '2024-05-01',
-  sourceName: 'Bundesministerium für Wirtschaft und Klimaschutz – öffentliche BWA-01-Gliederung',
-  sourceUrl: 'https://www.existenzgruendungsportal.de/Redaktion/DE/Downloads/DE/Checklisten-Uebersichten/Controlling/06-check-Betriebswirtschaftliche-Auswertung.pdf?__blob=publicationFile',
-  // The upstream PDF is currently unavailable; do not claim a digest or load this catalog as verified.
-  sourceHashStatus: 'unavailable',
+  version: 'BMWi-GründerZeiten-23-2021-01',
+  validFrom: '2021-01-01',
+  sourceName: 'Bundesministerium für Wirtschaft und Energie – GründerZeiten 23 Controlling',
+  sourceUrl: 'https://www.existenzgruendungsportal.de/Redaktion/DE/Downloads/DE/GruenderZeiten/GruenderZeiten-23.pdf?__blob=publicationFile',
+  sourceSha256: '28976588a6a429db8b6c457c07225dae55e10d271ffc1ae37d6d25fc60b60163',
+  sourceHashStatus: 'verified',
 };
 
 const both = ['micro', 'small'] as const;
@@ -223,8 +223,8 @@ export const PUBLIC_HGB_BILANZ_MICRO_2025 = catalog('hgb-bilanz-micro-2025', 'HG
 export const PUBLIC_HGB_BILANZ_SMALL_2025 = catalog('hgb-bilanz-small-2025', 'HGB-Bilanz – kleine Kapitalgesellschaften (Buchstaben und römische Ziffern)', 'bilanz', 'small', HGB_BILANZ, bilanzSmallPositions);
 export const PUBLIC_HGB_GKV_MICRO_2025 = catalog('hgb-gkv-micro-2025', 'HGB-Gewinn- und Verlustrechnung (Gesamtkostenverfahren) – Kleinstkapitalgesellschaften', 'gkv', 'micro', HGB_GKV, gkvPositions);
 export const PUBLIC_HGB_GKV_SMALL_2025 = catalog('hgb-gkv-small-2025', 'HGB-Gewinn- und Verlustrechnung (Gesamtkostenverfahren) – kleine Kapitalgesellschaften', 'gkv', 'small', HGB_GKV, gkvPositions);
-export const PUBLIC_BWA01_MICRO_2024 = catalog('bwa01-micro-2024', 'BWA 01 – öffentliche Positionsstruktur für Kleinstunternehmen (Stand Mai 2024)', 'bwa01', 'micro', BWA01, bwaPositions, false);
-export const PUBLIC_BWA01_SMALL_2024 = catalog('bwa01-small-2024', 'BWA 01 – öffentliche Positionsstruktur für kleine Unternehmen (Stand Mai 2024)', 'bwa01', 'small', BWA01, bwaPositions, false);
+export const PUBLIC_BWA01_MICRO_2021 = catalog('bwa01-micro-2021', 'BWA 01 – öffentliche Positionsstruktur für Kleinstunternehmen (Stand Januar 2021)', 'bwa01', 'micro', BWA01, bwaPositions);
+export const PUBLIC_BWA01_SMALL_2021 = catalog('bwa01-small-2021', 'BWA 01 – öffentliche Positionsstruktur für kleine Unternehmen (Stand Januar 2021)', 'bwa01', 'small', BWA01, bwaPositions);
 
 export const getPublicReportCatalogs = (year: number): PublicReportCatalog[] => {
   if (year !== 2025) throw new Error(`PUBLIC_REPORT_CATALOG_UNAVAILABLE:${year}`);
@@ -233,10 +233,12 @@ export const getPublicReportCatalogs = (year: number): PublicReportCatalog[] => 
     PUBLIC_HGB_BILANZ_SMALL_2025,
     PUBLIC_HGB_GKV_MICRO_2025,
     PUBLIC_HGB_GKV_SMALL_2025,
+    PUBLIC_BWA01_MICRO_2021,
+    PUBLIC_BWA01_SMALL_2021,
   ];
 };
 
+// Compatibility name retained for report consumers; all returned catalogs are verified.
 export const getPublicReportCatalogsIncludingUnverified = (year: number): PublicReportCatalog[] => {
-  if (year !== 2025) throw new Error(`PUBLIC_REPORT_CATALOG_UNAVAILABLE:${year}`);
-  return [...getPublicReportCatalogs(year), PUBLIC_BWA01_MICRO_2024, PUBLIC_BWA01_SMALL_2024];
+  return getPublicReportCatalogs(year);
 };

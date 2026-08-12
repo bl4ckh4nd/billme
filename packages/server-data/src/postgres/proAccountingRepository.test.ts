@@ -119,6 +119,26 @@ test('BWA01 uses explicit mapped positions, catalog order, and blocking unmapped
   assert.equal(report.mappingHealth.blocking, true);
 });
 
+test('server allows ledger reports for sole-proprietor EÜR and blocks HGB reports', async () => {
+  let call = 0;
+  const db = {
+    query: async (text: string) => {
+      call += 1;
+      if (call === 1) return { rows: [{ active_chart: 'SKR04', vat_method: 'soll' }] };
+      if (call === 2) return { rows: [] };
+      if (call === 3) return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { jurisdiction: 'DE', legalForm: 'sole_proprietor', profitDetermination: 'eur', fiscalYearStart: '01-01', vatMethod: 'soll' } }) }] };
+      return { rows: [] };
+    },
+  } as unknown as PostgresQueryable;
+  const repository = createPostgresProAccountingRepository(db);
+  const scope = createSingleTenantScope('eur-profile-test', 'pro');
+
+  assert.equal((await repository.getGuvReport(scope, { from: '2026-01-01', to: '2026-12-31' })).kind, 'management-guv');
+
+  call = 0;
+  await assert.rejects(() => repository.getGuvReport(scope, { profile: 'hgb-guv' }), /REPORTING_PROFILE_REQUIRED/);
+});
+
 test('mapping health is requested per report and ignores unrelated account families', async () => {
   const calls: Array<{ text: string; values: unknown[] }> = [];
   const db = {

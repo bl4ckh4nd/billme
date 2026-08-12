@@ -44,21 +44,52 @@ const insertGmbhSettings = (db: Database.Database, chart: 'SKR03' | 'SKR04' = 'S
     .run(JSON.stringify(settings));
 };
 
+const insertEurSettings = (db: Database.Database, chart?: 'SKR03' | 'SKR04'): void => {
+  const settings = structuredClone(MOCK_SETTINGS);
+  settings.businessReportingProfile = {
+    jurisdiction: 'DE',
+    legalForm: 'sole_proprietor',
+    profitDetermination: 'eur',
+    fiscalYearStart: '01-01',
+    ...(chart ? { chart } : {}),
+    vatMethod: 'soll',
+  };
+  db.prepare(`INSERT INTO settings (id, settings_json) VALUES (1, ?)`).run(JSON.stringify(settings));
+};
+
 describe('Pro reporting repository invariants', () => {
-  it('fails closed when the authoritative double-entry reporting profile is missing', () => {
+  it('fails closed when the authoritative reporting profile is missing', async () => {
     const db = createDb();
-    expect(() => getReportingReport(db, { kind: 'hgb-guv', from: '2026-03-01', to: '2026-03-31' }, createProTenantScope('default')))
-      .toThrow('REPORTING_PROFILE_REQUIRED');
+    await expect(getReportingReport(db, { kind: 'hgb-guv', from: '2026-03-01', to: '2026-03-31' }, createProTenantScope('default')))
+      .rejects.toThrow('REPORTING_PROFILE_REQUIRED');
   });
 
-  it('rejects a report when profile and accounting policy charts diverge', () => {
+  it('rejects a report when profile and accounting policy charts diverge', async () => {
     const db = createDb();
     insertGmbhSettings(db, 'SKR04');
-    expect(() => getReportingReport(db, { kind: 'hgb-guv' }, createProTenantScope('default')))
-      .toThrow('REPORTING_CHART_MISMATCH');
+    await expect(getReportingReport(db, { kind: 'hgb-guv' }, createProTenantScope('default')))
+      .rejects.toThrow('REPORTING_CHART_MISMATCH');
   });
 
-  it('keeps legacy generic mappings blocking until report-specific override', () => {
+  it('allows ledger BWA and management reports for a valid sole-proprietor EÜR profile', async () => {
+    const db = createDb();
+    insertEurSettings(db);
+
+    await expect(getReportingReport(db, { kind: 'management-guv' }, createProTenantScope('default'))).resolves.toMatchObject({ kind: 'management-guv' });
+    await expect(getReportingReport(db, { kind: 'bwa01' }, createProTenantScope('default'))).resolves.toMatchObject({ kind: 'bwa01' });
+  });
+
+  it('keeps HGB reports GmbH-only for a sole-proprietor EÜR profile', async () => {
+    const db = createDb();
+    insertEurSettings(db);
+
+    await expect(getReportingReport(db, { kind: 'hgb-guv' }, createProTenantScope('default')))
+      .rejects.toThrow('REPORTING_PROFILE_REQUIRED');
+    await expect(getReportingReport(db, { kind: 'hgb-bilanz' }, createProTenantScope('default')))
+      .rejects.toThrow('REPORTING_PROFILE_REQUIRED');
+  });
+
+  it('keeps legacy generic mappings blocking until report-specific override', async () => {
     const db = createDb();
     insertGmbhSettings(db);
     insertPostedEntry(db);
@@ -66,7 +97,7 @@ describe('Pro reporting repository invariants', () => {
       (id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at)
       VALUES ('legacy-guv', 'default', 'SKR03', '9999', 'guv', 'revenue', 'Umsatz', NULL, '2026-03-01T00:00:00.000Z')`).run();
 
-    const report = getReportingReport(db, { kind: 'hgb-guv', from: '2026-03-01', to: '2026-03-31' }, createProTenantScope('default'));
+    const report = await getReportingReport(db, { kind: 'hgb-guv', from: '2026-03-01', to: '2026-03-31' }, createProTenantScope('default'));
     expect(report.mappingHealth.blocking).toBe(true);
     expect(report.mappingHealth.unmappedAccounts).toContain('9999');
   });

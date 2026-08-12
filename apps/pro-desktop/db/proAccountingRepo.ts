@@ -185,6 +185,7 @@ export interface ReportMappingOverrideInput extends ReportingMapping {
   statement: ReportingStatement;
   position: string;
   label?: string;
+  reason?: string;
 }
 
 export interface DatevExportResult {
@@ -2040,22 +2041,40 @@ export const getBilanzReport = (
  * local repository only supplies immutable ledger balances and explicit HGB
  * mappings; it must not invent report categories from account prefixes.
  */
-export const getReportingReport = (
+export const getReportingReport = async (
   db: Database.Database,
   args: { kind: ReportKind; from?: string; to?: string; asOfDate?: string },
   scope: TenantScope,
-): ReportResult<object> => {
+): Promise<ReportResult<object>> => {
   const tenantId = getTenantId(scope);
   const policy = getAccountingPolicy(db, tenantId);
   const profile = getSettings(db)?.businessReportingProfile;
-  if (!profile || profile.legalForm !== 'gmbh' || profile.profitDetermination !== 'double_entry' || !profile.chart) {
+  const kind = args.kind.replaceAll('_', '-');
+  const hgbReport = kind === 'hgb-guv' || kind === 'hgb-bilanz';
+  const ledgerReport = kind === 'bwa01' || kind === 'management-guv' || kind === 'eur-ledger-reconciliation';
+  const supportedProfile = profile
+    && profile.jurisdiction === 'DE'
+    && ((profile.legalForm === 'gmbh' && profile.profitDetermination === 'double_entry')
+      || (profile.legalForm === 'sole_proprietor' && profile.profitDetermination === 'eur'));
+  if (!supportedProfile) {
     throw new Error('REPORTING_PROFILE_REQUIRED');
   }
-  if (profile.chart !== policy.activeChart) {
+  if (profile.chart && profile.chart !== policy.activeChart) {
     throw new Error('REPORTING_CHART_MISMATCH');
   }
+  if (profile.profitDetermination === 'eur' && profile.fiscalYearStart !== '01-01') {
+    throw new Error('REPORTING_PROFILE_INVALID');
+  }
+  if (hgbReport && (profile.legalForm !== 'gmbh' || profile.profitDetermination !== 'double_entry' || !profile.hgbSizeClass)) {
+    throw new Error('REPORTING_PROFILE_REQUIRED');
+  }
+  if (!hgbReport && !ledgerReport) {
+    throw new Error('REPORT_KIND_UNAVAILABLE');
+  }
   const calculationProfile: ReportingCalculationProfile = {
-    size: profile.hgbSizeClass ?? 'small',
+    // BWA/management reports are ledger views and remain available for a
+    // valid sole-proprietor EÜR profile; HGB reports are guarded above.
+    size: profile.hgbSizeClass ?? 'micro',
     fiscalYearStart: profile.fiscalYearStart,
     chart: profile.chart,
     currency: 'EUR',
@@ -2393,6 +2412,15 @@ export const upsertReportMappingOverride = (
         updatedAt: definition.updatedAt,
       },
     }).run();
+  if (input.reason?.trim()) appendAuditLog(db, {
+    entityType: 'report_mapping',
+    entityId: definition.id,
+    action: 'override',
+    reason: input.reason.trim(),
+    before: null,
+    after: definition,
+    actor: 'pro',
+  });
   return {
     accountNumber,
     statement: input.statement,

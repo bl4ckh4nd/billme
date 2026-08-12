@@ -563,21 +563,29 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
       const microEquityPosition = context.profile.size === 'micro'
         ? catalog.positions.find((position) => position.key === 'equity')
         : undefined;
+      const microAggregateEquity = Boolean(
+        microEquityPosition
+        && hasBalancePositionMapping(context, microEquityPosition.key)
+        && prepared.values.has(microEquityPosition.key),
+      );
       const priorResultPosition = forwardPosition && (!hasBalancePositionMapping(context, forwardPosition.key) || !prepared.values.has(forwardPosition.key))
         ? forwardPosition
-        : microEquityPosition && (!hasBalancePositionMapping(context, microEquityPosition.key) || !prepared.values.has(microEquityPosition.key))
+        : microEquityPosition && !microAggregateEquity
           ? microEquityPosition
           : undefined;
-      if (priorResultPosition && context.snapshot.fiscalYearRange) {
+      if ((priorResultPosition || microAggregateEquity) && context.snapshot.fiscalYearRange && (request.ledger.entries?.length ?? 0) > 0) {
         const priorRange = fiscalYearRange(context.snapshot.fiscalYear - 1, context.profile.fiscalYearStart);
         const priorGuv = calculateHgbGuv({
           ...request,
-          from: priorRange.start,
+          // No closing-flow assumption: carry the cumulative P&L of every
+          // ledger period before the current FY, not only the immediately
+          // preceding year.
+          from: undefined,
           to: priorRange.end,
           // Keep the current request year for catalog selection; only the
           // ledger period is prior-year data.
           asOfDate: context.asOfDate,
-          period: { from: priorRange.start, to: priorRange.end, asOfDate: context.asOfDate },
+          period: { from: undefined, to: priorRange.end, asOfDate: context.asOfDate },
         });
         if (priorGuv.mappingHealth.blocking) {
           mappingHealth = {
@@ -587,7 +595,16 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
             warnings: [...new Set([...mappingHealth.warnings, ...priorGuv.mappingHealth.warnings, 'HGB-Bilanz benötigt eine vollständige HGB-GuV-Zuordnung für den Gewinnvortrag'])],
             blocking: true,
           };
-        } else if (priorGuv.netResult !== 0) {
+        } else if (microAggregateEquity && priorGuv.netResult !== 0) {
+          mappingHealth = {
+            ...mappingHealth,
+            warnings: [...new Set([
+              ...mappingHealth.warnings,
+              'HGB-Bilanz: aggregiertes Kleinstkapitalgesellschafts-Eigenkapital ist ohne expliziten Gewinnvortrag nicht eindeutig fortschreibbar',
+            ])],
+            blocking: true,
+          };
+        } else if (priorResultPosition && priorGuv.netResult !== 0) {
           prepared.values.set(priorResultPosition.key, {
             amount: cents(priorGuv.netResult),
             accounts: new Set(priorGuv.rows.flatMap((row) => row.accountNumbers)),
@@ -623,6 +640,17 @@ export function calculateHgbBilanz(request: ReportRequest): ReportResult<HgbBila
   const total = (side: 'asset' | 'liability'): Cents => topLevel(side).reduce((sum, position) => sum + balancePositionValue(catalog, prepared.values, position.key).amount, 0);
   const totalAssets = total('asset');
   const totalLiabilities = total('liability');
+  if (totalAssets !== totalLiabilities) {
+    mappingHealth = {
+      ...mappingHealth,
+      warnings: [...new Set([
+        ...mappingHealth.warnings,
+        `HGB-Bilanz ist nicht ausgeglichen (Differenz ${amount(totalAssets - totalLiabilities).toFixed(2)}); Gewinnvortrag oder Abschlusszuordnung ist unvollständig bzw. mehrdeutig`,
+      ])],
+      blocking: true,
+    };
+    return envelope(context, 'hgb-bilanz', { assets: [], liabilities: [], totals: { assets: 0, liabilities: 0, delta: 0 } }, mappingHealth);
+  }
   return envelope(context, 'hgb-bilanz', {
     assets,
     liabilities,

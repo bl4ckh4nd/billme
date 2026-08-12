@@ -207,6 +207,37 @@ test('balance sheet derives open result from the current calendar fiscal year on
   assert.deepEqual(report.totals, { assets: 150, liabilities: 150, delta: 0 });
 });
 
+test('balance sheet carries cumulative pre-FY P&L into the 2026 profit forward', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: undefined,
+    to: undefined,
+    asOfDate: '2026-12-31',
+    ledger: { entries: [
+      { postingDate: '2024-12-31', lines: [
+        { accountNumber: '1000', debit: 100, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 100 },
+      ] },
+      { postingDate: '2025-12-31', lines: [
+        { accountNumber: '1000', debit: 100, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 100 },
+      ] },
+      { postingDate: '2026-12-31', lines: [
+        { accountNumber: '1000', debit: 50, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 50 },
+      ] },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 50);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.profit-loss-forward')?.amount, 200);
+  assert.deepEqual(report.totals, { assets: 250, liabilities: 250, delta: 0 });
+  assert.equal(report.mappingHealth.blocking, false);
+});
+
 test('balance sheet derives open result from a non-calendar fiscal year only', () => {
   const report = calculateHgbBilanz(request({
     profile: { size: 'small', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
@@ -284,11 +315,61 @@ test('micro balance folds prior open result into its statutory equity heading', 
   assert.deepEqual(report.totals, { assets: 150, liabilities: 150, delta: 0 });
 });
 
+test('micro aggregate equity with prior open P&L fails closed as ambiguous', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'micro', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: undefined,
+    to: undefined,
+    asOfDate: '2026-12-31',
+    ledger: {
+      entries: [
+        { postingDate: '2025-12-31', lines: [
+          { accountNumber: '1000', debit: 100, credit: 0 },
+          { accountNumber: '8000', debit: 0, credit: 100 },
+        ] },
+        { postingDate: '2026-12-31', lines: [
+          { accountNumber: '1000', debit: 50, credit: 0 },
+          { accountNumber: '8000', debit: 0, credit: 50 },
+        ] },
+      ],
+      balances: [{ accountNumber: '3000', openingBalance: -25 }],
+    },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' },
+      { accountNumber: '3000', statement: 'hgb-bilanz', position: 'equity', side: 'liability' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.mappingHealth.blocking, true);
+  assert.ok(report.mappingHealth.warnings.some((warning) => warning.includes('aggregiertes Kleinstkapitalgesellschafts-Eigenkapital')));
+  assert.deepEqual(report.assets, []);
+  assert.deepEqual(report.liabilities, []);
+  assert.deepEqual(report.totals, { assets: 0, liabilities: 0, delta: 0 });
+});
+
+test('materially unbalanced HGB balance payloads fail closed', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    ledger: { balances: [{ accountNumber: '1000', openingBalance: 0, debitTurnover: 100, creditTurnover: 0 }] },
+    mappings: [{ accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' }],
+  }));
+  assert.equal(report.mappingHealth.blocking, true);
+  assert.ok(report.mappingHealth.warnings.some((warning) => warning.includes('nicht ausgeglichen')));
+  assert.deepEqual(report.assets, []);
+  assert.deepEqual(report.liabilities, []);
+});
+
 test('micro and small balance output follows the committed statutory hierarchy', () => {
   const make = (size: 'micro' | 'small') => calculateHgbBilanz(request({
     profile: { size, fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
-    ledger: { balances: [{ accountNumber: '1000', openingBalance: 0, debitTurnover: 100, creditTurnover: 0 }] },
-    mappings: [{ accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' }],
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 100, creditTurnover: 0 },
+      { accountNumber: '3000', openingBalance: -100, debitTurnover: 0, creditTurnover: 0 },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' },
+      { accountNumber: '3000', statement: 'hgb-bilanz', position: 'equity', side: 'liability' },
+    ],
   }));
   for (const size of ['micro', 'small'] as const) {
     const catalog = getPublicReportCatalogs(2025).find((entry) => entry.kind === 'bilanz' && entry.scope === size)!;

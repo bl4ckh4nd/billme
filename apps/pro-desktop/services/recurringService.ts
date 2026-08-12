@@ -13,9 +13,9 @@ import {
 import type { AppSettings, Client, Invoice, Project, RecurringProfile } from '../types';
 import { getClient } from '../db/clientsRepo';
 import { listRecurringProfiles, upsertRecurringProfile } from '../db/recurringRepo';
-import { upsertInvoice } from '../db/invoicesRepo';
+import { finalizeOutgoingInvoice, upsertInvoice } from '../db/invoicesRepo';
 import { ensureDefaultProjectForClient } from '../db/projectsRepo';
-import { finalizeNumber, releaseNumber, reserveNumber } from '../db/numberingRepo';
+import { releaseNumber, reserveNumber } from '../db/numberingRepo';
 import { logger } from '../utils/logger';
 
 const PRODUCT = 'pro' as const;
@@ -28,7 +28,7 @@ const runtime: SqliteRecurringRuntime<Client, LegacyRecurringInvoice, Project> =
   ensureDefaultProject: (db, clientId) => ensureDefaultProjectForClient(db, clientId) as Project,
   reserveNumber: (db, kind) => reserveNumber(db, kind),
   releaseNumber: (db, reservationId) => releaseNumber(db, reservationId),
-  finalizeNumber: (db, reservationId, documentId) => finalizeNumber(db, reservationId, documentId),
+  finalizeNumber: (db, reservationId, documentId) => finalizeOutgoingInvoice(db, reservationId, documentId),
   createInvoiceId: () => uuidv4(),
   logger: {
     info: (message, meta) => logger.info('RecurringService', message, meta),

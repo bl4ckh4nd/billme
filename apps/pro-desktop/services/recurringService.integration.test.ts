@@ -38,6 +38,7 @@ vi.mock('../db/clientsRepo', () => ({
 
 vi.mock('../db/invoicesRepo', () => ({
   upsertInvoice: upsertInvoiceMock,
+  finalizeOutgoingInvoice: finalizeNumberMock,
 }));
 
 vi.mock('../db/projectsRepo', () => ({

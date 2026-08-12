@@ -58,6 +58,8 @@ export interface ProAccountingOposRepository {
   postIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
   allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
+  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
+  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
 }
@@ -114,6 +116,8 @@ export interface ProAccountingService {
   postIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
   allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
+  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
+  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(scope: TenantScope): Promise<void>;
@@ -164,6 +168,8 @@ export interface BoundProAccountingService {
   postIncomingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
   listOpenItems(): Promise<OpenItemEntity[]>;
   allocateOpenItemPayment(input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
+  allocateRemainingOpenItemPayment(paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
+  reverseDocumentAccounting(input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(): Promise<void>;
@@ -273,6 +279,8 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   postIncomingInvoice: (scope, invoiceId) => repository.postIncomingInvoice(scope, invoiceId),
   listOpenItems: (scope) => repository.listOpenItems(scope),
   allocateOpenItemPayment: (scope, input) => repository.allocateOpenItemPayment(scope, input),
+  allocateRemainingOpenItemPayment: (scope, paymentId, allocations) => repository.allocateRemainingOpenItemPayment(scope, paymentId, allocations),
+  reverseDocumentAccounting: (scope, input) => repository.reverseDocumentAccounting(scope, input),
   previewAccountingBackfill: (scope) => repository.previewAccountingBackfill(scope),
   confirmAccountingBackfill: (scope, input) => repository.confirmAccountingBackfill(scope, input),
   ensureSeedData: (scope) => repository.ensureSeedData(scope),
@@ -313,6 +321,8 @@ export const bindProAccountingScope = (
   postIncomingInvoice: (invoiceId) => service.postIncomingInvoice(scope, invoiceId),
   listOpenItems: () => service.listOpenItems(scope),
   allocateOpenItemPayment: (input) => service.allocateOpenItemPayment(scope, input),
+  allocateRemainingOpenItemPayment: (paymentId, allocations) => service.allocateRemainingOpenItemPayment(scope, paymentId, allocations),
+  reverseDocumentAccounting: (input) => service.reverseDocumentAccounting(scope, input),
   previewAccountingBackfill: () => service.previewAccountingBackfill(scope),
   confirmAccountingBackfill: (input) => service.confirmAccountingBackfill(scope, input),
   ensureSeedData: () => service.ensureSeedData(scope),

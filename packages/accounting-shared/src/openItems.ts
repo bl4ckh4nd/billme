@@ -107,6 +107,8 @@ export interface OpenItemPaymentEntity {
   sourceId: string;
   allocatedAmount: number;
   residualAmount: number;
+  status: 'open' | 'partially_allocated' | 'overpaid' | 'allocated';
+  journalEntryId?: string;
   createdAt: string;
 }
 
@@ -136,7 +138,7 @@ export interface AccountingAccountMapping {
   id: string;
   tenantId: string;
   chart: 'SKR03' | 'SKR04';
-  role: 'accounts_receivable' | 'accounts_payable' | 'bank' | 'revenue' | 'expense' | 'asset' | 'output_vat' | 'input_vat';
+  role: 'accounts_receivable' | 'accounts_payable' | 'bank' | 'revenue' | 'expense' | 'asset' | 'output_vat' | 'output_vat_deferred' | 'input_vat';
   accountNumber: string;
   updatedAt: string;
 }
@@ -158,6 +160,8 @@ export interface AccountingBackfillPreview {
     sourceId: string;
     status: 'ready' | 'unresolved';
     reason?: string;
+    sourceVersion: string;
+    snapshot?: unknown;
   }>;
   readyCount: number;
   unresolvedCount: number;

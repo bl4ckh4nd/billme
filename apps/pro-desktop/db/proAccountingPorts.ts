@@ -36,6 +36,7 @@ import {
 import { listTaxCaseAccountMappings, listTaxCases, upsertTaxCaseAccountMapping } from './taxCasesRepo';
 import {
   allocateOpenItemPayment,
+  allocateRemainingOpenItemPayment,
   confirmAccountingBackfill,
   getAccountingPolicyForPro,
   listAccountingAccountMappings,
@@ -47,6 +48,7 @@ import {
   previewAccountingBackfill,
   previewIncomingInvoice,
   previewOutgoingInvoice,
+  reverseDocumentAccounting,
   setAccountingPolicyForPro,
   upsertAccountingAccountMapping,
   upsertIncomingInvoice,
@@ -86,6 +88,8 @@ export const createSqliteProAccountingRepository = (db: Database.Database): ProA
   postIncomingInvoice: async (scope, invoiceId) => postIncomingInvoice(db, scope, invoiceId),
   listOpenItems: async (scope) => listOpenItems(db, scope),
   allocateOpenItemPayment: async (scope, input) => allocateOpenItemPayment(db, scope, input),
+  allocateRemainingOpenItemPayment: async (scope, paymentId, allocations) => allocateRemainingOpenItemPayment(db, scope, paymentId, allocations),
+  reverseDocumentAccounting: async (scope, input) => reverseDocumentAccounting(db, scope, input),
   previewAccountingBackfill: async (scope) => previewAccountingBackfill(db, scope),
   confirmAccountingBackfill: async (scope, input) => confirmAccountingBackfill(db, scope, input),
   ensureSeedData: async (scope) => {

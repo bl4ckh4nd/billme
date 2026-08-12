@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3';
 import type { DocumentTemplateKind, Invoice } from '../types';
 import { logger } from '../utils/logger';
 import { closeDb, getDb, getDbPath, initDb } from '../db/connection';
-import { createInvoiceFromOffer, deleteInvoice, listInvoices, upsertInvoice } from '../db/invoicesRepo';
+import { createInvoiceFromOffer, deleteInvoice, finalizeOutgoingInvoice, listInvoices, upsertInvoice } from '../db/invoicesRepo';
 import {
   deleteOffer,
   getOffer,
@@ -331,10 +331,9 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'numbers:finalize', async ({ reservationId, documentId }) => {
     const db = requireDb();
-    const result = finalizeNumber(db, reservationId, documentId);
     const reservation = db.prepare('SELECT kind FROM number_reservations WHERE id = ?').get(reservationId) as { kind: string } | undefined;
-    if (reservation?.kind === 'invoice') await getProAccountingService().postOutgoingInvoice(documentId);
-    return result;
+    if (reservation?.kind === 'invoice') return finalizeOutgoingInvoice(db, reservationId, documentId);
+    return finalizeNumber(db, reservationId, documentId);
   });
 
   register(ipcMain, 'documents:createFromClient', ({ kind, clientId }) => {
@@ -1290,6 +1289,8 @@ export const registerIpcHandlers = (
   register(ipcMain, 'pro:postIncomingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().postIncomingInvoice(invoiceId));
   register(ipcMain, 'pro:listOpenItems', () => getProAccountingService().listOpenItems());
   register(ipcMain, 'pro:allocateOpenItemPayment', ({ payment }) => getProAccountingService().allocateOpenItemPayment(payment));
+  register(ipcMain, 'pro:allocateRemainingPayment', ({ paymentId, allocations }) => getProAccountingService().allocateRemainingOpenItemPayment(paymentId, allocations));
+  register(ipcMain, 'pro:reverseDocumentAccounting', (input) => getProAccountingService().reverseDocumentAccounting(input));
   register(ipcMain, 'pro:previewAccountingBackfill', () => getProAccountingService().previewAccountingBackfill());
   register(ipcMain, 'pro:confirmAccountingBackfill', (input) => getProAccountingService().confirmAccountingBackfill(input));
 

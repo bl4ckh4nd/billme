@@ -5,6 +5,7 @@ vi.mock('uuid', () => ({
   v4: () => 'invoice-uuid',
 }));
 import { bootstrapSql } from '../db/bootstrap';
+import { runMigrations } from '../db/migrate';
 import { getClient, upsertClient } from '../db/clientsRepo';
 import { getInvoice } from '../db/invoicesRepo';
 import { listRecurringProfiles, upsertRecurringProfile } from '../db/recurringRepo';
@@ -26,7 +27,12 @@ const canRunNativeSqlite = (() => {
 const createDb = (): Database.Database => {
   const db = new Database(':memory:');
   db.exec(bootstrapSql);
+  runMigrations(db);
   setSettings(db, structuredClone(MOCK_SETTINGS));
+  db.exec(`INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at) VALUES
+    ('rec-ar', 'SKR03', '1400', 'Debitoren', 'test', datetime('now'), datetime('now')),
+    ('rec-revenue', 'SKR03', '8400', 'Erlöse', 'test', datetime('now'), datetime('now')),
+    ('rec-vat', 'SKR03', '1776', 'USt', 'test', datetime('now'), datetime('now'))`);
   return db;
 };
 

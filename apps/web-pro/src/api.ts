@@ -47,6 +47,7 @@ import {
   upsertArticlePayloadSchema,
   upsertTemplatePayloadSchema,
 } from '@billme/desktop-contracts-pro/schemas';
+import { z } from 'zod';
 
 type Parser<T> = { parse: (input: unknown) => T } | ((input: unknown) => T);
 
@@ -58,6 +59,23 @@ type RequestOptions<T> = {
 };
 
 const PRO_PRODUCT_QUERY = { product: 'pro' as const };
+const susaReportSchema = z.object({
+  asOfDate: z.string(),
+  rows: z.array(ledgerBalanceRowSchema),
+  totals: z.object({ debit: z.number(), credit: z.number(), balance: z.number() }),
+});
+const guvReportSchema = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
+  rows: z.array(z.object({ positionKey: z.string(), positionLabel: z.string(), amount: z.number() })),
+  netResult: z.number(),
+});
+const bilanzReportSchema = z.object({
+  asOfDate: z.string(),
+  assets: z.array(z.object({ accountNumber: z.string(), amount: z.number() })),
+  liabilities: z.array(z.object({ accountNumber: z.string(), amount: z.number() })),
+  totals: z.object({ assets: z.number(), liabilities: z.number(), delta: z.number() }),
+});
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
@@ -358,16 +376,19 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       return requestJson({ parser: (input) => input, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/vat/summary');
     },
     getSusaReport(asOfDate?: string) {
-      return requestJson({ parser: (input) => input, query: { asOfDate } }, '/api/v1/pro/accounting/reports/susa');
+      return requestJson({ parser: susaReportSchema, query: { asOfDate } }, '/api/v1/pro/accounting/reports/susa');
     },
     getGuvReport(query?: unknown) {
-      return requestJson({ parser: (input) => input, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/guv');
+      return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/guv');
     },
     getBilanzReport(asOfDate?: string) {
-      return requestJson({ parser: (input) => input, query: { asOfDate } }, '/api/v1/pro/accounting/reports/bilanz');
+      return requestJson({ parser: bilanzReportSchema, query: { asOfDate } }, '/api/v1/pro/accounting/reports/bilanz');
     },
     getAccountingPolicy() {
       return requestJson({ parser: accountingPolicySchema }, '/api/v1/pro/accounting/policy');
+    },
+    downloadDatevCsv(query?: { from?: string; to?: string }) {
+      return requestBlob('/api/v1/pro/accounting/datev/export.csv', query);
     },
     setAccountingPolicy(input: unknown, reason: string) {
       return requestJson({ method: 'PUT', body: { ...accountingPolicySchema.omit({ tenantId: true, periodPolicy: true, updatedAt: true }).parse(input), reason }, parser: accountingPolicySchema }, '/api/v1/pro/accounting/policy');
@@ -396,8 +417,9 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     previewOutgoingInvoice(invoiceId: string, reason = 'Vorschau') {
       return requestJson({ method: 'POST', body: { invoiceId, reason }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/outgoing-invoices/preview');
     },
-    postOutgoingInvoice(invoiceId: string, reason: string, options: Record<string, unknown> = {}) {
-      return requestJson({ method: 'POST', body: { invoiceId, reason, ...options }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/outgoing-invoices/post');
+    postOutgoingInvoice(invoiceId: string, reason: string, reservationId: string, options: Record<string, unknown> = {}) {
+      if (!reservationId.trim()) throw new Error('reservationId is required');
+      return requestJson({ method: 'POST', body: { invoiceId, reason, reservationId, ...options }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/outgoing-invoices/post');
     },
     previewIncomingInvoice(invoiceId: string, reason = 'Vorschau') {
       return requestJson({ method: 'POST', body: { invoiceId, reason }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/incoming-invoices/preview');

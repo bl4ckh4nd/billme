@@ -14,6 +14,14 @@ import {
   type ProAccountingSeed,
   type Transaction as WorkspaceTransaction,
 } from '@billme/accounting-ui-pro';
+import type {
+  BalanceSheetPreview,
+  GuvReport,
+  ReportDrilldownEntry,
+  ReportDrilldownSelection,
+  ReportFilterState,
+  SusaReport,
+} from '@billme/accounting-ui-pro';
 import { createProWebClient, type ProWebClient } from './api';
 
 const DEFAULT_API_URL = (import.meta.env.VITE_SERVER_API_URL as string | undefined) ?? 'http://127.0.0.1:3100';
@@ -827,12 +835,20 @@ export default function App() {
     } satisfies ProAccountingSeed;
   }, [client, data]);
 
-  const accountingDataAdapter = React.useMemo<ProAccountingDataAdapter | undefined>(() => {
-    if (!accountingSeed) return undefined;
+  const accountingDataAdapter = React.useMemo(() => {
+    if (!accountingSeed || !data) return undefined;
     let transactions = structuredClone(accountingSeed.transactions ?? []);
     let drafts = structuredClone(accountingSeed.drafts ?? []);
+    const canonical = data.accountingTransactions.length > 0;
+    const readOnly = (operation: string): never => {
+      throw new Error(`${operation} is unavailable in the legacy snapshot fallback. Reload canonical accounting data.`);
+    };
+    const reportFilter = (filters: ReportFilterState) => ({
+      from: filters.periodFrom,
+      to: filters.periodTo ?? filters.asOfDate,
+    });
     return {
-      hydrate(seed) {
+      hydrate(seed: ProAccountingSeed) {
         transactions = structuredClone(seed.transactions ?? []);
         drafts = structuredClone(seed.drafts ?? []);
       },
@@ -842,17 +858,100 @@ export default function App() {
       listBookingDrafts() {
         return structuredClone(drafts);
       },
-      getTransactionById(id) {
+      getTransactionById(id: string) {
         return structuredClone(transactions.find((row) => row.id === id));
       },
-      getBookingDraftByTransactionId(transactionId) {
+      getBookingDraftByTransactionId(transactionId: string) {
         return structuredClone(drafts.find((row) => row.transactionId === transactionId));
       },
-      // Mutations go through the awaited parent persistence hook below. The
-      // adapter intentionally exposes only canonical reads to avoid optimistic
-      // writes that could diverge from the server journal.
+      async saveDraft(draft: WorkspaceBookingDraft, actorName = 'Web Pro') {
+        if (!canonical) return readOnly('Draft mutation');
+        const saved = await client.saveAccountingDraft(
+          mapWorkspaceDraftToEntity(draft, data.sessionInfo.tenantId),
+          actorName,
+        );
+        return mapWorkflowDraftToWorkspace(saved);
+      },
+      async dispatchBookingAction(transactionId: string, action: string, options?: { actorName?: string; rejectReason?: string }) {
+        if (!canonical) return readOnly('Workflow mutation');
+        const saved = await client.dispatchAccountingDraftAction(
+          transactionId,
+          action,
+          options?.actorName ?? 'Web Pro',
+          options?.rejectReason,
+        );
+        return mapWorkflowDraftToWorkspace(saved);
+      },
+      async getSusaReport(filters: ReportFilterState): Promise<SusaReport> {
+        const report = await client.getSusaReport(filters.asOfDate);
+        const names = new Map(data.ledgerAccounts.map((account) => [account.accountNumber, account.name]));
+        return {
+          rows: report.rows.map((row) => ({
+            ...row,
+            accountName: names.get(row.accountNumber) ?? row.accountNumber,
+            normalBalance: row.closingBalance >= 0 ? 'debit' : 'credit',
+          })),
+          totals: {
+            openingDebit: 0,
+            openingCredit: 0,
+            turnoverDebit: report.totals.debit,
+            turnoverCredit: report.totals.credit,
+            closingDebit: Math.max(0, report.totals.balance),
+            closingCredit: Math.max(0, -report.totals.balance),
+          },
+          quality: { unmappedAccounts: 0, warnings: 0, generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
+      async getGuvReport(filters: ReportFilterState): Promise<GuvReport> {
+        const report = await client.getGuvReport(reportFilter(filters));
+        return {
+          lines: report.rows.map((row) => ({ id: row.positionKey, code: row.positionKey, label: row.positionLabel, level: 0, amountCurrent: row.amount })),
+          totals: {
+            revenue: report.rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + row.amount, 0),
+            expenses: report.rows.filter((row) => row.positionKey === 'expense').reduce((sum, row) => sum + Math.abs(row.amount), 0),
+            result: report.netResult,
+          },
+          quality: { unmappedAccounts: 0, warnings: 0, generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
+      async getBalanceSheetPreview(filters: ReportFilterState): Promise<BalanceSheetPreview> {
+        const report = await client.getBilanzReport(filters.asOfDate);
+        return {
+          aktiva: report.assets.map((row) => ({ id: row.accountNumber, code: row.accountNumber, label: row.accountNumber, amount: row.amount, level: 0, side: 'aktiva' })),
+          passiva: report.liabilities.map((row) => ({ id: row.accountNumber, code: row.accountNumber, label: row.accountNumber, amount: row.amount, level: 0, side: 'passiva' })),
+          totals: { aktiva: report.totals.assets, passiva: report.totals.liabilities, difference: report.totals.delta },
+          quality: { status: Math.abs(report.totals.delta) < 0.01 ? 'ok' : 'warning', notes: [], generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
+      async getReportDrilldownEntries(selection: ReportDrilldownSelection): Promise<ReportDrilldownEntry[]> {
+        const rows = await client.listAccountingJournalEntries({ accountNumbers: selection.accountNumbers });
+        return rows.flatMap((entry) => entry.lines.filter((line) => selection.accountNumbers.length === 0 || selection.accountNumbers.includes(line.accountNumber)).map((line) => ({
+          id: line.id,
+          date: entry.postingDate,
+          bookingText: entry.bookingText,
+          reference: entry.reference,
+          transactionId: entry.sourceKey,
+          accountNumber: line.accountNumber,
+          debit: line.debitAmount,
+          credit: line.creditAmount,
+          amount: line.debitAmount || line.creditAmount,
+          source: 'Manuell' as const,
+        })));
+      },
     };
-  }, [accountingSeed]);
+  }, [accountingSeed, client, data]);
+
+  const workspaceDataAdapter = React.useMemo(() => {
+    if (accountingDataAdapter) return accountingDataAdapter;
+    return {
+      listTransactions: () => [],
+      listBookingDrafts: () => [],
+      getTransactionById: () => undefined,
+      getBookingDraftByTransactionId: () => undefined,
+      saveDraft: () => { throw new Error('Legacy workflow snapshots are read-only.'); },
+      dispatchBookingAction: () => { throw new Error('Legacy workflow snapshots are read-only.'); },
+    };
+  }, [accountingDataAdapter]);
 
   const handleSaveSettings = async () => {
     await runAction(async () => {
@@ -1023,7 +1122,8 @@ export default function App() {
   };
 
   const handleCreateSampleWorkflow = async () => {
-    if (!data) {
+    if (!data || data.accountingTransactions.length === 0) {
+      setNotice(createNotice('neutral', 'Legacy-Workflow-Snapshots sind im Web nur lesbar.'));
       return;
     }
     await runAction(async () => {
@@ -1032,23 +1132,6 @@ export default function App() {
         navigate('accounting');
       }
     }, 'Beispiel-Workflow angelegt.');
-  };
-
-  const handlePersistWorkflowEntry = async (entry: { transaction: WorkspaceTransaction; draft: WorkspaceBookingDraft }) => {
-    if (!data || data.accountingTransactions.length === 0) {
-      return;
-    }
-    try {
-      await client.saveAccountingDraft(
-        mapWorkspaceDraftToEntity(entry.draft, data.sessionInfo.tenantId),
-        'Workflow-Entwurf im Web gespeichert',
-      );
-      await refreshData();
-      setNotice(createNotice('success', `Workflow ${entry.transaction.id} synchronisiert.`));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotice(createNotice('danger', message));
-    }
   };
 
   if (!session) {
@@ -1675,8 +1758,8 @@ export default function App() {
                 eyebrow="Accounting"
                 title="Ledger, Regeln und Workflow-Snapshots"
                 actions={
-                  <Button variant="secondary" onClick={() => void handleCreateSampleWorkflow()}>
-                    Beispiel-Workflow anlegen
+                  <Button variant="secondary" onClick={() => void handleCreateSampleWorkflow()} disabled={data.accountingTransactions.length === 0}>
+                    {data.accountingTransactions.length > 0 ? 'Beispiel-Workflow anlegen' : 'Legacy-Snapshots nur lesen'}
                   </Button>
                 }
               >
@@ -1687,8 +1770,9 @@ export default function App() {
                   <StatCard label="Regeln" value={String(data.suggestionRules.length)} hint="Kontovorschläge" />
                 </div>
                 <p className="helper-copy">
-                  Diese Webfläche ersetzt lokale Dateisystem-/IPC-Annahmen durch HTTP-Workflow-Persistenz. Für frische
-                  Installationen kann ein Beispieldatensatz angelegt werden, damit die Pro-Workspace-UI sofort nutzbar ist.
+                  {data.accountingTransactions.length > 0
+                    ? 'Die Pro-Workspace-UI liest kanonische Accounting-Daten aus Postgres; Entwürfe, Aktionen und Reports werden über die Accounting-API persistiert.'
+                    : 'Legacy-Workflow-Snapshots sind eine read-only Fallback-Ansicht. Mutationen bleiben deaktiviert, bis kanonische Accounting-Daten verfügbar sind.'}
                 </p>
               </SectionCard>
 
@@ -1825,14 +1909,18 @@ export default function App() {
               </SectionCard>
 
               <SectionCard eyebrow="Workspace" title="Geteilte Pro-Accounting-Oberfläche im Browser">
-                {accountingSeed ? (
+                {accountingSeed && data.accountingTransactions.length > 0 ? (
                   <div className="workspace-frame">
                     <ProAccountingWorkspace
                       seed={accountingSeed}
-                      dataAdapter={accountingDataAdapter}
-                      onPersistEntry={data?.accountingTransactions.length ? handlePersistWorkflowEntry : undefined}
+                      dataAdapter={workspaceDataAdapter as ProAccountingDataAdapter}
                     />
                   </div>
+                ) : data.workflowEntries.length > 0 ? (
+                  <EmptyState
+                    title="Legacy-Snapshots sind schreibgeschützt"
+                    body="Die alte Workflow-Ansicht bleibt als Fallback lesbar. Mutationen sind deaktiviert, bis kanonische Accounting-Daten geladen werden."
+                  />
                 ) : (
                   <EmptyState title="Workspace noch leer" body="Sobald Workflow-Snapshots vorhanden sind, wird die Pro-Workspace-UI hier direkt aus dem Shared Package gemountet." />
                 )}

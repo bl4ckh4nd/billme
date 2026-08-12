@@ -61,3 +61,8 @@ test('Pro web client rethrows canonical accounting mutation failures', async () 
     globalThis.fetch = previousFetch;
   }
 });
+
+test('Pro web client refuses outgoing posting without a finalized reservation id', async () => {
+  const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+  assert.throws(() => client.postOutgoingInvoice('invoice-1', 'test', ''), /reservationId is required/);
+});

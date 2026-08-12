@@ -3,6 +3,32 @@ import { describe, expect, it, vi } from 'vitest';
 import ReportsView from './ReportsView';
 
 describe('ReportsView drilldown ranges', () => {
+  it('renders profile tabs and routes report exports through the adapter', async () => {
+    const exportReport = vi.fn(async () => ({ format: 'csv' as const, path: '/tmp/report.csv' }));
+    const dataAdapter = {
+      getSusaReport: vi.fn(async () => ({ rows: [], totals: { openingDebit: 0, openingCredit: 0, turnoverDebit: 0, turnoverCredit: 0, closingDebit: 0, closingCredit: 0 }, quality: { unmappedAccounts: 0, warnings: 0, generatedAt: '', source: 'live' as const } })),
+      getGuvReport: vi.fn(async () => ({ lines: [], totals: { revenue: 0, expenses: 0, result: 0 }, quality: { unmappedAccounts: [], warnings: 0, generatedAt: '', source: 'live' as const } })),
+      getBalanceSheetPreview: vi.fn(async () => ({ aktiva: [], passiva: [], totals: { aktiva: 0, passiva: 0, difference: 0 }, quality: { status: 'ok' as const, notes: [], generatedAt: '', source: 'live' as const } })),
+      exportReport,
+    };
+    render(<ReportsView dataAdapter={dataAdapter} profile="management" />);
+    expect(await screen.findByRole('button', { name: 'BWA01' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'EÜR' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'CSV' }));
+    await waitFor(() => expect(exportReport).toHaveBeenCalledWith(expect.objectContaining({ report: 'susa', format: 'csv' })));
+    expect(await screen.findByText(/Export erstellt/)).toBeTruthy();
+  });
+
+  it('blocks a report with explicit mapping health failure', async () => {
+    const dataAdapter = {
+      getSusaReport: vi.fn(async () => ({ rows: [], totals: { openingDebit: 0, openingCredit: 0, turnoverDebit: 0, turnoverCredit: 0, closingDebit: 0, closingCredit: 0 }, quality: { unmappedAccounts: 2, warnings: 0, mappingStatus: 'blocked' as const, generatedAt: '', source: 'live' as const } })),
+      getGuvReport: vi.fn(async () => ({ lines: [], totals: { revenue: 0, expenses: 0, result: 0 }, quality: { unmappedAccounts: [], warnings: 0, generatedAt: '', source: 'live' as const } })),
+      getBalanceSheetPreview: vi.fn(async () => ({ aktiva: [], passiva: [], totals: { aktiva: 0, passiva: 0, difference: 0 }, quality: { status: 'ok' as const, notes: [], generatedAt: '', source: 'live' as const } })),
+    };
+    render(<ReportsView dataAdapter={dataAdapter} />);
+    expect((await screen.findByRole('alert')).textContent).toContain('Mapping unvollständig');
+  });
+
   it('offers a retry when report loading fails', async () => {
     const getSusaReport = vi.fn()
       .mockRejectedValueOnce(new Error('Berichts-Backend vorübergehend nicht erreichbar'))

@@ -1,3 +1,7 @@
+export type ReportTabId = 'eur' | 'susa' | 'bwa01' | 'management_guv' | 'hgb_guv' | 'bilanz';
+export type ReportProfile = 'all' | 'standard' | 'management' | 'tax';
+export type ReportPeriodPreset = 'current' | 'ytd' | 'prev_year';
+
 export interface ReportFilterState {
   chart: 'SKR03' | 'SKR04';
   mandantId: string;
@@ -6,6 +10,19 @@ export interface ReportFilterState {
   periodTo?: string;
   compareMode: 'none' | 'prev_period' | 'prev_year';
   includeDrafts: boolean;
+  /** Convenience period selector; explicit periodFrom/periodTo remain authoritative. */
+  periodPreset?: ReportPeriodPreset;
+}
+
+export interface ReportQuality {
+  generatedAt: string;
+  source: 'mock' | 'live';
+  /** Reports with unresolved mappings must not be treated as accounting truth. */
+  unmappedAccounts?: number | ReportUnmappedAccount[];
+  warnings: number;
+  state?: 'preview' | 'frozen';
+  mappingStatus?: 'healthy' | 'warning' | 'blocked';
+  mappingNotes?: string[];
 }
 
 export interface SusaRow {
@@ -36,6 +53,9 @@ export interface SusaReport {
     warnings: number;
     generatedAt: string;
     source: 'mock' | 'live';
+    state?: 'preview' | 'frozen';
+    mappingStatus?: 'healthy' | 'warning' | 'blocked';
+    mappingNotes?: string[];
   };
 }
 
@@ -63,6 +83,9 @@ export interface GuvReport {
     warnings: number;
     generatedAt: string;
     source: 'mock' | 'live';
+    state?: 'preview' | 'frozen';
+    mappingStatus?: 'healthy' | 'warning' | 'blocked';
+    mappingNotes?: string[];
   };
 }
 
@@ -94,8 +117,40 @@ export interface BalanceSheetPreview {
     notes: string[];
     generatedAt: string;
     source: 'mock' | 'live';
+    state?: 'preview' | 'frozen';
+    mappingStatus?: 'healthy' | 'warning' | 'blocked';
+    mappingNotes?: string[];
   };
 }
+
+export interface ReportExportRequest {
+  report: ReportTabId;
+  filters: ReportFilterState;
+  format: 'pdf' | 'csv';
+}
+
+export interface ReportExportResult {
+  format: 'pdf' | 'csv';
+  fileName?: string;
+  content?: string;
+  path?: string;
+}
+
+export const REPORT_TABS: ReadonlyArray<{ id: ReportTabId; label: string; description: string }> = [
+  { id: 'eur', label: 'EÜR', description: 'Einnahmenüberschussrechnung' },
+  { id: 'susa', label: 'SuSa', description: 'Summen- und Saldenliste' },
+  { id: 'bwa01', label: 'BWA01', description: 'Betriebswirtschaftliche Auswertung' },
+  { id: 'management_guv', label: 'Management-GuV', description: 'Interne Ergebnisrechnung' },
+  { id: 'hgb_guv', label: 'HGB-GuV', description: 'Gewinn- und Verlustrechnung nach HGB' },
+  { id: 'bilanz', label: 'Bilanz', description: 'Bilanz nach HGB' },
+];
+
+export const reportTabsForProfile = (profile: ReportProfile): ReportTabId[] => {
+  if (profile === 'management') return ['bwa01', 'management_guv', 'susa'];
+  if (profile === 'tax') return ['eur', 'hgb_guv', 'bilanz', 'susa'];
+  if (profile === 'standard') return ['susa', 'hgb_guv', 'bilanz'];
+  return REPORT_TABS.map((tab) => tab.id);
+};
 
 export interface ReportDrilldownSelection {
   reportType: 'susa' | 'guv' | 'bilanz';

@@ -12,6 +12,8 @@ import type {
   GuvReport,
   ReportDrilldownEntry,
   ReportDrilldownSelection,
+  ReportExportRequest,
+  ReportExportResult,
   ReportFilterState,
   SusaReport,
 } from '../domain/reportTypes';
@@ -92,6 +94,13 @@ export interface ProAccountingDataAdapter {
   getGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   getBalanceSheetPreview?: (filters: ReportFilterState) => Promise<BalanceSheetPreview>;
   getReportDrilldownEntries?: (selection: ReportDrilldownSelection) => Promise<ReportDrilldownEntry[]>;
+  getEurReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  getBwaReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  getManagementGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  getHgbGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  exportReport?: (request: ReportExportRequest) => Promise<ReportExportResult | void>;
+  exportReportPdf?: (request: Omit<ReportExportRequest, 'format'>) => Promise<ReportExportResult | void>;
+  exportReportCsv?: (request: Omit<ReportExportRequest, 'format'>) => Promise<ReportExportResult | void>;
   listAssets?: () => Promise<AssetItem[]>;
   upsertAsset?: (asset: AssetUpsertInput, reason: string) => Promise<AssetItem>;
   getDepreciationSchedule?: (assetId: string) => Promise<AssetDepreciationScheduleEntry[]>;

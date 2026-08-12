@@ -10,6 +10,7 @@ function euro(value: number) {
 interface GuvViewProps {
   report: GuvReport | null;
   onSelectLine: (line: GuvLine) => void;
+  title?: string;
 }
 
 interface FlatLine {
@@ -32,7 +33,7 @@ function flattenVisible(lines: GuvLine[], expanded: Set<string>, level = 0): Fla
   });
 }
 
-export default function GuvView({ report, onSelectLine }: GuvViewProps) {
+export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Verlustrechnung' }: GuvViewProps) {
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
 
   const defaultExpanded = useMemo<string[]>(() => (report ? collectExpandable(report.lines) : []), [report]);
@@ -93,7 +94,7 @@ export default function GuvView({ report, onSelectLine }: GuvViewProps) {
 
       <div className="rounded-2xl border border-border bg-surface overflow-hidden">
         <div className="px-4 h-12 border-b border-subtle flex items-center justify-between gap-3">
-          <div className="text-sm font-bold text-foreground">Gewinn- und Verlustrechnung</div>
+          <div className="text-sm font-bold text-foreground">{title}</div>
           <div className="text-xs text-muted">
             Stand: {new Date(report.quality.generatedAt).toLocaleString('de-DE')}
           </div>

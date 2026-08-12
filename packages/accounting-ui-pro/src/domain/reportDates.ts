@@ -19,7 +19,15 @@ export const monthToLastDay = (month?: string): string | undefined => {
   return `${match[1]}-${match[2]}-${String(lastDay).padStart(2, '0')}`;
 };
 
-export const reportDateRange = ({ periodFrom, periodTo, asOfDate }: Pick<ReportFilterState, 'periodFrom' | 'periodTo' | 'asOfDate'>) => ({
-  from: monthToFirstDay(periodFrom),
-  to: monthToLastDay(periodTo) ?? asOfDate,
-});
+export const reportDateRange = ({ periodFrom, periodTo, asOfDate, periodPreset }: Pick<ReportFilterState, 'periodFrom' | 'periodTo' | 'asOfDate' | 'periodPreset'>) => {
+  const yearOffset = periodPreset === 'prev_year' ? -1 : 0;
+  const shiftYear = (value?: string) => value ? `${Number(value.slice(0, 4)) + yearOffset}${value.slice(4)}` : undefined;
+  return {
+    from: shiftYear(monthToFirstDay(periodFrom)),
+    to: shiftYear(monthToLastDay(periodTo) ?? asOfDate),
+  };
+};
+
+export const periodPresetRange = (filters: ReportFilterState) => {
+  return reportDateRange(filters);
+};

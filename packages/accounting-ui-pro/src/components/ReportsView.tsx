@@ -8,14 +8,23 @@ import {
   GuvReport,
   ReportDrilldownEntry,
   ReportDrilldownSelection,
+  ReportExportRequest,
+  ReportExportResult,
   ReportFilterState,
+  ReportProfile,
+  ReportTabId,
+  reportTabsForProfile,
   SusaReport,
   SusaRow,
 } from '../domain/reportTypes';
 import {
   getBalanceSheetPreview,
+  getBwaReport,
+  getEurReport,
   getGuvReport,
+  getHgbGuvReport,
   getReportDrilldownEntries,
+  getManagementGuvReport,
   getSusaReport,
 } from '../services/mockReportService';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
@@ -28,6 +37,7 @@ import BalanceSheetPreviewView from './reports/BalanceSheetPreviewView';
 import ReportDrilldownPanel from './reports/ReportDrilldownPanel';
 import DatevExportPanel from './reports/DatevExportPanel';
 import { reportDateRange } from '../domain/reportDates';
+import ReportStatusBadge, { MappingHealthBlock, reportIsMappingBlocked } from './reports/ReportStatusBadge';
 
 const BILANZ_ACCOUNT_MAP: Record<string, string[]> = {
   'a-1-1': ['0440', '0480'],
@@ -49,12 +59,15 @@ function buildDefaultFilters(chart: 'SKR03' | 'SKR04' = 'SKR03'): ReportFilterSt
     periodTo: `${now.getFullYear()}-12`,
     compareMode: 'none',
     includeDrafts: false,
+    periodPreset: 'current',
   };
 }
 
 interface ReportsViewProps {
   dataAdapter?: ProAccountingDataAdapter;
   chartFramework?: 'SKR03' | 'SKR04';
+  profile?: ReportProfile;
+  availableTabs?: ReportTabId[];
   role?: UserRole;
   onOpenTransaction?: (transactionId: string) => void;
   onOpenInvoice?: (invoiceId: string) => void;
@@ -62,8 +75,9 @@ interface ReportsViewProps {
   onOpenJournalEntry?: (journalEntryId: string) => void;
 }
 
-export default function ReportsView({ dataAdapter, chartFramework, role = 'admin', onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
-  const [activeTab, setActiveTab] = useState<'susa' | 'guv' | 'bilanz'>('susa');
+export default function ReportsView({ dataAdapter, chartFramework, profile = 'all', availableTabs, role = 'admin', onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
+  const visibleTabs = availableTabs ?? reportTabsForProfile(profile);
+  const [activeTab, setActiveTab] = useState<ReportTabId>(() => visibleTabs.includes('susa') ? 'susa' : visibleTabs[0] ?? 'susa');
   const [filters, setFilters] = useState<ReportFilterState>(() => buildDefaultFilters(chartFramework));
 
   useEffect(() => {
@@ -73,6 +87,10 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
   const [susaReport, setSusaReport] = useState<SusaReport | null>(null);
   const [guvReport, setGuvReport] = useState<GuvReport | null>(null);
   const [balanceSheetPreview, setBalanceSheetPreview] = useState<BalanceSheetPreview | null>(null);
+  const [eurReport, setEurReport] = useState<GuvReport | null>(null);
+  const [bwaReport, setBwaReport] = useState<GuvReport | null>(null);
+  const [managementGuvReport, setManagementGuvReport] = useState<GuvReport | null>(null);
+  const [hgbGuvReport, setHgbGuvReport] = useState<GuvReport | null>(null);
   const [reportsLoading, setReportsLoading] = useState(true);
   const [reportsError, setReportsError] = useState<string | null>(null);
   const [reportsRetryKey, setReportsRetryKey] = useState(0);
@@ -82,28 +100,39 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
   const [drilldownLoading, setDrilldownLoading] = useState(false);
   const [drilldownError, setDrilldownError] = useState<string | null>(null);
   const [drilldownRetryKey, setDrilldownRetryKey] = useState(0);
+  const [exporting, setExporting] = useState(false);
+
+  useEffect(() => {
+    if (!visibleTabs.includes(activeTab)) setActiveTab(visibleTabs[0] ?? 'susa');
+  }, [activeTab, visibleTabs]);
 
   useEffect(() => {
     let cancelled = false;
     setReportsLoading(true);
     setReportsError(null);
 
-    const loadReports = dataAdapter
-      ? dataAdapter.getSusaReport && dataAdapter.getGuvReport && dataAdapter.getBalanceSheetPreview
-        ? Promise.all([
-            dataAdapter.getSusaReport(filters),
-            dataAdapter.getGuvReport(filters),
-            dataAdapter.getBalanceSheetPreview(filters),
-          ])
-        : Promise.reject(new Error('Auswertungen sind für diesen Adapter nicht verfügbar.'))
-      : Promise.all([getSusaReport(filters), getGuvReport(filters), getBalanceSheetPreview(filters)]);
+    const load = <T,>(method: ((value: ReportFilterState) => Promise<T>) | undefined, fallback: (value: ReportFilterState) => Promise<T>) =>
+      method ? method(filters) : fallback(filters);
+    const loadReports = Promise.all([
+      load(dataAdapter?.getSusaReport, getSusaReport),
+      load(dataAdapter?.getGuvReport, getGuvReport),
+      load(dataAdapter?.getBalanceSheetPreview, getBalanceSheetPreview),
+      load(dataAdapter?.getEurReport, getEurReport),
+      load(dataAdapter?.getBwaReport, getBwaReport),
+      load(dataAdapter?.getManagementGuvReport, getManagementGuvReport),
+      load(dataAdapter?.getHgbGuvReport, getHgbGuvReport),
+    ]);
 
     loadReports
-      .then(([susa, guv, bilanz]) => {
+      .then(([susa, guv, bilanz, eur, bwa, management, hgb]) => {
         if (cancelled) return;
         setSusaReport(susa);
         setGuvReport(guv);
         setBalanceSheetPreview(bilanz);
+        setEurReport(eur);
+        setBwaReport(bwa);
+        setManagementGuvReport(management);
+        setHgbGuvReport(hgb);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -150,17 +179,45 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
     };
   }, [dataAdapter, drilldownRetryKey, drilldownSelection]);
 
-  const activeReportLabel = useMemo(() => {
-    if (activeTab === 'susa') return 'Summen- und Saldenliste';
-    if (activeTab === 'guv') return 'Gewinn- und Verlustrechnung';
-    return 'Bilanz';
-  }, [activeTab]);
-  const activeSource =
-    activeTab === 'susa'
-      ? susaReport?.quality.source
-      : activeTab === 'guv'
-        ? guvReport?.quality.source
-      : balanceSheetPreview?.quality.source;
+  const activeReportLabel = useMemo(() => ({
+    eur: 'Einnahmenüberschussrechnung',
+    susa: 'Summen- und Saldenliste',
+    bwa01: 'BWA01',
+    management_guv: 'Management-GuV',
+    hgb_guv: 'Gewinn- und Verlustrechnung nach HGB',
+    bilanz: 'Bilanz',
+  })[activeTab], [activeTab]);
+  const activeReport = activeTab === 'susa'
+    ? susaReport
+    : activeTab === 'bilanz'
+      ? balanceSheetPreview
+      : activeTab === 'eur'
+        ? eurReport
+        : activeTab === 'bwa01'
+          ? bwaReport
+          : activeTab === 'management_guv'
+            ? managementGuvReport
+            : hgbGuvReport;
+  const activeQuality = activeReport?.quality;
+
+  const exportReport = async (format: 'pdf' | 'csv') => {
+    if (!dataAdapter) return;
+    setExporting(true);
+    setReportsError(null);
+    const request: ReportExportRequest = { report: activeTab, filters, format };
+    try {
+      let result: ReportExportResult | void;
+      if (dataAdapter.exportReport) result = await dataAdapter.exportReport(request);
+      else if (format === 'pdf' && dataAdapter.exportReportPdf) result = await dataAdapter.exportReportPdf({ report: activeTab, filters });
+      else if (format === 'csv' && dataAdapter.exportReportCsv) result = await dataAdapter.exportReportCsv({ report: activeTab, filters });
+      else throw new Error('Report-Export ist für diesen Adapter nicht verfügbar.');
+      setReportsError(result?.path ? `Export erstellt: ${result.path}` : `${format.toUpperCase()}-Export erstellt.`);
+    } catch (error) {
+      setReportsError(error instanceof Error ? error.message : 'Report-Export fehlgeschlagen.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleSusaSelect = (row: SusaRow) => {
     const range = reportDateRange(filters);
@@ -205,30 +262,19 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
             Auswertungen
           </div>
           <div className="flex-1 min-w-0">
-            <h1 className="text-sm font-black tracking-tight text-foreground">SuSa, GuV und Bilanz</h1>
-            <p className="text-xs text-muted">SuSa, GuV und Bilanz mit Journal-Drilldown.</p>
+            <h1 className="text-sm font-black tracking-tight text-foreground">EÜR und Finanzberichte</h1>
+            <p className="text-xs text-muted">Hierarchische Positionen mit Journal-Drilldown.</p>
           </div>
         </div>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
-        <ReportToolbar filters={filters} onChange={setFilters} />
+        <ReportToolbar filters={filters} onChange={setFilters} activeTab={activeTab} onExport={dataAdapter ? exportReport : undefined} exporting={exporting} />
         <div className="flex items-center justify-between gap-3">
-          <ReportTabSwitch activeTab={activeTab} onChange={setActiveTab} />
+          <ReportTabSwitch activeTab={activeTab} onChange={setActiveTab} tabs={visibleTabs} />
           <div className="text-xs text-muted flex items-center gap-2">
             Aktive Ansicht: {activeReportLabel}
-            {activeSource ? (
-              <span
-                className="rounded-full border border-border bg-surface px-2 py-0.5 font-semibold uppercase tracking-wide"
-                title={
-                  activeSource === 'live'
-                    ? 'Auswertung aus den gebuchten Daten dieser Installation.'
-                    : 'Beispieldaten zur Ansicht — nicht aus Ihrer Buchhaltung.'
-                }
-              >
-                {activeSource === 'live' ? 'Live-Daten' : 'Beispieldaten'}
-              </span>
-            ) : null}
+            <ReportStatusBadge quality={activeQuality} />
           </div>
         </div>
 
@@ -252,12 +298,17 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
                     {reportsLoading ? 'Lade erneut…' : 'Erneut versuchen'}
                   </Button>
                 </div>
-              ) : activeTab === 'susa' ? (
-                <SusaTable report={susaReport} onSelectRow={handleSusaSelect} />
-              ) : activeTab === 'guv' ? (
-                <GuvView report={guvReport} onSelectLine={handleGuvSelect} />
               ) : (
-                <BalanceSheetPreviewView report={balanceSheetPreview} onSelectLine={handleBilanzSelect} />
+                <>
+                  <MappingHealthBlock quality={activeQuality} />
+                  {!activeQuality || reportIsMappingBlocked(activeQuality) ? null : activeTab === 'susa' ? (
+                    <SusaTable report={susaReport} onSelectRow={handleSusaSelect} />
+                  ) : activeTab === 'bilanz' ? (
+                    <BalanceSheetPreviewView report={balanceSheetPreview} onSelectLine={handleBilanzSelect} />
+                  ) : (
+                    <GuvView report={activeReport as GuvReport | null} title={activeReportLabel} onSelectLine={handleGuvSelect} />
+                  )}
+                </>
               )}
             </div>
 

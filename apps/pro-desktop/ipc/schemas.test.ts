@@ -31,6 +31,18 @@ import {
 import { ipcRoutes } from './contract';
 
 describe('Pro IPC route schemas', () => {
+  it('exposes the authoritative accounting policy route', () => {
+    expect(ipcRoutes['pro:getAccountingPolicy'].args.parse(undefined)).toBeUndefined();
+    expect(
+      ipcRoutes['pro:getAccountingPolicy'].result.parse({
+        tenantId: 'default',
+        activeChart: 'SKR04',
+        periodPolicy: 'calendar_month',
+        updatedAt: '2026-08-12T00:00:00.000Z',
+      }),
+    ).toMatchObject({ tenantId: 'default', activeChart: 'SKR04' });
+  });
+
   it('validates journal entry account filters', () => {
     expect(
       ipcRoutes['pro:listJournalEntries'].args.parse({

@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3';
 import type { DocumentTemplateKind, Invoice } from '../types';
 import { logger } from '../utils/logger';
 import { closeDb, getDb, getDbPath, initDb } from '../db/connection';
-import { createInvoiceFromOffer, deleteInvoice, finalizeOutgoingInvoice, listInvoices, upsertInvoice } from '../db/invoicesRepo';
+import { createInvoiceFromOffer, deleteInvoice, listInvoices, upsertInvoice } from '../db/invoicesRepo';
 import {
   deleteOffer,
   getOffer,
@@ -99,6 +99,8 @@ import {
   runDepreciation,
   upsertAsset,
 } from '../db/assetsRepo';
+import { getAccountingPolicy } from '../db/proAccountingRepo';
+
 /**
  * Resolves the document's tax mode against the business settings and stores the
  * resulting snapshot alongside the gross amount. Pro must use the same shared
@@ -329,10 +331,8 @@ export const registerIpcHandlers = (
     return releaseNumber(db, reservationId);
   });
 
-  register(ipcMain, 'numbers:finalize', async ({ reservationId, documentId }) => {
+  register(ipcMain, 'numbers:finalize', ({ reservationId, documentId }) => {
     const db = requireDb();
-    const reservation = db.prepare('SELECT kind FROM number_reservations WHERE id = ?').get(reservationId) as { kind: string } | undefined;
-    if (reservation?.kind === 'invoice') return finalizeOutgoingInvoice(db, reservationId, documentId);
     return finalizeNumber(db, reservationId, documentId);
   });
 
@@ -1120,6 +1120,11 @@ export const registerIpcHandlers = (
     return getProAccountingCatalogService().listLedgerAccounts(args);
   });
 
+  register(ipcMain, 'pro:getAccountingPolicy', () => {
+    const db = requireDb();
+    return getAccountingPolicy(db, getProScope().tenantId);
+  });
+
   register(ipcMain, 'pro:listTaxCases', ({ activeOnly }) => {
     return getProAccountingCatalogService().listTaxCases({ activeOnly });
   });
@@ -1274,34 +1279,6 @@ export const registerIpcHandlers = (
   register(ipcMain, 'pro:upsertWorkflowEntry', ({ transactionId, transactionJson, draftJson }) => {
     return getProWorkflowService().upsert({ transactionId, transactionJson, draftJson });
   });
-
-  register(ipcMain, 'pro:getAccountingPolicy', () => getProAccountingService().getAccountingPolicy());
-  register(ipcMain, 'pro:setAccountingPolicy', (input) => getProAccountingService().setAccountingPolicy(input));
-  register(ipcMain, 'pro:listAccountingAccountMappings', ({ chart }) => getProAccountingService().listAccountingAccountMappings(chart));
-  register(ipcMain, 'pro:upsertAccountingAccountMapping', (input) => getProAccountingService().upsertAccountingAccountMapping(input));
-  register(ipcMain, 'pro:listVendors', () => getProAccountingService().listVendors());
-  register(ipcMain, 'pro:upsertVendor', ({ vendor }) => getProAccountingService().upsertVendor(vendor));
-  register(ipcMain, 'pro:listIncomingInvoices', () => getProAccountingService().listIncomingInvoices());
-  register(ipcMain, 'pro:upsertIncomingInvoice', ({ invoice }) => getProAccountingService().upsertIncomingInvoice(invoice));
-  register(ipcMain, 'pro:previewOutgoingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewOutgoingInvoice(invoiceId));
-  register(ipcMain, 'pro:postOutgoingInvoiceAccounting', ({ invoiceId, reservationId, softLockOverride, overrideReason }) => {
-    if (softLockOverride) assertLocalOwner('pro:postOutgoingInvoiceAccounting');
-    return getProAccountingService().postOutgoingInvoice(invoiceId, { reservationId, requireFinalizedReservation: true, softLockOverride, overrideReason });
-  });
-  register(ipcMain, 'pro:previewIncomingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewIncomingInvoice(invoiceId));
-  register(ipcMain, 'pro:postIncomingInvoiceAccounting', ({ invoiceId, softLockOverride, overrideReason }) => {
-    if (softLockOverride) assertLocalOwner('pro:postIncomingInvoiceAccounting');
-    return getProAccountingService().postIncomingInvoice(invoiceId, { softLockOverride, overrideReason });
-  });
-  register(ipcMain, 'pro:listOpenItems', () => getProAccountingService().listOpenItems());
-  register(ipcMain, 'pro:allocateOpenItemPayment', ({ payment }) => getProAccountingService().allocateOpenItemPayment(payment));
-  register(ipcMain, 'pro:allocateRemainingPayment', ({ paymentId, allocations }) => getProAccountingService().allocateRemainingOpenItemPayment(paymentId, allocations));
-  register(ipcMain, 'pro:reverseDocumentAccounting', (input) => {
-    if (input.softLockOverride) assertLocalOwner('pro:reverseDocumentAccounting');
-    return getProAccountingService().reverseDocumentAccounting(input);
-  });
-  register(ipcMain, 'pro:previewAccountingBackfill', () => getProAccountingService().previewAccountingBackfill());
-  register(ipcMain, 'pro:confirmAccountingBackfill', (input) => getProAccountingService().confirmAccountingBackfill(input));
 
   register(ipcMain, 'updater:getStatus', () => {
     return getCurrentUpdateStatus();

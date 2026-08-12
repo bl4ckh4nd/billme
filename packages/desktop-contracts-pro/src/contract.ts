@@ -695,9 +695,11 @@ const proRunDepreciationArgsSchema = z.object({
   assetId: z.string().min(1),
   year: z.number().int(),
   postingDate: z.string(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().min(1).optional(),
   reason: z.string().min(1),
   actorRole: proActorRoleSchema.optional(),
-});
+}).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
 
 const proDisposeAssetArgsSchema = z.object({
   assetId: z.string().min(1),

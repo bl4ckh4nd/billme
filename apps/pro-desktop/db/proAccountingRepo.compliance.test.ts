@@ -338,6 +338,41 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     expect(invalid.validationIssues.map((issue) => issue.code)).toEqual(expect.arrayContaining(['UNKNOWN_ACCOUNT', 'INVALID_LINE_SIDE']));
   });
 
+  it('does not let manual evidence labels bypass tax validation', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    db.exec("INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at) VALUES ('test-4830', 'SKR03', '4830', 'AfA', 'test', datetime('now'), datetime('now')), ('test-0440', 'SKR03', '0440', 'Anlage', 'test', datetime('now'), datetime('now'))");
+    db.prepare(`
+      INSERT INTO assets (
+        id, tenant_id, asset_number, name, asset_class, status, activation_date,
+        acquisition_cost, useful_life_years, depreciation_method, cost_center, location,
+        asset_account_number, created_at, updated_at
+      ) VALUES ('trusted-asset', 'default', 'TRUSTED-1', 'Trusted asset', 'IT-Hardware',
+        'aktiv', '2026-01-01', 100, 1, 'linear', 'IT', 'Berlin', '0440', datetime('now'), datetime('now'))
+    `).run();
+    const draft = (id: string) => ({
+      id,
+      tenantId: 'default',
+      transactionId: id,
+      workflowStatus: 'approved' as const,
+      postingDate: '2026-03-01',
+      documentDate: '2026-03-01',
+      bookingText: 'AfA',
+      period: '2026-03',
+      fiscalYear: 2026,
+      lines: [
+        { id: `${id}-debit`, accountNumber: '4830', debitAmount: 10, creditAmount: 0, evidenceType: 'asset_depreciation' },
+        { id: `${id}-credit`, accountNumber: '0440', debitAmount: 0, creditAmount: 10 },
+      ],
+      validationIssues: [],
+      updatedAt: new Date().toISOString(),
+    });
+    const manual = saveDraft(db, draft('manual-evidence'), scope);
+    expect(manual.validationIssues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'MISSING_TAX_CASE' })]));
+    const trusted = saveDraft(db, draft('asset-depreciation:trusted-asset:2026'), scope, { trustedSourceType: 'asset_depreciation' });
+    expect(trusted.validationIssues.some((issue) => issue.code === 'MISSING_TAX_CASE')).toBe(false);
+  });
+
   it('reverses on the requested date and nets every VAT-bearing cent', () => {
     const db = createDb();
     const scope = createProTenantScope('default');

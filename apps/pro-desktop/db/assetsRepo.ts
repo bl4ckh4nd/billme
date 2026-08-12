@@ -4,7 +4,6 @@ import { and, asc, eq } from "drizzle-orm";
 import { createDrizzle, schema } from "@billme/desktop-data/drizzle";
 import {
   buildDepreciationSchedule,
-  computeAssetDisposal,
   DEPRECIATION_EXPENSE_ACCOUNTS,
   resolveDepreciationMethod,
   type DepreciationMethod,
@@ -291,16 +290,7 @@ const mapAsset = (
   const posted = schedule
     .filter((period) => period.status === "posted")
     .reduce((sum, period) => sum + period.amount, 0);
-  const disposal = row.disposal_date
-    ? computeAssetDisposal({
-        ...scheduleInput(row),
-        disposalDate: row.disposal_date,
-        proceeds: Number(row.disposal_proceeds ?? 0),
-      })
-    : null;
-  const residualValue =
-    disposal?.residualBookValue ??
-    Math.max(0, amount(Number(row.acquisition_cost) - posted));
+  const residualValue = Math.max(0, amount(Number(row.acquisition_cost) - posted));
   const next = schedule.find((period) => period.status === "planned");
   return {
     id: row.id,
@@ -500,7 +490,7 @@ const matchingPostedIncomingInvoice = (
   if (!line) throw new Error("INCOMING_INVOICE_ASSET_LINE_MISMATCH");
   return {
     journalEntryId: invoice.accounting_journal_entry_id,
-    sourceKey: `incoming_invoice:${invoiceId}`,
+    sourceKey: `incoming-invoice:${invoiceId}`,
   };
 };
 
@@ -517,6 +507,7 @@ const postAssetJournal = (
     tenantId: string;
     lines: BookingDraftEntity["lines"];
     options: { softLockOverride?: boolean; overrideReason?: string };
+    trustedSourceType?: string;
   },
 ): string => {
   const draft: BookingDraftEntity = {
@@ -534,7 +525,9 @@ const postAssetJournal = (
     validationIssues: [],
     updatedAt: new Date().toISOString(),
   };
-  saveDraft(db, draft, scope);
+  saveDraft(db, draft, scope, {
+    trustedSourceType: args.trustedSourceType,
+  });
   const posted = postDraft(
     db,
     args.draftId,
@@ -544,6 +537,7 @@ const postAssetJournal = (
       sourceType: args.sourceType,
       softLockOverride: args.options.softLockOverride,
       overrideReason: args.options.overrideReason,
+      trustedSourceType: args.trustedSourceType,
     },
     scope,
   );
@@ -620,8 +614,9 @@ export const upsertAsset = (
     .where(and(eq(schema.assets.tenantId, tenantId), eq(schema.assets.id, id)))
     .get()?.id;
   const existingRow = existingId ? getAssetRow(db, tenantId, id) : undefined;
-  if (input.status === "aktiv")
-    assertPostingPeriod(db, tenantId, input.activationDate, input);
+  const retryingActivation = Boolean(
+    input.status === "aktiv" && existingRow?.activation_journal_entry_id,
+  );
   if (
     existingRow &&
     (getMovementCount(db, tenantId, id) > 0 ||
@@ -642,6 +637,8 @@ export const upsertAsset = (
         input.sourceIncomingInvoiceId !== existingRow.source_incoming_invoice_id);
     if (financialChanged) throw new Error("ACCOUNTING_ASSET_FIELDS_IMMUTABLE");
   }
+  if (input.status === "aktiv" && !retryingActivation)
+    assertPostingPeriod(db, tenantId, input.activationDate, input);
 
   let activationJournalEntryId =
     existingRow?.activation_journal_entry_id ?? null;
@@ -857,6 +854,26 @@ const sourceJournalId = (
       .get(tenantId, sourceType, sourceKey) as { id: string } | undefined
   )?.id;
 
+const postedAssetAmount = (
+  db: Database.Database,
+  tenantId: string,
+  assetId: string,
+): number => {
+  const row = db
+    .prepare(
+      "SELECT COALESCE(SUM(amount), 0) AS amount FROM asset_depreciation_schedule WHERE tenant_id = ? AND asset_id = ? AND status = 'posted'",
+    )
+    .get(tenantId, assetId) as { amount: number };
+  return Number(row.amount);
+};
+
+const carryingAmount = (
+  db: Database.Database,
+  tenantId: string,
+  row: AssetRow,
+): number =>
+  Math.max(0, amount(Number(row.acquisition_cost) - postedAssetAmount(db, tenantId, row.id)));
+
 export const runDepreciation = (
   db: Database.Database,
   args: {
@@ -875,9 +892,6 @@ export const runDepreciation = (
 } => {
   const tenantId = getTenantId(scope);
   const asset = getAssetRow(db, tenantId, args.assetId);
-  requireIsoDate(args.postingDate, "posting");
-  assertPostingPeriod(db, tenantId, args.postingDate, args);
-  if (asset.status === "entwurf") throw new Error("ASSET_NOT_ACTIVE");
   const scheduleEntry = getDepreciationSchedule(db, asset.id, scope).find(
     (entry) => entry.year === args.year,
   );
@@ -894,6 +908,11 @@ export const runDepreciation = (
       scheduleEntry,
       journalEntryId: existingJournalId,
     };
+  requireIsoDate(args.postingDate, "posting");
+  if (!existingJournalId)
+    assertPostingPeriod(db, tenantId, args.postingDate, args);
+  if (asset.status === "entwurf" || !asset.activation_journal_entry_id)
+    throw new Error("ASSET_NOT_ACTIVE");
   const chart = activeChart(db, tenantId);
   const expenseAccount = DEPRECIATION_EXPENSE_ACCOUNTS[chart];
   if (
@@ -930,6 +949,7 @@ export const runDepreciation = (
       },
     ],
     options: args,
+    trustedSourceType: "asset_depreciation",
   });
   const postedAt = new Date().toISOString();
   db.transaction(() => {
@@ -1020,18 +1040,45 @@ export const disposeAsset = (
   ensureTaxCaseSeedData(db);
   const tenantId = getTenantId(scope);
   const row = getAssetRow(db, tenantId, args.assetId);
+  const sourceKey = `asset_disposal:${row.id}`;
+  const existingJournalId = sourceJournalId(
+    db,
+    tenantId,
+    "asset_disposal",
+    sourceKey,
+  );
+  const existingDisposalMovement = db
+    .prepare(
+      "SELECT amount, proceeds, gain_loss FROM asset_movements WHERE tenant_id = ? AND asset_id = ? AND source_type = 'asset_disposal' AND source_key = ? LIMIT 1",
+    )
+    .get(tenantId, row.id, sourceKey) as
+    | { amount: number; proceeds: number | null; gain_loss: number | null }
+    | undefined;
+  if (existingJournalId && row.disposal_date && existingDisposalMovement) {
+    const residualBookValue = Number(existingDisposalMovement.amount);
+    const gainLoss = Number(
+      existingDisposalMovement.gain_loss ??
+        amount(Number(existingDisposalMovement.proceeds ?? args.proceeds) - residualBookValue),
+    );
+    return {
+      asset: mapAsset(db, row, scope),
+      residualBookValue,
+      gainLoss,
+      journalEntryId: existingJournalId,
+    };
+  }
   requireIsoDate(args.disposalDate, "disposal");
-  assertPostingPeriod(db, tenantId, args.disposalDate, args);
+  if (!existingJournalId)
+    assertPostingPeriod(db, tenantId, args.disposalDate, args);
   if (row.depreciation_method === "pool")
     throw new Error("POOL_INDIVIDUAL_DISPOSAL_NOT_SUPPORTED");
+  if (row.status === "entwurf" || !row.activation_journal_entry_id)
+    throw new Error("ASSET_NOT_ACTIVE");
   if (row.disposal_date) throw new Error("ASSET_ALREADY_DISPOSED");
   if (args.proceeds > 0 && args.taxRate === undefined)
     throw new Error("TAX_RATE_REQUIRED_FOR_PROCEEDS");
-  const result = computeAssetDisposal({
-    ...scheduleInput(row),
-    disposalDate: args.disposalDate,
-    proceeds: args.proceeds,
-  });
+  const residualBookValue = carryingAmount(db, tenantId, row);
+  const gainLoss = amount(args.proceeds - residualBookValue);
   const chart = activeChart(db, tenantId);
   const accounts = disposalAccounts(chart);
   const proceedsAccount =
@@ -1049,18 +1096,14 @@ export const disposeAsset = (
     accountNumbers.push(taxOutputAccount(db, chart, args.taxRate!));
   if (accountNumbers.some((account) => !accountExists(db, chart, account)))
     throw new Error("DISPOSAL_ACCOUNT_NOT_IN_CHART");
-  const sourceKey = `asset_disposal:${row.id}`;
-  const existingJournalId = sourceJournalId(
-    db,
-    tenantId,
-    "asset_disposal",
-    sourceKey,
-  );
-  if (existingJournalId)
+  if (existingJournalId && existingDisposalMovement)
     return {
       asset: mapAsset(db, getAssetRow(db, tenantId, row.id), scope),
-      residualBookValue: result.residualBookValue,
-      gainLoss: result.gainLoss,
+      residualBookValue: Number(existingDisposalMovement.amount),
+      gainLoss: Number(
+        existingDisposalMovement.gain_loss ??
+          amount(Number(existingDisposalMovement.proceeds ?? args.proceeds) - Number(existingDisposalMovement.amount)),
+      ),
       journalEntryId: existingJournalId,
     };
   const gross = amount(args.proceeds * (1 + (args.taxRate ?? 0) / 100));
@@ -1074,32 +1117,33 @@ export const disposeAsset = (
       creditAmount: 0,
       memo: args.reason,
     });
-  if (result.gainLoss < 0)
+  if (gainLoss < 0)
     lines.push({
       id: `${row.id}-loss`,
       accountNumber: accounts.loss,
-      debitAmount: amount(-result.gainLoss),
+      debitAmount: amount(-gainLoss),
       creditAmount: 0,
       memo: args.reason,
     });
-  if (result.gainLoss > 0)
+  if (gainLoss > 0)
     lines.push({
       id: `${row.id}-gain`,
       accountNumber: accounts.gain,
       debitAmount: 0,
-      creditAmount: result.gainLoss,
+      creditAmount: gainLoss,
       taxCaseKey: 'DE_ZERO_EXEMPT',
       evidenceType: 'asset_disposal',
       evidenceReference: row.asset_number,
       memo: args.reason,
     });
-  lines.push({
-    id: `${row.id}-residual`,
-    accountNumber: row.asset_account_number,
-    debitAmount: 0,
-    creditAmount: result.residualBookValue,
-    memo: args.reason,
-  });
+  if (residualBookValue > 0)
+    lines.push({
+      id: `${row.id}-residual`,
+      accountNumber: row.asset_account_number,
+      debitAmount: 0,
+      creditAmount: residualBookValue,
+      memo: args.reason,
+    });
   if (args.proceeds > 0 && vat > 0)
     lines.push({
       id: `${row.id}-vat`,
@@ -1129,6 +1173,24 @@ export const disposeAsset = (
   db.transaction(() => {
     const drizzle = createDrizzle(db);
     drizzle
+      .insert(schema.assetMovements)
+      .values({
+        id: randomUUID(),
+        tenantId,
+        assetId: row.id,
+        type: "disposal",
+        movementDate: args.disposalDate,
+        amount: residualBookValue,
+        proceeds: args.proceeds,
+        gainLoss,
+        journalEntryId,
+        sourceType: "asset_disposal",
+        sourceKey,
+        reason: args.overrideReason?.trim() || args.reason,
+        createdAt: now,
+      })
+      .run();
+    drizzle
       .update(schema.assets)
       .set({
         status: args.proceeds > 0 ? "verkauft" : "stillgelegt",
@@ -1151,24 +1213,6 @@ export const disposeAsset = (
         ),
       )
       .run();
-    drizzle
-      .insert(schema.assetMovements)
-      .values({
-        id: randomUUID(),
-        tenantId,
-        assetId: row.id,
-        type: "disposal",
-        movementDate: args.disposalDate,
-        amount: result.residualBookValue,
-        proceeds: args.proceeds,
-        gainLoss: result.gainLoss,
-        journalEntryId,
-        sourceType: "asset_disposal",
-        sourceKey,
-        reason: args.overrideReason?.trim() || args.reason,
-        createdAt: now,
-      })
-      .run();
     appendAuditLog(db, {
       entityType: "asset",
       entityId: row.id,
@@ -1182,8 +1226,8 @@ export const disposeAsset = (
           disposal_date: args.disposalDate,
           disposal_proceeds: args.proceeds,
         }),
-        residualBookValue: result.residualBookValue,
-        gainLoss: result.gainLoss,
+        residualBookValue,
+        gainLoss,
         journalEntryId,
       },
       actor: "pro",
@@ -1191,8 +1235,8 @@ export const disposeAsset = (
   })();
   return {
     asset: mapAsset(db, getAssetRow(db, tenantId, row.id), scope),
-    residualBookValue: result.residualBookValue,
-    gainLoss: result.gainLoss,
+    residualBookValue,
+    gainLoss,
     journalEntryId,
   };
 };

@@ -64,6 +64,25 @@ describe('Pro IPC route schemas', () => {
       }),
     ).toThrow();
     expect(() =>
+      ipcRoutes['pro:runDepreciation'].args.parse({
+        assetId: 'asset-1',
+        year: 2026,
+        postingDate: '2026-12-31',
+        reason: 'AfA',
+        softLockOverride: true,
+      }),
+    ).toThrow();
+    expect(
+      ipcRoutes['pro:runDepreciation'].args.parse({
+        assetId: 'asset-1',
+        year: 2026,
+        postingDate: '2026-12-31',
+        reason: 'AfA',
+        softLockOverride: true,
+        overrideReason: 'Owner approval',
+      }),
+    ).toMatchObject({ softLockOverride: true, overrideReason: 'Owner approval' });
+    expect(() =>
       ipcRoutes['pro:disposeAsset'].args.parse({
         assetId: 'asset-1',
         disposalDate: '2026-12-31',

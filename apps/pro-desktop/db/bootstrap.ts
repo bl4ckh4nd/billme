@@ -452,9 +452,44 @@ WHEN (EXISTS (SELECT 1 FROM asset_movements m WHERE m.asset_id = OLD.id AND m.te
     NEW.depreciation_method != OLD.depreciation_method OR NEW.asset_account_number != OLD.asset_account_number OR
     COALESCE(NEW.acquisition_offset_account_number, '') != COALESCE(OLD.acquisition_offset_account_number, '') OR
     COALESCE(NEW.source_incoming_invoice_id, '') != COALESCE(OLD.source_incoming_invoice_id, '') OR
-    COALESCE(NEW.activation_journal_entry_id, '') != COALESCE(OLD.activation_journal_entry_id, '')
+    COALESCE(NEW.activation_journal_entry_id, '') != COALESCE(OLD.activation_journal_entry_id, '') OR
+    (
+      (COALESCE(NEW.status, '') != COALESCE(OLD.status, '') OR
+       COALESCE(NEW.disposal_date, '') != COALESCE(OLD.disposal_date, '') OR
+       COALESCE(NEW.disposal_proceeds, -1) != COALESCE(OLD.disposal_proceeds, -1))
+      AND NOT (
+        OLD.status IN ('aktiv', 'voll_abgeschrieben') AND OLD.disposal_date IS NULL AND
+        NEW.status IN ('verkauft', 'stillgelegt') AND NEW.disposal_date IS NOT NULL AND
+        EXISTS (
+          SELECT 1 FROM asset_movements m
+          WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id
+            AND m.type = 'disposal' AND m.source_type = 'asset_disposal'
+            AND m.source_key = 'asset_disposal:' || OLD.id
+            AND m.journal_entry_id IS NOT NULL
+            AND m.movement_date = NEW.disposal_date
+            AND COALESCE(m.proceeds, -1) = COALESCE(NEW.disposal_proceeds, -1)
+            AND ((m.proceeds > 0 AND NEW.status = 'verkauft') OR
+                 (COALESCE(m.proceeds, 0) = 0 AND NEW.status = 'stillgelegt'))
+            AND EXISTS (SELECT 1 FROM journal_entries j
+                        WHERE j.id = m.journal_entry_id AND j.tenant_id = OLD.tenant_id)
+        )
+      )
+    )
   )
 BEGIN SELECT RAISE(ABORT, 'accounting-affecting asset fields are immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS asset_movements_require_source
+BEFORE INSERT ON asset_movements FOR EACH ROW
+WHEN NEW.type IN ('activation', 'depreciation', 'disposal') AND (
+  NEW.journal_entry_id IS NULL OR NEW.source_type IS NULL OR NEW.source_key IS NULL OR
+  (NEW.type = 'activation' AND NEW.source_type NOT IN ('asset_activation', 'incoming_invoice')) OR
+  (NEW.type = 'depreciation' AND NEW.source_type != 'asset_depreciation') OR
+  (NEW.type = 'disposal' AND NEW.source_type != 'asset_disposal') OR
+  NOT EXISTS (SELECT 1 FROM journal_entries j
+              WHERE j.id = NEW.journal_entry_id AND j.tenant_id = NEW.tenant_id
+                AND j.source_type = NEW.source_type AND j.source_key = NEW.source_key)
+)
+BEGIN SELECT RAISE(ABORT, 'asset movement requires a valid journal source'); END;
 
 CREATE TRIGGER IF NOT EXISTS asset_movements_no_update
 BEFORE UPDATE ON asset_movements FOR EACH ROW

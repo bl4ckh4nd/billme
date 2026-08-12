@@ -406,8 +406,22 @@ const validateDraft = (
   draft: BookingDraftEntity,
   periodStatus: AccountingPeriodStatus,
   chart: 'SKR03' | 'SKR04',
+  trustedSourceType?: string,
 ): DraftValidationIssue[] => {
   const issues: DraftValidationIssue[] = [];
+  const trustedDepreciationAssetId =
+    trustedSourceType === 'asset_depreciation' &&
+    draft.id.startsWith('asset-depreciation:')
+      ? draft.id.slice('asset-depreciation:'.length).split(':')[0]
+      : '';
+  const trustedAssetDepreciation = Boolean(
+    trustedDepreciationAssetId &&
+      db
+        .prepare(
+          "SELECT 1 FROM assets WHERE tenant_id = ? AND id = ? AND status <> 'entwurf' LIMIT 1",
+        )
+        .get(draft.tenantId, trustedDepreciationAssetId),
+  );
   const debit = draft.lines.reduce((total, line) => total + (toCents(line.debitAmount) ?? 0), 0);
   const credit = draft.lines.reduce((total, line) => total + (toCents(line.creditAmount) ?? 0), 0);
 
@@ -472,7 +486,9 @@ const validateDraft = (
 
     const taxCaseKey = normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode);
     const isPnl = line.accountNumber.startsWith('4') || line.accountNumber.startsWith('8');
-    if (isPnl && !taxCaseKey && line.evidenceType !== 'asset_depreciation') {
+    if (isPnl && !taxCaseKey && !(
+      trustedAssetDepreciation && line.evidenceType === 'asset_depreciation'
+    )) {
       issues.push({
         id: randomUUID(),
         code: 'MISSING_TAX_CASE',
@@ -824,6 +840,7 @@ export const saveDraft = (
   db: Database.Database,
   draft: BookingDraftEntity,
   scope: TenantScope,
+  options: { trustedSourceType?: string } = {},
 ): BookingDraftEntity => {
   const tenantId = getTenantId(scope);
   const now = new Date().toISOString();
@@ -851,7 +868,13 @@ export const saveDraft = (
 
   ensurePeriodExists(db, normalized.period, normalized.fiscalYear, tenantId);
   const periodStatus = loadPeriodStatus(db, normalized.period, tenantId);
-  normalized.validationIssues = validateDraft(db, normalized, periodStatus, chart);
+  normalized.validationIssues = validateDraft(
+    db,
+    normalized,
+    periodStatus,
+    chart,
+    options.trustedSourceType,
+  );
   normalized.workflowStatus = normalized.validationIssues.some((issue) => issue.blocking)
     ? periodStatus === 'closed'
       ? 'period_locked'
@@ -1043,6 +1066,7 @@ export const postDraft = (
     postingDate?: string;
     idempotencyKey?: string;
     sourceType?: string;
+    trustedSourceType?: string;
     softLockOverride?: boolean;
     overrideReason?: string;
     // Compatibility aliases for callers that used the wording in the policy.
@@ -1090,7 +1114,13 @@ export const postDraft = (
     };
   }
   const draftForPosting = { ...draft, postingDate, period, fiscalYear };
-  const validationIssues = validateDraft(db, draftForPosting, periodStatus, chart);
+  const validationIssues = validateDraft(
+    db,
+    draftForPosting,
+    periodStatus,
+    chart,
+    options.trustedSourceType,
+  );
   if (row.workflow_status !== 'approved') {
     validationIssues.push({ id: randomUUID(), code: 'DRAFT_NOT_APPROVED', severity: 'error', message: 'Nur freigegebene Buchungsentwürfe dürfen gebucht werden.', blocking: true, source: 'system' });
   }
@@ -1110,7 +1140,9 @@ export const postDraft = (
     };
   }
 
-  const validated = saveDraft(db, draftForPosting, scope);
+  const validated = saveDraft(db, draftForPosting, scope, {
+    trustedSourceType: options.trustedSourceType,
+  });
   const postingLines: JournalLineEntity[] = [];
   validated.lines.forEach((line) => {
     const taxCaseKey = normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode);

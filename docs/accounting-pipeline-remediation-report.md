@@ -1,8 +1,8 @@
 # Abschlussreport Buchungspipeline
 
 **Stand:** 12.08.2026 · **Codebasis:** Branch
-`fix/accounting-pipeline-hardening`, Codebaseline `f089e6e` (danach folgt nur
-diese Report-Aktualisierung)
+`fix/accounting-pipeline-hardening`, funktionale Accounting-Baseline `f089e6e`,
+Report `6314c18`, anschließender CI-Hygiene-Fix `caa2843`
 
 Dieser Report bewertet den technischen Stand der Pro-Buchungspipeline nach der
 Umsetzung. Er ist keine steuerliche oder rechtliche Beratung und keine GoBD-,
@@ -223,6 +223,9 @@ Diese Punkte sind keine offenen Integritätsfehler:
   nicht als unspezifischer HTTP 500 ausgegeben.
 - Der Release-Workflow veröffentlicht erst nach Server-Data-Prüfung und grünem
   migrationsgestütztem Full-Pro-Postgres-E2E.
+- `compose.env` und `runtime-state.json` sind aus allen Server-E2E-
+  Diagnoseuploads ausgeschlossen; `test:e2e:artifact-hygiene` prüft die drei
+  Uploadstellen.
 
 ## Verifikation
 
@@ -240,6 +243,7 @@ Diese Punkte sind keine offenen Integritätsfehler:
 | Server Core | **32/32 Tests**, Typecheck bestanden |
 | Lite Web | **1/1 Test**, Typecheck und Build bestanden |
 | Web Pro | **14/14 Tests**, Typecheck und Build bestanden |
+| Server-E2E-Artefakt-Hygiene | `compose.env`/`runtime-state.json` ausgeschlossen; **3 Uploadstellen** geprüft |
 
 Zum Prüfzeitpunkt war der getrackte Arbeitsbaum sauber; einzig das
 benutzerseitige, nicht zu versionierende `.test-artifacts/` blieb erhalten.

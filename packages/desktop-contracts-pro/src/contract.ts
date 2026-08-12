@@ -703,9 +703,13 @@ const proDisposeAssetArgsSchema = z.object({
   assetId: z.string().min(1),
   disposalDate: z.string(),
   proceeds: z.number().nonnegative(),
+  taxRate: z.union([z.literal(0), z.literal(7), z.literal(19)]).optional(),
+  proceedsAccountNumber: z.string().min(1).optional(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().min(1).optional(),
   reason: z.string().min(1),
   actorRole: proActorRoleSchema.optional(),
-});
+}).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
 
 const proExportDatevBuchungsstapelArgsSchema = z.object({
   from: z.string().optional(),
@@ -1151,6 +1155,7 @@ export const ipcRoutes = {
       asset: assetSchema,
       residualBookValue: z.number().nonnegative(),
       gainLoss: z.number(),
+      journalEntryId: z.string().min(1),
     }),
   },
   'pro:exportDatevBuchungsstapel': {

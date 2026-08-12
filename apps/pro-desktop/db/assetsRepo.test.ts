@@ -49,7 +49,8 @@ describe.skipIf(!canRunNativeSqlite)('asset migrations and repository', () => {
       INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at)
       VALUES
         ('asset-test-4830', 'SKR03', '4830', 'Abschreibungen', 'test', datetime('now'), datetime('now')),
-        ('asset-test-0440', 'SKR03', '0440', 'Betriebsausstattung', 'test', datetime('now'), datetime('now'));
+        ('asset-test-0440', 'SKR03', '0440', 'Betriebsausstattung', 'test', datetime('now'), datetime('now')),
+        ('asset-test-1600', 'SKR03', '1600', 'Kreditoren', 'test', datetime('now'), datetime('now'));
     `);
     const scope = createProTenantScope('default');
     const asset = upsertAsset(db, {

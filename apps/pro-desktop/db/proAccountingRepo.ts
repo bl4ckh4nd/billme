@@ -133,7 +133,7 @@ export interface JournalEntryEntity {
   fiscalYear: number;
   status: JournalEntryStatus;
   sourceDraftId?: string;
-  sourceType?: 'booking_draft' | 'reversal' | 'depreciation' | 'manual' | 'outgoing_invoice' | 'incoming_invoice' | 'payment' | 'payment_vat' | 'legacy_transaction';
+  sourceType?: 'booking_draft' | 'reversal' | 'depreciation' | 'manual' | 'outgoing_invoice' | 'incoming_invoice' | 'payment' | 'payment_vat' | 'legacy_transaction' | 'asset_activation' | 'asset_depreciation' | 'asset_disposal';
   sourceKey?: string;
   reversedEntryId?: string;
   createdAt: string;
@@ -472,7 +472,7 @@ const validateDraft = (
 
     const taxCaseKey = normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode);
     const isPnl = line.accountNumber.startsWith('4') || line.accountNumber.startsWith('8');
-    if (isPnl && !taxCaseKey) {
+    if (isPnl && !taxCaseKey && line.evidenceType !== 'asset_depreciation') {
       issues.push({
         id: randomUUID(),
         code: 'MISSING_TAX_CASE',
@@ -1042,6 +1042,7 @@ export const postDraft = (
   options: {
     postingDate?: string;
     idempotencyKey?: string;
+    sourceType?: string;
     softLockOverride?: boolean;
     overrideReason?: string;
     // Compatibility aliases for callers that used the wording in the policy.
@@ -1059,9 +1060,10 @@ export const postDraft = (
     } | undefined;
   if (!row) throw new Error('Draft not found');
 
+  const sourceType = options.sourceType?.trim() || 'booking_draft';
   const sourceKey = options.idempotencyKey?.trim() || `booking-draft:${draftId}`;
   const existingSource = drizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
-    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, 'booking_draft'), eq(schema.journalEntries.sourceKey, sourceKey))).get();
+    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, sourceType), eq(schema.journalEntries.sourceKey, sourceKey))).get();
   const existingDraft = drizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
     .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceDraftId, draftId))).get();
   const existingId = existingSource?.id ?? existingDraft?.id;
@@ -1131,7 +1133,7 @@ export const postDraft = (
   db.transaction(() => {
     const txDrizzle = createDrizzle(db);
     const duplicate = txDrizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
-      .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, 'booking_draft'), eq(schema.journalEntries.sourceKey, sourceKey))).get();
+      .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, sourceType), eq(schema.journalEntries.sourceKey, sourceKey))).get();
     if (duplicate) {
       duplicateEntryId = duplicate.id;
       return;
@@ -1139,7 +1141,7 @@ export const postDraft = (
     // Allocation deliberately occurs inside the same SQLite transaction as the
     // insert; SQLite serializes writers and the unique index is the final guard.
     entryNumber = getNextEntryNumber(db, tenantId);
-    txDrizzle.insert(schema.journalEntries).values({ id: entryId, tenantId, entryNumber, postingDate, documentDate: validated.documentDate ?? null, bookingText: validated.bookingText, reference: validated.reference ?? null, period, fiscalYear, status: 'posted', sourceDraftId: validated.id, sourceType: 'booking_draft', sourceKey, reversedEntryId: null, createdAt }).run();
+    txDrizzle.insert(schema.journalEntries).values({ id: entryId, tenantId, entryNumber, postingDate, documentDate: validated.documentDate ?? null, bookingText: validated.bookingText, reference: validated.reference ?? null, period, fiscalYear, status: 'posted', sourceDraftId: validated.id, sourceType, sourceKey, reversedEntryId: null, createdAt }).run();
     postingLines.forEach((line, idx) => {
       txDrizzle.insert(schema.journalLines).values({ id: line.id, tenantId, entryId, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: round2(line.debitAmount), creditAmount: round2(line.creditAmount), taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, datevSachverhaltLl: line.datevSachverhaltLl ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
     });
@@ -1162,7 +1164,7 @@ export const postDraft = (
     const existing = getJournalEntryById(db, duplicateEntryId, scope);
     if (existing) return { entry: existing, issues: [] };
   }
-  return { entry: { id: entryId, tenantId, entryNumber, postingDate, documentDate: validated.documentDate, bookingText: validated.bookingText, reference: validated.reference, period, fiscalYear, status: 'posted', sourceDraftId: validated.id, sourceType: 'booking_draft', sourceKey, createdAt, lines: postingLines }, issues: validated.validationIssues };
+  return { entry: { id: entryId, tenantId, entryNumber, postingDate, documentDate: validated.documentDate, bookingText: validated.bookingText, reference: validated.reference, period, fiscalYear, status: 'posted', sourceDraftId: validated.id, sourceType: sourceType as JournalEntryEntity['sourceType'], sourceKey, createdAt, lines: postingLines }, issues: validated.validationIssues };
 };
 
 const emptyJournalEntry = (tenantId: string, postingDate: string, period: string, fiscalYear: number): JournalEntryEntity => ({ id: '', tenantId, entryNumber: 0, postingDate, bookingText: '', period, fiscalYear, status: 'posted', createdAt: new Date().toISOString(), lines: [] });

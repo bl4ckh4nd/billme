@@ -65,7 +65,10 @@ export type JournalSourceType =
   | 'incoming_invoice'
   | 'payment'
   | 'payment_vat'
-  | 'legacy_transaction';
+  | 'legacy_transaction'
+  | 'asset_activation'
+  | 'asset_depreciation'
+  | 'asset_disposal';
 
 export interface LedgerBalance {
   accountNumber: string;

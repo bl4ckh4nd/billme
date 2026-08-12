@@ -630,6 +630,9 @@ export const assets = sqliteTable(
     assetAccountNumber: text('asset_account_number').notNull(),
     disposalDate: text('disposal_date'),
     disposalProceeds: real('disposal_proceeds'),
+    acquisitionOffsetAccountNumber: text('acquisition_offset_account_number'),
+    sourceIncomingInvoiceId: text('source_incoming_invoice_id'),
+    activationJournalEntryId: text('activation_journal_entry_id'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
@@ -651,6 +654,8 @@ export const assetDepreciationSchedule = sqliteTable(
     months: integer('months').notNull(),
     status: text('status').notNull(),
     journalEntryId: text('journal_entry_id'),
+    sourceType: text('source_type'),
+    sourceKey: text('source_key'),
     postedAt: text('posted_at'),
   },
   (t) => ({
@@ -671,11 +676,15 @@ export const assetMovements = sqliteTable(
     amount: real('amount').notNull().default(0),
     proceeds: real('proceeds'),
     gainLoss: real('gain_loss'),
+    journalEntryId: text('journal_entry_id'),
+    sourceType: text('source_type'),
+    sourceKey: text('source_key'),
     reason: text('reason').notNull(),
     createdAt: text('created_at').notNull(),
   },
   (t) => ({
     byTenantAssetDate: index('idx_asset_movements_tenant_asset_date').on(t.tenantId, t.assetId, t.movementDate),
+    bySource: uniqueIndex('idx_asset_movements_tenant_source').on(t.tenantId, t.sourceType, t.sourceKey),
   }),
 );
 

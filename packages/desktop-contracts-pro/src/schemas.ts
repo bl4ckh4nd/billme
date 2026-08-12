@@ -694,6 +694,9 @@ export const assetSchema = z.object({
   assetAccountNumber: z.string(),
   disposalDate: z.string().optional(),
   disposalProceeds: z.number().optional(),
+  acquisitionOffsetAccountNumber: z.string().optional(),
+  sourceIncomingInvoiceId: z.string().optional(),
+  activationJournalEntryId: z.string().optional(),
 });
 
 export const assetUpsertSchema = assetSchema
@@ -706,7 +709,11 @@ export const assetUpsertSchema = assetSchema
   })
   .extend({
     id: z.string().optional(),
-  });
+    acquisitionOffsetAccountNumber: z.string().optional(),
+    sourceIncomingInvoiceId: z.string().optional(),
+    softLockOverride: z.boolean().optional(),
+    overrideReason: z.string().min(1).optional(),
+  }).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
 
 export const assetDepreciationScheduleEntrySchema = z.object({
   id: z.string(),
@@ -714,8 +721,10 @@ export const assetDepreciationScheduleEntrySchema = z.object({
   year: z.number().int(),
   amount: z.number().nonnegative(),
   months: z.number().int().min(1).max(12),
-  status: z.enum(['planned', 'posted']),
+  status: z.enum(['planned', 'posted', 'cancelled']),
   journalEntryId: z.string().optional(),
+  sourceType: z.string().optional(),
+  sourceKey: z.string().optional(),
   postedAt: z.string().optional(),
 });
 

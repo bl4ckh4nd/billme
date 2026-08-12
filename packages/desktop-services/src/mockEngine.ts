@@ -2191,7 +2191,7 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       asset.status = proceeds > 0 ? 'verkauft' : 'stillgelegt';
       asset.disposalDate = disposalDate;
       asset.disposalProceeds = proceeds;
-      return { asset, residualBookValue: asset.residualValue, gainLoss: proceeds - asset.residualValue } as IpcResult<K>;
+      return { asset, residualBookValue: asset.residualValue, gainLoss: proceeds - asset.residualValue, journalEntryId: `mock-disposal:${assetId}` } as IpcResult<K>;
     }
 
     case 'pro:exportDatevBuchungsstapel': {

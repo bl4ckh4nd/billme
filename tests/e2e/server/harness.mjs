@@ -574,6 +574,15 @@ const startServerModeProcessStack = async (state, startupError) => {
   debugLog('process:wait-postgres-health');
   await waitForPostgresReady(databaseUrl, 'Postgres database');
 
+  debugLog('process:migrate');
+  await runCommand('pnpm', ['-C', 'packages/server-data', 'migrate'], {
+    timeoutMs: bootTimeoutMs,
+    env: {
+      ...process.env,
+      DATABASE_URL: databaseUrl,
+    },
+  });
+
   const commonServerEnv = {
     ...process.env,
     DATABASE_URL: databaseUrl,

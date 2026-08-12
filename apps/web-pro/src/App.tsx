@@ -26,6 +26,7 @@ import type {
   SusaReport,
 } from '@billme/accounting-ui-pro';
 import { createProWebClient, type ProWebClient } from './api';
+import { mapTransactionBankAccounts } from './accountingSeed';
 
 const DEFAULT_API_URL = (import.meta.env.VITE_SERVER_API_URL as string | undefined) ?? 'http://127.0.0.1:3100';
 const SESSION_STORAGE_KEY = 'billme.web-pro.session.v1';
@@ -52,6 +53,7 @@ type AppData = {
   workflowEntries: Awaited<ReturnType<ProWebClient['listWorkflowEntries']>>;
   accountingTransactions: Awaited<ReturnType<ProWebClient['listAccountingTransactions']>>;
   accountingDrafts: Awaited<ReturnType<ProWebClient['listAccountingDrafts']>>;
+  accountingPolicy: Awaited<ReturnType<ProWebClient['getAccountingPolicy']>>;
   ledgerStats: Awaited<ReturnType<ProWebClient['getLedgerStats']>>;
   ledgerAccounts: Awaited<ReturnType<ProWebClient['listLedgerAccounts']>>;
   taxCases: Awaited<ReturnType<ProWebClient['listTaxCases']>>;
@@ -679,6 +681,7 @@ export default function App() {
     setLoading(true);
     setLoadError('');
     try {
+      const accountingPolicy = await client.getAccountingPolicy();
       const accountingTransactionsPromise = client.listAccountingTransactions();
       const [
         health,
@@ -720,10 +723,10 @@ export default function App() {
         accountingTransactionsPromise,
         accountingTransactionsPromise.then((rows) => client.listAccountingDrafts(rows.map((row) => row.id))),
         client.getLedgerStats(),
-        client.listLedgerAccounts({ chart: 'SKR03', limit: 5000 }),
+        client.listLedgerAccounts({ chart: accountingPolicy.activeChart, limit: 5000 }),
         client.listTaxCases({ activeOnly: false }),
-        client.listTaxCaseMappings({ chart: 'SKR03' }),
-        client.listAccountSuggestionRules({ chart: 'SKR03', activeOnly: false }),
+        client.listTaxCaseMappings({ chart: accountingPolicy.activeChart }),
+        client.listAccountSuggestionRules({ chart: accountingPolicy.activeChart, activeOnly: false }),
       ]);
 
       setData({
@@ -745,6 +748,7 @@ export default function App() {
         workflowEntries,
         accountingTransactions,
         accountingDrafts,
+        accountingPolicy,
         ledgerStats,
         ledgerAccounts,
         taxCases,
@@ -830,11 +834,15 @@ export default function App() {
     const base = data.accountingTransactions.length > 0
       ? canonical
       : readWorkflowSeed(client, data.workflowEntries);
+    const bankAccountNumberByTransactionId = mapTransactionBankAccounts(data.accountingTransactions, data.bankAccounts);
+    const bankAccountNumbers = [...new Set(Object.values(bankAccountNumberByTransactionId))];
     return {
       ...base,
       accounts: mapLedgerAccountsToWorkspace(data.ledgerAccounts),
-      chartFramework: data.ledgerStats.byChart.SKR03 > 0 ? 'SKR03' : 'SKR04',
-      seedVersion: `${data.accountingTransactions.length}:${data.accountingDrafts.length}:${data.workflowEntries.length}:${data.ledgerAccounts.length}`,
+      bankAccountNumber: bankAccountNumbers.length === 1 ? bankAccountNumbers[0] : undefined,
+      bankAccountNumberByTransactionId,
+      chartFramework: data.accountingPolicy.activeChart,
+      seedVersion: `${data.accountingTransactions.length}:${data.accountingDrafts.length}:${data.workflowEntries.length}:${data.ledgerAccounts.length}:${data.accountingPolicy.updatedAt}`,
     } satisfies ProAccountingSeed;
   }, [client, data]);
 

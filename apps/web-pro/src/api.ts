@@ -27,6 +27,7 @@ import {
   incomingInvoiceSchema,
   journalEntryEntitySchema,
   ledgerBalanceRowSchema,
+  datevExportResultSchema,
   openItemSchema,
   vendorSchema,
   ledgerAccountSchema,
@@ -202,6 +203,22 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     }
 
     return response.blob();
+  };
+
+  const requestBlobWithHeaders = async (
+    path: string,
+    query?: Record<string, string | number | boolean | null | undefined>,
+  ): Promise<{ blob: Blob; headers: Headers }> => {
+    const headers = new Headers();
+    const token = getToken();
+    if (token) headers.set('authorization', `Bearer ${token}`);
+    const response = await fetch(buildUrl(baseUrl, path, query), { method: 'GET', headers });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      const message = isRecord(payload) && typeof payload.message === 'string' ? payload.message : `Download failed with status ${response.status}`;
+      throw new Error(message);
+    }
+    return { blob: await response.blob(), headers: response.headers };
   };
 
   return {
@@ -408,8 +425,19 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     downloadDatevCsv(query?: { from?: string; to?: string }) {
       return requestBlob('/api/v1/pro/accounting/datev/export.csv', query);
     },
+    exportDatevCsv(query: { from?: string; to?: string; reason?: string }) {
+      return requestBlobWithHeaders('/api/v1/pro/accounting/datev/export.csv', query).then(({ blob, headers }) => ({
+        blob,
+        exportId: headers.get('x-billme-datev-export-id') ?? '',
+        contentSha256: headers.get('x-billme-datev-content-sha256') ?? undefined,
+        recordCount: Number(headers.get('x-billme-datev-record-count') ?? 0),
+      }));
+    },
     downloadDatevExport(exportId: string) {
       return requestBlob(`/api/v1/pro/accounting/datev/exports/${encodeURIComponent(exportId)}`);
+    },
+    listDatevExports(limit?: number) {
+      return requestJson({ parser: parseArray(datevExportResultSchema) }, '/api/v1/pro/accounting/datev/exports').then((rows) => (limit ? rows.slice(0, limit) : rows));
     },
     setAccountingPolicy(input: unknown, reason: string) {
       return requestJson({ method: 'PUT', body: { ...accountingPolicySchema.omit({ tenantId: true, periodPolicy: true, updatedAt: true }).parse(input), reason }, parser: accountingPolicySchema }, '/api/v1/pro/accounting/policy');
@@ -554,10 +582,11 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
         '/api/v1/pro/accounting/account-suggestion-rules',
       );
     },
-    deleteAccountSuggestionRule(id: string) {
+    deleteAccountSuggestionRule(id: string, reason = 'Kontierungsvorschlagsregel gelöscht') {
       return requestJson(
         {
           method: 'DELETE',
+          query: { reason },
           parser: (payload) => payload,
         },
         `/api/v1/pro/accounting/account-suggestion-rules/${encodeURIComponent(id)}`,

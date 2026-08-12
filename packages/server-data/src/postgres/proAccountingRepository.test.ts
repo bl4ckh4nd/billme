@@ -66,6 +66,25 @@ test('DATEV byte snapshot migration is additive and immutable', async () => {
   assert.match(migration, /CREATE TRIGGER datev_exports_immutable BEFORE UPDATE OR DELETE/);
 });
 
+test('tax-case mapping tenancy migration keeps global defaults and drops global overwrite uniqueness', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const migration = await readFile(new URL('../../drizzle/0011_server_data_tax_case_mapping_tenancy.sql', import.meta.url), 'utf8');
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants/);
+  assert.match(migration, /DROP CONSTRAINT IF EXISTS tax_case_account_mappings_chart_tax_case_key_role_key/);
+  assert.match(migration, /idx_tax_case_account_mappings_tenant_lookup/);
+  assert.match(migration, /WHERE tenant_id IS NULL/);
+});
+
+test('asset-owned journal entries stay behind asset correction guards', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('./proAccountingRepository.ts', import.meta.url), 'utf8');
+  assert.match(source, /entry\.source_type === 'asset_activation'/);
+  assert.match(source, /entry\.source_type === 'asset_depreciation'/);
+  assert.match(source, /entry\.source_type === 'asset_disposal'/);
+  assert.match(source, /ASSET_REVERSAL_REQUIRED/);
+  assert.match(source, /ASSET_CORRECTION_REQUIRED/);
+});
+
 test('real Postgres DATEV exports return the exact persisted bytes after source changes', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
   const tenantId = `datev-bytes-${Date.now()}-${Math.random().toString(16).slice(2)}`;

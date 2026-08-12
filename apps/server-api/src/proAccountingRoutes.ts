@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { createHash } from 'node:crypto';
-import { createProAccountingService } from '@billme/accounting-engine';
+import { createProAccountingAssetService, createProAccountingService } from '@billme/accounting-engine';
 import type {
   AccountingMutationContext,
   ProDraftActionRequest,
@@ -18,6 +18,9 @@ import {
   accountingBackfillResultSchema,
   accountingPolicySchema,
   accountingPostingPreviewSchema,
+  assetDepreciationScheduleEntrySchema,
+  assetSchema,
+  assetUpsertSchema,
   bookingDraftEntitySchema,
   incomingInvoiceSchema,
   journalEntryEntitySchema,
@@ -32,7 +35,8 @@ import { requirePool, requireSession } from './app.js';
 
 const serviceFor = (app: FastifyInstance) => {
   const pool = requirePool(app);
-  return createProAccountingService(createPostgresProAccountingRepository(pool));
+  const repository = createPostgresProAccountingRepository(pool);
+  return { ...createProAccountingService(repository), ...createProAccountingAssetService(repository) };
 };
 
 const reasonSchema = z.string().trim().min(1, 'reason is required');
@@ -92,9 +96,10 @@ const mappingBody = z.object({
 });
 const vendorInput = vendorSchema.omit({ tenantId: true, createdAt: true, updatedAt: true });
 const vendorBody = z.object({ reason: reasonSchema, vendor: vendorInput });
+const incomingInvoiceInput = incomingInvoiceSchema.omit({ tenantId: true, createdAt: true, updatedAt: true, accountingStatus: true, accountingSnapshot: true });
 const incomingInvoiceBody = z.object({
   reason: reasonSchema,
-  invoice: incomingInvoiceSchema.omit({ tenantId: true, createdAt: true, updatedAt: true }),
+  invoice: incomingInvoiceInput,
 });
 const outgoingInvoiceBody = z.object({
   reason: reasonSchema,
@@ -145,6 +150,23 @@ const backfillBody = z.object({
   runId: z.string().min(1),
   confirmationHash: z.string().min(1),
 });
+const assetBody = z.object({ asset: assetUpsertSchema, reason: reasonSchema });
+const depreciationBody = z.object({
+  reason: reasonSchema,
+  postingDate: z.string(),
+  year: z.number().int(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().min(1).optional(),
+}).refine((value) => !value.softLockOverride || Boolean(value.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
+const disposalBody = z.object({
+  reason: reasonSchema,
+  disposalDate: z.string(),
+  proceeds: z.number().nonnegative(),
+  taxRate: z.union([z.literal(0), z.literal(7), z.literal(19)]).optional(),
+  proceedsAccountNumber: z.string().min(1).optional(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().min(1).optional(),
+}).refine((value) => !value.softLockOverride || Boolean(value.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
 
 const requireProSession = async (app: FastifyInstance, authHeader: string | undefined) =>
   requireSession(app, 'pro', authHeader);
@@ -556,6 +578,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       const invoice: IncomingInvoiceEntity & { mutation?: AccountingMutationContext } = {
         ...body.invoice,
         tenantId: session.scope.tenantId,
+        accountingStatus: 'unposted',
         createdAt: now,
         updatedAt: now,
         mutation: mutationFor(session, body.reason),
@@ -697,6 +720,60 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       const input: AccountingBackfillConfirmation = body;
       const result = await serviceFor(app).confirmAccountingBackfill(session.scope, input);
       return result;
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/assets`,
+    response: z.array(assetSchema),
+    async handler({ request }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return serviceFor(app).listAssets(session.scope);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/assets`,
+    body: assetBody,
+    response: assetSchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return serviceFor(app).upsertAsset(session.scope, body.asset, body.reason, { mutation: mutationFor(session, body.reason), softLockOverride: body.asset.softLockOverride, overrideReason: body.asset.overrideReason });
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/assets/:id/schedule`,
+    params: idParams,
+    response: z.array(assetDepreciationScheduleEntrySchema),
+    async handler({ request, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return serviceFor(app).getDepreciationSchedule(session.scope, params.id);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/assets/:id/depreciation`,
+    params: idParams,
+    body: depreciationBody,
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return serviceFor(app).runDepreciation(session.scope, { assetId: params.id, ...body, mutation: mutationFor(session, body.reason) });
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/assets/:id/dispose`,
+    params: idParams,
+    body: disposalBody,
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return serviceFor(app).disposeAsset(session.scope, { assetId: params.id, ...body, mutation: mutationFor(session, body.reason) });
     },
   });
 };

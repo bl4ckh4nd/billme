@@ -459,6 +459,7 @@ export const proUpsertTaxCaseAccountMappingArgsSchema = z.object({
   datevBuKey: z.string().optional(),
   validFrom: z.string().optional(),
   validTo: z.string().optional(),
+  reason: z.string().trim().min(1).optional(),
 });
 
 export const ledgerAccountSchema = z.object({
@@ -502,10 +503,12 @@ export const proUpsertAccountSuggestionRuleArgsSchema = z.object({
   targetAccountNumber: z.string().min(1),
   flowType: z.enum(['income', 'expense', 'any']).optional(),
   active: z.boolean().optional(),
+  reason: z.string().trim().min(1).optional(),
 });
 
 export const proDeleteAccountSuggestionRuleArgsSchema = z.object({
   id: z.string().min(1),
+  reason: z.string().trim().min(1).optional(),
 });
 
 export const proWorkflowEntrySchema = z.object({

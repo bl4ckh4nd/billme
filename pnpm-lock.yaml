@@ -1027,6 +1027,9 @@ importers:
 
   packages/server-data:
     dependencies:
+      '@billme/accounting-engine':
+        specifier: workspace:*
+        version: link:../accounting-engine
       '@billme/accounting-shared':
         specifier: workspace:*
         version: link:../accounting-shared

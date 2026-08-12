@@ -528,6 +528,106 @@ export interface ProAccountingRepository {
   ensureSeedData(scope: TenantScope): Promise<void>;
 }
 
+export type AssetStatus = 'entwurf' | 'aktiv' | 'voll_abgeschrieben' | 'verkauft' | 'stillgelegt';
+export type DepreciationMethod = 'linear' | 'gwg' | 'pool';
+
+export interface AssetItem {
+  id: string;
+  assetNumber: string;
+  name: string;
+  assetClass: string;
+  status: AssetStatus;
+  activationDate: string;
+  acquisitionCost: number;
+  residualValue: number;
+  annualDepreciation: number;
+  usefulLifeYears?: number;
+  depreciationMethod: DepreciationMethod;
+  costCenter: string;
+  location: string;
+  nextDepreciation: string;
+  receiptLinked: boolean;
+  supplier?: string;
+  invoiceRef?: string;
+  assetAccountNumber: string;
+  acquisitionOffsetAccountNumber?: string;
+  sourceIncomingInvoiceId?: string;
+  activationJournalEntryId?: string;
+  accountingRepairRequired?: boolean;
+  accountingRepairReason?: string;
+  disposalDate?: string;
+  disposalProceeds?: number;
+}
+
+export type AssetUpsertInput = Omit<AssetItem, 'id' | 'residualValue' | 'annualDepreciation' | 'nextDepreciation' | 'disposalDate' | 'disposalProceeds' | 'accountingRepairRequired' | 'accountingRepairReason'> & {
+  id?: string;
+  softLockOverride?: boolean;
+  overrideReason?: string;
+};
+
+export interface AssetDepreciationScheduleEntry {
+  id: string;
+  assetId: string;
+  year: number;
+  amount: number;
+  months: number;
+  status: 'planned' | 'posted' | 'cancelled';
+  journalEntryId?: string;
+  sourceType?: string;
+  sourceKey?: string;
+  postedAt?: string;
+}
+
+export interface AssetMutationOptions {
+  softLockOverride?: boolean;
+  overrideReason?: string;
+  mutation?: AccountingMutationContext;
+}
+
+export interface AssetDepreciationInput extends AssetMutationOptions {
+  assetId: string;
+  year: number;
+  postingDate: string;
+  reason: string;
+}
+
+export interface AssetDepreciationResult {
+  asset: AssetItem;
+  scheduleEntry: AssetDepreciationScheduleEntry;
+  journalEntryId: string;
+}
+
+export interface AssetDisposalInput extends AssetMutationOptions {
+  assetId: string;
+  disposalDate: string;
+  proceeds: number;
+  taxRate?: 0 | 7 | 19;
+  proceedsAccountNumber?: string;
+  reason: string;
+}
+
+export interface AssetDisposalResult {
+  asset: AssetItem;
+  residualBookValue: number;
+  gainLoss: number;
+  journalEntryId: string;
+}
+
+/**
+ * Fixed-asset persistence is intentionally a separate capability from the
+ * general Pro accounting repository.  Desktop Pro has its own local asset
+ * store, while server mode composes this capability onto the Postgres ledger
+ * repository.  Keeping the port separate prevents the server-only asset
+ * methods from leaking into the desktop repository contract.
+ */
+export interface ProAccountingAssetRepository {
+  listAssets(scope: TenantScope): Promise<AssetItem[]>;
+  upsertAsset(scope: TenantScope, input: AssetUpsertInput, reason: string, options?: AssetMutationOptions): Promise<AssetItem>;
+  getDepreciationSchedule(scope: TenantScope, assetId: string): Promise<AssetDepreciationScheduleEntry[]>;
+  runDepreciation(scope: TenantScope, input: AssetDepreciationInput): Promise<AssetDepreciationResult>;
+  disposeAsset(scope: TenantScope, input: AssetDisposalInput): Promise<AssetDisposalResult>;
+}
+
 export interface ProWorkflowRepository {
   list(scope: TenantScope): Promise<ProWorkflowEntry[]>;
   upsert(
@@ -555,6 +655,7 @@ export interface ProAccountingCatalogRepository {
       datevBuKey?: string;
       validFrom?: string;
       validTo?: string;
+      mutation?: AccountingMutationContext;
     },
   ): Promise<TaxCaseAccountMapping>;
   listAccountSuggestionRules(
@@ -563,9 +664,9 @@ export interface ProAccountingCatalogRepository {
   ): Promise<AccountSuggestionRule[]>;
   upsertAccountSuggestionRule(
     scope: TenantScope,
-    input: UpsertAccountSuggestionRuleInput,
+    input: UpsertAccountSuggestionRuleInput & { mutation?: AccountingMutationContext },
   ): Promise<AccountSuggestionRule>;
-  deleteAccountSuggestionRule(scope: TenantScope, id: string): Promise<void>;
+  deleteAccountSuggestionRule(scope: TenantScope, id: string, mutation?: AccountingMutationContext): Promise<void>;
 }
 
 export interface TransactionPort {

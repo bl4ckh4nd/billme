@@ -14,16 +14,23 @@ import type {
   TaxCaseDefinition,
   UpsertAccountSuggestionRuleInput,
   ValidationIssue,
+  AccountingMutationContext,
 } from '@billme/accounting-shared';
 import type { ProAccountingCatalogRepository, ProWorkflowRepository, TenantScope } from '@billme/server-core';
-import { and, asc, count, desc, eq, ilike, or } from 'drizzle-orm';
-import type { PostgresQueryable } from './connection.js';
+import { and, asc, count, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
+import type { Pool } from 'pg';
+import { withSerializablePostgresTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
+import { appendWithClient } from './audit.js';
 import { createDrizzle, schema } from './drizzle.js';
 
 const toNumber = (value: string | number): number => (typeof value === 'number' ? value : Number(value));
 const getTenantId = (scope: TenantScope): string => scope.tenantId;
 const nowIso = (): string => new Date().toISOString();
 const drizzleDb = (db: PostgresQueryable) => createDrizzle(db as never);
+const executeSql = (db: PostgresQueryable, statement: ReturnType<typeof sql>) => drizzleDb(db).execute(statement);
+const isPool = (db: PostgresQueryable): db is Pool => typeof (db as Pool).connect === 'function';
+const inTaxMappingTransaction = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
+  isPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
 const upsert = async (db: PostgresQueryable, table: any, values: any, target: any, set: any): Promise<void> => {
   await drizzleDb(db).insert(table).values(values).onConflictDoUpdate({ target, set });
 };
@@ -440,10 +447,43 @@ export const saveServerTaxCase = async (db: PostgresQueryable, record: ServerTax
   return record;
 };
 export const saveServerTaxCaseAccountMapping = async (db: PostgresQueryable, mapping: TaxCaseAccountMapping): Promise<TaxCaseAccountMapping> => {
-  await upsert(db, schema.taxCaseAccountMappings, { id: mapping.id, chart: mapping.chart, taxCaseKey: mapping.taxCaseKey, role: mapping.role, accountNumber: mapping.accountNumber, datevBuKey: mapping.datevBuKey ?? null, validFrom: mapping.validFrom ?? null, validTo: mapping.validTo ?? null, updatedAt: mapping.updatedAt },
-    [schema.taxCaseAccountMappings.chart, schema.taxCaseAccountMappings.taxCaseKey, schema.taxCaseAccountMappings.role], { accountNumber: mapping.accountNumber, datevBuKey: mapping.datevBuKey ?? null, validFrom: mapping.validFrom ?? null, validTo: mapping.validTo ?? null, updatedAt: mapping.updatedAt });
-  return mapping;
+  return saveServerTaxCaseAccountMappingForTenant(db, mapping);
 };
+
+/**
+ * Persist a tenant override while retaining the historical global seed rows.
+ * The optional tenantId is intentionally kept out of the shared desktop DTO.
+ */
+export const saveServerTaxCaseAccountMappingForTenant = async (
+  db: PostgresQueryable,
+  mapping: TaxCaseAccountMapping,
+  tenantId?: string,
+  mutation?: AccountingMutationContext,
+): Promise<TaxCaseAccountMapping> => inTaxMappingTransaction(db, async (tx) => {
+  if (mapping.validFrom && mapping.validTo && mapping.validFrom > mapping.validTo) throw new Error('TAX_MAPPING_INVALID_VALIDITY');
+  const tenant = tenantId ?? null;
+  const lockKey = `billme:tax-case-mapping:${tenant ?? 'global'}:${mapping.chart}:${mapping.taxCaseKey}:${mapping.role}`;
+  await executeSql(tx, sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+
+  const existing = (await executeSql(tx, sql`SELECT id FROM tax_case_account_mappings WHERE tenant_id IS NOT DISTINCT FROM ${tenant} AND chart=${mapping.chart} AND tax_case_key=${mapping.taxCaseKey} AND role=${mapping.role} AND valid_from IS NOT DISTINCT FROM ${mapping.validFrom ?? null} AND valid_to IS NOT DISTINCT FROM ${mapping.validTo ?? null} LIMIT 1`)).rows[0] as { id?: string } | undefined;
+  const sameId = (await executeSql(tx, sql`SELECT tenant_id FROM tax_case_account_mappings WHERE id=${mapping.id} LIMIT 1`)).rows[0] as { tenant_id?: string | null } | undefined;
+  const id = existing?.id ?? (sameId && sameId.tenant_id !== tenant ? randomUUID() : mapping.id);
+  const overlap = (await executeSql(tx, sql`SELECT id FROM tax_case_account_mappings WHERE tenant_id IS NOT DISTINCT FROM ${tenant} AND chart=${mapping.chart} AND tax_case_key=${mapping.taxCaseKey} AND role=${mapping.role} AND id<>${id} AND (valid_to IS NULL OR ${mapping.validFrom ?? null}::text IS NULL OR valid_to >= ${mapping.validFrom ?? null}::text) AND (valid_from IS NULL OR ${mapping.validTo ?? null}::text IS NULL OR valid_from <= ${mapping.validTo ?? null}::text) LIMIT 1`)).rows[0] as { id?: string } | undefined;
+  if (overlap) throw new Error('TAX_MAPPING_VALIDITY_OVERLAP');
+
+  await executeSql(tx, sql`INSERT INTO tax_case_account_mappings (id,tenant_id,chart,tax_case_key,role,account_number,datev_bu_key,valid_from,valid_to,updated_at) VALUES (${id},${tenant},${mapping.chart},${mapping.taxCaseKey},${mapping.role},${mapping.accountNumber},${mapping.datevBuKey ?? null},${mapping.validFrom ?? null},${mapping.validTo ?? null},${mapping.updatedAt}) ON CONFLICT (id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id,chart=EXCLUDED.chart,tax_case_key=EXCLUDED.tax_case_key,role=EXCLUDED.role,account_number=EXCLUDED.account_number,datev_bu_key=EXCLUDED.datev_bu_key,valid_from=EXCLUDED.valid_from,valid_to=EXCLUDED.valid_to,updated_at=EXCLUDED.updated_at`);
+  if (mutation) {
+    const reason = mutation.reason.trim();
+    if (!reason) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
+    await appendWithClient(tx, { tenantId: tenantId ?? 'global', product: 'pro', deploymentMode: 'single-tenant' }, {
+      occurredAt: new Date().toISOString(), action: 'update', reason,
+      actor: mutation.actor ?? { type: 'service', displayName: 'server-accounting' },
+      subject: { entityType: 'tax_case_account_mapping', entityId: id, tenantId: tenantId ?? 'global' },
+      change: { after: { ...mapping, tenantId } },
+    });
+  }
+  return { ...mapping, id };
+});
 export const saveServerAccountKeyword = async (db: PostgresQueryable, record: ServerAccountKeywordRecord): Promise<ServerAccountKeywordRecord> => {
   await upsert(db, schema.accountKeywords, { id: record.id, tenantId: record.tenantId, chart: record.chart, accountNumber: record.accountNumber, keyword: record.keyword, source: record.source, active: record.active, createdAt: record.createdAt, updatedAt: record.updatedAt },
     [schema.accountKeywords.tenantId, schema.accountKeywords.chart, schema.accountKeywords.accountNumber, schema.accountKeywords.keyword], { source: record.source, active: record.active, updatedAt: record.updatedAt });
@@ -621,25 +661,28 @@ export const createPostgresProAccountingCatalogRepository = (
     }));
   },
 
-  async listTaxCaseAccountMappings(_scope, args = {}) {
-    const conditions = [];
+  async listTaxCaseAccountMappings(scope, args = {}) {
+    const conditions = [or(eq(schema.taxCaseAccountMappings.tenantId, getTenantId(scope)), isNull(schema.taxCaseAccountMappings.tenantId))!];
     if (args.chart) conditions.push(eq(schema.taxCaseAccountMappings.chart, args.chart));
     if (args.taxCaseKey) conditions.push(eq(schema.taxCaseAccountMappings.taxCaseKey, args.taxCaseKey));
     const rows = await drizzleDb(db).select().from(schema.taxCaseAccountMappings)
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(asc(schema.taxCaseAccountMappings.chart), asc(schema.taxCaseAccountMappings.taxCaseKey), asc(schema.taxCaseAccountMappings.role));
-    return rows.map((row) => ({
+    const effective = new Map<string, typeof rows[number]>();
+    for (const row of rows) {
+      const key = `${row.chart}:${row.taxCaseKey}:${row.role}:${row.validFrom ?? ''}:${row.validTo ?? ''}`;
+      if (!effective.has(key) || row.tenantId === getTenantId(scope)) effective.set(key, row);
+    }
+    return [...effective.values()].map((row) => ({
       id: row.id!, chart: row.chart as TaxCaseAccountMapping['chart'], taxCaseKey: row.taxCaseKey as TaxCaseAccountMapping['taxCaseKey'],
       role: row.role as TaxCaseAccountMapping['role'], accountNumber: row.accountNumber!, datevBuKey: row.datevBuKey ?? undefined,
       validFrom: row.validFrom ?? undefined, validTo: row.validTo ?? undefined, updatedAt: row.updatedAt!,
     }));
   },
 
-  async upsertTaxCaseAccountMapping(_scope, args) {
-    const existing = await drizzleDb(db).select({ id: schema.taxCaseAccountMappings.id }).from(schema.taxCaseAccountMappings)
-      .where(and(eq(schema.taxCaseAccountMappings.chart, args.chart), eq(schema.taxCaseAccountMappings.taxCaseKey, args.taxCaseKey), eq(schema.taxCaseAccountMappings.role, args.role))).limit(1);
+  async upsertTaxCaseAccountMapping(scope, args) {
     const mapping: TaxCaseAccountMapping = {
-      id: args.id ?? existing[0]?.id ?? randomUUID(),
+      id: args.id ?? randomUUID(),
       chart: args.chart,
       taxCaseKey: args.taxCaseKey,
       role: args.role,
@@ -649,7 +692,7 @@ export const createPostgresProAccountingCatalogRepository = (
       validTo: args.validTo,
       updatedAt: nowIso(),
     };
-    return saveServerTaxCaseAccountMapping(db, mapping);
+    return saveServerTaxCaseAccountMappingForTenant(db, mapping, getTenantId(scope), args.mutation);
   },
 
   async listAccountSuggestionRules(scope, args = {}) {
@@ -668,29 +711,41 @@ export const createPostgresProAccountingCatalogRepository = (
   },
 
   async upsertAccountSuggestionRule(scope, input) {
-    const tenantId = input.tenantId ?? getTenantId(scope);
-    const now = nowIso();
-    const existing = input.id ? await drizzleDb(db).select({ createdAt: schema.accountSuggestionRules.createdAt }).from(schema.accountSuggestionRules)
-      .where(eq(schema.accountSuggestionRules.id, input.id)).limit(1) : [];
-    const rule: AccountSuggestionRule = {
-      id: input.id ?? randomUUID(),
-      tenantId,
-      chart: input.chart,
-      priority: input.priority,
-      field: input.field,
-      operator: input.operator,
-      value: input.value.trim(),
-      targetAccountNumber: input.targetAccountNumber.trim(),
-      flowType: input.flowType ?? 'any',
-      active: input.active !== false,
-      createdAt: existing[0]?.createdAt ?? now,
-      updatedAt: now,
-    };
-    return saveServerAccountSuggestionRule(db, rule);
+    return inTaxMappingTransaction(db, async (tx) => {
+      const tenantId = getTenantId(scope);
+      const now = nowIso();
+      const existing = input.id ? await executeSql(tx, sql`SELECT id,tenant_id,created_at FROM account_suggestion_rules WHERE id=${input.id} LIMIT 1`) : { rows: [] };
+      const existingRow = existing.rows[0] as { id: string; tenant_id: string; created_at: string } | undefined;
+      const rule: AccountSuggestionRule = {
+        id: existingRow && existingRow.tenant_id === tenantId ? existingRow.id : randomUUID(),
+        tenantId,
+        chart: input.chart,
+        priority: input.priority,
+        field: input.field,
+        operator: input.operator,
+        value: input.value.trim(),
+        targetAccountNumber: input.targetAccountNumber.trim(),
+        flowType: input.flowType ?? 'any',
+        active: input.active !== false,
+        createdAt: existingRow?.tenant_id === tenantId ? existingRow.created_at : now,
+        updatedAt: now,
+      };
+      await saveServerAccountSuggestionRule(tx, rule);
+      const reason = input.mutation?.reason.trim();
+      if (!reason) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
+      await appendWithClient(tx, scope, { occurredAt: now, action: 'update', reason, actor: input.mutation?.actor ?? { type: 'service', displayName: 'server-accounting' }, subject: { entityType: 'account_suggestion_rule', entityId: rule.id, tenantId }, change: { after: rule } });
+      return rule;
+    });
   },
 
-  async deleteAccountSuggestionRule(scope, id) {
-    await drizzleDb(db).delete(schema.accountSuggestionRules).where(and(eq(schema.accountSuggestionRules.tenantId, getTenantId(scope)), eq(schema.accountSuggestionRules.id, id)));
+  async deleteAccountSuggestionRule(scope, id, mutation) {
+    return inTaxMappingTransaction(db, async (tx) => {
+      const reason = mutation?.reason.trim();
+      if (!reason) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
+      const tenantId = getTenantId(scope);
+      const result = await executeSql(tx, sql`DELETE FROM account_suggestion_rules WHERE tenant_id=${tenantId} AND id=${id} RETURNING id`);
+      if (result.rows[0]) await appendWithClient(tx, scope, { occurredAt: nowIso(), action: 'delete', reason, actor: mutation?.actor ?? { type: 'service', displayName: 'server-accounting' }, subject: { entityType: 'account_suggestion_rule', entityId: id, tenantId }, change: { before: { id, tenantId } } });
+    });
   },
 });
 

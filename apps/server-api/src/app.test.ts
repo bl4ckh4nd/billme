@@ -174,6 +174,47 @@ test('canonical Pro accounting mutations require a reason and an accounting role
   });
 });
 
+test('server asset routes enforce Pro auth, mutation role, and reason before touching Postgres', async () => {
+  await withServerApi(async (app) => {
+    const unauthorized = await app.inject({ method: 'GET', url: '/api/v1/pro/accounting/assets' });
+    assert.equal(unauthorized.statusCode, 401);
+    const pro = await bootstrap(app, 'pro');
+    const viewerToken = app.tokenService.sign({ ...app.tokenService.verify(pro.token)!, role: 'viewer' });
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pro/accounting/assets',
+      headers: { authorization: `Bearer ${viewerToken}` },
+      payload: { reason: 'test', asset: { assetNumber: 'A-1', name: 'Test', assetClass: 'IT-Hardware', status: 'entwurf', activationDate: '2026-08-12', acquisitionCost: 100, depreciationMethod: 'linear', costCenter: 'FIN', location: 'Berlin', receiptLinked: false, assetAccountNumber: '0480' } },
+    });
+    assert.equal(forbidden.statusCode, 403);
+    const missingReason = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pro/accounting/assets',
+      headers: { authorization: `Bearer ${pro.token}` },
+      payload: { asset: { assetNumber: 'A-1', name: 'Test', assetClass: 'IT-Hardware', status: 'entwurf', activationDate: '2026-08-12', acquisitionCost: 100, depreciationMethod: 'linear', costCenter: 'FIN', location: 'Berlin', receiptLinked: false, assetAccountNumber: '0480' } },
+    });
+    assert.equal(missingReason.statusCode, 400);
+  });
+});
+
+test('tax mappings and suggestion rules reject viewer mutations and missing reasons', async () => {
+  await withServerApi(async (app) => {
+    const pro = await bootstrap(app, 'pro');
+    const viewerToken = app.tokenService.sign({ ...app.tokenService.verify(pro.token)!, role: 'viewer' });
+    const mapping = {
+      chart: 'SKR03', taxCaseKey: 'DE_STD_19', role: 'output_tax', accountNumber: '1776',
+    };
+    const viewer = await app.inject({ method: 'POST', url: '/api/v1/pro/accounting/tax-case-account-mappings', headers: { authorization: `Bearer ${viewerToken}` }, payload: { ...mapping, reason: 'viewer must not mutate' } });
+    assert.equal(viewer.statusCode, 403);
+    const missingReason = await app.inject({ method: 'POST', url: '/api/v1/pro/accounting/tax-case-account-mappings', headers: { authorization: `Bearer ${pro.token}` }, payload: mapping });
+    assert.equal(missingReason.statusCode, 400);
+    const suggestion = await app.inject({ method: 'POST', url: '/api/v1/pro/accounting/account-suggestion-rules', headers: { authorization: `Bearer ${viewerToken}` }, payload: { chart: 'SKR03', priority: 1, field: 'purpose', operator: 'contains', value: 'test', targetAccountNumber: '4900', reason: 'viewer must not mutate' } });
+    assert.equal(suggestion.statusCode, 403);
+    const deleteMissingReason = await app.inject({ method: 'DELETE', url: '/api/v1/pro/accounting/account-suggestion-rules/rule-1', headers: { authorization: `Bearer ${pro.token}` } });
+    assert.equal(deleteMissingReason.statusCode, 400);
+  });
+});
+
 test('draft saves cannot smuggle an approval or posting workflow status', async () => {
   await withServerApi(async (app) => {
     const pro = await bootstrap(app, 'pro');

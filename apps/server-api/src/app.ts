@@ -267,6 +267,14 @@ export const requireSession = async (
   return session;
 };
 
+export const requireMutationSession = async (app: FastifyInstance, authHeader: string | undefined): Promise<AuthSession> => {
+  const session = await requireSession(app, 'pro', authHeader);
+  if (!['owner', 'admin', 'accountant'].includes(session.role)) {
+    throw new ApiError(403, 'Accounting mutation requires owner, admin, or accountant role');
+  }
+  return session;
+};
+
 export const requirePool = (app: FastifyInstance): Pool => {
   if (!app.serverPool) {
     throw new ApiError(503, 'DATABASE_URL is required for server billing routes');
@@ -1131,7 +1139,7 @@ const registerProRoutes = (app: FastifyInstance) => {
   typedRoute(app, {
     method: 'POST',
     url: `${prefix}/accounting/tax-case-account-mappings`,
-    body: proUpsertTaxCaseAccountMappingArgsSchema,
+    body: proUpsertTaxCaseAccountMappingArgsSchema.extend({ reason: z.string().trim().min(1) }),
     response: z.object({
       id: z.string().min(1),
       chart: z.enum(['SKR03', 'SKR04']),
@@ -1144,8 +1152,11 @@ const registerProRoutes = (app: FastifyInstance) => {
       updatedAt: z.string().min(1),
     }),
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
-      return createPostgresProAccountingCatalogRepository(requirePool(app)).upsertTaxCaseAccountMapping(session.scope, body);
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return createPostgresProAccountingCatalogRepository(requirePool(app)).upsertTaxCaseAccountMapping(session.scope, {
+        ...body,
+        mutation: { reason: body.reason, actor: toAuditActor(session) },
+      });
     },
   });
 
@@ -1178,7 +1189,7 @@ const registerProRoutes = (app: FastifyInstance) => {
   typedRoute(app, {
     method: 'POST',
     url: `${prefix}/accounting/account-suggestion-rules`,
-    body: proUpsertAccountSuggestionRuleArgsSchema,
+    body: proUpsertAccountSuggestionRuleArgsSchema.extend({ reason: z.string().trim().min(1) }),
     response: z.object({
       id: z.string().min(1),
       tenantId: z.string().min(1),
@@ -1194,8 +1205,8 @@ const registerProRoutes = (app: FastifyInstance) => {
       updatedAt: z.string().min(1),
     }),
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
-      return createPostgresProAccountingCatalogRepository(requirePool(app)).upsertAccountSuggestionRule(session.scope, body);
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return createPostgresProAccountingCatalogRepository(requirePool(app)).upsertAccountSuggestionRule(session.scope, { ...body, tenantId: undefined, mutation: { reason: body.reason, actor: toAuditActor(session) } });
     },
   });
 
@@ -1205,10 +1216,11 @@ const registerProRoutes = (app: FastifyInstance) => {
     params: z.object({
       id: z.string().min(1),
     }),
+    query: z.object({ reason: z.string().trim().min(1) }),
     response: okSchema,
-    async handler({ request, params }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
-      await createPostgresProAccountingCatalogRepository(requirePool(app)).deleteAccountSuggestionRule(session.scope, params.id);
+    async handler({ request, params, query }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      await createPostgresProAccountingCatalogRepository(requirePool(app)).deleteAccountSuggestionRule(session.scope, params.id, { reason: query.reason, actor: toAuditActor(session) });
       return { ok: true as const };
     },
   });

@@ -128,3 +128,40 @@ test('Pro web client requires and preserves a remaining allocation event id acro
     globalThis.fetch = previousFetch;
   }
 });
+
+test('Pro web client exposes DATEV export receipt metadata and history', async () => {
+  const previousFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input) => {
+    calls.push(String(input));
+    if (calls.length === 1) {
+      return new Response('date;csv\n', {
+        status: 200,
+        headers: {
+          'content-type': 'text/csv',
+          'x-billme-datev-export-id': 'datev-1',
+          'x-billme-datev-content-sha256': 'a'.repeat(64),
+          'x-billme-datev-record-count': '1',
+        },
+      });
+    }
+    return new Response(JSON.stringify([{
+      id: 'datev-1',
+      filePath: 'datev-export/a',
+      recordCount: 1,
+      createdAt: '2026-08-12T00:00:00.000Z',
+    }]), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    const exported = await client.exportDatevCsv({ from: '2026-08-01', to: '2026-08-31', reason: 'Export geprüft' });
+    assert.equal(exported.exportId, 'datev-1');
+    assert.equal(exported.recordCount, 1);
+    const history = await client.listDatevExports(20);
+    assert.equal(history[0]?.id, 'datev-1');
+    assert.match(calls[0] ?? '', /datev\/export\.csv\?from=2026-08-01&to=2026-08-31&reason=Export\+gepr%C3%BCft$/);
+    assert.match(calls[1] ?? '', /datev\/exports$/);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

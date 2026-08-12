@@ -1,11 +1,20 @@
 import type {
   AccountingHealthSnapshot,
+  AssetDepreciationInput,
+  AssetDepreciationResult,
+  AssetDepreciationScheduleEntry,
+  AssetDisposalInput,
+  AssetDisposalResult,
+  AssetItem,
+  AssetMutationOptions,
+  AssetUpsertInput,
   BilanzReport,
   DatevPostingRow,
   GuvReport,
   LedgerBalanceOptions,
   ListJournalEntriesOptions,
   PostDraftOptions,
+  ProAccountingAssetRepository,
   ProAccountingCatalogRepository,
   ProAccountingRepository,
   ProDraftActionRequest,
@@ -179,6 +188,22 @@ export interface BoundProAccountingService {
   ensureSeedData(): Promise<void>;
 }
 
+export interface ProAccountingAssetService {
+  listAssets(scope: TenantScope): Promise<AssetItem[]>;
+  upsertAsset(scope: TenantScope, input: AssetUpsertInput, reason: string, options?: AssetMutationOptions): Promise<AssetItem>;
+  getDepreciationSchedule(scope: TenantScope, assetId: string): Promise<AssetDepreciationScheduleEntry[]>;
+  runDepreciation(scope: TenantScope, input: AssetDepreciationInput): Promise<AssetDepreciationResult>;
+  disposeAsset(scope: TenantScope, input: AssetDisposalInput): Promise<AssetDisposalResult>;
+}
+
+export interface BoundProAccountingAssetService {
+  listAssets(): Promise<AssetItem[]>;
+  upsertAsset(input: AssetUpsertInput, reason: string, options?: AssetMutationOptions): Promise<AssetItem>;
+  getDepreciationSchedule(assetId: string): Promise<AssetDepreciationScheduleEntry[]>;
+  runDepreciation(input: AssetDepreciationInput): Promise<AssetDepreciationResult>;
+  disposeAsset(input: AssetDisposalInput): Promise<AssetDisposalResult>;
+}
+
 export interface ProWorkflowService {
   list(scope: TenantScope): Promise<ProWorkflowEntry[]>;
   upsert(
@@ -294,6 +319,16 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   ensureSeedData: (scope) => repository.ensureSeedData(scope),
 });
 
+export const createProAccountingAssetService = (
+  repository: ProAccountingAssetRepository,
+): ProAccountingAssetService => ({
+  listAssets: (scope) => repository.listAssets(scope),
+  upsertAsset: (scope, input, reason, options) => repository.upsertAsset(scope, input, reason, options),
+  getDepreciationSchedule: (scope, assetId) => repository.getDepreciationSchedule(scope, assetId),
+  runDepreciation: (scope, input) => repository.runDepreciation(scope, input),
+  disposeAsset: (scope, input) => repository.disposeAsset(scope, input),
+});
+
 export const bindProAccountingScope = (
   service: ProAccountingService,
   scope: TenantScope,
@@ -335,6 +370,17 @@ export const bindProAccountingScope = (
   previewAccountingBackfill: () => service.previewAccountingBackfill(scope),
   confirmAccountingBackfill: (input) => service.confirmAccountingBackfill(scope, input),
   ensureSeedData: () => service.ensureSeedData(scope),
+});
+
+export const bindProAccountingAssetScope = (
+  service: ProAccountingAssetService,
+  scope: TenantScope,
+): BoundProAccountingAssetService => ({
+  listAssets: () => service.listAssets(scope),
+  upsertAsset: (input, reason, options) => service.upsertAsset(scope, input, reason, options),
+  getDepreciationSchedule: (assetId) => service.getDepreciationSchedule(scope, assetId),
+  runDepreciation: (input) => service.runDepreciation(scope, input),
+  disposeAsset: (input) => service.disposeAsset(scope, input),
 });
 
 export const createProWorkflowService = (repository: ProWorkflowRepository): ProWorkflowService => ({

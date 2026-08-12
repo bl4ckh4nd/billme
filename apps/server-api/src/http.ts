@@ -27,13 +27,13 @@ export const typedRoute = <
     query?: TQuery;
     body?: TBody;
     response?: TResponse;
-    handler: (args: {
+      handler: (args: {
       request: FastifyRequest;
       reply: FastifyReply;
       params: InferSchema<TParams>;
       query: InferSchema<TQuery>;
       body: InferSchema<TBody>;
-    }) => Promise<InferSchema<TResponse> | string> | InferSchema<TResponse> | string;
+      }) => Promise<InferSchema<TResponse> | string | Uint8Array> | InferSchema<TResponse> | string | Uint8Array;
   },
 ) => {
   app.route({
@@ -77,10 +77,10 @@ export const registerErrorHandler = (app: FastifyInstance) => {
       const code = error.message.split(':', 1)[0] ?? error.message;
       const status =
         /NOT_FOUND$/.test(code) ? 404 :
-        /^(POSTING_DATE_IN_CLOSED_PERIOD|BACKFILL_STALE_PREVIEW|BACKFILL_CONFIRMATION_HASH_MISMATCH|DRAFT_NOT_APPROVED|DOCUMENT_HAS_ALLOCATIONS|DOCUMENT_NOT_POSTED|VENDOR_HAS_POSTED_DOCUMENTS|PAYMENT_SOURCE_ALREADY_BOOKED|PERIOD_LOCKED|SOFT_LOCK_|FINALIZED_|ALREADY_|.*_POSTED$|.*_CLOSED$)/.test(code) ? 409 :
+        /^(POSTING_DATE_IN_CLOSED_PERIOD|BACKFILL_STALE_PREVIEW|BACKFILL_CONFIRMATION_HASH_MISMATCH|DATEV_EXPORT_CONTENT_UNAVAILABLE|DATEV_EXPORT_HASH_MISMATCH|DRAFT_NOT_APPROVED|DOCUMENT_HAS_ALLOCATIONS|DOCUMENT_NOT_POSTED|VENDOR_HAS_POSTED_DOCUMENTS|PAYMENT_SOURCE_ALREADY_BOOKED|PERIOD_LOCKED|SOFT_LOCK_|FINALIZED_|ALREADY_|.*_POSTED$|.*_CLOSED$)/.test(code) ? 409 :
         /^(UNBALANCED_|TAX_|VALIDATION_|INVALID_JOURNAL_|INVALID_LINE_|INVALID_TAX_|AMBIGUOUS_TAX_|UNKNOWN_ACCOUNT)/.test(code) ? 422 :
         /^(PAYMENT_SOURCE_MISMATCH|PAYMENT_SOURCE_DIRECTION_MISMATCH|PAYMENT_PARTY_MISMATCH)/.test(code) ? 422 :
-        /^(ACCOUNTING_AUDIT_REASON_REQUIRED|INVALID_|MISSING_|UNKNOWN_|EMPTY_|PAYMENT_|OPEN_ITEM_|DRAFT_|BANK_TRANSACTION_|BACKFILL_)/.test(code) ? 400 :
+        /^(ACCOUNTING_AUDIT_REASON_REQUIRED|DATEV_EXPORT_CONTENT_REQUIRED|INVALID_|MISSING_|UNKNOWN_|EMPTY_|PAYMENT_|OPEN_ITEM_|DRAFT_|BANK_TRANSACTION_|BACKFILL_)/.test(code) ? 400 :
         /^(Invalid workflow transition|Draft not found|Journal entry not found|Journal entry cannot|Journal entry has no lines|Invalid reversal posting date|Reversal reason is required)/i.test(code) ? 409 : undefined;
       if (status) {
         return reply.code(status).send({ message: error.message });

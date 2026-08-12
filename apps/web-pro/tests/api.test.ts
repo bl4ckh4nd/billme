@@ -66,3 +66,27 @@ test('Pro web client refuses outgoing posting without a finalized reservation id
   const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
   assert.throws(() => client.postOutgoingInvoice('invoice-1', 'test', ''), /reservationId is required/);
 });
+
+test('Pro web client sends one allocation event id for a payment action', async () => {
+  const previousFetch = globalThis.fetch;
+  let requestBody: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    await client.allocateOpenItemPayment(
+      { paymentId: 'payment-1', bankAccountNumber: '1200', allocations: [] },
+      'Zahlung zuordnen',
+    );
+    const payment = requestBody?.payment as Record<string, unknown>;
+    assert.equal(typeof payment.allocationEventId, 'string');
+    assert.ok(String(payment.allocationEventId).length > 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

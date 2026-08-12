@@ -59,6 +59,7 @@ type RequestOptions<T> = {
 };
 
 const PRO_PRODUCT_QUERY = { product: 'pro' as const };
+const newAccountingAllocationEventId = (): string => globalThis.crypto.randomUUID();
 const susaReportSchema = z.object({
   asOfDate: z.string(),
   rows: z.array(ledgerBalanceRowSchema),
@@ -390,6 +391,9 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     downloadDatevCsv(query?: { from?: string; to?: string }) {
       return requestBlob('/api/v1/pro/accounting/datev/export.csv', query);
     },
+    downloadDatevExport(exportId: string) {
+      return requestBlob(`/api/v1/pro/accounting/datev/exports/${encodeURIComponent(exportId)}`);
+    },
     setAccountingPolicy(input: unknown, reason: string) {
       return requestJson({ method: 'PUT', body: { ...accountingPolicySchema.omit({ tenantId: true, periodPolicy: true, updatedAt: true }).parse(input), reason }, parser: accountingPolicySchema }, '/api/v1/pro/accounting/policy');
     },
@@ -428,7 +432,11 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       return requestJson({ method: 'POST', body: { invoiceId, reason, ...options }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/incoming-invoices/post');
     },
     allocateOpenItemPayment(payment: unknown, reason: string) {
-      return requestJson({ method: 'POST', body: { payment, reason }, parser: (input) => input }, '/api/v1/pro/accounting/open-items/payments');
+      const paymentPayload = isRecord(payment) ? { ...payment, allocationEventId: typeof payment.allocationEventId === 'string' && payment.allocationEventId.trim() ? payment.allocationEventId : newAccountingAllocationEventId() } : payment;
+      return requestJson({ method: 'POST', body: { payment: paymentPayload, reason }, parser: (input) => input }, '/api/v1/pro/accounting/open-items/payments');
+    },
+    allocateRemainingOpenItemPayment(paymentId: string, allocations: unknown, reason: string, allocationEventId = newAccountingAllocationEventId()) {
+      return requestJson({ method: 'POST', body: { paymentId, allocations, reason, allocationEventId }, parser: (input) => input }, `/api/v1/pro/accounting/open-items/payments/${encodeURIComponent(paymentId)}/remaining`);
     },
     reverseDocumentAccounting(input: unknown, reason: string) {
       return requestJson({ method: 'POST', body: { ...input as Record<string, unknown>, reason }, parser: (payload) => payload }, '/api/v1/pro/accounting/documents/reverse');

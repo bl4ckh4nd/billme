@@ -181,6 +181,12 @@ export interface DatevExportResult {
   fromDate?: string;
   toDate?: string;
   createdAt: string;
+  contentSha256?: string;
+}
+
+export interface DatevExportContent extends DatevExportResult {
+  contentSha256: string;
+  content: Uint8Array;
 }
 
 export interface ProWorkflowEntry {

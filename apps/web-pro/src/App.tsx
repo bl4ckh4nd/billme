@@ -61,6 +61,22 @@ type AppData = {
   suggestionRules: Awaited<ReturnType<ProWebClient['listAccountSuggestionRules']>>;
 };
 
+const mapServerRoleToWorkspaceRole = (role: AppData['sessionInfo']['role']): UserRole => {
+  switch (role) {
+    case 'owner':
+    case 'admin':
+      return 'admin';
+    case 'accountant':
+      return 'accountant';
+    case 'sales':
+      return 'bookkeeper';
+    case 'viewer':
+      return 'auditor';
+    default:
+      return 'auditor';
+  }
+};
+
 type StoredSession = Awaited<ReturnType<ProWebClient['login']>> & {
   apiUrl: string;
 };
@@ -458,6 +474,25 @@ const readCanonicalSeed = (
   };
 };
 
+const WORKSPACE_ROLE_VALUES = new Set<UserRole>(['bookkeeper', 'reviewer', 'accountant', 'admin', 'auditor']);
+
+const requireMutationReason = (candidate: string | undefined, operation: string): string => {
+  const supplied = candidate?.trim();
+  // Shared workspace actions historically passed the UI role as actorName. A role
+  // is authorization context, not an audit reason, so never forward it as one.
+  if (supplied && supplied !== 'Web Pro' && !WORKSPACE_ROLE_VALUES.has(supplied.toLowerCase() as UserRole)) {
+    return supplied;
+  }
+  if (typeof window === 'undefined' || typeof window.prompt !== 'function') {
+    throw new Error(`Eine ausdrückliche Begründung ist für ${operation} erforderlich.`);
+  }
+  const entered = window.prompt(`Begründung für ${operation}`)?.trim() ?? '';
+  if (!entered || WORKSPACE_ROLE_VALUES.has(entered.toLowerCase() as UserRole)) {
+    throw new Error(`Eine ausdrückliche Begründung ist für ${operation} erforderlich.`);
+  }
+  return entered;
+};
+
 const triggerBlobDownload = (blob: Blob, fileName: string) => {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -851,6 +886,13 @@ export default function App() {
     let transactions = structuredClone(accountingSeed.transactions ?? []);
     let drafts = structuredClone(accountingSeed.drafts ?? []);
     const canonical = data.accountingTransactions.length > 0;
+    const refreshCanonicalSnapshots = async () => {
+      const nextTransactions = await client.listAccountingTransactions();
+      const nextDrafts = await client.listAccountingDrafts(nextTransactions.map((row) => row.id));
+      const nextSeed = readCanonicalSeed(nextTransactions, nextDrafts);
+      transactions = structuredClone(nextSeed.transactions ?? []);
+      drafts = structuredClone(nextSeed.drafts ?? []);
+    };
     const readOnly = (operation: string): never => {
       throw new Error(`${operation} is unavailable in the legacy snapshot fallback. Reload canonical accounting data.`);
     };
@@ -879,8 +921,10 @@ export default function App() {
         if (!canonical) return readOnly('Draft mutation');
         const saved = await client.saveAccountingDraft(
           mapWorkspaceDraftToEntity(draft, data.sessionInfo.tenantId),
-          actorName,
+          requireMutationReason(actorName, 'Speichern des Entwurfs'),
         );
+        await refreshCanonicalSnapshots();
+        await refreshData();
         return mapWorkflowDraftToWorkspace(saved);
       },
       async dispatchBookingAction(transactionId: string, action: string, options?: { actorName?: string; rejectReason?: string }) {
@@ -888,9 +932,11 @@ export default function App() {
         const saved = await client.dispatchAccountingDraftAction(
           transactionId,
           action,
-          options?.actorName ?? 'Web Pro',
+          requireMutationReason(options?.actorName, `Workflow-Aktion ${action}`),
           options?.rejectReason,
         );
+        await refreshCanonicalSnapshots();
+        await refreshData();
         return mapWorkflowDraftToWorkspace(saved);
       },
       listActivity(_transactionId: string) {
@@ -1001,7 +1047,7 @@ export default function App() {
         })));
       },
     };
-  }, [accountingSeed, client, data]);
+  }, [accountingSeed, client, data, refreshData]);
 
   const handleSaveSettings = async () => {
     await runAction(async () => {
@@ -1261,6 +1307,7 @@ export default function App() {
   const openOffers = data?.offers.filter((offer) => offer.status !== 'cancelled').length ?? 0;
   const activeClients = data?.clients.filter((clientRecord) => clientRecord.status === 'active').length ?? 0;
   const showOnboarding = Boolean(data) && !loading && shouldShowBusinessOnboarding(settingsDraft);
+  const workspaceRole = data ? mapServerRoleToWorkspaceRole(data.sessionInfo.role) : 'auditor';
 
   return (
     <main className="app-shell">
@@ -1964,6 +2011,7 @@ export default function App() {
                     <ProAccountingWorkspace
                       seed={accountingSeed}
                       dataAdapter={accountingDataAdapter}
+                      role={workspaceRole}
                     />
                   </div>
                 ) : data.workflowEntries.length > 0 ? (

@@ -3,6 +3,7 @@ import type {
   AccountSuggestionRule,
   BookingDraftEntity,
   DatevExportResult,
+  DatevExportContent,
   JournalEntryEntity,
   LedgerAccount,
   LedgerAccountStats,
@@ -465,11 +466,13 @@ export interface ProAccountingRepository {
   getGuvReport(scope: TenantScope, args?: ReportRangeOptions): Promise<GuvReport>;
   getBilanzReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<BilanzReport>;
   listDatevExports(scope: TenantScope): Promise<DatevExportResult[]>;
+  getDatevExportContent?(scope: TenantScope, exportId: string): Promise<DatevExportContent>;
   insertDatevExport(
     scope: TenantScope,
     args: {
       filePath: string;
       recordCount: number;
+      content?: Uint8Array;
       fromDate?: string;
       toDate?: string;
       contentSha256?: string;
@@ -489,7 +492,7 @@ export interface ProAccountingRepository {
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
   postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;

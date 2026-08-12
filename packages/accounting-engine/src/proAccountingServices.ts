@@ -18,6 +18,7 @@ import type {
   AccountSuggestionRule,
   BookingDraftEntity,
   DatevExportResult,
+  DatevExportContent,
   JournalEntryEntity,
   LedgerAccount,
   LedgerAccountStats,
@@ -54,7 +55,7 @@ export interface ProAccountingOposRepository {
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
   postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
@@ -86,9 +87,10 @@ export interface ProAccountingService {
   getGuvReport(scope: TenantScope, args?: ReportRangeOptions): Promise<GuvReport>;
   getBilanzReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<BilanzReport>;
   listDatevExports(scope: TenantScope): Promise<DatevExportResult[]>;
+  getDatevExportContent(scope: TenantScope, exportId: string): Promise<DatevExportContent>;
   insertDatevExport(
     scope: TenantScope,
-    args: { filePath: string; recordCount: number; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: { from?: string; to?: string; recordCount: number }; mutation?: AccountingMutationContext },
+    args: { filePath: string; recordCount: number; content?: Uint8Array; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: { from?: string; to?: string; recordCount: number }; mutation?: AccountingMutationContext },
   ): Promise<DatevExportResult>;
   getAccountingHealth(scope: TenantScope): Promise<AccountingHealthSnapshot>;
   getVatSummary(scope: TenantScope, args?: ReportRangeOptions): Promise<{
@@ -112,7 +114,7 @@ export interface ProAccountingService {
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
   postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
@@ -141,7 +143,8 @@ export interface BoundProAccountingService {
   getGuvReport(args?: ReportRangeOptions): Promise<GuvReport>;
   getBilanzReport(args?: LedgerBalanceOptions): Promise<BilanzReport>;
   listDatevExports(): Promise<DatevExportResult[]>;
-  insertDatevExport(args: { filePath: string; recordCount: number; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: { from?: string; to?: string; recordCount: number }; mutation?: AccountingMutationContext }): Promise<DatevExportResult>;
+  getDatevExportContent(exportId: string): Promise<DatevExportContent>;
+  insertDatevExport(args: { filePath: string; recordCount: number; content?: Uint8Array; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: { from?: string; to?: string; recordCount: number }; mutation?: AccountingMutationContext }): Promise<DatevExportResult>;
   getAccountingHealth(): Promise<AccountingHealthSnapshot>;
   getVatSummary(args?: ReportRangeOptions): Promise<{
     from?: string;
@@ -164,7 +167,7 @@ export interface BoundProAccountingService {
   listIncomingInvoices(): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
   postIncomingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   listOpenItems(): Promise<OpenItemEntity[]>;
@@ -262,6 +265,9 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   getGuvReport: (scope, args) => repository.getGuvReport(scope, args),
   getBilanzReport: (scope, args) => repository.getBilanzReport(scope, args),
   listDatevExports: (scope) => repository.listDatevExports(scope),
+  getDatevExportContent: (scope, exportId) => repository.getDatevExportContent
+    ? repository.getDatevExportContent(scope, exportId)
+    : Promise.reject(new Error('DATEV_EXPORT_CONTENT_UNAVAILABLE')),
   insertDatevExport: (scope, args) => repository.insertDatevExport(scope, args),
   getAccountingHealth: (scope) => repository.getAccountingHealth(scope),
   getVatSummary: (scope, args) => repository.getVatSummary(scope, args),
@@ -304,6 +310,7 @@ export const bindProAccountingScope = (
   getGuvReport: (args) => service.getGuvReport(scope, args),
   getBilanzReport: (args) => service.getBilanzReport(scope, args),
   listDatevExports: () => service.listDatevExports(scope),
+  getDatevExportContent: (exportId) => service.getDatevExportContent(scope, exportId),
   insertDatevExport: (args) => service.insertDatevExport(scope, args),
   getAccountingHealth: () => service.getAccountingHealth(scope),
   getVatSummary: (args) => service.getVatSummary(scope, args),

@@ -719,6 +719,7 @@ export const datevExportResultSchema = z.object({
   fromDate: z.string().optional(),
   toDate: z.string().optional(),
   createdAt: z.string(),
+  contentSha256: z.string().length(64).optional(),
 });
 
 export const recurringProfileSchema = z.object({

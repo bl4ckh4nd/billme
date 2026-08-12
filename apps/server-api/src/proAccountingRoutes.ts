@@ -44,7 +44,7 @@ const datevExportQuery = reportRange.extend({
   reason: reasonSchema.default('DATEV-Buchungsstapel exportiert'),
 });
 const asOfDate = z.object({ asOfDate: z.string().optional() });
-const csvEscape = (value: unknown): string => {
+export const csvEscape = (value: unknown): string => {
   const text = String(value ?? '');
   return /[;",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 };
@@ -123,12 +123,14 @@ const paymentBody = z.object({
     bankAccountNumber: z.string().min(1),
     method: z.string().optional(),
     allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })),
+    allocationEventId: z.string().min(1),
   }),
 });
 const remainingPaymentBody = z.object({
   reason: reasonSchema,
   paymentId: z.string().min(1),
   allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })),
+  allocationEventId: z.string().min(1),
 });
 const reverseDocumentBody = z.object({
   reason: reasonSchema,
@@ -386,13 +388,14 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       const columns = ['date', 'belegfeld1', 'buchungstext', 'konto', 'gegenkonto', 'sollHabenKennzeichen', 'buSchluessel', 'umsatz'];
       const csv = [columns.join(';'), ...rows.map((row) => columns.map((column) => csvEscape(row[column as keyof typeof row])).join(';'))].join('\n') + '\n';
       const contentSha256 = createHash('sha256').update(csv, 'utf8').digest('hex');
-      const filePath = `server://datev/${contentSha256}.csv`;
+      const filePath = `datev-export/${contentSha256}`;
       const existing = (await service.listDatevExports(session.scope)).find((entry) => entry.filePath === filePath);
       const receipt = existing ?? await service.insertDatevExport(session.scope, {
         filePath,
         recordCount: rows.length,
         fromDate: query.from,
         toDate: query.to,
+        content: new TextEncoder().encode(csv),
         mutation: mutationFor(session, query.reason),
         contentSha256,
         sourceSnapshot: { from: query.from, to: query.to, recordCount: rows.length },
@@ -403,6 +406,22 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       reply.header('content-type', 'text/csv; charset=utf-8');
       reply.header('content-disposition', 'attachment; filename="datev-buchungsstapel.csv"');
       return csv;
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/datev/exports/:id`,
+    params: idParams,
+    async handler({ request, reply, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      const exportSnapshot = await serviceFor(app).getDatevExportContent(session.scope, params.id);
+      reply.header('x-billme-datev-export-id', exportSnapshot.id);
+      reply.header('x-billme-datev-content-sha256', exportSnapshot.contentSha256);
+      reply.header('x-billme-datev-record-count', String(exportSnapshot.recordCount));
+      reply.header('content-type', 'text/csv; charset=utf-8');
+      reply.header('content-disposition', 'attachment; filename="datev-buchungsstapel.csv"');
+      reply.send(Buffer.from(exportSnapshot.content));
     },
   });
 
@@ -568,6 +587,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         softLockOverride: body.softLockOverride,
         overrideReason: body.overrideReason,
         reservationId: body.reservationId,
+        requireFinalizedReservation: true,
         mutation: mutationFor(session, body.reason),
       });
       return posted;
@@ -636,7 +656,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         session.scope,
         params.paymentId,
         body.allocations,
-        undefined,
+        body.allocationEventId,
         mutationFor(session, body.reason),
       );
       return payment;

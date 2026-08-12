@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { createSingleTenantScope } from '@billme/server-core';
 import type { PostgresQueryable, PostgresTransactionClient } from './connection.js';
@@ -54,6 +55,53 @@ test('OPOS hardening migration protects posted incoming invoice lines and persis
   assert.match(migration, /ADD COLUMN IF NOT EXISTS config_json/);
   assert.match(migration, /ADD COLUMN IF NOT EXISTS event_key/);
   assert.match(migration, /NEW\.status IN \('open','paid','overdue','unresolved'\)/);
+});
+
+test('DATEV byte snapshot migration is additive and immutable', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const migration = await readFile(new URL('../../drizzle/0009_server_data_datev_export_bytes.sql', import.meta.url), 'utf8');
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS content_bytes BYTEA/);
+  assert.match(migration, /datev_exports_immutable/);
+  assert.match(migration, /OLD\.content_bytes IS DISTINCT FROM NEW\.content_bytes/);
+  assert.match(migration, /CREATE TRIGGER datev_exports_immutable BEFORE UPDATE/);
+});
+
+test('real Postgres DATEV exports return the exact persisted bytes after source changes', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tenantId = `datev-bytes-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const scope = createSingleTenantScope(tenantId, 'pro');
+  const now = new Date().toISOString();
+  const filePath = `datev-export/test-${tenantId}`;
+  const sourceBytes = new TextEncoder().encode('konto;gegenkonto;buchungstext\n1200;8400;"source;before"\n');
+  try {
+    await runDrizzleMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'DATEV bytes test', now]);
+    const repository = createPostgresProAccountingRepository(pool);
+    const receipt = await repository.insertDatevExport(scope, {
+      filePath,
+      recordCount: 1,
+      content: sourceBytes,
+      contentSha256: createHash('sha256').update(sourceBytes).digest('hex'),
+      sourceSnapshot: { recordCount: 1 },
+      mutation: { reason: 'verify DATEV snapshot', actor: { type: 'user', id: 'test-user' } },
+    });
+    const sourceBytesAfterSourceChange = new TextEncoder().encode('konto;gegenkonto;buchungstext\n1200;8400;"source;after"\n');
+    assert.notDeepEqual(Array.from(sourceBytes), Array.from(sourceBytesAfterSourceChange));
+    const snapshot = await repository.getDatevExportContent(scope, receipt.id);
+    assert.deepEqual(Array.from(snapshot.content), Array.from(sourceBytes));
+    assert.equal(snapshot.contentSha256, receipt.contentSha256);
+    await assert.rejects(
+      () => pool.query(`UPDATE datev_exports SET content_bytes=$1 WHERE tenant_id=$2 AND id=$3`, [sourceBytesAfterSourceChange, tenantId, receipt.id]),
+      /DATEV export snapshots are immutable/,
+    );
+  } finally {
+    await pool.query(`ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete`).catch(() => undefined);
+    await pool.query(`DELETE FROM datev_exports WHERE tenant_id=$1`, [tenantId]).catch(() => undefined);
+    await pool.query(`DELETE FROM audit_log WHERE tenant_id=$1`, [tenantId]).catch(() => undefined);
+    await pool.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]).catch(() => undefined);
+    await pool.query(`ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete`).catch(() => undefined);
+    await pool.end();
+  }
 });
 
 test('real Postgres permits only OPOS status projection and rejects repeated over-allocation', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {

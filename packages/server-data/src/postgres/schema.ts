@@ -1,5 +1,6 @@
 import {
   boolean,
+  customType,
   bigint,
   integer,
   jsonb,
@@ -8,6 +9,8 @@ import {
   text,
 } from "drizzle-orm/pg-core";
 import { pgSchema } from "drizzle-orm/pg-core";
+
+const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({ dataType: () => "bytea" });
 
 const drizzleSchema = pgSchema("drizzle");
 export const drizzleMigrations = drizzleSchema.table("__drizzle_migrations", {
@@ -493,6 +496,7 @@ export const datevExports = pgTable("datev_exports", {
   toDate: text("to_date"),
   createdAt: text("created_at"),
   metaJson: text("meta_json"),
+  contentBytes: bytea("content_bytes"),
 });
 
 export const taxCases = pgTable("tax_cases", {

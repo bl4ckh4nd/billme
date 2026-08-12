@@ -29,17 +29,15 @@ export interface ProAccountingSeed {
 export interface ProAccountingWorkspaceProps {
   seed?: ProAccountingSeed;
   dataAdapter?: ProAccountingDataAdapter;
+  role?: UserRole;
   busy?: boolean;
   onPersistEntry?: (entry: { transaction: Transaction; draft: BookingDraft }) => void | Promise<void>;
 }
 
-export default function App({ seed, dataAdapter, busy = false, onPersistEntry }: ProAccountingWorkspaceProps) {
+export default function App({ seed, dataAdapter, role = 'auditor', busy = false, onPersistEntry }: ProAccountingWorkspaceProps) {
   const [currentView, setCurrentView] = useState<AppView>('inbox');
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
   const [inboxPreviewTransactionId, setInboxPreviewTransactionId] = useState<string | null>(null);
-  // Desktop authorization is enforced by the main process. The renderer only
-  // uses the owner-capability context to decide which controls to present.
-  const role: UserRole = 'admin';
   const [version, setVersion] = useState(0);
 
   useEffect(() => {

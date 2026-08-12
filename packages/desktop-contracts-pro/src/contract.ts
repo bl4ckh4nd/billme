@@ -1167,7 +1167,6 @@ export const ipcRoutes = {
     args: proUpsertWorkflowEntryArgsSchema,
     result: okSchema,
   },
-  'pro:getAccountingPolicy': { channel: 'pro:getAccountingPolicy', args: z.undefined(), result: accountingPolicySchema },
   'pro:setAccountingPolicy': { channel: 'pro:setAccountingPolicy', args: proSetAccountingPolicyArgsSchema, result: accountingPolicySchema },
   'pro:listAccountingAccountMappings': { channel: 'pro:listAccountingAccountMappings', args: proListAccountingAccountMappingsArgsSchema, result: z.array(accountingAccountMappingSchema) },
   'pro:upsertAccountingAccountMapping': { channel: 'pro:upsertAccountingAccountMapping', args: proUpsertAccountingAccountMappingArgsSchema, result: accountingAccountMappingSchema },

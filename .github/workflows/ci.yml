@@ -187,3 +187,49 @@ jobs:
           name: server-mode-diagnostics-smoke
           path: test-results/server-mode
           if-no-files-found: ignore
+
+  e2e-server-pro-full:
+    name: Full E2E (server mode, Pro accounting)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run full server-mode Pro E2E suite
+        run: pnpm test:e2e:server:full:pro
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-server-pro-full
+          path: playwright-report
+          if-no-files-found: ignore
+
+      - name: Upload server-mode diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-mode-diagnostics-pro-full
+          path: test-results/server-mode
+          if-no-files-found: ignore

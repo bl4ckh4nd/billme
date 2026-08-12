@@ -24,6 +24,7 @@ export default function WorkflowActionBar({
   onAction,
   isBusy,
 }: WorkflowActionBarProps) {
+  if (allowedActions.length === 0) return null;
   const primary =
     allowedActions.find((action) => ['post', 'approve', 'submit_for_review'].includes(action)) ??
     allowedActions.find((action) => action !== 'request_receipt') ??

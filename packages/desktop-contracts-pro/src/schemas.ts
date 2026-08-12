@@ -601,6 +601,7 @@ export const bookingDraftEntitySchema = z.object({
   lines: z.array(bookingDraftLineEntitySchema),
   validationIssues: z.array(draftValidationIssueSchema),
   updatedAt: z.string(),
+  isVirtualProjection: z.boolean().optional(),
 });
 
 export const journalLineEntitySchema = z.object({

@@ -294,8 +294,11 @@ export default function InboxView({
   // Derive primary action for previewTx
   const previewAllowedActions = useMemo(() => {
     if (!previewDraft) return [];
-    return getAllowedActions(previewDraft.workflowStatus, permissionCtx, previewDraft.validationIssues);
-  }, [previewDraft, permissionCtx]);
+    const actions = getAllowedActions(previewDraft.workflowStatus, permissionCtx, previewDraft.validationIssues);
+    return previewTx?.isVirtualPosted
+      ? actions.filter((action) => !['save_draft', 'reverse', 'create_correction'].includes(action))
+      : actions.filter((action) => action !== 'save_draft');
+  }, [previewDraft, previewTx, permissionCtx]);
   const previewPrimaryAction = previewAllowedActions.find((a) => ['approve', 'post', 'submit_for_review'].includes(a));
 
   return (
@@ -639,9 +642,10 @@ export default function InboxView({
             <div className="p-4 border-t border-gray-100 flex gap-2 shrink-0">
               <button
                 onClick={() => handleInlineAction(previewTx)}
-                className="flex-1 py-3 rounded-xl bg-black text-white font-bold text-sm hover:bg-gray-900 transition-colors"
+                disabled={!previewPrimaryAction}
+                className="flex-1 py-3 rounded-xl bg-black text-white font-bold text-sm hover:bg-gray-900 transition-colors disabled:opacity-40"
               >
-                {nextActionLabel(previewPrimaryAction)}
+                {previewPrimaryAction ? nextActionLabel(previewPrimaryAction) : 'Keine Aktion'}
               </button>
               <button
                 onClick={() => onOpenTransaction(previewTx.id)}

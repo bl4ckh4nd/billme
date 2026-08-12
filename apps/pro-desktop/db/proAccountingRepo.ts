@@ -99,6 +99,7 @@ export interface BookingDraftEntity {
   lines: BookingDraftLineEntity[];
   validationIssues: DraftValidationIssue[];
   updatedAt: string;
+  isVirtualProjection?: boolean;
 }
 
 export class PostedDraftImmutableError extends Error {
@@ -386,6 +387,7 @@ const parseDraftRow = (
     lines: (draft.lines ?? []).map(normalizeDraftLine),
     validationIssues: draft.validationIssues ?? [],
     updatedAt: row.updated_at,
+    isVirtualProjection: undefined,
   };
 };
 
@@ -418,23 +420,44 @@ const canonicalDraftSnapshot = (draft: BookingDraftEntity, tenantId: string): st
     costCenter: line.costCenter ?? null,
     memo: line.memo ?? null,
   })),
-  validationIssues: (draft.validationIssues ?? [])
-    .map((issue) => ({
-      code: issue.code,
-      severity: issue.severity,
-      message: issue.message,
-      fieldPath: issue.fieldPath ?? null,
-      blocking: issue.blocking,
-      source: issue.source,
-    }))
-    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
 });
+
+const isVirtualBookedProjection = (db: Database.Database, draft: BookingDraftEntity, tenantId: string): boolean => {
+  const bankTransaction = createDrizzle(db).select({ status: schema.bankTransactions.status })
+    .from(schema.bankTransactions)
+    .where(and(
+      eq(schema.bankTransactions.tenantId, tenantId),
+      eq(schema.bankTransactions.id, draft.transactionId),
+    ))
+    .get() as { status: string } | undefined;
+  if (bankTransaction?.status !== 'booked') return false;
+
+  const persistedDraft = createDrizzle(db).select({ id: schema.bookingDrafts.id })
+    .from(schema.bookingDrafts)
+    .where(and(
+      eq(schema.bookingDrafts.tenantId, tenantId),
+      eq(schema.bookingDrafts.id, draft.id),
+    ))
+    .get();
+  if (persistedDraft) return false;
+
+  const postedJournal = createDrizzle(db).select({ id: schema.journalEntries.id })
+    .from(schema.journalEntries)
+    .where(and(
+      eq(schema.journalEntries.tenantId, tenantId),
+      eq(schema.journalEntries.sourceDraftId, draft.id),
+      eq(schema.journalEntries.status, 'posted'),
+    ))
+    .get();
+  return !postedJournal;
+};
 
 const rejectPostedDraftMutationUnlessReplay = (
   db: Database.Database,
   draft: BookingDraftEntity,
-  tenantId: string,
+  scope: TenantScope,
 ): BookingDraftEntity | undefined => {
+  const tenantId = getTenantId(scope);
   const postedJournal = createDrizzle(db).select({ id: schema.journalEntries.id })
     .from(schema.journalEntries)
     .where(and(
@@ -451,7 +474,43 @@ const rejectPostedDraftMutationUnlessReplay = (
     ))
     .get() as { status: string } | undefined;
   if (!postedJournal && bankTransaction?.status !== 'booked') return undefined;
-  if (!postedJournal) throw new PostedDraftImmutableError();
+  if (!postedJournal) {
+    if (!isVirtualBookedProjection(db, draft, tenantId)) throw new PostedDraftImmutableError();
+    const txRow = createDrizzle(db).select({
+      id: schema.bankTransactions.id,
+      tenant_id: schema.bankTransactions.tenantId,
+      account_id: schema.bankTransactions.accountId,
+      date: schema.bankTransactions.date,
+      amount: schema.bankTransactions.amount,
+      type: schema.bankTransactions.type,
+      counterparty: schema.bankTransactions.counterparty,
+      purpose: schema.bankTransactions.purpose,
+      status: schema.bankTransactions.status,
+      linked_invoice_id: schema.bankTransactions.linkedInvoiceId,
+    }).from(schema.bankTransactions).where(and(
+      eq(schema.bankTransactions.tenantId, tenantId),
+      eq(schema.bankTransactions.id, draft.transactionId),
+    )).get() as {
+      id: string;
+      tenant_id: string;
+      account_id: string;
+      date: string;
+      amount: number;
+      type: string;
+      counterparty: string;
+      purpose: string;
+      status: string;
+      linked_invoice_id: string | null;
+    } | undefined;
+    if (!txRow) throw new PostedDraftImmutableError();
+    const tx = toBankTransaction(txRow);
+    const suggestion = buildSuggestionsByTransaction(db, [tx], scope).get(tx.id);
+    const canonical = defaultDraftFromBankTx(tx, suggestion?.accountNumber, resolveBankLedgerAccountForTransaction(db, tx));
+    if (canonicalDraftSnapshot(canonical, tenantId) !== canonicalDraftSnapshot(draft, tenantId)) {
+      throw new PostedDraftImmutableError();
+    }
+    return canonical;
+  }
 
   const row = createDrizzle(db).select({ draft_json: schema.bookingDrafts.draftJson, updated_at: schema.bookingDrafts.updatedAt })
     .from(schema.bookingDrafts)
@@ -917,9 +976,19 @@ export const getDraftByTransactionId = (
   const suggestion = buildSuggestionsByTransaction(db, [tx], scope).get(tx.id);
   const bankLedgerAccount = resolveBankLedgerAccountForTransaction(db, tx);
   const draft = defaultDraftFromBankTx(tx, suggestion?.accountNumber, bankLedgerAccount);
-  // A booked bank movement can have been posted by OPOS directly (payment
-  // journal, no booking_draft/source_draft_id).  Keep that read-only
-  // projection available to the UI; saveDraft itself rejects mutations.
+  const postedSourceDraft = createDrizzle(db).select({ id: schema.journalEntries.id })
+    .from(schema.journalEntries)
+    .where(and(
+      eq(schema.journalEntries.tenantId, tenantId),
+      eq(schema.journalEntries.sourceDraftId, draft.id),
+      eq(schema.journalEntries.status, 'posted'),
+    ))
+    .get();
+  // A booked bank movement with no persisted draft/source-draft journal is an
+  // OPOS payment projection. Keep it read-only and explicit across IPC.
+  if (tx.status === 'booked' && !postedSourceDraft) {
+    return { ...draft, isVirtualProjection: true };
+  }
   return tx.status === 'booked' ? draft : saveDraft(db, draft, scope);
 };
 
@@ -932,12 +1001,20 @@ export const saveDraft = (
   const tenantId = getTenantId(scope);
   const replay = options.allowPostedTransition
     ? undefined
-    : rejectPostedDraftMutationUnlessReplay(db, draft, tenantId);
-  if (replay) return replay;
+    : rejectPostedDraftMutationUnlessReplay(db, draft, scope);
+  if (replay) {
+    if (!isVirtualBookedProjection(db, replay, tenantId)) return replay;
+    const chart = getActiveChart(db, tenantId);
+    return {
+      ...replay,
+      validationIssues: validateDraft(db, replay, loadPeriodStatus(db, replay.period, tenantId), chart, options.trustedSourceType),
+    };
+  }
   const now = new Date().toISOString();
   const chart = getActiveChart(db, tenantId);
   const normalized: BookingDraftEntity = {
     ...draft,
+    isVirtualProjection: undefined,
     tenantId,
     lines: (draft.lines ?? []).map(normalizeDraftLine).map((line) => {
       const taxCase = getTaxCaseByKey(db, line.taxCaseKey ?? line.taxCode);
@@ -995,6 +1072,13 @@ export const dispatchDraftAction = (
   const draft = getDraftByTransactionId(db, args.transactionId, scope);
   if (!draft) {
     throw new Error('Draft not found');
+  }
+  if (
+    draft.workflowStatus === 'posted' &&
+    (args.action === 'reverse' || args.action === 'create_correction') &&
+    isVirtualBookedProjection(db, draft, tenantId)
+  ) {
+    throw new Error('PAYMENT_REVERSAL_REQUIRED: OPOS-Zahlungen müssen über die Zahlungsstornierung mit Allocation-Reversal korrigiert werden.');
   }
 
   const next = { ...draft };

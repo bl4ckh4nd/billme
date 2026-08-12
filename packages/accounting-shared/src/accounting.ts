@@ -135,6 +135,7 @@ export interface BookingDraftEntity {
   lines: BookingDraftLineEntity[];
   validationIssues: ValidationIssue[];
   updatedAt: string;
+  isVirtualProjection?: boolean;
 }
 
 export interface JournalLineEntity {

@@ -282,6 +282,7 @@ describe('ProAccountingPage integration', () => {
     });
 
     expect(workspaceState.lastProps.seed.transactions[0].workflowStatus).toBe('posted');
+    expect(workspaceState.lastProps.seed.transactions[0].isVirtualPosted).toBe(false);
     expect(workspaceState.lastProps.seed.transactions[1].workflowStatus).toBe('posted');
     expect(workspaceState.lastProps.seed.accounts[0]).toEqual(
       expect.objectContaining({ id: '8400', type: 'Revenue' }),
@@ -308,6 +309,43 @@ describe('ProAccountingPage integration', () => {
         }),
       );
     });
+  });
+
+  it('carries the explicit virtual projection marker only for an unpersisted booked transaction', async () => {
+    mockIpc.pro.listBankTransactions.mockResolvedValueOnce([
+      {
+        id: 'tx-virtual',
+        date: '2026-01-10',
+        counterparty: 'Kunde',
+        purpose: 'OPOS Zahlung',
+        amount: 119,
+        status: 'booked',
+        linkedInvoiceId: null,
+      },
+    ]);
+    mockIpc.pro.getDraftByTransactionId.mockResolvedValueOnce({
+      id: 'draft-tx-virtual',
+      tenantId: 'default',
+      transactionId: 'tx-virtual',
+      workflowStatus: 'posted',
+      postingDate: '2026-01-10',
+      documentDate: '2026-01-10',
+      bookingText: 'OPOS Zahlung',
+      reference: 'tx-virtual',
+      lines: [],
+      validationIssues: [],
+      updatedAt: new Date().toISOString(),
+      isVirtualProjection: true,
+    });
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await waitFor(() => expect(workspaceState.lastProps?.seed?.transactions).toHaveLength(1));
+    expect(workspaceState.lastProps.seed.transactions[0]).toEqual(
+      expect.objectContaining({ workflowStatus: 'posted', isVirtualPosted: true }),
+    );
+    expect(workspaceState.lastProps.seed.drafts[0]).toEqual(
+      expect.objectContaining({ workflowStatus: 'posted', isVirtualProjection: true }),
+    );
   });
 
   it('loads the active SKR04 catalog and carries a configured custom bank GL into the workspace', async () => {

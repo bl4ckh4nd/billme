@@ -121,6 +121,7 @@ export interface Transaction {
   bookingDraftId: string;
   owner?: string;
   exceptionCase?: ExceptionCase;
+  isVirtualPosted?: boolean;
 }
 
 export interface JournalLine {
@@ -190,6 +191,7 @@ export interface BookingDraft {
   chartFramework: 'SKR03' | 'SKR04';
   lines: JournalLine[];
   validationIssues: ValidationIssue[];
+  isVirtualProjection?: boolean;
   activity: ActivityEvent[];
   assignedTo?: string;
   approval: {

@@ -65,6 +65,7 @@ const mapLedgerAccountNames = (
 
 const mapTransactions = (
   rows: Awaited<ReturnType<typeof ipc.pro.listBankTransactions>>,
+  virtualPostedTransactionIds: ReadonlySet<string> = new Set(),
 ): ProUiTransaction[] => {
   return rows.map((row) => {
     const workflowStatus: ProUiTransaction['workflowStatus'] =
@@ -90,6 +91,9 @@ const mapTransactions = (
       flags: missingReceipt ? ['missing_receipt'] : [],
       bookingDraftId: `draft-${row.id}`,
       owner: 'Pro Workspace',
+      isVirtualPosted:
+        row.status === 'booked' &&
+        virtualPostedTransactionIds.has(row.id),
     };
   });
 };
@@ -142,6 +146,7 @@ const mapEntityDraftToUiDraft = (
       source: issue.source,
     })),
     activity: [],
+    isVirtualProjection: draft.isVirtualProjection,
     assignedTo: undefined,
     approval: {
       required: false,
@@ -235,6 +240,11 @@ export const ProAccountingPage: React.FC = () => {
     const draftRows = draftQuery.data ?? [];
     const transactionRows = txQuery.data ?? [];
     const bankStatusByTransactionId = new Map(transactionRows.map((tx) => [tx.id, tx.status]));
+    const virtualPostedTransactionIds = new Set(
+      draftRows
+        .filter((draft) => draft.isVirtualProjection)
+        .map((draft) => draft.transactionId),
+    );
     const activeLedgerAccounts = ledgerAccounts.filter((row) => !row.chart || row.chart === activeChart);
     const accountNames = mapLedgerAccountNames(activeLedgerAccounts);
     for (const draft of draftRows) {
@@ -249,7 +259,10 @@ export const ProAccountingPage: React.FC = () => {
       );
     }
 
-    const baseTransactions = mapTransactions(txQuery.data ?? []);
+    const baseTransactions = mapTransactions(
+      transactionRows,
+      virtualPostedTransactionIds,
+    );
     const mergedTransactions = baseTransactions;
     const bankAccountNumberByTransactionId = Object.fromEntries(
       (txQuery.data ?? []).flatMap((tx) => {

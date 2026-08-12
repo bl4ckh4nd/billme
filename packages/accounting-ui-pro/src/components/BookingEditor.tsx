@@ -85,8 +85,15 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
   const allowedActions = useMemo(() => {
     if (!draft) return [];
-    return getAllowedActions(draft.workflowStatus, permissionCtx, validationIssues);
-  }, [draft, permissionCtx, validationIssues]);
+    const actions = getAllowedActions(draft.workflowStatus, permissionCtx, validationIssues);
+    const readOnlyActions = new Set<BookingAction>();
+    if (draft.workflowStatus === 'posted' || draft.workflowStatus === 'reversed') readOnlyActions.add('save_draft');
+    if (transaction?.isVirtualPosted) {
+      readOnlyActions.add('reverse');
+      readOnlyActions.add('create_correction');
+    }
+    return actions.filter((action) => !readOnlyActions.has(action));
+  }, [draft, permissionCtx, transaction, validationIssues]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {

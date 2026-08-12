@@ -16,6 +16,7 @@ import {
   getVatSummary,
   buildDatevRows,
   dispatchDraftAction,
+  validateTaxCompliance,
 } from './proAccountingRepo';
 import { ensureTaxCaseSeedData } from './taxCasesRepo';
 import { createProTenantScope } from '../tenantScope';
@@ -202,6 +203,7 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     postDraft(db, draft.id, { postingDate: '2026-03-01' }, scope);
     const posted = getDraftByTransactionId(db, 'tx-posted-draft-1', scope);
     expect(posted?.workflowStatus).toBe('posted');
+    expect(posted?.isVirtualProjection).not.toBe(true);
 
     expect(saveDraft(db, { ...posted!, updatedAt: 'different-replay-timestamp' }, scope)).toEqual(posted);
     expect(() => saveDraft(db, { ...posted!, bookingText: 'Manipulierte Buchung' }, scope))
@@ -221,6 +223,43 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     expect(projected?.workflowStatus).toBe('posted');
     expect(() => saveDraft(db, { ...projected!, bookingText: 'Payment-Manipulation' }, scope))
       .toThrow('POSTED_DRAFT_IMMUTABLE');
+  });
+
+  it('allows a virtual booked projection to validate and replay without writing, but never reverses it as a draft', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    seedBankTransaction(db, 'tx-opos-virtual-1', '2026-03-01');
+    db.prepare("UPDATE bank_transactions SET status = 'booked' WHERE id = ?").run('tx-opos-virtual-1');
+
+    const projected = getDraftByTransactionId(db, 'tx-opos-virtual-1', scope)!;
+    expect(projected.isVirtualProjection).toBe(true);
+    const beforeDrafts = (db.prepare('SELECT COUNT(*) AS c FROM booking_drafts').get() as { c: number }).c;
+    const beforeJournals = (db.prepare('SELECT COUNT(*) AS c FROM journal_entries').get() as { c: number }).c;
+
+    // Keep the chart active through the bank account while removing the
+    // projected expense account, so pure validation must report the drift.
+    db.prepare("DELETE FROM ledger_accounts WHERE chart = 'SKR03' AND account_number = '6000'").run();
+    const validation = validateTaxCompliance(db, { transactionId: 'tx-opos-virtual-1' }, scope);
+    expect(validation.ok).toBe(false);
+    expect(validation.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'UNKNOWN_ACCOUNT' })]));
+    const drifted = {
+      ...projected,
+      lines: projected.lines.map((line, index) => index === 0
+        ? { ...line, accountNumber: '9999', taxCaseKey: 'DE_STD_19' as const }
+        : line),
+    };
+    expect(() => saveDraft(db, drifted, scope)).toThrow('POSTED_DRAFT_IMMUTABLE');
+    expect(saveDraft(db, { ...projected, updatedAt: 'replay-only' }, scope)).toMatchObject({
+      id: projected.id,
+      transactionId: projected.transactionId,
+      workflowStatus: 'posted',
+    });
+    expect(() => dispatchDraftAction(db, { transactionId: 'tx-opos-virtual-1', action: 'reverse' }, scope))
+      .toThrow('PAYMENT_REVERSAL_REQUIRED');
+
+    expect((db.prepare('SELECT COUNT(*) AS c FROM booking_drafts').get() as { c: number }).c).toBe(beforeDrafts);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM journal_entries').get() as { c: number }).c).toBe(beforeJournals);
+    expect((db.prepare('SELECT status FROM bank_transactions WHERE id = ?').get('tx-opos-virtual-1') as { status: string }).status).toBe('booked');
   });
 
   it('filters journal entries by account before pagination', () => {

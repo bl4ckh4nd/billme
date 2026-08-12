@@ -390,13 +390,6 @@ export const accountSchema = z.object({
 
 export const ledgerChartSchema = z.enum(['SKR03', 'SKR04']);
 
-export const accountingPolicySchema = z.object({
-  tenantId: z.string(),
-  activeChart: ledgerChartSchema,
-  periodPolicy: z.literal('calendar_month'),
-  updatedAt: z.string(),
-});
-
 export const taxCaseKeySchema = z.enum([
   'DE_STD_19',
   'DE_STD_7',

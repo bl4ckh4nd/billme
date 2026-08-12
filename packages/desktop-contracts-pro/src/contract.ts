@@ -25,7 +25,6 @@ import {
   appSettingsSchema,
   ledgerAccountSchema,
   ledgerChartSchema,
-  accountingPolicySchema,
   taxCaseDefinitionSchema,
   taxCaseAccountMappingSchema,
   taxCaseKeySchema,

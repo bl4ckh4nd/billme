@@ -6,7 +6,7 @@ interface ReportTabSwitchProps {
 const tabs: Array<{ id: 'susa' | 'guv' | 'bilanz'; label: string }> = [
   { id: 'susa', label: 'SuSa' },
   { id: 'guv', label: 'GuV' },
-  { id: 'bilanz', label: 'Bilanz (Preview)' },
+  { id: 'bilanz', label: 'Bilanz' },
 ];
 
 export default function ReportTabSwitch({ activeTab, onChange }: ReportTabSwitchProps) {
@@ -26,4 +26,3 @@ export default function ReportTabSwitch({ activeTab, onChange }: ReportTabSwitch
     </div>
   );
 }
-

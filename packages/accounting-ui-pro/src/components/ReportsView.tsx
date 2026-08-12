@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, FileBarChart2, RefreshCw } from 'lucide-react';
+import { FileBarChart2 } from 'lucide-react';
 import {
   BalanceSheetPreview,
   BalanceSheetPreviewLine,
@@ -74,11 +74,17 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenInvo
     setReportsLoading(true);
     setReportsError(null);
 
-    Promise.all([
-      (dataAdapter?.getSusaReport ?? getSusaReport)(filters),
-      (dataAdapter?.getGuvReport ?? getGuvReport)(filters),
-      (dataAdapter?.getBalanceSheetPreview ?? getBalanceSheetPreview)(filters),
-    ])
+    const loadReports = dataAdapter
+      ? dataAdapter.getSusaReport && dataAdapter.getGuvReport && dataAdapter.getBalanceSheetPreview
+        ? Promise.all([
+            dataAdapter.getSusaReport(filters),
+            dataAdapter.getGuvReport(filters),
+            dataAdapter.getBalanceSheetPreview(filters),
+          ])
+        : Promise.reject(new Error('Auswertungen sind für diesen Adapter nicht verfügbar.'))
+      : Promise.all([getSusaReport(filters), getGuvReport(filters), getBalanceSheetPreview(filters)]);
+
+    loadReports
       .then(([susa, guv, bilanz]) => {
         if (cancelled) return;
         setSusaReport(susa);
@@ -107,9 +113,16 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenInvo
     let cancelled = false;
     setDrilldownLoading(true);
 
-    (dataAdapter?.getReportDrilldownEntries ?? getReportDrilldownEntries)(drilldownSelection)
+    (dataAdapter
+      ? dataAdapter.getReportDrilldownEntries
+        ? dataAdapter.getReportDrilldownEntries(drilldownSelection)
+        : Promise.reject(new Error('Drilldown ist für diesen Adapter nicht verfügbar.'))
+      : getReportDrilldownEntries(drilldownSelection))
       .then((rows) => {
         if (!cancelled) setDrilldownEntries(rows);
+      })
+      .catch((error) => {
+        if (!cancelled) setReportsError(error instanceof Error ? error.message : 'Drilldown konnte nicht geladen werden.');
       })
       .finally(() => {
         if (!cancelled) setDrilldownLoading(false);
@@ -123,14 +136,14 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenInvo
   const activeReportLabel = useMemo(() => {
     if (activeTab === 'susa') return 'Summen- und Saldenliste';
     if (activeTab === 'guv') return 'Gewinn- und Verlustrechnung';
-    return 'Bilanz Preview';
+    return 'Bilanz';
   }, [activeTab]);
   const activeSource =
     activeTab === 'susa'
       ? susaReport?.quality.source
       : activeTab === 'guv'
         ? guvReport?.quality.source
-        : balanceSheetPreview?.quality.source;
+      : balanceSheetPreview?.quality.source;
 
   const handleSusaSelect = (row: SusaRow) => {
     setDrilldownSelection({
@@ -169,22 +182,14 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenInvo
       <div className="px-6 py-3 border-b border-gray-100 shrink-0">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gray-400 shrink-0">
-            <span className="w-6 h-6 rounded-md bg-[#ccff00] text-black flex items-center justify-center">
+            <span className="w-6 h-6 rounded-md bg-accent text-black flex items-center justify-center">
               <FileBarChart2 size={13} />
             </span>
             Auswertungen
           </div>
           <div className="flex-1 min-w-0">
-            <h1 className="text-sm font-black tracking-tight text-gray-900">SuSa, GuV und Bilanz-Preview</h1>
+            <h1 className="text-sm font-black tracking-tight text-gray-900">SuSa, GuV und Bilanz</h1>
             <p className="text-xs text-gray-400">SuSa, GuV und Bilanz mit Journal-Drilldown.</p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button className="px-3 h-8 rounded-full border border-gray-200 bg-white text-xs font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1.5 transition-colors">
-              <Download size={13} /> Export (Mock)
-            </button>
-            <button className="px-3 h-8 rounded-full border border-gray-200 bg-white text-xs font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1.5 transition-colors">
-              <RefreshCw size={13} /> Snapshot (Mock)
-            </button>
           </div>
         </div>
       </div>
@@ -217,7 +222,7 @@ export default function ReportsView({ dataAdapter, onOpenTransaction, onOpenInvo
                   Lade Auswertungen…
                 </div>
               ) : reportsError ? (
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-8 text-sm text-red-700">
+                <div className="rounded-2xl border border-error-border bg-error-bg p-8 text-sm text-error" role="alert" aria-live="assertive">
                   {reportsError}
                 </div>
               ) : activeTab === 'susa' ? (

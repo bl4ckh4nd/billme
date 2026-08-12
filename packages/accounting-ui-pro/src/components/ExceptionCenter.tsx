@@ -23,7 +23,7 @@ interface ExceptionCenterProps {
 const filterLabels: Record<ExceptionFilter, string> = {
   all: 'Alle',
   open: 'Offen',
-  snoozed: 'Snoozed',
+  snoozed: 'Pausiert',
   resolved: 'Erledigt',
   errors: 'Fehler',
   warnings: 'Warnungen',
@@ -81,7 +81,7 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
       <div className="w-[26rem] shrink-0 border-r border-gray-100 flex flex-col">
         <div className="px-4 py-3 border-b border-gray-100">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-black text-[#ccff00] flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-black text-accent flex items-center justify-center shrink-0">
               <AlertTriangle size={15} />
             </div>
             <div className="min-w-0">
@@ -286,12 +286,12 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                       <button
                         onClick={() => {
                           if (!snoozeUntil) return;
-                          snoozeException(selectedTx.id, snoozeUntil, role, resolutionNote || 'Snoozed aus Exception Center');
+                          snoozeException(selectedTx.id, snoozeUntil, role, resolutionNote || 'Pausiert aus dem Ausnahmebereich');
                           onRefresh();
                         }}
                         className="px-3 py-2 rounded-xl border border-gray-200 text-sm font-bold text-gray-700 hover:bg-gray-50"
                       >
-                        Snooze
+                      Pausieren
                       </button>
                     </div>
                   </div>
@@ -325,14 +325,14 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                       }}
                       className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50"
                     >
-                      Reopen
+                      Wieder öffnen
                     </button>
                   </div>
                 </div>
               </div>
 
               <div className="border border-gray-200 rounded-2xl bg-white p-5">
-                <div className="text-sm font-bold text-gray-900 mb-2">Workflow Snapshot</div>
+                <div className="text-sm font-bold text-gray-900 mb-2">Workflow-Status</div>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-gray-500">Status</span>
@@ -352,7 +352,7 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">Exception Status</span>
-                    <span className="font-bold text-gray-800">{exceptionState}</span>
+                    <span className="font-bold text-gray-800">{exceptionState === 'snoozed' ? 'Pausiert' : exceptionState === 'resolved' ? 'Erledigt' : 'Offen'}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">Owner</span>
@@ -360,7 +360,7 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                   </div>
                   {selectedTx.exceptionCase?.snoozedUntil && (
                     <div className="flex justify-between">
-                      <span className="text-gray-500">Snoozed bis</span>
+                      <span className="text-gray-500">Pausiert bis</span>
                       <span className="font-bold text-gray-800">{selectedTx.exceptionCase.snoozedUntil}</span>
                     </div>
                   )}

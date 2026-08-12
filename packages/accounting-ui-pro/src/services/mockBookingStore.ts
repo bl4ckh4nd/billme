@@ -21,6 +21,8 @@ import type {
   AssetUpsertInput,
 } from '../domain/assetTypes';
 
+type MaybePromise<T> = T | Promise<T>;
+
 let drafts = structuredClone(mockBookingDrafts) as BookingDraft[];
 let transactions = structuredClone(mockTransactions) as Transaction[];
 
@@ -35,12 +37,12 @@ export interface ProAccountingDataAdapter {
   listBookingDrafts?: () => BookingDraft[];
   getTransactionById?: (id: string) => Transaction | undefined;
   getBookingDraftByTransactionId?: (transactionId: string) => BookingDraft | undefined;
-  saveDraft?: (draft: BookingDraft, actorName?: string) => BookingDraft;
+  saveDraft?: (draft: BookingDraft, actorName?: string) => MaybePromise<BookingDraft>;
   dispatchBookingAction?: (
     transactionId: string,
     action: BookingAction,
     options?: { role: UserRole; actorName?: string; rejectReason?: string },
-  ) => BookingDraft;
+  ) => MaybePromise<BookingDraft>;
   listActivity?: (transactionId: string) => BookingDraft['activity'];
   reset?: () => void;
   updateExceptionCase?: (
@@ -193,9 +195,10 @@ export function getBookingDraftByTransactionId(transactionId: string): BookingDr
   return draft ? clone(draft) : undefined;
 }
 
-export function saveDraft(draft: BookingDraft, actorName = 'Mara Buchhaltung'): BookingDraft {
+export function saveDraft(draft: BookingDraft, actorName = 'Mara Buchhaltung'): BookingDraft | Promise<BookingDraft> {
   if (dataAdapter?.saveDraft) {
-    return clone(dataAdapter.saveDraft(clone(draft), actorName));
+    const saved = dataAdapter.saveDraft(clone(draft), actorName);
+    return saved instanceof Promise ? saved.then(clone) : clone(saved);
   }
   const index = getDraftIndexById(draft.id);
   if (index === -1) throw new Error('Draft not found');
@@ -217,9 +220,10 @@ export function dispatchBookingAction(
   transactionId: string,
   action: BookingAction,
   options: { role: UserRole; actorName?: string; rejectReason?: string } = { role: 'bookkeeper' },
-): BookingDraft {
+): BookingDraft | Promise<BookingDraft> {
   if (dataAdapter?.dispatchBookingAction) {
-    return clone(dataAdapter.dispatchBookingAction(transactionId, action, options));
+    const dispatched = dataAdapter.dispatchBookingAction(transactionId, action, options);
+    return dispatched instanceof Promise ? dispatched.then(clone) : clone(dispatched);
   }
   const draft = getBookingDraftByTransactionId(transactionId);
   const tx = getTransactionById(transactionId);
@@ -355,12 +359,10 @@ const buildSeedDraft = (
 };
 
 export function hydrateMockStore(seed: MockStoreSeed) {
+  if (seed.accounts) replaceMockAccounts(seed.accounts);
   if (dataAdapter?.hydrate) {
     dataAdapter.hydrate(seed);
     return;
-  }
-  if (seed.accounts && seed.accounts.length > 0) {
-    replaceMockAccounts(seed.accounts);
   }
 
   if (seed.transactions) {

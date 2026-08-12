@@ -225,6 +225,37 @@ describe('ReportsView drilldown ranges', () => {
     }));
   });
 
+  it('keeps sole-proprietor SuSa, BWA01, and Management-GuV on the visible calendar year', async () => {
+    const year = new Date().getUTCFullYear();
+    const getSusaReport = vi.fn(async () => ({
+      rows: [],
+      totals: { openingDebit: 0, openingCredit: 0, turnoverDebit: 0, turnoverCredit: 0, closingDebit: 0, closingCredit: 0 },
+      quality: { unmappedAccounts: 0, warnings: 0, generatedAt: '', source: 'live' as const },
+    }));
+    const guvReport = {
+      lines: [],
+      totals: { revenue: 0, expenses: 0, result: 0 },
+      quality: { unmappedAccounts: [], warnings: 0, generatedAt: '', source: 'live' as const },
+    };
+    const getBwaReport = vi.fn(async () => guvReport);
+    const getManagementGuvReport = vi.fn(async () => guvReport);
+    render(<ReportsView
+      businessReportingProfile={{ legalForm: 'sole_proprietor', profitDetermination: 'eur', fiscalYearStart: '01-01' }}
+      dataAdapter={{ getSusaReport, getBwaReport, getManagementGuvReport }}
+      availableTabs={['susa', 'bwa01', 'management_guv']}
+    />);
+
+    await screen.findByText('Summen- und Saldenliste');
+    const expectedRange = {
+      asOfDate: expect.stringMatching(new RegExp(`^${year}-\\d{2}-\\d{2}$`)),
+      periodFromDate: `${year}-01-01`,
+      periodToDate: `${year}-12-31`,
+    };
+    expect(getSusaReport).toHaveBeenCalledWith(expect.objectContaining(expectedRange));
+    expect(getBwaReport).toHaveBeenCalledWith(expect.objectContaining(expectedRange));
+    expect(getManagementGuvReport).toHaveBeenCalledWith(expect.objectContaining(expectedRange));
+  });
+
   it('classifies native EÜR cash sources with an audit reason', async () => {
     const upsertEurClassification = vi.fn(async () => ({}));
     const getEurReport = vi.fn(async () => ({

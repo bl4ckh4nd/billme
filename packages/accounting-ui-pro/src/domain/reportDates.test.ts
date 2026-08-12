@@ -34,17 +34,22 @@ describe('report date ranges', () => {
     expect(reportPeriodRangeForPreset('2026-04-14', profile, 'ytd')).toEqual({ from: '2025-04-15', to: '2026-04-14' });
   });
 
-  it('keeps native EÜR periods on the verified print-only 2025 calendar year', () => {
+  it('keeps generic sole-proprietor report periods on the visible calendar year', () => {
     const profile = { legalForm: 'sole_proprietor' as const, profitDetermination: 'eur' as const, fiscalYearStart: '04-15' };
-    expect(reportPeriodRangeForPreset('2026-04-14', profile, 'current')).toEqual({ from: '2025-01-01', to: '2025-12-31' });
+    expect(reportFiscalYearRange('2026-04-14', profile)).toMatchObject({
+      fiscalYear: 2026,
+      start: '2026-01-01',
+      end: '2026-12-31',
+    });
+    expect(reportPeriodRangeForPreset('2026-04-14', profile, 'current')).toEqual({ from: '2026-01-01', to: '2026-12-31' });
     expect(defaultReportFilters('SKR03', profile, '2026-04-14')).toMatchObject({
-      asOfDate: '2025-12-31',
-      periodFromDate: '2025-01-01',
-      periodToDate: '2025-12-31',
+      asOfDate: '2026-04-14',
+      periodFromDate: '2026-01-01',
+      periodToDate: '2026-12-31',
     });
     expect(reportDateRange({
       ...defaultReportFilters('SKR03', profile, '2026-04-14'),
       periodPreset: 'current',
-    })).toEqual({ from: '2025-01-01', to: '2025-12-31' });
+    })).toEqual({ from: '2026-01-01', to: '2026-12-31' });
   });
 });

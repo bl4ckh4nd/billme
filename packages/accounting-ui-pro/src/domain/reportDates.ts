@@ -10,9 +10,6 @@ export const NATIVE_EUR_2025_RANGE = Object.freeze({
   label: '2025',
 });
 
-const isNativeEurProfile = (profile?: BusinessReportingProfile): boolean =>
-  profile?.legalForm === 'sole_proprietor' && profile.profitDetermination === 'eur';
-
 export const monthToFirstDay = (month?: string): string | undefined => {
   const match = month?.match(MONTH_PATTERN);
   if (!match) return undefined;
@@ -42,14 +39,6 @@ const calendarYearRange = (asOfDate: string): FiscalYearRange => {
  * guidance instead of implementing a second validation rule.
  */
 export const reportFiscalYearRange = (asOfDate: string, profile?: BusinessReportingProfile): FiscalYearRange | undefined => {
-  if (isNativeEurProfile(profile)) {
-    return {
-      fiscalYear: 2025,
-      start: NATIVE_EUR_2025_RANGE.from,
-      end: NATIVE_EUR_2025_RANGE.to,
-      label: NATIVE_EUR_2025_RANGE.label,
-    };
-  }
   if (!profile || profile.legalForm !== 'gmbh' || profile.profitDetermination !== 'double_entry') {
     return calendarYearRange(asOfDate);
   }
@@ -68,7 +57,6 @@ export const reportPeriodRangeForPreset = (
 ): { from: string; to: string } | undefined => {
   const current = reportFiscalYearRange(asOfDate, profile);
   if (!current) return undefined;
-  if (isNativeEurProfile(profile)) return { from: current.start, to: current.end };
   if (periodPreset === 'ytd') return { from: current.start, to: asOfDate };
   if (periodPreset === 'prev_year') {
     if (profile?.legalForm === 'gmbh' && profile.profitDetermination === 'double_entry' && profile.fiscalYearStart) {
@@ -91,10 +79,9 @@ export const defaultReportFilters = (
   asOfDate = new Date().toISOString().slice(0, 10),
 ): ReportFilterState => {
   const range = reportFiscalYearRange(asOfDate, businessReportingProfile) ?? calendarYearRange(asOfDate);
-  const normalizedAsOfDate = isNativeEurProfile(businessReportingProfile) ? range.end : asOfDate;
   return {
     chart,
-    asOfDate: normalizedAsOfDate,
+    asOfDate,
     periodFrom: range.start.slice(0, 7),
     periodTo: range.end.slice(0, 7),
     periodFromDate: range.start,
@@ -115,7 +102,6 @@ export const reportDateRange = ({
   periodPreset,
   businessReportingProfile,
 }: Pick<ReportFilterState, 'periodFrom' | 'periodTo' | 'periodFromDate' | 'periodToDate' | 'asOfDate' | 'periodPreset' | 'businessReportingProfile'>) => {
-  if (isNativeEurProfile(businessReportingProfile)) return { from: NATIVE_EUR_2025_RANGE.from, to: NATIVE_EUR_2025_RANGE.to };
   if (periodFromDate || periodToDate) {
     return {
       from: periodFromDate ?? monthToFirstDay(periodFrom),

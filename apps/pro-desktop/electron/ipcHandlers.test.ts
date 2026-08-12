@@ -20,6 +20,7 @@ vi.mock('./updater', () => ({
 
 vi.mock('./dunningScheduler', () => ({ manualDunningRun: vi.fn() }));
 vi.mock('./recurringScheduler', () => ({ manualRecurringRun: vi.fn() }));
+vi.mock('../services/skrImport', () => ({ importSkrCharts: vi.fn() }));
 
 vi.mock('@billme/accounting-engine', async () => {
   const actual = await vi.importActual<typeof import('@billme/accounting-engine')>('@billme/accounting-engine');

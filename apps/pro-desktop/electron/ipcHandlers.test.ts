@@ -64,6 +64,6 @@ describe('Pro accounting IPC handlers', () => {
     const handler = handlers.get(channel);
     expect(handler).toBeDefined();
     await expect(handler?.(undefined, undefined)).resolves.toEqual(policy);
-    expect(mockGetAccountingPolicy).toHaveBeenCalledWith();
+    expect(mockGetAccountingPolicy).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'default', product: 'pro' }));
   });
 });

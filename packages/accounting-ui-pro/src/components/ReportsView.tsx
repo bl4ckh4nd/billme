@@ -39,7 +39,7 @@ import GuvView from './reports/GuvView';
 import BalanceSheetPreviewView from './reports/BalanceSheetPreviewView';
 import ReportDrilldownPanel from './reports/ReportDrilldownPanel';
 import DatevExportPanel from './reports/DatevExportPanel';
-import { defaultReportFilters, reportDateRange, reportFiscalYearRange } from '../domain/reportDates';
+import { defaultReportFilters, NATIVE_EUR_2025_RANGE, reportDateRange, reportFiscalYearRange } from '../domain/reportDates';
 import ReportStatusBadge, { MappingHealthBlock, reportIsMappingBlocked } from './reports/ReportStatusBadge';
 import ReportMappingSetup from './reports/ReportMappingSetup';
 import type { ReportMappingStatement } from '../domain/reportMapping';
@@ -132,6 +132,19 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   const [eurClassificationReason, setEurClassificationReason] = useState('');
   const [eurClassifying, setEurClassifying] = useState<string | null>(null);
 
+  const filtersForTab = (tab: ReportTabId): ReportFilterState => tab === 'eur'
+    ? {
+      ...filters,
+      asOfDate: NATIVE_EUR_2025_RANGE.to,
+      periodFrom: NATIVE_EUR_2025_RANGE.from.slice(0, 7),
+      periodTo: NATIVE_EUR_2025_RANGE.to.slice(0, 7),
+      periodFromDate: NATIVE_EUR_2025_RANGE.from,
+      periodToDate: NATIVE_EUR_2025_RANGE.to,
+      periodPreset: 'current',
+      compareMode: 'none',
+    }
+    : filters;
+
   const [drilldownSelection, setDrilldownSelection] = useState<ReportDrilldownSelection | null>(null);
   const [drilldownEntries, setDrilldownEntries] = useState<ReportDrilldownEntry[]>([]);
   const [drilldownLoading, setDrilldownLoading] = useState(false);
@@ -170,17 +183,17 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
     const missingReportMethod = <T,>(tab: ReportTabId): Promise<T> => Promise.reject(new Error(
       `${tab === 'bwa01' ? 'BWA01' : tab === 'management_guv' ? 'Management-GuV' : tab === 'hgb_guv' ? 'HGB-GuV' : tab === 'bilanz' ? 'Bilanz' : tab === 'eur' ? 'EÜR' : 'SuSa'} ist für diese Verbindung nicht verfügbar. Bitte Reporting-Profil und Adapter-Konfiguration prüfen.`,
     ));
-    const load = <T,>(tab: ReportTabId, method: ((value: ReportFilterState) => Promise<T>) | undefined, fallback: (value: ReportFilterState) => Promise<T>) => {
-      if (!dataAdapter) return fallback(filters);
-      return method ? method(filters) : missingReportMethod<T>(tab);
+    const load = <T,>(tab: ReportTabId, method: ((value: ReportFilterState) => Promise<T>) | undefined, fallback: (value: ReportFilterState) => Promise<T>, value: ReportFilterState) => {
+      if (!dataAdapter) return fallback(value);
+      return method ? method(value) : missingReportMethod<T>(tab);
     };
     const loadReports = Promise.all([
-      visibleTabs.includes('susa') ? load('susa', dataAdapter?.getSusaReport, getSusaReport) : Promise.resolve(null),
-      visibleTabs.includes('bilanz') ? load('bilanz', dataAdapter?.getBalanceSheetPreview, getBalanceSheetPreview) : Promise.resolve(null),
-      visibleTabs.includes('eur') ? load('eur', dataAdapter?.getEurReport, getEurReport) : Promise.resolve(null),
-      visibleTabs.includes('bwa01') ? load('bwa01', dataAdapter?.getBwaReport, getBwaReport) : Promise.resolve(null),
-      visibleTabs.includes('management_guv') ? load('management_guv', dataAdapter?.getManagementGuvReport, getManagementGuvReport) : Promise.resolve(null),
-      visibleTabs.includes('hgb_guv') ? load('hgb_guv', dataAdapter?.getHgbGuvReport, getHgbGuvReport) : Promise.resolve(null),
+      visibleTabs.includes('susa') ? load('susa', dataAdapter?.getSusaReport, getSusaReport, filtersForTab('susa')) : Promise.resolve(null),
+      visibleTabs.includes('bilanz') ? load('bilanz', dataAdapter?.getBalanceSheetPreview, getBalanceSheetPreview, filtersForTab('bilanz')) : Promise.resolve(null),
+      visibleTabs.includes('eur') ? load('eur', dataAdapter?.getEurReport, getEurReport, filtersForTab('eur')) : Promise.resolve(null),
+      visibleTabs.includes('bwa01') ? load('bwa01', dataAdapter?.getBwaReport, getBwaReport, filtersForTab('bwa01')) : Promise.resolve(null),
+      visibleTabs.includes('management_guv') ? load('management_guv', dataAdapter?.getManagementGuvReport, getManagementGuvReport, filtersForTab('management_guv')) : Promise.resolve(null),
+      visibleTabs.includes('hgb_guv') ? load('hgb_guv', dataAdapter?.getHgbGuvReport, getHgbGuvReport, filtersForTab('hgb_guv')) : Promise.resolve(null),
     ]);
 
     loadReports
@@ -291,6 +304,11 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
             ? managementGuvReport
             : hgbGuvReport;
   const activeQuality = activeReport?.quality;
+  useEffect(() => {
+    if (activeTab !== 'bilanz' || !balanceSheetPreview || !reportIsMappingBlocked(balanceSheetPreview.quality)) return;
+    setDrilldownSelection(null);
+    setDrilldownEntries([]);
+  }, [activeTab, balanceSheetPreview]);
   const mappingStatements = useMemo<ReportMappingStatement[]>(() => [
     ...(visibleTabs.includes('bwa01') ? ['bwa01' as const] : []),
     ...(visibleTabs.includes('management_guv') ? ['management-guv' as const] : []),
@@ -348,12 +366,12 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
     if (!dataAdapter) return;
     setExporting(true);
     setReportsError(null);
-    const request: ReportExportRequest = { report: activeTab, filters, format };
+    const request: ReportExportRequest = { report: activeTab, filters: filtersForTab(activeTab), format };
     try {
       let result: ReportExportResult | void;
       if (dataAdapter.exportReport) result = await dataAdapter.exportReport(request);
-      else if (format === 'pdf' && dataAdapter.exportReportPdf) result = await dataAdapter.exportReportPdf({ report: activeTab, filters });
-      else if (format === 'csv' && dataAdapter.exportReportCsv) result = await dataAdapter.exportReportCsv({ report: activeTab, filters });
+      else if (format === 'pdf' && dataAdapter.exportReportPdf) result = await dataAdapter.exportReportPdf({ report: activeTab, filters: filtersForTab(activeTab) });
+      else if (format === 'csv' && dataAdapter.exportReportCsv) result = await dataAdapter.exportReportCsv({ report: activeTab, filters: filtersForTab(activeTab) });
       else throw new Error('Report-Export ist für diesen Adapter nicht verfügbar.');
       setReportsError(null);
       setReportsNotice(result?.path ? `Export erstellt: ${result.path}` : `${format.toUpperCase()}-Export erstellt.`);
@@ -367,7 +385,8 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
 
   const freezeCurrentReport = async () => {
     if (!canMutate || !dataAdapter?.saveReportSnapshot || !activeReport || activeTab !== 'eur' || activeQualityBlocksFreeze) return;
-    const range = reportDateRange(filters);
+    const effectiveFilters = filtersForTab('eur');
+    const range = reportDateRange(effectiveFilters);
     if (range.from !== '2025-01-01' || range.to !== '2025-12-31') {
       setReportsNotice(null);
       setReportsError('Für das Filing-Center kann nur ein vollständiger EÜR-2025-Zeitraum eingefroren werden.');
@@ -385,7 +404,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
     try {
       await dataAdapter.saveReportSnapshot({
         reportType: activeTab,
-        args: filters,
+        args: effectiveFilters,
         payload: activeReport,
         reason,
       });
@@ -422,6 +441,12 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   };
 
   const handleBilanzSelect = (line: BalanceSheetPreviewLine) => {
+    if (reportIsMappingBlocked(balanceSheetPreview?.quality)) {
+      setDrilldownSelection(null);
+      setDrilldownEntries([]);
+      setDrilldownError('Bilanz-Drilldown ist wegen eines unvollständigen Konten-Mappings gesperrt.');
+      return;
+    }
     if (!line.accountRefs?.length) {
       setDrilldownSelection(null);
       setDrilldownEntries([]);
@@ -466,11 +491,12 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
           onMappingChanged={() => setReportsRetryKey((current) => current + 1)}
         />
         <ReportToolbar
-          filters={filters}
+          filters={filtersForTab(activeTab)}
           onChange={setFilters}
           activeTab={activeTab}
           onExport={dataAdapter ? exportReport : undefined}
           exporting={exporting}
+          lockNativeEurPeriod={activeTab === 'eur'}
         />
         {activeTab === 'eur' && dataAdapter?.saveReportSnapshot ? canMutate ? (
           <div className="flex flex-wrap items-end gap-2 rounded-xl border border-border bg-surface p-3">

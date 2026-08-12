@@ -26,6 +26,7 @@ export {
   defaultReportFilters,
   monthToFirstDay,
   monthToLastDay,
+  NATIVE_EUR_2025_RANGE,
   reportDateRange,
   reportFiscalYearRange,
   reportPeriodRangeForPreset,

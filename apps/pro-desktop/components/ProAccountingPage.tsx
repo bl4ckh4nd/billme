@@ -4,6 +4,7 @@ import { Settings2 } from 'lucide-react';
 import { Button } from '@billme/ui';
 import {
   ProAccountingWorkspace,
+  NATIVE_EUR_2025_RANGE,
   reportDateRange,
   type ReportFilterState,
   type ProAccountingDataAdapter,
@@ -42,6 +43,12 @@ import {
 
 const reportPeriodRange = (filters: ReportFilterState): { from?: string; to?: string } =>
   reportDateRange(filters);
+
+const requireMutationReason = (reason: string, operation: string): string => {
+  const normalized = reason.trim();
+  if (!normalized) throw new Error(`${operation}: Audit-Grund erforderlich.`);
+  return normalized;
+};
 
 /**
  * Reporting tabs must consume the shared, report-specific engine route. Do
@@ -483,11 +490,19 @@ export const ProAccountingPage: React.FC = () => {
         const report = await ipc.pro.getGuvReport(range);
         return mapGuvReport(report);
       },
-      async getEurReport(filters) {
-        const range = reportPeriodRange(filters);
-        const taxYear = Number((range.to ?? filters.asOfDate).slice(0, 4));
-        const report = await ipc.eur.getReport({ taxYear, from: range.from, to: range.to });
+      async getEurReport(_filters) {
+        const report = await ipc.eur.getReport({ taxYear: 2025, ...NATIVE_EUR_2025_RANGE });
         return mapEurReport(report);
+      },
+      listEurCashItems() {
+        return ipc.eur.listItems({ taxYear: 2025, ...NATIVE_EUR_2025_RANGE });
+      },
+      upsertEurClassification(input) {
+        return runMutation(() => ipc.eur.upsertClassification({
+          ...input,
+          taxYear: 2025,
+          reason: requireMutationReason(input.reason, 'EÜR-Klassifikation speichern'),
+        }));
       },
       listReportSnapshots(reportType) {
         return ipc.pro.listReportSnapshots({ reportType }).then((rows) => rows.map((row) => ({

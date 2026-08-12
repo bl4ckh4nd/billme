@@ -70,10 +70,10 @@ test('Pro web client reads native 2025 EÜR rows without a ledger reconciliation
   }) as typeof fetch;
   try {
     const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
-    const report = await client.getEurReport();
+    const report = await client.getEurReport({ from: '2025-01-01', to: '2025-12-31' });
     assert.equal(report.rows[0]?.kennziffer, '112');
     assert.equal(report.rows[0]?.providerPath, 'income');
-    assert.match(requestUrl, /reports\/eur$/);
+    assert.match(requestUrl, /reports\/eur\?from=2025-01-01&to=2025-12-31$/);
   } finally {
     globalThis.fetch = previousFetch;
   }
@@ -94,10 +94,10 @@ test('Pro web client lists EÜR cash sources and persists tenant classifications
   }) as typeof fetch;
   try {
     const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
-    const items = await client.listEurCashItems();
+    const items = await client.listEurCashItems({ from: '2025-01-01', to: '2025-12-31' });
     assert.equal(items[0]?.sourceId, 'bank-1');
     await client.upsertEurClassification({ sourceType: 'transaction', sourceId: 'bank-1', taxYear: 2025, eurLineId: 'E2025_KZ123', vatMode: 'default', vatRate: 19, reason: 'Beleg geprüft' });
-    assert.match(calls[0]?.input ?? '', /reports\/eur\/items$/);
+    assert.match(calls[0]?.input ?? '', /reports\/eur\/items\?from=2025-01-01&to=2025-12-31$/);
     assert.match(calls[1]?.input ?? '', /reports\/eur\/classifications$/);
     assert.deepEqual(JSON.parse(String(calls[1]?.init?.body)), {
       sourceType: 'transaction', sourceId: 'bank-1', taxYear: 2025, eurLineId: 'E2025_KZ123', vatMode: 'default', vatRate: 19, reason: 'Beleg geprüft',

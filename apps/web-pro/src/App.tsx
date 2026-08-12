@@ -16,6 +16,7 @@ import {
   type ProAccountingDataAdapter,
   type OposBankTransaction,
   permissionContextForRole,
+  NATIVE_EUR_2025_RANGE,
   reportDateRange,
 } from '@billme/accounting-ui-pro';
 import type {
@@ -1155,7 +1156,7 @@ export default function App() {
       async getEurReport(_filters: ReportFilterState): Promise<GuvReport> {
         // EÜR is a calendar-year cash report; do not send the double-entry
         // chart or current fiscal-year filter to its native endpoint.
-        const report = await client.getEurReport();
+        const report = await client.getEurReport(NATIVE_EUR_2025_RANGE);
         const rows = report.rows.map((row) => ({
           position: row.id,
           label: row.kennziffer ? `${row.kennziffer} · ${row.label}` : row.label,
@@ -1183,7 +1184,7 @@ export default function App() {
         };
       },
       listEurCashItems() {
-        return client.listEurCashItems();
+        return client.listEurCashItems(NATIVE_EUR_2025_RANGE);
       },
       upsertEurClassification(input) {
         return client.upsertEurClassification({
@@ -1229,11 +1230,21 @@ export default function App() {
       async getBalanceSheetPreview(filters: ReportFilterState): Promise<BalanceSheetPreview> {
         const report = await client.getBilanzReport({ asOfDate: filters.asOfDate, chart: filters.chart });
         const unmappedNotes = report.mappingHealth.unmappedAccounts.map((accountNumber) => `Konto ${accountNumber} ist nicht zugeordnet.`);
+        const mapping = reportQuality(report.mappingHealth);
+        const mappingBlocked = report.mappingHealth.blocking || mapping.mappingStatus === 'blocked';
         return {
           aktiva: report.assets.map((row) => ({ id: row.position, code: row.position, label: row.label, amount: row.amount, level: row.parentPosition ? 1 : 0, side: 'aktiva' as const, accountRefs: row.accountRefs ?? row.accountNumbers, isSubtotal: row.kind === 'heading' || row.kind === 'subtotal' || row.kind === 'result' })),
           passiva: report.liabilities.map((row) => ({ id: row.position, code: row.position, label: row.label, amount: row.amount, level: row.parentPosition ? 1 : 0, side: 'passiva' as const, accountRefs: row.accountRefs ?? row.accountNumbers, isSubtotal: row.kind === 'heading' || row.kind === 'subtotal' || row.kind === 'result' })),
           totals: { aktiva: report.totals.assets, passiva: report.totals.liabilities, difference: report.totals.delta },
-          quality: { status: Math.abs(report.totals.delta) < 0.01 && unmappedNotes.length === 0 && !report.mappingHealth.blocking ? 'ok' : 'warning', notes: [...unmappedNotes, ...report.mappingHealth.warnings], generatedAt: new Date().toISOString(), source: 'live' },
+          quality: {
+            status: mappingBlocked ? 'error' : Math.abs(report.totals.delta) < 0.01 && unmappedNotes.length === 0 ? 'ok' : 'warning',
+            notes: [...unmappedNotes, ...report.mappingHealth.warnings],
+            generatedAt: mapping.generatedAt,
+            source: mapping.source,
+            mappingStatus: mapping.mappingStatus,
+            mappingNotes: mapping.mappingNotes,
+            unmappedAccounts: mapping.unmappedAccounts,
+          },
         };
       },
       async getReportDrilldownEntries(selection: ReportDrilldownSelection): Promise<ReportDrilldownEntry[]> {

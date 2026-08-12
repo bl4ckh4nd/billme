@@ -1,3 +1,4 @@
+import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import ReportsView from './ReportsView';
@@ -43,6 +44,30 @@ describe('ReportsView drilldown ranges', () => {
     expect((unmappedLine as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(mappedLine);
     await waitFor(() => expect(getReportDrilldownEntries).toHaveBeenCalledWith(expect.objectContaining({ accountNumbers: ['1000'] })));
+  });
+
+  it('blocks a balance sheet with mapping health and shows affected account IDs', async () => {
+    const getReportDrilldownEntries = vi.fn(async () => []);
+    const getBalanceSheetPreview = vi.fn(async () => ({
+      aktiva: [{ id: 'asset-1', code: '1200', label: 'Bank', amount: 100, level: 0, side: 'aktiva' as const, accountRefs: ['1200'] }],
+      passiva: [],
+      totals: { aktiva: 100, passiva: 100, difference: 0 },
+      quality: {
+        status: 'error' as const,
+        notes: ['Konto 1200 ist nicht zugeordnet.'],
+        generatedAt: '2025-12-31T00:00:00.000Z',
+        source: 'live' as const,
+        mappingStatus: 'blocked' as const,
+        unmappedAccounts: [{ accountNumber: '1200', amount: 100 }],
+      },
+    }));
+    render(<ReportsView dataAdapter={{ getBalanceSheetPreview, getReportDrilldownEntries }} availableTabs={['bilanz']} />);
+
+    const block = await screen.findByRole('alert');
+    expect(block.textContent).toContain('Mapping-Health: blockierend');
+    expect(block.textContent).toContain('Betroffene Konten: 1200');
+    expect(screen.queryByRole('button', { name: /1200 Bank/ })).toBeNull();
+    expect(getReportDrilldownEntries).not.toHaveBeenCalled();
   });
 
   it('renders profile tabs and routes report exports through the adapter', async () => {
@@ -172,6 +197,32 @@ describe('ReportsView drilldown ranges', () => {
       reason: 'Abschlussprüfung EÜR 2025',
       args: expect.objectContaining({ periodFrom: '2025-01', periodTo: '2025-12' }),
     })));
+  });
+
+  it('locks native EÜR filters to 2025 and never requests a 2026 range', async () => {
+    const getEurReport = vi.fn(async (filters) => ({
+      lines: [],
+      totals: { revenue: 0, expenses: 0, result: 0 },
+      quality: { unmappedAccounts: [], warnings: 0, generatedAt: '', source: 'live' as const },
+      filing: {
+        kind: 'euer' as const,
+        taxYear: 2025,
+        catalog: { id: 'anlage-euer-2025', version: '2025', sourceHash: 'b'.repeat(64), delivery: 'print-form-only' as const, elsterReady: false },
+        lineProvenance: [{ lineId: 'E2025_KZ111', kennziffer: '111', providerPath: 'income', exportable: true }],
+      },
+    }));
+    render(<ReportsView dataAdapter={{ getEurReport }} availableTabs={['eur']} />);
+
+    expect(await screen.findByText(/nur für das Druckformular 2025 verfügbar/)).toBeTruthy();
+    expect((screen.getByLabelText('Stichtag') as HTMLInputElement).value).toBe('2025-12-31');
+    expect((screen.getByLabelText('Periode von') as HTMLInputElement).value).toBe('2025-01');
+    expect((screen.getByLabelText('Periode bis') as HTMLInputElement).value).toBe('2025-12');
+    expect((screen.getByLabelText('Stichtag') as HTMLInputElement).disabled).toBe(true);
+    expect(getEurReport).toHaveBeenCalledWith(expect.objectContaining({
+      asOfDate: '2025-12-31',
+      periodFromDate: '2025-01-01',
+      periodToDate: '2025-12-31',
+    }));
   });
 
   it('classifies native EÜR cash sources with an audit reason', async () => {

@@ -1,7 +1,7 @@
 import { LockKeyhole, TriangleAlert } from 'lucide-react';
 import type { ReportQuality } from '../../domain/reportTypes';
 
-type ReportStatusBadgeProps = { quality?: Pick<ReportQuality, 'source' | 'state' | 'mappingStatus'> };
+type ReportStatusBadgeProps = { quality?: Pick<ReportQuality, 'source' | 'state' | 'mappingStatus' | 'unmappedAccounts'> };
 
 export function reportIsMappingBlocked(quality?: Pick<ReportQuality, 'mappingStatus' | 'unmappedAccounts'>): boolean {
   if (!quality) return false;
@@ -30,6 +30,9 @@ export function MappingHealthBlock({ quality }: ReportStatusBadgeProps & { notes
       <div className="font-bold">Auswertung blockiert: Konten-Mapping unvollständig</div>
       <p className="mt-1">Bitte ordnen Sie alle betroffenen Konten zu, bevor Sie diesen Report als Abschluss verwenden oder exportieren.</p>
       {quality?.mappingStatus === 'blocked' ? <p className="mt-1 text-xs">Mapping-Health: blockierend.</p> : null}
+      {Array.isArray(quality?.unmappedAccounts) && quality.unmappedAccounts.length > 0 ? (
+        <p className="mt-1 text-xs">Betroffene Konten: {quality.unmappedAccounts.map((account) => account.accountNumber).join(', ')}</p>
+      ) : null}
     </div>
   );
 }

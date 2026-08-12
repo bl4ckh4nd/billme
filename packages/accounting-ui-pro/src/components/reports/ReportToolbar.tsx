@@ -1,7 +1,7 @@
 import { FileDown, FileText, RotateCcw } from 'lucide-react';
 import { Button } from '@billme/ui';
 import { ReportFilterState, ReportTabId } from '../../domain/reportTypes';
-import { defaultReportFilters, reportPeriodRangeForPreset } from '../../domain/reportDates';
+import { defaultReportFilters, NATIVE_EUR_2025_RANGE, reportPeriodRangeForPreset } from '../../domain/reportDates';
 
 interface ReportToolbarProps {
   filters: ReportFilterState;
@@ -10,10 +10,27 @@ interface ReportToolbarProps {
   onExport?: (format: 'pdf' | 'csv') => void;
   exporting?: boolean;
   exportBlockedReason?: string;
+  /** Native EÜR is currently a fixed, print-only 2025 report. */
+  lockNativeEurPeriod?: boolean;
 }
 
-export default function ReportToolbar({ filters, onChange, activeTab, onExport, exporting = false, exportBlockedReason }: ReportToolbarProps) {
+export default function ReportToolbar({ filters, onChange, activeTab, onExport, exporting = false, exportBlockedReason, lockNativeEurPeriod = false }: ReportToolbarProps) {
+  const nativeEurPeriodDescriptionId = 'native-eur-period-description';
+  const forceNativeEurPeriod = () => onChange({
+    ...filters,
+    asOfDate: NATIVE_EUR_2025_RANGE.to,
+    periodFrom: NATIVE_EUR_2025_RANGE.from.slice(0, 7),
+    periodTo: NATIVE_EUR_2025_RANGE.to.slice(0, 7),
+    periodFromDate: NATIVE_EUR_2025_RANGE.from,
+    periodToDate: NATIVE_EUR_2025_RANGE.to,
+    periodPreset: 'current',
+    compareMode: 'none',
+  });
   const setPreset = (periodPreset: ReportFilterState['periodPreset']) => {
+    if (lockNativeEurPeriod) {
+      forceNativeEurPeriod();
+      return;
+    }
     const nextPreset = periodPreset ?? 'current';
     const range = reportPeriodRangeForPreset(filters.asOfDate, filters.businessReportingProfile, nextPreset);
     onChange({
@@ -27,6 +44,10 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
     });
   };
   const setAsOfDate = (asOfDate: string) => {
+    if (lockNativeEurPeriod) {
+      forceNativeEurPeriod();
+      return;
+    }
     const range = filters.periodPreset
       ? reportPeriodRangeForPreset(asOfDate, filters.businessReportingProfile, filters.periodPreset)
       : undefined;
@@ -42,6 +63,11 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
 
   return (
     <div className="rounded-xl border border-border bg-surface px-4 py-3 space-y-2">
+      {lockNativeEurPeriod ? (
+        <p id={nativeEurPeriodDescriptionId} className="text-xs text-muted" role="status">
+          Die native EÜR ist derzeit nur für das Druckformular 2025 verfügbar. Der Zeitraum ist deshalb fest auf 01.01.2025–31.12.2025 eingestellt.
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-end gap-3">
         <label className="text-[10px] font-bold uppercase tracking-wide text-muted">
           Zeitraum
@@ -49,6 +75,8 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             aria-label="Zeitraum"
             value={filters.periodPreset ?? 'current'}
             onChange={(event) => setPreset(event.target.value as ReportFilterState['periodPreset'])}
+            disabled={lockNativeEurPeriod}
+            aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
             className="mt-0.5 h-8 w-full rounded-lg border border-border px-2 text-sm"
           >
             <option value="current">Aktuelle Periode</option>
@@ -62,6 +90,8 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             type="date"
             value={filters.asOfDate}
             onChange={(e) => setAsOfDate(e.target.value)}
+            disabled={lockNativeEurPeriod}
+            aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
             className="mt-0.5 h-8 w-full rounded-lg border border-border px-2 text-sm"
           />
         </label>
@@ -72,6 +102,8 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             type="month"
             value={filters.periodFrom}
             onChange={(e) => onChange({ ...filters, periodFrom: e.target.value, periodFromDate: undefined, periodPreset: undefined })}
+            disabled={lockNativeEurPeriod}
+            aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
             className="mt-0.5 h-8 w-full rounded-lg border border-border px-2 text-sm"
           />
         </label>
@@ -82,6 +114,8 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             type="month"
             value={filters.periodTo}
             onChange={(e) => onChange({ ...filters, periodTo: e.target.value, periodToDate: undefined, periodPreset: undefined })}
+            disabled={lockNativeEurPeriod}
+            aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
             className="mt-0.5 h-8 w-full rounded-lg border border-border px-2 text-sm"
           />
         </label>
@@ -93,7 +127,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
           <button
             type="button"
             onClick={() =>
-              onChange(defaultReportFilters(filters.chart, filters.businessReportingProfile))
+              lockNativeEurPeriod ? forceNativeEurPeriod() : onChange(defaultReportFilters(filters.chart, filters.businessReportingProfile))
             }
             className="h-7 px-2.5 rounded-full border border-border text-xs font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1 transition-colors"
           >

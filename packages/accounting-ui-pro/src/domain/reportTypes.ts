@@ -216,7 +216,7 @@ export const reportTabsForBusinessProfile = (profile?: BusinessReportingProfile)
     return ['eur', 'susa', 'bwa01', 'management_guv'];
   }
   if (profile.legalForm === 'gmbh' && profile.profitDetermination === 'double_entry') {
-    return ['susa', 'bwa01', 'hgb_guv', 'bilanz'];
+    return ['susa', 'bwa01', 'management_guv', 'hgb_guv', 'bilanz'];
   }
   return ['susa'];
 };

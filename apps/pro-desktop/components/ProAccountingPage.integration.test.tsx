@@ -63,6 +63,11 @@ const {
         sha256: 'hash',
       })),
     },
+    eur: {
+      getReport: vi.fn(async () => ({ rows: [], summary: { incomeTotal: 0, expenseTotal: 0, surplus: 0 }, unclassifiedCount: 0, warnings: [], taxYear: 2025, from: '2025-01-01', to: '2025-12-31', catalog: { id: 'eur-2025', version: '2025', sourceHash: 'a'.repeat(64), delivery: 'print-form-only', elsterReady: false } })),
+      listItems: vi.fn(async (): Promise<any[]> => []),
+      upsertClassification: vi.fn(async () => ({ id: 'classification-1', sourceType: 'transaction', sourceId: 'tx-eur-1', taxYear: 2025, excluded: false, vatMode: 'none', updatedAt: new Date().toISOString() })),
+    },
   },
 }));
 
@@ -85,6 +90,7 @@ vi.mock('../hooks/useAccounts', () => ({
 }));
 
 vi.mock('@billme/accounting-ui-pro', () => ({
+  NATIVE_EUR_2025_RANGE: { from: '2025-01-01', to: '2025-12-31' },
   ProAccountingWorkspace: (props: any) => {
     workspaceState.lastProps = props;
     return (
@@ -473,5 +479,61 @@ describe('ProAccountingPage integration', () => {
       accountLength: 4,
       encoding: 'cp1252',
     }));
+  });
+
+  it('loads native EÜR cash items and refetches the saved classification through IPC', async () => {
+    const cashItem = {
+      sourceType: 'transaction' as const,
+      sourceId: 'tx-eur-1',
+      date: '2025-02-14',
+      amountGross: 119,
+      amountNet: 119,
+      flowType: 'expense' as const,
+      counterparty: 'Lieferant',
+      purpose: 'Beleg',
+    };
+    const classifiedItem = {
+      ...cashItem,
+      classification: {
+        id: 'classification-1',
+        sourceType: 'transaction' as const,
+        sourceId: 'tx-eur-1',
+        taxYear: 2025,
+        eurLineId: 'E2025_KZ123',
+        excluded: false,
+        vatMode: 'default' as const,
+        vatRate: 19,
+        updatedAt: '2025-02-14T12:00:00.000Z',
+      },
+    };
+    mockIpc.eur.listItems
+      .mockResolvedValueOnce([cashItem])
+      .mockResolvedValueOnce([classifiedItem]);
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await screen.findByTestId('pro-accounting-workspace');
+    const adapter = workspaceState.lastProps.dataAdapter;
+
+    await expect(adapter.listEurCashItems()).resolves.toEqual([cashItem]);
+    await act(async () => {
+      await adapter.upsertEurClassification({
+        ...cashItem,
+        taxYear: 2025,
+        eurLineId: 'E2025_KZ123',
+        excluded: false,
+        vatMode: 'default',
+        vatRate: 19,
+        reason: 'Beleg geprüft',
+      });
+    });
+    expect(mockIpc.eur.listItems).toHaveBeenCalledWith({ taxYear: 2025, from: '2025-01-01', to: '2025-12-31' });
+    expect(mockIpc.eur.upsertClassification).toHaveBeenCalledWith(expect.objectContaining({
+      sourceType: 'transaction',
+      sourceId: 'tx-eur-1',
+      taxYear: 2025,
+      eurLineId: 'E2025_KZ123',
+      reason: 'Beleg geprüft',
+    }));
+    await expect(adapter.listEurCashItems()).resolves.toEqual([classifiedItem]);
   });
 });

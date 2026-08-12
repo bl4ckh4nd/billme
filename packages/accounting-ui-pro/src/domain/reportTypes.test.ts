@@ -14,7 +14,7 @@ describe('report tabs for business profile', () => {
 
   it('exposes HGB reports only for GmbH double-entry accounting', () => {
     expect(reportTabsForBusinessProfile({ legalForm: 'gmbh', profitDetermination: 'double_entry' })).toEqual([
-      'susa', 'bwa01', 'hgb_guv', 'bilanz',
+      'susa', 'bwa01', 'management_guv', 'hgb_guv', 'bilanz',
     ]);
   });
 });

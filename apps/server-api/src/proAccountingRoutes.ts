@@ -519,7 +519,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
           ? await repository.getBilanzReport(session.scope, { asOfDate: body.asOfDate, chart: body.chart })
           : body.reportType === 'bwa01'
             ? await repository.getBwa01Report(session.scope, { from: body.from, to: body.to, chart: body.chart, profile: body.profile })
-            : await repository.getGuvReport(session.scope, { from: body.from, to: body.to, profile: body.reportType === 'management-guv' || body.reportType === 'hgb-guv' ? body.reportType : 'management-guv' });
+            : await repository.getGuvReport(session.scope, { from: body.from, to: body.to, chart: body.chart, profile: body.reportType === 'management-guv' || body.reportType === 'hgb-guv' ? body.reportType : 'management-guv' });
       return repository.saveReportSnapshot(session.scope, {
         reportType: body.reportType,
         args,

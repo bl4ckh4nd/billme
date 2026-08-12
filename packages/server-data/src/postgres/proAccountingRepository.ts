@@ -189,15 +189,21 @@ const calculateDatabaseReport = async <T extends DatabaseReportType>(db: Postgre
 
 type ReportMappingType = 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz';
 
-const validateReportMappingPosition = async (db: PostgresQueryable, scope: TenantScope, input: { chart: 'SKR03' | 'SKR04'; statementType: ReportMappingType; positionKey: string; balanceSide?: 'asset' | 'liability' }): Promise<void> => {
+const validateReportMappingPosition = async (db: PostgresQueryable, scope: TenantScope, input: { chart: 'SKR03' | 'SKR04'; statementType: ReportMappingType; positionKey: string; balanceSide?: 'asset' | 'liability'; asOfDate: string }): Promise<void> => {
   const p = await policy(db, tenant(scope));
   if (input.chart !== p.activeChart) throw new Error('REPORT_CHART_MISMATCH');
   const profile = await reportProfile(db, tenant(scope), input.chart, input.statementType);
+  const catalogPosition = listReportMappingPositions(input.statementType, profile.size, input.asOfDate)
+    .find((entry) => entry.key === input.positionKey);
+  if (!catalogPosition) throw new Error('REPORT_POSITION_INVALID');
+  if (input.balanceSide && catalogPosition.side && input.balanceSide !== catalogPosition.side) throw new Error('REPORT_POSITION_INVALID');
   const result = calculateReport({
     kind: input.statementType,
     profile,
     ledger: { balances: [{ accountNumber: '__mapping_validation__', debitTurnover: 0, creditTurnover: 0, openingBalance: 0, closingBalance: 0 }] },
     mappings: [{ accountNumber: '__mapping_validation__', statement: input.statementType, position: input.positionKey, side: input.balanceSide, label: input.positionKey }],
+    to: input.asOfDate,
+    asOfDate: input.asOfDate,
   });
   // An unknown position is distinguishable by the validation account being
   // reported as unmapped. The canonical catalog is owned by accounting-engine.
@@ -588,8 +594,8 @@ export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGu
   getReportSnapshot(scope: TenantScope, id: string): Promise<ReportSnapshotRecord>;
   saveReportSnapshot(scope: TenantScope, input: { reportType: string; args: unknown; payload: unknown; mutation?: AccountingMutationContext }): Promise<ReportSnapshotRecord>;
   getAccountMappingHealth(scope: TenantScope, chart?: 'SKR03' | 'SKR04', reportType?: ReportMappingType, asOfDate?: string): Promise<{ chart: string; reportType?: string; unmapped: Array<{ accountNumber: string; statementType: string }> }>;
-  listReportMappingPositions(scope: TenantScope, reportType: ReportMappingType): Promise<ReturnType<typeof listReportMappingPositions>>;
-  upsertAccountMappingOverride(scope: TenantScope, input: { chart: 'SKR03' | 'SKR04'; accountNumber: string; statementType: ReportMappingType; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; mutation?: AccountingMutationContext }): Promise<unknown>;
+  listReportMappingPositions(scope: TenantScope, reportType: ReportMappingType, asOfDate: string): Promise<ReturnType<typeof listReportMappingPositions>>;
+  upsertAccountMappingOverride(scope: TenantScope, input: { chart: 'SKR03' | 'SKR04'; asOfDate: string; accountNumber: string; statementType: ReportMappingType; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; mutation?: AccountingMutationContext }): Promise<unknown>;
 };
 
 export const createPostgresProAccountingRepository = (db: PostgresQueryable): ProAccountingReportRepository => ({
@@ -692,10 +698,10 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
     const rows = await q<any>(db, `SELECT DISTINCT jl.account_number,$3::text AS statement_type FROM journal_lines jl LEFT JOIN report_account_mappings relevant ON relevant.tenant_id=jl.tenant_id AND relevant.chart=$2 AND relevant.account_number=jl.account_number AND relevant.report_type = ANY($4::text[]) AND (relevant.valid_from IS NULL OR relevant.valid_from::date <= $5::date) AND (relevant.valid_to IS NULL OR relevant.valid_to::date >= $5::date) LEFT JOIN report_account_mappings current_mapping ON current_mapping.tenant_id=jl.tenant_id AND current_mapping.chart=$2 AND current_mapping.account_number=jl.account_number AND current_mapping.report_type=$3 AND (current_mapping.valid_from IS NULL OR current_mapping.valid_from::date <= $5::date) AND (current_mapping.valid_to IS NULL OR current_mapping.valid_to::date >= $5::date) WHERE jl.tenant_id=$1 AND (relevant.id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM report_account_mappings any_mapping WHERE any_mapping.tenant_id=jl.tenant_id AND any_mapping.chart=$2 AND any_mapping.account_number=jl.account_number AND (any_mapping.valid_from IS NULL OR any_mapping.valid_from::date <= $5::date) AND (any_mapping.valid_to IS NULL OR any_mapping.valid_to::date >= $5::date))) AND current_mapping.id IS NULL ORDER BY jl.account_number`, [tenant(scope), activeChart, requested, requested === 'hgb-bilanz' ? ['hgb-bilanz'] : ['bwa01', 'management-guv', 'hgb-guv'], effectiveAsOfDate]);
     return { chart: activeChart, reportType: requested, unmapped: rows.map((r) => ({ accountNumber: String(r.account_number), statementType: String(r.statement_type) })) };
   },
-  async listReportMappingPositions(scope, reportType) {
+  async listReportMappingPositions(scope, reportType, asOfDate) {
     const p = await policy(db, tenant(scope));
     const profile = await reportProfile(db, tenant(scope), p.activeChart, reportType);
-    return listReportMappingPositions(reportType, profile.size);
+    return listReportMappingPositions(reportType, profile.size, asOfDate);
   },
   async upsertAccountMappingOverride(scope, input) {
     return inTx(db, async (tx) => {

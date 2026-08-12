@@ -1271,18 +1271,19 @@ export const registerIpcHandlers = (
     }));
   });
 
-  register(ipcMain, 'pro:listReportMappingPositions', ({ statement }) => {
+  register(ipcMain, 'pro:listReportMappingPositions', ({ statement, asOfDate }) => {
     const size = getSettings(requireDb())?.businessReportingProfile?.hgbSizeClass ?? 'small';
-    return listReportMappingPositions(statement, size);
+    return listReportMappingPositions(statement, size, asOfDate);
   });
 
-  register(ipcMain, 'pro:upsertReportMappingOverride', ({ chart, accountNumber, statement, position, label, side, reason }) => {
+  register(ipcMain, 'pro:upsertReportMappingOverride', ({ chart, asOfDate, accountNumber, statement, position, label, side, reason }) => {
     assertLocalOwner('pro:upsertReportMappingOverride');
     const db = requireDb();
     const size = getSettings(db)?.businessReportingProfile?.hgbSizeClass ?? 'small';
-    if (!listReportMappingPositions(statement, size).some((item) => item.key === position)) throw new Error('REPORT_MAPPING_POSITION_NOT_ALLOWED');
+    if (!listReportMappingPositions(statement, size, asOfDate).some((item) => item.key === position)) throw new Error('REPORT_MAPPING_POSITION_NOT_ALLOWED');
     return createSqliteProAccountingRepository(db).upsertReportMappingOverride(getProScope(), {
       chart,
+      asOfDate,
       accountNumber,
       statement,
       position,

@@ -1,4 +1,4 @@
-import { getPublicReportCatalogsIncludingUnverified } from './catalogs/publicReportCatalogs';
+import { getManagementReportCatalogs, getPublicReportCatalogsIncludingUnverified } from './catalogs/publicReportCatalogs';
 
 export type ReportMappingCatalogStatement = 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz';
 export type ReportMappingCatalogSide = 'asset' | 'liability';
@@ -10,19 +10,17 @@ export interface ReportMappingCatalogPosition {
   side?: ReportMappingCatalogSide;
 }
 
-const managementPositions: ReportMappingCatalogPosition[] = [
-  { key: 'revenue', label: 'Betriebliche Erlöse', kind: 'line' },
-  { key: 'variable-costs', label: 'Variable Kosten', kind: 'line' },
-  { key: 'contribution-margin', label: 'Deckungsbeitrag', kind: 'subtotal' },
-  { key: 'personnel-costs', label: 'Personalkosten', kind: 'line' },
-  { key: 'fixed-costs', label: 'Fixkosten', kind: 'line' },
-  { key: 'ebitda', label: 'EBITDA', kind: 'subtotal' },
-  { key: 'depreciation', label: 'Abschreibungen', kind: 'line' },
-  { key: 'ebit', label: 'EBIT', kind: 'subtotal' },
-  { key: 'financial-result', label: 'Finanzergebnis', kind: 'line' },
-  { key: 'taxes', label: 'Steuern', kind: 'line' },
-  { key: 'net-result', label: 'Managementergebnis', kind: 'result' },
-];
+const yearForCatalogDate = (asOfDate: string): number => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(asOfDate);
+  if (!match) throw new Error(`REPORT_MAPPING_DATE_INVALID:${asOfDate}`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (!daysInMonth || day < 1 || day > daysInMonth) throw new Error(`REPORT_MAPPING_DATE_INVALID:${asOfDate}`);
+  return year;
+};
 
 const sideForBilanzKey = (key: string): ReportMappingCatalogSide | undefined => {
   if (key.startsWith('assets.')) return 'asset';
@@ -33,11 +31,17 @@ const sideForBilanzKey = (key: string): ReportMappingCatalogSide | undefined => 
 export const listReportMappingPositions = (
   statement: ReportMappingCatalogStatement,
   size: 'micro' | 'small' = 'small',
+  asOfDate: string,
 ): ReportMappingCatalogPosition[] => {
-  if (statement === 'management-guv') return managementPositions.map((position) => ({ ...position }));
+  const year = yearForCatalogDate(asOfDate);
+  if (statement === 'management-guv') {
+    const catalog = getManagementReportCatalogs(year).find((entry) => entry.scope === size);
+    if (!catalog) throw new Error(`REPORT_MAPPING_CATALOG_UNAVAILABLE:${statement}:${size}:${year}`);
+    return catalog.positions.map((position) => ({ key: position.key, label: position.label, kind: position.kind }));
+  }
   const kind = statement === 'hgb-bilanz' ? 'bilanz' : statement === 'hgb-guv' ? 'gkv' : 'bwa01';
-  const catalog = getPublicReportCatalogsIncludingUnverified(2025).find((entry) => entry.kind === kind && entry.scope === size);
-  if (!catalog) throw new Error(`REPORT_MAPPING_CATALOG_UNAVAILABLE:${statement}:${size}`);
+  const catalog = getPublicReportCatalogsIncludingUnverified(year).find((entry) => entry.kind === kind && entry.scope === size);
+  if (!catalog) throw new Error(`REPORT_MAPPING_CATALOG_UNAVAILABLE:${statement}:${size}:${year}`);
   return catalog.positions.map((position) => ({
     key: position.key,
     label: position.label,

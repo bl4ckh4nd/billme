@@ -541,10 +541,10 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     getAccountMappingHealth(chart?: 'SKR03' | 'SKR04', reportType?: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz', asOfDate?: string) {
       return requestJson({ parser: z.object({ chart: z.enum(['SKR03', 'SKR04']).optional(), unmapped: z.array(z.object({ accountNumber: z.string(), statementType: z.string() })).optional() }), query: chart || reportType || asOfDate ? { chart, reportType, asOfDate } : undefined }, '/api/v1/pro/accounting/mappings/health');
     },
-    listReportMappingPositions(reportType: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz') {
-      return requestJson({ parser: parseArray(z.object({ key: z.string(), label: z.string(), kind: z.enum(['heading', 'line', 'subtotal', 'result']), side: z.enum(['asset', 'liability']).optional() })), query: { reportType } }, '/api/v1/pro/accounting/mappings/positions');
+    listReportMappingPositions(reportType: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz', asOfDate: string) {
+      return requestJson({ parser: parseArray(z.object({ key: z.string(), label: z.string(), kind: z.enum(['heading', 'line', 'subtotal', 'result']), side: z.enum(['asset', 'liability']).optional() })), query: { reportType, asOfDate } }, '/api/v1/pro/accounting/mappings/positions');
     },
-    saveAccountMappingOverride(input: { chart: 'SKR03' | 'SKR04'; accountNumber: string; statementType: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz'; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; reason: string }) {
+    saveAccountMappingOverride(input: { chart: 'SKR03' | 'SKR04'; asOfDate: string; accountNumber: string; statementType: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz'; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; reason: string }) {
       return requestJson({ method: 'PUT', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/mappings/overrides');
     },
     getAccountingPolicy() {

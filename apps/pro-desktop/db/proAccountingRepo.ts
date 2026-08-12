@@ -181,6 +181,7 @@ export interface DesktopReportSnapshotRecord {
 
 export interface ReportMappingOverrideInput extends ReportingMapping {
   chart: 'SKR03' | 'SKR04';
+  asOfDate: string;
   /** Mapping overrides are scoped to one explicit report catalog. */
   statement: ReportingStatement;
   position: string;
@@ -2431,7 +2432,7 @@ export const upsertReportMappingOverride = (
     throw new Error('REPORT_MAPPING_STATEMENT_REQUIRED');
   }
   const size = getSettings(db)?.businessReportingProfile?.hgbSizeClass ?? 'small';
-  const catalogPosition = listReportMappingPositions(catalogStatement, size).find((entry) => entry.key === position);
+  const catalogPosition = listReportMappingPositions(catalogStatement, size, input.asOfDate).find((entry) => entry.key === position);
   if (!catalogPosition) throw new Error('REPORT_MAPPING_POSITION_NOT_ALLOWED');
   if (input.side && catalogPosition.side && input.side !== catalogPosition.side) throw new Error('REPORT_MAPPING_SIDE_INVALID');
   const reason = input.reason?.trim();

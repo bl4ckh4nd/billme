@@ -14,7 +14,7 @@ function adapter(overrides: Partial<ProAccountingDataAdapter> = {}): ProAccounti
       { accountNumber: '8400', statement: 'hgb-guv' as const },
       { accountNumber: '1200', statement: 'hgb-bilanz' as const },
     ] })),
-    listReportMappingPositions: vi.fn(async (statement) => statement === 'hgb-bilanz' ? [positions[1]] : [positions[0]]),
+    listReportMappingPositions: vi.fn(async ({ statement }) => statement === 'hgb-bilanz' ? [positions[1]] : [positions[0]]),
     upsertReportMappingOverride: vi.fn(async () => ({ ok: true })),
     ...overrides,
   };
@@ -31,11 +31,12 @@ describe('ReportMappingSetup', () => {
     expect(screen.queryByRole('option', { name: /freie Position/ })).toBeNull();
     expect(screen.getByText(/DATEV.*Import-Gate/)).toBeTruthy();
     expect(dataAdapter.getReportMappingHealth).toHaveBeenCalledWith({ chart: 'SKR03', statement: 'hgb-guv', asOfDate: '2025-12-31' });
+    expect(dataAdapter.listReportMappingPositions).toHaveBeenCalledWith({ statement: 'hgb-guv', asOfDate: '2025-12-31' });
   });
 
   it('requires an audit reason and derives label/side from the selected catalog position', async () => {
     const upsertReportMappingOverride = vi.fn(async () => ({ ok: true }));
-    render(<ReportMappingSetup dataAdapter={adapter({ upsertReportMappingOverride })} chart="SKR03" role="admin" />);
+    render(<ReportMappingSetup dataAdapter={adapter({ upsertReportMappingOverride })} chart="SKR03" role="admin" asOfDate="2025-12-31" />);
     await screen.findByText('1200');
 
     const saveButtons = screen.getAllByRole('button', { name: 'Zuordnen' });
@@ -51,19 +52,20 @@ describe('ReportMappingSetup', () => {
       label: 'Kassenbestand',
       side: 'asset',
       reason: 'Kontenabstimmung',
+      asOfDate: '2025-12-31',
     })));
   });
 
   it('hides mutation controls for viewer and surfaces load failures', async () => {
     const readonly = adapter();
-    const { unmount } = render(<ReportMappingSetup dataAdapter={readonly} chart="SKR03" role="viewer" />);
+    const { unmount } = render(<ReportMappingSetup dataAdapter={readonly} chart="SKR03" role="viewer" asOfDate="2025-12-31" />);
     await screen.findByText('8400');
     expect(screen.getAllByRole('button', { name: 'Zuordnen' })[0]).toHaveProperty('disabled', true);
     expect(screen.getByText(/darf Report-Mappings nur lesen/)).toBeTruthy();
     unmount();
 
     const failure = adapter({ getReportMappingHealth: vi.fn(async () => { throw new Error('Mapping-Service ausgefallen'); }) });
-    render(<ReportMappingSetup dataAdapter={failure} chart="SKR03" role="admin" />);
+    render(<ReportMappingSetup dataAdapter={failure} chart="SKR03" role="admin" asOfDate="2025-12-31" />);
     expect((await screen.findByRole('alert')).textContent).toContain('Mapping-Service ausgefallen');
   });
 });

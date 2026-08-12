@@ -56,13 +56,19 @@ test('HGB balance scopes expose only statutory minimum detail', () => {
 });
 
 test('report mapping positions derive balance side for every micro position', () => {
-  const positions = listReportMappingPositions('hgb-bilanz', 'micro');
+  const positions = listReportMappingPositions('hgb-bilanz', 'micro', '2025-12-31');
   assert.equal(positions.length, 10);
   assert.ok(positions.every((position) => position.side));
   assert.deepEqual(positions.map((position) => position.side), [
     'asset', 'asset', 'asset', 'asset', 'asset',
     'liability', 'liability', 'liability', 'liability', 'liability',
   ]);
+});
+
+test('report mapping positions require a supported catalog year', () => {
+  assert.throws(() => listReportMappingPositions('hgb-bilanz', 'micro', ''), /REPORT_MAPPING_DATE_INVALID/);
+  assert.equal(listReportMappingPositions('hgb-bilanz', 'micro', '2026-03-31').length, 10);
+  assert.throws(() => listReportMappingPositions('hgb-bilanz', 'micro', '2027-01-01'), /PUBLIC_REPORT_CATALOG_UNAVAILABLE:2027/);
 });
 
 test('BWA01 ordered keys match the verified GründerZeiten 23 source', () => {

@@ -546,8 +546,8 @@ export const ProAccountingPage: React.FC = () => {
       getReportMappingHealth(args) {
         return ipc.pro.getReportMappingHealth(args ?? {});
       },
-      listReportMappingPositions(statement) {
-        return ipc.pro.listReportMappingPositions({ statement });
+      listReportMappingPositions(args) {
+        return ipc.pro.listReportMappingPositions(args);
       },
       upsertReportMappingOverride(input) {
         return runMutation(() => ipc.pro.upsertReportMappingOverride(input));

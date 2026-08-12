@@ -98,10 +98,11 @@ export const mappingHealthQuerySchema = z.object({
   reportType: reportMappingTypeSchema.optional(),
   asOfDate: z.string().date().optional(),
 });
-export const mappingPositionsQuerySchema = z.object({ reportType: reportMappingTypeSchema });
+export const mappingPositionsQuerySchema = z.object({ reportType: reportMappingTypeSchema, asOfDate: z.string().date() });
 export const mappingOverrideBodySchema = z.object({
   reason: reasonSchema,
   chart: z.enum(['SKR03', 'SKR04']),
+  asOfDate: z.string().date(),
   accountNumber: z.string().trim().min(1),
   statementType: reportMappingTypeSchema,
   positionKey: z.string().trim().min(1),
@@ -805,7 +806,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     response: z.array(z.object({ key: z.string(), label: z.string(), kind: z.enum(['heading', 'line', 'subtotal', 'result']), side: z.enum(['asset', 'liability']).optional() })),
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
-      return repositoryFor(app).listReportMappingPositions(session.scope, query.reportType);
+      return repositoryFor(app).listReportMappingPositions(session.scope, query.reportType, query.asOfDate);
     },
   });
 
@@ -836,6 +837,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       const session = await requireMutationSession(app, request.headers.authorization);
       return repositoryFor(app).upsertAccountMappingOverride(session.scope, {
         chart: body.chart,
+        asOfDate: body.asOfDate,
         accountNumber: body.accountNumber,
         statementType: body.statementType,
         positionKey: body.positionKey,

@@ -7,6 +7,7 @@ import {
   eurClassificationBodySchema,
   mappingOverrideBodySchema,
   mappingHealthQuerySchema,
+  mappingPositionsQuerySchema,
   reportSnapshotBodySchema,
   reportSnapshotQuerySchema,
   susaReportQuerySchema,
@@ -94,8 +95,14 @@ test('EÜR classifications require a mutation reason and normalize safe defaults
 test('mapping overrides require an explicit reason and never accept arbitrary statement types', () => {
   assert.throws(() => mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz' }));
   assert.throws(() => mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }));
-  assert.equal(mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'management-guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }).balanceSide, undefined);
-  assert.equal(mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '1200', statementType: 'hgb-bilanz', positionKey: 'cash', positionLabel: 'Bank', balanceSide: 'asset', reason: 'Kontenplan geprüft' }).statementType, 'hgb-bilanz');
+  assert.throws(() => mappingOverrideBodySchema.parse({ chart: 'SKR03', accountNumber: '8400', statementType: 'management-guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }));
+  assert.equal(mappingOverrideBodySchema.parse({ chart: 'SKR03', asOfDate: '2026-03-31', accountNumber: '8400', statementType: 'management-guv', positionKey: 'revenue', positionLabel: 'Umsatz', reason: 'Kontenplan geprüft' }).balanceSide, undefined);
+  assert.equal(mappingOverrideBodySchema.parse({ chart: 'SKR03', asOfDate: '2026-03-31', accountNumber: '1200', statementType: 'hgb-bilanz', positionKey: 'cash', positionLabel: 'Bank', balanceSide: 'asset', reason: 'Kontenplan geprüft' }).statementType, 'hgb-bilanz');
+});
+
+test('mapping position lists require the same explicit report date', () => {
+  assert.throws(() => mappingPositionsQuerySchema.parse({ reportType: 'hgb-bilanz' }));
+  assert.deepEqual(mappingPositionsQuerySchema.parse({ reportType: 'hgb-bilanz', asOfDate: '2026-03-31' }), { reportType: 'hgb-bilanz', asOfDate: '2026-03-31' });
 });
 
 test('mapping health can scope unmapped accounts to one canonical report', () => {

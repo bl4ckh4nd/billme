@@ -21,6 +21,7 @@ export interface ReportMappingPosition {
 
 export interface ReportMappingOverrideInput {
   chart: 'SKR03' | 'SKR04';
+  asOfDate: string;
   accountNumber: string;
   statement: ReportMappingStatement;
   position: string;

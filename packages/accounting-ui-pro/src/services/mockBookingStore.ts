@@ -105,7 +105,7 @@ export interface ProAccountingDataAdapter {
   getHgbGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   /** Read-only catalog and report-specific missing-account diagnostics. */
   getReportMappingHealth?: (args?: { chart?: 'SKR03' | 'SKR04'; statement?: ReportMappingHealth['unmapped'][number]['statement']; asOfDate?: string }) => Promise<ReportMappingHealth>;
-  listReportMappingPositions?: (statement: ReportMappingHealth['unmapped'][number]['statement']) => Promise<ReportMappingPosition[]>;
+  listReportMappingPositions?: (args: { statement: ReportMappingHealth['unmapped'][number]['statement']; asOfDate: string }) => Promise<ReportMappingPosition[]>;
   upsertReportMappingOverride?: (input: ReportMappingOverrideInput) => Promise<unknown>;
   listReportSnapshots?: (reportType?: string) => Promise<ReportSnapshotRecord[]>;
   saveReportSnapshot?: (input: {

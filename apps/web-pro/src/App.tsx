@@ -1104,12 +1104,13 @@ export default function App() {
           })),
         };
       },
-      listReportMappingPositions(statement) {
-        return client.listReportMappingPositions(statement);
+      listReportMappingPositions(args) {
+        return client.listReportMappingPositions(args.statement, args.asOfDate);
       },
       upsertReportMappingOverride(input) {
         return client.saveAccountMappingOverride({
           chart: input.chart,
+          asOfDate: input.asOfDate,
           accountNumber: input.accountNumber,
           statementType: input.statement,
           positionKey: input.position,

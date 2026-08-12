@@ -1153,9 +1153,10 @@ export const proGetReportMappingHealthResultSchema = z.object({
   chart: z.enum(['SKR03', 'SKR04']),
   unmapped: z.array(z.object({ accountNumber: z.string().min(1), statement: reportMappingStatementSchema })),
 });
-export const proListReportMappingPositionsArgsSchema = z.object({ statement: reportMappingStatementSchema });
+export const proListReportMappingPositionsArgsSchema = z.object({ statement: reportMappingStatementSchema, asOfDate: z.string().date() });
 export const proUpsertReportMappingOverrideArgsSchema = z.object({
   chart: z.enum(['SKR03', 'SKR04']),
+  asOfDate: z.string().date(),
   accountNumber: z.string().trim().min(1),
   statement: reportMappingStatementSchema,
   position: z.string().trim().min(1),

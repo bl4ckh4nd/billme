@@ -206,17 +206,26 @@ describe('Pro reporting repository invariants', () => {
   it('requires report-specific mapping catalog keys for overrides', () => {
     const db = createDb();
     expect(() => upsertReportMappingOverride(db, {
-      chart: 'SKR03', accountNumber: '8400', statement: 'guv', position: 'revenue',
+      chart: 'SKR03', asOfDate: '2025-12-31', accountNumber: '8400', statement: 'guv', position: 'revenue',
     }, createProTenantScope('default'))).toThrow('REPORT_MAPPING_STATEMENT_REQUIRED');
     expect(() => upsertReportMappingOverride(db, {
-      chart: 'SKR03', accountNumber: '8400', statement: 'bwa01', position: 'revenue',
+      chart: 'SKR03', asOfDate: '2025-12-31', accountNumber: '8400', statement: 'bwa01', position: 'revenue',
     }, createProTenantScope('default'))).toThrow('REPORT_MAPPING_REASON_REQUIRED');
     expect(() => upsertReportMappingOverride(db, {
-      chart: 'SKR03', accountNumber: '8400', statement: 'bwa01', position: 'arbitrary', reason: 'Kontenabstimmung',
+      chart: 'SKR03', asOfDate: '2025-12-31', accountNumber: '8400', statement: 'bwa01', position: 'arbitrary', reason: 'Kontenabstimmung',
     }, createProTenantScope('default'))).toThrow('REPORT_MAPPING_POSITION_NOT_ALLOWED');
     expect(upsertReportMappingOverride(db, {
-      chart: 'SKR03', accountNumber: '8400', statement: 'bwa01', position: 'revenue', reason: 'Kontenabstimmung',
+      chart: 'SKR03', asOfDate: '2025-12-31', accountNumber: '8400', statement: 'bwa01', position: 'revenue', reason: 'Kontenabstimmung',
     }, createProTenantScope('default'))).toMatchObject({ statement: 'bwa01', position: 'revenue' });
-    expect(db.prepare(`SELECT reason FROM audit_log WHERE entity_type = 'report_mapping' AND action = 'override'`).get()).toMatchObject({ reason: 'Kontenabstimmung' });
+    expect(upsertReportMappingOverride(db, {
+      chart: 'SKR03', asOfDate: '2026-03-31', accountNumber: '8300', statement: 'bwa01', position: 'revenue', reason: '2026-Kontenabstimmung',
+    }, createProTenantScope('default'))).toMatchObject({ statement: 'bwa01', position: 'revenue' });
+    expect(() => upsertReportMappingOverride(db, {
+      chart: 'SKR03', asOfDate: '2027-01-01', accountNumber: '8301', statement: 'bwa01', position: 'revenue', reason: 'Nicht verfügbar',
+    }, createProTenantScope('default'))).toThrow('PUBLIC_REPORT_CATALOG_UNAVAILABLE:2027');
+    expect(() => upsertReportMappingOverride(db, {
+      chart: 'SKR03', asOfDate: '', accountNumber: '8302', statement: 'bwa01', position: 'revenue', reason: 'Ungültiger Stichtag',
+    }, createProTenantScope('default'))).toThrow('REPORT_MAPPING_DATE_INVALID');
+    expect(db.prepare(`SELECT reason FROM audit_log WHERE entity_type = 'report_mapping' AND action = 'override' ORDER BY rowid LIMIT 1`).get()).toMatchObject({ reason: 'Kontenabstimmung' });
   });
 });

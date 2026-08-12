@@ -119,6 +119,7 @@ test('Pro web client scopes mapping health and overrides to canonical report typ
     await client.getAccountMappingHealth('SKR04', 'hgb-bilanz', '2025-12-31');
     await client.saveAccountMappingOverride({
       chart: 'SKR04',
+      asOfDate: '2026-03-31',
       accountNumber: '1200',
       statementType: 'hgb-bilanz',
       positionKey: 'assets.current.cash',
@@ -129,6 +130,7 @@ test('Pro web client scopes mapping health and overrides to canonical report typ
     assert.match(calls[0]?.input ?? '', /mappings\/health\?chart=SKR04&reportType=hgb-bilanz&asOfDate=2025-12-31$/);
     assert.deepEqual(JSON.parse(String(calls[1]?.init?.body)), {
       chart: 'SKR04',
+      asOfDate: '2026-03-31',
       accountNumber: '1200',
       statementType: 'hgb-bilanz',
       positionKey: 'assets.current.cash',
@@ -136,6 +138,22 @@ test('Pro web client scopes mapping health and overrides to canonical report typ
       balanceSide: 'asset',
       reason: 'Kontenplan geprüft',
     });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('Pro web client sends the explicit mapping catalog date', async () => {
+  const previousFetch = globalThis.fetch;
+  let requestUrl = '';
+  globalThis.fetch = (async (input) => {
+    requestUrl = String(input);
+    return new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    await client.listReportMappingPositions('hgb-bilanz', '2026-03-31');
+    assert.match(requestUrl, /mappings\/positions\?reportType=hgb-bilanz&asOfDate=2026-03-31$/);
   } finally {
     globalThis.fetch = previousFetch;
   }

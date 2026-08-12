@@ -18,7 +18,7 @@ interface ReportMappingSetupProps {
   chart: 'SKR03' | 'SKR04';
   role: UserRole;
   statements?: ReportMappingStatement[];
-  asOfDate?: string;
+  asOfDate: string;
   refreshKey?: number;
   onMappingChanged?: () => void;
 }
@@ -60,7 +60,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
       });
       const loaded = await Promise.all([...new Set(nextHealth.unmapped.map((entry) => entry.statement))].map(async (statement) => [
         statement,
-        await dataAdapter.listReportMappingPositions!(statement),
+        await dataAdapter.listReportMappingPositions!({ statement, asOfDate }),
       ] as const));
       setHealth(nextHealth);
       setPositions(Object.fromEntries(loaded));
@@ -102,6 +102,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
     setNotice(null);
     const input: ReportMappingOverrideInput = {
       chart,
+      asOfDate,
       accountNumber: entry.accountNumber,
       statement: selected.statement,
       position: position.key,

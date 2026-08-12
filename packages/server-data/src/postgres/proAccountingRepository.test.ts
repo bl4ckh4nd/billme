@@ -178,9 +178,12 @@ test('asset-owned journal entries stay behind asset correction guards', async ()
 test('asset ownership migration guards direct status changes after activation', async () => {
   const { readFile } = await import('node:fs/promises');
   const migration = await readFile(new URL('../../drizzle/0012_server_data_asset_ownership_guard.sql', import.meta.url), 'utf8');
+  const hardening = await readFile(new URL('../../drizzle/0013_server_data_asset_ownership_hardening.sql', import.meta.url), 'utf8');
   assert.match(migration, /CREATE OR REPLACE FUNCTION billme_protect_asset_accounting/);
-  assert.match(migration, /assets_accounting_ownership_guard/);
-  assert.match(migration, /asset status and disposal fields are immutable after accounting ownership/);
+  assert.match(migration, /asset status is immutable after accounting ownership/);
+  assert.match(hardening, /CREATE OR REPLACE FUNCTION billme_protect_asset_accounting/);
+  assert.match(hardening, /financial_fields_changed/);
+  assert.match(hardening, /asset status and disposal fields are immutable after accounting ownership/);
 });
 
 test('real Postgres keeps activated asset status immutable while allowing metadata replay', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {

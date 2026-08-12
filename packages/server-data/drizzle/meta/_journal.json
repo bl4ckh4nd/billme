@@ -92,6 +92,13 @@
       "when": 1786538400000,
       "tag": "0012_server_data_asset_ownership_guard",
       "breakpoints": false
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786538400001,
+      "tag": "0013_server_data_asset_ownership_hardening",
+      "breakpoints": false
     }
   ]
 }

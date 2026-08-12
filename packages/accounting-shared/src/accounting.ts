@@ -56,7 +56,15 @@ export interface JournalEntry {
   lines: JournalLine[];
 }
 
-export type JournalSourceType = 'booking_draft' | 'reversal' | 'depreciation' | 'manual';
+export type JournalSourceType =
+  | 'booking_draft'
+  | 'reversal'
+  | 'depreciation'
+  | 'manual'
+  | 'outgoing_invoice'
+  | 'incoming_invoice'
+  | 'payment'
+  | 'legacy_transaction';
 
 export interface LedgerBalance {
   accountNumber: string;
@@ -149,6 +157,7 @@ export interface JournalEntryEntity {
 export interface AccountingPolicy {
   tenantId: string;
   activeChart: LedgerChart;
+  vatMethod: 'soll' | 'ist';
   periodPolicy: 'calendar_month';
   updatedAt: string;
 }

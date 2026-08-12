@@ -130,7 +130,7 @@ export interface JournalEntryEntity {
   fiscalYear: number;
   status: JournalEntryStatus;
   sourceDraftId?: string;
-  sourceType?: 'booking_draft' | 'reversal' | 'depreciation' | 'manual';
+  sourceType?: 'booking_draft' | 'reversal' | 'depreciation' | 'manual' | 'outgoing_invoice' | 'incoming_invoice' | 'payment' | 'legacy_transaction';
   sourceKey?: string;
   reversedEntryId?: string;
   createdAt: string;
@@ -591,32 +591,36 @@ export const getAccountingPolicy = (db: Database.Database, tenantId = 'default')
   const row = createDrizzle(db).select({
     tenantId: schema.accountingPolicies.tenantId,
     activeChart: schema.accountingPolicies.activeChart,
+    vatMethod: schema.accountingPolicies.vatMethod,
     periodPolicy: schema.accountingPolicies.periodPolicy,
     updatedAt: schema.accountingPolicies.updatedAt,
   }).from(schema.accountingPolicies).where(eq(schema.accountingPolicies.tenantId, tenantId)).get() as {
     tenantId: string;
     activeChart: 'SKR03' | 'SKR04';
+    vatMethod: 'soll' | 'ist';
     periodPolicy: 'calendar_month';
     updatedAt: string;
   } | undefined;
-  return row ?? { tenantId, activeChart: 'SKR03' as const, periodPolicy: 'calendar_month' as const, updatedAt: '' };
+  return row ?? { tenantId, activeChart: 'SKR03' as const, vatMethod: 'soll' as const, periodPolicy: 'calendar_month' as const, updatedAt: '' };
 };
 
 export const setAccountingPolicy = (
   db: Database.Database,
-  policy: { activeChart: 'SKR03' | 'SKR04'; periodPolicy?: 'calendar_month' },
+  policy: { activeChart: 'SKR03' | 'SKR04'; vatMethod?: 'soll' | 'ist'; periodPolicy?: 'calendar_month' },
   scope: TenantScope,
 ) => {
   const tenantId = getTenantId(scope);
   const updatedAt = new Date().toISOString();
+  const vatMethod = policy.vatMethod ?? getAccountingPolicy(db, tenantId).vatMethod;
   createDrizzle(db).insert(schema.accountingPolicies).values({
     tenantId,
     activeChart: policy.activeChart,
+    vatMethod,
     periodPolicy: policy.periodPolicy ?? 'calendar_month',
     updatedAt,
   }).onConflictDoUpdate({
     target: schema.accountingPolicies.tenantId,
-    set: { activeChart: policy.activeChart, periodPolicy: policy.periodPolicy ?? 'calendar_month', updatedAt },
+    set: { activeChart: policy.activeChart, vatMethod, periodPolicy: policy.periodPolicy ?? 'calendar_month', updatedAt },
   }).run();
   return getAccountingPolicy(db, tenantId);
 };

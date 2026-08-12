@@ -508,6 +508,37 @@ export const proWorkflowEntrySchema = z.object({
   updatedAt: z.string(),
 });
 
+const accountingSourceTypeSchema = z.enum(['outgoing_invoice', 'incoming_invoice', 'legacy_transaction']);
+const accountingSnapshotSchema = z.object({
+  sourceType: accountingSourceTypeSchema,
+  sourceId: z.string(),
+  sourceVersion: z.string(),
+  chart: ledgerChartSchema,
+  vatMethod: z.enum(['soll', 'ist']),
+  netAmount: z.number(),
+  taxAmount: z.number(),
+  grossAmount: z.number(),
+  lines: z.array(z.object({ accountNumber: z.string(), debitAmount: z.number(), creditAmount: z.number(), taxRate: z.number().optional(), taxAmount: z.number().optional(), memo: z.string().optional() })),
+  capturedAt: z.string(),
+});
+export const accountingPostingPreviewSchema = z.object({
+  sourceType: accountingSourceTypeSchema,
+  sourceId: z.string(),
+  status: z.enum(['ready', 'unresolved']),
+  reason: z.string().optional(),
+  snapshot: accountingSnapshotSchema.optional(),
+  issues: z.array(z.object({ code: z.string(), message: z.string(), blocking: z.boolean() })),
+});
+export const accountingPolicySchema = z.object({ tenantId: z.string(), activeChart: ledgerChartSchema, vatMethod: z.enum(['soll', 'ist']), periodPolicy: z.literal('calendar_month'), updatedAt: z.string() });
+export const accountingAccountMappingSchema = z.object({ id: z.string(), tenantId: z.string(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'input_vat']), accountNumber: z.string(), updatedAt: z.string() });
+export const vendorSchema = z.object({ id: z.string(), tenantId: z.string(), vendorNumber: z.string().optional(), name: z.string().min(1), email: z.string().optional(), address: z.string().optional(), vatId: z.string().optional(), iban: z.string().optional(), defaultExpenseAccount: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
+const incomingInvoiceLineSchema = z.object({ id: z.string(), incomingInvoiceId: z.string(), position: z.number().int(), description: z.string(), quantity: z.number(), unitPrice: z.number(), netAmount: z.number(), taxRate: z.number(), taxAmount: z.number(), grossAmount: z.number(), accountNumber: z.string().optional(), assetAccountNumber: z.string().optional() });
+export const incomingInvoiceSchema = z.object({ id: z.string(), tenantId: z.string(), vendorId: z.string(), number: z.string(), invoiceDate: z.string(), dueDate: z.string(), servicePeriod: z.string().optional(), netAmount: z.number(), taxAmount: z.number(), grossAmount: z.number(), status: z.enum(['draft', 'open', 'paid', 'cancelled', 'unresolved']), taxRate: z.number(), taxCaseKey: z.string().optional(), notes: z.string().optional(), lines: z.array(incomingInvoiceLineSchema), accountingStatus: z.enum(['unposted', 'posted', 'unresolved', 'reversed']), accountingSnapshot: accountingSnapshotSchema.optional(), createdAt: z.string(), updatedAt: z.string() });
+export const openItemSchema = z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string(), sourceType: accountingSourceTypeSchema, sourceId: z.string(), documentNumber: z.string(), documentDate: z.string(), dueDate: z.string(), originalAmount: z.number(), allocatedAmount: z.number(), residualAmount: z.number(), status: z.enum(['open', 'partially_paid', 'paid', 'overpaid', 'unresolved']), journalEntryId: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
+const accountingCandidateSchema = z.object({ sourceType: accountingSourceTypeSchema, sourceId: z.string(), status: z.enum(['ready', 'unresolved']), reason: z.string().optional() });
+export const accountingBackfillPreviewSchema = z.object({ runId: z.string(), status: z.enum(['preview', 'confirmed', 'completed']), candidates: z.array(accountingCandidateSchema), readyCount: z.number().int(), unresolvedCount: z.number().int(), confirmationHash: z.string() });
+export const accountingBackfillResultSchema = z.object({ runId: z.string(), postedCount: z.number().int(), unresolvedCount: z.number().int(), status: z.literal('completed') });
+
 export const bookingDraftLineEntitySchema = z.object({
   id: z.string(),
   accountNumber: z.string(),

@@ -30,8 +30,38 @@ import type {
   TaxCaseKey,
   UpsertAccountSuggestionRuleInput,
   ValidationIssue,
+  AccountingAccountMapping,
+  AccountingBackfillConfirmation,
+  AccountingBackfillPreview,
+  AccountingBackfillResult,
+  AccountingPostingPreview,
+  IncomingInvoiceEntity,
+  OpenItemEntity,
+  OpenItemPaymentEntity,
+  OpenItemPaymentInput,
+  VendorEntity,
 } from '@billme/accounting-shared';
 import type { TenantScope } from '@billme/server-core';
+
+export interface ProAccountingOposRepository {
+  getAccountingPolicy(scope: TenantScope): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
+  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist' }): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
+  listAccountingAccountMappings(scope: TenantScope, chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
+  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string }): Promise<AccountingAccountMapping>;
+  listVendors(scope: TenantScope): Promise<VendorEntity[]>;
+  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<VendorEntity>;
+  listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
+  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
+  previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
+  allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
+  previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
+  confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
+}
+type ProAccountingRepositoryWithOpos = ProAccountingRepository & ProAccountingOposRepository;
 
 export interface ProAccountingService {
   listBankTransactions(scope: TenantScope): Promise<ProBankTransaction[]>;
@@ -70,6 +100,22 @@ export interface ProAccountingService {
     }>;
   }>;
   buildDatevRows(scope: TenantScope, args?: ReportRangeOptions): Promise<DatevPostingRow[]>;
+  getAccountingPolicy(scope: TenantScope): ReturnType<ProAccountingOposRepository['getAccountingPolicy']>;
+  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist' }): ReturnType<ProAccountingOposRepository['setAccountingPolicy']>;
+  listAccountingAccountMappings(scope: TenantScope, chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
+  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string }): Promise<AccountingAccountMapping>;
+  listVendors(scope: TenantScope): Promise<VendorEntity[]>;
+  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<VendorEntity>;
+  listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
+  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
+  previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
+  allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
+  previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
+  confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(scope: TenantScope): Promise<void>;
 }
 
@@ -104,6 +150,22 @@ export interface BoundProAccountingService {
     }>;
   }>;
   buildDatevRows(args?: ReportRangeOptions): Promise<DatevPostingRow[]>;
+  getAccountingPolicy(): ReturnType<ProAccountingOposRepository['getAccountingPolicy']>;
+  setAccountingPolicy(input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist' }): ReturnType<ProAccountingOposRepository['setAccountingPolicy']>;
+  listAccountingAccountMappings(chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
+  upsertAccountingAccountMapping(input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string }): Promise<AccountingAccountMapping>;
+  listVendors(): Promise<VendorEntity[]>;
+  upsertVendor(input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<VendorEntity>;
+  listIncomingInvoices(): Promise<IncomingInvoiceEntity[]>;
+  upsertIncomingInvoice(input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
+  previewOutgoingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
+  previewIncomingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
+  listOpenItems(): Promise<OpenItemEntity[]>;
+  allocateOpenItemPayment(input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
+  previewAccountingBackfill(): Promise<AccountingBackfillPreview>;
+  confirmAccountingBackfill(input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(): Promise<void>;
 }
 
@@ -178,7 +240,7 @@ export interface BoundProAccountingCatalogService {
   deleteAccountSuggestionRule(id: string): Promise<void>;
 }
 
-export const createProAccountingService = (repository: ProAccountingRepository): ProAccountingService => ({
+export const createProAccountingService = (repository: ProAccountingRepositoryWithOpos): ProAccountingService => ({
   listBankTransactions: (scope) => repository.listBankTransactions(scope),
   getDraftByTransactionId: (scope, transactionId) => repository.getDraftByTransactionId(scope, transactionId),
   saveDraft: (scope, draft) => repository.saveDraft(scope, draft),
@@ -197,6 +259,22 @@ export const createProAccountingService = (repository: ProAccountingRepository):
   getAccountingHealth: (scope) => repository.getAccountingHealth(scope),
   getVatSummary: (scope, args) => repository.getVatSummary(scope, args),
   buildDatevRows: (scope, args) => repository.buildDatevRows(scope, args),
+  getAccountingPolicy: (scope) => repository.getAccountingPolicy(scope),
+  setAccountingPolicy: (scope, input) => repository.setAccountingPolicy(scope, input),
+  listAccountingAccountMappings: (scope, chart) => repository.listAccountingAccountMappings(scope, chart),
+  upsertAccountingAccountMapping: (scope, input) => repository.upsertAccountingAccountMapping(scope, input),
+  listVendors: (scope) => repository.listVendors(scope),
+  upsertVendor: (scope, input) => repository.upsertVendor(scope, input),
+  listIncomingInvoices: (scope) => repository.listIncomingInvoices(scope),
+  upsertIncomingInvoice: (scope, input) => repository.upsertIncomingInvoice(scope, input),
+  previewOutgoingInvoice: (scope, invoiceId) => repository.previewOutgoingInvoice(scope, invoiceId),
+  postOutgoingInvoice: (scope, invoiceId) => repository.postOutgoingInvoice(scope, invoiceId),
+  previewIncomingInvoice: (scope, invoiceId) => repository.previewIncomingInvoice(scope, invoiceId),
+  postIncomingInvoice: (scope, invoiceId) => repository.postIncomingInvoice(scope, invoiceId),
+  listOpenItems: (scope) => repository.listOpenItems(scope),
+  allocateOpenItemPayment: (scope, input) => repository.allocateOpenItemPayment(scope, input),
+  previewAccountingBackfill: (scope) => repository.previewAccountingBackfill(scope),
+  confirmAccountingBackfill: (scope, input) => repository.confirmAccountingBackfill(scope, input),
   ensureSeedData: (scope) => repository.ensureSeedData(scope),
 });
 
@@ -221,6 +299,22 @@ export const bindProAccountingScope = (
   getAccountingHealth: () => service.getAccountingHealth(scope),
   getVatSummary: (args) => service.getVatSummary(scope, args),
   buildDatevRows: (args) => service.buildDatevRows(scope, args),
+  getAccountingPolicy: () => service.getAccountingPolicy(scope),
+  setAccountingPolicy: (input) => service.setAccountingPolicy(scope, input),
+  listAccountingAccountMappings: (chart) => service.listAccountingAccountMappings(scope, chart),
+  upsertAccountingAccountMapping: (input) => service.upsertAccountingAccountMapping(scope, input),
+  listVendors: () => service.listVendors(scope),
+  upsertVendor: (input) => service.upsertVendor(scope, input),
+  listIncomingInvoices: () => service.listIncomingInvoices(scope),
+  upsertIncomingInvoice: (input) => service.upsertIncomingInvoice(scope, input),
+  previewOutgoingInvoice: (invoiceId) => service.previewOutgoingInvoice(scope, invoiceId),
+  postOutgoingInvoice: (invoiceId) => service.postOutgoingInvoice(scope, invoiceId),
+  previewIncomingInvoice: (invoiceId) => service.previewIncomingInvoice(scope, invoiceId),
+  postIncomingInvoice: (invoiceId) => service.postIncomingInvoice(scope, invoiceId),
+  listOpenItems: () => service.listOpenItems(scope),
+  allocateOpenItemPayment: (input) => service.allocateOpenItemPayment(scope, input),
+  previewAccountingBackfill: () => service.previewAccountingBackfill(scope),
+  confirmAccountingBackfill: (input) => service.confirmAccountingBackfill(scope, input),
   ensureSeedData: () => service.ensureSeedData(scope),
 });
 

@@ -34,8 +34,27 @@ import {
   upsertAccountSuggestionRule,
 } from './accountSuggestionRulesRepo';
 import { listTaxCaseAccountMappings, listTaxCases, upsertTaxCaseAccountMapping } from './taxCasesRepo';
+import {
+  allocateOpenItemPayment,
+  confirmAccountingBackfill,
+  getAccountingPolicyForPro,
+  listAccountingAccountMappings,
+  listIncomingInvoices,
+  listOpenItems,
+  listVendors,
+  postIncomingInvoice,
+  postOutgoingInvoice,
+  previewAccountingBackfill,
+  previewIncomingInvoice,
+  previewOutgoingInvoice,
+  setAccountingPolicyForPro,
+  upsertAccountingAccountMapping,
+  upsertIncomingInvoice,
+  upsertVendor,
+} from './oposRepo';
+import type { ProAccountingOposRepository } from '@billme/accounting-engine';
 
-export const createSqliteProAccountingRepository = (db: Database.Database): ProAccountingRepository => ({
+export const createSqliteProAccountingRepository = (db: Database.Database): ProAccountingRepository & ProAccountingOposRepository => ({
   listBankTransactions: async (scope) => listBankTransactions(db, scope),
   getDraftByTransactionId: async (scope, transactionId) => getDraftByTransactionId(db, transactionId, scope),
   saveDraft: async (scope, draft) => saveDraft(db, draft, scope),
@@ -53,6 +72,22 @@ export const createSqliteProAccountingRepository = (db: Database.Database): ProA
   getAccountingHealth: async (scope) => getAccountingHealth(db, scope),
   getVatSummary: async (scope, args) => getVatSummary(db, args, scope),
   buildDatevRows: async (scope, args) => buildDatevRows(db, args, scope),
+  getAccountingPolicy: async (scope) => getAccountingPolicyForPro(db, scope),
+  setAccountingPolicy: async (scope, input) => setAccountingPolicyForPro(db, scope, input),
+  listAccountingAccountMappings: async (scope, chart) => listAccountingAccountMappings(db, scope, chart),
+  upsertAccountingAccountMapping: async (scope, input) => upsertAccountingAccountMapping(db, scope, input),
+  listVendors: async (scope) => listVendors(db, scope),
+  upsertVendor: async (scope, input) => upsertVendor(db, scope, input),
+  listIncomingInvoices: async (scope) => listIncomingInvoices(db, scope),
+  upsertIncomingInvoice: async (scope, input) => upsertIncomingInvoice(db, scope, input),
+  previewOutgoingInvoice: async (scope, invoiceId) => previewOutgoingInvoice(db, scope, invoiceId),
+  postOutgoingInvoice: async (scope, invoiceId) => postOutgoingInvoice(db, scope, invoiceId),
+  previewIncomingInvoice: async (scope, invoiceId) => previewIncomingInvoice(db, scope, invoiceId),
+  postIncomingInvoice: async (scope, invoiceId) => postIncomingInvoice(db, scope, invoiceId),
+  listOpenItems: async (scope) => listOpenItems(db, scope),
+  allocateOpenItemPayment: async (scope, input) => allocateOpenItemPayment(db, scope, input),
+  previewAccountingBackfill: async (scope) => previewAccountingBackfill(db, scope),
+  confirmAccountingBackfill: async (scope, input) => confirmAccountingBackfill(db, scope, input),
   ensureSeedData: async (scope) => {
     ensureProAccountingSeedData(db, scope);
   },

@@ -59,6 +59,14 @@ import {
   assetSchema,
   assetUpsertSchema,
   assetDepreciationScheduleEntrySchema,
+  accountingPolicySchema,
+  accountingAccountMappingSchema,
+  vendorSchema,
+  incomingInvoiceSchema,
+  openItemSchema,
+  accountingPostingPreviewSchema,
+  accountingBackfillPreviewSchema,
+  accountingBackfillResultSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -699,6 +707,15 @@ const proGetAccountingHealthResultSchema = z.object({
   lastDatevExportAt: z.string().optional(),
 });
 
+const proSetAccountingPolicyArgsSchema = z.object({ activeChart: ledgerChartSchema, vatMethod: z.enum(['soll', 'ist']) });
+const proListAccountingAccountMappingsArgsSchema = z.object({ chart: ledgerChartSchema.optional() });
+const proUpsertAccountingAccountMappingArgsSchema = z.object({ id: z.string().optional(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'input_vat']), accountNumber: z.string().min(1) });
+const proUpsertVendorArgsSchema = z.object({ vendor: vendorSchema });
+const proUpsertIncomingInvoiceArgsSchema = z.object({ invoice: incomingInvoiceSchema });
+const proInvoiceAccountingArgsSchema = z.object({ invoiceId: z.string().min(1) });
+const proAllocateOpenItemPaymentArgsSchema = z.object({ payment: z.object({ paymentId: z.string().optional(), sourceType: z.enum(['bank_transaction', 'invoice_payment', 'manual']), sourceId: z.string().min(1), partyType: z.enum(['debtor', 'creditor']), partyId: z.string().optional(), paymentDate: z.string(), amount: z.number().positive(), bankAccountNumber: z.string().min(1), method: z.string().optional(), allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })) }) });
+const proConfirmAccountingBackfillArgsSchema = z.object({ runId: z.string().min(1), confirmationHash: z.string().min(1), reason: z.string().min(1) });
+
 export type RouteDef<Args extends z.ZodTypeAny, Result extends z.ZodTypeAny> = {
   channel: string;
   args: Args;
@@ -1141,6 +1158,22 @@ export const ipcRoutes = {
     args: proUpsertWorkflowEntryArgsSchema,
     result: okSchema,
   },
+  'pro:getAccountingPolicy': { channel: 'pro:getAccountingPolicy', args: z.undefined(), result: accountingPolicySchema },
+  'pro:setAccountingPolicy': { channel: 'pro:setAccountingPolicy', args: proSetAccountingPolicyArgsSchema, result: accountingPolicySchema },
+  'pro:listAccountingAccountMappings': { channel: 'pro:listAccountingAccountMappings', args: proListAccountingAccountMappingsArgsSchema, result: z.array(accountingAccountMappingSchema) },
+  'pro:upsertAccountingAccountMapping': { channel: 'pro:upsertAccountingAccountMapping', args: proUpsertAccountingAccountMappingArgsSchema, result: accountingAccountMappingSchema },
+  'pro:listVendors': { channel: 'pro:listVendors', args: z.undefined(), result: z.array(vendorSchema) },
+  'pro:upsertVendor': { channel: 'pro:upsertVendor', args: proUpsertVendorArgsSchema, result: vendorSchema },
+  'pro:listIncomingInvoices': { channel: 'pro:listIncomingInvoices', args: z.undefined(), result: z.array(incomingInvoiceSchema) },
+  'pro:upsertIncomingInvoice': { channel: 'pro:upsertIncomingInvoice', args: proUpsertIncomingInvoiceArgsSchema, result: incomingInvoiceSchema },
+  'pro:previewOutgoingInvoiceAccounting': { channel: 'pro:previewOutgoingInvoiceAccounting', args: proInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
+  'pro:postOutgoingInvoiceAccounting': { channel: 'pro:postOutgoingInvoiceAccounting', args: proInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
+  'pro:previewIncomingInvoiceAccounting': { channel: 'pro:previewIncomingInvoiceAccounting', args: proInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
+  'pro:postIncomingInvoiceAccounting': { channel: 'pro:postIncomingInvoiceAccounting', args: proInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
+  'pro:listOpenItems': { channel: 'pro:listOpenItems', args: z.undefined(), result: z.array(openItemSchema) },
+  'pro:allocateOpenItemPayment': { channel: 'pro:allocateOpenItemPayment', args: proAllocateOpenItemPaymentArgsSchema, result: z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string().optional(), paymentDate: z.string(), amount: z.number(), bankAccountNumber: z.string(), method: z.string().optional(), sourceType: z.enum(['bank_transaction', 'invoice_payment', 'manual']), sourceId: z.string(), allocatedAmount: z.number(), residualAmount: z.number(), createdAt: z.string() }) },
+  'pro:previewAccountingBackfill': { channel: 'pro:previewAccountingBackfill', args: z.undefined(), result: accountingBackfillPreviewSchema },
+  'pro:confirmAccountingBackfill': { channel: 'pro:confirmAccountingBackfill', args: proConfirmAccountingBackfillArgsSchema, result: accountingBackfillResultSchema },
 
   'eur:getReport': {
     channel: 'eur:getReport',

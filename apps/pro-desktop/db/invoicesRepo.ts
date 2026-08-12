@@ -9,6 +9,8 @@ import {
 } from '@billme/desktop-data/invoicesRepo';
 import { finalizeNumber, releaseNumber, reserveNumber } from './numberingRepo';
 import { getSettings } from './settingsRepo';
+import { postOutgoingInvoice } from './oposRepo';
+import { createProTenantScope } from '../tenantScope';
 
 const PRODUCT = 'pro' as const;
 
@@ -55,6 +57,7 @@ export const createInvoiceFromOffer = (
       }) as Invoice;
 
       finalizeNumber(db, numberReservation.reservationId, newInvoiceId);
+      postOutgoingInvoice(db, createProTenantScope('default'), newInvoiceId);
       return invoice;
     } catch (error) {
       releaseNumber(db, numberReservation.reservationId);

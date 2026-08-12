@@ -110,6 +110,11 @@ export const runMigrations = (db: Database.Database): void => {
     // original journal schema can run the same bootstrap block safely.
     tryAddColumn(db, 'journal_entries', 'source_type', "TEXT NOT NULL DEFAULT 'booking_draft'");
     tryAddColumn(db, 'journal_entries', 'source_key', 'TEXT');
+    tryAddColumn(db, 'invoices', 'accounting_status', "TEXT NOT NULL DEFAULT 'unposted'");
+    tryAddColumn(db, 'invoices', 'accounting_snapshot_json', 'TEXT');
+    tryAddColumn(db, 'invoices', 'accounting_journal_entry_id', 'TEXT');
+    tryAddColumn(db, 'invoices', 'accounting_posted_at', 'TEXT');
+    tryAddColumn(db, 'accounting_policies', 'vat_method', "TEXT NOT NULL DEFAULT 'soll'");
 
     // Documents: project assignment
     tryAddColumn(db, 'invoices', 'project_id', 'TEXT');
@@ -649,7 +654,160 @@ export const runMigrations = (db: Database.Database): void => {
 
     CREATE INDEX IF NOT EXISTS idx_journal_posting_pairs_entry
       ON journal_posting_pairs(tenant_id, entry_id);
+
+    CREATE TABLE IF NOT EXISTS vendors (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      vendor_number TEXT,
+      name TEXT NOT NULL,
+      email TEXT,
+      address TEXT,
+      vat_id TEXT,
+      iban TEXT,
+      default_expense_account TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_tenant_number ON vendors(tenant_id, vendor_number);
+    CREATE INDEX IF NOT EXISTS idx_vendors_tenant_name ON vendors(tenant_id, name);
+
+    CREATE TABLE IF NOT EXISTS incoming_invoices (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      vendor_id TEXT NOT NULL REFERENCES vendors(id) ON DELETE RESTRICT,
+      number TEXT NOT NULL,
+      invoice_date TEXT NOT NULL,
+      due_date TEXT NOT NULL,
+      service_period TEXT,
+      net_amount REAL NOT NULL,
+      tax_amount REAL NOT NULL,
+      gross_amount REAL NOT NULL,
+      tax_rate REAL NOT NULL DEFAULT 0,
+      tax_case_key TEXT,
+      notes TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      accounting_status TEXT NOT NULL DEFAULT 'unposted',
+      accounting_snapshot_json TEXT,
+      accounting_journal_entry_id TEXT,
+      accounting_posted_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_incoming_invoices_tenant_number ON incoming_invoices(tenant_id, number);
+    CREATE INDEX IF NOT EXISTS idx_incoming_invoices_tenant_due_date ON incoming_invoices(tenant_id, due_date);
+
+    CREATE TABLE IF NOT EXISTS incoming_invoice_lines (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      incoming_invoice_id TEXT NOT NULL REFERENCES incoming_invoices(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      description TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      unit_price REAL NOT NULL,
+      net_amount REAL NOT NULL,
+      tax_rate REAL NOT NULL,
+      tax_amount REAL NOT NULL,
+      gross_amount REAL NOT NULL,
+      account_number TEXT,
+      asset_account_number TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_incoming_invoice_lines_invoice ON incoming_invoice_lines(incoming_invoice_id, position);
+
+    CREATE TABLE IF NOT EXISTS accounting_account_mappings (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      chart TEXT NOT NULL CHECK (chart IN ('SKR03', 'SKR04')),
+      role TEXT NOT NULL,
+      account_number TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_accounting_account_mappings_tenant_chart_role ON accounting_account_mappings(tenant_id, chart, role);
+
+    CREATE TABLE IF NOT EXISTS open_items (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      party_type TEXT NOT NULL CHECK (party_type IN ('debtor', 'creditor')),
+      party_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      document_number TEXT NOT NULL,
+      document_date TEXT NOT NULL,
+      due_date TEXT NOT NULL,
+      original_amount REAL NOT NULL,
+      allocated_amount REAL NOT NULL DEFAULT 0,
+      residual_amount REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      journal_entry_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_open_items_tenant_source ON open_items(tenant_id, source_type, source_id);
+    CREATE INDEX IF NOT EXISTS idx_open_items_tenant_status_due_date ON open_items(tenant_id, status, due_date);
+
+    CREATE TABLE IF NOT EXISTS open_item_payments (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      party_type TEXT NOT NULL CHECK (party_type IN ('debtor', 'creditor')),
+      party_id TEXT,
+      payment_date TEXT NOT NULL,
+      amount REAL NOT NULL,
+      bank_account_number TEXT NOT NULL,
+      method TEXT,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      allocated_amount REAL NOT NULL DEFAULT 0,
+      residual_amount REAL NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_open_item_payments_tenant_source ON open_item_payments(tenant_id, source_type, source_id);
+
+    CREATE TABLE IF NOT EXISTS open_item_allocations (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      payment_id TEXT NOT NULL REFERENCES open_item_payments(id) ON DELETE CASCADE,
+      open_item_id TEXT NOT NULL REFERENCES open_items(id) ON DELETE CASCADE,
+      amount REAL NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_open_item_allocations_payment ON open_item_allocations(tenant_id, payment_id);
+    CREATE INDEX IF NOT EXISTS idx_open_item_allocations_open_item ON open_item_allocations(tenant_id, open_item_id);
+
+    CREATE TABLE IF NOT EXISTS accounting_backfill_runs (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      status TEXT NOT NULL,
+      candidates_json TEXT NOT NULL,
+      confirmation_hash TEXT NOT NULL,
+      confirmed_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_accounting_backfill_runs_tenant_status ON accounting_backfill_runs(tenant_id, status);
   `);
+
+  // Conservative defaults cover both German charts. Posting still validates
+  // every configured account against the selected chart before writing.
+  const mappingDefaults: Record<'SKR03' | 'SKR04', Record<string, string>> = {
+    SKR03: {
+      accounts_receivable: '1400', accounts_payable: '1600', bank: '1200',
+      revenue: '8400', expense: '4900', asset: '0480', output_vat: '1776', input_vat: '1576',
+    },
+    SKR04: {
+      accounts_receivable: '1200', accounts_payable: '3300', bank: '1800',
+      revenue: '4400', expense: '6300', asset: '0670', output_vat: '3806', input_vat: '1406',
+    },
+  };
+  const insertMapping = db.prepare(`
+    INSERT OR IGNORE INTO accounting_account_mappings
+      (id, tenant_id, chart, role, account_number, updated_at)
+    VALUES (?, 'default', ?, ?, ?, ?)
+  `);
+  const mappingNow = new Date().toISOString();
+  for (const [chart, roles] of Object.entries(mappingDefaults) as Array<['SKR03' | 'SKR04', Record<string, string>]>) {
+    for (const [role, accountNumber] of Object.entries(roles)) {
+      insertMapping.run(`default-${chart}-${role}`, chart, role, accountNumber, mappingNow);
+    }
+  }
 
   db.exec(`
     INSERT OR IGNORE INTO bank_transactions (

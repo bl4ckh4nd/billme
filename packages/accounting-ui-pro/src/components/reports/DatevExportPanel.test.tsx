@@ -15,6 +15,20 @@ const historyRow = {
 };
 
 describe('DatevExportPanel', () => {
+  it('offers a retry when immutable history loading fails', async () => {
+    const listDatevExports = vi.fn()
+      .mockRejectedValueOnce(new Error('DATEV-Verlauf vorübergehend nicht erreichbar'))
+      .mockResolvedValueOnce([historyRow]);
+
+    render(<DatevExportPanel dataAdapter={{ listDatevExports }} />);
+
+    expect((await screen.findByRole('alert')).textContent).toContain('vorübergehend');
+    fireEvent.click(screen.getByRole('button', { name: 'Erneut laden' }));
+
+    await waitFor(() => expect(listDatevExports).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/12 Buchungen/)).toBeTruthy();
+  });
+
   it('loads immutable history and exports through the productive adapter', async () => {
     const listDatevExports = vi.fn(async () => [historyRow]);
     const exportDatevBuchungsstapel = vi.fn(async () => ({ ...historyRow, id: 'datev-2', recordCount: 4 }));

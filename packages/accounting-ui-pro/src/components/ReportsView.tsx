@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FileBarChart2 } from 'lucide-react';
+import { Button } from '@billme/ui';
 import {
   BalanceSheetPreview,
   BalanceSheetPreviewLine,
@@ -74,10 +75,13 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
   const [balanceSheetPreview, setBalanceSheetPreview] = useState<BalanceSheetPreview | null>(null);
   const [reportsLoading, setReportsLoading] = useState(true);
   const [reportsError, setReportsError] = useState<string | null>(null);
+  const [reportsRetryKey, setReportsRetryKey] = useState(0);
 
   const [drilldownSelection, setDrilldownSelection] = useState<ReportDrilldownSelection | null>(null);
   const [drilldownEntries, setDrilldownEntries] = useState<ReportDrilldownEntry[]>([]);
   const [drilldownLoading, setDrilldownLoading] = useState(false);
+  const [drilldownError, setDrilldownError] = useState<string | null>(null);
+  const [drilldownRetryKey, setDrilldownRetryKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,16 +116,19 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
     return () => {
       cancelled = true;
     };
-  }, [dataAdapter, filters]);
+  }, [dataAdapter, filters, reportsRetryKey]);
 
   useEffect(() => {
     if (!drilldownSelection) {
       setDrilldownEntries([]);
+      setDrilldownError(null);
       return;
     }
 
     let cancelled = false;
     setDrilldownLoading(true);
+    setDrilldownError(null);
+    setDrilldownEntries([]);
 
     (dataAdapter
       ? dataAdapter.getReportDrilldownEntries
@@ -132,7 +139,7 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
         if (!cancelled) setDrilldownEntries(rows);
       })
       .catch((error) => {
-        if (!cancelled) setReportsError(error instanceof Error ? error.message : 'Drilldown konnte nicht geladen werden.');
+        if (!cancelled) setDrilldownError(error instanceof Error ? error.message : 'Drilldown konnte nicht geladen werden.');
       })
       .finally(() => {
         if (!cancelled) setDrilldownLoading(false);
@@ -141,7 +148,7 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
     return () => {
       cancelled = true;
     };
-  }, [dataAdapter, drilldownSelection]);
+  }, [dataAdapter, drilldownRetryKey, drilldownSelection]);
 
   const activeReportLabel = useMemo(() => {
     if (activeTab === 'susa') return 'Summen- und Saldenliste';
@@ -232,8 +239,18 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
                   Lade Auswertungen…
                 </div>
               ) : reportsError ? (
-                <div className="rounded-2xl border border-error-border bg-error-bg p-8 text-sm text-error" role="alert" aria-live="assertive">
-                  {reportsError}
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-error-border bg-error-bg p-8 text-sm text-error" role="alert" aria-live="assertive">
+                  <span>{reportsError}</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setReportsRetryKey((current) => current + 1)}
+                    disabled={reportsLoading}
+                    aria-busy={reportsLoading}
+                  >
+                    {reportsLoading ? 'Lade erneut…' : 'Erneut versuchen'}
+                  </Button>
                 </div>
               ) : activeTab === 'susa' ? (
                 <SusaTable report={susaReport} onSelectRow={handleSusaSelect} />
@@ -246,16 +263,33 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
 
             <div className={`transition-all duration-200 ${drilldownSelection ? 'xl:w-96 w-full' : 'xl:w-0 w-full'}`}>
               {drilldownSelection ? (
-                <ReportDrilldownPanel
-                  selection={drilldownSelection}
-                  entries={drilldownEntries}
-                  loading={drilldownLoading}
-                  onClose={() => setDrilldownSelection(null)}
-                  onOpenTransaction={onOpenTransaction}
-                  onOpenInvoice={onOpenInvoice}
-                  onOpenIncomingInvoice={onOpenIncomingInvoice}
-                  onOpenJournalEntry={onOpenJournalEntry}
-                />
+                <div className="space-y-3">
+                  <ReportDrilldownPanel
+                    selection={drilldownSelection}
+                    entries={drilldownEntries}
+                    loading={drilldownLoading}
+                    onClose={() => setDrilldownSelection(null)}
+                    onOpenTransaction={onOpenTransaction}
+                    onOpenInvoice={onOpenInvoice}
+                    onOpenIncomingInvoice={onOpenIncomingInvoice}
+                    onOpenJournalEntry={onOpenJournalEntry}
+                  />
+                  {drilldownError ? (
+                    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">
+                      <span>{drilldownError}</span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setDrilldownRetryKey((current) => current + 1)}
+                        disabled={drilldownLoading}
+                        aria-busy={drilldownLoading}
+                      >
+                        {drilldownLoading ? 'Lade erneut…' : 'Drilldown erneut versuchen'}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
               ) : (
                 <div className="hidden xl:flex h-full items-center justify-center rounded-2xl border border-dashed border-border bg-surface/70 text-sm text-muted px-6 text-center">
                   Konto- oder Reportzeile anklicken, um Drilldown zu sehen.

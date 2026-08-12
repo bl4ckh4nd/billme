@@ -75,6 +75,7 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
   const [values, setValues] = useState<DatevExportValues>(defaultValues);
   const [history, setHistory] = useState<DatevExportResult[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<DatevExportResult | null>(null);
@@ -87,8 +88,9 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
     setLoadingHistory(true);
     try {
       setHistory(await dataAdapter.listDatevExports(20));
+      setHistoryError(null);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'DATEV-Exportverlauf konnte nicht geladen werden.');
+      setHistoryError(loadError instanceof Error ? loadError.message : 'DATEV-Exportverlauf konnte nicht geladen werden.');
     } finally {
       setLoadingHistory(false);
     }
@@ -203,7 +205,14 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
           <h3 className="text-xs font-black uppercase tracking-wide text-muted">Exportverlauf</h3>
           {loadingHistory ? <span className="text-xs text-muted" aria-live="polite">Lade Verlauf…</span> : null}
         </div>
-        {!canListHistory ? (
+        {historyError ? (
+          <div className="mt-2 flex flex-wrap items-center gap-3 rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">
+            <span>{historyError}</span>
+            <Button type="button" size="sm" variant="secondary" onClick={() => void loadHistory()} disabled={loadingHistory} aria-busy={loadingHistory}>
+              {loadingHistory ? 'Lade Verlauf…' : 'Erneut laden'}
+            </Button>
+          </div>
+        ) : !canListHistory ? (
           <p className="mt-2 text-xs text-muted">Der unveränderliche Exportverlauf ist nur im Pro Desktop verfügbar.</p>
         ) : history.length === 0 && !loadingHistory ? (
           <p className="mt-2 text-xs text-muted">Noch keine DATEV-Exporte vorhanden.</p>

@@ -1899,11 +1899,11 @@ export const getSusaReport = (
   const chart = getAccountingPolicy(db, tenantId).activeChart;
   const upperDate = args.to ?? args.asOfDate;
   const rows = getLedgerBalances(db, args, scope);
-  const allRows = loadReportJournalLines(db, tenantId, upperDate ? { to: upperDate } : {});
+  // SuSa is a ledger-level account list, not a categorized report. Category
+  // mappings belong to GuV/Bilanz/BWA and must never hide or block accounts in
+  // this statement.
   const mappings = loadHgbMappings(db, tenantId, chart);
   const mappingByAccount = new Map(mappings.map((mapping) => [mapping.account_number, mapping]));
-  const knownAccounts = new Set(mappings.map((mapping) => mapping.account_number));
-  const unmappedAccounts = aggregateUnmapped(allRows, knownAccounts, (row) => centsForReport(row.debit_amount) - centsForReport(row.credit_amount));
   const totals = rows.reduce(
     (acc, row) => {
       acc.debit += centsForReport(row.debitTurnover);
@@ -1923,7 +1923,7 @@ export const getSusaReport = (
       return {
         ...row,
         mappedTo: mapping?.position_key,
-        hasWarnings: !mapping,
+        hasWarnings: false,
       };
     }),
     totals: {
@@ -1931,8 +1931,8 @@ export const getSusaReport = (
       credit: amountForReport(totals.credit),
       balance: amountForReport(totals.balance),
     },
-    unmappedAccounts,
-    blocking: unmappedAccounts.length > 0,
+    unmappedAccounts: [],
+    blocking: false,
   };
 };
 

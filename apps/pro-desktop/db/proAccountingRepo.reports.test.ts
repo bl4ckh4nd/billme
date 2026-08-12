@@ -188,8 +188,9 @@ describe.skipIf(!canRunNativeSqlite)('auditable Pro reports', () => {
     const scope = createProTenantScope('default');
 
     const susa = getSusaReport(db, { asOfDate: '2026-03-31' }, scope);
-    expect(susa.unmappedAccounts).toEqual([{ accountNumber: '9999', amount: 10 }]);
-    expect(susa.blocking).toBe(true);
+    expect(susa.unmappedAccounts).toEqual([]);
+    expect(susa.blocking).toBe(false);
+    expect(susa.rows.find((row) => row.accountNumber === '9999')).toMatchObject({ hasWarnings: false });
     expect(getGuvReport(db, { from: '2026-03-01', to: '2026-03-31' }, scope).unmappedAccounts)
       .toEqual([{ accountNumber: '9999', amount: -10 }]);
     expect(getBilanzReport(db, { asOfDate: '2026-03-31' }, scope).unmappedAccounts)

@@ -251,6 +251,13 @@ export const createPostgresTaxFilingRepository = (db: PostgresQueryable): TaxFil
       if (input.approverId === currentRecord.createdByActorId || input.approverId === input.requesterId) {
         throw new Error('TAX_SUBMISSION_CREATOR_CANNOT_APPROVE');
       }
+      if (
+        input.record.status !== 'approved' ||
+        input.record.approvedByActorId !== input.approverId ||
+        input.record.approvalRequestedByActorId !== input.requesterId
+      ) {
+        throw new Error('TAX_FILING_APPROVAL_RESULT_MISMATCH');
+      }
 
       const createdAt = input.now ?? new Date().toISOString();
       const approvalId = `tax-filing-approval-${createHash('sha256')
@@ -300,6 +307,14 @@ export const createPostgresTaxFilingRepository = (db: PostgresQueryable): TaxFil
         JSON.stringify(currentRecord.snapshot) !== JSON.stringify(input.record.snapshot)
       ) {
         throw new Error('TAX_FILING_SNAPSHOT_IMMUTABLE');
+      }
+      const expectedAction = input.result.status === 'accepted'
+        ? 'accept'
+        : input.result.status === 'rejected'
+          ? 'reject'
+          : 'fail_retryable';
+      if (input.action !== expectedAction || input.record.status !== input.result.status) {
+        throw new Error('TAX_FILING_PROVIDER_RESULT_MISMATCH');
       }
       const updatedAt = input.now ?? input.record.updatedAt ?? new Date().toISOString();
       const persisted: TaxFilingRecord = {

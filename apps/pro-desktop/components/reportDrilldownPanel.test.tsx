@@ -83,7 +83,7 @@ describe('ReportDrilldownPanel', () => {
       },
     };
 
-    render(<GuvView report={report} compareMode="none" onSelectLine={vi.fn()} />);
+    render(<GuvView report={report} onSelectLine={vi.fn()} />);
 
     expect(screen.getByTestId('guv-unmapped-accounts')).toHaveTextContent('Konto 9999');
     expect(screen.getByTestId('guv-unmapped-accounts')).toHaveTextContent('12,50');

@@ -2,6 +2,7 @@ export { default as ProAccountingWorkspace } from './App';
 export type { ProAccountingWorkspaceProps, ProAccountingSeed } from './App';
 export type { ProAccountingDataAdapter } from './services/mockBookingStore';
 export type { OposBankTransaction } from './services/mockBookingStore';
+export { permissionContextForRole } from './mocks/users';
 export type {
   BalanceSheetPreview,
   GuvReport,
@@ -13,6 +14,7 @@ export type {
   ReportDrilldownSourceType,
   SusaReport,
 } from './domain/reportTypes';
+export { monthToFirstDay, monthToLastDay, reportDateRange } from './domain/reportDates';
 export type {
   AssetDepreciationScheduleEntry,
   AssetItem,

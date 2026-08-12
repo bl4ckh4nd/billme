@@ -258,7 +258,9 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
   const canMutate = permissionContextForRole(role).canMutate;
   const accountingActorRole = toAccountingActorRole(role);
   const [assets, setAssets] = useState<AssetItem[]>(() => (dataAdapter ? [] : mockAssets));
+  const [assetsLoading, setAssetsLoading] = useState(Boolean(dataAdapter));
   const [schedule, setSchedule] = useState<AssetDepreciationScheduleEntry[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(Boolean(dataAdapter));
   const [assetsError, setAssetsError] = useState<string | null>(null);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
@@ -281,24 +283,35 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
   const [selectedId, setSelectedId] = useState<string>(mockAssets[0]?.id ?? '');
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>('Übersicht');
 
-  useEffect(() => {
+  const loadAssets = useCallback(async () => {
     if (!dataAdapter) {
       setAssets(mockAssets);
       setAssetsError(null);
+      setAssetsLoading(false);
       return;
     }
     const list = dataAdapter.listAssets;
     if (!list) {
       setAssets([]);
       setAssetsError('Anlagen konnten nicht geladen werden.');
+      setAssetsLoading(false);
       return;
     }
     setAssetsError(null);
-    void list().then(setAssets).catch((error) => {
+    setAssetsLoading(true);
+    try {
+      setAssets(await list());
+    } catch (error) {
       setAssets([]);
       setAssetsError(error instanceof Error ? error.message : 'Anlagen konnten nicht geladen werden.');
-    });
+    } finally {
+      setAssetsLoading(false);
+    }
   }, [dataAdapter]);
+
+  useEffect(() => {
+    void loadAssets();
+  }, [loadAssets]);
 
   useEffect(() => {
     setEditForm(null);
@@ -328,9 +341,11 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
     if (!load) {
       setSchedule([]);
       setScheduleError(null);
+      setScheduleLoading(false);
       return;
     }
     setScheduleError(null);
+    setScheduleLoading(true);
     try {
       const nextSchedule = await load(assetId);
       if (requestId !== scheduleRequestRef.current) return;
@@ -339,6 +354,8 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
       if (requestId !== scheduleRequestRef.current) return;
       setSchedule([]);
       setScheduleError(error instanceof Error ? error.message : 'Abschreibungsplan konnte nicht geladen werden.');
+    } finally {
+      if (requestId === scheduleRequestRef.current) setScheduleLoading(false);
     }
   }, [dataAdapter]);
 
@@ -347,6 +364,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
       scheduleRequestRef.current += 1;
       setSchedule([]);
       setScheduleError(null);
+      setScheduleLoading(false);
       return;
     }
     void loadScheduleForAsset(selected.id);
@@ -585,7 +603,8 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4 space-y-2">
-          {filtered.map((asset) => {
+          {assetsLoading ? <div className="rounded-xl border border-border bg-surface p-6 text-sm text-muted" role="status" aria-live="polite" aria-busy="true">Anlagen werden geladen…</div> : null}
+          {!assetsLoading && filtered.map((asset) => {
             const pill = statusPill(asset.status);
             const selectedCard = selected?.id === asset.id;
             return (
@@ -625,8 +644,8 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
               </button>
             );
           })}
-          {assetsError && <div className="rounded-xl border border-error-border bg-error-bg p-4 text-sm text-error" role="alert" aria-live="assertive">{assetsError}</div>}
-          {filtered.length === 0 && !assetsError && (
+          {assetsError && <div className="flex flex-wrap items-center gap-3 rounded-xl border border-error-border bg-error-bg p-4 text-sm text-error" role="alert" aria-live="assertive"><span>{assetsError}</span><Button type="button" size="sm" variant="secondary" onClick={() => void loadAssets()}>Erneut versuchen</Button></div>}
+          {!assetsLoading && filtered.length === 0 && !assetsError && (
             <div className="rounded-xl border border-border bg-surface p-6 text-sm text-muted">
               Keine Anlagen gefunden.
             </div>
@@ -734,8 +753,9 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
 
                   {activeTab === 'Abschreibungsplan' && (
                     <div className="space-y-3">
-                      {scheduleError && <div className="rounded-lg border border-error-border bg-error-bg p-3 text-sm text-error" role="alert">{scheduleError}</div>}
-                      {(schedule.length ? schedule : dataAdapter ? [] : [{
+                      {scheduleLoading ? <div className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-muted" role="status" aria-live="polite" aria-busy="true">Abschreibungsplan wird geladen…</div> : null}
+                      {scheduleError && <div className="flex flex-wrap items-center gap-3 rounded-lg border border-error-border bg-error-bg p-3 text-sm text-error" role="alert"><span>{scheduleError}</span><Button type="button" size="sm" variant="secondary" onClick={() => { if (selected) void loadScheduleForAsset(selected.id); }}>Erneut versuchen</Button></div>}
+                      {!scheduleLoading && (schedule.length ? schedule : dataAdapter ? [] : [{
                         id: 'fallback',
                         assetId: selected.id,
                         year: Number(selected.activationDate.slice(0, 4)),

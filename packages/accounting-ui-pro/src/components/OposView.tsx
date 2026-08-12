@@ -9,6 +9,7 @@ import type {
 import type { OposBankTransaction, ProAccountingDataAdapter } from '../services/mockBookingStore';
 import { permissionContextForRole } from '../mocks/users';
 import type { UserRole } from '../types';
+import { Button } from '@billme/ui';
 
 const euro = (value: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -45,6 +46,7 @@ export default function OposView({ dataAdapter, role = 'admin' }: OposViewProps)
   const [softLockOverride, setSoftLockOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(Boolean(dataAdapter));
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const runInFlightRef = useRef(false);
@@ -53,19 +55,26 @@ export default function OposView({ dataAdapter, role = 'admin' }: OposViewProps)
   const canMutate = permissionContextForRole(role).canMutate;
 
   const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     if (!dataAdapter?.listOpenItems || !dataAdapter.listBankTransactions || !dataAdapter.listVendors || !dataAdapter.listIncomingInvoices) {
+      setLoading(false);
       throw new Error('OPOS-Datenadapter ist nicht vollständig konfiguriert.');
     }
-    const [nextItems, nextBankTransactions, nextVendors, nextInvoices] = await Promise.all([
-      dataAdapter.listOpenItems(),
-      dataAdapter.listBankTransactions(),
-      dataAdapter.listVendors(),
-      dataAdapter.listIncomingInvoices(),
-    ]);
-    setItems(nextItems);
-    setBankTransactions(nextBankTransactions);
-    setVendors(nextVendors);
-    setInvoices(nextInvoices);
+    try {
+      const [nextItems, nextBankTransactions, nextVendors, nextInvoices] = await Promise.all([
+        dataAdapter.listOpenItems(),
+        dataAdapter.listBankTransactions(),
+        dataAdapter.listVendors(),
+        dataAdapter.listIncomingInvoices(),
+      ]);
+      setItems(nextItems);
+      setBankTransactions(nextBankTransactions);
+      setVendors(nextVendors);
+      setInvoices(nextInvoices);
+    } finally {
+      setLoading(false);
+    }
   }, [dataAdapter]);
 
   useEffect(() => {
@@ -229,13 +238,14 @@ export default function OposView({ dataAdapter, role = 'admin' }: OposViewProps)
         <p className="text-sm text-muted">Offene Posten, Zahlungszuordnung und Eingangsrechnungen.</p>
       </div>
       {busy ? <div className="mb-3 text-sm text-muted" aria-live="polite" aria-busy="true">Speichere Änderung…</div> : null}
-      {error ? <div className="mb-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">{error}</div> : null}
+      {loading ? <div className="mb-3 text-sm text-muted" role="status" aria-live="polite" aria-busy="true">OPOS-Daten werden geladen…</div> : null}
+      {error ? <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive"><span>{error}</span><Button type="button" size="sm" variant="secondary" onClick={() => void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : 'OPOS-Daten konnten nicht geladen werden.'))}>Erneut versuchen</Button></div> : null}
       {message ? <div className="mb-3 rounded-lg border border-success-border bg-success-bg px-3 py-2 text-sm text-success" role="status" aria-live="polite">{message}</div> : null}
       {!canMutate ? <div className="mb-3 rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann OPOS-Daten nur lesen.</div> : null}
       <div className="grid gap-5 xl:grid-cols-2">
         <section className="rounded-xl border border-border p-4" aria-labelledby="open-items-heading">
           <h3 id="open-items-heading" className="mb-3 text-base font-bold">Offene Posten</h3>
-          {items.length === 0 ? <p className="text-sm text-muted">Keine offenen Posten vorhanden.</p> : (
+          {!loading && !error && items.length === 0 ? <p className="text-sm text-muted">Keine offenen Posten vorhanden.</p> : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead><tr className="border-b border-border text-xs text-muted"><th className="p-2">Beleg</th><th className="p-2">Art</th><th className="p-2 text-right">Restbetrag</th><th className="p-2">Status</th></tr></thead>

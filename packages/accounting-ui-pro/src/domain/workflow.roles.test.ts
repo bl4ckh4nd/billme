@@ -3,7 +3,7 @@ import { permissionContextForRole } from '../mocks/users';
 import { getAllowedActions } from './workflow';
 
 describe('server role presentation', () => {
-  it.each(['viewer', 'sales'] as const)('%s has no mutation actions', (role) => {
+  it.each(['viewer', 'sales', 'auditor'] as const)('%s has no mutation actions', (role) => {
     const permissions = permissionContextForRole(role);
     expect(permissions.canMutate).toBe(false);
     expect(getAllowedActions('ready_for_review', permissions, [])).toEqual([]);

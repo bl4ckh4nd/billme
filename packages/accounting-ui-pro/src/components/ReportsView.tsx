@@ -26,6 +26,7 @@ import GuvView from './reports/GuvView';
 import BalanceSheetPreviewView from './reports/BalanceSheetPreviewView';
 import ReportDrilldownPanel from './reports/ReportDrilldownPanel';
 import DatevExportPanel from './reports/DatevExportPanel';
+import { reportDateRange } from '../domain/reportDates';
 
 const BILANZ_ACCOUNT_MAP: Record<string, string[]> = {
   'a-1-1': ['0440', '0480'],
@@ -155,24 +156,24 @@ export default function ReportsView({ dataAdapter, chartFramework, role = 'admin
       : balanceSheetPreview?.quality.source;
 
   const handleSusaSelect = (row: SusaRow) => {
+    const range = reportDateRange(filters);
     setDrilldownSelection({
       reportType: 'susa',
       targetId: row.accountNumber,
       targetLabel: `${row.accountNumber} · ${row.accountName}`,
       accountNumbers: [row.accountNumber],
-      from: filters.periodFrom ? `${filters.periodFrom}-01` : undefined,
-      to: filters.periodTo ? `${filters.periodTo}-31` : filters.asOfDate,
+      ...range,
     });
   };
 
   const handleGuvSelect = (line: GuvLine) => {
+    const range = reportDateRange(filters);
     setDrilldownSelection({
       reportType: 'guv',
       targetId: line.id,
       targetLabel: `${line.code} · ${line.label}`,
       accountNumbers: line.accountRefs ?? [],
-      from: filters.periodFrom ? `${filters.periodFrom}-01` : undefined,
-      to: filters.periodTo ? `${filters.periodTo}-31` : filters.asOfDate,
+      ...range,
     });
   };
 

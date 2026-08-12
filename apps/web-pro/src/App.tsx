@@ -15,6 +15,8 @@ import {
   type UserRole,
   type ProAccountingDataAdapter,
   type OposBankTransaction,
+  permissionContextForRole,
+  reportDateRange,
 } from '@billme/accounting-ui-pro';
 import type {
   BalanceSheetPreview,
@@ -881,6 +883,7 @@ export default function App() {
   }, [client, data]);
 
   const workspaceRole = data ? mapServerRoleToWorkspaceRole(data.sessionInfo.role) : 'viewer';
+  const canMutateAccountingRules = data ? permissionContextForRole(workspaceRole).canMutate : false;
 
   const accountingDataAdapter = React.useMemo<ProAccountingDataAdapter | undefined>(() => {
     if (!accountingSeed || !data) return undefined;
@@ -897,10 +900,7 @@ export default function App() {
     const readOnly = (operation: string): never => {
       throw new Error(`${operation} is unavailable in the legacy snapshot fallback. Reload canonical accounting data.`);
     };
-    const reportFilter = (filters: ReportFilterState) => ({
-      from: filters.periodFrom,
-      to: filters.periodTo ?? filters.asOfDate,
-    });
+    const reportFilter = (filters: ReportFilterState) => reportDateRange(filters);
     return {
       hydrate(seed: ProAccountingSeed) {
         transactions = structuredClone(seed.transactions ?? []);
@@ -1115,7 +1115,11 @@ export default function App() {
         };
       },
       async getReportDrilldownEntries(selection: ReportDrilldownSelection): Promise<ReportDrilldownEntry[]> {
-        const rows = await client.listAccountingJournalEntries({ accountNumbers: selection.accountNumbers });
+        const rows = await client.listAccountingJournalEntries({
+          accountNumbers: selection.accountNumbers,
+          from: selection.from,
+          to: selection.to,
+        });
         return rows.flatMap((entry) => entry.lines.filter((line) => selection.accountNumbers.length === 0 || selection.accountNumbers.includes(line.accountNumber)).map((line) => ({
           id: line.id,
           date: entry.postingDate,
@@ -1961,17 +1965,18 @@ export default function App() {
               </SectionCard>
 
               <SectionCard eyebrow="Steuer-Mapping" title="Tax Cases auf Konten abbilden">
+                {!canMutateAccountingRules ? <p className="helper-copy" role="status">Ihre Rolle darf Steuer-Mappings nur lesen.</p> : null}
                 <div className="form-grid three-col compact-grid">
                   <label className="select-field">
                     <span>Chart</span>
-                    <select value={taxMappingDraft.chart} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
+                    <select disabled={!canMutateAccountingRules} value={taxMappingDraft.chart} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
                       <option value="SKR03">SKR03</option>
                       <option value="SKR04">SKR04</option>
                     </select>
                   </label>
                   <label className="select-field">
                     <span>Steuerfall</span>
-                    <select value={taxMappingDraft.taxCaseKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, taxCaseKey: event.target.value }))}>
+                    <select disabled={!canMutateAccountingRules} value={taxMappingDraft.taxCaseKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, taxCaseKey: event.target.value }))}>
                       {data.taxCases.map((taxCase) => (
                         <option key={taxCase.key} value={taxCase.key}>
                           {taxCase.key}
@@ -1981,17 +1986,17 @@ export default function App() {
                   </label>
                   <label className="select-field">
                     <span>Rolle</span>
-                    <select value={taxMappingDraft.role} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, role: event.target.value as typeof current.role }))}>
+                    <select disabled={!canMutateAccountingRules} value={taxMappingDraft.role} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, role: event.target.value as typeof current.role }))}>
                       <option value="output_tax">Output tax</option>
                       <option value="input_tax">Input tax</option>
                       <option value="datev_bu">DATEV BU</option>
                     </select>
                   </label>
-                  <Input label="Account" fullWidth value={taxMappingDraft.accountNumber} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, accountNumber: event.target.value }))} />
-                  <Input label="DATEV BU Key" fullWidth value={taxMappingDraft.datevBuKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, datevBuKey: event.target.value }))} />
+                  <Input disabled={!canMutateAccountingRules} label="Account" fullWidth value={taxMappingDraft.accountNumber} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, accountNumber: event.target.value }))} />
+                  <Input disabled={!canMutateAccountingRules} label="DATEV BU Key" fullWidth value={taxMappingDraft.datevBuKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, datevBuKey: event.target.value }))} />
                 </div>
                 <div className="action-row">
-                  <Button onClick={() => void handleSaveTaxMapping()}>Mapping speichern</Button>
+                  <Button disabled={!canMutateAccountingRules} onClick={() => void handleSaveTaxMapping()}>Mapping speichern</Button>
                 </div>
                 <DataTable>
                   <table>
@@ -2018,18 +2023,19 @@ export default function App() {
               </SectionCard>
 
               <SectionCard eyebrow="Kontovorschläge" title="Rule-based Assignment im Browser pflegen">
+                {!canMutateAccountingRules ? <p className="helper-copy" role="status">Ihre Rolle darf Vorschlagsregeln nur lesen.</p> : null}
                 <div className="form-grid three-col compact-grid">
                   <label className="select-field">
                     <span>Chart</span>
-                    <select value={suggestionRuleDraft.chart} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
+                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.chart} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
                       <option value="SKR03">SKR03</option>
                       <option value="SKR04">SKR04</option>
                     </select>
                   </label>
-                  <Input label="Priorität" fullWidth value={suggestionRuleDraft.priority} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, priority: event.target.value }))} />
+                  <Input disabled={!canMutateAccountingRules} label="Priorität" fullWidth value={suggestionRuleDraft.priority} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, priority: event.target.value }))} />
                   <label className="select-field">
                     <span>Feld</span>
-                    <select value={suggestionRuleDraft.field} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, field: event.target.value as typeof current.field }))}>
+                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.field} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, field: event.target.value as typeof current.field }))}>
                       <option value="counterparty">Counterparty</option>
                       <option value="purpose">Purpose</option>
                       <option value="any">Any</option>
@@ -2037,14 +2043,15 @@ export default function App() {
                   </label>
                   <label className="select-field">
                     <span>Operator</span>
-                    <select value={suggestionRuleDraft.operator} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, operator: event.target.value as typeof current.operator }))}>
+                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.operator} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, operator: event.target.value as typeof current.operator }))}>
                       <option value="contains">contains</option>
                       <option value="equals">equals</option>
                       <option value="startsWith">startsWith</option>
                     </select>
                   </label>
-                  <Input label="Suchwert" fullWidth value={suggestionRuleDraft.value} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, value: event.target.value }))} />
+                  <Input disabled={!canMutateAccountingRules} label="Suchwert" fullWidth value={suggestionRuleDraft.value} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, value: event.target.value }))} />
                   <Input
+                    disabled={!canMutateAccountingRules}
                     label="Zielkonto"
                     fullWidth
                     value={suggestionRuleDraft.targetAccountNumber}
@@ -2052,7 +2059,7 @@ export default function App() {
                   />
                   <label className="select-field">
                     <span>Flow</span>
-                    <select value={suggestionRuleDraft.flowType} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, flowType: event.target.value as typeof current.flowType }))}>
+                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.flowType} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, flowType: event.target.value as typeof current.flowType }))}>
                       <option value="income">income</option>
                       <option value="expense">expense</option>
                       <option value="any">any</option>
@@ -2060,7 +2067,7 @@ export default function App() {
                   </label>
                 </div>
                 <div className="action-row">
-                  <Button onClick={() => void handleSaveSuggestionRule()}>Regel speichern</Button>
+                  <Button disabled={!canMutateAccountingRules} onClick={() => void handleSaveSuggestionRule()}>Regel speichern</Button>
                 </div>
                 <DataTable>
                   <table>
@@ -2081,7 +2088,7 @@ export default function App() {
                           <td>{rule.targetAccountNumber}</td>
                           <td>{rule.flowType}</td>
                           <td>
-                            <button type="button" className="text-button" onClick={() => void handleDeleteSuggestionRule(rule.id)}>
+                            <button type="button" className="text-button" disabled={!canMutateAccountingRules} onClick={() => void handleDeleteSuggestionRule(rule.id)}>
                               Löschen
                             </button>
                           </td>
@@ -2093,7 +2100,7 @@ export default function App() {
               </SectionCard>
 
               <SectionCard eyebrow="Workspace" title="Geteilte Pro-Accounting-Oberfläche im Browser">
-                {accountingSeed && data.accountingTransactions.length > 0 ? (
+                {accountingSeed && accountingDataAdapter ? (
                   <div className="workspace-frame">
                     <ProAccountingWorkspace
                       seed={accountingSeed}
@@ -2102,13 +2109,8 @@ export default function App() {
                       assetsAvailable
                     />
                   </div>
-                ) : data.workflowEntries.length > 0 ? (
-                  <EmptyState
-                    title="Legacy-Snapshots sind schreibgeschützt"
-                    body="Die alte Workflow-Ansicht bleibt als Fallback lesbar. Mutationen sind deaktiviert, bis kanonische Accounting-Daten geladen werden."
-                  />
                 ) : (
-                  <EmptyState title="Workspace noch leer" body="Sobald Workflow-Snapshots vorhanden sind, wird die Pro-Workspace-UI hier direkt aus dem Shared Package gemountet." />
+                  <EmptyState title="Workspace nicht verfügbar" body="Die Accounting-Daten konnten nicht für die Workspace-Oberfläche bereitgestellt werden." />
                 )}
               </SectionCard>
             </div>

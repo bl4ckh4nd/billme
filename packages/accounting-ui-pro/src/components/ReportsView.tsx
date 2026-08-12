@@ -30,6 +30,7 @@ import {
 } from '../services/mockReportService';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
 import type { UserRole } from '../types';
+import { permissionContextForRole } from '../mocks/users';
 import ReportToolbar from './reports/ReportToolbar';
 import ReportTabSwitch from './reports/ReportTabSwitch';
 import SusaTable from './reports/SusaTable';
@@ -82,6 +83,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   const [hgbGuvReport, setHgbGuvReport] = useState<GuvReport | null>(null);
   const [reportsLoading, setReportsLoading] = useState(true);
   const [reportsError, setReportsError] = useState<string | null>(null);
+  const [reportsNotice, setReportsNotice] = useState<string | null>(null);
   const [reportsRetryKey, setReportsRetryKey] = useState(0);
 
   const [drilldownSelection, setDrilldownSelection] = useState<ReportDrilldownSelection | null>(null);
@@ -92,6 +94,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   const [exporting, setExporting] = useState(false);
   const [freezing, setFreezing] = useState(false);
   const [freezeReason, setFreezeReason] = useState('');
+  const canMutate = permissionContextForRole(role).canMutate;
 
   const profileSetupError = businessReportingProfile
     && businessReportingProfile.legalForm === 'gmbh'
@@ -108,6 +111,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
     let cancelled = false;
     setReportsLoading(true);
     setReportsError(null);
+    setReportsNotice(null);
 
     if (profileSetupError) {
       setReportsError(profileSetupError);
@@ -219,8 +223,10 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
       else if (format === 'pdf' && dataAdapter.exportReportPdf) result = await dataAdapter.exportReportPdf({ report: activeTab, filters });
       else if (format === 'csv' && dataAdapter.exportReportCsv) result = await dataAdapter.exportReportCsv({ report: activeTab, filters });
       else throw new Error('Report-Export ist für diesen Adapter nicht verfügbar.');
-      setReportsError(result?.path ? `Export erstellt: ${result.path}` : `${format.toUpperCase()}-Export erstellt.`);
+      setReportsError(null);
+      setReportsNotice(result?.path ? `Export erstellt: ${result.path}` : `${format.toUpperCase()}-Export erstellt.`);
     } catch (error) {
+      setReportsNotice(null);
       setReportsError(error instanceof Error ? error.message : 'Report-Export fehlgeschlagen.');
     } finally {
       setExporting(false);
@@ -228,19 +234,22 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   };
 
   const freezeCurrentReport = async () => {
-    if (!dataAdapter?.saveReportSnapshot || !activeReport || activeTab !== 'eur') return;
+    if (!canMutate || !dataAdapter?.saveReportSnapshot || !activeReport || activeTab !== 'eur') return;
     const range = reportDateRange(filters);
-    if (!range.from?.startsWith('2025-') || !range.to?.startsWith('2025-')) {
+    if (range.from !== '2025-01-01' || range.to !== '2025-12-31') {
+      setReportsNotice(null);
       setReportsError('Für das Filing-Center kann nur ein vollständiger EÜR-2025-Zeitraum eingefroren werden.');
       return;
     }
     const reason = freezeReason.trim();
     if (!reason) {
+      setReportsNotice(null);
       setReportsError('Bitte geben Sie einen Audit-Grund für das Einfrieren des EÜR-Snapshots an.');
       return;
     }
     setFreezing(true);
     setReportsError(null);
+    setReportsNotice(null);
     try {
       await dataAdapter.saveReportSnapshot({
         reportType: activeTab,
@@ -249,8 +258,9 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
         reason,
       });
       setFreezeReason('');
-      setReportsError('EÜR-Snapshot eingefroren und im Audit protokolliert.');
+      setReportsNotice('EÜR-Snapshot eingefroren und im Audit protokolliert.');
     } catch (error) {
+      setReportsNotice(null);
       setReportsError(error instanceof Error ? error.message : 'Snapshot konnte nicht eingefroren werden.');
     } finally {
       setFreezing(false);
@@ -315,7 +325,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
         <ReportToolbar filters={filters} onChange={setFilters} activeTab={activeTab} onExport={dataAdapter ? exportReport : undefined} exporting={exporting} />
-        {activeTab === 'eur' && dataAdapter?.saveReportSnapshot ? (
+        {activeTab === 'eur' && dataAdapter?.saveReportSnapshot ? canMutate ? (
           <div className="flex flex-wrap items-end gap-2 rounded-xl border border-border bg-surface p-3">
             <label className="flex min-w-64 flex-1 flex-col gap-1 text-xs font-semibold text-foreground" htmlFor="report-freeze-reason">
               Audit-Grund für EÜR-Snapshot
@@ -332,7 +342,8 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
               {freezing ? 'Friere ein…' : 'Snapshot einfrieren'}
             </Button>
           </div>
-        ) : null}
+        ) : <div className="rounded-xl border border-border bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann EÜR-Snapshots nur lesen.</div> : null}
+        {reportsNotice ? <div className="rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success" role="status" aria-live="polite">{reportsNotice}</div> : null}
         <div className="flex items-center justify-between gap-3">
           <ReportTabSwitch activeTab={activeTab} onChange={setActiveTab} tabs={visibleTabs} />
           <div className="text-xs text-muted flex items-center gap-2">

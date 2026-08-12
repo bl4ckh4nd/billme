@@ -74,7 +74,6 @@ export const defaultReportFilters = (
   const range = reportFiscalYearRange(asOfDate, businessReportingProfile) ?? calendarYearRange(asOfDate);
   return {
     chart,
-    mandantId: 'demo-gmbh',
     asOfDate,
     periodFrom: range.start.slice(0, 7),
     periodTo: range.end.slice(0, 7),

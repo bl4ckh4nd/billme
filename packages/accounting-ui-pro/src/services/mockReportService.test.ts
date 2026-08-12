@@ -3,7 +3,6 @@ import { getBwaReport, getEurReport, getHgbGuvReport } from './mockReportService
 
 const filters = {
   chart: 'SKR03' as const,
-  mandantId: 'demo-gmbh',
   asOfDate: '2026-08-12',
   periodFrom: '2026-01',
   periodTo: '2026-08',

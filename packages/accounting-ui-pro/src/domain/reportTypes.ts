@@ -11,7 +11,6 @@ export interface BusinessReportingProfile {
 
 export interface ReportFilterState {
   chart: 'SKR03' | 'SKR04';
-  mandantId: string;
   asOfDate: string;
   periodFrom?: string;
   periodTo?: string;

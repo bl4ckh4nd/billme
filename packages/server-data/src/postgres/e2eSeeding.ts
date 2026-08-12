@@ -551,6 +551,17 @@ export const buildServerModeProTenantSeed = (options: ServerModeSeedOptions): Se
         active: true,
         updatedAt: now,
       },
+      {
+        key: 'EU_B2B_SERVICE_RC',
+        label: 'EU-Dienstleistung Reverse Charge',
+        mechanism: 'reverse_charge',
+        defaultRate: 0,
+        requiresCounterpartyVatId: true,
+        requiresCountry: true,
+        requiresEvidence: true,
+        active: true,
+        updatedAt: now,
+      },
     ],
     accountKeywords: [
       {
@@ -744,6 +755,15 @@ export const buildServerModeProTenantSeed = (options: ServerModeSeedOptions): Se
         role: 'datev_bu',
         accountNumber: '8400',
         datevBuKey: '81',
+        updatedAt: now,
+      },
+      {
+        id: seedId(namespace, 'tax-mapping', 'eu-service-datev'),
+        chart: 'SKR03',
+        taxCaseKey: 'EU_B2B_SERVICE_RC',
+        role: 'datev_bu',
+        accountNumber: '8400',
+        datevBuKey: '94',
         updatedAt: now,
       },
     ],

@@ -402,27 +402,6 @@ export const runProAccountingScenario = async (page) => {
   expect(datevRefetched.headers.get('x-billme-datev-content-sha256')).toBe(datevContentHash);
   expect(datevRefetched.headers.get('content-type')).toContain('charset=utf-8');
 
-  // When the deployed catalog includes the EU reverse-charge case, prove the
-  // persisted immutable tax evidence reaches DATEV fields 40/41/43 rather
-  // than only testing the generic header/parameter path above.
-  const taxCases = await requestJson(state, session, '/api/v1/pro/accounting/tax-cases');
-  if (taxCases.some((taxCase) => taxCase.key === 'EU_B2B_SERVICE_RC')) {
-    const specialId = `playwright-eu-rc-${suffix}`;
-    const specialReservation = await requestJson(state, session, '/api/v1/pro/numbers/reserve', undefined, { method: 'POST', body: { kind: 'invoice' } });
-    await requestJson(state, session, '/api/v1/pro/invoices', undefined, { method: 'POST', body: { reason: 'Playwright persist EU reverse-charge evidence', invoice: {
-      kind: 'invoice', id: specialId, clientId: outgoingClientId, clientNumber: outgoingClient?.customerNumber, number: specialReservation.number, client: outgoingClient?.company, clientEmail: outgoingClient?.email, clientAddress: outgoingClient?.address,
-      taxMode: 'intra_eu_service_reverse_charge', taxMeta: { buyerCountryCode: 'AT', buyerVatId: 'ATU12345678', destinationVatRate: 20, datevSachverhaltLl: '13', datevEvidenceType: 'reverse_charge', datevEvidenceReference: 'playwright-proof' },
-      taxSnapshot: { vatRateApplied: 0, vatAmount: 0, netAmount: 100, grossAmount: 100, einvoiceCategoryCode: 'S', vatBreakdown: [{ rate: 0, netAmount: 100, vatAmount: 0, taxCaseKey: 'EU_B2B_SERVICE_RC' }] }, date: '2026-03-09', dueDate: '2026-03-23', amount: 100, status: 'open', dunningLevel: 0, items: [{ description: 'Playwright EU service', quantity: 1, price: 100, total: 100, taxRate: 0 }], payments: [], history: [],
-    } } });
-    await requestJson(state, session, '/api/v1/pro/numbers/finalize', undefined, { method: 'POST', body: { reservationId: specialReservation.reservationId, documentId: specialId } });
-    const specialPosted = await requestJson(state, session, '/api/v1/pro/accounting/outgoing-invoices/post', undefined, { method: 'POST', body: { reason: 'Playwright post EU reverse-charge evidence', invoiceId: specialId, reservationId: specialReservation.reservationId } });
-    expect(specialPosted).toMatchObject({ status: 'ready' });
-    const specialExport = await requestText(state, session, '/api/v1/pro/accounting/datev/export.csv', { from: '2026-03-09', to: '2026-03-09', consultantNumber: '1001', clientNumber: '7', fiscalYearStart: '2026-01-01', accountLength: 4, encoding: 'utf8-bom', reason: 'Playwright EU DATEV evidence' });
-    expect(specialExport.body).toContain('ATU12345678');
-    expect(specialExport.body).toContain('20,00');
-    expect(specialExport.body).toContain(';13;');
-  }
-
   const mappingRequests = [
     ['accounts_receivable', '1200'],
     ['accounts_payable', '1200'],
@@ -649,6 +628,28 @@ export const runProAccountingScenario = async (page) => {
     },
   );
   expect(outgoingPosted).toMatchObject({ sourceType: 'outgoing_invoice', sourceId: outgoingInvoiceId, status: 'ready' });
+
+  // Prove the persisted immutable tax evidence reaches DATEV fields 40/41/43
+  // rather than only testing the generic header/parameter path above.
+  const taxCases = await requestJson(state, session, '/api/v1/pro/accounting/tax-cases');
+  expect(taxCases).toEqual(expect.arrayContaining([expect.objectContaining({ key: 'EU_B2B_SERVICE_RC', requiresCountry: true, requiresCounterpartyVatId: true, requiresEvidence: true })]));
+  {
+    const specialId = `playwright-eu-rc-${Date.now()}`;
+    const specialReservation = await requestJson(state, session, '/api/v1/pro/numbers/reserve', undefined, { method: 'POST', body: { kind: 'invoice' } });
+    await requestJson(state, session, '/api/v1/pro/invoices', undefined, { method: 'POST', body: { reason: 'Playwright persist EU reverse-charge evidence', invoice: {
+      kind: 'invoice', id: specialId, clientId: outgoingClientId, clientNumber: outgoingClient?.customerNumber, number: specialReservation.number, client: outgoingClient?.company, clientEmail: outgoingClient?.email, clientAddress: outgoingClient?.address,
+      taxMode: 'intra_eu_service_reverse_charge', taxMeta: { buyerCountryCode: 'AT', buyerVatId: 'ATU12345678', destinationVatRate: 20, datevSachverhaltLl: '13', datevEvidenceType: 'reverse_charge', datevEvidenceReference: 'playwright-proof' },
+      taxSnapshot: { vatRateApplied: 0, vatAmount: 0, netAmount: 100, grossAmount: 100, einvoiceCategoryCode: 'S', vatBreakdown: [{ rate: 0, netAmount: 100, vatAmount: 0, taxCaseKey: 'EU_B2B_SERVICE_RC' }] }, date: '2026-03-09', dueDate: '2026-03-23', amount: 100, status: 'open', dunningLevel: 0, items: [{ description: 'Playwright EU service', quantity: 1, price: 100, total: 100, taxRate: 0 }], payments: [], history: [],
+    } } });
+    await requestJson(state, session, '/api/v1/pro/numbers/finalize', undefined, { method: 'POST', body: { reservationId: specialReservation.reservationId, documentId: specialId } });
+    const specialPosted = await requestJson(state, session, '/api/v1/pro/accounting/outgoing-invoices/post', undefined, { method: 'POST', body: { reason: 'Playwright post EU reverse-charge evidence', invoiceId: specialId, reservationId: specialReservation.reservationId } });
+    expect(specialPosted).toMatchObject({ status: 'ready' });
+    const specialExport = await requestText(state, session, '/api/v1/pro/accounting/datev/export.csv', { from: '2026-03-09', to: '2026-03-09', consultantNumber: '1001', clientNumber: '7', fiscalYearStart: '2026-01-01', accountLength: 4, encoding: 'utf8-bom', reason: 'Playwright EU DATEV evidence' });
+    expect(specialExport.body).toContain('ATU12345678');
+    expect(specialExport.body).toContain('20,00');
+    expect(specialExport.body).toContain(';13;');
+  }
+
 
   const outgoingRefetched = await requestJson(
     state,

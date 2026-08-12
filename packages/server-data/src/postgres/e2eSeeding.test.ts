@@ -38,14 +38,14 @@ test('buildServerModeProTenantSeed adds accounting fixtures', () => {
 
   assert.equal(seed.ledgerAccounts.length, 4);
   assert.ok(seed.ledgerAccounts.some((account) => account.accountNumber === '1776'));
-  assert.equal(seed.taxCases.length, 2);
+  assert.equal(seed.taxCases.length, 3);
   assert.equal(seed.accountKeywords.length, 1);
   assert.equal(seed.articles.length, 2);
   assert.equal(seed.bankAccounts.length, 1);
   assert.equal(seed.bankTransactions.length, 2);
   assert.equal(seed.templates.length, 2);
   assert.equal(seed.workflowEntries.length, 1);
-  assert.equal(seed.taxCaseAccountMappings.length, 2);
+  assert.equal(seed.taxCaseAccountMappings.length, 3);
   assert.equal(seed.accountSuggestionRules.length, 1);
   assert.equal(seed.activeTemplates.invoiceTemplateId, 'pro-smoke-template-invoice');
 });

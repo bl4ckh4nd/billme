@@ -50,6 +50,13 @@
       "when": 1786092000001,
       "tag": "0006_server_data_opos",
       "breakpoints": false
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786092000002,
+      "tag": "0007_server_data_opos_hardening",
+      "breakpoints": false
     }
   ]
 }

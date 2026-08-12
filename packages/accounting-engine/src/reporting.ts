@@ -1,6 +1,7 @@
 import {
   assertEurUsesCalendarYear,
   fiscalYearForDate,
+  fiscalYearRange,
 } from '@billme/accounting-shared';
 import type {
   BusinessReportingProfile,
@@ -176,6 +177,10 @@ function makeContext(request: ReportRequest): ReportingContext {
     asOfDate: effectiveAsOfDate,
     fiscalYear: effectiveAsOfDate ? fiscalYearForDate(effectiveAsOfDate, request.profile.fiscalYearStart) : 0,
     fiscalYearStart: request.profile.fiscalYearStart,
+    fiscalYearRange: effectiveAsOfDate
+      ? fiscalYearRange(fiscalYearForDate(effectiveAsOfDate, request.profile.fiscalYearStart), request.profile.fiscalYearStart)
+      : undefined,
+    businessSize: request.profile.size,
     ledgerEntryCount: entries.length,
     ledgerAccountCount: ledgerAccountNumbers.length,
     cashEntryCount: cashEntries.length,

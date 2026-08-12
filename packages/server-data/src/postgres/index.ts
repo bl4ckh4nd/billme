@@ -8,7 +8,5 @@ export * from './migrations.js';
 export * from './proAccounting.js';
 export * from './drizzle.js';
 export * from './schema.js';
-export * from './taxFilingRepository.js';
-export * from './taxFilingCredentials.js';
 export * from './reporting.js';
 export * from './taxSubmission.js';

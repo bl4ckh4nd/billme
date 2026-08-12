@@ -143,6 +143,8 @@ export interface ReportSnapshot {
   asOfDate?: string;
   fiscalYear: number;
   fiscalYearStart: number;
+  fiscalYearRange?: FiscalYearRange;
+  businessSize: ReportingBusinessSize;
   ledgerEntryCount: number;
   ledgerAccountCount: number;
   cashEntryCount: number;

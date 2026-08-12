@@ -10,6 +10,7 @@ import {
   recurringProfileSchema,
   dunningLevelSchema,
   appSettingsSchema,
+  businessReportingProfileSchema,
   upsertPayloadSchema,
   deleteByIdSchema,
   csvProfileSchema,
@@ -748,6 +749,29 @@ describe('Settings Schema', () => {
         },
       };
       expect(() => appSettingsSchema.parse(settings)).not.toThrow();
+      const parsed = appSettingsSchema.parse(settings);
+      expect(parsed.businessReportingProfile).toEqual({
+        jurisdiction: 'DE',
+        legalForm: 'sole_proprietor',
+        profitDetermination: 'eur',
+        fiscalYearStart: '01-01',
+        vatMethod: 'soll',
+      });
+    });
+
+    it('validates canonical GmbH reporting and projects its VAT method', () => {
+      const settings = {
+        company: { name: 'GmbH', owner: 'Owner', street: 'Street', zip: '12345', city: 'City', email: 'a@b.test', phone: '', website: '' },
+        finance: { bankName: '', iban: '', bic: '', taxId: '', vatId: '', registerCourt: 'HRB 1' },
+        numbers: { invoicePrefix: 'INV', nextInvoiceNumber: 1, numberLength: 5, offerPrefix: 'OFF', nextOfferNumber: 1 },
+        dunning: { levels: [] },
+        legal: { smallBusinessRule: false, defaultVatRate: 19, taxAccountingMethod: 'soll' as const, paymentTermsDays: 14, defaultIntroText: '', defaultFooterText: '' },
+        businessReportingProfile: { jurisdiction: 'DE' as const, legalForm: 'gmbh' as const, profitDetermination: 'double_entry' as const, hgbSizeClass: 'small' as const, fiscalYearStart: '04-01', chart: 'SKR04' as const, vatMethod: 'ist' as const },
+      };
+      const parsed = appSettingsSchema.parse(settings);
+      expect(parsed.businessReportingProfile?.chart).toBe('SKR04');
+      expect(parsed.legal.taxAccountingMethod).toBe('ist');
+      expect(() => businessReportingProfileSchema.parse({ ...settings.businessReportingProfile, profitDetermination: 'eur', fiscalYearStart: '04-01' })).toThrow();
     });
 
     it('should apply defaults for optional sections', () => {

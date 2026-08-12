@@ -781,7 +781,34 @@ export const dunningLevelSchema = z.object({
   text: z.string(),
 });
 
-export const appSettingsSchema = z.object({
+export const businessReportingProfileSchema = z
+  .object({
+    jurisdiction: z.literal('DE'),
+    legalForm: z.enum(['sole_proprietor', 'gmbh']),
+    profitDetermination: z.enum(['eur', 'double_entry']),
+    hgbSizeClass: z.enum(['micro', 'small']).optional(),
+    fiscalYearStart: z.string().regex(/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/, 'Expected MM-DD'),
+    chart: z.enum(['SKR03', 'SKR04']).optional(),
+    vatMethod: z.enum(['soll', 'ist']),
+  })
+  .superRefine((profile, ctx) => {
+    if (profile.profitDetermination === 'eur' && profile.fiscalYearStart !== '01-01') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fiscalYearStart'], message: 'EÜR requires a calendar-year start (01-01)' });
+    }
+    if (profile.legalForm !== 'gmbh') return;
+    if (profile.profitDetermination !== 'double_entry') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profitDetermination'], message: 'GmbH requires double-entry accounting' });
+    }
+    if (!profile.hgbSizeClass) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['hgbSizeClass'], message: 'GmbH requires an HGB size class' });
+    }
+    if (!profile.chart) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['chart'], message: 'GmbH requires a ledger chart' });
+    }
+  });
+
+const appSettingsBaseSchema = z.object({
+  businessReportingProfile: businessReportingProfileSchema.optional(),
   company: z.object({
     name: z.string(),
     owner: z.string(),
@@ -903,6 +930,28 @@ export const appSettingsSchema = z.object({
       topClientsLimit: 5,
     }),
   onboardingCompleted: z.boolean().optional(),
+});
+
+export const appSettingsSchema: z.ZodType<
+  z.output<typeof appSettingsBaseSchema>,
+  z.ZodTypeDef,
+  z.input<typeof appSettingsBaseSchema>
+> = appSettingsBaseSchema.transform((settings) => {
+  const businessReportingProfile = settings.businessReportingProfile ?? {
+    jurisdiction: 'DE' as const,
+    legalForm: 'sole_proprietor' as const,
+    profitDetermination: 'eur' as const,
+    fiscalYearStart: '01-01',
+    vatMethod: settings.legal.taxAccountingMethod,
+  };
+  return {
+    ...settings,
+    businessReportingProfile,
+    legal: {
+      ...settings.legal,
+      taxAccountingMethod: businessReportingProfile.vatMethod,
+    },
+  };
 });
 
 export const upsertClientPayloadSchema = z.object({

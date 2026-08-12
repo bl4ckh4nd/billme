@@ -27,7 +27,31 @@ export interface DunningLevel {
   text: string;
 }
 
+export type BusinessReportingJurisdiction = 'DE';
+export type BusinessLegalForm = 'sole_proprietor' | 'gmbh';
+export type ProfitDetermination = 'eur' | 'double_entry';
+export type HgbSizeClass = 'micro' | 'small';
+export type LedgerChart = 'SKR03' | 'SKR04';
+export type VatMethod = 'soll' | 'ist';
+
+/**
+ * Canonical business reporting configuration. The legacy
+ * `legal.taxAccountingMethod` field is retained as a read-only projection for
+ * older callers and persisted documents.
+ */
+export interface BusinessReportingProfile {
+  jurisdiction: BusinessReportingJurisdiction;
+  legalForm: BusinessLegalForm;
+  profitDetermination: ProfitDetermination;
+  hgbSizeClass?: HgbSizeClass;
+  fiscalYearStart: string; // MM-DD
+  chart?: LedgerChart;
+  vatMethod: VatMethod;
+}
+
 export interface AppSettings {
+  /** Canonical reporting truth; omitted only by legacy in-memory callers. */
+  businessReportingProfile?: BusinessReportingProfile;
   company: {
     name: string;
     owner: string;

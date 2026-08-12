@@ -2,11 +2,31 @@ import type Database from "better-sqlite3";
 import { eq } from "drizzle-orm";
 import { createDrizzle, schema } from "./drizzle";
 import type { AppSettings } from "@billme/desktop-core/types";
-import { strictJsonParse, SettingsSchema } from "./validation-schemas";
+import {
+  BusinessReportingProfileSchema,
+  strictJsonParse,
+  SettingsSchema,
+} from "./validation-schemas";
 import { logger } from "@billme/desktop-core/utils/logger";
 
 const normalizeSettings = (settings: unknown): AppSettings => {
   const next = settings as Partial<AppSettings>;
+  const legacyLegal = next.legal;
+  const businessReportingProfile = BusinessReportingProfileSchema.parse(
+    next.businessReportingProfile ?? {
+      jurisdiction: 'DE',
+      legalForm: 'sole_proprietor',
+      profitDetermination: 'eur',
+      fiscalYearStart: '01-01',
+      vatMethod: legacyLegal?.taxAccountingMethod ?? 'soll',
+    },
+  );
+  next.businessReportingProfile = businessReportingProfile;
+  if (next.legal) {
+    // The legacy field is a read-only projection. Canonical profile wins on
+    // conflicts so callers cannot persist two divergent VAT-method truths.
+    next.legal.taxAccountingMethod = businessReportingProfile.vatMethod;
+  }
   // Backward compatibility for older saved settings that predate the portal section.
   if (!next.portal) {
     next.portal = { baseUrl: "" };
@@ -139,12 +159,13 @@ export const setSettings = (
   db: Database.Database,
   settings: AppSettings,
 ): void => {
+  const normalized = normalizeSettings(settings);
   createDrizzle(db)
     .insert(schema.settings)
-    .values({ id: 1, settingsJson: JSON.stringify(settings) })
+    .values({ id: 1, settingsJson: JSON.stringify(normalized) })
     .onConflictDoUpdate({
       target: schema.settings.id,
-      set: { settingsJson: JSON.stringify(settings) },
+      set: { settingsJson: JSON.stringify(normalized) },
     })
     .run();
 };
@@ -159,7 +180,7 @@ export const setLastRecurringRun = (
     .where(eq(schema.settings.id, 1))
     .get();
   if (!row) return;
-  const parsed = JSON.parse(row.settingsJson) as Record<string, any>;
+  const parsed = normalizeSettings(JSON.parse(row.settingsJson));
   parsed.automation = {
     ...(parsed.automation ?? {}),
     lastRecurringRun: timestamp,

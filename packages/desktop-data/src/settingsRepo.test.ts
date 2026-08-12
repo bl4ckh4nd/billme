@@ -23,7 +23,8 @@ vi.mock("@billme/desktop-core/utils/logger", () => ({
   },
 }));
 
-import { getSettings, setSettings } from "./settingsRepo";
+import { getSettings, setLastRecurringRun, setSettings } from "./settingsRepo";
+import { BusinessReportingProfileSchema } from "./validation-schemas";
 
 type FakeDb = Database.Database;
 const makeDb = (row?: { settings_json: string }) => {
@@ -56,7 +57,14 @@ describe("settingsRepo", () => {
 
     const result = getSettings(db as any);
 
-    expect(result).toEqual(MOCK_SETTINGS);
+    expect(result).toMatchObject(MOCK_SETTINGS);
+    expect(result?.businessReportingProfile).toEqual({
+      jurisdiction: 'DE',
+      legalForm: 'sole_proprietor',
+      profitDetermination: 'eur',
+      fiscalYearStart: '01-01',
+      vatMethod: 'soll',
+    });
     expect(strictJsonParseMock).toHaveBeenCalledTimes(1);
   });
 
@@ -104,6 +112,13 @@ describe("settingsRepo", () => {
     expect(result?.automation?.recurringRunTime).toBe("03:00");
     expect(result?.dashboard?.monthlyRevenueGoal).toBe(30000);
     expect(result?.dunning.levels[0]?.enabled).toBe(true);
+    expect(result?.businessReportingProfile).toEqual({
+      jurisdiction: 'DE',
+      legalForm: 'sole_proprietor',
+      profitDetermination: 'eur',
+      fiscalYearStart: '01-01',
+      vatMethod: 'soll',
+    });
   });
 
   it("normalizes malformed optional section values", () => {
@@ -150,9 +165,72 @@ describe("settingsRepo", () => {
   it("upserts settings as JSON string", () => {
     const { db } = makeDb();
     setSettings(db as any, MOCK_SETTINGS);
-    expect(
-      db.prepare("SELECT settings_json FROM settings WHERE id = 1").get(),
-    ).toEqual({ settings_json: JSON.stringify(MOCK_SETTINGS) });
+    const persisted = JSON.parse(
+      (db.prepare("SELECT settings_json FROM settings WHERE id = 1").get() as { settings_json: string }).settings_json,
+    );
+    expect(persisted).toMatchObject(MOCK_SETTINGS);
+    expect(persisted.businessReportingProfile).toEqual({
+      jurisdiction: 'DE',
+      legalForm: 'sole_proprietor',
+      profitDetermination: 'eur',
+      fiscalYearStart: '01-01',
+      vatMethod: 'soll',
+    });
     db.close();
+  });
+
+  it("persists a canonical profile and projects its VAT method to legacy settings", () => {
+    const { db } = makeDb();
+    const settings = structuredClone(MOCK_SETTINGS);
+    settings.legal.taxAccountingMethod = 'soll';
+    settings.businessReportingProfile = {
+      jurisdiction: 'DE',
+      legalForm: 'gmbh',
+      profitDetermination: 'double_entry',
+      hgbSizeClass: 'small',
+      fiscalYearStart: '04-01',
+      chart: 'SKR04',
+      vatMethod: 'ist',
+    };
+
+    setSettings(db as any, settings);
+    const persisted = JSON.parse(
+      (db.prepare("SELECT settings_json FROM settings WHERE id = 1").get() as { settings_json: string }).settings_json,
+    );
+
+    expect(persisted.businessReportingProfile).toEqual(settings.businessReportingProfile);
+    expect(persisted.legal.taxAccountingMethod).toBe('ist');
+    db.close();
+  });
+
+  it('keeps recurring-run writes on the canonical settings shape', () => {
+    const { db } = makeDb({ settings_json: JSON.stringify(MOCK_SETTINGS) });
+    setLastRecurringRun(db as any, '2026-08-12T12:00:00.000Z');
+    const persisted = JSON.parse(
+      (db.prepare("SELECT settings_json FROM settings WHERE id = 1").get() as { settings_json: string }).settings_json,
+    );
+    expect(persisted.businessReportingProfile).toBeDefined();
+    expect(persisted.automation.lastRecurringRun).toBe('2026-08-12T12:00:00.000Z');
+    db.close();
+  });
+
+  it('accepts sole-proprietor EÜR only for the calendar year', () => {
+    expect(() => BusinessReportingProfileSchema.parse({
+      jurisdiction: 'DE',
+      legalForm: 'sole_proprietor',
+      profitDetermination: 'eur',
+      fiscalYearStart: '04-01',
+      vatMethod: 'soll',
+    })).toThrow();
+  });
+
+  it('requires HGB profile fields for GmbH', () => {
+    expect(() => BusinessReportingProfileSchema.parse({
+      jurisdiction: 'DE',
+      legalForm: 'gmbh',
+      profitDetermination: 'eur',
+      fiscalYearStart: '01-01',
+      vatMethod: 'soll',
+    })).toThrow();
   });
 });

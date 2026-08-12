@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { FileDown, LockKeyhole } from 'lucide-react';
 import { Button, Input } from '@billme/ui';
 import type { DatevExportResult, ProAccountingDataAdapter } from '../../services/mockBookingStore';
@@ -79,20 +79,26 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<DatevExportResult | null>(null);
+  const historyRequestId = useRef(0);
+  const mounted = useRef(true);
 
   const canExport = permissionContextForRole(role).canMutate && Boolean(dataAdapter?.exportDatevBuchungsstapel);
   const canListHistory = Boolean(dataAdapter?.listDatevExports);
 
   const loadHistory = useCallback(async () => {
+    const requestId = ++historyRequestId.current;
     if (!dataAdapter?.listDatevExports) return;
     setLoadingHistory(true);
     try {
-      setHistory(await dataAdapter.listDatevExports(20));
+      const nextHistory = await dataAdapter.listDatevExports(20);
+      if (!mounted.current || requestId !== historyRequestId.current) return;
+      setHistory(nextHistory);
       setHistoryError(null);
     } catch (loadError) {
+      if (!mounted.current || requestId !== historyRequestId.current) return;
       setHistoryError(loadError instanceof Error ? loadError.message : 'DATEV-Exportverlauf konnte nicht geladen werden.');
     } finally {
-      setLoadingHistory(false);
+      if (mounted.current && requestId === historyRequestId.current) setLoadingHistory(false);
     }
   }, [dataAdapter]);
 
@@ -101,6 +107,14 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
     setSuccess(null);
     void loadHistory();
   }, [loadHistory]);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      historyRequestId.current += 1;
+    };
+  }, []);
 
   const validationError = useMemo(() => validate(values), [values]);
   const update = <K extends keyof DatevExportValues>(key: K, value: DatevExportValues[K]) => {

@@ -14,6 +14,16 @@ const historyRow = {
   chart: 'SKR03' as const,
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('DatevExportPanel', () => {
   it('offers a retry when immutable history loading fails', async () => {
     const listDatevExports = vi.fn()
@@ -27,6 +37,43 @@ describe('DatevExportPanel', () => {
 
     await waitFor(() => expect(listDatevExports).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/12 Buchungen/)).toBeTruthy();
+  });
+
+  it('ignores a stale history response after a newer refresh succeeds', async () => {
+    const stale = deferred<typeof historyRow[]>();
+    const fresh = deferred<typeof historyRow[]>();
+    const staleRow = { ...historyRow, id: 'datev-stale', recordCount: 99 };
+    const listDatevExports = vi.fn()
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => fresh.promise);
+    const { rerender } = render(<DatevExportPanel dataAdapter={{ listDatevExports }} />);
+
+    await waitFor(() => expect(listDatevExports).toHaveBeenCalledTimes(1));
+    rerender(<DatevExportPanel dataAdapter={{ listDatevExports }} />);
+    await waitFor(() => expect(listDatevExports).toHaveBeenCalledTimes(2));
+
+    fresh.resolve([historyRow]);
+    expect(await screen.findByText(/12 Buchungen/)).toBeTruthy();
+    stale.resolve([staleRow]);
+    await waitFor(() => expect(screen.queryByText(/99 Buchungen/)).toBeNull());
+  });
+
+  it('does not surface a stale history error after a newer refresh succeeds', async () => {
+    const stale = deferred<typeof historyRow[]>();
+    const fresh = deferred<typeof historyRow[]>();
+    const listDatevExports = vi.fn()
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => fresh.promise);
+    const { rerender } = render(<DatevExportPanel dataAdapter={{ listDatevExports }} />);
+
+    await waitFor(() => expect(listDatevExports).toHaveBeenCalledTimes(1));
+    rerender(<DatevExportPanel dataAdapter={{ listDatevExports }} />);
+    await waitFor(() => expect(listDatevExports).toHaveBeenCalledTimes(2));
+
+    fresh.resolve([historyRow]);
+    expect(await screen.findByText(/12 Buchungen/)).toBeTruthy();
+    stale.reject(new Error('veralteter DATEV-Verlauf-Fehler'));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 
   it('loads immutable history and exports through the productive adapter', async () => {

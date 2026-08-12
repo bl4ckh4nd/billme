@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Filter,
-  FileText,
   Inbox,
   CheckSquare,
   PanelRightClose,
   PanelRightOpen,
-  Upload,
-  Wand2,
 } from 'lucide-react';
 import { getQueueCounts, getStatusPresentation, InboxQueueKey, txMatchesQueue } from '../domain/selectors';
 import { normalizeTaxCaseKey, TAX_CASE_OPTIONS, toLegacyTaxCode } from '../domain/taxCases';
@@ -18,15 +14,16 @@ import {
   dispatchBookingAction,
   getBookingDraftByTransactionId,
   saveDraft,
-  setTransactionReceiptStatus,
 } from '../services/mockBookingStore';
 import AccountCombobox from './AccountCombobox';
-import { BookingAction, Transaction, UserRole } from '../types';
+import { getBankAccountNumber } from './ReconciliationWorkbench';
+import { Account, BookingAction, BookingDraft, Transaction, UserRole } from '../types';
 import InboxQueueTabs from './InboxQueueTabs';
 import IssueBadges from './IssueBadges';
 
 interface InboxViewProps {
   role: UserRole;
+  accounts?: Account[];
   transactions: Transaction[];
   onOpenTransaction: (transactionId: string) => void;
   onRefresh: () => void;
@@ -52,11 +49,13 @@ function nextActionLabel(action: BookingAction | undefined) {
 
 export default function InboxView({
   role,
+  accounts,
   transactions,
   onOpenTransaction,
   onRefresh,
   forcedPreviewTransactionId,
 }: InboxViewProps) {
+  const accountOptions = accounts ?? mockAccounts;
   const [activeQueue, setActiveQueue] = useState<InboxQueueKey>('all');
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -75,7 +74,8 @@ export default function InboxView({
 
   const previewTx = previewId ? filtered.find((tx) => tx.id === previewId) ?? null : null;
   const previewDraft = previewTx ? getBookingDraftByTransactionId(previewTx.id) : undefined;
-  const previewCounterLine = previewDraft?.lines.find((line) => line.accountId !== '1200') ?? previewDraft?.lines[0];
+  const previewBankAccountNumber = previewDraft ? getBankAccountNumber(previewDraft, accountOptions) : undefined;
+  const previewCounterLine = previewDraft?.lines.find((line) => line.accountId !== previewBankAccountNumber) ?? previewDraft?.lines[0];
   const previewAccountEditable = !!previewDraft && !['posted', 'reversed'].includes(previewDraft.workflowStatus);
 
   const selectedSet = new Set(selectedIds);
@@ -102,18 +102,7 @@ export default function InboxView({
     });
   };
 
-  const selectSimilarToPreview = () => {
-    if (!previewTx) return;
-    const similar = filtered.filter(
-      (tx) =>
-        tx.id !== previewTx.id &&
-        tx.amount * previewTx.amount > 0 &&
-        (tx.payee === previewTx.payee || tx.suggestion === previewTx.suggestion),
-    );
-    setSelectedIds([previewTx.id, ...similar.map((tx) => tx.id)]);
-  };
-
-  const handleInlineAction = (tx: Transaction) => {
+  const handleInlineAction = async (tx: Transaction) => {
     const draft = getBookingDraftByTransactionId(tx.id);
     if (!draft) return;
     const allowed = getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues);
@@ -123,39 +112,39 @@ export default function InboxView({
       return;
     }
     try {
-      dispatchBookingAction(tx.id, primary, { role, actorName: role });
+      await dispatchBookingAction(tx.id, primary, { role, actorName: role });
       onRefresh();
-    } catch {
-      onOpenTransaction(tx.id);
+    } catch (error) {
+      setBatchMessage(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
     }
   };
 
-  const runBatchAction = (preferredAction: BookingAction) => {
+  const runBatchAction = async (preferredAction: BookingAction) => {
     const ids = filtered.filter((tx) => selectedSet.has(tx.id)).map((tx) => tx.id);
     if (ids.length === 0) return;
 
     let success = 0;
     let skipped = 0;
 
-    ids.forEach((id) => {
+    for (const id of ids) {
       const draft = getBookingDraftByTransactionId(id);
-      if (!draft) { skipped += 1; return; }
+      if (!draft) { skipped += 1; continue; }
       const allowed = getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues);
-      if (!allowed.includes(preferredAction)) { skipped += 1; return; }
+      if (!allowed.includes(preferredAction)) { skipped += 1; continue; }
       try {
-        dispatchBookingAction(id, preferredAction, { role, actorName: role });
+        await dispatchBookingAction(id, preferredAction, { role, actorName: role });
         success += 1;
       } catch {
         skipped += 1;
       }
-    });
+    }
 
     setBatchMessage(`Sammelaktion '${preferredAction}': ${success} erfolgreich, ${skipped} übersprungen.`);
     setSelectedIds((prev) => prev.filter((id) => !ids.includes(id)));
     onRefresh();
   };
 
-  const assignBatchAccount = () => {
+  const assignBatchAccount = async () => {
     if (!batchAccountSelection) {
       setBatchMessage('Bitte wählen Sie zuerst ein Konto für die Sammelzuweisung.');
       return;
@@ -164,20 +153,21 @@ export default function InboxView({
     const ids = filtered.filter((tx) => selectedSet.has(tx.id)).map((tx) => tx.id);
     if (ids.length === 0) return;
 
-    const account = mockAccounts.find((acc) => acc.number === batchAccountSelection.id);
+    const account = accountOptions.find((acc) => acc.number === batchAccountSelection.id);
     if (!account) { setBatchMessage('Gewähltes Konto wurde nicht gefunden.'); return; }
 
     let success = 0;
     let skipped = 0;
-    ids.forEach((id) => {
+    for (const id of ids) {
       const draft = getBookingDraftByTransactionId(id);
-      if (!draft || ['posted', 'reversed'].includes(draft.workflowStatus)) { skipped += 1; return; }
+      if (!draft || ['posted', 'reversed'].includes(draft.workflowStatus)) { skipped += 1; continue; }
       try {
         const nextLines = [...draft.lines];
-        const targetIndex = nextLines.findIndex((line) => line.accountId !== '1200');
+        const bankAccountNumber = getBankAccountNumber(draft, accountOptions);
+        const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
         const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
         const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
-        if (index < 0) { skipped += 1; return; }
+        if (index < 0) { skipped += 1; continue; }
         nextLines[index] = {
           ...nextLines[index],
           accountId: account.number,
@@ -189,22 +179,32 @@ export default function InboxView({
             ?? account.defaultTaxCode
             ?? '',
         };
-        saveDraft({ ...draft, lines: nextLines }, role);
+        await saveDraft({ ...draft, lines: nextLines }, role);
         success += 1;
       } catch {
         skipped += 1;
       }
-    });
+    }
 
     setBatchMessage(`Sammel-Kontozuweisung (${account.number}): ${success} aktualisiert, ${skipped} übersprungen.`);
     onRefresh();
   };
 
-  const updateInboxAccount = (txId: string, accountNumber: string, accountName: string, defaultTaxCode?: string) => {
+  const saveInboxDraft = async (nextDraft: BookingDraft) => {
+    try {
+      await saveDraft(nextDraft, role);
+      onRefresh();
+    } catch (error) {
+      setBatchMessage(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+    }
+  };
+
+  const updateInboxAccount = async (txId: string, accountNumber: string, accountName: string, defaultTaxCode?: string) => {
     const draft = getBookingDraftByTransactionId(txId);
     if (!draft) return;
     const nextLines = [...draft.lines];
-    const targetIndex = nextLines.findIndex((line) => line.accountId !== '1200');
+    const bankAccountNumber = getBankAccountNumber(draft, accountOptions);
+    const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
     const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
     if (index < 0) return;
@@ -219,15 +219,15 @@ export default function InboxView({
         ?? defaultTaxCode
         ?? '',
     };
-    saveDraft({ ...draft, lines: nextLines }, role);
-    onRefresh();
+    await saveInboxDraft({ ...draft, lines: nextLines });
   };
 
-  const updateInboxTaxCase = (txId: string, taxCaseValue: string) => {
+  const updateInboxTaxCase = async (txId: string, taxCaseValue: string) => {
     const draft = getBookingDraftByTransactionId(txId);
     if (!draft) return;
     const nextLines = [...draft.lines];
-    const targetIndex = nextLines.findIndex((line) => line.accountId !== '1200');
+    const bankAccountNumber = getBankAccountNumber(draft, accountOptions);
+    const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
     const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
     if (index < 0) return;
@@ -237,22 +237,15 @@ export default function InboxView({
       taxCaseKey,
       taxCode: toLegacyTaxCode(taxCaseKey) ?? (taxCaseKey ?? ''),
     };
-    saveDraft({ ...draft, lines: nextLines }, role);
-    onRefresh();
+    await saveInboxDraft({ ...draft, lines: nextLines });
   };
 
-  const commitInboxBookingText = (txId: string) => {
+  const commitInboxBookingText = async (txId: string) => {
     const draft = getBookingDraftByTransactionId(txId);
     if (!draft) return;
     const edited = bookingTextEdits[txId];
     if (edited === undefined || edited === draft.bookingText) return;
-    saveDraft({ ...draft, bookingText: edited }, role);
-    onRefresh();
-  };
-
-  const updateReceiptInline = (txId: string, hasReceipt: boolean) => {
-    setTransactionReceiptStatus(txId, hasReceipt, role);
-    onRefresh();
+    await saveInboxDraft({ ...draft, bookingText: edited });
   };
 
   // Derive primary action for previewTx
@@ -268,9 +261,9 @@ export default function InboxView({
       <div className="flex flex-col h-full flex-1 min-w-0">
         {/* Header — compact two-row layout */}
         <div className="px-6 pt-3 pb-0 border-b border-gray-100 shrink-0">
-          {/* Row 1: icon + title + Filter + Bankabgleich */}
+          {/* Row 1: icon + title */}
           <div className="flex items-center gap-3 pb-3">
-            <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-[#ccff00] shrink-0">
+            <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-accent shrink-0">
               <Inbox size={15} />
             </div>
             <div className="flex-1 min-w-0">
@@ -278,15 +271,6 @@ export default function InboxView({
               <p className="text-xs text-gray-400 font-medium leading-tight">
                 Workflow-Queues, Validierungen und Freigaben.
               </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button className="h-8 flex items-center gap-1.5 px-3 bg-white border border-gray-200 rounded-full text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors">
-                <Filter size={13} />
-                Filter
-              </button>
-              <button className="h-8 px-4 bg-black rounded-full text-xs font-bold text-white hover:bg-gray-900 transition-colors">
-                Bankabgleich (n/a)
-              </button>
             </div>
           </div>
 
@@ -301,14 +285,6 @@ export default function InboxView({
                 <CheckSquare size={11} />
                 {allVisibleSelected ? 'Auswahl aufheben' : 'Sichtbare markieren'}
               </button>
-              <button
-                onClick={selectSimilarToPreview}
-                disabled={!previewTx}
-                className="h-7 px-2.5 rounded-full border border-gray-200 bg-white text-[11px] font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40 inline-flex items-center gap-1 transition-colors"
-              >
-                <Wand2 size={11} />
-                Ähnliche markieren
-              </button>
             </div>
           </div>
 
@@ -320,7 +296,7 @@ export default function InboxView({
               <div className="flex flex-wrap gap-2">
                 <div className="min-w-[16rem] max-w-[18rem]">
                   <AccountCombobox
-                    accounts={mockAccounts}
+                    accounts={accountOptions}
                     valueAccountId={batchAccountSelection?.id ?? ''}
                     valueAccountName={batchAccountSelection?.name ?? ''}
                     placeholder="Sammel-Konto wählen..."
@@ -362,7 +338,7 @@ export default function InboxView({
           )}
 
           {batchMessage && (
-            <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700">
+            <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700" aria-live="polite">
               {batchMessage}
             </div>
           )}
@@ -423,10 +399,9 @@ export default function InboxView({
                 return (
                   <tr
                     key={tx.id}
-                    onClick={() => setPreviewId((current) => (current === tx.id ? null : tx.id))}
-                    className={`hover:bg-gray-50/60 transition-colors cursor-pointer ${
-                      isSelectedPreview ? 'bg-gray-50/90 shadow-[inset_3px_0_0_0_#111827]' : ''
-                    } ${blockerCount > 0 ? 'shadow-[inset_1px_0_0_0_#fecaca]' : ''}`}
+                    className={`hover:bg-gray-50/60 transition-colors ${
+                      isSelectedPreview ? 'bg-gray-50/90 border-l-2 border-dark-1' : ''
+                    } ${blockerCount > 0 ? 'border-l-2 border-error-border' : ''}`}
                   >
                     <td className="px-3 py-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                       <input
@@ -446,8 +421,16 @@ export default function InboxView({
                       {new Date(tx.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
                     </td>
                     <td className="px-3 py-4 align-top">
-                      <div className="font-bold text-gray-900 text-sm">{tx.payee}</div>
-                      <div className="text-xs text-gray-500 mt-0.5 line-clamp-1">{tx.description}</div>
+                      <button
+                        type="button"
+                        onClick={() => setPreviewId((current) => (current === tx.id ? null : tx.id))}
+                        aria-label={`${tx.payee} öffnen`}
+                        aria-pressed={isSelectedPreview}
+                        className="w-full text-left rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
+                      >
+                        <div className="font-bold text-gray-900 text-sm">{tx.payee}</div>
+                        <div className="text-xs text-gray-500 mt-0.5 line-clamp-1">{tx.description}</div>
+                      </button>
                     </td>
                     <td className="px-3 py-4 text-right align-top">
                       <div className="flex flex-col items-end gap-1">
@@ -543,7 +526,7 @@ export default function InboxView({
                   <div>
                     <label className="block text-xs font-bold text-gray-500 mb-1">Konto</label>
                     <AccountCombobox
-                      accounts={mockAccounts}
+                      accounts={accountOptions}
                       valueAccountId={previewCounterLine?.accountId ?? ''}
                       valueAccountName={previewCounterLine?.accountName ?? ''}
                       disabled={!previewAccountEditable}
@@ -568,27 +551,6 @@ export default function InboxView({
                         </option>
                       ))}
                     </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Beleg</label>
-                    {previewTx.hasReceipt ? (
-                      <button
-                        onClick={() => updateReceiptInline(previewTx.id, false)}
-                        disabled={!previewAccountEditable}
-                        className="w-full h-10 px-3 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-bold hover:bg-emerald-100 disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                      >
-                        <FileText size={14} /> Beleg vorhanden
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => updateReceiptInline(previewTx.id, true)}
-                        disabled={!previewAccountEditable}
-                        className="w-full h-10 px-3 rounded-xl border border-dashed border-gray-300 bg-white text-gray-500 text-sm font-bold hover:bg-gray-50 disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                      >
-                        <Upload size={14} /> + Beleg hinzufügen
-                      </button>
-                    )}
                   </div>
 
                   <div>

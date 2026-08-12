@@ -15,6 +15,7 @@ type ExceptionFilter = 'all' | 'open' | 'snoozed' | 'resolved' | 'errors' | 'war
 
 interface ExceptionCenterProps {
   role: UserRole;
+  canMutateExceptions?: boolean;
   transactions: Transaction[];
   onOpenTransaction: (transactionId: string) => void;
   onRefresh: () => void;
@@ -23,7 +24,7 @@ interface ExceptionCenterProps {
 const filterLabels: Record<ExceptionFilter, string> = {
   all: 'Alle',
   open: 'Offen',
-  snoozed: 'Snoozed',
+  snoozed: 'Pausiert',
   resolved: 'Erledigt',
   errors: 'Fehler',
   warnings: 'Warnungen',
@@ -57,12 +58,13 @@ function matchesFilter(tx: Transaction, filter: ExceptionFilter) {
   }
 }
 
-export default function ExceptionCenter({ role, transactions, onOpenTransaction, onRefresh }: ExceptionCenterProps) {
+export default function ExceptionCenter({ role, canMutateExceptions = true, transactions, onOpenTransaction, onRefresh }: ExceptionCenterProps) {
   const [filter, setFilter] = useState<ExceptionFilter>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [ownerDraft, setOwnerDraft] = useState('Mara Buchhaltung');
   const [snoozeUntil, setSnoozeUntil] = useState('');
   const [resolutionNote, setResolutionNote] = useState('');
+  const [mutationError, setMutationError] = useState<string | null>(null);
 
   const items = useMemo(() => transactions.filter((tx) => matchesFilter(tx, filter)), [transactions, filter]);
   const selectedTx = items.find((tx) => tx.id === selectedId) ?? items[0] ?? null;
@@ -81,7 +83,7 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
       <div className="w-[26rem] shrink-0 border-r border-gray-100 flex flex-col">
         <div className="px-4 py-3 border-b border-gray-100">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-black text-[#ccff00] flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-black text-accent flex items-center justify-center shrink-0">
               <AlertTriangle size={15} />
             </div>
             <div className="min-w-0">
@@ -225,12 +227,15 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                   </button>
                   <button
                     onClick={() => {
-                      try {
-                        dispatchBookingAction(selectedTx.id, 'request_receipt', { role, actorName: role });
-                        onRefresh();
-                      } catch {
-                        onOpenTransaction(selectedTx.id);
-                      }
+                      void (async () => {
+                        setMutationError(null);
+                        try {
+                          await dispatchBookingAction(selectedTx.id, 'request_receipt', { role, actorName: role });
+                          onRefresh();
+                        } catch (error) {
+                          setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
+                        }
+                      })();
                     }}
                     className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50"
                   >
@@ -247,6 +252,9 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
 
               <div className="border border-gray-200 rounded-2xl bg-white p-5">
                 <div className="text-sm font-bold text-gray-900 mb-3">Exception Resolution Flow</div>
+                {!canMutateExceptions && <div className="mb-3 text-sm text-gray-500" role="status">Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.</div>}
+                {mutationError && <div className="mb-3 text-sm text-error" role="alert" aria-live="assertive">{mutationError}</div>}
+                <fieldset disabled={!canMutateExceptions} className="space-y-3">
                 <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wide text-gray-500 mb-1">
@@ -261,10 +269,15 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                         placeholder="Owner"
                       />
                       <button
-                        onClick={() => {
-                          assignExceptionOwner(selectedTx.id, ownerDraft || role, role);
-                          onRefresh();
-                        }}
+                        onClick={() => void (async () => {
+                          setMutationError(null);
+                          try {
+                            await assignExceptionOwner(selectedTx.id, ownerDraft || role, role);
+                            onRefresh();
+                          } catch (error) {
+                            setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                          }
+                        })()}
                         className="px-3 py-2 rounded-xl border border-gray-200 text-sm font-bold text-gray-700 hover:bg-gray-50"
                       >
                         Zuweisen
@@ -284,14 +297,19 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                         className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm"
                       />
                       <button
-                        onClick={() => {
+                        onClick={() => void (async () => {
                           if (!snoozeUntil) return;
-                          snoozeException(selectedTx.id, snoozeUntil, role, resolutionNote || 'Snoozed aus Exception Center');
-                          onRefresh();
-                        }}
+                          setMutationError(null);
+                          try {
+                            await snoozeException(selectedTx.id, snoozeUntil, role, resolutionNote || 'Pausiert aus dem Ausnahmebereich');
+                            onRefresh();
+                          } catch (error) {
+                            setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                          }
+                        })()}
                         className="px-3 py-2 rounded-xl border border-gray-200 text-sm font-bold text-gray-700 hover:bg-gray-50"
                       >
-                        Snooze
+                      Pausieren
                       </button>
                     </div>
                   </div>
@@ -310,29 +328,40 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
 
                   <div className="flex flex-wrap gap-2">
                     <button
-                      onClick={() => {
-                        resolveException(selectedTx.id, resolutionNote || 'Manuell als gelöst markiert', role);
-                        onRefresh();
-                      }}
+                      onClick={() => void (async () => {
+                        setMutationError(null);
+                        try {
+                          await resolveException(selectedTx.id, resolutionNote || 'Manuell als gelöst markiert', role);
+                          onRefresh();
+                        } catch (error) {
+                          setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                        }
+                      })()}
                       className="px-4 py-2 rounded-full bg-black text-white text-sm font-bold hover:bg-gray-900"
                     >
                       Als gelöst markieren
                     </button>
                     <button
-                      onClick={() => {
-                        reopenException(selectedTx.id, role);
-                        onRefresh();
-                      }}
+                      onClick={() => void (async () => {
+                        setMutationError(null);
+                        try {
+                          await reopenException(selectedTx.id, role);
+                          onRefresh();
+                        } catch (error) {
+                          setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                        }
+                      })()}
                       className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50"
                     >
-                      Reopen
+                      Wieder öffnen
                     </button>
                   </div>
                 </div>
+                </fieldset>
               </div>
 
               <div className="border border-gray-200 rounded-2xl bg-white p-5">
-                <div className="text-sm font-bold text-gray-900 mb-2">Workflow Snapshot</div>
+                <div className="text-sm font-bold text-gray-900 mb-2">Workflow-Status</div>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-gray-500">Status</span>
@@ -352,7 +381,7 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">Exception Status</span>
-                    <span className="font-bold text-gray-800">{exceptionState}</span>
+                    <span className="font-bold text-gray-800">{exceptionState === 'snoozed' ? 'Pausiert' : exceptionState === 'resolved' ? 'Erledigt' : 'Offen'}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">Owner</span>
@@ -360,7 +389,7 @@ export default function ExceptionCenter({ role, transactions, onOpenTransaction,
                   </div>
                   {selectedTx.exceptionCase?.snoozedUntil && (
                     <div className="flex justify-between">
-                      <span className="text-gray-500">Snoozed bis</span>
+                      <span className="text-gray-500">Pausiert bis</span>
                       <span className="font-bold text-gray-800">{selectedTx.exceptionCase.snoozedUntil}</span>
                     </div>
                   )}

@@ -177,8 +177,8 @@ const mapUiDraftToEntityDraft = (
 
 export const ProAccountingPage: React.FC = () => {
   const queryClient = useQueryClient();
-  const { data: ledgerStats } = useProLedgerStatsQuery();
-  const { data: ledgerAccounts = [] } = useProLedgerAccountsQuery({
+  const { data: ledgerStats, isError: ledgerStatsError, error: ledgerStatsLoadError } = useProLedgerStatsQuery();
+  const { data: ledgerAccounts = [], isError: ledgerAccountsError, error: ledgerAccountsLoadError } = useProLedgerAccountsQuery({
     chart: 'SKR03',
     limit: 3000,
   });
@@ -199,6 +199,10 @@ export const ProAccountingPage: React.FC = () => {
   });
   const importSkr = useImportSkrMutation();
   const [showRulesModal, setShowRulesModal] = React.useState(false);
+  const [importMessage, setImportMessage] = React.useState<string | null>(null);
+  const [importFailed, setImportFailed] = React.useState(false);
+  const [adapterBusy, setAdapterBusy] = React.useState(false);
+  const [adapterError, setAdapterError] = React.useState<string | null>(null);
 
   const seed = React.useMemo<ProAccountingSeed>(() => {
     const draftMap = new Map<string, ProUiBookingDraft>();
@@ -229,11 +233,41 @@ export const ProAccountingPage: React.FC = () => {
     );
   }, [seed.seedVersion, seed.transactions, seed.drafts]);
 
-  const invalidateProQueries = React.useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'transactions'] });
-    void queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'drafts'] });
-    void queryClient.invalidateQueries({ queryKey: ['pro-reports'] });
+  const invalidateProQueries = React.useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'transactions'] }),
+      queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'drafts'] }),
+      queryClient.invalidateQueries({ queryKey: ['pro-reports'] }),
+    ]);
   }, [queryClient]);
+
+  const runMutation = React.useCallback(async <T,>(mutation: () => Promise<T>): Promise<T> => {
+    setAdapterBusy(true);
+    setAdapterError(null);
+    try {
+      const result = await mutation();
+      await invalidateProQueries();
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.';
+      setAdapterError(message);
+      throw error;
+    } finally {
+      setAdapterBusy(false);
+    }
+  }, [invalidateProQueries]);
+
+  const handleImportSkr = async () => {
+    setImportMessage(null);
+    setImportFailed(false);
+    try {
+      await importSkr.mutateAsync({ preferredSource: 'auto' });
+      setImportMessage('Kontenrahmen erfolgreich importiert.');
+    } catch (error) {
+      setImportFailed(true);
+      setImportMessage(error instanceof Error ? error.message : 'Kontenrahmen konnte nicht importiert werden.');
+    }
+  };
 
   const dataAdapter = React.useMemo<ProAccountingDataAdapter>(() => {
     const setTxWorkflowStatus = (transactionId: string, workflowStatus: ProUiTransaction['workflowStatus']) => {
@@ -244,25 +278,6 @@ export const ProAccountingPage: React.FC = () => {
         workflowStatus,
       };
     };
-    const patchExceptionCase = (
-      transactionId: string,
-      patch: Partial<NonNullable<ProUiTransaction['exceptionCase']>>,
-    ): ProUiTransaction => {
-      const idx = adapterTransactionsRef.current.findIndex((tx) => tx.id === transactionId);
-      if (idx === -1) throw new Error('Transaction not found');
-      const tx = adapterTransactionsRef.current[idx];
-      const next = {
-        ...tx,
-        exceptionCase: {
-          state: 'open' as const,
-          ...(tx.exceptionCase ?? {}),
-          ...patch,
-        },
-      };
-      adapterTransactionsRef.current[idx] = next;
-      return structuredClone(next);
-    };
-
     return {
       hydrate(seedData) {
         adapterTransactionsRef.current = structuredClone(seedData.transactions ?? []);
@@ -284,30 +299,18 @@ export const ProAccountingPage: React.FC = () => {
         const draft = adapterDraftsRef.current.get(transactionId);
         return draft ? structuredClone(draft) : undefined;
       },
-      saveDraft(draft) {
-        adapterDraftsRef.current.set(draft.transactionId, structuredClone(draft));
-        void ipc.pro.saveDraft({ draft: mapUiDraftToEntityDraft(draft) }).then(() => {
-          invalidateProQueries();
+      async saveDraft(draft) {
+        return runMutation(async () => {
+          const saved = await ipc.pro.saveDraft({ draft: mapUiDraftToEntityDraft(draft) });
+          const resolvedDraft = mapEntityDraftToUiDraft(saved);
+          adapterDraftsRef.current.set(draft.transactionId, resolvedDraft);
+          return structuredClone(resolvedDraft);
         });
-        return structuredClone(draft);
       },
-      dispatchBookingAction(transactionId, action, options) {
+      async dispatchBookingAction(transactionId, action, options) {
         const existing = adapterDraftsRef.current.get(transactionId);
         if (!existing) throw new Error('Draft not found');
-        const next = structuredClone(existing);
-
-        if (action === 'save_draft') next.workflowStatus = 'suggested';
-        else if (action === 'submit_for_review') next.workflowStatus = 'pending_approval';
-        else if (action === 'approve') next.workflowStatus = 'approved';
-        else if (action === 'reject' || action === 'request_receipt') next.workflowStatus = 'incomplete';
-        else if (action === 'post') next.workflowStatus = 'approved';
-        else if (action === 'reverse') next.workflowStatus = 'reversed';
-        else if (action === 'create_correction') next.workflowStatus = 'corrected';
-
-        adapterDraftsRef.current.set(transactionId, next);
-        setTxWorkflowStatus(transactionId, next.workflowStatus);
-
-        void (async () => {
+        return runMutation(async () => {
           const dispatched = await ipc.pro.dispatchDraftAction({
             transactionId,
             action,
@@ -318,7 +321,6 @@ export const ProAccountingPage: React.FC = () => {
           if (action === 'post') {
             const postResult = await ipc.pro.postDraft({
               draftId: resolvedDraft.id,
-              actorRole: options?.role ?? 'bookkeeper',
             });
             const hasBlocking = postResult.issues.some((issue) => issue.blocking);
             if (!hasBlocking) {
@@ -345,54 +347,20 @@ export const ProAccountingPage: React.FC = () => {
               await ipc.pro.reverseJournalEntry({
                 entryId: entry.id,
                 reason: options?.rejectReason || 'Storno aus Pro Workspace',
-                actorRole: options?.role ?? 'bookkeeper',
               });
             }
           }
 
+          const authoritative = await ipc.pro.getDraftByTransactionId({ transactionId });
+          if (authoritative) resolvedDraft = mapEntityDraftToUiDraft(authoritative);
           adapterDraftsRef.current.set(transactionId, resolvedDraft);
           setTxWorkflowStatus(transactionId, resolvedDraft.workflowStatus);
-          invalidateProQueries();
-        })();
-
-        return structuredClone(next);
+          return structuredClone(resolvedDraft);
+        });
       },
       listActivity(transactionId) {
         const draft = adapterDraftsRef.current.get(transactionId);
         return structuredClone(draft?.activity ?? []);
-      },
-      updateExceptionCase(transactionId, patch) {
-        return patchExceptionCase(transactionId, patch);
-      },
-      assignExceptionOwner(transactionId, owner) {
-        return patchExceptionCase(transactionId, { owner, state: 'open' });
-      },
-      snoozeException(transactionId, snoozedUntil, _actorName, note) {
-        return patchExceptionCase(transactionId, { state: 'snoozed', snoozedUntil, resolutionNote: note });
-      },
-      resolveException(transactionId, resolutionNote, actorName) {
-        return patchExceptionCase(
-          transactionId,
-          {
-            state: 'resolved',
-            resolutionNote,
-            resolvedAt: new Date().toISOString(),
-            resolvedBy: actorName,
-          },
-        );
-      },
-      reopenException(transactionId) {
-        return patchExceptionCase(
-          transactionId,
-          { state: 'open', snoozedUntil: undefined, resolvedAt: undefined, resolvedBy: undefined },
-        );
-      },
-      setTransactionReceiptStatus(transactionId, hasReceipt) {
-        const idx = adapterTransactionsRef.current.findIndex((tx) => tx.id === transactionId);
-        if (idx === -1) throw new Error('Transaction not found');
-        const next = { ...adapterTransactionsRef.current[idx], hasReceipt };
-        adapterTransactionsRef.current[idx] = next;
-        return structuredClone(next);
       },
       async getSusaReport(filters) {
         const [report, accounts] = await Promise.all([
@@ -440,34 +408,36 @@ export const ProAccountingPage: React.FC = () => {
         return ipc.pro.disposeAsset(args);
       },
     };
-  }, [invalidateProQueries]);
+  }, [invalidateProQueries, runMutation]);
 
   if (txQuery.isLoading || draftQuery.isLoading) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm text-sm text-gray-600">
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-gray-600">
         Lade Pro-Buchhaltungsdaten…
       </div>
     );
   }
 
-  if (txQuery.isError || draftQuery.isError) {
+  if (txQuery.isError || draftQuery.isError || ledgerStatsError || ledgerAccountsError) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm text-sm text-red-700">
-        Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error)}
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm text-sm text-red-700" role="alert">
+        Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error ?? ledgerStatsLoadError ?? ledgerAccountsLoadError)}
       </div>
     );
   }
 
   if ((ledgerStats?.total ?? 0) === 0) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
         <h2 className="text-xl font-black text-gray-900">Pro Kontenrahmen fehlt</h2>
         <p className="mt-2 text-sm text-gray-600">
           Bitte laden Sie zuerst den SKR03/04 Kontenrahmen für die Pro-Buchhaltung.
         </p>
+        {importMessage && <div className={`mt-3 text-sm ${importFailed ? 'text-error' : 'text-success'}`} role={importFailed ? 'alert' : 'status'} aria-live={importFailed ? 'assertive' : 'polite'}>{importMessage}</div>}
         <button
-          onClick={() => void importSkr.mutateAsync({ preferredSource: 'auto' })}
+          onClick={() => void handleImportSkr()}
           disabled={importSkr.isPending}
+          aria-busy={importSkr.isPending}
           className="mt-5 px-5 py-2.5 rounded-xl bg-black text-white text-sm font-semibold disabled:opacity-60"
         >
           {importSkr.isPending ? 'Import läuft…' : 'SKR03/04 importieren'}
@@ -477,7 +447,7 @@ export const ProAccountingPage: React.FC = () => {
   }
 
   return (
-    <div className="bg-white rounded-[2.5rem] px-6 pt-5 pb-0 h-full flex flex-col shadow-sm">
+    <div className="bg-white rounded-2xl px-6 pt-5 pb-0 h-full flex flex-col shadow-sm">
       <div className="mb-3 flex items-center justify-between shrink-0">
         <div>
           <h2 className="text-xl font-black text-gray-900 leading-tight">Pro Buchhaltung</h2>
@@ -491,18 +461,26 @@ export const ProAccountingPage: React.FC = () => {
 
 
 
+      {adapterBusy && <div className="px-1 pb-2 text-xs text-gray-500" aria-live="polite">Speichere Änderung…</div>}
+      {adapterError && (
+        <div className="mb-2 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">
+          {adapterError}
+        </div>
+      )}
       <div className="flex-1 min-h-0 rounded-t-2xl border border-b-0 border-gray-200 overflow-hidden">
         <ProAccountingWorkspace
           seed={seed}
           dataAdapter={dataAdapter}
+          busy={adapterBusy}
           onPersistEntry={async ({ transaction, draft }) => {
-            await ipc.pro.saveDraft({
-              draft: mapUiDraftToEntityDraft({
-                ...draft,
-                transactionId: transaction.id,
-              }),
+            await runMutation(async () => {
+              await ipc.pro.saveDraft({
+                draft: mapUiDraftToEntityDraft({
+                  ...draft,
+                  transactionId: transaction.id,
+                }),
+              });
             });
-            invalidateProQueries();
           }}
         />
       </div>

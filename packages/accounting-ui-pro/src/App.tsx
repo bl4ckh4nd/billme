@@ -27,14 +27,17 @@ export interface ProAccountingSeed {
 export interface ProAccountingWorkspaceProps {
   seed?: ProAccountingSeed;
   dataAdapter?: ProAccountingDataAdapter;
+  busy?: boolean;
   onPersistEntry?: (entry: { transaction: Transaction; draft: BookingDraft }) => void | Promise<void>;
 }
 
-export default function App({ seed, dataAdapter, onPersistEntry }: ProAccountingWorkspaceProps) {
+export default function App({ seed, dataAdapter, busy = false, onPersistEntry }: ProAccountingWorkspaceProps) {
   const [currentView, setCurrentView] = useState<AppView>('inbox');
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
   const [inboxPreviewTransactionId, setInboxPreviewTransactionId] = useState<string | null>(null);
-  const [role, setRole] = useState<UserRole>('bookkeeper');
+  // Desktop authorization is enforced by the main process. The renderer only
+  // uses the owner-capability context to decide which controls to present.
+  const role: UserRole = 'admin';
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
@@ -62,7 +65,11 @@ export default function App({ seed, dataAdapter, onPersistEntry }: ProAccounting
     return () => configureStoreAdapter(undefined);
   }, [dataAdapter]);
 
-  const transactions = useMemo(() => listTransactions(), [version]);
+  const transactions = useMemo(
+    () => (dataAdapter ? seed?.transactions ?? [] : listTransactions()),
+    [dataAdapter, seed?.seedVersion, seed?.transactions, version],
+  );
+  const accounts = dataAdapter ? seed?.accounts ?? [] : undefined;
 
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
 
@@ -111,27 +118,15 @@ export default function App({ seed, dataAdapter, onPersistEntry }: ProAccounting
             </button>
           ))}
         </nav>
-        <div className="ml-auto pb-2">
-          <select
-            aria-label="Demo Rolle"
-            value={role}
-            onChange={(e) => setRole(e.target.value as UserRole)}
-            className="px-3 py-1.5 rounded-xl bg-white border border-gray-200 text-sm font-medium text-gray-700"
-          >
-            <option value="bookkeeper">Bookkeeper</option>
-            <option value="reviewer">Reviewer</option>
-            <option value="accountant">Accountant</option>
-            <option value="admin">Admin</option>
-            <option value="auditor">Auditor</option>
-          </select>
-        </div>
       </div>
 
       <main className="flex-1 overflow-hidden">
+        {busy ? <div className="sr-only" aria-live="polite">Speichere Änderung…</div> : null}
         <div className="h-full overflow-hidden flex flex-col">
           {currentView === 'inbox' ? (
             <InboxView
               role={role}
+              accounts={accounts}
               transactions={transactions}
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}
@@ -141,12 +136,14 @@ export default function App({ seed, dataAdapter, onPersistEntry }: ProAccounting
             <BookingEditor
               transactionId={selectedTransactionId}
               role={role}
+              accounts={accounts}
               onBack={handleBackToInbox}
               onStoreChange={refresh}
             />
           ) : currentView === 'reconciliation' ? (
             <ReconciliationWorkbench
               role={role}
+              accounts={accounts}
               transactions={transactions}
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}
@@ -154,6 +151,7 @@ export default function App({ seed, dataAdapter, onPersistEntry }: ProAccounting
           ) : currentView === 'exceptions' ? (
             <ExceptionCenter
               role={role}
+              canMutateExceptions={!dataAdapter}
               transactions={transactions}
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}

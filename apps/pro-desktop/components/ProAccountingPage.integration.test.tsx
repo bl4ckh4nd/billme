@@ -74,6 +74,17 @@ vi.mock('@billme/accounting-ui-pro', () => ({
       <div data-testid="pro-accounting-workspace">
         <button
           onClick={async () => {
+            try {
+              await props.dataAdapter.dispatchBookingAction('tx-1', 'submit_for_review', { role: 'admin' });
+            } catch {
+              // The page renders the adapter error for the user.
+            }
+          }}
+        >
+          failing-action
+        </button>
+        <button
+          onClick={async () => {
             await props.onPersistEntry({
               transaction: {
                 id: 'tx-1',
@@ -178,6 +189,19 @@ describe('ProAccountingPage integration', () => {
     });
   });
 
+  it('exposes a failed SKR import without leaving a pending action', async () => {
+    mockUseProLedgerStatsQuery.mockReturnValue({
+      data: { total: 0, byChart: { SKR03: 0, SKR04: 0 } },
+    });
+    mockImportSkrMutateAsync.mockRejectedValueOnce(new Error('Kontenrahmen-Backend nicht erreichbar'));
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+
+    await userEvent.click(await screen.findByRole('button', { name: /SKR03\/04 importieren/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Kontenrahmen-Backend nicht erreichbar');
+    expect(screen.getByRole('button', { name: /SKR03\/04 importieren/i })).not.toHaveAttribute('aria-busy', 'true');
+  });
+
   it('maps pro bookkeeping data into workspace seed and persists entries via IPC', async () => {
     mockIpc.pro.listBankTransactions.mockResolvedValueOnce([
       {
@@ -275,5 +299,42 @@ describe('ProAccountingPage integration', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'trigger-rules-changed' }));
     expect(mockOnRulesChangedTrigger).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the previous status and exposes failed adapter mutations', async () => {
+    mockIpc.pro.listBankTransactions.mockResolvedValueOnce([
+      {
+        id: 'tx-1',
+        date: '2026-01-10',
+        counterparty: 'Telekom',
+        purpose: 'Telefon',
+        amount: -119,
+        status: 'open',
+        linkedInvoiceId: null,
+      },
+    ]);
+    mockIpc.pro.getDraftByTransactionId.mockResolvedValue({
+      id: 'draft-1',
+      tenantId: 'default',
+      transactionId: 'tx-1',
+      workflowStatus: 'suggested',
+      postingDate: '2026-01-10',
+      documentDate: '2026-01-10',
+      bookingText: 'Telefonkosten',
+      reference: 'TEL-1',
+      lines: [],
+      validationIssues: [],
+      updatedAt: new Date().toISOString(),
+    });
+    mockIpc.pro.dispatchDraftAction.mockRejectedValueOnce(new Error('Backend nicht erreichbar'));
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await screen.findByTestId('pro-accounting-workspace');
+    await userEvent.click(screen.getByRole('button', { name: 'failing-action' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Backend nicht erreichbar');
+    expect(workspaceState.lastProps.dataAdapter.getBookingDraftByTransactionId('tx-1')).toEqual(
+      expect.objectContaining({ workflowStatus: 'suggested' }),
+    );
   });
 });

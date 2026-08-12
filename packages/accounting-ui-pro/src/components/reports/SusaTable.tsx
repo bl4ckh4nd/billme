@@ -54,7 +54,7 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
 
       <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
         <div className="px-4 h-12 border-b border-gray-100 text-sm font-bold text-gray-900 flex items-center">
-          Summen- und Saldenliste (Preview)
+          Summen- und Saldenliste
         </div>
         <div className="max-h-[32rem] overflow-auto">
           <table className="w-full text-sm table-fixed">
@@ -78,7 +78,7 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
                   ['creditTurnover', 'Haben'],
                   ['closingBalance', 'Ende'],
                 ].map(([key, label]) => (
-                  <th key={key} className={`px-3 py-3 font-bold ${key.includes('Balance') || key === 'debitTurnover' || key === 'creditTurnover' ? 'text-right' : 'text-left'}`}>
+                  <th scope="col" key={key} className={`px-3 py-3 font-bold ${key.includes('Balance') || key === 'debitTurnover' || key === 'creditTurnover' ? 'text-right' : 'text-left'}`}>
                     <button
                       onClick={() => toggleSort(key as SortKey)}
                       className="hover:text-gray-800"
@@ -87,8 +87,8 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
                     </button>
                   </th>
                 ))}
-                <th className="px-3 py-3 text-left font-bold">Mapping</th>
-                <th className="px-3 py-3 text-left font-bold">Hinweise</th>
+                <th scope="col" className="px-3 py-3 text-left font-bold">Mapping</th>
+                <th scope="col" className="px-3 py-3 text-left font-bold">Hinweise</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -100,8 +100,25 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
                 </tr>
               ) : null}
               {rows.map((row) => (
-                <tr key={row.accountNumber} className="hover:bg-gray-50 cursor-pointer" onClick={() => onSelectRow(row)}>
-                  <td className="px-3 py-2.5 font-bold text-gray-800 whitespace-nowrap">{row.accountNumber}</td>
+                <tr
+                  key={row.accountNumber}
+                  className="hover:bg-gray-50"
+                >
+                  <td className="px-3 py-2.5 font-bold text-gray-800 whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => onSelectRow(row)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          onSelectRow(row);
+                        }
+                      }}
+                      className="rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
+                    >
+                      {row.accountNumber}
+                    </button>
+                  </td>
                   <td className="px-3 py-2.5 text-gray-700">{row.accountName}</td>
                   <td className="px-3 py-2.5 text-right font-medium text-gray-700">{euro(row.openingBalance)}</td>
                   <td className="px-3 py-2.5 text-right font-medium text-gray-700">{euro(row.debitTurnover)}</td>

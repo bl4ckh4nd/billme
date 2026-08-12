@@ -73,7 +73,7 @@ export default function BalanceSheetPreviewView({ report, onSelectLine }: Balanc
       <div className="rounded-2xl border border-gray-200 bg-white p-4 space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-bold text-gray-900">Bilanz (HGB Preview, Mock)</div>
+            <div className="text-sm font-bold text-gray-900">Bilanz (HGB)</div>
             <div className="text-xs text-gray-500">Stand: {new Date(report.quality.generatedAt).toLocaleString('de-DE')}</div>
           </div>
           <span
@@ -85,7 +85,7 @@ export default function BalanceSheetPreviewView({ report, onSelectLine }: Balanc
                   : 'bg-red-100 text-red-700'
             }`}
           >
-            {report.quality.status === 'ok' ? 'OK' : report.quality.status === 'warning' ? 'Preview prüfen' : 'Fehler'}
+            {report.quality.status === 'ok' ? 'OK' : report.quality.status === 'warning' ? 'Prüfen' : 'Fehler'}
           </span>
         </div>
         <ul className="space-y-1 text-sm text-gray-600">

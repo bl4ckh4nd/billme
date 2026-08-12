@@ -71,6 +71,13 @@ test('SuSa carries opening balances and cent-exact turnover', () => {
   assert.equal(report.snapshot.fiscalYear, 2025);
 });
 
+test('SuSa does not require report-category mappings', () => {
+  const report = calculateSusa(request({ mappings: [] }));
+  assert.equal(report.mappingHealth.blocking, false);
+  assert.deepEqual(report.mappingHealth.unmappedAccounts, []);
+  assert.equal(report.rows.length, 4);
+});
+
 test('BWA01, HGB GKV and HGB Bilanz are derived from the same neutral ledger', () => {
   const input = request();
   assert.equal(calculateBwa01(input).totals.operatingResult, 600);

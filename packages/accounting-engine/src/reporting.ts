@@ -335,6 +335,15 @@ function envelope<T extends object>(context: ReportingContext, kind: ReportKind,
 
 export function calculateSusa(request: ReportRequest): ReportResult<SusaReport> {
   const context = makeContext(request);
+  // SuSa is the ledger's account-level truth; report-category mappings are not
+  // required to calculate its balances and must not block the statement.
+  const mappingHealth: MappingHealth = {
+    mappedAccounts: context.rows.length,
+    inferredAccounts: 0,
+    unmappedAccounts: [],
+    warnings: [],
+    blocking: false,
+  };
   const rows = context.rows.map((row) => {
     return {
       accountNumber: row.accountNumber,
@@ -353,7 +362,7 @@ export function calculateSusa(request: ReportRequest): ReportResult<SusaReport> 
       credit: amount(rows.reduce((sum, row) => sum + cents(row.creditTurnover), 0)),
       balance: amount(rows.reduce((sum, row) => sum + cents(row.closingBalance), 0)),
     },
-  });
+  }, mappingHealth);
 }
 
 const bwaCostKeys = [

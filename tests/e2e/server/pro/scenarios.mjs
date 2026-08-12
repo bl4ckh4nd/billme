@@ -405,7 +405,7 @@ export const runProAccountingScenario = async (page) => {
   for (const mapping of reportMappingFixtures) {
     const savedMapping = await requestJson(state, session, '/api/v1/pro/accounting/mappings/overrides', undefined, {
       method: 'PUT',
-      body: { reason: `Playwright explicit ${mapping.statementType} mapping`, chart: 'SKR03', ...mapping },
+      body: { reason: `Playwright explicit ${mapping.statementType} mapping`, chart: 'SKR03', asOfDate: '2026-03-31', ...mapping },
     });
     expect(savedMapping).toMatchObject({ reportType: mapping.statementType, chart: 'SKR03', accountNumber: mapping.accountNumber, positionKey: expect.any(String) });
   }

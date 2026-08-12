@@ -5,6 +5,7 @@ import ReconciliationWorkbench from './components/ReconciliationWorkbench';
 import ExceptionCenter from './components/ExceptionCenter';
 import AssetManagementView from './components/AssetManagementView';
 import ReportsView from './components/ReportsView';
+import OposView from './components/OposView';
 import {
   configureStoreAdapter,
   configureStorePersistence,
@@ -14,7 +15,7 @@ import {
 } from './services/mockBookingStore';
 import { Account, BookingDraft, Transaction, UserRole } from './types';
 
-type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports';
+type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos';
 
 export interface ProAccountingSeed {
   transactions?: Transaction[];
@@ -100,11 +101,13 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
               { view: 'exceptions', label: 'Exceptions' },
               { view: 'assets', label: 'Anlagen' },
               { view: 'reports', label: 'Auswertungen' },
+              { view: 'opos', label: 'OPOS' },
             ] as { view: AppView; label: string }[]
           ).map(({ view, label }) => (
             <button
               key={view}
               onClick={() => setCurrentView(view)}
+              aria-current={currentView === view ? 'page' : undefined}
               className={`px-4 py-2 text-sm font-bold transition-colors rounded-t-lg relative ${
                 currentView === view
                   ? 'text-gray-900 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-black'
@@ -163,6 +166,8 @@ export default function App({ seed, dataAdapter, busy = false, onPersistEntry }:
               chartFramework={seed?.chartFramework}
               onOpenTransaction={handleOpenTransaction}
             />
+          ) : currentView === 'opos' ? (
+            <OposView dataAdapter={dataAdapter} />
           ) : (
             <AssetManagementView dataAdapter={dataAdapter} />
           )}

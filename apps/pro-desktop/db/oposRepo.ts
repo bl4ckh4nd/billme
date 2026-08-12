@@ -9,6 +9,7 @@ import type {
   AccountingDocumentSource,
   AccountingPostingPreview,
   AccountingSnapshot,
+  AccountingMutationContext,
   IncomingInvoiceEntity,
   IncomingInvoiceLineEntity,
   OpenItemAllocationEntity,
@@ -50,6 +51,16 @@ const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 
 const cents = (value: number): number => Math.round((Number(value) + Number.EPSILON) * 100);
 const amount = (value: number): number => round2(cents(value) / 100);
 const now = (): string => new Date().toISOString();
+const auditReason = (reason?: string): string => {
+  const value = reason?.trim();
+  if (!value) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
+  return value;
+};
+const allocationEvent = (value?: string): string => {
+  const eventId = value?.trim();
+  if (!eventId) throw new Error('ALLOCATION_EVENT_ID_REQUIRED');
+  return eventId;
+};
 const json = <T>(value: string | null | undefined): T | undefined => {
   if (!value) return undefined;
   try { return JSON.parse(value) as T; } catch { return undefined; }
@@ -401,13 +412,16 @@ const vendorFromRow = (row: Record<string, string>): VendorEntity => ({ id: row.
 
 export const listVendors = (db: Database.Database, scope: TenantScope): VendorEntity[] => (db.prepare('SELECT * FROM vendors WHERE tenant_id = ? ORDER BY name').all(tenant(scope)) as Array<Record<string, string>>).map(vendorFromRow);
 
-export const upsertVendor = (db: Database.Database, scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>): VendorEntity => {
+export const upsertVendor = (db: Database.Database, scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): VendorEntity => {
+  const reason = auditReason(input.mutation?.reason);
   const tenantId = tenant(scope); const timestamp = now(); const id = input.id || randomUUID();
   const owner = db.prepare('SELECT tenant_id FROM vendors WHERE id = ?').get(id) as { tenant_id: string } | undefined;
   if (owner && owner.tenant_id !== tenantId) throw new Error('TENANT_MISMATCH');
-  db.prepare(`INSERT INTO vendors (id, tenant_id, vendor_number, name, email, address, vat_id, iban, default_expense_account, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET vendor_number=excluded.vendor_number, name=excluded.name, email=excluded.email, address=excluded.address, vat_id=excluded.vat_id, iban=excluded.iban, default_expense_account=excluded.default_expense_account, updated_at=excluded.updated_at`).run(id, tenantId, input.vendorNumber ?? null, input.name, input.email ?? null, input.address ?? null, input.vatId ?? null, input.iban ?? null, input.defaultExpenseAccount ?? null, timestamp, timestamp);
-  appendAuditLog(db, { entityType: 'vendor', entityId: id, action: 'upsert', reason: 'vendor changed', before: null, after: input, actor: 'pro' });
+  db.transaction(() => {
+    db.prepare(`INSERT INTO vendors (id, tenant_id, vendor_number, name, email, address, vat_id, iban, default_expense_account, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET vendor_number=excluded.vendor_number, name=excluded.name, email=excluded.email, address=excluded.address, vat_id=excluded.vat_id, iban=excluded.iban, default_expense_account=excluded.default_expense_account, updated_at=excluded.updated_at`).run(id, tenantId, input.vendorNumber ?? null, input.name, input.email ?? null, input.address ?? null, input.vatId ?? null, input.iban ?? null, input.defaultExpenseAccount ?? null, timestamp, timestamp);
+    appendAuditLog(db, { entityType: 'vendor', entityId: id, action: 'upsert', reason, before: null, after: input, actor: input.mutation?.actor?.displayName || 'pro' });
+  })();
   return listVendors(db, scope).find((row) => row.id === id)!;
 };
 
@@ -419,7 +433,8 @@ const incomingSourceVersion = (invoice: IncomingInvoiceEntity): string => sha256
 
 export const listIncomingInvoices = (db: Database.Database, scope: TenantScope): IncomingInvoiceEntity[] => (db.prepare('SELECT * FROM incoming_invoices WHERE tenant_id = ? ORDER BY invoice_date DESC, number').all(tenant(scope)) as Array<Record<string, any>>).map((row) => incomingFromRow(db, row));
 
-export const upsertIncomingInvoice = (db: Database.Database, scope: TenantScope, input: IncomingInvoiceEntity): IncomingInvoiceEntity => {
+export const upsertIncomingInvoice = (db: Database.Database, scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): IncomingInvoiceEntity => {
+  const reason = auditReason(input.mutation?.reason);
   const tenantId = tenant(scope); const timestamp = now(); const id = input.id || randomUUID();
   const lines = input.lines ?? [];
   const net = amount(input.netAmount); const tax = amount(input.taxAmount); const gross = amount(input.grossAmount);
@@ -435,6 +450,7 @@ export const upsertIncomingInvoice = (db: Database.Database, scope: TenantScope,
     db.prepare('DELETE FROM incoming_invoice_lines WHERE tenant_id = ? AND incoming_invoice_id = ?').run(tenantId, id);
     const insert = db.prepare(`INSERT INTO incoming_invoice_lines (id, tenant_id, incoming_invoice_id, position, description, quantity, unit_price, net_amount, tax_rate, tax_amount, gross_amount, account_number, asset_account_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     lines.forEach((line, index) => insert.run(line.id || randomUUID(), tenantId, id, index, line.description, line.quantity, line.unitPrice, line.netAmount, line.taxRate, line.taxAmount, line.grossAmount, line.accountNumber ?? null, line.assetAccountNumber ?? null));
+    appendAuditLog(db, { entityType: 'incoming_invoice', entityId: id, action: 'upsert', reason, before: null, after: input, actor: input.mutation?.actor?.displayName || 'pro' });
   })();
   return listIncomingInvoices(db, scope).find((row) => row.id === id)!;
 };
@@ -494,7 +510,8 @@ export const previewIncomingInvoice = (db: Database.Database, scope: TenantScope
   return issues.length ? { sourceType: 'incoming_invoice', sourceId: invoiceId, status: 'unresolved', issues } : { sourceType: 'incoming_invoice', sourceId: invoiceId, status: 'ready', snapshot, issues: [] };
 };
 
-export const postIncomingInvoice = (db: Database.Database, scope: TenantScope, invoiceId: string, options: { softLockOverride?: boolean; overrideReason?: string } = {}): AccountingPostingPreview => {
+export const postIncomingInvoice = (db: Database.Database, scope: TenantScope, invoiceId: string, options: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext } = {}): AccountingPostingPreview => {
+  const reason = auditReason(options.mutation?.reason);
   const tenantId = tenant(scope);
   const existingRow = db.prepare('SELECT * FROM incoming_invoices WHERE tenant_id = ? AND id = ?').get(tenantId, invoiceId) as Record<string, any> | undefined;
   if (!existingRow) throw new Error('Incoming invoice not found');
@@ -511,7 +528,7 @@ export const postIncomingInvoice = (db: Database.Database, scope: TenantScope, i
     const timestamp = now();
     db.prepare(`INSERT INTO open_items (id, tenant_id, party_type, party_id, source_type, source_id, document_number, document_date, due_date, original_amount, allocated_amount, residual_amount, status, journal_entry_id, created_at, updated_at) VALUES (?, ?, 'creditor', ?, 'incoming_invoice', ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?, ?) ON CONFLICT(tenant_id, source_type, source_id) DO NOTHING`).run(randomUUID(), tenantId, row.vendor_id, invoiceId, row.number, row.invoice_date, row.due_date, preview.snapshot!.grossAmount, preview.snapshot!.grossAmount, id, timestamp, timestamp);
     db.prepare('UPDATE incoming_invoices SET accounting_status = \'posted\', accounting_snapshot_json = ?, accounting_journal_entry_id = ?, accounting_posted_at = ?, status = CASE WHEN status = \'draft\' THEN \'open\' ELSE status END WHERE tenant_id = ? AND id = ?').run(JSON.stringify(preview.snapshot), id, timestamp, tenantId, invoiceId);
-    appendAuditLog(db, { entityType: 'incoming_invoice', entityId: invoiceId, action: 'accounting_post', reason: 'incoming invoice confirmed', before: { accountingStatus: row.accounting_status }, after: { journalEntryId: id, snapshot: preview.snapshot }, actor: 'pro' });
+    appendAuditLog(db, { entityType: 'incoming_invoice', entityId: invoiceId, action: 'accounting_post', reason, before: { accountingStatus: row.accounting_status }, after: { journalEntryId: id, snapshot: preview.snapshot }, actor: options.mutation?.actor?.displayName || 'pro' });
     return id;
   })();
   void journalEntryId;
@@ -522,7 +539,7 @@ export const listOpenItems = (db: Database.Database, scope: TenantScope): OpenIt
 
 const paymentFromRow = (row: Record<string, any>): OpenItemPaymentEntity => ({ id: row.id, tenantId: row.tenant_id, partyType: row.party_type, partyId: row.party_id ?? undefined, paymentDate: row.payment_date, amount: Number(row.amount), bankAccountNumber: row.bank_account_number, method: row.method ?? undefined, sourceType: row.source_type, sourceId: row.source_id, allocatedAmount: Number(row.allocated_amount), residualAmount: Number(row.residual_amount), status: row.status ?? (Number(row.residual_amount) > 0 ? 'overpaid' : 'allocated'), journalEntryId: row.journal_entry_id ?? undefined, createdAt: row.created_at });
 
-type PaymentInput = { paymentId?: string; sourceType: OpenItemPaymentEntity['sourceType']; sourceId: string; partyType: OpenItemPaymentEntity['partyType']; partyId?: string; paymentDate: string; amount: number; bankAccountNumber: string; method?: string; allocations: Array<{ openItemId: string; amount: number }> };
+type PaymentInput = { paymentId?: string; sourceType: OpenItemPaymentEntity['sourceType']; sourceId: string; partyType: OpenItemPaymentEntity['partyType']; partyId?: string; paymentDate: string; amount: number; bankAccountNumber: string; method?: string; allocations: Array<{ openItemId: string; amount: number }>; reason?: string; allocationEventId?: string; mutation?: AccountingMutationContext };
 
 const validatePaymentSource = (db: Database.Database, tenantId: string, input: PaymentInput, allowBookedSource = false): { partyId?: string } => {
   if (!isIsoDate(input.paymentDate)) throw new Error('INVALID_PAYMENT_DATE');
@@ -618,6 +635,8 @@ const addPaymentAllocations = (db: Database.Database, tenantId: string, payment:
 };
 
 export const allocateOpenItemPayment = (db: Database.Database, scope: TenantScope, input: PaymentInput): OpenItemPaymentEntity => {
+  const reason = auditReason(input.mutation?.reason ?? input.reason);
+  const allocationEventId = allocationEvent(input.allocationEventId);
   const tenantId = assertDesktopTenant(scope); const timestamp = now();
   const knownDuplicate = !input.paymentId ? db.prepare('SELECT * FROM open_item_payments WHERE tenant_id = ? AND source_type = ? AND source_id = ?').get(tenantId, input.sourceType, input.sourceId) as Record<string, any> | undefined : undefined;
   if (knownDuplicate) {
@@ -659,15 +678,21 @@ export const allocateOpenItemPayment = (db: Database.Database, scope: TenantScop
       const linked = input.allocations.find((allocation) => (db.prepare('SELECT source_type FROM open_items WHERE tenant_id = ? AND id = ?').get(tenantId, allocation.openItemId) as { source_type: string } | undefined)?.source_type === 'outgoing_invoice');
       db.prepare('UPDATE bank_transactions SET status = \'booked\', linked_invoice_id = ?, updated_at = ? WHERE tenant_id = ? AND id = ?').run(linked ? (db.prepare('SELECT source_id FROM open_items WHERE tenant_id = ? AND id = ?').get(tenantId, linked.openItemId) as { source_id: string }).source_id : null, timestamp, tenantId, input.sourceId);
     }
-    appendAuditLog(db, { entityType: 'open_item_payment', entityId: paymentId, action: 'allocate', reason: 'payment allocation', before: null, after: input, actor: 'pro' });
+    appendAuditLog(db, { entityType: 'open_item_payment', entityId: paymentId, action: 'allocate', reason, before: null, after: { ...input, allocationEventId }, actor: input.mutation?.actor?.displayName || 'pro' });
   })();
   return paymentFromRow(db.prepare('SELECT * FROM open_item_payments WHERE tenant_id = ? AND id = ?').get(tenantId, paymentId) as Record<string, any>);
 };
 
-export const allocateRemainingOpenItemPayment = (db: Database.Database, scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): OpenItemPaymentEntity => {
+export const allocateRemainingOpenItemPayment = (db: Database.Database, scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>, allocationEventId?: string, mutation?: AccountingMutationContext): OpenItemPaymentEntity => {
+  const reason = auditReason(mutation?.reason);
+  const eventId = allocationEvent(allocationEventId);
   const tenantId = assertDesktopTenant(scope);
   const payment = db.prepare('SELECT * FROM open_item_payments WHERE tenant_id = ? AND id = ?').get(tenantId, paymentId) as Record<string, any> | undefined;
   if (!payment) throw new Error('PAYMENT_NOT_FOUND');
+  const priorEvents = db.prepare("SELECT after_json FROM audit_log WHERE entity_type = 'open_item_payment' AND entity_id = ? AND action = 'allocate_remaining'").all(paymentId) as Array<{ after_json?: string | null }>;
+  if (priorEvents.some(({ after_json }) => {
+    try { return JSON.parse(after_json ?? 'null')?.allocationEventId === eventId; } catch { return false; }
+  })) return paymentFromRow(db.prepare('SELECT * FROM open_item_payments WHERE tenant_id = ? AND id = ?').get(tenantId, paymentId) as Record<string, any>);
   const policy = getAccountingPolicyForPro(db, scope);
   db.transaction(() => {
     const requested = amount(allocations.reduce((sum, allocation) => sum + allocation.amount, 0));
@@ -676,6 +701,7 @@ export const allocateRemainingOpenItemPayment = (db: Database.Database, scope: T
     const allocated = db.prepare('SELECT allocated_amount, amount FROM open_item_payments WHERE tenant_id = ? AND id = ?').get(tenantId, paymentId) as { allocated_amount: number; amount: number };
     const residual = amount(allocated.amount - allocated.allocated_amount);
     db.prepare('UPDATE open_item_payments SET residual_amount = ?, status = ? WHERE tenant_id = ? AND id = ?').run(residual, residual > 0 ? 'overpaid' : 'allocated', tenantId, paymentId);
+    appendAuditLog(db, { entityType: 'open_item_payment', entityId: paymentId, action: 'allocate_remaining', reason, before: { residualAmount: payment.residual_amount }, after: { allocations, allocationEventId: eventId }, actor: mutation?.actor?.displayName || 'pro' });
   })();
   return paymentFromRow(db.prepare('SELECT * FROM open_item_payments WHERE tenant_id = ? AND id = ?').get(tenantId, paymentId) as Record<string, any>);
 };
@@ -731,7 +757,7 @@ export const confirmAccountingBackfill = (db: Database.Database, scope: TenantSc
   const result = db.transaction(() => {
     for (const candidate of candidates) {
       if (candidate.status !== 'ready') { unresolvedCount += 1; continue; }
-      const posted = candidate.sourceType === 'outgoing_invoice' ? postOutgoingInvoice(db, scope, candidate.sourceId) : postIncomingInvoice(db, scope, candidate.sourceId);
+      const posted = candidate.sourceType === 'outgoing_invoice' ? postOutgoingInvoice(db, scope, candidate.sourceId) : postIncomingInvoice(db, scope, candidate.sourceId, { mutation: { reason: input.reason, actor: { type: 'system', displayName: 'accounting backfill' } } });
       if (posted.status === 'ready') postedCount += 1; else unresolvedCount += 1;
     }
     const output: AccountingBackfillResult = { runId: input.runId, postedCount, unresolvedCount, status: 'completed' };

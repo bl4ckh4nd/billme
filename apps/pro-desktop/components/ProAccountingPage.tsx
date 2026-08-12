@@ -15,6 +15,8 @@ import { ipc } from '../ipc/client';
 import { useAccountsQuery } from '../hooks/useAccounts';
 import { useImportSkrMutation, useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
 import type { IpcArgs, IpcResult } from '../ipc/contract';
+import type { IncomingInvoiceEntity, OpenItemPaymentInput } from '@billme/accounting-shared';
+import type { OposBankTransaction } from '@billme/accounting-ui-pro';
 import { ProAccountRulesModal } from './ProAccountRulesModal';
 import {
   mapBalanceSheetPreview,
@@ -500,8 +502,42 @@ export const ProAccountingPage: React.FC = () => {
       exportDatevBuchungsstapel(args: DatevExportArgs) {
         return runMutation(() => ipc.pro.exportDatevBuchungsstapel(args));
       },
+      listOpenItems() {
+        return ipc.pro.listOpenItems();
+      },
+      async listBankTransactions(): Promise<OposBankTransaction[]> {
+        const transactions = await ipc.pro.listBankTransactions();
+        return transactions.flatMap((transaction) => {
+          const bankAccountNumber = bankAccounts.find((account) => account.id === transaction.accountId)?.defaultSkrAccountNumber;
+          return bankAccountNumber ? [{ ...transaction, bankAccountNumber }] : [];
+        });
+      },
+      allocateOpenItemPayment(input: OpenItemPaymentInput) {
+        return ipc.pro.allocateOpenItemPayment({ payment: input });
+      },
+      allocateRemainingOpenItemPayment(paymentId, allocations, allocationEventId, reason) {
+        return ipc.pro.allocateRemainingPayment({ paymentId, allocations, allocationEventId, reason });
+      },
+      listVendors() {
+        return ipc.pro.listVendors();
+      },
+      upsertVendor(vendor, reason) {
+        return ipc.pro.upsertVendor({ vendor: { ...vendor, tenantId: 'default', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, reason });
+      },
+      listIncomingInvoices() {
+        return ipc.pro.listIncomingInvoices();
+      },
+      upsertIncomingInvoice(invoice: IncomingInvoiceEntity, reason) {
+        return ipc.pro.upsertIncomingInvoice({ invoice, reason });
+      },
+      previewIncomingInvoiceAccounting(invoiceId) {
+        return ipc.pro.previewIncomingInvoiceAccounting({ invoiceId });
+      },
+      postIncomingInvoiceAccounting(invoiceId, options) {
+        return ipc.pro.postIncomingInvoiceAccounting({ invoiceId, reason: options.reason, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason });
+      },
     };
-  }, [accountNames, activeChart, invalidateProQueries, runMutation]);
+  }, [accountNames, activeChart, bankAccounts, invalidateProQueries, runMutation]);
 
   if (txQuery.isLoading || draftQuery.isLoading || policyQuery.isLoading) {
     return (

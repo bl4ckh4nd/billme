@@ -20,6 +20,21 @@ import type {
   AssetItem,
   AssetUpsertInput,
 } from '../domain/assetTypes';
+import type {
+  AccountingPostingPreview,
+  IncomingInvoiceEntity,
+  OpenItemEntity,
+  OpenItemPaymentEntity,
+  OpenItemPaymentInput,
+  VendorEntity,
+} from '@billme/accounting-shared';
+import type { ProBankTransaction } from '@billme/accounting-shared';
+
+// The desktop IPC transaction schema intentionally omits tenantId because the
+// tenant is fixed by the local Pro database. Keep the source identity and
+// imported-bank fields intact while enriching it with the resolved ledger
+// account needed by OPOS posting.
+export type OposBankTransaction = Omit<ProBankTransaction, 'tenantId'> & { bankAccountNumber: string };
 
 export interface DatevExportResult {
   id: string;
@@ -106,6 +121,21 @@ export interface ProAccountingDataAdapter {
     encoding: 'cp1252' | 'utf8-bom';
   }) => Promise<DatevExportResult>;
   listDatevExports?: (limit?: number) => Promise<DatevExportResult[]>;
+  listOpenItems?: () => Promise<OpenItemEntity[]>;
+  listBankTransactions?: () => Promise<OposBankTransaction[]>;
+  allocateOpenItemPayment?: (input: OpenItemPaymentInput) => Promise<OpenItemPaymentEntity>;
+  allocateRemainingOpenItemPayment?: (
+    paymentId: string,
+    allocations: Array<{ openItemId: string; amount: number }>,
+    allocationEventId: string,
+    reason: string,
+  ) => Promise<OpenItemPaymentEntity>;
+  listVendors?: () => Promise<VendorEntity[]>;
+  upsertVendor?: (vendor: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>, reason: string) => Promise<VendorEntity>;
+  listIncomingInvoices?: () => Promise<IncomingInvoiceEntity[]>;
+  upsertIncomingInvoice?: (invoice: IncomingInvoiceEntity, reason: string) => Promise<IncomingInvoiceEntity>;
+  previewIncomingInvoiceAccounting?: (invoiceId: string) => Promise<AccountingPostingPreview>;
+  postIncomingInvoiceAccounting?: (invoiceId: string, options: { reason: string; softLockOverride?: boolean; overrideReason?: string }) => Promise<AccountingPostingPreview>;
 }
 
 let dataAdapter: ProAccountingDataAdapter | null = null;

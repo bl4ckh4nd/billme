@@ -628,6 +628,9 @@ importers:
 
   packages/accounting-ui-pro:
     dependencies:
+      '@billme/accounting-shared':
+        specifier: workspace:*
+        version: link:../accounting-shared
       '@billme/ui':
         specifier: workspace:*
         version: link:../ui

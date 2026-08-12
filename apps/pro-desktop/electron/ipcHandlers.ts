@@ -1368,22 +1368,22 @@ export const registerIpcHandlers = (
   register(ipcMain, 'pro:listAccountingAccountMappings', ({ chart }) => getProAccountingService().listAccountingAccountMappings(chart));
   register(ipcMain, 'pro:upsertAccountingAccountMapping', (input) => getProAccountingService().upsertAccountingAccountMapping(input));
   register(ipcMain, 'pro:listVendors', () => getProAccountingService().listVendors());
-  register(ipcMain, 'pro:upsertVendor', ({ vendor }) => getProAccountingService().upsertVendor(vendor));
+  register(ipcMain, 'pro:upsertVendor', ({ vendor, reason }) => getProAccountingService().upsertVendor({ ...vendor, mutation: { reason } }));
   register(ipcMain, 'pro:listIncomingInvoices', () => getProAccountingService().listIncomingInvoices());
-  register(ipcMain, 'pro:upsertIncomingInvoice', ({ invoice }) => getProAccountingService().upsertIncomingInvoice(invoice));
+  register(ipcMain, 'pro:upsertIncomingInvoice', ({ invoice, reason }) => getProAccountingService().upsertIncomingInvoice({ ...invoice, mutation: { reason } }));
   register(ipcMain, 'pro:previewOutgoingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewOutgoingInvoice(invoiceId));
   register(ipcMain, 'pro:postOutgoingInvoiceAccounting', ({ invoiceId, reservationId, softLockOverride, overrideReason }) => {
     if (softLockOverride) assertLocalOwner('pro:postOutgoingInvoiceAccounting');
     return getProAccountingService().postOutgoingInvoice(invoiceId, { reservationId, requireFinalizedReservation: true, softLockOverride, overrideReason });
   });
   register(ipcMain, 'pro:previewIncomingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewIncomingInvoice(invoiceId));
-  register(ipcMain, 'pro:postIncomingInvoiceAccounting', ({ invoiceId, softLockOverride, overrideReason }) => {
+  register(ipcMain, 'pro:postIncomingInvoiceAccounting', ({ invoiceId, reason, softLockOverride, overrideReason }) => {
     if (softLockOverride) assertLocalOwner('pro:postIncomingInvoiceAccounting');
-    return getProAccountingService().postIncomingInvoice(invoiceId, { softLockOverride, overrideReason });
+    return getProAccountingService().postIncomingInvoice(invoiceId, { softLockOverride, overrideReason, mutation: { reason } });
   });
   register(ipcMain, 'pro:listOpenItems', () => getProAccountingService().listOpenItems());
-  register(ipcMain, 'pro:allocateOpenItemPayment', ({ payment }) => getProAccountingService().allocateOpenItemPayment(payment));
-  register(ipcMain, 'pro:allocateRemainingPayment', ({ paymentId, allocations }) => getProAccountingService().allocateRemainingOpenItemPayment(paymentId, allocations));
+  register(ipcMain, 'pro:allocateOpenItemPayment', ({ payment }) => getProAccountingService().allocateOpenItemPayment({ ...payment, mutation: { reason: payment.reason } }));
+  register(ipcMain, 'pro:allocateRemainingPayment', ({ paymentId, allocations, reason, allocationEventId }) => getProAccountingService().allocateRemainingOpenItemPayment(paymentId, allocations, allocationEventId, { reason }));
   register(ipcMain, 'pro:reverseDocumentAccounting', (input) => {
     if (input.softLockOverride) assertLocalOwner('pro:reverseDocumentAccounting');
     return getProAccountingService().reverseDocumentAccounting(input);

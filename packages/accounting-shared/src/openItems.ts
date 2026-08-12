@@ -142,6 +142,8 @@ export interface OpenItemPaymentInput {
   sourceId: string;
   allocations: Array<{ openItemId: string; amount: number }>;
   mutation?: AccountingMutationContext;
+  /** Required UI audit reason for this allocation event. */
+  reason: string;
   /** Stable retry key for one allocation event (not the payment id). */
   allocationEventId: string;
 }

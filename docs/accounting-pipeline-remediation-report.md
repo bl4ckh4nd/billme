@@ -1,7 +1,8 @@
 # Abschlussreport Buchungspipeline
 
 **Stand:** 12.08.2026 · **Codebasis:** Branch
-`fix/accounting-pipeline-hardening`, Commit `62e44e2`
+`fix/accounting-pipeline-hardening`, Codebaseline `6a5c427` (danach nur diese
+Report-Aktualisierung)
 
 Dieser Report bewertet den technischen Stand der Pro-Buchungspipeline nach der
 Umsetzung. Er ist keine steuerliche oder rechtliche Beratung und keine GoBD-,
@@ -167,17 +168,19 @@ Diese Punkte sind keine offenen Integritätsfehler:
 - Typed Errors unterscheiden Konflikt, Validierungsfehler, fehlende Quelle und
   nicht verfügbaren historischen Export; normale Accounting-Konflikte werden
   nicht als unspezifischer HTTP 500 ausgegeben.
+- Der Release-Workflow veröffentlicht erst nach Server-Data-Prüfung und grünem
+  migrationsgestütztem Full-Pro-Postgres-E2E.
 
 ## Verifikation
 
 | Scope | Ergebnis |
 |---|---:|
 | Full Pro Server E2E gegen frisch migrierten Postgres-Stack | **7/7 Szenarien bestanden** |
-| Pro Desktop | **284/284 Tests**, Typecheck und Build bestanden |
-| Accounting UI Pro | **26/26 Tests bestanden** |
+| Pro Desktop | **286/286 Tests**, Typecheck und Build bestanden |
+| Accounting UI Pro | **29/29 Tests bestanden** |
 | Accounting Engine | **5/5 Tests bestanden** |
 | Desktop Data | **50/50 Tests bestanden** |
-| Server API | **24/24 Tests**, Typecheck bestanden |
+| Server API | **25/25 Tests**, Typecheck bestanden |
 | Server Data am finalen HEAD ohne DB-URL | **30 bestanden, 11 erwartete DB-Skips**, Typecheck bestanden |
 | SQLite-Import-Paritätsfixture gegen frisches Postgres | **bestanden** |
 | Web Pro | **9/9 direkte Tests**, Typecheck und Build bestanden |

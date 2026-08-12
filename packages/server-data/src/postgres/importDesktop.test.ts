@@ -19,6 +19,7 @@ import {
   detectUnsupportedSqliteTables,
   importDesktopSqliteToPostgres,
   loadAccountMappingsHgb,
+  loadLegacyAccountMappingsHgb,
   validateCanonicalEurLines,
 } from './importDesktop.js';
 import type { ServerEurLineRecord, ServerReportAccountMappingRecord } from './proAccounting.js';
@@ -146,8 +147,9 @@ test('Desktop reporting mappings preserve effective-date history and legacy SQLi
   const legacy = new Database(':memory:');
   legacy.exec(`CREATE TABLE account_mappings_hgb (id TEXT PRIMARY KEY, tenant_id TEXT, chart TEXT, account_number TEXT, statement_type TEXT, position_key TEXT, position_label TEXT, balance_side TEXT, updated_at TEXT)`);
   legacy.prepare('INSERT INTO account_mappings_hgb VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('legacy', 'desktop', 'SKR03', '1200', 'guv', 'cash', 'Bank', 'asset', '2024-01-01T00:00:00.000Z');
-  const legacyRows = loadAccountMappingsHgb(legacy, 'tenant-import');
-  assert.deepEqual(legacyRows[0], { id: legacyRows[0]?.id, tenantId: 'tenant-import', reportType: 'management-guv', chart: 'SKR03', accountNumber: '1200', positionKey: 'asset:cash', positionLabel: 'Bank', validFrom: undefined, validTo: undefined, version: 1, source: 'desktop-import', sourceHash: legacyRows[0]?.sourceHash, createdAt: '2024-01-01T00:00:00.000Z' });
+  assert.deepEqual(loadAccountMappingsHgb(legacy, 'tenant-import'), []);
+  const legacyRows = loadLegacyAccountMappingsHgb(legacy, 'tenant-import');
+  assert.deepEqual(legacyRows[0], { id: 'legacy', tenantId: 'tenant-import', chart: 'SKR03', accountNumber: '1200', statementType: 'guv', positionKey: 'cash', positionLabel: 'Bank', balanceSide: 'asset', updatedAt: '2024-01-01T00:00:00.000Z' });
   legacy.close();
 });
 

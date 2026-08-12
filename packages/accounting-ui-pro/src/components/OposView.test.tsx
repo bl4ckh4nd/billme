@@ -75,6 +75,7 @@ describe('OposView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Für Buchung freigeben' }));
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(2));
     expect(invoices[0].status).toBe('open');
+    expect(adapter.upsertIncomingInvoice).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: invoices[0].id, status: 'open' }), 'Eingangsbeleg geprüft');
     expect(screen.getByRole('status').textContent).toContain('zur Buchung freigegeben');
     expect(screen.getByRole('button', { name: 'Buchen' }).hasAttribute('disabled')).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Buchen' }));

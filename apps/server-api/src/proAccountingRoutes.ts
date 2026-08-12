@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { createHash } from 'node:crypto';
 import { createProAccountingService } from '@billme/accounting-engine';
 import type {
   ProDraftActionRequest,
@@ -39,10 +40,13 @@ const idParams = z.object({ id: z.string().min(1) });
 const transactionParams = z.object({ transactionId: z.string().min(1) });
 const draftParams = z.object({ draftId: z.string().min(1) });
 const reportRange = z.object({ from: z.string().optional(), to: z.string().optional() });
+const datevExportQuery = reportRange.extend({
+  reason: reasonSchema.default('DATEV-Buchungsstapel exportiert'),
+});
 const asOfDate = z.object({ asOfDate: z.string().optional() });
 const csvEscape = (value: unknown): string => {
   const text = String(value ?? '');
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  return /[;",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 };
 const journalQuery = z.object({
   from: z.string().optional(),
@@ -172,7 +176,18 @@ const auditAccountingMutation = async (
 const tenantDraft = (scope: TenantScope, draft: z.infer<typeof bookingDraftEntitySchema>) => ({
   ...draft,
   tenantId: scope.tenantId,
+  // Workflow transitions are exclusively owned by the action/post routes. A
+  // draft save can never approve or post an entity supplied by the browser.
+  workflowStatus: 'incomplete' as const,
 });
+
+const CLIENT_CONTROLLED_WORKFLOW_STATUSES = new Set([
+  'approved',
+  'posted',
+  'reversed',
+  'corrected',
+  'period_locked',
+]);
 
 export const registerProAccountingRoutes = (app: FastifyInstance) => {
   const prefix = '/api/v1/pro/accounting';
@@ -205,6 +220,9 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     response: bookingDraftEntitySchema,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
+      if (CLIENT_CONTROLLED_WORKFLOW_STATUSES.has(body.draft.workflowStatus)) {
+        throw new ApiError(400, 'workflowStatus is server controlled; use the draft action or post route');
+      }
       const saved = await serviceFor(app).saveDraft(session.scope, tenantDraft(session.scope, body.draft));
       await auditAccountingMutation(app, session, 'pro-accounting.draft.save', saved.id, body.reason, saved);
       return saved;
@@ -362,12 +380,32 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
   typedRoute(app, {
     method: 'GET',
     url: `${prefix}/datev/export.csv`,
-    query: reportRange,
+    query: datevExportQuery,
     async handler({ request, reply, query }) {
-      const session = await requireProSession(app, request.headers.authorization);
-      const rows = await serviceFor(app).buildDatevRows(session.scope, query);
+      const session = await requireMutationSession(app, request.headers.authorization);
+      const service = serviceFor(app);
+      const rows = await service.buildDatevRows(session.scope, query);
       const columns = ['date', 'belegfeld1', 'buchungstext', 'konto', 'gegenkonto', 'sollHabenKennzeichen', 'buSchluessel', 'umsatz'];
       const csv = [columns.join(';'), ...rows.map((row) => columns.map((column) => csvEscape(row[column as keyof typeof row])).join(';'))].join('\n') + '\n';
+      const contentSha256 = createHash('sha256').update(csv, 'utf8').digest('hex');
+      const filePath = `server://datev/${contentSha256}.csv`;
+      const existing = (await service.listDatevExports(session.scope)).find((entry) => entry.filePath === filePath);
+      const receipt = existing ?? await service.insertDatevExport(session.scope, {
+        filePath,
+        recordCount: rows.length,
+        fromDate: query.from,
+        toDate: query.to,
+      });
+      if (!existing) {
+        await auditAccountingMutation(app, session, 'pro-accounting.datev.export', receipt.id, query.reason, {
+          ...receipt,
+          contentSha256,
+          source: { from: query.from, to: query.to, rowCount: rows.length },
+        });
+      }
+      reply.header('x-billme-datev-export-id', receipt.id);
+      reply.header('x-billme-datev-content-sha256', contentSha256);
+      reply.header('x-billme-datev-record-count', String(rows.length));
       reply.header('content-type', 'text/csv; charset=utf-8');
       reply.header('content-disposition', 'attachment; filename="datev-buchungsstapel.csv"');
       return csv;

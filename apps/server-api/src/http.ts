@@ -77,9 +77,9 @@ export const registerErrorHandler = (app: FastifyInstance) => {
       const code = error.message.split(':', 1)[0] ?? error.message;
       const status =
         /NOT_FOUND$/.test(code) ? 404 :
-        /^(INVALID_|MISSING_|UNKNOWN_|EMPTY_|PAYMENT_|OPEN_ITEM_|DRAFT_|BANK_TRANSACTION_)/.test(code) ? 400 :
-        /^(SOFT_LOCK_|FINALIZED_|ALREADY_|.*_POSTED$|.*_CLOSED$)/.test(code) ? 409 :
-        /^(UNBALANCED_|TAX_|VALIDATION_)/.test(code) ? 422 : undefined;
+        /^(POSTING_DATE_IN_CLOSED_PERIOD|BACKFILL_STALE_PREVIEW|PERIOD_LOCKED|SOFT_LOCK_|FINALIZED_|ALREADY_|.*_POSTED$|.*_CLOSED$)/.test(code) ? 409 :
+        /^(UNBALANCED_|TAX_|VALIDATION_|INVALID_JOURNAL_|INVALID_LINE_|INVALID_TAX_|AMBIGUOUS_TAX_|UNKNOWN_ACCOUNT)/.test(code) ? 422 :
+        /^(INVALID_|MISSING_|UNKNOWN_|EMPTY_|PAYMENT_|OPEN_ITEM_|DRAFT_|BANK_TRANSACTION_)/.test(code) ? 400 : undefined;
       if (status) {
         return reply.code(status).send({ message: error.message });
       }

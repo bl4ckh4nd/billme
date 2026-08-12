@@ -8,11 +8,13 @@ import {
 } from '@billme/ui';
 import {
   ProAccountingWorkspace,
-  type ProAccountingDataAdapter,
   type Account as WorkspaceAccount,
   type BookingDraft as WorkspaceBookingDraft,
   type ProAccountingSeed,
   type Transaction as WorkspaceTransaction,
+  type AssetDepreciationScheduleEntry,
+  type AssetItem,
+  type AssetUpsertInput,
 } from '@billme/accounting-ui-pro';
 import type {
   BalanceSheetPreview,
@@ -882,6 +884,57 @@ export default function App() {
         );
         return mapWorkflowDraftToWorkspace(saved);
       },
+      listActivity(_transactionId: string) {
+        return [];
+      },
+      reset() {
+        return readOnly('Workspace reset');
+      },
+      async updateExceptionCase(_transactionId: string, _patch: Partial<NonNullable<WorkspaceTransaction['exceptionCase']>>, _actorName: string) {
+        return readOnly('Exception mutation');
+      },
+      async assignExceptionOwner(_transactionId: string, _owner: string, _actorName: string) {
+        return readOnly('Exception mutation');
+      },
+      async snoozeException(_transactionId: string, _snoozedUntil: string, _actorName: string, _note?: string) {
+        return readOnly('Exception mutation');
+      },
+      async resolveException(_transactionId: string, _resolutionNote: string, _actorName: string) {
+        return readOnly('Exception mutation');
+      },
+      async reopenException(_transactionId: string, _actorName: string) {
+        return readOnly('Exception mutation');
+      },
+      async setTransactionReceiptStatus(_transactionId: string, _hasReceipt: boolean, _actorName: string) {
+        return readOnly('Receipt mutation');
+      },
+      async listAssets(): Promise<AssetItem[]> {
+        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      },
+      async upsertAsset(_asset: AssetUpsertInput, _reason: string): Promise<AssetItem> {
+        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      },
+      async getDepreciationSchedule(_assetId: string): Promise<AssetDepreciationScheduleEntry[]> {
+        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      },
+      async runDepreciation(_args: {
+        assetId: string;
+        year: number;
+        postingDate: string;
+        reason: string;
+        actorRole: 'admin' | 'accountant' | 'bookkeeper' | 'auditor';
+      }) {
+        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      },
+      async disposeAsset(_args: {
+        assetId: string;
+        disposalDate: string;
+        proceeds: number;
+        reason: string;
+        actorRole: 'admin' | 'accountant' | 'bookkeeper' | 'auditor';
+      }) {
+        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      },
       async getSusaReport(filters: ReportFilterState): Promise<SusaReport> {
         const report = await client.getSusaReport(filters.asOfDate);
         const names = new Map(data.ledgerAccounts.map((account) => [account.accountNumber, account.name]));
@@ -940,18 +993,6 @@ export default function App() {
       },
     };
   }, [accountingSeed, client, data]);
-
-  const workspaceDataAdapter = React.useMemo(() => {
-    if (accountingDataAdapter) return accountingDataAdapter;
-    return {
-      listTransactions: () => [],
-      listBookingDrafts: () => [],
-      getTransactionById: () => undefined,
-      getBookingDraftByTransactionId: () => undefined,
-      saveDraft: () => { throw new Error('Legacy workflow snapshots are read-only.'); },
-      dispatchBookingAction: () => { throw new Error('Legacy workflow snapshots are read-only.'); },
-    };
-  }, [accountingDataAdapter]);
 
   const handleSaveSettings = async () => {
     await runAction(async () => {
@@ -1913,7 +1954,7 @@ export default function App() {
                   <div className="workspace-frame">
                     <ProAccountingWorkspace
                       seed={accountingSeed}
-                      dataAdapter={workspaceDataAdapter as ProAccountingDataAdapter}
+                      dataAdapter={accountingDataAdapter}
                     />
                   </div>
                 ) : data.workflowEntries.length > 0 ? (

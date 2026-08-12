@@ -20,9 +20,18 @@ const sectionByTitle = (page, title) =>
 
 const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') => {
   const heading = page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' });
-  if (!(await heading.isVisible().catch(() => false))) {
-    return;
-  }
+  const workspaceHeading = page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' });
+
+  // Authentication only starts refreshData. Wait for either the onboarding
+  // dialog or the hydrated workspace before deciding that no setup is needed.
+  // Otherwise the logout button can win the race and be covered by the dialog.
+  await expect.poll(async () => {
+    if (await heading.isVisible().catch(() => false)) return 'onboarding';
+    if (await workspaceHeading.isVisible().catch(() => false)) return 'ready';
+    return 'loading';
+  }, { timeout: 30_000 }).toMatch(/^(onboarding|ready)$/);
+
+  if (!(await heading.isVisible().catch(() => false))) return;
 
   const slug = scenarioKey.replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
 

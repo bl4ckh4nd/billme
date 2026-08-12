@@ -3,6 +3,12 @@
 -- additive and idempotent: never rewrite the applied 0006 migration.
 ALTER TABLE incoming_invoices ADD COLUMN IF NOT EXISTS accounting_posted_at TEXT;
 ALTER TABLE accounting_backfill_runs ADD COLUMN IF NOT EXISTS config_json TEXT;
+-- Allocation rows represent immutable allocation events.  Older 0006 installs
+-- had a one-row-per-payment/item uniqueness constraint; remove it so partial
+-- and remaining payments can each carry their own VAT recognition event.
+ALTER TABLE open_item_allocations DROP CONSTRAINT IF EXISTS open_item_allocations_tenant_id_payment_id_open_item_id_key;
+ALTER TABLE open_item_allocations ADD COLUMN IF NOT EXISTS event_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_open_item_allocations_event ON open_item_allocations (tenant_id, payment_id, event_key) WHERE event_key IS NOT NULL;
 
 -- Posted documents retain immutable accounting content, but their OPOS status
 -- is a projection maintained by payment allocation.  Only that projection
@@ -21,8 +27,9 @@ BEGIN
      AND (to_jsonb(OLD) - 'status' - 'updated_at') = (to_jsonb(NEW) - 'status' - 'updated_at') THEN
     RETURN NEW;
   END IF;
-  IF OLD.accounting_status IN ('posted','reversed')
+  IF OLD.accounting_status = 'posted'
      AND NEW.accounting_status = 'reversed'
+     AND NEW.status = 'cancelled'
      AND (to_jsonb(OLD) - 'accounting_status' - 'status' - 'updated_at') = (to_jsonb(NEW) - 'accounting_status' - 'status' - 'updated_at') THEN
     RETURN NEW;
   END IF;

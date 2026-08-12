@@ -434,7 +434,7 @@ export const openItemPayments = pgTable("open_item_payments", {
 });
 
 export const openItemAllocations = pgTable("open_item_allocations", {
-  id: text("id"), tenantId: text("tenant_id"), paymentId: text("payment_id"), openItemId: text("open_item_id"), amount: numeric("amount"), createdAt: text("created_at"),
+  id: text("id"), tenantId: text("tenant_id"), paymentId: text("payment_id"), openItemId: text("open_item_id"), amount: numeric("amount"), createdAt: text("created_at"), eventKey: text("event_key"),
 });
 
 export const accountingBackfillRuns = pgTable("accounting_backfill_runs", {

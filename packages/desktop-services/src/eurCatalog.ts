@@ -13,6 +13,7 @@ export type EurLineDef = {
 };
 
 export const EUR_SOURCE_VERSION_2025 = 'BMF-2025-2025-08-29';
+export const EUR_SOURCE_URL_2025 = 'https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2025-08-29-anlage-EUER-2025.pdf?__blob=publicationFile&v=3';
 
 export const getCatalogForYear = (year: number): EurLineDef[] => {
   if (year === 2025) {
@@ -20,7 +21,7 @@ export const getCatalogForYear = (year: number): EurLineDef[] => {
     validateEurLineCatalog(lines);
     return lines;
   }
-  return [];
+  throw new Error(`EUR_CATALOG_UNAVAILABLE:${year}`);
 };
 
 export const validateEurLineCatalog = (lines: EurLineDef[]): void => {

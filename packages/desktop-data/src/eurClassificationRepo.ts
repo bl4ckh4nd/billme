@@ -14,6 +14,7 @@ export interface EurClassification {
   eurLineId?: string;
   excluded: boolean;
   vatMode: EurVatMode;
+  vatRate?: number;
   note?: string;
   updatedAt: string;
 }
@@ -25,6 +26,7 @@ export interface UpsertEurClassificationInput {
   eurLineId?: string;
   excluded?: boolean;
   vatMode?: EurVatMode;
+  vatRate?: number;
   note?: string;
 }
 
@@ -55,6 +57,7 @@ export const upsertEurClassification = (
     eurLineId,
     excluded: excluded ? 1 : 0,
     vatMode: input.vatMode ?? 'none',
+    vatRate: input.vatRate ?? null,
     note: input.note ?? null,
     updatedAt: now,
   }).onConflictDoUpdate({ target: [
@@ -65,6 +68,7 @@ export const upsertEurClassification = (
     eurLineId,
     excluded: excluded ? 1 : 0,
     vatMode: input.vatMode ?? 'none',
+    vatRate: input.vatRate ?? null,
     note: input.note ?? null,
     updatedAt: now,
   }}).run();
@@ -114,6 +118,7 @@ const mapRow = (row: {
   eur_line_id: string | null;
   excluded: number;
   vat_mode: EurVatMode;
+  vat_rate: number | null;
   note: string | null;
   updated_at: string;
 }): EurClassification => ({
@@ -124,6 +129,7 @@ const mapRow = (row: {
   eurLineId: row.eur_line_id ?? undefined,
   excluded: row.excluded === 1,
   vatMode: row.vat_mode,
+  vatRate: row.vat_rate ?? undefined,
   note: row.note ?? undefined,
   updatedAt: row.updated_at,
 });
@@ -136,6 +142,7 @@ const mapSchemaRow = (row: typeof schema.eurClassifications.$inferSelect): EurCl
   eur_line_id: row.eurLineId ?? null,
   excluded: row.excluded!,
   vat_mode: row.vatMode as EurVatMode,
+  vat_rate: row.vatRate ?? null,
   note: row.note ?? null,
   updated_at: row.updatedAt!,
 });

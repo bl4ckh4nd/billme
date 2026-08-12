@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, lte, max, sum } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, max, or, sum } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import type { TenantScope } from '@billme/server-core';
 import { appendAuditLog } from './audit';
@@ -742,7 +743,7 @@ export const listBankTransactions = (db: Database.Database, scope: TenantScope):
     purpose: schema.bankTransactions.purpose,
     status: schema.bankTransactions.status,
     linked_invoice_id: schema.bankTransactions.linkedInvoiceId,
-  }).from(schema.bankTransactions).where(eq(schema.bankTransactions.tenantId, tenantId))
+  }).from(schema.bankTransactions).where(and(eq(schema.bankTransactions.tenantId, tenantId), or(isNull(schema.bankTransactions.deletedAt), eq(schema.bankTransactions.deletedAt, ''))))
     .orderBy(desc(schema.bankTransactions.date), asc(schema.bankTransactions.id)).all() as Array<{
     id: string;
     tenant_id: string;
@@ -795,7 +796,7 @@ export const getDraftByTransactionId = (
     purpose: schema.bankTransactions.purpose,
     status: schema.bankTransactions.status,
     linked_invoice_id: schema.bankTransactions.linkedInvoiceId,
-  }).from(schema.bankTransactions).where(and(eq(schema.bankTransactions.tenantId, tenantId), eq(schema.bankTransactions.id, transactionId))).get() as
+  }).from(schema.bankTransactions).where(and(eq(schema.bankTransactions.tenantId, tenantId), eq(schema.bankTransactions.id, transactionId), or(isNull(schema.bankTransactions.deletedAt), eq(schema.bankTransactions.deletedAt, '')))).get() as
     | {
         id: string;
         tenant_id: string;
@@ -2069,7 +2070,7 @@ export const ensureProAccountingSeedData = (db: Database.Database, scope: Tenant
     .where(eq(schema.bankTransactions.tenantId, tenantId)).get()?.c ?? 0);
 
   if (bankCount === 0) {
-    const sourceTransactions = drizzle.select().from(schema.transactions).all();
+    const sourceTransactions = drizzle.select().from(schema.transactions).where(or(isNull(schema.transactions.deletedAt), eq(schema.transactions.deletedAt, ''))).all();
     for (const transaction of sourceTransactions) {
       const createdAt = `${transaction.date}T00:00:00.000Z`;
       drizzle.insert(schema.bankTransactions).values({ id: transaction.id, tenantId, accountId: transaction.accountId,

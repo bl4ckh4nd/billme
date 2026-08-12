@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { and, asc, count, desc, eq } from 'drizzle-orm';
+import { and, asc, count, desc, eq, isNull, or } from 'drizzle-orm';
 import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import type { Account, Transaction } from '../types';
 
@@ -115,7 +115,7 @@ export const listAccounts = (db: Database.Database): Account[] => {
   const accountRows = drizzle.select({ id: schema.accounts.id, name: schema.accounts.name, iban: schema.accounts.iban, balance: schema.accounts.balance, default_skr_account_number: schema.accounts.defaultSkrAccountNumber, type: schema.accounts.type, color: schema.accounts.color })
     .from(schema.accounts).orderBy(asc(schema.accounts.name)).all() as AccountRow[];
   const txRows = drizzle.select({ id: schema.transactions.id, account_id: schema.transactions.accountId, date: schema.transactions.date, amount: schema.transactions.amount, type: schema.transactions.type, counterparty: schema.transactions.counterparty, purpose: schema.transactions.purpose, linked_invoice_id: schema.transactions.linkedInvoiceId, status: schema.transactions.status })
-    .from(schema.transactions).orderBy(asc(schema.transactions.accountId), desc(schema.transactions.date)).all() as TransactionRow[];
+    .from(schema.transactions).where(or(isNull(schema.transactions.deletedAt), eq(schema.transactions.deletedAt, ''))).orderBy(asc(schema.transactions.accountId), desc(schema.transactions.date)).all() as TransactionRow[];
 
   const txByAccount = new Map<string, Transaction[]>();
   for (const t of txRows) {

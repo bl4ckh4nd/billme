@@ -268,10 +268,13 @@ export const bankTransactions = sqliteTable(
     linkedInvoiceId: text('linked_invoice_id'),
     status: text('status').notNull(),
     sourceTransactionId: text('source_transaction_id'),
+    deletedAt: text('deleted_at'),
+    rollbackReason: text('rollback_reason'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
   (t) => ({
+    uniqueTenantSource: uniqueIndex('idx_bank_transactions_tenant_source').on(t.tenantId, t.sourceTransactionId),
     byTenantDate: index('idx_bank_transactions_tenant_date').on(t.tenantId, t.date),
     byTenantStatus: index('idx_bank_transactions_status').on(t.tenantId, t.status),
   }),
@@ -839,6 +842,7 @@ export const transactions = sqliteTable('transactions', {
   status: text('status').notNull(),
   dedupHash: text('dedup_hash'),
   importBatchId: text('import_batch_id'),
+  linkedPaymentId: text('linked_payment_id'),
   deletedAt: text('deleted_at'),
 });
 
@@ -872,6 +876,7 @@ export const eurClassifications = sqliteTable(
     eurLineId: text('eur_line_id').references(() => eurLines.id, { onDelete: 'set null' }),
     excluded: integer('excluded').notNull().default(0),
     vatMode: text('vat_mode').notNull().default('none'),
+    vatRate: real('vat_rate'),
     note: text('note'),
     updatedAt: text('updated_at').notNull(),
   },

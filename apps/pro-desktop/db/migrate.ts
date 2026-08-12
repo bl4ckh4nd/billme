@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { seedEurCatalog } from './eurCatalogRepo';
 import { ensureTaxCaseSeedData } from './taxCasesRepo';
+import { appendAuditLog } from './audit';
 
 const getColumns = (db: Database.Database, table: string): Set<string> => {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
@@ -189,6 +190,7 @@ export const runMigrations = (db: Database.Database): void => {
   tryAddColumn(db, 'accounts', 'default_skr_account_number', "TEXT NOT NULL DEFAULT '1200'");
   tryAddColumn(db, 'transactions', 'dedup_hash', 'TEXT');
   tryAddColumn(db, 'transactions', 'import_batch_id', 'TEXT');
+  tryAddColumn(db, 'transactions', 'linked_payment_id', 'TEXT');
   tryAddColumn(db, 'transactions', 'deleted_at', 'TEXT');
   tryAddColumn(db, 'booking_draft_lines', 'tax_case_key', 'TEXT');
   tryAddColumn(db, 'booking_draft_lines', 'tax_rate', 'REAL');
@@ -596,6 +598,71 @@ export const runMigrations = (db: Database.Database): void => {
       SELECT RAISE(ABORT, 'datev_exports are immutable');
     END;
   `);
+
+  // Pro import identity/rollback metadata. Existing bank rows remain intact;
+  // only missing source links are filled from their immutable row id.
+  tryAddColumn(db, 'bank_transactions', 'deleted_at', 'TEXT');
+  tryAddColumn(db, 'bank_transactions', 'rollback_reason', 'TEXT');
+  db.exec(`UPDATE bank_transactions SET source_transaction_id = id WHERE source_transaction_id IS NULL OR TRIM(source_transaction_id) = '';`);
+  const sourceConflicts = db.prepare(`
+    SELECT tenant_id, source_transaction_id
+    FROM bank_transactions
+    WHERE source_transaction_id IS NOT NULL
+    GROUP BY tenant_id, source_transaction_id
+    HAVING COUNT(*) > 1
+  `).all() as Array<{ tenant_id: string; source_transaction_id: string }>;
+  for (const conflict of sourceConflicts) {
+    const rows = db.prepare(`SELECT id FROM bank_transactions WHERE tenant_id = ? AND source_transaction_id = ? ORDER BY created_at, id`).all(conflict.tenant_id, conflict.source_transaction_id) as Array<{ id: string }>;
+    for (const duplicate of rows.slice(1)) {
+      const repairedSource = `legacy-conflict:${conflict.source_transaction_id}:${duplicate.id}`;
+      db.prepare('UPDATE bank_transactions SET source_transaction_id = ? WHERE tenant_id = ? AND id = ?').run(repairedSource, conflict.tenant_id, duplicate.id);
+      appendAuditLog(db, {
+        entityType: 'bank_transaction', entityId: duplicate.id, action: 'source_identity_conflict',
+        reason: 'Legacy duplicate source_transaction_id repaired without overwrite',
+        before: { sourceTransactionId: conflict.source_transaction_id }, after: { sourceTransactionId: repairedSource }, actor: 'migration',
+      });
+    }
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_transactions_tenant_source
+      ON bank_transactions(tenant_id, source_transaction_id)
+      WHERE source_transaction_id IS NOT NULL;
+  `);
+
+  // Legacy Pro installs can contain a bank row without its Lite compatibility
+  // mirror. Recreate only missing rows; never overwrite an existing transaction.
+  db.exec(`
+    INSERT OR IGNORE INTO transactions
+      (id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, dedup_hash, import_batch_id, deleted_at)
+    SELECT b.source_transaction_id, b.account_id, b.date, b.amount, b.type, b.counterparty, b.purpose,
+      b.linked_invoice_id, b.status, b.source_transaction_id, NULL, b.deleted_at
+    FROM bank_transactions b
+    WHERE b.source_transaction_id IS NOT NULL
+      AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = b.account_id)
+      AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.account_id = b.account_id AND t.dedup_hash = b.source_transaction_id);
+  `);
+  db.exec(`
+    UPDATE transactions
+    SET dedup_hash = (
+      SELECT b.source_transaction_id FROM bank_transactions b WHERE b.id = transactions.id LIMIT 1
+    )
+    WHERE (dedup_hash IS NULL OR TRIM(dedup_hash) = '')
+      AND EXISTS (SELECT 1 FROM bank_transactions b WHERE b.id = transactions.id AND b.source_transaction_id IS NOT NULL);
+  `);
+  const identityConflicts = db.prepare(`
+    SELECT t.id AS transaction_id, b.id AS bank_id, b.source_transaction_id
+    FROM transactions t JOIN bank_transactions b
+      ON b.tenant_id = 'default' AND b.source_transaction_id = t.dedup_hash
+    WHERE t.id <> b.source_transaction_id
+  `).all() as Array<{ transaction_id: string; bank_id: string; source_transaction_id: string }>;
+  for (const conflict of identityConflicts) {
+    if (db.prepare("SELECT 1 FROM audit_log WHERE entity_type = 'finance_import' AND entity_id = ? AND action = 'source_identity_conflict' LIMIT 1").get(conflict.source_transaction_id)) continue;
+    appendAuditLog(db, {
+      entityType: 'finance_import', entityId: conflict.source_transaction_id, action: 'source_identity_conflict',
+      reason: 'Legacy transaction and bank rows share a source hash but differ in durable ids',
+      before: conflict, after: null, actor: 'migration',
+    });
+  }
 
   tryAddColumn(db, 'assets', 'disposal_date', 'TEXT');
   tryAddColumn(db, 'assets', 'disposal_proceeds', 'REAL');
@@ -1388,6 +1455,7 @@ export const runMigrations = (db: Database.Database): void => {
   // Import batches: rollback support
   tryAddColumn(db, 'import_batches', 'rolled_back_at', 'TEXT');
   tryAddColumn(db, 'import_batches', 'rollback_reason', 'TEXT');
+  tryAddColumn(db, 'eur_classifications', 'vat_rate', 'REAL');
 
   db.exec(`
       CREATE TABLE IF NOT EXISTS eur_lines (
@@ -1419,6 +1487,7 @@ export const runMigrations = (db: Database.Database): void => {
         eur_line_id TEXT REFERENCES eur_lines(id) ON DELETE SET NULL,
         excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0, 1)),
         vat_mode TEXT NOT NULL DEFAULT 'none' CHECK (vat_mode IN ('none', 'default')),
+        vat_rate REAL,
         note TEXT,
         updated_at TEXT NOT NULL,
         CHECK (NOT (excluded = 1 AND eur_line_id IS NOT NULL))

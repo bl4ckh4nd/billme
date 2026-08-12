@@ -18,6 +18,7 @@ const transactionSelection = {
   status: schema.transactions.status,
   dedup_hash: schema.transactions.dedupHash,
   import_batch_id: schema.transactions.importBatchId,
+  linked_payment_id: schema.transactions.linkedPaymentId,
 };
 
 export interface Transaction {
@@ -32,6 +33,7 @@ export interface Transaction {
   status: 'pending' | 'booked';
   dedupHash?: string;
   importBatchId?: string;
+  linkedPaymentId?: string;
 }
 
 export interface InvoiceMatchSuggestion {
@@ -46,7 +48,7 @@ export interface InvoiceMatchSuggestion {
  */
 export const getUnmatchedTransactions = (db: Database.Database): Transaction[] => {
   const rows = createDrizzle(db).select(transactionSelection).from(schema.transactions)
-    .where(and(eq(schema.transactions.type, 'income'), or(isNull(schema.transactions.linkedInvoiceId), eq(schema.transactions.linkedInvoiceId, ''))))
+    .where(and(eq(schema.transactions.type, 'income'), or(isNull(schema.transactions.linkedInvoiceId), eq(schema.transactions.linkedInvoiceId, '')), or(isNull(schema.transactions.deletedAt), eq(schema.transactions.deletedAt, ''))))
     .orderBy(desc(schema.transactions.date), desc(schema.transactions.amount)).all();
 
   return rows.map((r) => ({
@@ -61,6 +63,7 @@ export const getUnmatchedTransactions = (db: Database.Database): Transaction[] =
     status: r.status as 'pending' | 'booked',
     dedupHash: r.dedup_hash ?? undefined,
     importBatchId: r.import_batch_id ?? undefined,
+    linkedPaymentId: r.linked_payment_id ?? undefined,
   }));
 };
 
@@ -300,6 +303,7 @@ export const listTransactions = (
   if (filters?.type) conditions.push(eq(schema.transactions.type, filters.type));
   if (filters?.linkedOnly) conditions.push(isNotNull(schema.transactions.linkedInvoiceId));
   if (filters?.unlinkedOnly) conditions.push(or(isNull(schema.transactions.linkedInvoiceId), eq(schema.transactions.linkedInvoiceId, '')));
+  conditions.push(or(isNull(schema.transactions.deletedAt), eq(schema.transactions.deletedAt, '')));
   const rows = createDrizzle(db).select(transactionSelection).from(schema.transactions)
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(schema.transactions.date), desc(schema.transactions.amount)).all();
@@ -316,5 +320,6 @@ export const listTransactions = (
     status: r.status as 'pending' | 'booked',
     dedupHash: r.dedup_hash ?? undefined,
     importBatchId: r.import_batch_id ?? undefined,
+    linkedPaymentId: r.linked_payment_id ?? undefined,
   }));
 };

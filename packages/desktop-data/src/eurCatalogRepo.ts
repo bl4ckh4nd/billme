@@ -67,6 +67,8 @@ export const seedEurCatalog = (db: Database.Database, year: number): number => {
 };
 
 export const listEurLines = (db: Database.Database, taxYear: number): EurLine[] => {
+  // Do not turn an unsupported year into a misleading successful empty report.
+  if (taxYear !== 2025) getCatalogForYear(taxYear);
   const rows = createDrizzle(db)
     .select({
       id: schema.eurLines.id,

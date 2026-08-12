@@ -119,6 +119,7 @@ export const runMigrations = (db: Database.Database): void => {
   // Finance: transaction import support (non-audit-locked)
   tryAddColumn(db, 'transactions', 'dedup_hash', 'TEXT');
   tryAddColumn(db, 'transactions', 'import_batch_id', 'TEXT');
+  tryAddColumn(db, 'transactions', 'linked_payment_id', 'TEXT');
   tryAddColumn(db, 'transactions', 'deleted_at', 'TEXT');
 
   const transactionCols = getColumns(db, 'transactions');
@@ -495,6 +496,7 @@ export const runMigrations = (db: Database.Database): void => {
   // Import batches: rollback support
   tryAddColumn(db, 'import_batches', 'rolled_back_at', 'TEXT');
   tryAddColumn(db, 'import_batches', 'rollback_reason', 'TEXT');
+  tryAddColumn(db, 'eur_classifications', 'vat_rate', 'REAL');
 
   db.exec(`
       CREATE TABLE IF NOT EXISTS eur_lines (
@@ -526,6 +528,7 @@ export const runMigrations = (db: Database.Database): void => {
         eur_line_id TEXT REFERENCES eur_lines(id) ON DELETE SET NULL,
         excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0, 1)),
         vat_mode TEXT NOT NULL DEFAULT 'none' CHECK (vat_mode IN ('none', 'default')),
+        vat_rate REAL,
         note TEXT,
         updated_at TEXT NOT NULL,
         CHECK (NOT (excluded = 1 AND eur_line_id IS NOT NULL))

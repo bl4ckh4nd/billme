@@ -11,6 +11,7 @@ export interface EurReportParams {
   from?: string;
   to?: string;
   settings: AppSettings;
+  product?: 'lite' | 'pro';
 }
 
 export interface EurReportRow {
@@ -53,6 +54,7 @@ export interface EurListItem {
   suggestionLayer?: SuggestionLayer;
   classification?: EurClassification;
   line?: EurLine;
+  vatWarning?: string;
 }
 
 export interface EurListItemsParams {
@@ -68,6 +70,7 @@ export interface EurListItemsParams {
   accountId?: string;
   limit?: number;
   offset?: number;
+  product?: 'lite' | 'pro';
 }
 
 const fallbackDateRange = (taxYear: number, from?: string, to?: string): { from: string; to: string } => ({
@@ -80,11 +83,13 @@ export const listEurItems = (db: Database.Database, params: EurListItemsParams):
   const lines = listEurLines(db, params.taxYear);
   const linesById = new Map(lines.map((line) => [line.id, line]));
   const classifications = listEurClassificationsMap(db, params.taxYear);
-  const rawItems = listRawEurItems(db, from, to);
+  const rawItems = listRawEurItems(db, from, to, params.product ?? 'lite');
   const pipelineCtx = buildPipelineContext(db, params.taxYear, lines);
 
   let items = rawItems.map((item) => {
-    const classification = classifications.get(`${item.sourceType}:${item.sourceId}`);
+    const classification = classifications.get(`${item.sourceType}:${item.sourceId}`)
+      ?? (item.classificationFallbackId ? classifications.get(`invoice:${item.classificationFallbackId}`) : undefined);
+    const { sourceNet: _sourceNet, classificationFallbackId: _classificationFallbackId, ...publicItem } = item;
     const line = classification?.eurLineId ? linesById.get(classification.eurLineId) : undefined;
     const suggestion = classifyItem(pipelineCtx, {
       flowType: item.flowType,
@@ -92,8 +97,8 @@ export const listEurItems = (db: Database.Database, params: EurListItemsParams):
       purpose: item.purpose,
     });
     return {
-      ...item,
-      amountNet: toNet(item.amountGross, classification, params.settings),
+      ...publicItem,
+      ...toNet(item.amountGross, classification, params.settings, item, params.product ?? 'lite'),
       suggestedLineId: suggestion.lineId,
       suggestionReason: suggestion.reason,
       suggestionLayer: suggestion.layer,
@@ -164,9 +169,11 @@ export const getEurReport = (db: Database.Database, params: EurReportParams): Eu
     from,
     to,
     settings: params.settings,
+    product: params.product,
   });
 
   for (const item of items) {
+    if (item.vatWarning) warnings.push(item.vatWarning);
     const cls = item.classification;
     if (cls?.excluded) continue;
     if (!cls?.eurLineId) {
@@ -254,6 +261,7 @@ export const upsertEurItemClassification = (
     eurLineId?: string;
     excluded?: boolean;
     vatMode?: 'none' | 'default';
+    vatRate?: number;
     note?: string;
   },
 ): EurClassification => {
@@ -283,18 +291,26 @@ const toNet = (
   amountGross: number,
   classification: EurClassification | undefined,
   settings: AppSettings,
-): number => {
-  if (settings.legal.smallBusinessRule) return round2(amountGross);
-  if ((classification?.vatMode ?? 'none') !== 'default') return round2(amountGross);
-  const rate = Number(settings.legal.defaultVatRate) || 0;
-  if (rate <= 0) return round2(amountGross);
-  return round2(amountGross / (1 + rate / 100));
+  raw: { sourceId: string; sourceNet?: number },
+  product: 'lite' | 'pro',
+): { amountNet: number; vatWarning?: string } => {
+  if (raw.sourceNet !== undefined) return { amountNet: round2(raw.sourceNet) };
+  if (settings.legal.smallBusinessRule) return { amountNet: round2(amountGross) };
+  if ((classification?.vatMode ?? 'none') !== 'default') return { amountNet: round2(amountGross) };
+  const rate = Number(classification?.vatRate);
+  if (product === 'lite') {
+    const legacyRate = Number(settings.legal.defaultVatRate) || 0;
+    return { amountNet: legacyRate > 0 ? round2(amountGross / (1 + legacyRate / 100)) : round2(amountGross) };
+  }
+  if (Number.isFinite(rate) && rate > 0) return { amountNet: round2(amountGross / (1 + rate / 100)) };
+  return { amountNet: round2(amountGross), vatWarning: `VAT_RATE_REQUIRED:${raw.sourceId}` };
 };
 
 const listRawEurItems = (
   db: Database.Database,
   from: string,
   to: string,
+  product: 'lite' | 'pro' = 'lite',
 ): Array<{
   sourceType: EurSourceType;
   sourceId: string;
@@ -305,7 +321,10 @@ const listRawEurItems = (
   linkedViaInvoice?: boolean;
   counterparty: string;
   purpose: string;
+  sourceNet?: number;
+  classificationFallbackId?: string;
 }> => {
+  if (product === 'pro') return listProRawEurItems(db, from, to);
   const drizzle = createDrizzle(db);
   const invoicePayments = drizzle.select({
     invoice_id: schema.invoicePayments.invoiceId,
@@ -392,4 +411,152 @@ const listRawEurItems = (
   });
 
   return result;
+};
+
+const listProRawEurItems = (
+  db: Database.Database,
+  from: string,
+  to: string,
+): Array<{
+  sourceType: EurSourceType;
+  sourceId: string;
+  date: string;
+  amountGross: number;
+  amountNet?: number;
+  flowType: 'income' | 'expense';
+  accountId?: string;
+  linkedViaInvoice?: boolean;
+  counterparty: string;
+  purpose: string;
+  sourceNet?: number;
+  classificationFallbackId?: string;
+}> => {
+  const tableExists = (name: string) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+  const hasBankDeletedAt = db.prepare('PRAGMA table_info(bank_transactions)').all().some((row) => (row as { name: string }).name === 'deleted_at');
+  const bankDeleted = hasBankDeletedAt ? "AND (b.deleted_at IS NULL OR b.deleted_at = '')" : '';
+  const representedBanks = new Set<string>();
+  const result: Array<{
+    sourceType: EurSourceType;
+    sourceId: string;
+    date: string;
+    amountGross: number;
+    amountNet?: number;
+    flowType: 'income' | 'expense';
+    accountId?: string;
+    linkedViaInvoice?: boolean;
+    counterparty: string;
+    purpose: string;
+    sourceNet?: number;
+    classificationFallbackId?: string;
+  }> = [];
+
+  if (tableExists('open_item_payments')) {
+    const payments = db.prepare(`
+      SELECT p.id, p.payment_date, p.amount, p.party_type, p.source_type, p.source_id,
+             b.account_id, b.counterparty AS bank_counterparty, b.purpose AS bank_purpose,
+             MAX(CASE WHEN oi.source_type IN ('outgoing_invoice', 'incoming_invoice') THEN oi.source_type END) AS item_source_type,
+             MAX(CASE WHEN oi.source_type IN ('outgoing_invoice', 'incoming_invoice') THEN oi.source_id END) AS item_source_id,
+             COALESCE(SUM(oa.amount), 0) AS allocated_amount
+      FROM open_item_payments p
+      LEFT JOIN bank_transactions b ON b.id = p.source_id AND p.source_type = 'bank_transaction'
+      LEFT JOIN open_item_allocations oa ON oa.payment_id = p.id
+      LEFT JOIN open_items oi ON oi.id = oa.open_item_id
+      WHERE p.payment_date >= ? AND p.payment_date <= ?
+        AND (p.source_type <> 'bank_transaction' OR b.status = 'booked')
+      GROUP BY p.id, p.payment_date, p.amount, p.party_type, p.source_type, p.source_id,
+               b.account_id, b.counterparty, b.purpose
+      ORDER BY p.payment_date DESC, p.id
+    `).all(from, to) as Array<Record<string, unknown>>;
+
+    for (const payment of payments) {
+      const bankId = typeof payment.source_id === 'string' && payment.source_type === 'bank_transaction' ? payment.source_id : undefined;
+      if (bankId) representedBanks.add(bankId);
+      const invoiceId = typeof payment.item_source_id === 'string'
+        && (payment.item_source_type === 'outgoing_invoice' || payment.item_source_type === 'incoming_invoice')
+        ? payment.item_source_id : undefined;
+      const amountGross = Math.abs(Number(payment.amount) || 0);
+      const allocated = Math.min(amountGross, Math.max(0, Number(payment.allocated_amount) || 0));
+      let sourceNet: number | undefined;
+      if (invoiceId && tableExists('invoices') && payment.item_source_type === 'outgoing_invoice') {
+        const invoice = db.prepare('SELECT amount, tax_snapshot_json FROM invoices WHERE id = ?').get(invoiceId) as { amount?: number; tax_snapshot_json?: string | null } | undefined;
+        const snapshot = parseJsonObject(invoice?.tax_snapshot_json);
+        const gross = Number(snapshot?.grossAmount ?? invoice?.amount) || 0;
+        const net = Number(snapshot?.netAmount);
+        if (gross > 0 && Number.isFinite(net)) sourceNet = allocated * net / gross + Math.max(0, amountGross - allocated);
+      }
+      result.push({
+        sourceType: 'transaction',
+        sourceId: `payment:${String(payment.id)}`,
+        date: String(payment.payment_date),
+        amountGross,
+        flowType: payment.party_type === 'creditor' ? 'expense' : 'income',
+        accountId: typeof payment.account_id === 'string' ? payment.account_id : undefined,
+        linkedViaInvoice: Boolean(invoiceId),
+        counterparty: String(payment.bank_counterparty ?? invoiceId ?? ''),
+        purpose: String(payment.bank_purpose ?? (invoiceId ? `OPOS ${invoiceId}` : 'OPOS Zahlung')),
+        sourceNet,
+        classificationFallbackId: invoiceId,
+      });
+    }
+  }
+
+  const bankRows = db.prepare(`
+    SELECT b.id, b.account_id, b.date, b.amount, b.type, b.counterparty, b.purpose, b.linked_invoice_id
+    FROM bank_transactions b
+    WHERE b.status = 'booked' AND b.date >= ? AND b.date <= ? ${bankDeleted}
+    ORDER BY b.date DESC, b.id
+  `).all(from, to) as Array<Record<string, unknown>>;
+  for (const bank of bankRows) {
+    const id = String(bank.id);
+    if (representedBanks.has(id)) continue;
+    result.push({
+      sourceType: 'transaction',
+      sourceId: id,
+      date: String(bank.date),
+      amountGross: Math.abs(Number(bank.amount) || 0),
+      flowType: bank.type === 'expense' ? 'expense' : 'income',
+      accountId: typeof bank.account_id === 'string' ? bank.account_id : undefined,
+      linkedViaInvoice: Boolean(bank.linked_invoice_id),
+      counterparty: String(bank.counterparty ?? ''),
+      purpose: String(bank.purpose ?? ''),
+      classificationFallbackId: typeof bank.linked_invoice_id === 'string' ? bank.linked_invoice_id : undefined,
+    });
+  }
+
+  if (tableExists('invoice_payments')) {
+    const invoicePayments = db.prepare(`
+      SELECT p.id, p.invoice_id, p.date, p.amount, i.client, i.number
+      FROM invoice_payments p JOIN invoices i ON i.id = p.invoice_id
+      WHERE p.date >= ? AND p.date <= ?
+      ORDER BY p.date DESC, p.id
+    `).all(from, to) as Array<Record<string, unknown>>;
+    const representedInvoices = new Set(result.filter((item) => item.linkedViaInvoice && item.classificationFallbackId).map((item) => item.classificationFallbackId));
+    for (const payment of invoicePayments) {
+      const invoiceId = String(payment.invoice_id);
+      if (representedInvoices.has(invoiceId)) continue;
+      result.push({
+        sourceType: 'invoice',
+        sourceId: `invoice_payment:${String(payment.id)}`,
+        date: String(payment.date),
+        amountGross: Math.abs(Number(payment.amount) || 0),
+        flowType: 'income',
+        linkedViaInvoice: true,
+        counterparty: String(payment.client ?? ''),
+        purpose: `Rechnung ${String(payment.number ?? invoiceId)}`,
+        classificationFallbackId: invoiceId,
+      });
+    }
+  }
+
+  return result.sort((a, b) => a.date === b.date ? a.sourceId.localeCompare(b.sourceId) : (a.date > b.date ? -1 : 1));
+};
+
+const parseJsonObject = (value: string | null | undefined): Record<string, unknown> | undefined => {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
 };

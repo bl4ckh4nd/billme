@@ -257,6 +257,7 @@ export const eurClassificationSchema = z.object({
   eurLineId: z.string().optional(),
   excluded: z.boolean(),
   vatMode: z.enum(['none', 'default']),
+  vatRate: z.number().min(0).max(100).optional(),
   note: z.string().optional(),
   updatedAt: z.string(),
 });
@@ -310,6 +311,7 @@ export const eurListItemSchema = z.object({
   linkedViaInvoice: z.boolean().optional(),
   counterparty: z.string(),
   purpose: z.string(),
+  vatWarning: z.string().optional(),
   suggestedLineId: z.string().optional(),
   suggestionReason: z.string().optional(),
   suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword']).optional(),
@@ -330,6 +332,7 @@ export const eurUpsertClassificationArgsSchema = z.object({
   eurLineId: z.string().optional(),
   excluded: z.boolean().optional(),
   vatMode: z.enum(['none', 'default']).optional(),
+  vatRate: z.number().min(0).max(100).optional(),
   note: z.string().optional(),
 });
 

@@ -50,6 +50,8 @@ import {
   listImportBatches,
   getImportBatchDetails,
   rollbackImportBatch,
+  commitProImport,
+  rollbackProImportBatch,
 } from '../db/financeImportRepo';
 import type { AppSettings } from '../types';
 import { sendEmail, testEmailConfig, type SmtpConfig, type ResendConfig, type EmailOptions } from '../services/emailService';
@@ -595,6 +597,7 @@ export const registerIpcHandlers = (
     // FIRST PASS: Validate ALL rows and collect errors
     const errors: Array<{ rowIndex: number; message: string }> = [];
     const toInsert: Array<{
+      rowIndex: number;
       id: string;
       accountId: string;
       date: string;
@@ -619,6 +622,7 @@ export const registerIpcHandlers = (
         continue;
       }
       toInsert.push({
+        rowIndex: r.rowIndex,
         id: crypto.randomUUID(),
         accountId: args.accountId,
         date,
@@ -642,6 +646,30 @@ export const registerIpcHandlers = (
         `Bitte überprüfen Sie das CSV-Format und die Spaltenzuordnung.\n` +
         `Maximal 50% Fehlerrate erlaubt.`
       );
+    }
+
+    if (PRODUCT_PROFILE.appId === 'com.billme.pro') {
+      const result = commitProImport(db, {
+        accountId: args.accountId,
+        profile: committed.profile,
+        fileName: committed.fileName,
+        fileSha256: committed.fileSha256,
+        mappingJson: {
+          profile: args.profile ?? 'auto',
+          mapping: args.mapping,
+          encoding: args.encoding,
+          delimiter: args.delimiter,
+        },
+        rows: toInsert.map((row) => ({ ...row, type: row.type as 'income' | 'expense', status: row.status as 'pending' | 'booked' })),
+        errorCount: errors.length,
+      });
+      return {
+        batchId: result.batchId,
+        imported: result.inserted,
+        skipped: result.skipped,
+        errors: [...errors, ...result.conflicts.map((conflict) => ({ rowIndex: conflict.rowIndex ?? 0, message: `${conflict.reason}:${conflict.sourceTransactionId}` }))],
+        fileSha256: committed.fileSha256,
+      };
     }
 
     // SECOND PASS: Only if error rate is acceptable, commit to database
@@ -1104,7 +1132,9 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'finance:rollbackImportBatch', ({ batchId, reason }) => {
     const db = requireDb();
-    return rollbackImportBatch(db, batchId, reason);
+    return PRODUCT_PROFILE.appId === 'com.billme.pro'
+      ? rollbackProImportBatch(db, batchId, reason)
+      : rollbackImportBatch(db, batchId, reason);
   });
 
   register(ipcMain, 'pro:importSkr', (args) => {
@@ -1375,7 +1405,7 @@ export const registerIpcHandlers = (
   register(ipcMain, 'eur:getReport', ({ taxYear, from, to }) => {
     const db = requireDb();
     const settings = requireSettings(db);
-    return getEurReport(db, { taxYear, from, to, settings });
+    return getEurReport(db, { taxYear, from, to, settings, product: 'pro' });
   });
 
   register(ipcMain, 'eur:listItems', ({
@@ -1406,6 +1436,7 @@ export const registerIpcHandlers = (
       accountId,
       limit,
       offset,
+      product: 'pro',
     });
   });
 
@@ -1416,6 +1447,7 @@ export const registerIpcHandlers = (
     eurLineId,
     excluded,
     vatMode,
+    vatRate,
     note,
   }) => {
     const db = requireDb();
@@ -1426,6 +1458,7 @@ export const registerIpcHandlers = (
       eurLineId,
       excluded,
       vatMode,
+      vatRate,
       note,
     });
   });
@@ -1433,7 +1466,7 @@ export const registerIpcHandlers = (
   register(ipcMain, 'eur:exportCsv', ({ taxYear, from, to }) => {
     const db = requireDb();
     const settings = requireSettings(db);
-    const report = getEurReport(db, { taxYear, from, to, settings });
+    const report = getEurReport(db, { taxYear, from, to, settings, product: 'pro' });
     return buildEurCsv(report);
   });
 

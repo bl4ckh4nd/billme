@@ -201,7 +201,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   linked_invoice_id TEXT,
   status TEXT NOT NULL,
   dedup_hash TEXT,
-  import_batch_id TEXT
+  import_batch_id TEXT,
+  linked_payment_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS eur_lines (
@@ -231,6 +232,7 @@ CREATE TABLE IF NOT EXISTS eur_classifications (
   eur_line_id TEXT REFERENCES eur_lines(id) ON DELETE SET NULL,
   excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0, 1)),
   vat_mode TEXT NOT NULL DEFAULT 'none' CHECK (vat_mode IN ('none', 'default')),
+  vat_rate REAL,
   note TEXT,
   updated_at TEXT NOT NULL,
   CHECK (NOT (excluded = 1 AND eur_line_id IS NOT NULL))

@@ -40,6 +40,7 @@ import ReportDrilldownPanel from './reports/ReportDrilldownPanel';
 import DatevExportPanel from './reports/DatevExportPanel';
 import { defaultReportFilters, reportDateRange, reportFiscalYearRange } from '../domain/reportDates';
 import ReportStatusBadge, { MappingHealthBlock, reportIsMappingBlocked } from './reports/ReportStatusBadge';
+import ReportMappingSetup from './reports/ReportMappingSetup';
 
 interface ReportsViewProps {
   dataAdapter?: ProAccountingDataAdapter;
@@ -349,6 +350,13 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+        <ReportMappingSetup
+          dataAdapter={dataAdapter}
+          chart={filters.chart}
+          role={role}
+          refreshKey={reportsRetryKey}
+          onMappingChanged={() => setReportsRetryKey((current) => current + 1)}
+        />
         <ReportToolbar filters={filters} onChange={setFilters} activeTab={activeTab} onExport={dataAdapter ? exportReport : undefined} exporting={exporting} />
         {activeTab === 'eur' && dataAdapter?.saveReportSnapshot ? canMutate ? (
           <div className="flex flex-wrap items-end gap-2 rounded-xl border border-border bg-surface p-3">

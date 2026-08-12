@@ -14,6 +14,14 @@ export type {
   ReportDrilldownSourceType,
   SusaReport,
 } from './domain/reportTypes';
+export type {
+  ReportMappingHealth,
+  ReportMappingMissingAccount,
+  ReportMappingOverrideInput,
+  ReportMappingPosition,
+  ReportMappingSide,
+  ReportMappingStatement,
+} from './domain/reportMapping';
 export {
   defaultReportFilters,
   monthToFirstDay,

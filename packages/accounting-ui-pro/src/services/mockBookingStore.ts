@@ -17,6 +17,7 @@ import type {
   ReportFilterState,
   SusaReport,
 } from '../domain/reportTypes';
+import type { ReportMappingHealth, ReportMappingPosition, ReportMappingOverrideInput } from '../domain/reportMapping';
 import type {
   AssetDepreciationScheduleEntry,
   AssetItem,
@@ -98,6 +99,17 @@ export interface ProAccountingDataAdapter {
   getBwaReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   getManagementGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   getHgbGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  /** Read-only catalog and report-specific missing-account diagnostics. */
+  getReportMappingHealth?: (args?: { chart?: 'SKR03' | 'SKR04'; statement?: ReportMappingHealth['unmapped'][number]['statement'] }) => Promise<ReportMappingHealth>;
+  listReportMappingPositions?: (statement: ReportMappingHealth['unmapped'][number]['statement']) => Promise<ReportMappingPosition[]>;
+  upsertReportMappingOverride?: (input: ReportMappingOverrideInput) => Promise<unknown>;
+  listReportSnapshots?: (reportType?: string) => Promise<ReportSnapshotRecord[]>;
+  saveReportSnapshot?: (input: {
+    reportType: string;
+    args: unknown;
+    payload: unknown;
+    reason: string;
+  }) => Promise<ReportSnapshotRecord>;
   exportReport?: (request: ReportExportRequest) => Promise<ReportExportResult | void>;
   exportReportPdf?: (request: Omit<ReportExportRequest, 'format'>) => Promise<ReportExportResult | void>;
   exportReportCsv?: (request: Omit<ReportExportRequest, 'format'>) => Promise<ReportExportResult | void>;
@@ -146,6 +158,15 @@ export interface ProAccountingDataAdapter {
   upsertIncomingInvoice?: (invoice: IncomingInvoiceEntity, reason: string) => Promise<IncomingInvoiceEntity>;
   previewIncomingInvoiceAccounting?: (invoiceId: string) => Promise<AccountingPostingPreview>;
   postIncomingInvoiceAccounting?: (invoiceId: string, options: { reason: string; softLockOverride?: boolean; overrideReason?: string }) => Promise<AccountingPostingPreview>;
+}
+
+export interface ReportSnapshotRecord {
+  id: string;
+  reportType: string;
+  args: unknown;
+  payload: unknown;
+  createdAt: string;
+  sourceHash: string;
 }
 
 let dataAdapter: ProAccountingDataAdapter | null = null;

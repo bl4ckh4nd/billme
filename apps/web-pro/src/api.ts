@@ -58,8 +58,22 @@ type RequestOptions<T> = {
   parser?: Parser<T>;
 };
 
+export type ProOpenItemPaymentInput = {
+  paymentId?: string;
+  sourceType: 'bank_transaction' | 'invoice_payment' | 'manual';
+  sourceId: string;
+  partyType: 'debtor' | 'creditor';
+  partyId?: string;
+  paymentDate: string;
+  amount: number;
+  bankAccountNumber: string;
+  method?: string;
+  allocations: Array<{ openItemId: string; amount: number }>;
+  /** Stable retry key generated once at the user operation boundary. */
+  allocationEventId: string;
+};
+
 const PRO_PRODUCT_QUERY = { product: 'pro' as const };
-const newAccountingAllocationEventId = (): string => globalThis.crypto.randomUUID();
 const susaReportSchema = z.object({
   asOfDate: z.string(),
   rows: z.array(ledgerBalanceRowSchema),
@@ -431,9 +445,9 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     postIncomingInvoice(invoiceId: string, reason: string, options: Record<string, unknown> = {}) {
       return requestJson({ method: 'POST', body: { invoiceId, reason, ...options }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/incoming-invoices/post');
     },
-    allocateOpenItemPayment(payment: unknown, reason: string) {
-      const paymentPayload = isRecord(payment) ? { ...payment, allocationEventId: typeof payment.allocationEventId === 'string' && payment.allocationEventId.trim() ? payment.allocationEventId : newAccountingAllocationEventId() } : payment;
-      return requestJson({ method: 'POST', body: { payment: paymentPayload, reason }, parser: (input) => input }, '/api/v1/pro/accounting/open-items/payments');
+    allocateOpenItemPayment(payment: ProOpenItemPaymentInput, reason: string) {
+      if (typeof payment.allocationEventId !== 'string' || !payment.allocationEventId.trim()) throw new Error('allocationEventId is required');
+      return requestJson({ method: 'POST', body: { payment, reason }, parser: (input) => input }, '/api/v1/pro/accounting/open-items/payments');
     },
     allocateRemainingOpenItemPayment(paymentId: string, allocations: unknown, reason: string, allocationEventId: string) {
       if (!allocationEventId.trim()) throw new Error('allocationEventId is required');

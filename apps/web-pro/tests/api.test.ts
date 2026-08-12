@@ -80,15 +80,32 @@ test('Pro web client sends one allocation event id for a payment action', async 
   try {
     const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
     await client.allocateOpenItemPayment(
-      { paymentId: 'payment-1', bankAccountNumber: '1200', allocations: [] },
+      {
+        paymentId: 'payment-1',
+        sourceType: 'manual',
+        sourceId: 'source-1',
+        partyType: 'debtor',
+        paymentDate: '2026-08-12',
+        amount: 10,
+        bankAccountNumber: '1200',
+        allocations: [],
+        allocationEventId: 'allocation-event-1',
+      },
       'Zahlung zuordnen',
     );
     const payment = requestBody?.payment as Record<string, unknown>;
-    assert.equal(typeof payment.allocationEventId, 'string');
-    assert.ok(String(payment.allocationEventId).length > 0);
+    assert.equal(payment.allocationEventId, 'allocation-event-1');
   } finally {
     globalThis.fetch = previousFetch;
   }
+});
+
+test('Pro web client rejects a payment action without an allocation event id', async () => {
+  const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+  assert.throws(
+    () => client.allocateOpenItemPayment({ sourceType: 'manual', sourceId: 'source-1', partyType: 'debtor', paymentDate: '2026-08-12', amount: 10, bankAccountNumber: '1200', allocations: [] } as never, 'Zahlung zuordnen'),
+    /allocationEventId is required/,
+  );
 });
 
 test('Pro web client requires and preserves a remaining allocation event id across retries', async () => {

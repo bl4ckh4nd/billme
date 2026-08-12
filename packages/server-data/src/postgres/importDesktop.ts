@@ -100,9 +100,9 @@ type SqliteDraftValidationIssueRow = { id: string; draft_id: string; code: strin
 type SqliteAccountingPeriodRow = { id: string; period: string; fiscal_year: number; status: string; starts_at: string; ends_at: string; created_at: string; updated_at: string };
 type SqliteJournalEntryRow = { id: string; entry_number: number; posting_date: string; document_date: string | null; booking_text: string; reference: string | null; period: string; fiscal_year: number; status: string; source_draft_id: string | null; source_type?: string | null; source_key?: string | null; reversed_entry_id: string | null; created_at: string };
 type SqliteJournalLineRow = { id: string; entry_id: string; line_no: number; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null; tax_case_key: string | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null; gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null; evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null };
-type SqliteAssetRow = { id: string; asset_number: string; name: string; asset_class: string; status: string; activation_date: string; acquisition_cost: number; useful_life_years: number | null; depreciation_method: string; cost_center: string; location: string; receipt_linked: number; supplier: string | null; invoice_ref: string | null; asset_account_number: string; disposal_date: string | null; disposal_proceeds: number | null; created_at: string; updated_at: string };
-type SqliteAssetScheduleRow = { id: string; asset_id: string; year: number; amount: number; months: number; status: string; journal_entry_id: string | null; posted_at: string | null };
-type SqliteAssetMovementRow = { id: string; asset_id: string; type: string; movement_date: string; amount: number; proceeds: number | null; gain_loss: number | null; reason: string; created_at: string };
+type SqliteAssetRow = { id: string; asset_number: string; name: string; asset_class: string; status: string; activation_date: string; acquisition_cost: number; useful_life_years: number | null; depreciation_method: string; cost_center: string; location: string; receipt_linked: number; supplier: string | null; invoice_ref: string | null; asset_account_number: string; disposal_date: string | null; disposal_proceeds: number | null; acquisition_offset_account_number?: string | null; source_incoming_invoice_id?: string | null; activation_journal_entry_id?: string | null; accounting_repair_required?: number | boolean | null; accounting_repair_reason?: string | null; created_at: string; updated_at: string };
+type SqliteAssetScheduleRow = { id: string; asset_id: string; year: number; amount: number; months: number; status: string; journal_entry_id: string | null; source_type?: string | null; source_key?: string | null; posted_at: string | null };
+type SqliteAssetMovementRow = { id: string; asset_id: string; type: string; movement_date: string; amount: number; proceeds: number | null; gain_loss: number | null; journal_entry_id?: string | null; source_type?: string | null; source_key?: string | null; reason: string; created_at: string };
 type SqliteAccountMappingHgbRow = { id: string; chart: string; account_number: string; statement_type: string; position_key: string; position_label: string; balance_side: string | null; updated_at: string };
 type SqliteReportSnapshotRow = { id: string; report_type: string; args_json: string; payload_json: string; created_at: string };
 type SqliteDatevExportRow = { id: string; file_path: string; record_count: number; from_date: string | null; to_date: string | null; created_at: string; meta_json: string };
@@ -468,17 +468,25 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
             usefulLifeYears: row.useful_life_years, depreciationMethod: row.depreciation_method, costCenter: row.cost_center,
             location: row.location, receiptLinked: Boolean(row.receipt_linked), supplier: row.supplier, invoiceRef: row.invoice_ref,
             assetAccountNumber: row.asset_account_number, disposalDate: row.disposal_date, disposalProceeds: row.disposal_proceeds,
+            acquisitionOffsetAccountNumber: row.acquisition_offset_account_number ?? null,
+            sourceIncomingInvoiceId: row.source_incoming_invoice_id ?? null,
+            activationJournalEntryId: row.activation_journal_entry_id ?? null,
+            accountingRepairRequired: Boolean(row.accounting_repair_required),
+            accountingRepairReason: row.accounting_repair_reason ?? null,
             createdAt: row.created_at, updatedAt: row.updated_at } as any);
           counts.assets += 1;
         }
         for (const row of loadAssetSchedule(sqliteDb)) {
           await createDrizzle(client).insert(schema.assetDepreciationSchedule).values({ id: row.id, tenantId, assetId: row.asset_id,
-            year: row.year, amount: row.amount, months: row.months, status: row.status, journalEntryId: row.journal_entry_id, postedAt: row.posted_at } as any);
+            year: row.year, amount: row.amount, months: row.months, status: row.status, journalEntryId: row.journal_entry_id,
+            sourceType: row.source_type ?? null, sourceKey: row.source_key ?? null, postedAt: row.posted_at } as any);
           counts.assetDepreciationSchedule += 1;
         }
         for (const row of loadAssetMovements(sqliteDb)) {
           await createDrizzle(client).insert(schema.assetMovements).values({ id: row.id, tenantId, assetId: row.asset_id, type: row.type,
-            movementDate: row.movement_date, amount: row.amount, proceeds: row.proceeds, gainLoss: row.gain_loss, reason: row.reason, createdAt: row.created_at } as any);
+            movementDate: row.movement_date, amount: row.amount, proceeds: row.proceeds, gainLoss: row.gain_loss,
+            journalEntryId: row.journal_entry_id ?? null, sourceType: row.source_type ?? null, sourceKey: row.source_key ?? null,
+            reason: row.reason, createdAt: row.created_at } as any);
           counts.assetMovements += 1;
         }
         for (const row of loadAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerAccountMappingHgb(client, row); counts.accountMappingsHgb += 1; }

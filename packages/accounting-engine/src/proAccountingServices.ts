@@ -265,9 +265,7 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   getGuvReport: (scope, args) => repository.getGuvReport(scope, args),
   getBilanzReport: (scope, args) => repository.getBilanzReport(scope, args),
   listDatevExports: (scope) => repository.listDatevExports(scope),
-  getDatevExportContent: (scope, exportId) => repository.getDatevExportContent
-    ? repository.getDatevExportContent(scope, exportId)
-    : Promise.reject(new Error('DATEV_EXPORT_CONTENT_UNAVAILABLE')),
+  getDatevExportContent: (scope, exportId) => repository.getDatevExportContent(scope, exportId),
   insertDatevExport: (scope, args) => repository.insertDatevExport(scope, args),
   getAccountingHealth: (scope) => repository.getAccountingHealth(scope),
   getVatSummary: (scope, args) => repository.getVatSummary(scope, args),

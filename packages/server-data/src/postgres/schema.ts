@@ -685,6 +685,11 @@ export const assets = pgTable("assets", {
   assetAccountNumber: text("asset_account_number"),
   disposalDate: text("disposal_date"),
   disposalProceeds: numeric("disposal_proceeds"),
+  acquisitionOffsetAccountNumber: text("acquisition_offset_account_number"),
+  sourceIncomingInvoiceId: text("source_incoming_invoice_id"),
+  activationJournalEntryId: text("activation_journal_entry_id"),
+  accountingRepairRequired: boolean("accounting_repair_required"),
+  accountingRepairReason: text("accounting_repair_reason"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
@@ -700,6 +705,8 @@ export const assetDepreciationSchedule = pgTable(
     months: integer("months"),
     status: text("status"),
     journalEntryId: text("journal_entry_id"),
+    sourceType: text("source_type"),
+    sourceKey: text("source_key"),
     postedAt: text("posted_at"),
   },
 );
@@ -713,6 +720,9 @@ export const assetMovements = pgTable("asset_movements", {
   amount: numeric("amount"),
   proceeds: numeric("proceeds"),
   gainLoss: numeric("gain_loss"),
+  journalEntryId: text("journal_entry_id"),
+  sourceType: text("source_type"),
+  sourceKey: text("source_key"),
   reason: text("reason"),
   createdAt: text("created_at"),
 });

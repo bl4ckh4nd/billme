@@ -4,6 +4,9 @@ ALTER TABLE datev_exports ADD COLUMN IF NOT EXISTS content_bytes BYTEA;
 
 CREATE OR REPLACE FUNCTION billme_protect_datev_export_bytes() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'DATEV export snapshots are immutable';
+  END IF;
   IF OLD.content_bytes IS DISTINCT FROM NEW.content_bytes
      OR OLD.file_path IS DISTINCT FROM NEW.file_path
      OR OLD.meta_json IS DISTINCT FROM NEW.meta_json
@@ -16,4 +19,4 @@ BEGIN
 END $$;
 
 DROP TRIGGER IF EXISTS datev_exports_immutable ON datev_exports;
-CREATE TRIGGER datev_exports_immutable BEFORE UPDATE ON datev_exports FOR EACH ROW EXECUTE FUNCTION billme_protect_datev_export_bytes();
+CREATE TRIGGER datev_exports_immutable BEFORE UPDATE OR DELETE ON datev_exports FOR EACH ROW EXECUTE FUNCTION billme_protect_datev_export_bytes();

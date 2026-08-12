@@ -20,6 +20,7 @@ const postgresMigrationUrls = [
   new URL('../../drizzle/0005_server_data_audit_heads.sql', import.meta.url),
   new URL('../../drizzle/0006_server_data_opos.sql', import.meta.url),
   new URL('../../drizzle/0007_server_data_opos_hardening.sql', import.meta.url),
+  new URL('../../drizzle/0008_server_data_asset_accounting.sql', import.meta.url),
 ];
 
 const extractSqliteTableNames = async (schemaUrl: URL): Promise<string[]> => {

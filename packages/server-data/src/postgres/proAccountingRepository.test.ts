@@ -63,7 +63,7 @@ test('DATEV byte snapshot migration is additive and immutable', async () => {
   assert.match(migration, /ADD COLUMN IF NOT EXISTS content_bytes BYTEA/);
   assert.match(migration, /datev_exports_immutable/);
   assert.match(migration, /OLD\.content_bytes IS DISTINCT FROM NEW\.content_bytes/);
-  assert.match(migration, /CREATE TRIGGER datev_exports_immutable BEFORE UPDATE/);
+  assert.match(migration, /CREATE TRIGGER datev_exports_immutable BEFORE UPDATE OR DELETE/);
 });
 
 test('real Postgres DATEV exports return the exact persisted bytes after source changes', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
@@ -94,12 +94,25 @@ test('real Postgres DATEV exports return the exact persisted bytes after source 
       () => pool.query(`UPDATE datev_exports SET content_bytes=$1 WHERE tenant_id=$2 AND id=$3`, [sourceBytesAfterSourceChange, tenantId, receipt.id]),
       /DATEV export snapshots are immutable/,
     );
+    await assert.rejects(
+      () => pool.query(`DELETE FROM datev_exports WHERE tenant_id=$1 AND id=$2`, [tenantId, receipt.id]),
+      /DATEV export snapshots are immutable/,
+    );
   } finally {
-    await pool.query(`ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete`).catch(() => undefined);
-    await pool.query(`DELETE FROM datev_exports WHERE tenant_id=$1`, [tenantId]).catch(() => undefined);
-    await pool.query(`DELETE FROM audit_log WHERE tenant_id=$1`, [tenantId]).catch(() => undefined);
-    await pool.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]).catch(() => undefined);
-    await pool.query(`ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete`).catch(() => undefined);
+    await pool.query('BEGIN');
+    try {
+      await pool.query(`ALTER TABLE datev_exports DISABLE TRIGGER datev_exports_immutable`);
+      await pool.query(`ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete`);
+      await pool.query(`DELETE FROM datev_exports WHERE tenant_id=$1`, [tenantId]);
+      await pool.query(`DELETE FROM audit_log WHERE tenant_id=$1`, [tenantId]);
+      await pool.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]);
+      await pool.query(`ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete`);
+      await pool.query(`ALTER TABLE datev_exports ENABLE TRIGGER datev_exports_immutable`);
+      await pool.query('COMMIT');
+    } catch (error) {
+      await pool.query('ROLLBACK');
+      throw error;
+    }
     await pool.end();
   }
 });

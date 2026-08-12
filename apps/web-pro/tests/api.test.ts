@@ -90,3 +90,24 @@ test('Pro web client sends one allocation event id for a payment action', async 
     globalThis.fetch = previousFetch;
   }
 });
+
+test('Pro web client requires and preserves a remaining allocation event id across retries', async () => {
+  const previousFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    assert.throws(() => client.allocateRemainingOpenItemPayment('payment-1', [], 'Restzahlung', ''), /allocationEventId is required/);
+    await client.allocateRemainingOpenItemPayment('payment-1', [], 'Restzahlung', 'allocation-event-1');
+    await client.allocateRemainingOpenItemPayment('payment-1', [], 'Restzahlung', 'allocation-event-1');
+    assert.deepEqual(
+      bodies.map((body) => body.allocationEventId),
+      ['allocation-event-1', 'allocation-event-1'],
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

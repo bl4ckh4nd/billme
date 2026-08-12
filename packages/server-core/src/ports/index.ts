@@ -466,7 +466,7 @@ export interface ProAccountingRepository {
   getGuvReport(scope: TenantScope, args?: ReportRangeOptions): Promise<GuvReport>;
   getBilanzReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<BilanzReport>;
   listDatevExports(scope: TenantScope): Promise<DatevExportResult[]>;
-  getDatevExportContent?(scope: TenantScope, exportId: string): Promise<DatevExportContent>;
+  getDatevExportContent(scope: TenantScope, exportId: string): Promise<DatevExportContent>;
   insertDatevExport(
     scope: TenantScope,
     args: {

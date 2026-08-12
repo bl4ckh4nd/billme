@@ -435,7 +435,8 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       const paymentPayload = isRecord(payment) ? { ...payment, allocationEventId: typeof payment.allocationEventId === 'string' && payment.allocationEventId.trim() ? payment.allocationEventId : newAccountingAllocationEventId() } : payment;
       return requestJson({ method: 'POST', body: { payment: paymentPayload, reason }, parser: (input) => input }, '/api/v1/pro/accounting/open-items/payments');
     },
-    allocateRemainingOpenItemPayment(paymentId: string, allocations: unknown, reason: string, allocationEventId = newAccountingAllocationEventId()) {
+    allocateRemainingOpenItemPayment(paymentId: string, allocations: unknown, reason: string, allocationEventId: string) {
+      if (!allocationEventId.trim()) throw new Error('allocationEventId is required');
       return requestJson({ method: 'POST', body: { paymentId, allocations, reason, allocationEventId }, parser: (input) => input }, `/api/v1/pro/accounting/open-items/payments/${encodeURIComponent(paymentId)}/remaining`);
     },
     reverseDocumentAccounting(input: unknown, reason: string) {

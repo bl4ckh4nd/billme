@@ -70,6 +70,9 @@ export const createSqliteProAccountingRepository = (db: Database.Database): ProA
   getGuvReport: async (scope, args) => getGuvReport(db, args, scope),
   getBilanzReport: async (scope, args) => getBilanzReport(db, args, scope),
   listDatevExports: async (scope) => listDatevExports(db, scope),
+  getDatevExportContent: async () => {
+    throw new Error('DATEV_EXPORT_CONTENT_UNAVAILABLE');
+  },
   insertDatevExport: async (scope, args) => insertDatevExport(db, args, scope),
   getAccountingHealth: async (scope) => getAccountingHealth(db, scope),
   getVatSummary: async (scope, args) => getVatSummary(db, args, scope),

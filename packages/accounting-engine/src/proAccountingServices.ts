@@ -18,6 +18,7 @@ import type {
   AccountSuggestionRule,
   BookingDraftEntity,
   DatevExportResult,
+  DatevExportContent,
   JournalEntryEntity,
   LedgerAccount,
   LedgerAccountStats,
@@ -69,11 +70,11 @@ type ProAccountingRepositoryWithOpos = ProAccountingRepository & ProAccountingOp
 export interface ProAccountingService {
   listBankTransactions(scope: TenantScope): Promise<ProBankTransaction[]>;
   getDraftByTransactionId(scope: TenantScope, transactionId: string): Promise<BookingDraftEntity | null>;
-  saveDraft(scope: TenantScope, draft: BookingDraftEntity): Promise<BookingDraftEntity>;
+  saveDraft(scope: TenantScope, draft: BookingDraftEntity & { mutation?: AccountingMutationContext }): Promise<BookingDraftEntity>;
   dispatchDraftAction(scope: TenantScope, args: ProDraftActionRequest): Promise<BookingDraftEntity>;
   validateTaxCompliance(
     scope: TenantScope,
-    args: { draftId?: string; transactionId?: string },
+    args: { draftId?: string; transactionId?: string; mutation?: AccountingMutationContext },
   ): Promise<{ ok: boolean; issues: ValidationIssue[] }>;
   postDraft(scope: TenantScope, draftId: string, options?: PostDraftOptions): Promise<{
     entry: JournalEntryEntity;
@@ -86,13 +87,10 @@ export interface ProAccountingService {
   getGuvReport(scope: TenantScope, args?: ReportRangeOptions): Promise<GuvReport>;
   getBilanzReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<BilanzReport>;
   listDatevExports(scope: TenantScope): Promise<DatevExportResult[]>;
+  getDatevExportContent(scope: TenantScope, exportId: string): Promise<DatevExportContent>;
   insertDatevExport(
     scope: TenantScope,
-    args: {
-      id?: string; filePath: string; recordCount: number; fromDate?: string; toDate?: string;
-      sha256?: string; byteSize?: number; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number;
-      chart?: 'SKR03' | 'SKR04'; sourceSnapshotHash?: string; manifestJson?: string; status?: string; validationJson?: string;
-    },
+    args: { id?: string; filePath: string; recordCount: number; content?: Uint8Array; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: { from?: string; to?: string; recordCount: number }; sha256?: string; byteSize?: number; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshotHash?: string; manifestJson?: string; status?: string; validationJson?: string; mutation?: AccountingMutationContext },
   ): Promise<DatevExportResult>;
   getAccountingHealth(scope: TenantScope): Promise<AccountingHealthSnapshot>;
   getVatSummary(scope: TenantScope, args?: ReportRangeOptions): Promise<{
@@ -131,9 +129,9 @@ export interface ProAccountingService {
 export interface BoundProAccountingService {
   listBankTransactions(): Promise<ProBankTransaction[]>;
   getDraftByTransactionId(transactionId: string): Promise<BookingDraftEntity | null>;
-  saveDraft(draft: BookingDraftEntity): Promise<BookingDraftEntity>;
+  saveDraft(draft: BookingDraftEntity & { mutation?: AccountingMutationContext }): Promise<BookingDraftEntity>;
   dispatchDraftAction(args: ProDraftActionRequest): Promise<BookingDraftEntity>;
-  validateTaxCompliance(args: { draftId?: string; transactionId?: string }): Promise<{ ok: boolean; issues: ValidationIssue[] }>;
+  validateTaxCompliance(args: { draftId?: string; transactionId?: string; mutation?: AccountingMutationContext }): Promise<{ ok: boolean; issues: ValidationIssue[] }>;
   postDraft(draftId: string, options?: PostDraftOptions): Promise<{
     entry: JournalEntryEntity;
     issues: ValidationIssue[];
@@ -145,11 +143,8 @@ export interface BoundProAccountingService {
   getGuvReport(args?: ReportRangeOptions): Promise<GuvReport>;
   getBilanzReport(args?: LedgerBalanceOptions): Promise<BilanzReport>;
   listDatevExports(): Promise<DatevExportResult[]>;
-  insertDatevExport(args: {
-    id?: string; filePath: string; recordCount: number; fromDate?: string; toDate?: string;
-    sha256?: string; byteSize?: number; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number;
-    chart?: 'SKR03' | 'SKR04'; sourceSnapshotHash?: string; manifestJson?: string; status?: string; validationJson?: string;
-  }): Promise<DatevExportResult>;
+  getDatevExportContent(exportId: string): Promise<DatevExportContent>;
+  insertDatevExport(args: { id?: string; filePath: string; recordCount: number; content?: Uint8Array; fromDate?: string; toDate?: string; contentSha256?: string; sourceSnapshot?: { from?: string; to?: string; recordCount: number }; sha256?: string; byteSize?: number; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshotHash?: string; manifestJson?: string; status?: string; validationJson?: string; mutation?: AccountingMutationContext }): Promise<DatevExportResult>;
   getAccountingHealth(): Promise<AccountingHealthSnapshot>;
   getVatSummary(args?: ReportRangeOptions): Promise<{
     from?: string;
@@ -263,13 +258,17 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   validateTaxCompliance: (scope, args) => repository.validateTaxCompliance(scope, args),
   postDraft: (scope, draftId, options) => repository.postDraft(scope, draftId, options),
   reverseJournalEntry: (scope, entryId, reason, options) =>
-    (repository.reverseJournalEntry as unknown as (scope: TenantScope, entryId: string, reason: string, options?: ReverseJournalEntryOptions) => Promise<{ ok: true; reversalEntryId: string }>)(scope, entryId, reason, options),
+    repository.reverseJournalEntry(scope, entryId, reason, options),
   listJournalEntries: (scope, args) => repository.listJournalEntries(scope, args),
   getLedgerBalances: (scope, args) => repository.getLedgerBalances(scope, args),
   getSusaReport: (scope, args) => repository.getSusaReport(scope, args),
   getGuvReport: (scope, args) => repository.getGuvReport(scope, args),
   getBilanzReport: (scope, args) => repository.getBilanzReport(scope, args),
   listDatevExports: (scope) => repository.listDatevExports(scope),
+  getDatevExportContent: async (scope, exportId) => {
+    if (!repository.getDatevExportContent) throw new Error('DATEV_EXPORT_CONTENT_UNAVAILABLE');
+    return repository.getDatevExportContent(scope, exportId);
+  },
   insertDatevExport: (scope, args) => repository.insertDatevExport(scope, args),
   getAccountingHealth: (scope) => repository.getAccountingHealth(scope),
   getVatSummary: (scope, args) => repository.getVatSummary(scope, args),
@@ -312,6 +311,7 @@ export const bindProAccountingScope = (
   getGuvReport: (args) => service.getGuvReport(scope, args),
   getBilanzReport: (args) => service.getBilanzReport(scope, args),
   listDatevExports: () => service.listDatevExports(scope),
+  getDatevExportContent: (exportId) => service.getDatevExportContent(scope, exportId),
   insertDatevExport: (args) => service.insertDatevExport(scope, args),
   getAccountingHealth: () => service.getAccountingHealth(scope),
   getVatSummary: (args) => service.getVatSummary(scope, args),

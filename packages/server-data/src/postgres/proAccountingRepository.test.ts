@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { createSingleTenantScope } from '@billme/server-core';
 import type { PostgresQueryable, PostgresTransactionClient } from './connection.js';
@@ -54,6 +55,66 @@ test('OPOS hardening migration protects posted incoming invoice lines and persis
   assert.match(migration, /ADD COLUMN IF NOT EXISTS config_json/);
   assert.match(migration, /ADD COLUMN IF NOT EXISTS event_key/);
   assert.match(migration, /NEW\.status IN \('open','paid','overdue','unresolved'\)/);
+});
+
+test('DATEV byte snapshot migration is additive and immutable', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const migration = await readFile(new URL('../../drizzle/0009_server_data_datev_export_bytes.sql', import.meta.url), 'utf8');
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS content_bytes BYTEA/);
+  assert.match(migration, /datev_exports_immutable/);
+  assert.match(migration, /OLD\.content_bytes IS DISTINCT FROM NEW\.content_bytes/);
+  assert.match(migration, /CREATE TRIGGER datev_exports_immutable BEFORE UPDATE OR DELETE/);
+});
+
+test('real Postgres DATEV exports return the exact persisted bytes after source changes', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tenantId = `datev-bytes-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const scope = createSingleTenantScope(tenantId, 'pro');
+  const now = new Date().toISOString();
+  const filePath = `datev-export/test-${tenantId}`;
+  const sourceBytes = new TextEncoder().encode('konto;gegenkonto;buchungstext\n1200;8400;"source;before"\n');
+  try {
+    await runDrizzleMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'DATEV bytes test', now]);
+    const repository = createPostgresProAccountingRepository(pool);
+    const receipt = await repository.insertDatevExport(scope, {
+      filePath,
+      recordCount: 1,
+      content: sourceBytes,
+      contentSha256: createHash('sha256').update(sourceBytes).digest('hex'),
+      sourceSnapshot: { recordCount: 1 },
+      mutation: { reason: 'verify DATEV snapshot', actor: { type: 'user', id: 'test-user' } },
+    });
+    const sourceBytesAfterSourceChange = new TextEncoder().encode('konto;gegenkonto;buchungstext\n1200;8400;"source;after"\n');
+    assert.notDeepEqual(Array.from(sourceBytes), Array.from(sourceBytesAfterSourceChange));
+    const snapshot = await repository.getDatevExportContent!(scope, receipt.id);
+    assert.deepEqual(Array.from(snapshot.content), Array.from(sourceBytes));
+    assert.equal(snapshot.contentSha256, receipt.contentSha256);
+    await assert.rejects(
+      () => pool.query(`UPDATE datev_exports SET content_bytes=$1 WHERE tenant_id=$2 AND id=$3`, [sourceBytesAfterSourceChange, tenantId, receipt.id]),
+      /DATEV export snapshots are immutable/,
+    );
+    await assert.rejects(
+      () => pool.query(`DELETE FROM datev_exports WHERE tenant_id=$1 AND id=$2`, [tenantId, receipt.id]),
+      /DATEV export snapshots are immutable/,
+    );
+  } finally {
+    await pool.query('BEGIN');
+    try {
+      await pool.query(`ALTER TABLE datev_exports DISABLE TRIGGER datev_exports_immutable`);
+      await pool.query(`ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete`);
+      await pool.query(`DELETE FROM datev_exports WHERE tenant_id=$1`, [tenantId]);
+      await pool.query(`DELETE FROM audit_log WHERE tenant_id=$1`, [tenantId]);
+      await pool.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]);
+      await pool.query(`ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete`);
+      await pool.query(`ALTER TABLE datev_exports ENABLE TRIGGER datev_exports_immutable`);
+      await pool.query('COMMIT');
+    } catch (error) {
+      await pool.query('ROLLBACK');
+      throw error;
+    }
+    await pool.end();
+  }
 });
 
 test('real Postgres permits only OPOS status projection and rejects repeated over-allocation', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
@@ -124,7 +185,7 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     await assert.rejects(() => repository.allocateOpenItemPayment(scope, { paymentId: `no-event-${suffix}`, partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 100, bankAccountNumber: bankAccount, sourceType: 'manual', sourceId: `no-event-${suffix}`, allocations: [{ openItemId, amount: 10 }] } as any), /ALLOCATION_EVENT_ID_REQUIRED/);
     assert.equal(Number((await pool.query(`SELECT COUNT(*)::int AS count FROM open_item_payments WHERE tenant_id=$1`, [tenantId])).rows[0].count), noEventPaymentCount);
     assert.equal(Number((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count), noEventJournalCount);
-    await repository.allocateOpenItemPayment(scope, { paymentId, partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 100, bankAccountNumber: bankAccount, sourceType: 'manual', sourceId: `manual-${suffix}`, allocations: [{ openItemId, amount: 80 }], allocationEventId: 'initial-80' });
+    await repository.allocateOpenItemPayment(scope, { paymentId, partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 100, bankAccountNumber: bankAccount, sourceType: 'manual', sourceId: `manual-${suffix}`, allocations: [{ openItemId, amount: 80 }], allocationEventId: 'initial-80', reason: 'test allocation' });
     await assert.rejects(() => repository.allocateRemainingOpenItemPayment(scope, paymentId, [{ openItemId, amount: 1 }], '' as any), /ALLOCATION_EVENT_ID_REQUIRED/);
     await assert.rejects(() => repository.allocateRemainingOpenItemPayment(scope, paymentId, [{ openItemId, amount: 80 }], 'over-allocation'), /PAYMENT_ALLOCATION_EXCEEDS_RESIDUAL/);
     const item = (await pool.query(`SELECT allocated_amount,residual_amount,status FROM open_items WHERE tenant_id=$1 AND id=$2`, [tenantId, openItemId])).rows[0];
@@ -132,11 +193,11 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     const invoice = (await pool.query(`SELECT status,accounting_status FROM invoices WHERE tenant_id=$1 AND id=$2`, [tenantId, invoiceId])).rows[0];
     assert.deepEqual(invoice, { status: 'open', accounting_status: 'posted' });
     await pool.query(`INSERT INTO bank_transactions (id,tenant_id,account_id,date,amount,type,counterparty,purpose,linked_invoice_id,status,source_transaction_id,created_at,updated_at) VALUES ($1,$2,$3,'2026-08-12',20,'income','Test payer','RE test',NULL,'pending',$1,$4,$4)`, [bankTransactionId, tenantId, bankAccountId, now]);
-    await assert.rejects(() => repository.allocateOpenItemPayment(scope, { partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 19, bankAccountNumber: bankAccount, sourceType: 'bank_transaction', sourceId: bankTransactionId, allocations: [{ openItemId, amount: 19 }], allocationEventId: 'bank-wrong-amount' }), /PAYMENT_SOURCE_MISMATCH/);
-    await assert.rejects(() => repository.allocateOpenItemPayment(scope, { partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-13', amount: 20, bankAccountNumber: bankAccount, sourceType: 'bank_transaction', sourceId: bankTransactionId, allocations: [{ openItemId, amount: 20 }], allocationEventId: 'bank-wrong-date' }), /PAYMENT_SOURCE_MISMATCH/);
-    await assert.rejects(() => repository.allocateOpenItemPayment(scope, { partyType: 'creditor', partyId: 'client', paymentDate: '2026-08-12', amount: 20, bankAccountNumber: bankAccount, sourceType: 'bank_transaction', sourceId: bankTransactionId, allocations: [{ openItemId, amount: 20 }], allocationEventId: 'bank-wrong-direction' }), /PAYMENT_SOURCE_DIRECTION_MISMATCH/);
-    await assert.rejects(() => repository.allocateOpenItemPayment(createSingleTenantScope(`foreign-${suffix}`, 'pro'), { partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 20, bankAccountNumber: bankAccount, sourceType: 'bank_transaction', sourceId: bankTransactionId, allocations: [{ openItemId, amount: 20 }], allocationEventId: 'bank-foreign' }), /PAYMENT_SOURCE_NOT_FOUND/);
-    await repository.allocateOpenItemPayment(scope, { partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 20, bankAccountNumber: bankAccount, sourceType: 'bank_transaction', sourceId: bankTransactionId, allocations: [{ openItemId, amount: 20 }], allocationEventId: 'bank-payment' });
+    await assert.rejects(() => repository.allocateOpenItemPayment(scope, { partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 19, bankAccountNumber: bankAccount, sourceType: 'bank_transaction', sourceId: bankTransactionId, allocations: [{ openItemId, amount: 19 }], allocationEventId: 'bank-wrong-amount', reason: 'test allocation' }), /PAYMENT_SOURCE_MISMATCH/);
+    await assert.rejects(() => repository.allocateOpenItemPayment(scope, { partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-13', amount: 20, bankAccountNumber: bankAccount, sourceType: 'bank_transaction', sourceId: bankTransactionId, allocations: [{ openItemId, amount: 20 }], allocationEventId: 'bank-wrong-date', reason: 'test allocation' }), /PAYMENT_SOURCE_MISMATCH/);
+    await assert.rejects(() => repository.allocateOpenItemPayment(scope, { partyType: 'creditor', partyId: 'client', paymentDate: '2026-08-12', amount: 20, bankAccountNumber: bankAccount, sourceType: 'bank_transaction', sourceId: bankTransactionId, allocations: [{ openItemId, amount: 20 }], allocationEventId: 'bank-wrong-direction', reason: 'test allocation' }), /PAYMENT_SOURCE_DIRECTION_MISMATCH/);
+    await assert.rejects(() => repository.allocateOpenItemPayment(createSingleTenantScope(`foreign-${suffix}`, 'pro'), { partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 20, bankAccountNumber: bankAccount, sourceType: 'bank_transaction', sourceId: bankTransactionId, allocations: [{ openItemId, amount: 20 }], allocationEventId: 'bank-foreign', reason: 'test allocation' }), /PAYMENT_SOURCE_NOT_FOUND/);
+    await repository.allocateOpenItemPayment(scope, { partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 20, bankAccountNumber: bankAccount, sourceType: 'bank_transaction', sourceId: bankTransactionId, allocations: [{ openItemId, amount: 20 }], allocationEventId: 'bank-payment', reason: 'test allocation' });
     assert.equal((await pool.query(`SELECT status,linked_invoice_id FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [tenantId, bankTransactionId])).rows[0].status, 'booked');
     await pool.query(`INSERT INTO invoices (id,tenant_id,number,client,client_email,date,due_date,amount,status,dunning_level,items_json,payments_json,history_json,created_at,updated_at,accounting_status,tax_snapshot_json) VALUES ($1,$2,$3,'Reserved client','test@example.test','2026-08-12','2026-08-31',119,'open',0,$4,'[]','[]',$5,$5,'unposted',$6)`, [reservationInvoiceId, tenantId, `RE-RES-${suffix}`, JSON.stringify([{ description: 'Service', total: 119, taxRate: 19 }]), now, JSON.stringify({ netAmount: 100, taxAmount: 19, grossAmount: 119, vatBreakdown: [{ rate: 19, netAmount: 100, vatAmount: 19, taxCaseKey: reservationTaxCaseKey }] })]);
     await assert.rejects(() => repository.postOutgoingInvoice(scope, reservationInvoiceId), /FINALIZED_RESERVATION_REQUIRED/);
@@ -160,7 +221,7 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     assert.ok(datevRows.some((row) => row.belegfeld1 === String(legacyEntryNumber) && row.umsatz === 10));
     assert.ok(datevRows.some((row) => row.belegfeld1 !== String(legacyEntryNumber)));
     const allocationCountBeforeAuditFailure = Number((await pool.query(`SELECT COUNT(*)::int AS count FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2`, [tenantId, paymentId])).rows[0].count);
-    await assert.rejects(() => repository.allocateOpenItemPayment(scope, { paymentId, partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 100, bankAccountNumber: bankAccount, sourceType: 'manual', sourceId: `manual-${suffix}`, allocations: [{ openItemId, amount: 10 }], allocationEventId: 'audit-failure', mutation: { reason: '   ', actor: { type: 'user', id: 'reviewer' } } }), /ACCOUNTING_AUDIT_REASON_REQUIRED/);
+    await assert.rejects(() => repository.allocateOpenItemPayment(scope, { paymentId, partyType: 'debtor', partyId: 'client', paymentDate: '2026-08-12', amount: 100, bankAccountNumber: bankAccount, sourceType: 'manual', sourceId: `manual-${suffix}`, allocations: [{ openItemId, amount: 10 }], allocationEventId: 'audit-failure', reason: 'test allocation', mutation: { reason: '   ', actor: { type: 'user', id: 'reviewer' } } }), /ACCOUNTING_AUDIT_REASON_REQUIRED/);
     assert.equal(Number((await pool.query(`SELECT COUNT(*)::int AS count FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2`, [tenantId, paymentId])).rows[0].count), allocationCountBeforeAuditFailure);
 
     await pool.query(`UPDATE accounting_policies SET vat_method='ist' WHERE tenant_id=$1`, [tenantId]);
@@ -170,10 +231,10 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     await pool.query(`INSERT INTO invoices (id,tenant_id,number,client,client_email,date,due_date,amount,status,dunning_level,items_json,payments_json,history_json,created_at,updated_at,accounting_status,accounting_snapshot_json) VALUES ($1,$2,$3,'Ist Client','test@example.test','2026-08-12','2026-08-31',119,'open',0,'[]','[]','[]',$4,$4,'posted',$5)`, [istInvoiceId, tenantId, `RE-IST-${suffix}`, now, JSON.stringify({ sourceType: 'outgoing_invoice', sourceId: istInvoiceId, sourceVersion: 'fixture', chart: 'SKR03', vatMethod: 'ist', netAmount: 100, taxAmount: 19, grossAmount: 119, lines: [{ id: 'ar', accountNumber: receivableAccount, debitAmount: 119, creditAmount: 0 }, { id: 'base', accountNumber: '8400', debitAmount: 0, creditAmount: 100, memo: 'UStBasis DE_STD_19' }, { id: 'vat', accountNumber: deferredVatAccount, debitAmount: 0, creditAmount: 19, memo: 'USt DE_STD_19' }], capturedAt: now })]);
     await pool.query(`INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,created_at,updated_at) VALUES ($1,$2,'debtor','ist-client','outgoing_invoice',$3,$4,'2026-08-12','2026-08-31',119,0,119,'open',$5,$5)`, [istItemId, tenantId, istInvoiceId, `RE-IST-${suffix}`, now]);
     const istPaymentId = `ist-payment-${suffix}`;
-    await repository.allocateOpenItemPayment(scope, { paymentId: istPaymentId, partyType: 'debtor', partyId: 'ist-client', paymentDate: '2026-08-12', amount: 119, bankAccountNumber: bankAccount, sourceType: 'manual', sourceId: `ist-manual-${suffix}`, allocations: [{ openItemId: istItemId, amount: 59.5 }], allocationEventId: 'ist-first' });
+    await repository.allocateOpenItemPayment(scope, { paymentId: istPaymentId, partyType: 'debtor', partyId: 'ist-client', paymentDate: '2026-08-12', amount: 119, bankAccountNumber: bankAccount, sourceType: 'manual', sourceId: `ist-manual-${suffix}`, allocations: [{ openItemId: istItemId, amount: 59.5 }], allocationEventId: 'ist-first', reason: 'test allocation' });
     assert.equal((await pool.query(`SELECT COUNT(*)::int c FROM journal_entries WHERE tenant_id=$1 AND source_type='payment_vat'`, [tenantId])).rows[0].c, 1);
     assert.equal((await repository.getVatSummary(scope)).rows.find((row) => row.taxCaseKey === 'DE_STD_19')?.taxAmount, vatBaseline + 9.5);
-    await repository.allocateOpenItemPayment(scope, { paymentId: istPaymentId, partyType: 'debtor', partyId: 'ist-client', paymentDate: '2026-08-12', amount: 119, bankAccountNumber: bankAccount, sourceType: 'manual', sourceId: `ist-manual-${suffix}`, allocations: [{ openItemId: istItemId, amount: 59.5 }], allocationEventId: 'ist-first' });
+    await repository.allocateOpenItemPayment(scope, { paymentId: istPaymentId, partyType: 'debtor', partyId: 'ist-client', paymentDate: '2026-08-12', amount: 119, bankAccountNumber: bankAccount, sourceType: 'manual', sourceId: `ist-manual-${suffix}`, allocations: [{ openItemId: istItemId, amount: 59.5 }], allocationEventId: 'ist-first', reason: 'test allocation' });
     assert.equal((await pool.query(`SELECT COUNT(*)::int c FROM journal_entries WHERE tenant_id=$1 AND source_type='payment_vat'`, [tenantId])).rows[0].c, 1);
     await repository.allocateRemainingOpenItemPayment(scope, istPaymentId, [{ openItemId: istItemId, amount: 59.5 }], 'ist-second');
     assert.equal((await pool.query(`SELECT COUNT(*)::int c FROM journal_entries WHERE tenant_id=$1 AND source_type='payment_vat'`, [tenantId])).rows[0].c, 2);

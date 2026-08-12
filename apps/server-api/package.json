@@ -12,6 +12,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@billme/accounting-engine": "workspace:*",
+    "@billme/accounting-shared": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/server-data": "workspace:*",

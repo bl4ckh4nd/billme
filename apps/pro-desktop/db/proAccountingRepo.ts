@@ -14,7 +14,7 @@ import type {
   ReportingMapping,
   ReportingStatement,
 } from '@billme/accounting-shared';
-import { calculateReport } from '@billme/accounting-engine';
+import { calculateReport, listReportMappingPositions } from '@billme/accounting-engine';
 import { fiscalYearForDate } from '@billme/accounting-shared';
 import { appendAuditLog } from './audit';
 import { getSettings } from './settingsRepo';
@@ -2363,11 +2363,35 @@ export const getReportMappingHealth = (
   const activeChart = getAccountingPolicy(db, tenantId).activeChart;
   if (args.chart && args.chart !== activeChart) throw new Error('REPORT_CHART_MISMATCH');
   const chart = args.chart ?? activeChart;
-  const mappings = loadHgbMappings(db, tenantId, chart).filter((row) => !args.statement || row.statement_type === args.statement);
-  const mappedAccounts = new Set(mappings.map((row) => row.account_number));
+  const canonicalStatement = (statement: string): ReportingStatement | undefined => {
+    if (statement === 'hgb-gkv') return 'hgb-guv';
+    if (statement === 'hgb-balance') return 'hgb-bilanz';
+    if (statement === 'bwa01' || statement === 'management-guv' || statement === 'hgb-guv' || statement === 'hgb-bilanz') return statement;
+    return undefined;
+  };
+  const requestedStatement = args.statement ?? 'management-guv';
+  const requested = canonicalStatement(requestedStatement) ?? requestedStatement;
+  const mappingsByAccount = new Map<string, Set<ReportingStatement>>();
+  for (const mapping of loadHgbMappings(db, tenantId, chart)) {
+    const statement = canonicalStatement(mapping.statement_type);
+    if (!statement) continue;
+    const accountMappings = mappingsByAccount.get(mapping.account_number) ?? new Set<ReportingStatement>();
+    accountMappings.add(statement);
+    mappingsByAccount.set(mapping.account_number, accountMappings);
+  }
+  const relevantStatements = requested === 'hgb-bilanz'
+    ? new Set<ReportingStatement>(['hgb-bilanz'])
+    : new Set<ReportingStatement>(['bwa01', 'management-guv', 'hgb-guv']);
   const rows = loadReportJournalLines(db, tenantId);
   const seenAccounts = new Set(rows.map((row) => row.account_number));
-  const unmappedAccounts = [...seenAccounts].filter((accountNumber) => !mappedAccounts.has(accountNumber)).sort();
+  const unmappedAccounts = [...seenAccounts].filter((accountNumber) => {
+    const accountMappings = mappingsByAccount.get(accountNumber);
+    const mappedForRequested = accountMappings?.has(requested) ?? false;
+    const hasRelevantMapping = [...(accountMappings ?? [])].some((statement) => relevantStatements.has(statement));
+    // An account already mapped to the other report family must not block this
+    // report. Accounts with no report-specific mapping remain actionable.
+    return !mappedForRequested && (hasRelevantMapping || !accountMappings?.size);
+  }).sort();
   const warnings = unmappedAccounts.map((accountNumber) => `Konto ${accountNumber} ist keinem Report zugeordnet.`);
   return {
     mappedAccounts: seenAccounts.size - unmappedAccounts.length,
@@ -2384,6 +2408,8 @@ export const upsertReportMappingOverride = (
   scope: TenantScope,
 ): ReportingMapping => {
   const tenantId = getTenantId(scope);
+  const activeChart = getAccountingPolicy(db, tenantId).activeChart;
+  if (input.chart !== activeChart) throw new Error('REPORT_CHART_MISMATCH');
   const accountNumber = input.accountNumber.trim();
   const position = input.position.trim();
   if (!accountNumber || !position) throw new Error('REPORT_MAPPING_REQUIRED');
@@ -2393,6 +2419,16 @@ export const upsertReportMappingOverride = (
   if (!reportSpecificStatements.includes(input.statement)) {
     throw new Error('REPORT_MAPPING_STATEMENT_REQUIRED');
   }
+  const catalogStatement = input.statement === 'hgb-gkv' ? 'hgb-guv' : input.statement === 'hgb-balance' ? 'hgb-bilanz' : input.statement;
+  if (catalogStatement !== 'bwa01' && catalogStatement !== 'management-guv' && catalogStatement !== 'hgb-guv' && catalogStatement !== 'hgb-bilanz') {
+    throw new Error('REPORT_MAPPING_STATEMENT_REQUIRED');
+  }
+  const size = getSettings(db)?.businessReportingProfile?.hgbSizeClass ?? 'small';
+  const catalogPosition = listReportMappingPositions(catalogStatement, size).find((entry) => entry.key === position);
+  if (!catalogPosition) throw new Error('REPORT_MAPPING_POSITION_NOT_ALLOWED');
+  if (input.side && catalogPosition.side && input.side !== catalogPosition.side) throw new Error('REPORT_MAPPING_SIDE_INVALID');
+  const reason = input.reason?.trim();
+  if (!reason) throw new Error('REPORT_MAPPING_REASON_REQUIRED');
   const definition = {
     id: `report-override:${tenantId}:${input.chart}:${accountNumber}:${input.statement}`,
     tenantId,
@@ -2414,11 +2450,11 @@ export const upsertReportMappingOverride = (
         updatedAt: definition.updatedAt,
       },
     }).run();
-  if (input.reason?.trim()) appendAuditLog(db, {
+  appendAuditLog(db, {
     entityType: 'report_mapping',
     entityId: definition.id,
     action: 'override',
-    reason: input.reason.trim(),
+    reason,
     before: null,
     after: definition,
     actor: 'pro',

@@ -6,6 +6,7 @@ import {
   fiscalYearForPostingDate,
   getGuvReport,
   getReportingReport,
+  getReportMappingHealth,
   getReportSnapshot,
   listReportSnapshots,
   saveReportSnapshot,
@@ -114,6 +115,22 @@ describe('Pro reporting repository invariants', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM account_mappings_hgb WHERE tenant_id = 'default'`).get()).toEqual({ count: 0 });
   });
 
+  it('scopes mapping health to the requested report family', () => {
+    const db = createDb();
+    insertPostedEntry(db);
+    db.prepare(`INSERT INTO journal_lines
+      (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount)
+      VALUES ('line-3', 'default', 'entry-1', 3, '8400', 0, 10)`).run();
+    db.prepare(`INSERT INTO account_mappings_hgb
+      (id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at)
+      VALUES ('balance-1200', 'default', 'SKR03', '1200', 'hgb-bilanz', 'assets.current.cash', 'Bank', 'asset', '2026-03-01T00:00:00.000Z'),
+             ('guv-8400', 'default', 'SKR03', '8400', 'hgb-guv', 'revenue', 'Umsatz', NULL, '2026-03-01T00:00:00.000Z')`).run();
+
+    expect(getReportMappingHealth(db, createProTenantScope('default'), { statement: 'hgb-guv' }).unmappedAccounts).toEqual(['9999']);
+    expect(getReportMappingHealth(db, createProTenantScope('default'), { statement: 'hgb-bilanz' }).unmappedAccounts).toEqual(['9999']);
+    expect(getReportMappingHealth(db, createProTenantScope('default'), { statement: 'management-guv' }).unmappedAccounts).toEqual(['8400', '9999']);
+  });
+
   it('resolves double-entry fiscal years from the canonical settings profile at the boundary', () => {
     const db = createDb();
     const settings = structuredClone(MOCK_SETTINGS);
@@ -162,8 +179,15 @@ describe('Pro reporting repository invariants', () => {
     expect(() => upsertReportMappingOverride(db, {
       chart: 'SKR03', accountNumber: '8400', statement: 'guv', position: 'revenue',
     }, createProTenantScope('default'))).toThrow('REPORT_MAPPING_STATEMENT_REQUIRED');
-    expect(upsertReportMappingOverride(db, {
+    expect(() => upsertReportMappingOverride(db, {
       chart: 'SKR03', accountNumber: '8400', statement: 'bwa01', position: 'revenue',
+    }, createProTenantScope('default'))).toThrow('REPORT_MAPPING_REASON_REQUIRED');
+    expect(() => upsertReportMappingOverride(db, {
+      chart: 'SKR03', accountNumber: '8400', statement: 'bwa01', position: 'arbitrary', reason: 'Kontenabstimmung',
+    }, createProTenantScope('default'))).toThrow('REPORT_MAPPING_POSITION_NOT_ALLOWED');
+    expect(upsertReportMappingOverride(db, {
+      chart: 'SKR03', accountNumber: '8400', statement: 'bwa01', position: 'revenue', reason: 'Kontenabstimmung',
     }, createProTenantScope('default'))).toMatchObject({ statement: 'bwa01', position: 'revenue' });
+    expect(db.prepare(`SELECT reason FROM audit_log WHERE entity_type = 'report_mapping' AND action = 'override'`).get()).toMatchObject({ reason: 'Kontenabstimmung' });
   });
 });

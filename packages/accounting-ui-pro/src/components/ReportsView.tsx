@@ -371,7 +371,6 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
           activeTab={activeTab}
           onExport={dataAdapter ? exportReport : undefined}
           exporting={exporting}
-          exportBlockedReason={activeTab === 'bwa01' ? 'BWA-Export bleibt blockiert: Der externe BWA-Quell-Hash ist nicht verfügbar. Bitte den externen Katalog-/DATEV-Import-Gate verwenden.' : undefined}
         />
         {activeTab === 'eur' && dataAdapter?.saveReportSnapshot ? canMutate ? (
           <div className="flex flex-wrap items-end gap-2 rounded-xl border border-border bg-surface p-3">

@@ -191,9 +191,8 @@ const validateReportMappingPosition = async (db: PostgresQueryable, scope: Tenan
     ledger: { balances: [{ accountNumber: '__mapping_validation__', debitTurnover: 0, creditTurnover: 0, openingBalance: 0, closingBalance: 0 }] },
     mappings: [{ accountNumber: '__mapping_validation__', statement: input.statementType, position: input.positionKey, side: input.balanceSide, label: input.positionKey }],
   });
-  // BWA01 deliberately remains source-unverified, so its calculator blocks an
-  // otherwise valid catalog position.  An unknown position is distinguishable
-  // by the validation account being reported as unmapped.
+  // An unknown position is distinguishable by the validation account being
+  // reported as unmapped. The canonical catalog is owned by accounting-engine.
   if (result.mappingHealth.unmappedAccounts.includes('__mapping_validation__')) throw new Error('REPORT_POSITION_INVALID');
 };
 

@@ -81,7 +81,6 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
     void load();
   }, [load, refreshKey]);
 
-  const hasBwa = Boolean(health?.unmapped.some((entry) => entry.statement === 'bwa01'));
   const mutationDisabled = !canMutate || loading || Boolean(saving) || !reason.trim();
 
   const save = async (entry: ReportMappingMissingAccount) => {
@@ -197,9 +196,8 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
       ) : null}
 
       <div className="mt-3 space-y-1 text-xs text-muted">
-        <p><strong>BWA-Katalog:</strong> Der Quell-Hash ist nicht verfügbar. BWA-Mappings dürfen gespeichert werden; Freeze/Export bleibt unverifiziert blockiert.</p>
+        <p><strong>BWA-Katalog:</strong> Die öffentliche Positionsstruktur ist mit verifizierter Provenienz hinterlegt.</p>
         <p><strong>DATEV:</strong> Der lizenzierte Konten-/Positionsinhalt wird nicht eingebettet. Verwenden Sie den externen DATEV-Import-Gate.</p>
-        {hasBwa ? <p role="status">BWA01 bleibt bis zur externen Katalog-Verifikation unverifiziert.</p> : null}
       </div>
     </section>
   );

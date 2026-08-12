@@ -174,23 +174,23 @@ describe('ReportsView drilldown ranges', () => {
     })));
   });
 
-  it('blocks BWA export while the external catalog hash is unavailable', async () => {
+  it('allows BWA export when the public catalog provenance is verified', async () => {
     const exportReport = vi.fn(async () => ({ format: 'csv' as const }));
     render(<ReportsView
       dataAdapter={{
         getBwaReport: vi.fn(async () => ({
           lines: [],
           totals: { revenue: 0, expenses: 0, result: 0 },
-          quality: { unmappedAccounts: [], warnings: 1, mappingStatus: 'blocked' as const, mappingNotes: ['BWA01 public catalog provenance hash is unavailable'], generatedAt: '', source: 'live' as const },
+          quality: { unmappedAccounts: [], warnings: 0, mappingStatus: 'ready' as const, mappingNotes: [], generatedAt: '', source: 'live' as const },
         })),
         exportReport,
       }}
       availableTabs={['bwa01']}
     />);
 
-    expect(await screen.findByText(/BWA-Export bleibt blockiert/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'PDF' })).toHaveProperty('disabled', true);
-    expect(screen.getByRole('button', { name: 'CSV' })).toHaveProperty('disabled', true);
-    expect(exportReport).not.toHaveBeenCalled();
+    const csv = await screen.findByRole('button', { name: 'CSV' });
+    expect(csv).toHaveProperty('disabled', false);
+    fireEvent.click(csv);
+    await waitFor(() => expect(exportReport).toHaveBeenCalledWith(expect.objectContaining({ report: 'bwa01', format: 'csv' })));
   });
 });

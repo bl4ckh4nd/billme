@@ -8,6 +8,7 @@ import test from 'node:test';
 import Database from 'better-sqlite3';
 import { createSingleTenantScope } from '@billme/server-core';
 import { createPostgresPool } from './connection.js';
+import { runPostgresMigrations } from './migrations.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
 import { tenantCoreRowCountTables } from './billing.js';
 import {
@@ -163,10 +164,39 @@ test('SQLite import preserves posted outgoing/incoming accounting metadata and l
     assert.deepEqual(outgoing, { accounting_status: 'posted', accounting_snapshot_json: outgoingSnapshot, accounting_journal_entry_id: 'outgoing-journal', accounting_posted_at: '2026-08-12T12:00:00.000Z' });
     assert.deepEqual(incoming, { accounting_status: 'posted', accounting_snapshot_json: incomingSnapshot, accounting_journal_entry_id: 'incoming-journal', accounting_posted_at: '2026-08-12T13:00:00.000Z' });
     assert.equal((await pool.query('SELECT COUNT(*)::int AS count FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2', [tenantId, incomingId])).rows[0].count, 1);
+    assert.equal((await pool.query('SELECT status FROM sqlite_import_runs WHERE id=$1', [result.importRunId])).rows[0].status, 'completed');
     const repository = createPostgresProAccountingRepository(pool);
     const scope = createSingleTenantScope(tenantId, 'pro');
     assert.equal((await repository.postOutgoingInvoice(scope, outgoingId)).snapshot?.sourceVersion, 'sqlite-outgoing-posted');
     assert.equal((await repository.postIncomingInvoice(scope, incomingId)).snapshot?.sourceVersion, 'sqlite-incoming-posted');
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SQLite import records a failed run when the target already contains billing data', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tenantId = `import-occupied-${randomUUID()}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-occupied-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  const tenant = { id: tenantId, slug: tenantId, displayName: 'Occupied import test' } as const;
+  try {
+    sqlite.close();
+    await runPostgresMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at) VALUES ($1,$2,$3,'pro','single-tenant','active',now()::text,now()::text)`, [tenantId, tenant.slug, tenant.displayName]);
+    await pool.query(`INSERT INTO server_settings (tenant_id, settings_json, created_at, updated_at) VALUES ($1,'{}',now()::text,now()::text)`, [tenantId]);
+
+    await assert.rejects(
+      importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant }),
+      /already contains server billing data/,
+    );
+    const failedRun = (await pool.query('SELECT status, details_json FROM sqlite_import_runs WHERE tenant_id=$1', [tenantId])).rows[0];
+    assert.equal(failedRun.status, 'failed');
+    assert.match(failedRun.details_json, /already contains server billing data/);
   } finally {
     if (sqlite.open) sqlite.close();
     await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);

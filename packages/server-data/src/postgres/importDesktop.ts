@@ -440,18 +440,27 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
       throw new Error(`SQLite audit log verification failed: ${sourceAuditVerification.errors.map((entry) => `#${entry.sequence} ${entry.message}`).join(', ')}`);
     }
     const importRunId = randomUUID();
+    const sourceSha256 = await sha256File(options.sqlitePath);
+    const importRunStartedAt = new Date().toISOString();
     const drizzle = createDrizzle(options.pool);
+    const dependencies = createPostgresBillingDependencies(options.pool);
+    const existingTenant = await dependencies.tenantRepo.getById(tenantId);
+    if (existingTenant) {
+      if (existingTenant.slug !== options.tenant.slug || existingTenant.displayName !== options.tenant.displayName || existingTenant.product !== options.product || existingTenant.deploymentMode !== 'single-tenant') {
+        throw new Error(`Target tenant ${tenantId} metadata does not match the import target`);
+      }
+    } else {
+      await dependencies.tenantRepo.save({ id: tenantId, slug: options.tenant.slug, displayName: options.tenant.displayName, product: options.product, deploymentMode: 'single-tenant', status: 'active', createdAt: importRunStartedAt, updatedAt: importRunStartedAt });
+    }
     await drizzle.insert(schema.sqliteImportRuns).values({ id: importRunId, tenantId, sourcePath: options.sqlitePath,
-      sourceProduct: options.product, sourceSha256: await sha256File(options.sqlitePath), status: 'started',
-      detailsJson: JSON.stringify({ unsupportedTables }), startedAt: new Date().toISOString(), completedAt: null });
+      sourceProduct: options.product, sourceSha256, status: 'started',
+      detailsJson: JSON.stringify({ unsupportedTables }), startedAt: importRunStartedAt, completedAt: null });
     try {
       await withPostgresTransaction(options.pool, async (client) => {
         if ((await countTenantCoreRows(client, tenantId)) > 0) throw new Error(`Target tenant ${tenantId} already contains server billing data`);
         const auditCount = await createDrizzle(client).select({ count: count() }).from(schema.auditLog)
           .where(eq(schema.auditLog.tenantId, tenantId));
         if (Number(auditCount[0]?.count ?? 0) > 0) throw new Error(`Target tenant ${tenantId} already contains audit log rows`);
-        const dependencies = createPostgresBillingDependencies(client);
-        await dependencies.tenantRepo.save({ id: tenantId, slug: options.tenant.slug, displayName: options.tenant.displayName, product: options.product, deploymentMode: 'single-tenant', status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         const settingsJson = loadSettingsJson(sqliteDb);
         if (settingsJson) await saveServerSettings(client, { tenantId, settingsJson, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         for (const reservation of loadNumberReservations(sqliteDb, tenantId)) { await saveServerNumberReservation(client, reservation); counts.numberReservations += 1; }
@@ -534,7 +543,8 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
       });
       await createDrizzle(options.pool).update(schema.sqliteImportRuns).set({ status: 'completed', detailsJson: JSON.stringify({ counts, unsupportedTables }), completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
     } catch (error) {
-      await createDrizzle(options.pool).update(schema.sqliteImportRuns).set({ status: 'failed', detailsJson: JSON.stringify({ counts, unsupportedTables, error: error instanceof Error ? error.message : String(error) }), completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
+      const detailsJson = JSON.stringify({ counts, unsupportedTables, error: error instanceof Error ? error.message : String(error) });
+      await drizzle.update(schema.sqliteImportRuns).set({ status: 'failed', detailsJson, completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
       throw error;
     }
     return { importRunId, counts, unsupportedTables };

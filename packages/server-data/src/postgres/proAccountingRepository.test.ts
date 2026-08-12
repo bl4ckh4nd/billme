@@ -54,6 +54,48 @@ test('SuSa report maps inclusive from/to bounds into ledger opening and turnover
   assert.equal(report.asOfDate, '2026-12-31');
 });
 
+test('booked draft reads return virtual projections without creating periods', async () => {
+  const calls: string[] = [];
+  const tenantId = 'virtual-draft-read-test';
+  const transactionId = 'virtual-draft-transaction';
+  const db = {
+    query: async (text: string) => {
+      calls.push(text);
+      if (text.includes('SELECT * FROM booking_drafts')) return { rows: [] };
+      if (text.includes('SELECT * FROM bank_transactions')) {
+        return {
+          rows: [{
+            id: transactionId,
+            tenant_id: tenantId,
+            date: '2025-03-02',
+            amount: '-59.5',
+            type: 'expense',
+            purpose: 'EÜR test expense',
+            status: 'booked',
+          }],
+        };
+      }
+      if (text.includes('SELECT * FROM accounting_policies')) return { rows: [{ active_chart: 'SKR03' }] };
+      if (text.includes('SELECT role,account_number FROM accounting_account_mappings')) return { rows: [] };
+      if (text.includes('SELECT settings_json FROM server_settings')) {
+        return { rows: [{ settings_json: JSON.stringify({ businessReportingProfile: { profitDetermination: 'eur' } }) }] };
+      }
+      if (text.includes('SELECT id FROM journal_entries')) return { rows: [] };
+      throw new Error(`unexpected query: ${text}`);
+    },
+  } as unknown as PostgresQueryable;
+
+  const draft = await createPostgresProAccountingRepository(db).getDraftByTransactionId(
+    createSingleTenantScope(tenantId, 'pro'),
+    transactionId,
+  );
+
+  assert.equal(draft?.isVirtualProjection, true);
+  assert.equal(draft?.workflowStatus, 'posted');
+  assert.equal(calls.some((text) => text.includes('INSERT INTO booking_drafts')), false);
+  assert.equal(calls.some((text) => text.includes('INSERT INTO accounting_periods')), false);
+});
+
 test('report adapters fail closed when the persisted profile or chart is not compatible', async () => {
   const calls: Array<{ text: string; values: unknown[] }> = [];
   const db = {

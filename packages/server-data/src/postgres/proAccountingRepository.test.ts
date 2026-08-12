@@ -160,6 +160,7 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
   const reservationInvoiceId = `reservation-invoice-${suffix}`;
   const reservationId = `reservation-${suffix}`;
   const backfillInvoiceId = `backfill-invoice-${suffix}`;
+  const backfillReservationId = `backfill-reservation-${suffix}`;
   const legacyEntryId = `legacy-entry-${suffix}`;
   const invoiceId = `invoice-${suffix}`;
   const openItemId = `item-${suffix}`;
@@ -266,7 +267,9 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     assert.ok(guv.rows.some((row) => row.positionKey.startsWith('unmapped:')));
     const bilanz = await repository.getBilanzReport(scope, { asOfDate: '2026-08-12' });
     assert.ok((bilanz.unmappedAccounts ?? []).length > 0);
-    await pool.query(`INSERT INTO invoices (id,tenant_id,number,client,client_email,date,due_date,amount,status,dunning_level,items_json,payments_json,history_json,created_at,updated_at,accounting_status) VALUES ($1,$2,$3,'Backfill client','test@example.test','2026-08-12','2026-08-31',119,'open',0,$4,'[]','[]',$5,$5,'unposted')`, [backfillInvoiceId, tenantId, `RE-BF-${suffix}`, JSON.stringify([{ description: 'Backfill service', total: 119, taxRate: 19 }]), now]);
+    const backfillNumber = `RE-BF-${suffix}`;
+    await pool.query(`INSERT INTO invoices (id,tenant_id,number,client,client_email,date,due_date,amount,status,dunning_level,items_json,payments_json,history_json,created_at,updated_at,accounting_status) VALUES ($1,$2,$3,'Backfill client','test@example.test','2026-08-12','2026-08-31',119,'open',0,$4,'[]','[]',$5,$5,'unposted')`, [backfillInvoiceId, tenantId, backfillNumber, JSON.stringify([{ description: 'Backfill service', total: 119, taxRate: 19 }]), now]);
+    await pool.query(`INSERT INTO number_reservations (id,tenant_id,kind,number,counter_value,status,document_id,created_at,updated_at) VALUES ($1,$2,'invoice',$3,1,'finalized',$4,$5,$5)`, [backfillReservationId, tenantId, backfillNumber, backfillInvoiceId, now]);
     const backfillPreview = await repository.previewAccountingBackfill(scope);
     assert.ok(backfillPreview.candidates.some((candidate) => candidate.sourceId === backfillInvoiceId && candidate.status === 'ready'));
     await pool.query(`UPDATE tax_case_account_mappings SET account_number=$1,updated_at=$2 WHERE id=$3`, [outputVatAccount, now, reservationTaxMappingId]);

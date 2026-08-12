@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { incomingInvoiceSchema } from '@billme/desktop-contracts-pro/schemas';
+import type { IncomingInvoiceEntity } from '@billme/accounting-shared';
 import { createSingleTenantScope } from '@billme/server-core';
 import type { PostgresQueryable, PostgresTransactionClient } from './connection.js';
 import { createPostgresPool } from './connection.js';
@@ -64,6 +66,71 @@ test('DATEV byte snapshot migration is additive and immutable', async () => {
   assert.match(migration, /datev_exports_immutable/);
   assert.match(migration, /OLD\.content_bytes IS DISTINCT FROM NEW\.content_bytes/);
   assert.match(migration, /CREATE TRIGGER datev_exports_immutable BEFORE UPDATE OR DELETE/);
+});
+
+test('real Postgres unposted incoming invoices omit empty accounting snapshots for the typed API response', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tenantId = `incoming-response-${suffix}`;
+  const vendorId = `incoming-vendor-${suffix}`;
+  const invoiceId = `incoming-invoice-${suffix}`;
+  const now = new Date().toISOString();
+  const scope = createSingleTenantScope(tenantId, 'pro');
+  try {
+    await runDrizzleMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'Incoming response test', now]);
+    await pool.query(`INSERT INTO vendors (id,tenant_id,name,created_at,updated_at) VALUES ($1,$2,'Snapshot test vendor',$3,$3)`, [vendorId, tenantId, now]);
+    const repository = createPostgresProAccountingRepository(pool);
+    const saved = await repository.upsertIncomingInvoice(scope, {
+      id: invoiceId,
+      tenantId,
+      vendorId,
+      number: `ER-${suffix}`,
+      invoiceDate: '2026-08-12',
+      dueDate: '2026-08-31',
+      netAmount: 100,
+      taxAmount: 19,
+      grossAmount: 119,
+      status: 'open',
+      taxRate: 19,
+      lines: [{
+        id: `${invoiceId}-line`,
+        incomingInvoiceId: invoiceId,
+        position: 0,
+        description: 'Snapshot test service',
+        quantity: 1,
+        unitPrice: 100,
+        netAmount: 100,
+        taxRate: 19,
+        taxAmount: 19,
+        grossAmount: 119,
+        accountNumber: '6200',
+      }],
+      accountingStatus: 'unposted',
+      createdAt: now,
+      updatedAt: now,
+    } satisfies IncomingInvoiceEntity);
+    assert.equal(saved.accountingStatus, 'unposted');
+    assert.equal(saved.accountingSnapshot, undefined);
+    assert.equal(Object.hasOwn(saved, 'accountingSnapshot'), true);
+    assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(saved)), 'accountingSnapshot'), false);
+    assert.doesNotThrow(() => incomingInvoiceSchema.parse(saved));
+    const refetched = (await repository.listIncomingInvoices(scope)).find((invoice) => invoice.id === invoiceId);
+    assert.ok(refetched);
+    assert.equal(refetched.accountingSnapshot, undefined);
+    assert.doesNotThrow(() => incomingInvoiceSchema.parse(refetched));
+  } finally {
+    try {
+      await pool.query(`ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete`);
+      await pool.query(`DELETE FROM incoming_invoices WHERE tenant_id=$1`, [tenantId]);
+      await pool.query(`DELETE FROM vendors WHERE tenant_id=$1`, [tenantId]);
+      await pool.query(`DELETE FROM audit_log WHERE tenant_id=$1`, [tenantId]);
+      await pool.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]);
+      await pool.query(`ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete`);
+    } finally {
+      await pool.end();
+    }
+  }
 });
 
 test('tax-case mapping tenancy migration keeps global defaults and drops global overwrite uniqueness', async () => {

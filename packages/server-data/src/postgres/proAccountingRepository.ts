@@ -35,7 +35,7 @@ const isoDate = (value: unknown): value is string => {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 };
 const period = (date: string): string => date.slice(0, 7);
-const parse = <T>(value: unknown, fallback: T): T => { try { return typeof value === 'string' ? JSON.parse(value) as T : (value as T); } catch { return fallback; } };
+const parse = <T>(value: unknown, fallback: T): T => { if (value == null) return fallback; try { return typeof value === 'string' ? JSON.parse(value) as T : (value as T); } catch { return fallback; } };
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const issue = (code: string, message: string, fieldPath?: string): ValidationIssue => ({ id: randomUUID(), code, severity: 'error', message, fieldPath, blocking: true, source: 'system' });
 const defaultActor = { type: 'service' as const, displayName: 'server-accounting' };

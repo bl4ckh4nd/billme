@@ -12,6 +12,7 @@ import type {
   ProWorkflowRepository,
   ReportRangeOptions,
   SusaReport,
+  AccountingMutationOptions,
 } from '@billme/server-core';
 import type { ReverseJournalEntryOptions } from '@billme/server-core/ports';
 import type {
@@ -45,20 +46,20 @@ import type { TenantScope } from '@billme/server-core';
 
 export interface ProAccountingOposRepository {
   getAccountingPolicy(scope: TenantScope): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
-  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist' }): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
+  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; reason?: string }): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
   listAccountingAccountMappings(scope: TenantScope, chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
-  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string }): Promise<AccountingAccountMapping>;
+  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string; reason?: string }): Promise<AccountingAccountMapping>;
   listVendors(scope: TenantScope): Promise<VendorEntity[]>;
-  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<VendorEntity>;
+  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & AccountingMutationOptions): Promise<VendorEntity>;
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
-  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
+  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & AccountingMutationOptions): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean; reason?: string }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reason?: string }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
-  allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
-  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
+  allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput & AccountingMutationOptions): Promise<OpenItemPaymentEntity>;
+  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>, options?: AccountingMutationOptions): Promise<OpenItemPaymentEntity>;
   reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
@@ -68,11 +69,12 @@ type ProAccountingRepositoryWithOpos = ProAccountingRepository & ProAccountingOp
 export interface ProAccountingService {
   listBankTransactions(scope: TenantScope): Promise<ProBankTransaction[]>;
   getDraftByTransactionId(scope: TenantScope, transactionId: string): Promise<BookingDraftEntity | null>;
-  saveDraft(scope: TenantScope, draft: BookingDraftEntity): Promise<BookingDraftEntity>;
+  saveDraft(scope: TenantScope, draft: BookingDraftEntity, options?: AccountingMutationOptions): Promise<BookingDraftEntity>;
   dispatchDraftAction(scope: TenantScope, args: ProDraftActionRequest): Promise<BookingDraftEntity>;
   validateTaxCompliance(
     scope: TenantScope,
     args: { draftId?: string; transactionId?: string },
+    options?: AccountingMutationOptions,
   ): Promise<{ ok: boolean; issues: ValidationIssue[] }>;
   postDraft(scope: TenantScope, draftId: string, options?: PostDraftOptions): Promise<{
     entry: JournalEntryEntity;
@@ -87,7 +89,7 @@ export interface ProAccountingService {
   listDatevExports(scope: TenantScope): Promise<DatevExportResult[]>;
   insertDatevExport(
     scope: TenantScope,
-    args: { filePath: string; recordCount: number; fromDate?: string; toDate?: string },
+    args: { filePath: string; recordCount: number; fromDate?: string; toDate?: string; reason?: string; contentSha256?: string; sourceSnapshot?: unknown },
   ): Promise<DatevExportResult>;
   getAccountingHealth(scope: TenantScope): Promise<AccountingHealthSnapshot>;
   getVatSummary(scope: TenantScope, args?: ReportRangeOptions): Promise<{
@@ -103,20 +105,20 @@ export interface ProAccountingService {
   }>;
   buildDatevRows(scope: TenantScope, args?: ReportRangeOptions): Promise<DatevPostingRow[]>;
   getAccountingPolicy(scope: TenantScope): ReturnType<ProAccountingOposRepository['getAccountingPolicy']>;
-  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist' }): ReturnType<ProAccountingOposRepository['setAccountingPolicy']>;
+  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; reason?: string }): ReturnType<ProAccountingOposRepository['setAccountingPolicy']>;
   listAccountingAccountMappings(scope: TenantScope, chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
-  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string }): Promise<AccountingAccountMapping>;
+  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string; reason?: string }): Promise<AccountingAccountMapping>;
   listVendors(scope: TenantScope): Promise<VendorEntity[]>;
-  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>): Promise<VendorEntity>;
+  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & AccountingMutationOptions): Promise<VendorEntity>;
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
-  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
+  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & AccountingMutationOptions): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean; reason?: string }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reason?: string }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
-  allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
-  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>): Promise<OpenItemPaymentEntity>;
+  allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput & AccountingMutationOptions): Promise<OpenItemPaymentEntity>;
+  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>, options?: AccountingMutationOptions): Promise<OpenItemPaymentEntity>;
   reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string }): Promise<{ ok: true; reversalEntryId: string }>;
   previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
@@ -249,9 +251,9 @@ export interface BoundProAccountingCatalogService {
 export const createProAccountingService = (repository: ProAccountingRepositoryWithOpos): ProAccountingService => ({
   listBankTransactions: (scope) => repository.listBankTransactions(scope),
   getDraftByTransactionId: (scope, transactionId) => repository.getDraftByTransactionId(scope, transactionId),
-  saveDraft: (scope, draft) => repository.saveDraft(scope, draft),
+  saveDraft: (scope, draft, options) => repository.saveDraft(scope, draft, options),
   dispatchDraftAction: (scope, args) => repository.dispatchDraftAction(scope, args),
-  validateTaxCompliance: (scope, args) => repository.validateTaxCompliance(scope, args),
+  validateTaxCompliance: (scope, args, options) => repository.validateTaxCompliance(scope, args, options),
   postDraft: (scope, draftId, options) => repository.postDraft(scope, draftId, options),
   reverseJournalEntry: (scope, entryId, reason, options) =>
     (repository.reverseJournalEntry as unknown as (scope: TenantScope, entryId: string, reason: string, options?: ReverseJournalEntryOptions) => Promise<{ ok: true; reversalEntryId: string }>)(scope, entryId, reason, options),
@@ -279,7 +281,7 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   postIncomingInvoice: (scope, invoiceId, options) => repository.postIncomingInvoice(scope, invoiceId, options),
   listOpenItems: (scope) => repository.listOpenItems(scope),
   allocateOpenItemPayment: (scope, input) => repository.allocateOpenItemPayment(scope, input),
-  allocateRemainingOpenItemPayment: (scope, paymentId, allocations) => repository.allocateRemainingOpenItemPayment(scope, paymentId, allocations),
+  allocateRemainingOpenItemPayment: (scope, paymentId, allocations, options) => repository.allocateRemainingOpenItemPayment(scope, paymentId, allocations, options),
   reverseDocumentAccounting: (scope, input) => repository.reverseDocumentAccounting(scope, input),
   previewAccountingBackfill: (scope) => repository.previewAccountingBackfill(scope),
   confirmAccountingBackfill: (scope, input) => repository.confirmAccountingBackfill(scope, input),

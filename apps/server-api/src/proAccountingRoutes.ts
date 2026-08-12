@@ -11,7 +11,7 @@ import type {
   IncomingInvoiceEntity,
   OpenItemPaymentInput,
 } from '@billme/accounting-shared';
-import { createPostgresBillingDependencies, createPostgresProAccountingRepository } from '@billme/server-data';
+import { createPostgresProAccountingRepository } from '@billme/server-data';
 import {
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
@@ -155,24 +155,6 @@ const requireMutationSession = async (app: FastifyInstance, authHeader: string |
   return session;
 };
 
-const auditAccountingMutation = async (
-  app: FastifyInstance,
-  session: Awaited<ReturnType<typeof requireSession>>,
-  action: string,
-  entityId: string,
-  reason: string,
-  after?: unknown,
-) => {
-  await createPostgresBillingDependencies(requirePool(app)).auditLog.append(session.scope, {
-    occurredAt: new Date().toISOString(),
-    action,
-    reason,
-    actor: { type: 'user', id: session.user.id, displayName: session.user.fullName },
-    subject: { entityType: 'pro-accounting', entityId, tenantId: session.scope.tenantId },
-    change: { after },
-  });
-};
-
 const tenantDraft = (scope: TenantScope, draft: z.infer<typeof bookingDraftEntitySchema>) => ({
   ...draft,
   tenantId: scope.tenantId,
@@ -223,8 +205,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       if (CLIENT_CONTROLLED_WORKFLOW_STATUSES.has(body.draft.workflowStatus)) {
         throw new ApiError(400, 'workflowStatus is server controlled; use the draft action or post route');
       }
-      const saved = await serviceFor(app).saveDraft(session.scope, tenantDraft(session.scope, body.draft));
-      await auditAccountingMutation(app, session, 'pro-accounting.draft.save', saved.id, body.reason, saved);
+      const saved = await serviceFor(app).saveDraft(session.scope, tenantDraft(session.scope, body.draft), { reason: body.reason });
       return saved;
     },
   });
@@ -241,9 +222,9 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         transactionId: params.transactionId,
         action: body.action,
         rejectReason: body.rejectReason,
+        reason: body.reason,
       };
       const saved = await serviceFor(app).dispatchDraftAction(session.scope, action);
-      await auditAccountingMutation(app, session, `pro-accounting.draft.${body.action}`, saved.id, body.reason, saved);
       return saved;
     },
   });
@@ -256,7 +237,6 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     async handler({ request, params, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
       const posted = await serviceFor(app).postDraft(session.scope, params.draftId, body);
-      await auditAccountingMutation(app, session, 'pro-accounting.draft.post', params.draftId, body.reason, posted);
       return posted;
     },
   });
@@ -282,7 +262,6 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     async handler({ request, params, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
       const reversed = await serviceFor(app).reverseJournalEntry(session.scope, params.id, body.reason, body);
-      await auditAccountingMutation(app, session, 'pro-accounting.journal.reverse', params.id, body.reason, reversed);
       return reversed;
     },
   });
@@ -395,14 +374,10 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         recordCount: rows.length,
         fromDate: query.from,
         toDate: query.to,
+        reason: query.reason,
+        contentSha256,
+        sourceSnapshot: { from: query.from, to: query.to, recordCount: rows.length },
       });
-      if (!existing) {
-        await auditAccountingMutation(app, session, 'pro-accounting.datev.export', receipt.id, query.reason, {
-          ...receipt,
-          contentSha256,
-          source: { from: query.from, to: query.to, rowCount: rows.length },
-        });
-      }
       reply.header('x-billme-datev-export-id', receipt.id);
       reply.header('x-billme-datev-content-sha256', contentSha256);
       reply.header('x-billme-datev-record-count', String(rows.length));
@@ -415,10 +390,10 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
   typedRoute(app, {
     method: 'POST',
     url: `${prefix}/validate`,
-    body: z.object({ draftId: z.string().min(1).optional(), transactionId: z.string().min(1).optional() }).refine((value) => value.draftId || value.transactionId, 'draftId or transactionId is required'),
+    body: z.object({ reason: reasonSchema, draftId: z.string().min(1).optional(), transactionId: z.string().min(1).optional() }).refine((value) => value.draftId || value.transactionId, 'draftId or transactionId is required'),
     async handler({ request, body }) {
-      const session = await requireProSession(app, request.headers.authorization);
-      return serviceFor(app).validateTaxCompliance(session.scope, body);
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return serviceFor(app).validateTaxCompliance(session.scope, body, { reason: body.reason });
     },
   });
 
@@ -426,13 +401,13 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     method: 'POST',
     url: `${prefix}/drafts/:draftId/validate`,
     params: draftParams,
-    body: z.object({ reason: z.string().trim().min(1).optional(), transactionId: z.string().min(1).optional() }),
+    body: z.object({ reason: reasonSchema, transactionId: z.string().min(1).optional() }),
     async handler({ request, params, body }) {
-      const session = await requireProSession(app, request.headers.authorization);
+      const session = await requireMutationSession(app, request.headers.authorization);
       return serviceFor(app).validateTaxCompliance(session.scope, {
         draftId: params.draftId,
         transactionId: body.transactionId,
-      });
+      }, { reason: body.reason });
     },
   });
 
@@ -454,7 +429,6 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
       const policy = await serviceFor(app).setAccountingPolicy(session.scope, body);
-      await auditAccountingMutation(app, session, 'pro-accounting.policy.set', session.scope.tenantId, body.reason, policy);
       return policy;
     },
   });
@@ -482,9 +456,9 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         chart: body.chart,
         role: body.role,
         accountNumber: body.accountNumber,
+        reason: body.reason,
       };
       const mapping = await serviceFor(app).upsertAccountingAccountMapping(session.scope, input);
-      await auditAccountingMutation(app, session, 'pro-accounting.mapping.upsert', mapping.id, body.reason, mapping);
       return mapping;
     },
   });
@@ -508,8 +482,8 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       const session = await requireMutationSession(app, request.headers.authorization);
       const vendor = await serviceFor(app).upsertVendor(session.scope, {
         ...body.vendor,
+        reason: body.reason,
       });
-      await auditAccountingMutation(app, session, 'pro-accounting.vendor.upsert', vendor.id, body.reason, vendor);
       return vendor;
     },
   });
@@ -539,7 +513,6 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         updatedAt: now,
       };
       const saved = await serviceFor(app).upsertIncomingInvoice(session.scope, invoice);
-      await auditAccountingMutation(app, session, 'pro-accounting.incoming-invoice.upsert', saved.id, body.reason, saved);
       return saved;
     },
   });
@@ -566,7 +539,6 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
         ...body,
         requireFinalizedReservation: true,
       });
-      await auditAccountingMutation(app, session, 'pro-accounting.outgoing-invoice.post', body.invoiceId, body.reason, posted);
       return posted;
     },
   });
@@ -590,7 +562,6 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
       const posted = await serviceFor(app).postIncomingInvoice(session.scope, body.invoiceId, body);
-      await auditAccountingMutation(app, session, 'pro-accounting.incoming-invoice.post', body.invoiceId, body.reason, posted);
       return posted;
     },
   });
@@ -611,8 +582,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     body: paymentBody,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const payment = await serviceFor(app).allocateOpenItemPayment(session.scope, body.payment as OpenItemPaymentInput);
-      await auditAccountingMutation(app, session, 'pro-accounting.open-item-payment.allocate', payment.id, body.reason, payment);
+      const payment = await serviceFor(app).allocateOpenItemPayment(session.scope, { ...body.payment, reason: body.reason } as OpenItemPaymentInput & { reason: string });
       return payment;
     },
   });
@@ -624,8 +594,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     body: remainingPaymentBody,
     async handler({ request, params, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const payment = await serviceFor(app).allocateRemainingOpenItemPayment(session.scope, params.paymentId, body.allocations);
-      await auditAccountingMutation(app, session, 'pro-accounting.open-item-payment.allocate-remaining', params.paymentId, body.reason, payment);
+      const payment = await serviceFor(app).allocateRemainingOpenItemPayment(session.scope, params.paymentId, body.allocations, { reason: body.reason });
       return payment;
     },
   });
@@ -637,7 +606,6 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
       const reversed = await serviceFor(app).reverseDocumentAccounting(session.scope, body);
-      await auditAccountingMutation(app, session, 'pro-accounting.document.reverse', body.documentId, body.reason, reversed);
       return reversed;
     },
   });
@@ -661,7 +629,6 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       const session = await requireMutationSession(app, request.headers.authorization);
       const input: AccountingBackfillConfirmation = body;
       const result = await serviceFor(app).confirmAccountingBackfill(session.scope, input);
-      await auditAccountingMutation(app, session, 'pro-accounting.backfill.confirm', body.runId, body.reason, result);
       return result;
     },
   });

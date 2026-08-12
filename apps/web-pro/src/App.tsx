@@ -15,6 +15,7 @@ import {
   type AssetDepreciationScheduleEntry,
   type AssetItem,
   type AssetUpsertInput,
+  type UserRole,
 } from '@billme/accounting-ui-pro';
 import type {
   BalanceSheetPreview,
@@ -922,7 +923,7 @@ export default function App() {
         year: number;
         postingDate: string;
         reason: string;
-        actorRole: 'admin' | 'accountant' | 'bookkeeper' | 'auditor';
+        actorRole: UserRole;
       }) {
         throw new Error('Asset accounting is not available in server-mode Web Pro.');
       },
@@ -931,7 +932,7 @@ export default function App() {
         disposalDate: string;
         proceeds: number;
         reason: string;
-        actorRole: 'admin' | 'accountant' | 'bookkeeper' | 'auditor';
+        actorRole: UserRole;
       }) {
         throw new Error('Asset accounting is not available in server-mode Web Pro.');
       },

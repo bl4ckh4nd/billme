@@ -24,6 +24,9 @@ import {
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
   accountingBackfillResultSchema,
+  assetDepreciationScheduleEntrySchema,
+  assetSchema,
+  assetUpsertSchema,
   incomingInvoiceSchema,
   journalEntryEntitySchema,
   ledgerBalanceRowSchema,
@@ -87,6 +90,17 @@ const guvReportSchema = z.object({
   rows: z.array(z.object({ positionKey: z.string(), positionLabel: z.string(), amount: z.number() })),
   netResult: z.number(),
   unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
+});
+const assetDepreciationResultSchema = z.object({
+  asset: assetSchema,
+  scheduleEntry: assetDepreciationScheduleEntrySchema,
+  journalEntryId: z.string().min(1),
+});
+const assetDisposalResultSchema = z.object({
+  asset: assetSchema,
+  residualBookValue: z.number().nonnegative(),
+  gainLoss: z.number(),
+  journalEntryId: z.string().min(1),
 });
 const bilanzReportSchema = z.object({
   asOfDate: z.string(),
@@ -421,6 +435,47 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     },
     getAccountingPolicy() {
       return requestJson({ parser: accountingPolicySchema }, '/api/v1/pro/accounting/policy');
+    },
+    listAssets() {
+      return requestJson({ parser: parseArray(assetSchema) }, '/api/v1/pro/accounting/assets');
+    },
+    upsertAsset(asset: unknown, reason: string) {
+      return requestJson(
+        {
+          method: 'POST',
+          body: { asset: assetUpsertSchema.parse(asset), reason },
+          parser: assetSchema,
+        },
+        '/api/v1/pro/accounting/assets',
+      );
+    },
+    getDepreciationSchedule(assetId: string) {
+      return requestJson(
+        { parser: parseArray(assetDepreciationScheduleEntrySchema) },
+        `/api/v1/pro/accounting/assets/${encodeURIComponent(assetId)}/schedule`,
+      );
+    },
+    runDepreciation(args: {
+      assetId: string;
+      year: number;
+      postingDate: string;
+      reason: string;
+      softLockOverride?: boolean;
+      overrideReason?: string;
+    }) {
+      return requestJson({ method: 'POST', body: args, parser: assetDepreciationResultSchema }, `/api/v1/pro/accounting/assets/${encodeURIComponent(args.assetId)}/depreciation`);
+    },
+    disposeAsset(args: {
+      assetId: string;
+      disposalDate: string;
+      proceeds: number;
+      taxRate?: 0 | 7 | 19;
+      proceedsAccountNumber?: string;
+      reason: string;
+      softLockOverride?: boolean;
+      overrideReason?: string;
+    }) {
+      return requestJson({ method: 'POST', body: args, parser: assetDisposalResultSchema }, `/api/v1/pro/accounting/assets/${encodeURIComponent(args.assetId)}/dispose`);
     },
     downloadDatevCsv(query?: { from?: string; to?: string }) {
       return requestBlob('/api/v1/pro/accounting/datev/export.csv', query);

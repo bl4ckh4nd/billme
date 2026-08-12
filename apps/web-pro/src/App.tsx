@@ -12,10 +12,9 @@ import {
   type BookingDraft as WorkspaceBookingDraft,
   type ProAccountingSeed,
   type Transaction as WorkspaceTransaction,
-  type AssetDepreciationScheduleEntry,
-  type AssetItem,
-  type AssetUpsertInput,
   type UserRole,
+  type ProAccountingDataAdapter,
+  type OposBankTransaction,
 } from '@billme/accounting-ui-pro';
 import type {
   BalanceSheetPreview,
@@ -25,6 +24,7 @@ import type {
   ReportFilterState,
   SusaReport,
 } from '@billme/accounting-ui-pro';
+import type { OpenItemPaymentEntity } from '@billme/accounting-shared';
 import { createProWebClient, type ProWebClient } from './api';
 import { mapTransactionBankAccounts } from './accountingSeed';
 
@@ -90,6 +90,21 @@ const ROUTES: Array<{ id: AppRoute; label: string; summary: string }> = [
 ];
 
 const WORKFLOW_ROUTE_TARGET = '#/accounting';
+
+const mapServerRoleToWorkspaceRole = (role: AppData['sessionInfo']['role']): UserRole => {
+  switch (role) {
+    case 'owner':
+      return 'owner';
+    case 'admin':
+      return 'admin';
+    case 'accountant':
+      return 'accountant';
+    case 'sales':
+      return 'sales';
+    case 'viewer':
+      return 'viewer';
+  }
+};
 
 const currencyFormatter = new Intl.NumberFormat('de-DE', {
   style: 'currency',
@@ -865,7 +880,9 @@ export default function App() {
     } satisfies ProAccountingSeed;
   }, [client, data]);
 
-  const accountingDataAdapter = React.useMemo(() => {
+  const workspaceRole = data ? mapServerRoleToWorkspaceRole(data.sessionInfo.role) : 'viewer';
+
+  const accountingDataAdapter = React.useMemo<ProAccountingDataAdapter | undefined>(() => {
     if (!accountingSeed || !data) return undefined;
     let transactions = structuredClone(accountingSeed.transactions ?? []);
     let drafts = structuredClone(accountingSeed.drafts ?? []);
@@ -947,32 +964,109 @@ export default function App() {
       async setTransactionReceiptStatus(_transactionId: string, _hasReceipt: boolean, _actorName: string) {
         return readOnly('Receipt mutation');
       },
-      async listAssets(): Promise<AssetItem[]> {
-        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      listAssets() {
+        return client.listAssets();
       },
-      async upsertAsset(_asset: AssetUpsertInput, _reason: string): Promise<AssetItem> {
-        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      async upsertAsset(asset, reason) {
+        return client.upsertAsset(asset, requireMutationReason(reason, 'Anlage speichern'));
       },
-      async getDepreciationSchedule(_assetId: string): Promise<AssetDepreciationScheduleEntry[]> {
-        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      getDepreciationSchedule(assetId) {
+        return client.getDepreciationSchedule(assetId).then((rows) => rows.filter((row) => row.status !== 'cancelled'));
       },
-      async runDepreciation(_args: {
-        assetId: string;
-        year: number;
-        postingDate: string;
-        reason: string;
-        actorRole: UserRole;
+      async runDepreciation(args) {
+        const { actorRole: _actorRole, ...input } = args;
+        const result = await client.runDepreciation({
+          ...input,
+          reason: requireMutationReason(args.reason, 'AfA buchen'),
+        });
+        if (result.scheduleEntry.status === 'cancelled') {
+          throw new Error('Die Abschreibung wurde storniert und nicht gebucht.');
+        }
+        return result;
+      },
+      async disposeAsset(args) {
+        const { actorRole: _actorRole, ...input } = args;
+        return client.disposeAsset({
+          ...input,
+          reason: requireMutationReason(args.reason, 'Anlage ausbuchen'),
+        });
+      },
+      listDatevExports(limit?: number) {
+        return client.listDatevExports(limit);
+      },
+      async exportDatevBuchungsstapel(args: {
+        from: string;
+        to: string;
+        consultantNumber: string;
+        clientNumber: string;
+        fiscalYearStart: string;
+        accountLength: number;
+        encoding: 'cp1252' | 'utf8-bom';
       }) {
-        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+        const exported = await client.exportDatevCsv({
+          from: args.from,
+          to: args.to,
+          reason: 'DATEV-Buchungsstapel exportiert',
+        });
+        if (!exported.exportId) throw new Error('DATEV-Export ohne Serverbeleg-ID.');
+        if (typeof document !== 'undefined') triggerBlobDownload(exported.blob, `datev-${args.from}.csv`);
+        const history = await client.listDatevExports();
+        const receipt = history.find((item) => item.id === exported.exportId);
+        if (!receipt) throw new Error('DATEV-Export wurde nicht in der Serverhistorie gefunden.');
+        return receipt;
       },
-      async disposeAsset(_args: {
-        assetId: string;
-        disposalDate: string;
-        proceeds: number;
-        reason: string;
-        actorRole: UserRole;
-      }) {
-        throw new Error('Asset accounting is not available in server-mode Web Pro.');
+      getDatevExportContent(exportId: string) {
+        return client.downloadDatevExport(exportId);
+      },
+      async listOpenItems() {
+        return client.listOpenItems();
+      },
+      async listBankTransactions(): Promise<OposBankTransaction[]> {
+        const byAccountId = new Map(data.bankAccounts.map((account) => [account.id, account.defaultSkrAccountNumber]));
+        const rows = await client.listAccountingTransactions();
+        return rows.flatMap((row) => {
+          const bankAccountNumber = row.accountId ? byAccountId.get(row.accountId) : undefined;
+          if (!bankAccountNumber || (row.status !== 'pending' && row.status !== 'booked')) return [];
+          const transaction: OposBankTransaction = {
+            ...row,
+            status: row.status as 'pending' | 'booked',
+            accountId: row.accountId ?? '',
+            bankAccountNumber,
+          };
+          return [transaction];
+        });
+      },
+      allocateOpenItemPayment(input): Promise<OpenItemPaymentEntity> {
+        return client.allocateOpenItemPayment(input, requireMutationReason(input.reason, 'Zahlung zuordnen')) as Promise<OpenItemPaymentEntity>;
+      },
+      allocateRemainingOpenItemPayment(paymentId, allocations, allocationEventId, reason): Promise<OpenItemPaymentEntity> {
+        return client.allocateRemainingOpenItemPayment(
+          paymentId,
+          allocations,
+          requireMutationReason(reason, 'Restzahlung zuordnen'),
+          allocationEventId,
+        ) as Promise<OpenItemPaymentEntity>;
+      },
+      listVendors() {
+        return client.listAccountingVendors();
+      },
+      upsertVendor(vendor, reason) {
+        return client.saveAccountingVendor(vendor, requireMutationReason(reason, 'Kreditor speichern'));
+      },
+      listIncomingInvoices() {
+        return client.listIncomingInvoices();
+      },
+      upsertIncomingInvoice(invoice, reason) {
+        return client.saveIncomingInvoice({ ...invoice, tenantId: data.sessionInfo.tenantId }, requireMutationReason(reason, 'Eingangsrechnung speichern'));
+      },
+      previewIncomingInvoiceAccounting(invoiceId) {
+        return client.previewIncomingInvoice(invoiceId, 'Vorschau');
+      },
+      postIncomingInvoiceAccounting(invoiceId, options) {
+        return client.postIncomingInvoice(invoiceId, requireMutationReason(options.reason, 'Eingangsrechnung buchen'), {
+          softLockOverride: options.softLockOverride,
+          overrideReason: options.overrideReason,
+        });
       },
       async getSusaReport(filters: ReportFilterState): Promise<SusaReport> {
         const report = await client.getSusaReport(filters.asOfDate);
@@ -1164,6 +1258,7 @@ export default function App() {
         role: taxMappingDraft.role,
         accountNumber: taxMappingDraft.accountNumber,
         datevBuKey: taxMappingDraft.datevBuKey || undefined,
+        reason: 'Steuer-Mapping im Pro-Kontenplan aktualisiert',
       });
     }, 'Steuer-Mapping gespeichert.');
   };
@@ -1179,6 +1274,7 @@ export default function App() {
         targetAccountNumber: suggestionRuleDraft.targetAccountNumber,
         flowType: suggestionRuleDraft.flowType,
         active: true,
+        reason: 'Kontierungsvorschlagsregel aktualisiert',
       });
       setSuggestionRuleDraft((current) => ({ ...current, value: '' }));
     }, 'Vorschlagsregel gespeichert.');
@@ -1186,7 +1282,7 @@ export default function App() {
 
   const handleDeleteSuggestionRule = async (ruleId: string) => {
     await runAction(async () => {
-      await client.deleteAccountSuggestionRule(ruleId);
+      await client.deleteAccountSuggestionRule(ruleId, 'Kontierungsvorschlagsregel gelöscht');
     }, 'Vorschlagsregel gelöscht.');
   };
 
@@ -1997,6 +2093,8 @@ export default function App() {
                     <ProAccountingWorkspace
                       seed={accountingSeed}
                       dataAdapter={accountingDataAdapter}
+                      role={workspaceRole}
+                      assetsAvailable
                     />
                   </div>
                 ) : data.workflowEntries.length > 0 ? (

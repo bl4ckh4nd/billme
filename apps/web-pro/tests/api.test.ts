@@ -165,3 +165,94 @@ test('Pro web client exposes DATEV export receipt metadata and history', async (
     globalThis.fetch = previousFetch;
   }
 });
+
+test('Pro web client maps fixed-asset routes, payloads, and typed results', async () => {
+  const previousFetch = globalThis.fetch;
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  const asset = {
+    id: 'asset-1',
+    assetNumber: 'ANL-2026-001',
+    name: 'Notebook',
+    assetClass: 'IT-Hardware',
+    status: 'aktiv',
+    activationDate: '2026-01-01',
+    acquisitionCost: 1200,
+    residualValue: 900,
+    annualDepreciation: 300,
+    usefulLifeYears: 4,
+    depreciationMethod: 'linear',
+    costCenter: 'IT',
+    location: 'Berlin',
+    nextDepreciation: '2026-12-31',
+    receiptLinked: true,
+    assetAccountNumber: '0480',
+  };
+  const assetInput = {
+    id: asset.id,
+    assetNumber: asset.assetNumber,
+    name: asset.name,
+    assetClass: asset.assetClass,
+    status: asset.status,
+    activationDate: asset.activationDate,
+    acquisitionCost: asset.acquisitionCost,
+    usefulLifeYears: asset.usefulLifeYears,
+    depreciationMethod: asset.depreciationMethod,
+    costCenter: asset.costCenter,
+    location: asset.location,
+    receiptLinked: asset.receiptLinked,
+    assetAccountNumber: asset.assetAccountNumber,
+  };
+  const scheduleEntry = {
+    id: 'schedule-1',
+    assetId: asset.id,
+    year: 2026,
+    amount: 300,
+    months: 12,
+    status: 'posted',
+    journalEntryId: 'journal-1',
+  };
+  globalThis.fetch = (async (input, init) => {
+    calls.push({ input: String(input), init });
+    const response = calls.length === 1
+      ? [asset]
+      : calls.length === 2
+        ? asset
+        : calls.length === 3
+          ? [scheduleEntry]
+          : calls.length === 4
+            ? { asset, scheduleEntry, journalEntryId: 'journal-1' }
+            : { asset: { ...asset, status: 'verkauft', disposalDate: '2026-08-12', disposalProceeds: 500 }, residualBookValue: 900, gainLoss: -400, journalEntryId: 'journal-2' };
+    return new Response(JSON.stringify(response), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    assert.deepEqual(await client.listAssets(), [asset]);
+    assert.deepEqual(await client.upsertAsset(assetInput, 'Anlage geprüft'), asset);
+    assert.deepEqual(await client.getDepreciationSchedule(asset.id), [scheduleEntry]);
+    assert.equal((await client.runDepreciation({ assetId: asset.id, year: 2026, postingDate: '2026-12-31', reason: 'AfA geprüft' })).journalEntryId, 'journal-1');
+    assert.equal((await client.disposeAsset({ assetId: asset.id, disposalDate: '2026-08-12', proceeds: 500, taxRate: 19, proceedsAccountNumber: '8800', reason: 'Verkauf geprüft' })).gainLoss, -400);
+
+    assert.match(calls[0]?.input ?? '', /\/api\/v1\/pro\/accounting\/assets$/);
+    assert.match(calls[1]?.input ?? '', /\/api\/v1\/pro\/accounting\/assets$/);
+    assert.match(calls[2]?.input ?? '', /\/api\/v1\/pro\/accounting\/assets\/asset-1\/schedule$/);
+    assert.match(calls[3]?.input ?? '', /\/api\/v1\/pro\/accounting\/assets\/asset-1\/depreciation$/);
+    assert.match(calls[4]?.input ?? '', /\/api\/v1\/pro\/accounting\/assets\/asset-1\/dispose$/);
+    assert.deepEqual(JSON.parse(String(calls[1]?.init?.body)), { asset: assetInput, reason: 'Anlage geprüft' });
+    assert.deepEqual(JSON.parse(String(calls[3]?.init?.body)), {
+      assetId: asset.id,
+      year: 2026,
+      postingDate: '2026-12-31',
+      reason: 'AfA geprüft',
+    });
+    assert.deepEqual(JSON.parse(String(calls[4]?.init?.body)), {
+      assetId: asset.id,
+      disposalDate: '2026-08-12',
+      proceeds: 500,
+      taxRate: 19,
+      proceedsAccountNumber: '8800',
+      reason: 'Verkauf geprüft',
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

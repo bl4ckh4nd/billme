@@ -51,7 +51,12 @@ describe('OposView', () => {
     adapter.listIncomingInvoices = vi.fn(async () => invoices);
     const saved = vi.fn(async (invoice) => invoice);
     const posted = vi.fn(async () => ({ sourceType: 'incoming_invoice' as const, sourceId: 'incoming-1', status: 'ready' as const, issues: [] }));
-    adapter.upsertIncomingInvoice = vi.fn(async (invoice) => { invoices.push(invoice); return saved(invoice); });
+    adapter.upsertIncomingInvoice = vi.fn(async (invoice) => {
+      const index = invoices.findIndex((item) => item.id === invoice.id);
+      if (index < 0) invoices.push(invoice);
+      else invoices[index] = invoice;
+      return saved(invoice);
+    });
     adapter.upsertVendor = vi.fn(async (vendor) => ({ ...vendor, tenantId: 'default', createdAt: '', updatedAt: '' }));
     adapter.previewIncomingInvoiceAccounting = vi.fn(async () => ({ sourceType: 'incoming_invoice' as const, sourceId: 'incoming-1', status: 'ready' as const, issues: [] }));
     adapter.postIncomingInvoiceAccounting = posted;
@@ -65,8 +70,16 @@ describe('OposView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Entwurf speichern' }));
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
     await screen.findByRole('option', { name: /ER-1/ });
+    expect(invoices[0].status).toBe('draft');
+    expect(screen.getByRole('button', { name: 'Buchen' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Für Buchung freigeben' }));
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(2));
+    expect(invoices[0].status).toBe('open');
+    expect(screen.getByRole('status').textContent).toContain('zur Buchung freigegeben');
+    expect(screen.getByRole('button', { name: 'Buchen' }).hasAttribute('disabled')).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Buchen' }));
     await waitFor(() => expect(posted).toHaveBeenCalledTimes(1));
-    expect(adapter.listIncomingInvoices).toHaveBeenCalledTimes(3);
+    expect(posted).toHaveBeenCalledWith(invoices[0].id, { reason: 'Eingangsbeleg geprüft', softLockOverride: false, overrideReason: undefined });
+    expect(adapter.listIncomingInvoices).toHaveBeenCalledTimes(4);
   });
 });

@@ -33,7 +33,7 @@ describe('ProAccountingWorkspace report routing', () => {
 
     render(<ProAccountingWorkspace dataAdapter={adapter} />);
     await user.click(screen.getByRole('button', { name: 'Auswertungen' }));
-    await waitFor(() => expect(screen.getByText('Summen- und Saldenliste (Preview)')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Summen- und Saldenliste')).toBeInTheDocument());
     await user.click(screen.getByText('1400'));
     await waitFor(() => expect(screen.getByTestId('drilldown-source-incoming-entry:incoming-line')).toHaveTextContent('incoming_invoice · incoming-42'));
     expect(screen.queryByRole('button', { name: /Transaktion öffnen|Beleg öffnen|Eingangsrechnung öffnen/i })).toBeNull();

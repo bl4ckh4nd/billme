@@ -195,6 +195,38 @@ describe.skipIf(!canRunNativeSqlite)('asset migrations and repository', () => {
     });
   });
 
+  it('audits persisted normalized asset fields with a symmetric snapshot shape', () => {
+    const db = setupDisposalDb();
+    const scope = createProTenantScope('default');
+    const asset = upsertAsset(db, {
+      id: 'audit-normalized-gwg',
+      assetNumber: 'AUDIT-NORMALIZED-GWG',
+      name: 'Low-value asset',
+      assetClass: 'IT-Hardware',
+      status: 'aktiv',
+      activationDate: '2026-01-01',
+      acquisitionCost: 800,
+      usefulLifeYears: 1,
+      depreciationMethod: 'linear',
+      costCenter: 'IT',
+      location: 'Berlin',
+      receiptLinked: true,
+      assetAccountNumber: '0440',
+    }, 'Normalized asset audit', scope);
+
+    const audit = db.prepare(
+      "SELECT before_json, after_json FROM audit_log WHERE entity_id = ? AND action = 'create' ORDER BY sequence DESC LIMIT 1",
+    ).get(asset.id) as { before_json: string; after_json: string };
+    expect(JSON.parse(audit.before_json)).toEqual({ asset: null, schedule: [] });
+    expect(JSON.parse(audit.after_json)).toMatchObject({
+      asset: expect.objectContaining({
+        id: asset.id,
+        depreciationMethod: 'gwg',
+      }),
+      schedule: [expect.objectContaining({ year: 2026, status: 'planned', amount: 800 })],
+    });
+  });
+
   const setupDisposalDb = (): Database.Database => {
     const db = new Database(':memory:');
     db.exec(bootstrapSql);

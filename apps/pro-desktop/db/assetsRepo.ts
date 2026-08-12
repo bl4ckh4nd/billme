@@ -965,22 +965,18 @@ export const upsertAsset = (
     }
 
     const scheduleAfter = getDepreciationSchedule(db, id, scope);
+    const persistedAfter = getAssetRow(db, tenantId, id);
     appendAuditLog(db, {
       entityType: "asset",
       entityId: id,
       action: existingRow ? "update" : "create",
       reason: input.overrideReason?.trim() || reason,
-      before: existingRow
-        ? { ...assetSnapshot(existingRow), schedule: auditSchedule(scheduleBefore) }
-        : { schedule: auditSchedule(scheduleBefore) },
+      before: {
+        asset: existingRow ? assetSnapshot(existingRow) : null,
+        schedule: auditSchedule(scheduleBefore),
+      },
       after: {
-        ...assetSnapshot({
-          ...input,
-          id,
-          acquisitionOffsetAccountNumber: acquisitionOffsetAccountNumber ?? undefined,
-          sourceIncomingInvoiceId: sourceIncomingInvoiceId ?? undefined,
-          activationJournalEntryId: activationJournalEntryId ?? undefined,
-        }),
+        asset: assetSnapshot(persistedAfter),
         schedule: auditSchedule(scheduleAfter),
       },
       actor: "pro",

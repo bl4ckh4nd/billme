@@ -17,6 +17,8 @@ const postgresMigrationUrls = [
   new URL('../../drizzle/0002_server_data_assets.sql', import.meta.url),
   new URL('../../drizzle/0003_server_data_offer_items.sql', import.meta.url),
   new URL('../../drizzle/0004_server_data_tax_rules.sql', import.meta.url),
+  new URL('../../drizzle/0005_server_data_audit_heads.sql', import.meta.url),
+  new URL('../../drizzle/0006_server_data_opos.sql', import.meta.url),
 ];
 
 const extractSqliteTableNames = async (schemaUrl: URL): Promise<string[]> => {
@@ -89,7 +91,7 @@ test('desktop sqlite onboarding only ignores explicit safe metadata tables', () 
 
 test('tenant-scoped postgres tables stay covered by import overwrite guards', async () => {
   const tenantScopedTables = await extractTenantScopedPostgresTables(postgresMigrationUrls);
-  const excludedTables = new Set(['tenant_memberships', 'sqlite_import_runs']);
+  const excludedTables = new Set(['tenant_memberships', 'sqlite_import_runs', 'audit_heads']);
   const expected = tenantScopedTables.filter((table) => !excludedTables.has(table)).sort();
 
   assert.deepEqual([...tenantCoreRowCountTables].sort(), expected);
@@ -99,7 +101,7 @@ test('Drizzle migration journal contains incremental migrations', async () => {
   const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ tag: string }> };
   assert.deepEqual(journal.entries.map((entry) => entry.tag), [
     '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
-    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads',
+    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos',
   ]);
 });
 

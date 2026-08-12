@@ -147,6 +147,8 @@ export interface ServerJournalEntryRecord {
   fiscalYear: number;
   status: string;
   sourceDraftId?: string;
+  sourceType?: string;
+  sourceKey?: string;
   reversedEntryId?: string;
   createdAt: string;
 }
@@ -483,8 +485,8 @@ export const saveServerAccountingPeriod = async (db: PostgresQueryable, record: 
   return record;
 };
 export const saveServerJournalEntry = async (db: PostgresQueryable, record: ServerJournalEntryRecord): Promise<ServerJournalEntryRecord> => {
-  await upsert(db, schema.journalEntries, { id: record.id, tenantId: record.tenantId, entryNumber: record.entryNumber, postingDate: record.postingDate, documentDate: record.documentDate ?? null, bookingText: record.bookingText, reference: record.reference ?? null, period: record.period, fiscalYear: record.fiscalYear, status: record.status, sourceDraftId: record.sourceDraftId ?? null, reversedEntryId: record.reversedEntryId ?? null, createdAt: record.createdAt }, schema.journalEntries.id,
-    { tenantId: record.tenantId, entryNumber: record.entryNumber, postingDate: record.postingDate, documentDate: record.documentDate ?? null, bookingText: record.bookingText, reference: record.reference ?? null, period: record.period, fiscalYear: record.fiscalYear, status: record.status, sourceDraftId: record.sourceDraftId ?? null, reversedEntryId: record.reversedEntryId ?? null, createdAt: record.createdAt });
+  await upsert(db, schema.journalEntries, { id: record.id, tenantId: record.tenantId, entryNumber: record.entryNumber, postingDate: record.postingDate, documentDate: record.documentDate ?? null, bookingText: record.bookingText, reference: record.reference ?? null, period: record.period, fiscalYear: record.fiscalYear, status: record.status, sourceDraftId: record.sourceDraftId ?? null, sourceType: record.sourceType ?? null, sourceKey: record.sourceKey ?? null, reversedEntryId: record.reversedEntryId ?? null, createdAt: record.createdAt }, schema.journalEntries.id,
+    { tenantId: record.tenantId, entryNumber: record.entryNumber, postingDate: record.postingDate, documentDate: record.documentDate ?? null, bookingText: record.bookingText, reference: record.reference ?? null, period: record.period, fiscalYear: record.fiscalYear, status: record.status, sourceDraftId: record.sourceDraftId ?? null, sourceType: record.sourceType ?? null, sourceKey: record.sourceKey ?? null, reversedEntryId: record.reversedEntryId ?? null, createdAt: record.createdAt });
   return record;
 };
 export const saveServerJournalLine = async (db: PostgresQueryable, record: ServerJournalLineRecord): Promise<ServerJournalLineRecord> => {
@@ -691,3 +693,5 @@ export const createPostgresProAccountingCatalogRepository = (
     await drizzleDb(db).delete(schema.accountSuggestionRules).where(and(eq(schema.accountSuggestionRules.tenantId, getTenantId(scope)), eq(schema.accountSuggestionRules.id, id)));
   },
 });
+
+export { createPostgresProAccountingRepository } from "./proAccountingRepository.js";

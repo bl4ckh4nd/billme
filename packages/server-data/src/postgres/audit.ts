@@ -169,7 +169,7 @@ const rowToAuditEntry = (
   hash: row.hash,
 });
 
-const appendWithClient = async (
+export const appendWithClient = async (
   client: PostgresTransactionClient,
   scope: TenantScope,
   entry: AuditEntryDraft,

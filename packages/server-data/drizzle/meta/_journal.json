@@ -43,6 +43,13 @@
       "when": 1786092000000,
       "tag": "0005_server_data_audit_heads",
       "breakpoints": false
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786092000001,
+      "tag": "0006_server_data_opos",
+      "breakpoints": false
     }
   ]
 }

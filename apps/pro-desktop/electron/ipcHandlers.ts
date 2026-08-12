@@ -1284,13 +1284,22 @@ export const registerIpcHandlers = (
   register(ipcMain, 'pro:listIncomingInvoices', () => getProAccountingService().listIncomingInvoices());
   register(ipcMain, 'pro:upsertIncomingInvoice', ({ invoice }) => getProAccountingService().upsertIncomingInvoice(invoice));
   register(ipcMain, 'pro:previewOutgoingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewOutgoingInvoice(invoiceId));
-  register(ipcMain, 'pro:postOutgoingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().postOutgoingInvoice(invoiceId));
+  register(ipcMain, 'pro:postOutgoingInvoiceAccounting', ({ invoiceId, softLockOverride, overrideReason }) => {
+    if (softLockOverride) assertLocalOwner('pro:postOutgoingInvoiceAccounting');
+    return getProAccountingService().postOutgoingInvoice(invoiceId, { softLockOverride, overrideReason });
+  });
   register(ipcMain, 'pro:previewIncomingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewIncomingInvoice(invoiceId));
-  register(ipcMain, 'pro:postIncomingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().postIncomingInvoice(invoiceId));
+  register(ipcMain, 'pro:postIncomingInvoiceAccounting', ({ invoiceId, softLockOverride, overrideReason }) => {
+    if (softLockOverride) assertLocalOwner('pro:postIncomingInvoiceAccounting');
+    return getProAccountingService().postIncomingInvoice(invoiceId, { softLockOverride, overrideReason });
+  });
   register(ipcMain, 'pro:listOpenItems', () => getProAccountingService().listOpenItems());
   register(ipcMain, 'pro:allocateOpenItemPayment', ({ payment }) => getProAccountingService().allocateOpenItemPayment(payment));
   register(ipcMain, 'pro:allocateRemainingPayment', ({ paymentId, allocations }) => getProAccountingService().allocateRemainingOpenItemPayment(paymentId, allocations));
-  register(ipcMain, 'pro:reverseDocumentAccounting', (input) => getProAccountingService().reverseDocumentAccounting(input));
+  register(ipcMain, 'pro:reverseDocumentAccounting', (input) => {
+    if (input.softLockOverride) assertLocalOwner('pro:reverseDocumentAccounting');
+    return getProAccountingService().reverseDocumentAccounting(input);
+  });
   register(ipcMain, 'pro:previewAccountingBackfill', () => getProAccountingService().previewAccountingBackfill());
   register(ipcMain, 'pro:confirmAccountingBackfill', (input) => getProAccountingService().confirmAccountingBackfill(input));
 

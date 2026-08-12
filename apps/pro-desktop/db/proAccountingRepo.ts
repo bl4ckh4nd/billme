@@ -1726,13 +1726,15 @@ export const getVatSummary = (
   if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
   const sourceRows = createDrizzle(db).select({ tax_case_key: schema.journalLines.taxCaseKey,
     net: schema.journalLines.netAmount, tax: schema.journalLines.taxAmount, gross: schema.journalLines.grossAmount,
-    debit: schema.journalLines.debitAmount, credit: schema.journalLines.creditAmount })
+    debit: schema.journalLines.debitAmount, credit: schema.journalLines.creditAmount, status: schema.journalEntries.status })
     .from(schema.journalLines).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
     .where(and(...conditions)).all();
   const grouped = new Map<string, { tax_case_key: TaxCaseKey; net_amount: number; tax_amount: number; gross_amount: number; line_count: number }>();
   for (const row of sourceRows) {
     if (!row.tax_case_key) continue;
     const current = grouped.get(row.tax_case_key) ?? { tax_case_key: row.tax_case_key as TaxCaseKey, net_amount: 0, tax_amount: 0, gross_amount: 0, line_count: 0 };
+    // Reversal lines persist the negated tax basis. The original entry remains
+    // visible as reversed, so summing stored signed values yields net zero.
     current.net_amount += Number(row.net ?? 0);
     current.tax_amount += Number(row.tax ?? 0);
     current.gross_amount += Number(row.gross ?? (Number(row.debit ?? 0) > 0 ? row.debit : row.credit) ?? 0);

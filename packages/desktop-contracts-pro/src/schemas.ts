@@ -518,7 +518,7 @@ const accountingSnapshotSchema = z.object({
   netAmount: z.number(),
   taxAmount: z.number(),
   grossAmount: z.number(),
-  lines: z.array(z.object({ accountNumber: z.string(), debitAmount: z.number(), creditAmount: z.number(), taxRate: z.number().optional(), taxAmount: z.number().optional(), memo: z.string().optional() })),
+  lines: z.array(z.object({ accountNumber: z.string(), debitAmount: z.number(), creditAmount: z.number(), taxCaseKey: z.string().optional(), netAmount: z.number().optional(), taxRate: z.number().optional(), taxAmount: z.number().optional(), grossAmount: z.number().optional(), evidenceType: z.string().optional(), evidenceReference: z.string().optional(), memo: z.string().optional() })),
   capturedAt: z.string(),
 });
 export const accountingPostingPreviewSchema = z.object({

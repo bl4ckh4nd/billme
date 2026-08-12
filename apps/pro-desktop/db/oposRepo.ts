@@ -20,19 +20,21 @@ import type { TenantScope } from '@billme/server-core';
 import { appendAuditLog } from './audit';
 import { getTenantId } from '../tenantScope';
 import { getAccountingPolicy, reverseJournalEntry } from './proAccountingRepo';
+import { resolveTaxAccountsForCase } from './taxCasesRepo';
 
 export type AccountingRole = AccountingAccountMapping['role'];
 export type AccountingChart = 'SKR03' | 'SKR04';
 export type VatAccountingMethod = 'soll' | 'ist';
 
 type InvoiceRow = {
-  id: string; client_id: string | null; number: string; date: string; due_date: string;
-  amount: number; status: string; tax_snapshot_json: string | null; accounting_status: string;
+  id: string; client_id: string | null; client?: string | null; client_email?: string | null; client_address?: string | null; billing_address_json?: string | null; shipping_address_json?: string | null; tax_meta_json?: string | null;
+  number: string; date: string; due_date: string; service_period?: string | null;
+  amount: number; status: string; tax_mode?: string | null; tax_snapshot_json: string | null; accounting_status: string;
   accounting_snapshot_json: string | null; accounting_journal_entry_id: string | null;
 };
 
 type RawLine = {
-  id: number; description: string; quantity: number; price: number; total: number; tax_rate: number | null;
+  id: number; description: string; quantity: number; price: number; total: number; tax_rate: number | null; line_meta_json?: string | null; article_id?: string | null; category?: string | null; unit?: string | null; discount_percent?: number | null;
 };
 
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -53,6 +55,22 @@ const assertDesktopTenant = (scope: TenantScope): string => {
 };
 const period = (date: string): string => date.slice(0, 7);
 const fiscalYear = (date: string): number => Number(date.slice(0, 4));
+const taxCaseForRate = (rate: number, taxMode?: string | null, einvoiceCategoryCode?: string): string => {
+  if (taxMode === 'small_business_19_ustg') return 'DE_KU19';
+  if (taxMode === 'reverse_charge_13b') return 'DE_RC_13B_DOMESTIC';
+  if (taxMode === 'intra_eu_supply_6a') return 'EU_IGL_GOODS_0';
+  if (taxMode === 'intra_eu_service_reverse_charge') return 'EU_B2B_SERVICE_RC';
+  if (taxMode === 'export_third_country') return 'NON_EU_EXPORT_0';
+  if (taxMode === 'vat_exempt_4_ustg') return 'DE_ZERO_EXEMPT';
+  if (taxMode === 'non_taxable_outside_scope') return 'NON_EU_SERVICE_RC';
+  if (einvoiceCategoryCode === 'K') return 'EU_IGL_GOODS_0';
+  if (einvoiceCategoryCode === 'G') return 'NON_EU_EXPORT_0';
+  if (einvoiceCategoryCode === 'AE') return 'DE_RC_13B_DOMESTIC';
+  if (einvoiceCategoryCode === 'E' || einvoiceCategoryCode === 'O') return 'DE_ZERO_EXEMPT';
+  if (rate === 0) return 'DE_ZERO_EXEMPT';
+  return Math.abs(rate - 7) < 0.01 ? 'DE_STD_7' : 'DE_STD_19';
+};
+const outputTaxAccount = (db: Database.Database, chart: AccountingChart, taxCaseKey: string, fallback: string): string => resolveTaxAccountsForCase(db, chart, taxCaseKey).outputTaxAccount ?? fallback;
 
 const defaultMappings: Record<AccountingChart, Record<AccountingRole, string>> = {
   SKR03: {
@@ -153,36 +171,36 @@ const insertJournal = (
     (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount, tax_code, tax_case_key, tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id, evidence_type, evidence_reference, cost_center, memo)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   for (const line of entryLines) {
-    insertLine.run(line.id, tenantId, id, line.index + 1, line.accountNumber, amount(line.debitAmount), amount(line.creditAmount), null, null, line.taxRate ?? null, null, line.taxAmount ?? null, null, null, null, null, null, null, line.memo ?? null);
+    insertLine.run(line.id, tenantId, id, line.index + 1, line.accountNumber, amount(line.debitAmount), amount(line.creditAmount), null, line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, null, null, line.evidenceType ?? null, line.evidenceReference ?? null, null, line.memo ?? null);
   }
-  const debits = entryLines.filter((line) => cents(line.debitAmount) > 0).map((line) => ({ id: line.id, remaining: amount(line.debitAmount) }));
-  const credits = entryLines.filter((line) => cents(line.creditAmount) > 0).map((line) => ({ id: line.id, remaining: amount(line.creditAmount) }));
-  const insertPair = db.prepare('INSERT INTO journal_posting_pairs (id, tenant_id, entry_id, debit_line_id, credit_line_id, amount, tax_case_key, datev_bu_key, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)');
+  const debits = entryLines.filter((line) => cents(line.debitAmount) > 0).map((line) => ({ id: line.id, remaining: amount(line.debitAmount), taxCaseKey: line.taxCaseKey }));
+  const credits = entryLines.filter((line) => cents(line.creditAmount) > 0).map((line) => ({ id: line.id, remaining: amount(line.creditAmount), taxCaseKey: line.taxCaseKey }));
+  const insertPair = db.prepare('INSERT INTO journal_posting_pairs (id, tenant_id, entry_id, debit_line_id, credit_line_id, amount, tax_case_key, datev_bu_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)');
   let creditCursor = 0;
   for (const debitLine of debits) {
     while (debitLine.remaining > 0.0001 && creditCursor < credits.length) {
       const creditLine = credits[creditCursor]!;
       if (creditLine.remaining <= 0.0001) { creditCursor += 1; continue; }
       const pairAmount = amount(Math.min(debitLine.remaining, creditLine.remaining));
-      insertPair.run(randomUUID(), tenantId, id, debitLine.id, creditLine.id, pairAmount, timestamp);
+      insertPair.run(randomUUID(), tenantId, id, debitLine.id, creditLine.id, pairAmount, debitLine.taxCaseKey ?? creditLine.taxCaseKey ?? null, timestamp);
       debitLine.remaining = amount(debitLine.remaining - pairAmount);
       creditLine.remaining = amount(creditLine.remaining - pairAmount);
     }
   }
   for (const line of entryLines.filter((candidate) => cents(candidate.taxAmount ?? 0) > 0)) {
-    db.prepare('INSERT INTO vat_evidence (id, tenant_id, draft_id, entry_id, line_id, tax_case_key, evidence_type, evidence_reference, country_code, counterparty_vat_id, captured_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?)').run(randomUUID(), tenantId, sourceKey, id, line.id, 'standard_vat', sourceKey, timestamp);
+    db.prepare('INSERT INTO vat_evidence (id, tenant_id, draft_id, entry_id, line_id, tax_case_key, evidence_type, evidence_reference, country_code, counterparty_vat_id, captured_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?)').run(randomUUID(), tenantId, sourceKey, id, line.id, line.taxCaseKey ?? 'standard_vat', sourceKey, timestamp);
   }
   appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: id, action: 'post', reason: options.overrideReason?.trim() || 'OPOS posting', before: null, after: { sourceType, sourceKey, entryNumber, postingDate }, actor: 'pro' });
   return id;
 };
 
-const invoiceRow = (db: Database.Database, tenantId: string, invoiceId: string): InvoiceRow | null => db.prepare(`SELECT id, client_id, number, date, due_date, amount, status, tax_snapshot_json, accounting_status, accounting_snapshot_json, accounting_journal_entry_id FROM invoices WHERE id = ? AND ? = 'default'`).get(invoiceId, tenantId) as InvoiceRow | null;
-const invoiceLines = (db: Database.Database, invoiceId: string): RawLine[] => db.prepare('SELECT id, description, quantity, price, total, tax_rate FROM invoice_items WHERE invoice_id = ? ORDER BY position, id').all(invoiceId) as RawLine[];
+const invoiceRow = (db: Database.Database, tenantId: string, invoiceId: string): InvoiceRow | null => db.prepare(`SELECT * FROM invoices WHERE id = ? AND ? = 'default'`).get(invoiceId, tenantId) as InvoiceRow | null;
+const invoiceLines = (db: Database.Database, invoiceId: string): RawLine[] => db.prepare('SELECT id, description, quantity, price, total, tax_rate, line_meta_json, article_id, category, unit, discount_percent FROM invoice_items WHERE invoice_id = ? ORDER BY position, id').all(invoiceId) as RawLine[];
 
-const outgoingSourceVersion = (row: InvoiceRow, lines: RawLine[]): string => sha256({ id: row.id, clientId: row.client_id, number: row.number, date: row.date, dueDate: row.due_date, amount: row.amount, taxSnapshot: json(row.tax_snapshot_json) ?? null, lines: lines.map((line) => ({ id: line.id, description: line.description, quantity: line.quantity, price: line.price, total: line.total, taxRate: line.tax_rate })) });
+const outgoingSourceVersion = (row: InvoiceRow, lines: RawLine[]): string => sha256({ id: row.id, clientId: row.client_id, client: row.client, clientEmail: row.client_email, clientAddress: row.client_address, billingAddress: json(row.billing_address_json) ?? null, shippingAddress: json(row.shipping_address_json) ?? null, number: row.number, date: row.date, dueDate: row.due_date, servicePeriod: row.service_period, amount: row.amount, taxMode: row.tax_mode, taxMeta: json(row.tax_meta_json) ?? null, taxSnapshot: json(row.tax_snapshot_json) ?? null, lines: lines.map((line) => ({ id: line.id, description: line.description, quantity: line.quantity, price: line.price, total: line.total, taxRate: line.tax_rate, lineMeta: json(line.line_meta_json) ?? null, articleId: line.article_id, category: line.category, unit: line.unit, discountPercent: line.discount_percent })) });
 
-const deriveTaxSnapshot = (row: InvoiceRow, lines: RawLine[], chart: AccountingChart, vatMethod: VatAccountingMethod): { snapshot?: AccountingSnapshot; issues: AccountingPostingPreview['issues'] } => {
-  const explicit = json<{ netAmount?: number; vatAmount?: number; grossAmount?: number }>(row.tax_snapshot_json);
+const deriveTaxSnapshot = (db: Database.Database, row: InvoiceRow, lines: RawLine[], chart: AccountingChart, vatMethod: VatAccountingMethod): { snapshot?: AccountingSnapshot; issues: AccountingPostingPreview['issues'] } => {
+  const explicit = json<{ netAmount?: number; vatAmount?: number; grossAmount?: number; vatBreakdown?: Array<{ rate: number; netAmount: number; vatAmount: number }>; einvoiceCategoryCode?: string }>(row.tax_snapshot_json);
   let net = Number(explicit?.netAmount);
   let tax = Number(explicit?.vatAmount);
   let gross = Number(explicit?.grossAmount);
@@ -197,12 +215,41 @@ const deriveTaxSnapshot = (row: InvoiceRow, lines: RawLine[], chart: AccountingC
   if (gross <= 0 || net < 0 || tax < 0 || Math.abs(gross - net - tax) > 0.01) {
     return { issues: [{ code: 'INVALID_TAX_SNAPSHOT', message: 'Netto, Steuer und Brutto der Rechnung sind nicht konsistent.', blocking: true }] };
   }
+  const grouped = new Map<number, { rate: number; netAmount: number; vatAmount: number }>();
+  for (const line of lines) {
+    if (line.tax_rate === null || !Number.isFinite(Number(line.tax_rate))) continue;
+    const rate = Number(line.tax_rate);
+    const lineGross = Number(line.total);
+    const current = grouped.get(rate) ?? { rate, netAmount: 0, vatAmount: 0 };
+    const lineNet = lineGross / (1 + rate / 100);
+    current.netAmount += lineNet;
+    current.vatAmount += lineGross - lineNet;
+    grouped.set(rate, current);
+  }
+  const breakdown = (explicit?.vatBreakdown?.length ? explicit.vatBreakdown : [...grouped.values()]).map((entry) => ({ rate: Number(entry.rate), netAmount: amount(entry.netAmount), vatAmount: amount(entry.vatAmount) }));
+  if (!breakdown.length) breakdown.push({ rate: Number(lines.find((line) => line.tax_rate !== null)?.tax_rate ?? (tax > 0 ? 19 : 0)), netAmount: net, vatAmount: tax });
+  const breakdownNet = amount(breakdown.reduce((sum, entry) => sum + entry.netAmount, 0));
+  const breakdownTax = amount(breakdown.reduce((sum, entry) => sum + entry.vatAmount, 0));
+  if (Math.abs(breakdownNet - net) > 0.02 || Math.abs(breakdownTax - tax) > 0.02) return { issues: [{ code: 'INVALID_TAX_BREAKDOWN', message: 'Die Steueraufteilung stimmt nicht mit dem taxSnapshot überein.', blocking: true }] };
+
   const mapping = defaultMappings[chart];
-  const linesOut: AccountingSnapshot['lines'] = [
-    { accountNumber: mapping.accounts_receivable, debitAmount: gross, creditAmount: 0, memo: `Debitor ${row.number}` },
-    { accountNumber: mapping.revenue, debitAmount: 0, creditAmount: net, taxAmount: tax },
-  ];
-  if (tax > 0) linesOut.push({ accountNumber: vatMethod === 'ist' ? mapping.output_vat_deferred : mapping.output_vat, debitAmount: 0, creditAmount: tax, taxAmount: tax });
+  const linesOut: AccountingSnapshot['lines'] = [{ accountNumber: mapping.accounts_receivable, debitAmount: gross, creditAmount: 0, memo: `Debitor ${row.number}` }];
+  for (const entry of breakdown) {
+    const taxCaseKey = taxCaseForRate(entry.rate, row.tax_mode, explicit?.einvoiceCategoryCode);
+    const basisMetadata = vatMethod === 'soll' || entry.vatAmount <= 0 ? { taxCaseKey, netAmount: entry.netAmount, taxRate: entry.rate, taxAmount: entry.vatAmount, grossAmount: amount(entry.netAmount + entry.vatAmount) } : {};
+    linesOut.push({ accountNumber: mapping.revenue, debitAmount: 0, creditAmount: entry.netAmount, memo: vatMethod === 'ist' ? `UStBasis ${taxCaseKey}` : undefined, ...basisMetadata });
+    if (entry.vatAmount > 0) {
+      const fallbackTaxAccount = vatMethod === 'ist' ? mapping.output_vat_deferred : mapping.output_vat;
+      // Ist-USt stays on the configured deferred account until payment.  The
+      // tax-case output mapping is only used for Soll invoices and for the
+      // later payment recognition journal.
+      const taxAccount = vatMethod === 'ist' ? fallbackTaxAccount : outputTaxAccount(db, chart, taxCaseKey, fallbackTaxAccount);
+      // Keep the tax case on the single revenue basis line.  The VAT control
+      // line is deliberately unannotated so VAT summaries cannot count the
+      // same tax base twice; the memo preserves the case for account mapping.
+      linesOut.push({ accountNumber: taxAccount, debitAmount: 0, creditAmount: entry.vatAmount, memo: `USt ${taxCaseKey}` });
+    }
+  }
   const snapshot: AccountingSnapshot = {
     sourceType: 'outgoing_invoice', sourceId: row.id, sourceVersion: outgoingSourceVersion(row, lines), chart, vatMethod,
     netAmount: net, taxAmount: tax, grossAmount: gross, lines: linesOut, capturedAt: now(),
@@ -249,18 +296,22 @@ export const previewOutgoingInvoice = (db: Database.Database, scope: TenantScope
   const policy = getAccountingPolicyForPro(db, scope);
   const mappings = getMapping(db, tenantId, policy.activeChart);
   const issues = validateMapping(db, policy.activeChart, mappings, ['accounts_receivable', 'revenue']);
-  const tax = deriveTaxSnapshot(row, invoiceLines(db, invoiceId), policy.activeChart, policy.vatMethod);
+  const tax = deriveTaxSnapshot(db, row, invoiceLines(db, invoiceId), policy.activeChart, policy.vatMethod);
   issues.push(...tax.issues);
   if (tax.snapshot?.taxAmount) issues.push(...validateMapping(db, policy.activeChart, mappings, [policy.vatMethod === 'ist' ? 'output_vat_deferred' : 'output_vat']));
+  if (tax.snapshot) for (const line of tax.snapshot.lines) if (!accountExists(db, policy.activeChart, line.accountNumber)) issues.push({ code: 'UNKNOWN_ACCOUNT', message: `Konto ${line.accountNumber} fehlt im ${policy.activeChart}.`, blocking: true });
   if (issues.length || !tax.snapshot) return { sourceType: 'outgoing_invoice', sourceId: invoiceId, status: 'unresolved', issues };
   // Respect tenant overrides after deriving the snapshot.
-  tax.snapshot.lines[0]!.accountNumber = mappings.accounts_receivable;
-  tax.snapshot.lines[1]!.accountNumber = mappings.revenue;
-  if (tax.snapshot.lines[2]) tax.snapshot.lines[2].accountNumber = policy.vatMethod === 'ist' ? mappings.output_vat_deferred : mappings.output_vat;
+  for (const [index, line] of tax.snapshot.lines.entries()) {
+    if (index === 0) line.accountNumber = mappings.accounts_receivable;
+    else if (line.memo?.startsWith('USt ') && line.netAmount === undefined && line.taxAmount === undefined) {
+      line.accountNumber = policy.vatMethod === 'ist' ? mappings.output_vat_deferred : mappings.output_vat;
+    } else line.accountNumber = mappings.revenue;
+  }
   return { sourceType: 'outgoing_invoice', sourceId: invoiceId, status: 'ready', snapshot: tax.snapshot, issues: [] };
 };
 
-export const postOutgoingInvoice = (db: Database.Database, scope: TenantScope, invoiceId: string): AccountingPostingPreview => {
+export const postOutgoingInvoice = (db: Database.Database, scope: TenantScope, invoiceId: string, options: { softLockOverride?: boolean; overrideReason?: string } = {}): AccountingPostingPreview => {
   const tenantId = assertDesktopTenant(scope);
   const existingRow = invoiceRow(db, tenantId, invoiceId);
   if (!existingRow) throw new Error('Invoice not found');
@@ -277,12 +328,12 @@ export const postOutgoingInvoice = (db: Database.Database, scope: TenantScope, i
   if (row.accounting_status === 'posted' && row.accounting_snapshot_json) return { ...preview, snapshot: json<AccountingSnapshot>(row.accounting_snapshot_json) ?? preview.snapshot };
   const sourceKey = `outgoing-invoice:${invoiceId}`;
   const result = db.transaction(() => {
-    const journalEntryId = insertJournal(db, tenantId, 'outgoing_invoice', sourceKey, row.date, `Rechnung ${row.number}`, preview.snapshot!.lines, { chart: preview.snapshot!.chart });
+    const journalEntryId = insertJournal(db, tenantId, 'outgoing_invoice', sourceKey, row.date, `Rechnung ${row.number}`, preview.snapshot!.lines, { chart: preview.snapshot!.chart, ...options });
     const timestamp = now();
     db.prepare(`INSERT INTO open_items (id, tenant_id, party_type, party_id, source_type, source_id, document_number, document_date, due_date, original_amount, allocated_amount, residual_amount, status, journal_entry_id, created_at, updated_at)
       VALUES (?, ?, 'debtor', ?, 'outgoing_invoice', ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?, ?)
       ON CONFLICT(tenant_id, source_type, source_id) DO NOTHING`).run(randomUUID(), tenantId, row.client_id ?? row.id, invoiceId, row.number, row.date, row.due_date, preview.snapshot!.grossAmount, preview.snapshot!.grossAmount, journalEntryId, timestamp, timestamp);
-    db.prepare(`UPDATE invoices SET accounting_status = 'posted', accounting_snapshot_json = ?, accounting_journal_entry_id = ?, accounting_posted_at = ? WHERE id = ?`).run(JSON.stringify(preview.snapshot), journalEntryId, timestamp, invoiceId);
+    db.prepare(`UPDATE invoices SET status = CASE WHEN status = 'draft' THEN 'open' ELSE status END, accounting_status = 'posted', accounting_snapshot_json = ?, accounting_journal_entry_id = ?, accounting_posted_at = ? WHERE id = ?`).run(JSON.stringify(preview.snapshot), journalEntryId, timestamp, invoiceId);
     appendAuditLog(db, { entityType: 'invoice', entityId: invoiceId, action: 'accounting_post', reason: 'outgoing invoice finalized', before: { accountingStatus: row.accounting_status }, after: { journalEntryId, snapshot: preview.snapshot }, actor: 'pro' });
     return journalEntryId;
   })();
@@ -347,18 +398,18 @@ export const previewIncomingInvoice = (db: Database.Database, scope: TenantScope
   for (const line of invoice.lines) {
     const accountNumber = line.assetAccountNumber || line.accountNumber || mappings.expense;
     if (!accountExists(db, policy.activeChart, accountNumber)) issues.push({ code: 'UNKNOWN_ACCOUNT', message: `Konto ${accountNumber} fehlt im ${policy.activeChart}.`, blocking: true });
-    lines.push({ accountNumber, debitAmount: line.netAmount, creditAmount: 0, taxRate: line.taxRate, taxAmount: line.taxAmount, memo: line.description });
+    lines.push({ accountNumber, debitAmount: line.netAmount, creditAmount: 0, taxCaseKey: line.taxAmount > 0 ? (invoice.taxCaseKey ?? taxCaseForRate(line.taxRate)) : undefined, netAmount: line.taxAmount > 0 ? line.netAmount : undefined, taxRate: line.taxAmount > 0 ? line.taxRate : undefined, taxAmount: line.taxAmount > 0 ? line.taxAmount : undefined, grossAmount: line.taxAmount > 0 ? line.grossAmount : undefined, memo: line.description });
   }
   if (invoice.taxAmount > 0) {
     issues.push(...validateMapping(db, policy.activeChart, mappings, ['input_vat']));
-    lines.push({ accountNumber: mappings.input_vat, debitAmount: invoice.taxAmount, creditAmount: 0, taxAmount: invoice.taxAmount });
+    lines.push({ accountNumber: mappings.input_vat, debitAmount: invoice.taxAmount, creditAmount: 0 });
   }
   lines.push({ accountNumber: mappings.accounts_payable, debitAmount: 0, creditAmount: invoice.grossAmount, memo: `Kreditor ${invoice.number}` });
   const snapshot: AccountingSnapshot = { sourceType: 'incoming_invoice', sourceId: invoiceId, sourceVersion: incomingSourceVersion(invoice), chart: policy.activeChart, vatMethod: policy.vatMethod, netAmount: invoice.netAmount, taxAmount: invoice.taxAmount, grossAmount: invoice.grossAmount, lines, capturedAt: now() };
   return issues.length ? { sourceType: 'incoming_invoice', sourceId: invoiceId, status: 'unresolved', issues } : { sourceType: 'incoming_invoice', sourceId: invoiceId, status: 'ready', snapshot, issues: [] };
 };
 
-export const postIncomingInvoice = (db: Database.Database, scope: TenantScope, invoiceId: string): AccountingPostingPreview => {
+export const postIncomingInvoice = (db: Database.Database, scope: TenantScope, invoiceId: string, options: { softLockOverride?: boolean; overrideReason?: string } = {}): AccountingPostingPreview => {
   const tenantId = tenant(scope);
   const existingRow = db.prepare('SELECT * FROM incoming_invoices WHERE tenant_id = ? AND id = ?').get(tenantId, invoiceId) as Record<string, any> | undefined;
   if (!existingRow) throw new Error('Incoming invoice not found');
@@ -371,7 +422,7 @@ export const postIncomingInvoice = (db: Database.Database, scope: TenantScope, i
   const row = existingRow;
   if (row.accounting_status === 'posted') return preview;
   const journalEntryId = db.transaction(() => {
-    const id = insertJournal(db, tenantId, 'incoming_invoice', `incoming-invoice:${invoiceId}`, row.invoice_date, `Eingangsrechnung ${row.number}`, preview.snapshot!.lines, { chart: preview.snapshot!.chart });
+    const id = insertJournal(db, tenantId, 'incoming_invoice', `incoming-invoice:${invoiceId}`, row.invoice_date, `Eingangsrechnung ${row.number}`, preview.snapshot!.lines, { chart: preview.snapshot!.chart, ...options });
     const timestamp = now();
     db.prepare(`INSERT INTO open_items (id, tenant_id, party_type, party_id, source_type, source_id, document_number, document_date, due_date, original_amount, allocated_amount, residual_amount, status, journal_entry_id, created_at, updated_at) VALUES (?, ?, 'creditor', ?, 'incoming_invoice', ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?, ?) ON CONFLICT(tenant_id, source_type, source_id) DO NOTHING`).run(randomUUID(), tenantId, row.vendor_id, invoiceId, row.number, row.invoice_date, row.due_date, preview.snapshot!.grossAmount, preview.snapshot!.grossAmount, id, timestamp, timestamp);
     db.prepare('UPDATE incoming_invoices SET accounting_status = \'posted\', accounting_snapshot_json = ?, accounting_journal_entry_id = ?, accounting_posted_at = ?, status = CASE WHEN status = \'draft\' THEN \'open\' ELSE status END WHERE tenant_id = ? AND id = ?').run(JSON.stringify(preview.snapshot), id, timestamp, tenantId, invoiceId);
@@ -388,7 +439,7 @@ const paymentFromRow = (row: Record<string, any>): OpenItemPaymentEntity => ({ i
 
 type PaymentInput = { paymentId?: string; sourceType: OpenItemPaymentEntity['sourceType']; sourceId: string; partyType: OpenItemPaymentEntity['partyType']; partyId?: string; paymentDate: string; amount: number; bankAccountNumber: string; method?: string; allocations: Array<{ openItemId: string; amount: number }> };
 
-const validatePaymentSource = (db: Database.Database, tenantId: string, input: PaymentInput): { partyId?: string } => {
+const validatePaymentSource = (db: Database.Database, tenantId: string, input: PaymentInput, allowBookedSource = false): { partyId?: string } => {
   if (!isIsoDate(input.paymentDate)) throw new Error('INVALID_PAYMENT_DATE');
   const total = amount(input.amount);
   if (total <= 0) throw new Error('INVALID_PAYMENT_AMOUNT');
@@ -396,7 +447,7 @@ const validatePaymentSource = (db: Database.Database, tenantId: string, input: P
     const row = db.prepare('SELECT tenant_id, amount, date, status, linked_invoice_id FROM bank_transactions WHERE tenant_id = ? AND id = ?').get(tenantId, input.sourceId) as { tenant_id: string; amount: number; date: string; status: string; linked_invoice_id: string | null } | undefined;
     if (!row) throw new Error('PAYMENT_SOURCE_NOT_FOUND');
     if (amount(Math.abs(row.amount)) !== total || row.date !== input.paymentDate) throw new Error('PAYMENT_SOURCE_MISMATCH');
-    if (row.status === 'booked' || row.linked_invoice_id) throw new Error('PAYMENT_SOURCE_ALREADY_BOOKED');
+    if (!allowBookedSource && (row.status === 'booked' || row.linked_invoice_id)) throw new Error('PAYMENT_SOURCE_ALREADY_BOOKED');
   } else if (input.sourceType === 'invoice_payment') {
     const row = db.prepare('SELECT p.amount, p.date, i.client_id FROM invoice_payments p JOIN invoices i ON i.id = p.invoice_id WHERE p.id = ?').get(input.sourceId) as { amount: number; date: string; client_id: string | null } | undefined;
     if (!row) throw new Error('PAYMENT_SOURCE_NOT_FOUND');
@@ -408,6 +459,9 @@ const validatePaymentSource = (db: Database.Database, tenantId: string, input: P
 
 const addPaymentAllocations = (db: Database.Database, tenantId: string, payment: Record<string, any>, allocations: Array<{ openItemId: string; amount: number }>, policy: ReturnType<typeof getAccountingPolicyForPro>): void => {
   const timestamp = now();
+  const requestedAmount = amount(allocations.reduce((sum, allocation) => sum + allocation.amount, 0));
+  const existingAmount = Number((db.prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM open_item_allocations WHERE tenant_id = ? AND payment_id = ?').get(tenantId, payment.id) as { total: number }).total);
+  if (amount(existingAmount + requestedAmount) > amount(payment.amount) + 0.01) throw new Error('PAYMENT_ALLOCATION_EXCEEDS_RESIDUAL');
   const insertAllocation = db.prepare('INSERT INTO open_item_allocations (id, tenant_id, payment_id, open_item_id, amount, created_at) VALUES (?, ?, ?, ?, ?, ?)');
   for (const allocation of allocations) {
     const value = amount(allocation.amount);
@@ -416,7 +470,8 @@ const addPaymentAllocations = (db: Database.Database, tenantId: string, payment:
     if (!item || item.party_type !== payment.party_type || (payment.party_id && item.party_id !== payment.party_id)) throw new Error('OPEN_ITEM_PARTY_MISMATCH');
     if (value > Number(item.residual_amount) + 0.01) throw new Error('OPEN_ITEM_ALLOCATION_EXCEEDS_RESIDUAL');
     const beforeAllocated = amount(item.allocated_amount);
-    insertAllocation.run(randomUUID(), tenantId, payment.id, item.id, value, timestamp);
+    const allocationId = randomUUID();
+    insertAllocation.run(allocationId, tenantId, payment.id, item.id, value, timestamp);
     const allocated = amount(beforeAllocated + value); const residual = amount(Number(item.original_amount) - allocated);
     const status = residual > 0 ? 'partially_paid' : 'paid';
     db.prepare('UPDATE open_items SET allocated_amount = ?, residual_amount = ?, status = ?, updated_at = ? WHERE tenant_id = ? AND id = ?').run(allocated, Math.max(0, residual), status, timestamp, tenantId, item.id);
@@ -429,20 +484,51 @@ const addPaymentAllocations = (db: Database.Database, tenantId: string, payment:
     if (item.source_type === 'outgoing_invoice' && policy.vatMethod === 'ist') {
       const snapshotRow = db.prepare('SELECT accounting_snapshot_json FROM invoices WHERE id = ?').get(item.source_id) as { accounting_snapshot_json: string | null } | undefined;
       const snapshot = json<AccountingSnapshot>(snapshotRow?.accounting_snapshot_json);
-      const tax = snapshot?.taxAmount ?? 0; const gross = snapshot?.grossAmount ?? Number(item.original_amount);
-      const previousRecognized = amount((tax * Math.min(beforeAllocated, gross)) / gross);
-      const recognized = amount((tax * Math.min(allocated, gross)) / gross);
-      const delta = amount(recognized - previousRecognized);
-      if (delta > 0 && snapshot) {
-        const deferred = snapshot.lines.find((line) => line.creditAmount > 0 && line.accountNumber !== snapshot.lines[1]?.accountNumber)?.accountNumber;
-        const output = getMapping(db, tenantId, policy.activeChart).output_vat;
-        if (!deferred) throw new Error('DEFERRED_VAT_ACCOUNT_MISSING');
-        insertJournal(db, tenantId, 'payment_vat', `payment-vat:${payment.id}:${item.id}`, payment.payment_date, 'USt Vereinnahmung', [
-          { accountNumber: deferred, debitAmount: delta, creditAmount: 0, taxAmount: delta },
-          { accountNumber: output, debitAmount: 0, creditAmount: delta, taxAmount: delta },
-        ], { chart: policy.activeChart });
+      const invoiceGross = snapshot?.grossAmount ?? Number(item.original_amount);
+      if (snapshot && invoiceGross > 0) {
+        const basisLines = snapshot.lines.filter((line) => line.creditAmount > 0 && line.memo?.startsWith('UStBasis '));
+        const taxByCase = new Map<string, { accountNumber: string; taxAmount: number }>();
+        for (const line of snapshot.lines.filter((candidate) => candidate.memo?.startsWith('USt '))) {
+          const taxCaseKey = line.memo!.slice('USt '.length);
+          taxByCase.set(taxCaseKey, { accountNumber: line.accountNumber, taxAmount: amount(line.creditAmount) });
+        }
+        // Soll snapshots carry the case/net/tax metadata on the revenue basis
+        // line. Ist snapshots intentionally omit it from journal metadata so
+        // VAT is not reported before payment; their stable basis memo above
+        // supplies the same immutable breakdown here.
+        const metadataBases = snapshot.lines.filter((line) => line.creditAmount > 0 && line.taxCaseKey && line.netAmount !== undefined && line.taxAmount !== undefined && line.grossAmount !== undefined);
+        const bases = basisLines.length ? basisLines : metadataBases;
+        const fallbackTax = snapshot.taxAmount ?? 0;
+        const fallbackCase = metadataBases[0]?.taxCaseKey ?? 'DE_STD_19';
+        const fallbackTaxAccount = getMapping(db, tenantId, policy.activeChart).output_vat_deferred;
+        const payableLines: AccountingSnapshot['lines'] = [];
+        for (const basis of bases.length ? bases : [{ creditAmount: snapshot.netAmount, memo: `UStBasis ${fallbackCase}` } as AccountingSnapshot['lines'][number]]) {
+          const taxCaseKey = basis.taxCaseKey ?? basis.memo?.slice('UStBasis '.length) ?? fallbackCase;
+          const control = taxByCase.get(taxCaseKey);
+          const taxForBasis = control?.taxAmount ?? (bases.length === 1 ? fallbackTax : 0);
+          const basisGross = control ? amount(basis.creditAmount + taxForBasis) : (basis.grossAmount ?? amount(basis.creditAmount + taxForBasis));
+          const previousRecognized = amount((taxForBasis * Math.min(beforeAllocated, invoiceGross) * basisGross) / (invoiceGross * basisGross));
+          const recognized = amount((taxForBasis * Math.min(allocated, invoiceGross) * basisGross) / (invoiceGross * basisGross));
+          const delta = amount(recognized - previousRecognized);
+          if (delta <= 0) continue;
+          const grossShare = amount((Math.min(value, invoiceGross) * basisGross) / invoiceGross);
+          const netShare = amount(grossShare - delta);
+          const deferred = control?.accountNumber ?? fallbackTaxAccount;
+          const output = resolveTaxAccountsForCase(db, policy.activeChart, taxCaseKey).outputTaxAccount ?? getMapping(db, tenantId, policy.activeChart).output_vat;
+          payableLines.push({ accountNumber: deferred, debitAmount: delta, creditAmount: 0, taxCaseKey, netAmount: netShare, taxAmount: delta, grossAmount: grossShare });
+          payableLines.push({ accountNumber: output, debitAmount: 0, creditAmount: delta });
+        }
+        if (payableLines.length) insertJournal(db, tenantId, 'payment_vat', `payment-vat:${payment.id}:${allocationId}`, payment.payment_date, 'USt Vereinnahmung', payableLines, { chart: policy.activeChart });
       }
     }
+  }
+  const allocatedAmount = amount((db.prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM open_item_allocations WHERE tenant_id = ? AND payment_id = ?').get(tenantId, payment.id) as { total: number }).total);
+  const residualAmount = amount(Number(payment.amount) - allocatedAmount);
+  db.prepare('UPDATE open_item_payments SET allocated_amount = ?, residual_amount = ?, status = ? WHERE tenant_id = ? AND id = ?').run(allocatedAmount, residualAmount, residualAmount > 0 ? 'overpaid' : 'allocated', tenantId, payment.id);
+  if (payment.source_type === 'bank_transaction') {
+    const linked = db.prepare(`SELECT source_id FROM open_items oi JOIN open_item_allocations oa ON oa.open_item_id = oi.id
+      WHERE oa.tenant_id = ? AND oa.payment_id = ? AND oi.source_type = 'outgoing_invoice' ORDER BY oa.created_at LIMIT 1`).get(tenantId, payment.id) as { source_id: string } | undefined;
+    db.prepare("UPDATE bank_transactions SET status = 'booked', linked_invoice_id = COALESCE(?, linked_invoice_id), updated_at = ? WHERE tenant_id = ? AND id = ?").run(linked?.source_id ?? null, timestamp, tenantId, payment.source_id);
   }
 };
 
@@ -454,7 +540,7 @@ export const allocateOpenItemPayment = (db: Database.Database, scope: TenantScop
     return paymentFromRow(knownDuplicate);
   }
   const policy = getAccountingPolicyForPro(db, scope); const mapping = getMapping(db, tenantId, policy.activeChart);
-  const source = validatePaymentSource(db, tenantId, input);
+  const source = validatePaymentSource(db, tenantId, input, Boolean(input.paymentId));
   if ((input.sourceType === 'bank_transaction' || input.sourceType === 'invoice_payment') && !input.partyId && !source.partyId) throw new Error('PAYMENT_PARTY_REQUIRED');
   if (source.partyId && input.partyId && source.partyId !== input.partyId) throw new Error('PAYMENT_PARTY_MISMATCH');
   if (input.paymentId) {
@@ -464,9 +550,6 @@ export const allocateOpenItemPayment = (db: Database.Database, scope: TenantScop
     if (amount(input.allocations.reduce((sum, allocation) => sum + allocation.amount, 0)) > Number(existing.residual_amount) + 0.01) throw new Error('PAYMENT_ALLOCATION_EXCEEDS_RESIDUAL');
     db.transaction(() => {
       addPaymentAllocations(db, tenantId, existing, input.allocations, policy);
-      const row = db.prepare('SELECT allocated_amount, amount FROM open_item_payments WHERE tenant_id = ? AND id = ?').get(tenantId, existing.id) as { allocated_amount: number; amount: number };
-      const residual = amount(Number(existing.amount) - Number(row.allocated_amount));
-      db.prepare('UPDATE open_item_payments SET allocated_amount = ?, residual_amount = ?, status = ? WHERE tenant_id = ? AND id = ?').run(row.allocated_amount, residual, residual > 0 ? 'overpaid' : 'allocated', tenantId, existing.id);
     })();
     return paymentFromRow(db.prepare('SELECT * FROM open_item_payments WHERE tenant_id = ? AND id = ?').get(tenantId, existing.id) as Record<string, any>);
   }
@@ -484,12 +567,9 @@ export const allocateOpenItemPayment = (db: Database.Database, scope: TenantScop
       ? [{ accountNumber: input.bankAccountNumber, debitAmount: total, creditAmount: 0 }, { accountNumber: mapping.accounts_receivable, debitAmount: 0, creditAmount: total }]
       : [{ accountNumber: mapping.accounts_payable, debitAmount: total, creditAmount: 0 }, { accountNumber: input.bankAccountNumber, debitAmount: 0, creditAmount: total }];
     const journalEntryId = insertJournal(db, tenantId, 'payment', `payment:${input.sourceType}:${input.sourceId}`, input.paymentDate, 'Zahlung', journalLines, { chart: policy.activeChart });
-    db.prepare(`INSERT INTO open_item_payments (id, tenant_id, party_type, party_id, payment_date, amount, bank_account_number, method, source_type, source_id, allocated_amount, residual_amount, status, journal_entry_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(paymentId, tenantId, input.partyType, input.partyId ?? derivedParty ?? null, input.paymentDate, total, input.bankAccountNumber, input.method ?? null, input.sourceType, input.sourceId, allocationTotal, amount(total - allocationTotal), allocationTotal < total ? 'overpaid' : 'allocated', journalEntryId, timestamp);
+    db.prepare(`INSERT INTO open_item_payments (id, tenant_id, party_type, party_id, payment_date, amount, bank_account_number, method, source_type, source_id, allocated_amount, residual_amount, status, journal_entry_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'overpaid', ?, ?)`).run(paymentId, tenantId, input.partyType, input.partyId ?? derivedParty ?? null, input.paymentDate, total, input.bankAccountNumber, input.method ?? null, input.sourceType, input.sourceId, total, journalEntryId, timestamp);
     const payment = db.prepare('SELECT * FROM open_item_payments WHERE id = ?').get(paymentId) as Record<string, any>;
     addPaymentAllocations(db, tenantId, payment, input.allocations, policy);
-    const allocated = db.prepare('SELECT allocated_amount FROM open_item_payments WHERE id = ?').get(paymentId) as { allocated_amount: number };
-    const residual = amount(total - Number(allocated.allocated_amount));
-    db.prepare('UPDATE open_item_payments SET residual_amount = ?, status = ? WHERE tenant_id = ? AND id = ?').run(residual, residual > 0 ? 'overpaid' : 'allocated', tenantId, paymentId);
     if (input.sourceType === 'bank_transaction') {
       const linked = input.allocations.find((allocation) => (db.prepare('SELECT source_type FROM open_items WHERE tenant_id = ? AND id = ?').get(tenantId, allocation.openItemId) as { source_type: string } | undefined)?.source_type === 'outgoing_invoice');
       db.prepare('UPDATE bank_transactions SET status = \'booked\', linked_invoice_id = ?, updated_at = ? WHERE tenant_id = ? AND id = ?').run(linked ? (db.prepare('SELECT source_id FROM open_items WHERE tenant_id = ? AND id = ?').get(tenantId, linked.openItemId) as { source_id: string }).source_id : null, timestamp, tenantId, input.sourceId);
@@ -579,7 +659,7 @@ export const confirmAccountingBackfill = (db: Database.Database, scope: TenantSc
 
 export const listOpenItemAllocations = (db: Database.Database, scope: TenantScope, openItemId?: string): OpenItemAllocationEntity[] => (db.prepare(`SELECT id, tenant_id, payment_id, open_item_id, amount, created_at FROM open_item_allocations WHERE tenant_id = ? ${openItemId ? 'AND open_item_id = ?' : ''} ORDER BY created_at`).all(...(openItemId ? [tenant(scope), openItemId] : [tenant(scope)])) as Array<Record<string, any>>).map((row) => ({ id: row.id, tenantId: row.tenant_id, paymentId: row.payment_id, openItemId: row.open_item_id, amount: Number(row.amount), createdAt: row.created_at }));
 
-export const reverseDocumentAccounting = (db: Database.Database, scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string }): { ok: true; reversalEntryId: string } => {
+export const reverseDocumentAccounting = (db: Database.Database, scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string }): { ok: true; reversalEntryId: string } => {
   const tenantId = assertDesktopTenant(scope);
   return db.transaction(() => {
     const table = input.documentType === 'outgoing_invoice' ? 'invoices' : 'incoming_invoices';
@@ -587,7 +667,7 @@ export const reverseDocumentAccounting = (db: Database.Database, scope: TenantSc
     if (!row || row.accounting_status !== 'posted' || !row.accounting_journal_entry_id) throw new Error('DOCUMENT_NOT_POSTED');
     const item = db.prepare('SELECT id FROM open_items WHERE tenant_id = ? AND source_type = ? AND source_id = ?').get(tenantId, input.documentType, input.documentId) as { id: string } | undefined;
     if (item && Number((db.prepare('SELECT COUNT(*) AS c FROM open_item_allocations WHERE tenant_id = ? AND open_item_id = ?').get(tenantId, item.id) as { c: number }).c) > 0) throw new Error('DOCUMENT_HAS_ALLOCATIONS');
-    const reversal = reverseJournalEntry(db, row.accounting_journal_entry_id, input.reason, scope, { postingDate: input.postingDate });
+    const reversal = reverseJournalEntry(db, row.accounting_journal_entry_id, input.reason, scope, { postingDate: input.postingDate, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason ?? input.reason });
     if (item) db.prepare("UPDATE open_items SET status = 'unresolved', residual_amount = 0, updated_at = ? WHERE tenant_id = ? AND id = ?").run(now(), tenantId, item.id);
     if (table === 'invoices') db.prepare("UPDATE invoices SET accounting_status = 'reversed', status = 'cancelled' WHERE id = ?").run(input.documentId);
     else db.prepare("UPDATE incoming_invoices SET accounting_status = 'reversed', status = 'cancelled' WHERE tenant_id = ? AND id = ?").run(tenantId, input.documentId);

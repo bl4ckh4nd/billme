@@ -799,8 +799,12 @@ export const runMigrations = (db: Database.Database): void => {
     CREATE TRIGGER invoices_protect_posted_accounting
     BEFORE UPDATE ON invoices
     FOR EACH ROW WHEN OLD.accounting_status = 'posted' AND (
-      NEW.number != OLD.number OR NEW.date != OLD.date OR NEW.due_date != OLD.due_date OR
-      NEW.amount != OLD.amount OR COALESCE(NEW.tax_snapshot_json, '') != COALESCE(OLD.tax_snapshot_json, '') OR
+      NEW.accounting_status != OLD.accounting_status AND NOT (NEW.accounting_status = 'reversed' AND EXISTS (SELECT 1 FROM journal_entries WHERE id = OLD.accounting_journal_entry_id AND tenant_id = 'default' AND status = 'reversed')) OR
+      COALESCE(NEW.client_id, '') != COALESCE(OLD.client_id, '') OR COALESCE(NEW.client, '') != COALESCE(OLD.client, '') OR COALESCE(NEW.client_email, '') != COALESCE(OLD.client_email, '') OR
+      COALESCE(NEW.client_address, '') != COALESCE(OLD.client_address, '') OR COALESCE(NEW.billing_address_json, '') != COALESCE(OLD.billing_address_json, '') OR
+      COALESCE(NEW.shipping_address_json, '') != COALESCE(OLD.shipping_address_json, '') OR COALESCE(NEW.tax_mode, '') != COALESCE(OLD.tax_mode, '') OR
+      COALESCE(NEW.tax_meta_json, '') != COALESCE(OLD.tax_meta_json, '') OR NEW.number != OLD.number OR NEW.date != OLD.date OR NEW.due_date != OLD.due_date OR
+      COALESCE(NEW.service_period, '') != COALESCE(OLD.service_period, '') OR NEW.amount != OLD.amount OR COALESCE(NEW.tax_snapshot_json, '') != COALESCE(OLD.tax_snapshot_json, '') OR
       COALESCE(NEW.accounting_snapshot_json, '') != COALESCE(OLD.accounting_snapshot_json, '') OR
       COALESCE(NEW.accounting_journal_entry_id, '') != COALESCE(OLD.accounting_journal_entry_id, '') OR
       COALESCE(NEW.accounting_posted_at, '') != COALESCE(OLD.accounting_posted_at, '')
@@ -825,9 +829,10 @@ export const runMigrations = (db: Database.Database): void => {
     CREATE TRIGGER incoming_invoices_protect_posted_accounting
     BEFORE UPDATE ON incoming_invoices
     FOR EACH ROW WHEN OLD.accounting_status = 'posted' AND (
+      (NEW.accounting_status != OLD.accounting_status AND NOT (NEW.accounting_status = 'reversed' AND EXISTS (SELECT 1 FROM journal_entries WHERE id = OLD.accounting_journal_entry_id AND tenant_id = OLD.tenant_id AND status = 'reversed'))) OR
       NEW.vendor_id != OLD.vendor_id OR NEW.number != OLD.number OR NEW.invoice_date != OLD.invoice_date OR
       NEW.due_date != OLD.due_date OR NEW.net_amount != OLD.net_amount OR NEW.tax_amount != OLD.tax_amount OR
-      NEW.gross_amount != OLD.gross_amount OR NEW.tax_rate != OLD.tax_rate OR
+      NEW.gross_amount != OLD.gross_amount OR NEW.tax_rate != OLD.tax_rate OR COALESCE(NEW.tax_case_key, '') != COALESCE(OLD.tax_case_key, '') OR COALESCE(NEW.service_period, '') != COALESCE(OLD.service_period, '') OR
       COALESCE(NEW.accounting_snapshot_json, '') != COALESCE(OLD.accounting_snapshot_json, '') OR
       COALESCE(NEW.accounting_journal_entry_id, '') != COALESCE(OLD.accounting_journal_entry_id, '') OR
       COALESCE(NEW.accounting_posted_at, '') != COALESCE(OLD.accounting_posted_at, '')
@@ -954,6 +959,17 @@ export const runMigrations = (db: Database.Database): void => {
     BEGIN
       SELECT RAISE(ABORT, 'journal_entries core fields are immutable');
     END;
+    DROP TRIGGER IF EXISTS journal_entries_require_reversal_link;
+    CREATE TRIGGER journal_entries_require_reversal_link
+    BEFORE UPDATE ON journal_entries
+    FOR EACH ROW WHEN NEW.status = 'reversed' AND (
+      NEW.reversed_entry_id IS NULL OR
+      NOT EXISTS (SELECT 1 FROM journal_entries reversal
+        WHERE reversal.id = NEW.reversed_entry_id
+          AND reversal.source_type = 'reversal'
+          AND reversal.reversed_entry_id = OLD.id)
+    )
+    BEGIN SELECT RAISE(ABORT, 'journal reversal requires linked reversal entry'); END;
   `);
   if (repairedJournalSources > 0) {
     logMigration(db, 'journal_source_draft_repair', 'completed', JSON.stringify({ repaired: repairedJournalSources }));

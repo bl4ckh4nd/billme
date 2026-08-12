@@ -68,8 +68,13 @@ export interface AccountingSnapshot {
     accountNumber: string;
     debitAmount: number;
     creditAmount: number;
+    taxCaseKey?: string;
+    netAmount?: number;
     taxRate?: number;
     taxAmount?: number;
+    grossAmount?: number;
+    evidenceType?: string;
+    evidenceReference?: string;
     memo?: string;
   }>;
   capturedAt: string;

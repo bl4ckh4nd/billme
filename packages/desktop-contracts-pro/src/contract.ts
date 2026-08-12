@@ -709,12 +709,12 @@ const proGetAccountingHealthResultSchema = z.object({
 
 const proSetAccountingPolicyArgsSchema = z.object({ activeChart: ledgerChartSchema, vatMethod: z.enum(['soll', 'ist']) });
 const proListAccountingAccountMappingsArgsSchema = z.object({ chart: ledgerChartSchema.optional() });
-const proUpsertAccountingAccountMappingArgsSchema = z.object({ id: z.string().optional(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'input_vat']), accountNumber: z.string().min(1) });
+const proUpsertAccountingAccountMappingArgsSchema = z.object({ id: z.string().optional(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat']), accountNumber: z.string().min(1) });
 const proUpsertVendorArgsSchema = z.object({ vendor: vendorSchema });
 const proUpsertIncomingInvoiceArgsSchema = z.object({ invoice: incomingInvoiceSchema });
-const proInvoiceAccountingArgsSchema = z.object({ invoiceId: z.string().min(1) });
+const proInvoiceAccountingArgsSchema = z.object({ invoiceId: z.string().min(1), softLockOverride: z.boolean().optional(), overrideReason: z.string().min(1).optional() }).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
 const proAllocateOpenItemPaymentArgsSchema = z.object({ payment: z.object({ paymentId: z.string().optional(), sourceType: z.enum(['bank_transaction', 'invoice_payment', 'manual']), sourceId: z.string().min(1), partyType: z.enum(['debtor', 'creditor']), partyId: z.string().optional(), paymentDate: z.string(), amount: z.number().positive(), bankAccountNumber: z.string().min(1), method: z.string().optional(), allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })) }) });
-const proReverseDocumentAccountingArgsSchema = z.object({ documentType: z.enum(['outgoing_invoice', 'incoming_invoice']), documentId: z.string().min(1), reason: z.string().min(1), postingDate: z.string().optional() });
+const proReverseDocumentAccountingArgsSchema = z.object({ documentType: z.enum(['outgoing_invoice', 'incoming_invoice']), documentId: z.string().min(1), reason: z.string().min(1), postingDate: z.string().optional(), softLockOverride: z.boolean().optional(), overrideReason: z.string().min(1).optional() }).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
 const proAllocateRemainingPaymentArgsSchema = z.object({ paymentId: z.string().min(1), allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })) });
 const proConfirmAccountingBackfillArgsSchema = z.object({ runId: z.string().min(1), confirmationHash: z.string().min(1), reason: z.string().min(1) });
 

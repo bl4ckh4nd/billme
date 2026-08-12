@@ -12,6 +12,7 @@ const HGB_BILANZ: CatalogProvenance = {
   sourceName: 'Gesetze im Internet – Handelsgesetzbuch § 266',
   sourceUrl: 'https://www.gesetze-im-internet.de/hgb/__266.html',
   sourceSha256: '7905132dcbdb537815d5d9b5deab5c97b6bc053b9ada21e16dd1c92d7a551ffe',
+  sourceHashStatus: 'verified',
 };
 
 const HGB_GKV: CatalogProvenance = {
@@ -21,16 +22,16 @@ const HGB_GKV: CatalogProvenance = {
   sourceName: 'Gesetze im Internet – Handelsgesetzbuch § 275',
   sourceUrl: 'https://www.gesetze-im-internet.de/hgb/__275.html',
   sourceSha256: '3fa1ae0daa58ca663a835465fa8142089b79deaea73b83807c59354ca01fdcdc',
+  sourceHashStatus: 'verified',
 };
 
 const BWA01: CatalogProvenance = {
-  version: 'BWA01-public-2025-01-01',
-  validFrom: '2025-01-01',
-  validTo: '2025-12-31',
+  version: 'BMWK-BWA-2024-05',
+  validFrom: '2024-05-01',
   sourceName: 'Bundesministerium für Wirtschaft und Klimaschutz – öffentliche BWA-01-Gliederung',
   sourceUrl: 'https://www.existenzgruendungsportal.de/Redaktion/DE/Downloads/DE/Checklisten-Uebersichten/Controlling/06-check-Betriebswirtschaftliche-Auswertung.pdf?__blob=publicationFile',
-  // Reference hash only: DATEV account mappings are intentionally not part of this public catalog.
-  sourceSha256: '06bebbb1374ca3913f9ac5c68c8c5830f1c2d3b878ea6636f9281ad21f58148d',
+  // The upstream PDF is currently unavailable; do not claim a digest or load this catalog as verified.
+  sourceHashStatus: 'unavailable',
 };
 
 const both = ['micro', 'small'] as const;
@@ -71,13 +72,11 @@ const bilanzPositions: PublicReportPosition[] = [
   position('BILANZ_B_II_4', 'assets.current.receivables.other', 'Sonstige Vermögensgegenstände', 40, 'line', 'assets.current.receivables'),
   position('BILANZ_B_III', 'assets.current.securities', 'III. Wertpapiere', 41, 'heading', 'assets.current'),
   position('BILANZ_B_III_1', 'assets.current.securities.affiliates', 'Anteile an verbundenen Unternehmen', 42, 'line', 'assets.current.securities'),
-  position('BILANZ_B_III_2', 'assets.current.securities.own', 'Eigene Anteile', 43, 'line', 'assets.current.securities'),
-  position('BILANZ_B_III_3', 'assets.current.securities.other', 'Sonstige Wertpapiere', 44, 'line', 'assets.current.securities'),
-  position('BILANZ_B_IV', 'assets.current.cash', 'IV. Kassenbestand, Bundesbankguthaben, Guthaben bei Kreditinstituten und Schecks', 45, 'line', 'assets.current'),
+  position('BILANZ_B_III_2', 'assets.current.securities.other', 'Sonstige Wertpapiere', 43, 'line', 'assets.current.securities'),
+  position('BILANZ_B_IV', 'assets.current.cash', 'IV. Kassenbestand, Bundesbankguthaben, Guthaben bei Kreditinstituten und Schecks', 44, 'line', 'assets.current'),
   position('BILANZ_C', 'assets.prepaid', 'C. Rechnungsabgrenzungsposten', 50, 'line'),
   position('BILANZ_D', 'assets.deferred-tax', 'D. Aktive latente Steuern', 51, 'line'),
   position('BILANZ_E', 'assets.offset', 'E. Aktiver Unterschiedsbetrag aus der Vermögensverrechnung', 52, 'line'),
-  position('BILANZ_F', 'assets.loss', 'F. Nicht durch Eigenkapital gedeckter Fehlbetrag', 53, 'line'),
   position('BILANZ_PA', 'equity', 'A. Eigenkapital', 60, 'heading'),
   position('BILANZ_PA_1', 'equity.subscribed', 'Gezeichnetes Kapital', 61, 'line', 'equity'),
   position('BILANZ_PA_2', 'equity.capital-reserve', 'Kapitalrücklage', 62, 'line', 'equity'),
@@ -127,30 +126,72 @@ const gkvPositions: PublicReportPosition[] = [
   position('GKV_17', 'annual-result', '17. Jahresüberschuss/Jahresfehlbetrag', 23, 'result'),
 ];
 
+const bilanzSmallKeys = new Set([
+  'assets.non-current',
+  'assets.non-current.intangible',
+  'assets.non-current.tangible',
+  'assets.non-current.financial',
+  'assets.current',
+  'assets.current.inventory',
+  'assets.current.receivables',
+  'assets.current.securities',
+  'assets.current.cash',
+  'assets.prepaid',
+  'assets.deferred-tax',
+  'assets.offset',
+  'equity',
+  'equity.subscribed',
+  'equity.capital-reserve',
+  'equity.revenue-reserves',
+  'equity.profit-loss-forward',
+  'equity.result',
+  'provisions',
+  'liabilities',
+  'liabilities.prepaid',
+  'liabilities.deferred-tax',
+]);
+const bilanzMicroKeys = new Set([
+  'assets.non-current',
+  'assets.current',
+  'assets.prepaid',
+  'equity',
+  'provisions',
+  'liabilities',
+  'liabilities.prepaid',
+]);
+const bilanzSmallPositions = bilanzPositions.filter((entry) => bilanzSmallKeys.has(entry.key));
+const bilanzMicroPositions = bilanzPositions.filter((entry) => bilanzMicroKeys.has(entry.key));
+
 const bwaPositions: PublicReportPosition[] = [
   position('BWA01_01', 'revenue', 'Umsatzerlöse', 1, 'line'),
-  position('BWA01_02', 'inventory-change', 'Bestandsveränderungen', 2, 'line'),
-  position('BWA01_03', 'capitalized-work', 'Aktivierte Eigenleistungen', 3, 'line'),
-  position('BWA01_04', 'total-output', 'Gesamtleistung', 4, 'subtotal'),
-  position('BWA01_05', 'material-expense', 'Wareneinsatz/Materialaufwand', 5, 'line'),
-  position('BWA01_06', 'gross-profit', 'Rohertrag', 6, 'subtotal'),
+  position('BWA01_02', 'total-output', 'Gesamtleistung', 2, 'subtotal'),
+  position('BWA01_03', 'material-expense', 'Material/Wareneinkauf', 3, 'line'),
+  position('BWA01_04', 'gross-profit', 'Rohertrag', 4, 'subtotal'),
+  position('BWA01_05', 'special-operating-income', 'Sonderbetriebserlöse', 5, 'line'),
+  position('BWA01_06', 'operating-gross-profit', 'Betrieblicher Rohertrag', 6, 'subtotal'),
   position('BWA01_07', 'personnel-expense', 'Personalkosten', 7, 'line'),
   position('BWA01_08', 'space-expense', 'Raumkosten', 8, 'line'),
-  position('BWA01_09', 'insurance-contributions', 'Versicherungen/Beiträge', 9, 'line'),
-  position('BWA01_10', 'vehicle-expense', 'Kfz-Kosten', 10, 'line'),
-  position('BWA01_11', 'advertising-travel', 'Werbe-/Reisekosten', 11, 'line'),
-  position('BWA01_12', 'cost-of-goods-out', 'Kosten der Warenabgabe', 12, 'line'),
-  position('BWA01_13', 'depreciation', 'Abschreibungen', 13, 'line'),
-  position('BWA01_14', 'maintenance', 'Reparatur/Instandhaltung', 14, 'line'),
-  position('BWA01_15', 'other-operating-expense', 'Sonstige Kosten', 15, 'line'),
-  position('BWA01_16', 'total-costs', 'Gesamtkosten', 16, 'subtotal'),
-  position('BWA01_17', 'operating-result', 'Betriebsergebnis', 17, 'subtotal'),
-  position('BWA01_18', 'interest-expense', 'Zinsaufwand', 18, 'line'),
-  position('BWA01_19', 'neutral-expense', 'Neutraler Aufwand', 19, 'line'),
-  position('BWA01_20', 'neutral-income', 'Neutraler Ertrag', 20, 'line'),
-  position('BWA01_21', 'result-before-tax', 'Ergebnis vor Steuern', 21, 'subtotal'),
-  position('BWA01_22', 'income-tax', 'Steuern vom Einkommen und Ertrag', 22, 'line'),
-  position('BWA01_23', 'preliminary-result', 'Vorläufiges Ergebnis', 23, 'result'),
+  position('BWA01_09', 'operating-tax', 'Betriebliche Steuern', 9, 'line'),
+  position('BWA01_10', 'insurance', 'Versicherungen', 10, 'line'),
+  position('BWA01_11', 'special-cost', 'Besondere Kosten', 11, 'line'),
+  position('BWA01_12', 'vehicle-expense', 'Kfz-Kosten (ohne Steuern)', 12, 'line'),
+  position('BWA01_13', 'advertising-travel', 'Werbe-/Reisekosten', 13, 'line'),
+  position('BWA01_14', 'cost-of-goods-out', 'Kosten Warenabgabe', 14, 'line'),
+  position('BWA01_15', 'depreciation', 'Abschreibungen', 15, 'line'),
+  position('BWA01_16', 'maintenance', 'Reparatur/Instandhaltung', 16, 'line'),
+  position('BWA01_17', 'other-operating-expense', 'Sonstige Kosten', 17, 'line'),
+  position('BWA01_18', 'total-costs', 'Gesamtkosten', 18, 'subtotal'),
+  position('BWA01_19', 'operating-result', 'Betriebsergebnis', 19, 'subtotal'),
+  position('BWA01_20', 'interest-expense', 'Zinsaufwand', 20, 'line'),
+  position('BWA01_21', 'other-neutral-expense', 'Sonstige neutrale Aufwände', 21, 'line'),
+  position('BWA01_22', 'neutral-expense', 'Neutraler Aufwand', 22, 'subtotal'),
+  position('BWA01_23', 'interest-income', 'Zinserträge', 23, 'line'),
+  position('BWA01_24', 'other-neutral-income', 'Sonstige neutrale Erträge', 24, 'line'),
+  position('BWA01_25', 'imputed-cost-offset', 'Verrechnung kalkulatorischer Kosten', 25, 'line'),
+  position('BWA01_26', 'neutral-income', 'Neutraler Ertrag', 26, 'subtotal'),
+  position('BWA01_27', 'result-before-tax', 'Ergebnis vor Steuern', 27, 'subtotal'),
+  position('BWA01_28', 'income-tax', 'Steuern', 28, 'line'),
+  position('BWA01_29', 'preliminary-result', 'Vorläufiges Ergebnis', 29, 'result'),
 ];
 
 const catalog = (
@@ -160,18 +201,27 @@ const catalog = (
   scope: PublicReportCatalog['scope'],
   provenance: CatalogProvenance,
   positions: PublicReportPosition[],
+  verifySource = true,
 ): PublicReportCatalog => {
-  const result = { id, title, kind, scope, provenance, positions, mappingStatus: 'public-structure-only' as const };
-  validatePublicReportCatalog(result);
+  const result = {
+    id,
+    title,
+    kind,
+    scope,
+    provenance,
+    positions: positions.map((entry) => ({ ...entry, scopes: [scope] })),
+    mappingStatus: 'public-structure-only' as const,
+  };
+  if (verifySource) validatePublicReportCatalog(result);
   return result;
 };
 
-export const PUBLIC_HGB_BILANZ_MICRO_2025 = catalog('hgb-bilanz-micro-2025', 'HGB-Bilanz – Kleinstkapitalgesellschaften', 'bilanz', 'micro', HGB_BILANZ, bilanzPositions);
-export const PUBLIC_HGB_BILANZ_SMALL_2025 = catalog('hgb-bilanz-small-2025', 'HGB-Bilanz – kleine Kapitalgesellschaften', 'bilanz', 'small', HGB_BILANZ, bilanzPositions);
+export const PUBLIC_HGB_BILANZ_MICRO_2025 = catalog('hgb-bilanz-micro-2025', 'HGB-Bilanz – Kleinstkapitalgesellschaften (Mindestgliederung)', 'bilanz', 'micro', HGB_BILANZ, bilanzMicroPositions);
+export const PUBLIC_HGB_BILANZ_SMALL_2025 = catalog('hgb-bilanz-small-2025', 'HGB-Bilanz – kleine Kapitalgesellschaften (Buchstaben und römische Ziffern)', 'bilanz', 'small', HGB_BILANZ, bilanzSmallPositions);
 export const PUBLIC_HGB_GKV_MICRO_2025 = catalog('hgb-gkv-micro-2025', 'HGB-Gewinn- und Verlustrechnung (Gesamtkostenverfahren) – Kleinstkapitalgesellschaften', 'gkv', 'micro', HGB_GKV, gkvPositions);
 export const PUBLIC_HGB_GKV_SMALL_2025 = catalog('hgb-gkv-small-2025', 'HGB-Gewinn- und Verlustrechnung (Gesamtkostenverfahren) – kleine Kapitalgesellschaften', 'gkv', 'small', HGB_GKV, gkvPositions);
-export const PUBLIC_BWA01_MICRO_2025 = catalog('bwa01-micro-2025', 'BWA 01 – öffentliche Positionsstruktur für Kleinstunternehmen', 'bwa01', 'micro', BWA01, bwaPositions);
-export const PUBLIC_BWA01_SMALL_2025 = catalog('bwa01-small-2025', 'BWA 01 – öffentliche Positionsstruktur für kleine Unternehmen', 'bwa01', 'small', BWA01, bwaPositions);
+export const PUBLIC_BWA01_MICRO_2024 = catalog('bwa01-micro-2024', 'BWA 01 – öffentliche Positionsstruktur für Kleinstunternehmen (Stand Mai 2024)', 'bwa01', 'micro', BWA01, bwaPositions, false);
+export const PUBLIC_BWA01_SMALL_2024 = catalog('bwa01-small-2024', 'BWA 01 – öffentliche Positionsstruktur für kleine Unternehmen (Stand Mai 2024)', 'bwa01', 'small', BWA01, bwaPositions, false);
 
 export const getPublicReportCatalogs = (year: number): PublicReportCatalog[] => {
   if (year !== 2025) throw new Error(`PUBLIC_REPORT_CATALOG_UNAVAILABLE:${year}`);
@@ -180,8 +230,10 @@ export const getPublicReportCatalogs = (year: number): PublicReportCatalog[] => 
     PUBLIC_HGB_BILANZ_SMALL_2025,
     PUBLIC_HGB_GKV_MICRO_2025,
     PUBLIC_HGB_GKV_SMALL_2025,
-    PUBLIC_BWA01_MICRO_2025,
-    PUBLIC_BWA01_SMALL_2025,
   ];
 };
 
+export const getPublicReportCatalogsIncludingUnverified = (year: number): PublicReportCatalog[] => {
+  if (year !== 2025) throw new Error(`PUBLIC_REPORT_CATALOG_UNAVAILABLE:${year}`);
+  return [...getPublicReportCatalogs(year), PUBLIC_BWA01_MICRO_2024, PUBLIC_BWA01_SMALL_2024];
+};

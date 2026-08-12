@@ -47,6 +47,8 @@ const manifestFor = (annex: EurAnnexId): CatalogManifest => ({
   sourceUrl: annexSource.sourceUrl,
   sha256: annexSource.sourceSha256,
   scope: 'de-sole-proprietor',
+  delivery: 'print-form-only',
+  elsterReady: false,
 });
 
 const validateLines = (annex: EurAnnexId, lines: EurAnnexLineDef[]): void => {

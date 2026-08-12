@@ -5,10 +5,11 @@ export type PublicReportPositionKind = 'heading' | 'line' | 'subtotal' | 'result
 export type CatalogProvenance = {
   version: string;
   validFrom: string;
-  validTo: string;
+  validTo?: string;
   sourceName: string;
   sourceUrl: string;
-  sourceSha256: string;
+  sourceSha256?: string;
+  sourceHashStatus: 'verified' | 'unavailable';
 };
 
 export type PublicReportPosition = {
@@ -33,14 +34,20 @@ export type PublicReportCatalog = {
 
 export const validateCatalogProvenance = (provenance: CatalogProvenance): void => {
   const date = /^\d{4}-\d{2}-\d{2}$/;
-  if (!provenance.version.trim() || !date.test(provenance.validFrom) || !date.test(provenance.validTo) || provenance.validFrom > provenance.validTo) {
+  if (!provenance.version.trim() || !date.test(provenance.validFrom) || (provenance.validTo !== undefined && (!date.test(provenance.validTo) || provenance.validFrom > provenance.validTo))) {
     throw new Error('Invalid report catalog provenance');
   }
   if (!provenance.sourceName.trim() || !/^https?:\/\//.test(provenance.sourceUrl)) {
     throw new Error('Report catalog source is incomplete');
   }
-  if (!/^[a-f0-9]{64}$/i.test(provenance.sourceSha256)) {
+  if (!['verified', 'unavailable'].includes(provenance.sourceHashStatus)) {
+    throw new Error('Report catalog source hash status is invalid');
+  }
+  if (provenance.sourceHashStatus === 'verified' && !/^[a-f0-9]{64}$/i.test(provenance.sourceSha256 ?? '')) {
     throw new Error('Report catalog source hash is missing or invalid');
+  }
+  if (provenance.sourceHashStatus === 'unavailable' && provenance.sourceSha256 !== undefined) {
+    throw new Error('Unavailable report catalog source must not claim a hash');
   }
 };
 
@@ -50,6 +57,7 @@ export const validatePublicReportCatalog = (catalog: PublicReportCatalog): void 
   if (!['micro', 'small'].includes(catalog.scope)) throw new Error(`Invalid report catalog scope: ${catalog.id}`);
   if (catalog.mappingStatus !== 'public-structure-only') throw new Error(`Private account mappings are not allowed in ${catalog.id}`);
   validateCatalogProvenance(catalog.provenance);
+  if (catalog.provenance.sourceHashStatus !== 'verified') throw new Error(`Report catalog source is not verified: ${catalog.id}`);
 
   const ids = new Set<string>();
   const keys = new Set<string>();
@@ -87,4 +95,3 @@ export const validatePublicReportCatalog = (catalog: PublicReportCatalog): void 
   };
   for (const position of catalog.positions) visit(position.key);
 };
-

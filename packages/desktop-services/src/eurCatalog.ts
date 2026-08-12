@@ -17,6 +17,8 @@ export type CatalogManifest = {
   sourceUrl: string;
   sha256: string;
   scope: 'de-sole-proprietor';
+  delivery: 'print-form-only' | 'elster-ready';
+  elsterReady: boolean;
 };
 
 export type EurLineDef = {
@@ -28,7 +30,11 @@ export type EurLineDef = {
   exportable: boolean;
   computedFromIds?: string[];
   computedTerms?: EurComputedTerm[];
-  role?: 'tax_adjustment' | 'tax_result';
+  role?: 'tax_adjustment' | 'tax_result' | 'form_metadata';
+  lineNumber?: number;
+  providerPath?: string;
+  scope?: 'de-sole-proprietor' | 'luf' | 'corporation';
+  unsupportedReason?: string;
 };
 
 export const EUR_SOURCE_VERSION_2025 = 'BMF-2025-2025-08-29';
@@ -44,6 +50,8 @@ export const EUR_CATALOG_MANIFEST_2025: CatalogManifest = {
   // SHA-256 of the BMF source PDF. Recompute when the source changes.
   sha256: 'b69b5cf0a982d28cbce20644e67677a36be0bc494bed4fae2310dc08230a1599',
   scope: 'de-sole-proprietor',
+  delivery: 'print-form-only',
+  elsterReady: false,
 };
 
 export const getCatalogForYear = (year: number): EurLineDef[] => {
@@ -66,6 +74,15 @@ export const validateEurLineCatalog = (lines: EurLineDef[]): void => {
     if (!line.id.trim() || !line.label.trim()) {
       throw new Error(`Invalid EÜR line metadata: ${line.id}`);
     }
+    if (line.lineNumber !== undefined && (!Number.isInteger(line.lineNumber) || line.lineNumber < 1 || line.lineNumber > 107)) {
+      throw new Error(`Invalid EÜR form line number: ${line.id}`);
+    }
+    if (line.providerPath !== undefined && !line.providerPath.trim()) {
+      throw new Error(`Invalid EÜR provider path: ${line.id}`);
+    }
+    if (line.scope === 'luf' && !line.unsupportedReason?.trim()) {
+      throw new Error(`Unsupported LuF EÜR line requires a reason: ${line.id}`);
+    }
     if (!['income', 'expense', 'computed'].includes(line.kind)) {
       throw new Error(`Invalid EÜR line kind: ${line.id}`);
     }
@@ -76,9 +93,9 @@ export const validateEurLineCatalog = (lines: EurLineDef[]): void => {
 
     const kz = line.kennziffer?.trim();
     if (kz) {
-      const key = `${line.year}:${kz}`;
+      const key = `${line.year}:${line.providerPath ?? 'main'}:${kz}`;
       if (kzs.has(key)) {
-        throw new Error(`Duplicate EÜR Kennziffer in year ${line.year}: ${kz}`);
+        throw new Error(`Duplicate EÜR Kennziffer in provider path ${line.providerPath ?? 'main'}: ${kz}`);
       }
       kzs.add(key);
     }
@@ -149,6 +166,14 @@ export const validateCatalogManifest = (manifest: CatalogManifest): void => {
   if (!/^[a-f0-9]{64}$/i.test(manifest.sha256)) {
     throw new Error(`Invalid catalog SHA-256: ${manifest.id}`);
   }
+  if (!['print-form-only', 'elster-ready'].includes(manifest.delivery) || manifest.elsterReady !== (manifest.delivery === 'elster-ready')) {
+    throw new Error(`Invalid catalog delivery status: ${manifest.id}`);
+  }
 };
 
 validateCatalogManifest(EUR_CATALOG_MANIFEST_2025);
+
+export const assertEurElsterReady = (manifest: CatalogManifest = EUR_CATALOG_MANIFEST_2025): void => {
+  validateCatalogManifest(manifest);
+  if (!manifest.elsterReady) throw new Error(`EUR_ELSTER_CATALOG_UNAVAILABLE:${manifest.id}`);
+};

@@ -13,6 +13,7 @@ on:
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/e2e-nightly.yml'
   pull_request:
     paths:
       - 'apps/**'
@@ -25,6 +26,7 @@ on:
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/e2e-nightly.yml'
 
 jobs:
   validate:
@@ -142,6 +144,9 @@ jobs:
       - name: Demo tests
         run: pnpm -C apps/demo test
 
+      - name: E2E artifact hygiene
+        run: pnpm test:e2e:artifact-hygiene
+
   e2e-server-smoke:
     name: E2E smoke (server mode)
     runs-on: ubuntu-latest
@@ -185,7 +190,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: server-mode-diagnostics-smoke
-          path: test-results/server-mode
+          path: |
+            test-results/server-mode
+            !test-results/server-mode/**/compose.env
+            !test-results/server-mode/**/runtime-state.json
           if-no-files-found: ignore
 
   e2e-server-pro-full:
@@ -231,5 +239,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: server-mode-diagnostics-pro-full
-          path: test-results/server-mode
+          path: |
+            test-results/server-mode
+            !test-results/server-mode/**/compose.env
+            !test-results/server-mode/**/runtime-state.json
           if-no-files-found: ignore

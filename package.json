@@ -47,7 +47,8 @@
     "test:e2e:server:smoke:pro": "node tests/e2e/server/run-suite.mjs smoke pro",
     "test:e2e:server:full": "node tests/e2e/server/run-suite.mjs full",
     "test:e2e:server:full:lite": "node tests/e2e/server/run-suite.mjs full lite",
-    "test:e2e:server:full:pro": "node tests/e2e/server/run-suite.mjs full pro"
+    "test:e2e:server:full:pro": "node tests/e2e/server/run-suite.mjs full pro",
+    "test:e2e:artifact-hygiene": "node tests/e2e/server/artifact-hygiene.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2"

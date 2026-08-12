@@ -1,9 +1,9 @@
 import type Database from 'better-sqlite3';
+import { randomUUID } from 'crypto';
 import { and, desc, eq, isNull, isNotNull, or, inArray } from 'drizzle-orm';
 import { upsertInvoice, getInvoice } from './invoicesRepo';
 import type { Invoice } from '@billme/desktop-core/types';
 import type { ServerProduct } from '@billme/server-core';
-import { v4 as uuidv4 } from 'uuid';
 import { createDrizzle, schema } from './drizzle';
 
 const transactionSelection = {
@@ -200,7 +200,7 @@ export const linkTransactionToInvoice = (
       .where(eq(schema.transactions.id, transactionId)).run();
 
     // Create payment record
-    const paymentId = uuidv4();
+    const paymentId = randomUUID();
     const payment = {
       id: paymentId,
       date: txRow.date,

@@ -67,8 +67,9 @@ describe('Pro IPC route schemas', () => {
   });
 
   it('requires an audited reason for document soft-lock overrides', () => {
-    expect(() => ipcRoutes['pro:postOutgoingInvoiceAccounting'].args.parse({ invoiceId: 'inv-1', softLockOverride: true })).toThrow();
-    expect(ipcRoutes['pro:postOutgoingInvoiceAccounting'].args.parse({ invoiceId: 'inv-1', softLockOverride: true, overrideReason: 'Owner approval' })).toMatchObject({ softLockOverride: true });
+    expect(() => ipcRoutes['pro:postOutgoingInvoiceAccounting'].args.parse({ invoiceId: 'inv-1', reservationId: 'res-1', softLockOverride: true })).toThrow();
+    expect(() => ipcRoutes['pro:postOutgoingInvoiceAccounting'].args.parse({ invoiceId: 'inv-1', softLockOverride: true, overrideReason: 'Owner approval' })).toThrow();
+    expect(ipcRoutes['pro:postOutgoingInvoiceAccounting'].args.parse({ invoiceId: 'inv-1', reservationId: 'res-1', softLockOverride: true, overrideReason: 'Owner approval' })).toMatchObject({ softLockOverride: true, reservationId: 'res-1' });
   });
 });
 

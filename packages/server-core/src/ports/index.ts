@@ -469,7 +469,7 @@ export interface ProAccountingRepository {
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
   postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;

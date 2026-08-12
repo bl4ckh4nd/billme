@@ -53,7 +53,7 @@ export interface ProAccountingOposRepository {
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
   postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
@@ -111,7 +111,7 @@ export interface ProAccountingService {
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
   postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
   listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
@@ -163,7 +163,7 @@ export interface BoundProAccountingService {
   listIncomingInvoices(): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(input: IncomingInvoiceEntity): Promise<IncomingInvoiceEntity>;
   previewOutgoingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
-  postOutgoingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; requireFinalizedReservation?: boolean }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
   postIncomingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string }): Promise<AccountingPostingPreview>;
   listOpenItems(): Promise<OpenItemEntity[]>;

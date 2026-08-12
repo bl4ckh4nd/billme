@@ -19,6 +19,17 @@ import { setSettings } from './settingsRepo';
 const createDb = () => {
   const db = new Database(':memory:');
   db.exec(bootstrapSql);
+  const invoiceColumns = new Set(
+    (db.prepare('PRAGMA table_info(invoices)').all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  for (const [column, definition] of [
+    ['accounting_status', "TEXT NOT NULL DEFAULT 'unposted'"],
+    ['accounting_snapshot_json', 'TEXT'],
+    ['accounting_journal_entry_id', 'TEXT'],
+    ['accounting_posted_at', 'TEXT'],
+  ] as const) {
+    if (!invoiceColumns.has(column)) db.exec(`ALTER TABLE invoices ADD COLUMN ${column} ${definition}`);
+  }
   setSettings(db, {
     company: {
       name: 'Billme',
@@ -118,6 +129,7 @@ const baseOffer: Invoice = {
   status: 'draft' as Invoice['status'],
   items: [
     {
+      kind: 'item',
       description: 'Consulting',
       quantity: 1,
       price: 100,

@@ -74,7 +74,7 @@ export interface ProAccountingDataAdapter {
     proceeds: number;
     reason: string;
     actorRole: UserRole;
-  }) => Promise<{ asset: AssetItem; residualBookValue: number; gainLoss: number }>;
+  }) => Promise<{ asset: AssetItem; residualBookValue: number; gainLoss: number; journalEntryId?: string }>;
 }
 
 let dataAdapter: ProAccountingDataAdapter | null = null;

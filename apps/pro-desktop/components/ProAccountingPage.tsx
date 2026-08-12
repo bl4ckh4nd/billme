@@ -143,10 +143,6 @@ const mapEntityDraftToUiDraft = (
   };
 };
 
-type ProAccountingPolicy = {
-  activeChart: 'SKR03' | 'SKR04';
-};
-
 const mapUiDraftToEntityDraft = (
   draft: ProUiBookingDraft,
 ): IpcArgs<'pro:saveDraft'>['draft'] => {
@@ -197,13 +193,7 @@ export const ProAccountingPage: React.FC = () => {
   const { data: ledgerStats, isError: ledgerStatsError, error: ledgerStatsLoadError } = useProLedgerStatsQuery();
   const policyQuery = useQuery({
     queryKey: ['pro-accounting', 'policy'],
-    queryFn: async (): Promise<ProAccountingPolicy> => {
-      const getAccountingPolicy = (ipc.pro as typeof ipc.pro & {
-        getAccountingPolicy?: () => Promise<ProAccountingPolicy>;
-      }).getAccountingPolicy;
-      if (!getAccountingPolicy) throw new Error('Buchhaltungspolitik ist für diese Pro-Installation nicht verfügbar.');
-      return getAccountingPolicy();
-    },
+    queryFn: () => ipc.pro.getAccountingPolicy(),
   });
   const activeChart = policyQuery.data?.activeChart ?? 'SKR03';
   const { data: ledgerAccounts = [], isError: ledgerAccountsError, error: ledgerAccountsLoadError } = useProLedgerAccountsQuery({

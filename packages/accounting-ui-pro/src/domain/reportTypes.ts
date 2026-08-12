@@ -146,6 +146,8 @@ export interface ReportUnmappedAccount {
 
 export interface BalanceSheetPreviewLine {
   id: string;
+  /** Catalog position key from the authoritative HGB report. */
+  position?: string;
   code: string;
   label: string;
   amount: number;
@@ -154,6 +156,8 @@ export interface BalanceSheetPreviewLine {
   /** Authoritative account references supplied by the report adapter. */
   accountRefs?: string[];
   isSubtotal?: boolean;
+  kind?: 'heading' | 'line' | 'subtotal' | 'result';
+  parentPosition?: string;
 }
 
 export interface BalanceSheetPreview {
@@ -172,6 +176,7 @@ export interface BalanceSheetPreview {
     state?: 'preview' | 'frozen';
     mappingStatus?: 'healthy' | 'warning' | 'blocked';
     mappingNotes?: string[];
+    unmappedAccounts?: ReportUnmappedAccount[];
   };
 }
 

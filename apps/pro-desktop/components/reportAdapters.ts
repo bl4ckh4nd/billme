@@ -9,6 +9,7 @@ import type {
 } from '@billme/accounting-ui-pro';
 import type {
   Bwa01Report,
+  HgbBilanzReport,
   HgbGuvReport,
   ManagementGuvReport,
   ReportResult,
@@ -179,6 +180,74 @@ export const mapEngineReport = (report: EngineReport | EngineReportPayload): Guv
 export const mapBwa01Report = mapEngineReport;
 export const mapManagementGuvReport = mapEngineReport;
 export const mapHgbGuvReport = mapEngineReport;
+
+type HgbBilanzEngineReport = ReportResult<HgbBilanzReport>;
+
+const catalogLevel = (rows: HgbBilanzReport['assets'] | HgbBilanzReport['liabilities']): Map<string, number> => {
+  const parents = new Map(rows.map((row) => [row.position, row.parentPosition]));
+  const levels = new Map<string, number>();
+  const levelOf = (position: string, seen = new Set<string>()): number => {
+    const cached = levels.get(position);
+    if (cached !== undefined) return cached;
+    if (seen.has(position)) return 0;
+    seen.add(position);
+    const parent = parents.get(position);
+    const level = parent ? levelOf(parent, seen) + 1 : 0;
+    levels.set(position, level);
+    return level;
+  };
+  for (const row of rows) levelOf(row.position);
+  return levels;
+};
+
+/** Maps the shared HGB balance catalog without reconstructing categories. */
+export const mapHgbBilanzReport = (
+  report: HgbBilanzEngineReport,
+  accounts: LedgerAccount[],
+  chart?: 'SKR03' | 'SKR04',
+): BalanceSheetPreview => {
+  const names = accountNameMap(accounts, chart);
+  const allRows = [...report.assets, ...report.liabilities];
+  const levels = catalogLevel(allRows);
+  const mapLines = (
+    rows: HgbBilanzReport['assets'] | HgbBilanzReport['liabilities'],
+    side: 'aktiva' | 'passiva',
+  ) => rows.map((row) => ({
+    id: row.position,
+    position: row.position,
+    code: row.position,
+    label: row.label,
+    amount: row.amount,
+    level: levels.get(row.position) ?? 0,
+    side,
+    accountRefs: row.accountNumbers,
+    kind: row.kind,
+    parentPosition: row.parentPosition,
+    isSubtotal: row.kind !== 'line',
+  }));
+  const unmappedAccounts = report.mappingHealth.unmappedAccounts.map((accountNumber) => ({ accountNumber, amount: 0 }));
+  const mappingNotes = report.mappingHealth.warnings;
+  const blocked = report.mappingHealth.blocking;
+  const status = blocked ? 'error' : mappingNotes.length || report.totals.delta !== 0 ? 'warning' : 'ok';
+  return {
+    aktiva: mapLines(report.assets, 'aktiva'),
+    passiva: mapLines(report.liabilities, 'passiva'),
+    totals: {
+      aktiva: report.totals.assets,
+      passiva: report.totals.liabilities,
+      difference: report.totals.delta,
+    },
+    quality: {
+      status,
+      notes: mappingNotes,
+      generatedAt: new Date().toISOString(),
+      source: 'live',
+      mappingStatus: blocked ? 'blocked' : mappingNotes.length ? 'warning' : 'healthy',
+      mappingNotes,
+      unmappedAccounts,
+    },
+  };
+};
 
 export const mapEurReport = (report: IpcResult<'eur:getReport'>): GuvReport => {
   const lines = report.rows.map((row) => ({

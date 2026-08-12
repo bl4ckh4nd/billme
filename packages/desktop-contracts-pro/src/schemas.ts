@@ -1113,14 +1113,14 @@ export const saveReportSnapshotArgsSchema = z.object({
 });
 
 export const proGetReportingReportArgsSchema = z.object({
-  kind: z.enum(['bwa01', 'management-guv', 'hgb-guv']),
+  kind: z.enum(['bwa01', 'management-guv', 'hgb-guv', 'hgb-bilanz']),
   from: z.string().optional(),
   to: z.string().optional(),
   asOfDate: z.string().optional(),
 });
 
 export const proGetReportingReportResultSchema = z.object({
-  kind: z.enum(['bwa01', 'management-guv', 'hgb-guv']),
+  kind: z.enum(['bwa01', 'management-guv', 'hgb-guv', 'hgb-bilanz']),
   snapshot: z.object({
     fiscalYear: z.number().int(),
     fiscalYearStart: z.string(),

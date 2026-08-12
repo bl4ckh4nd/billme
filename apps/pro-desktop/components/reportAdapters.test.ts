@@ -3,6 +3,7 @@ import {
   mapBalanceSheetPreview,
   mapBwa01Report,
   mapGuvReport,
+  mapHgbBilanzReport,
   mapHgbGuvReport,
   mapReportDrilldownEntries,
   mapSusaReport,
@@ -125,6 +126,45 @@ describe('reportAdapters', () => {
     expect(report.totals.difference).toBe(50);
     expect(report.aktiva[0]?.accountRefs).toEqual(['0440']);
     expect(report.passiva[0]?.accountRefs).toEqual(['1600']);
+  });
+
+  it.each([
+    {
+      size: 'micro' as const,
+      assets: [{ position: 'assets.current', label: 'B. Umlaufvermögen', amount: 100, accountNumbers: ['1200'], kind: 'heading' as const }],
+      liabilities: [{ position: 'equity', label: 'A. Eigenkapital', amount: 100, accountNumbers: ['3000'], kind: 'heading' as const }],
+    },
+    {
+      size: 'small' as const,
+      assets: [
+        { position: 'assets.current', label: 'B. Umlaufvermögen', amount: 100, accountNumbers: [], kind: 'heading' as const },
+        { position: 'assets.current.cash', label: 'IV. Kassenbestand', amount: 100, accountNumbers: ['1200'], kind: 'line' as const, parentPosition: 'assets.current' },
+      ],
+      liabilities: [{ position: 'equity', label: 'A. Eigenkapital', amount: 100, accountNumbers: ['3000'], kind: 'heading' as const }],
+    },
+  ])('preserves $size HGB catalog positions, hierarchy and account refs', ({ assets, liabilities }) => {
+    const report = mapHgbBilanzReport({
+      kind: 'hgb-bilanz',
+      assets,
+      liabilities,
+      totals: { assets: 100, liabilities: 100, delta: 0 },
+      snapshot: { fiscalYear: 2026, fiscalYearStart: '01-01', businessSize: 'small', ledgerEntryCount: 1, ledgerAccountCount: 2, cashEntryCount: 0 },
+      mappingHealth: { mappedAccounts: 2, inferredAccounts: 0, unmappedAccounts: [], warnings: [], blocking: false },
+    }, [account('1200', 'Bank'), account('3000', 'Eigenkapital')]);
+    expect([...report.aktiva, ...report.passiva].map((row) => row.position)).toEqual([...assets, ...liabilities].map((row) => row.position));
+    if (assets.some((row) => row.position === 'assets.current.cash')) {
+      expect(report.aktiva.find((row) => row.position === 'assets.current.cash')).toMatchObject({ level: 1, parentPosition: 'assets.current', accountRefs: ['1200'] });
+    }
+    expect(report.quality).toMatchObject({ mappingStatus: 'healthy', mappingNotes: [] });
+  });
+
+  it('preserves blocked HGB mapping health and unmapped identities', () => {
+    const report = mapHgbBilanzReport({
+      kind: 'hgb-bilanz', assets: [], liabilities: [], totals: { assets: 0, liabilities: 0, delta: 0 },
+      snapshot: { fiscalYear: 2026, fiscalYearStart: '01-01', businessSize: 'small', ledgerEntryCount: 1, ledgerAccountCount: 1, cashEntryCount: 0 },
+      mappingHealth: { mappedAccounts: 0, inferredAccounts: 0, unmappedAccounts: ['9999'], warnings: ['9999 fehlt im HGB-Bilanz-Mapping'], blocking: true },
+    }, []);
+    expect(report.quality).toMatchObject({ status: 'error', mappingStatus: 'blocked', mappingNotes: ['9999 fehlt im HGB-Bilanz-Mapping'], unmappedAccounts: [{ accountNumber: '9999', amount: 0 }] });
   });
 
   it('keeps report-specific engine rows and blocks incomplete mapping health', () => {

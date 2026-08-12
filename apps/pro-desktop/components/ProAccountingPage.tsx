@@ -19,6 +19,7 @@ import { useImportSkrMutation, useProLedgerAccountsQuery, useProLedgerStatsQuery
 import type { IpcArgs, IpcResult } from '../ipc/contract';
 import type {
   Bwa01Report,
+  HgbBilanzReport,
   HgbGuvReport,
   IncomingInvoiceEntity,
   ManagementGuvReport,
@@ -29,11 +30,11 @@ import type {
 import type { OposBankTransaction } from '@billme/accounting-ui-pro';
 import { ProAccountRulesModal } from './ProAccountRulesModal';
 import {
-  mapBalanceSheetPreview,
   mapBwa01Report,
   mapEurReport,
   mapGuvReport,
   mapHgbGuvReport,
+  mapHgbBilanzReport,
   mapManagementGuvReport,
   mapReportDrilldownEntries,
   mapSusaReport,
@@ -48,7 +49,7 @@ const reportPeriodRange = (filters: ReportFilterState): { from?: string; to?: st
  * and HGB GuV appear identical while hiding their mapping health.
  */
 const runReportingReport = async (
-  kind: Extract<ReportKind, 'bwa01' | 'management-guv' | 'hgb-guv'>,
+  kind: Extract<ReportKind, 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz'>,
   range: { from?: string; to?: string },
 ): Promise<ReportResult<object>> => {
   return ipc.pro.getReportingReport({ kind, ...range }) as unknown as ReportResult<object>;
@@ -528,9 +529,9 @@ export const ProAccountingPage: React.FC = () => {
       },
       async getBalanceSheetPreview(filters) {
         activeReportFilters = filters;
-        const report = await ipc.pro.getBilanzReport({ asOfDate: filters.asOfDate });
-        const accounts = await ipc.pro.listLedgerAccounts({ chart: report.chart ?? filters.chart, limit: 10_000 });
-        return mapBalanceSheetPreview(report, accounts);
+        const report = await runReportingReport('hgb-bilanz', { to: filters.asOfDate });
+        const accounts = await ipc.pro.listLedgerAccounts({ chart: filters.chart, limit: 10_000 });
+        return mapHgbBilanzReport(report as ReportResult<HgbBilanzReport>, accounts, filters.chart);
       },
       async getReportDrilldownEntries(selection) {
         if (!selection.accountNumbers.length) return [];

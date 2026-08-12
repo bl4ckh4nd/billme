@@ -1,7 +1,7 @@
 # Abschlussreport Buchungspipeline
 
 **Stand:** 12.08.2026 · **Codebasis:** Branch
-`fix/accounting-pipeline-hardening`, Codebaseline `dbaafc7` (danach folgt nur
+`fix/accounting-pipeline-hardening`, Codebaseline `661b790` (danach folgt nur
 diese Report-Aktualisierung)
 
 Dieser Report bewertet den technischen Stand der Pro-Buchungspipeline nach der
@@ -142,6 +142,8 @@ Die Kerninvarianten sind damit explizit:
 - Lade-, Fehler-, Validierungs- und Busy-Zustände sind an der Aktion sichtbar.
   Doppelklicks werden bei Zahlungszuordnung verhindert; serverseitige
   Idempotenz bleibt die letzte Sicherung.
+- Transiente Fehler in Reports, Drilldowns und der DATEV-Historie bieten
+  zugängliche Retry-Aktionen direkt am betroffenen Bereich.
 - Viewer, Sales und Auditor erhalten read-only Controls. Owner, Admin und
   Accountant sehen nur die für ihre Rolle freigegebenen Mutationen; der Server
   erzwingt dieselbe Grenze erneut.
@@ -181,7 +183,7 @@ Diese Punkte sind keine offenen Integritätsfehler:
 |---|---:|
 | Full Pro Server E2E gegen frisch migrierten Postgres-Stack (`test-results/server-mode/billme-e2e-msq2ya38-1tlad`) | **7/7 Szenarien bestanden**, inklusive unbedingter `EU_B2B_SERVICE_RC`-Persistenz-/DATEV-Felder-40/41/43-Prüfung |
 | Pro Desktop | **286/286 Tests**, Typecheck und Build bestanden |
-| Accounting UI Pro | **30/30 Tests bestanden** |
+| Accounting UI Pro | **34/34 Tests bestanden** |
 | Accounting Engine | **5/5 Tests bestanden** |
 | Desktop Data | **50/50 Tests bestanden** |
 | Server API | **26/26 Tests**, Typecheck bestanden |

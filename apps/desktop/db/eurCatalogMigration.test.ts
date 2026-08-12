@@ -38,6 +38,7 @@ describe('Lite EÜR catalog bootstrap and migration', () => {
       SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_eur_lines_year_provider_kennziffer'
     `).get() as { sql: string };
     expect(indexSql.sql).toContain('provider_path');
+    expect((db.prepare(`SELECT COUNT(*) AS count FROM eur_lines WHERE tax_year = 2025 AND kennziffer = '120'`).get() as { count: number }).count).toBe(3);
     db.close();
   });
 });

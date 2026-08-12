@@ -53,7 +53,6 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
       { id: 'projects', label: 'Projekte' },
       { id: 'documents', label: 'Dokumente' },
       { id: 'finance', label: 'Finanzen' },
-      { id: 'tax-filing', label: 'Steuer' },
       { id: 'articles', label: 'Artikel' },
     ] as const;
 

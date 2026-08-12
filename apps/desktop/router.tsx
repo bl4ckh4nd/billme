@@ -24,7 +24,6 @@ import { RecurringView } from './components/RecurringView';
 import { ProjectsView } from './components/ProjectsView';
 import { ProjectDetailView } from './components/ProjectDetailView';
 import { FinanceHubView } from './components/FinanceHubView';
-import { TaxFilingCenter } from './components/TaxFilingCenter';
 import { EurView } from './components/EurView';
 import { InvoiceEditor } from './components/InvoiceEditor';
 import { InvoiceDocumentEditor } from './components/InvoiceDocumentEditor';
@@ -50,8 +49,7 @@ const RootLayout: React.FC = () => {
   const showOnboarding = shouldShowBusinessOnboarding(settings);
 
   const activePage = (() => {
-    if (pathname.startsWith('/finance') || pathname.startsWith('/accounts') || pathname.startsWith('/statistics') || pathname.startsWith('/eur')
-      || pathname.startsWith('/tax-filing'))
+    if (pathname.startsWith('/finance') || pathname.startsWith('/accounts') || pathname.startsWith('/statistics') || pathname.startsWith('/eur'))
       return 'finance';
     if (pathname.startsWith('/templates') || pathname.startsWith('/recurring')) return 'documents';
     if (pathname.startsWith('/documents')) return 'documents';
@@ -119,7 +117,6 @@ const StatisticsPage: React.FC = () => <StatisticsView />;
 const AccountsPage: React.FC = () => <AccountsView />;
 const FinancePage: React.FC = () => <FinanceHubView />;
 const EurPage: React.FC = () => <EurView />;
-const TaxFilingPage: React.FC = () => <TaxFilingCenter />;
 const ClientsPage: React.FC = () => <ClientsView />;
 const ProjectsPage: React.FC = () => <ProjectsView />;
 const ArticlesPage: React.FC = () => <ArticlesView />;
@@ -441,12 +438,6 @@ const eurRoute = createRoute({
   component: EurPage,
 });
 
-const taxFilingRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/tax-filing',
-  component: TaxFilingPage,
-});
-
 const templatesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/templates',
@@ -517,7 +508,6 @@ const routeTree = rootRoute.addChildren([
   accountsRoute,
   financeRoute,
   eurRoute,
-  taxFilingRoute,
   templatesRoute,
   templateEditorRoute,
   documentsRoute,

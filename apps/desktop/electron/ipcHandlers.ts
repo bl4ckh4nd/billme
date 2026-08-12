@@ -74,8 +74,6 @@ import { PRODUCT_PROFILE } from '../productProfile';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import { eq } from 'drizzle-orm';
-import { registerTaxFilingIpcHandlers } from '@billme/desktop-core/electron/tax-filing/ipc';
-import { createDesktopTaxFilingAdapter } from './taxFilingAdapter';
 
 const normalizeInvoiceTaxData = (doc: Invoice, settings: AppSettings): Invoice => {
   const taxMode = resolveInvoiceTaxMode(doc.taxMode, settings);
@@ -140,7 +138,6 @@ export const registerIpcHandlers = (
   const requireDb = deps.requireDb;
   const getUserDataPath = deps.getUserDataPath;
   const getMainWindow = deps.getMainWindow;
-  registerTaxFilingIpcHandlers(ipcMain, { getUserDataPath, resourcesPath: process.resourcesPath, binaryPath: process.env.BILLME_ERIC_BINARY, adapter: createDesktopTaxFilingAdapter(getUserDataPath) });
 
   register(ipcMain, 'invoices:list', () => {
     const db = requireDb();

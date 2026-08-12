@@ -26,7 +26,7 @@ const managementPositions: ReportMappingCatalogPosition[] = [
 
 const sideForBilanzKey = (key: string): ReportMappingCatalogSide | undefined => {
   if (key.startsWith('assets.')) return 'asset';
-  if (key.startsWith('equity') || key.startsWith('provisions') || key.startsWith('liabilities.')) return 'liability';
+  if (key.startsWith('equity') || key.startsWith('provisions') || key === 'liabilities' || key.startsWith('liabilities.')) return 'liability';
   return undefined;
 };
 

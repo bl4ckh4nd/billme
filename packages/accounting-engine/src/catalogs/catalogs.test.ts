@@ -8,6 +8,7 @@ import { getPublicReportCatalogs, getPublicReportCatalogsIncludingUnverified, PU
 import { loadPrivateDatevArtifact } from './datevArtifact';
 import { getEurAnnexCatalog, validateEurAnnexCatalog } from '../../../desktop-services/src/eur/annexCatalog';
 import { assertEurElsterReady, EUR_CATALOG_MANIFEST_2025, getCatalogForYear } from '../../../desktop-services/src/eurCatalog';
+import { listReportMappingPositions } from '../reportMappingCatalog';
 
 test('public report catalogs have provenance and no private account mapping', () => {
   const catalogs = getPublicReportCatalogs(2025);
@@ -47,6 +48,16 @@ test('HGB balance scopes expose only statutory minimum detail', () => {
   ]);
   assert.ok(!small?.positions.some((position) => position.key.includes('assets.current.securities.own')));
   assert.ok(!small?.positions.some((position) => position.key === 'assets.loss'));
+});
+
+test('report mapping positions derive balance side for every micro position', () => {
+  const positions = listReportMappingPositions('hgb-bilanz', 'micro');
+  assert.equal(positions.length, 10);
+  assert.ok(positions.every((position) => position.side));
+  assert.deepEqual(positions.map((position) => position.side), [
+    'asset', 'asset', 'asset', 'asset', 'asset',
+    'liability', 'liability', 'liability', 'liability', 'liability',
+  ]);
 });
 
 test('BWA01 ordered keys match the verified GründerZeiten 23 source', () => {

@@ -58,6 +58,9 @@ const mapNativeEurCashItem = (item: NativeEurListItem): EurCashItem => {
   if (item.classification && item.classification.taxYear !== 2025) {
     throw new Error(`EUR_UNSUPPORTED_TAX_YEAR:${item.classification.taxYear}`);
   }
+  const classification = item.classification
+    ? { ...item.classification, taxYear: 2025 as const }
+    : undefined;
   return {
     sourceType: item.sourceType,
     sourceId: item.sourceId,
@@ -68,7 +71,7 @@ const mapNativeEurCashItem = (item: NativeEurListItem): EurCashItem => {
     counterparty: item.counterparty,
     purpose: item.purpose,
     vatWarning: item.vatWarning,
-    classification: item.classification,
+    classification,
   };
 };
 

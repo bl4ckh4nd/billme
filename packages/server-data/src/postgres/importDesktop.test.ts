@@ -388,3 +388,39 @@ test('SQLite import keeps effective-date and legacy mappings traceable and idemp
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test('rerunning a fully migrated Postgres database preserves reporting evidence, EÜR catalog, and migration journal', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tenantId = `migration-rerun-${randomUUID()}`;
+  const snapshotId = `snapshot-${randomUUID()}`;
+  const submissionId = `submission-${randomUUID()}`;
+  try {
+    await runPostgresMigrations(pool);
+    const now = new Date().toISOString();
+    await pool.query(`INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at) VALUES ($1,$2,'Migration rerun','pro','single-tenant','active',$3,$3)`, [tenantId, tenantId, now]);
+    await pool.query(`INSERT INTO report_snapshots (id, tenant_id, report_type, args_json, payload_json, created_at, source_hash, from_date, to_date, as_of_date) VALUES ($1,$2,'guv','{}','{"total":119}',$3,'source-rerun','2026-01-01','2026-12-31','2026-12-31')`, [snapshotId, tenantId, now]);
+    await pool.query(`INSERT INTO report_snapshot_positions (id, tenant_id, snapshot_id, position_key, position_label, amount, debit_amount, credit_amount, metadata_json, created_at) VALUES ($1,$2,$3,'revenue','Revenue',119,119,0,'{}',$4)`, [`position-${randomUUID()}`, tenantId, snapshotId, now]);
+    await pool.query(`INSERT INTO report_catalog_refs (id, tenant_id, report_type, catalog_key, catalog_version, source_hash, payload_json, created_at) VALUES ($1,$2,'guv','catalog','2026','catalog-rerun','{}',$3)`, [`catalog-${randomUUID()}`, tenantId, now]);
+    await pool.query(`INSERT INTO tax_submissions (id, tenant_id, submission_type, tax_year, period, status, payload_json, idempotency_key, created_by, created_at, updated_at) VALUES ($1,$2,'ustva',2026,'2026-12','draft','{}','rerun-submit','test',$3,$3)`, [submissionId, tenantId, now]);
+
+    const before = {
+      journal: (await pool.query('SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY id')).rows,
+      snapshot: (await pool.query('SELECT id, source_hash, from_date, to_date, as_of_date, payload_json FROM report_snapshots WHERE id=$1', [snapshotId])).rows,
+      positions: (await pool.query('SELECT snapshot_id, position_key, amount FROM report_snapshot_positions WHERE tenant_id=$1', [tenantId])).rows,
+      submission: (await pool.query('SELECT id, idempotency_key, status, payload_json FROM tax_submissions WHERE id=$1', [submissionId])).rows,
+      eur: (await pool.query(`SELECT COUNT(*)::int AS count, MIN(source_version) AS source_version, MAX(source_version) AS max_source_version FROM eur_lines WHERE tax_year=2025`)).rows,
+    };
+
+    await runPostgresMigrations(pool);
+
+    assert.deepEqual((await pool.query('SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY id')).rows, before.journal);
+    assert.deepEqual((await pool.query('SELECT id, source_hash, from_date, to_date, as_of_date, payload_json FROM report_snapshots WHERE id=$1', [snapshotId])).rows, before.snapshot);
+    assert.deepEqual((await pool.query('SELECT snapshot_id, position_key, amount FROM report_snapshot_positions WHERE tenant_id=$1', [tenantId])).rows, before.positions);
+    assert.deepEqual((await pool.query('SELECT id, idempotency_key, status, payload_json FROM tax_submissions WHERE id=$1', [submissionId])).rows, before.submission);
+    assert.deepEqual((await pool.query(`SELECT COUNT(*)::int AS count, MIN(source_version) AS source_version, MAX(source_version) AS max_source_version FROM eur_lines WHERE tax_year=2025`)).rows, before.eur);
+    await assert.rejects(pool.query('UPDATE report_snapshots SET payload_json=$1 WHERE id=$2', ['{"tampered":true}', snapshotId]), /report_snapshots is immutable/);
+  } finally {
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
+    await pool.end();
+  }
+});

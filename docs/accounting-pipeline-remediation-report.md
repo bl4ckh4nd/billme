@@ -1,9 +1,10 @@
 # Abschlussreport Buchungspipeline
 
-**Stand:** 12.08.2026 · **Codebasis:** Branch
-`fix/accounting-pipeline-hardening`, funktionale Accounting-Baseline `f089e6e`,
-Report `6314c18`, abschließender CI-Hygiene-Stand mit Fix `caa2843` und
-Guard-Härtung `9d2b8ac`
+**Stand:** 13.08.2026 · **Codebasis:** Branch
+`fix/accounting-pipeline-hardening`, aktueller Code-HEAD vor dieser
+Dokumentaktualisierung `a66353d` (`test: fix Pro soft-lock E2E fixture`). Der
+unmittelbar folgende Commit ist ausschließlich report-only und ändert keinen
+Code.
 
 Dieser Report bewertet den technischen Stand der Pro-Buchungspipeline nach der
 Umsetzung. Er ist keine steuerliche oder rechtliche Beratung und keine GoBD-,
@@ -12,20 +13,32 @@ Auftrags.
 
 ## Ergebnis
 
-Die zuvor gefundenen technischen P0/P1-Probleme der geprüften Pipeline sind
-behoben. Die Buchungskette ist in Pro Desktop und Pro Server/Web durchgängig
-verdrahtet: Entwurf und Freigabe, Ausgangs- und Eingangsrechnungen, doppelte
-Buchführung, OPOS und Teilzahlungen, Ist-USt, Storno, Anlagen/AfA/Abgang,
-SuSa/GuV/Bilanz, DATEV sowie SQLite-zu-Postgres-Import.
+Die geprüften technischen P0/P1-Probleme der Pipeline sind in den unten
+genannten Pfaden behoben. Die Buchungskette ist in Pro Desktop und Pro
+Server/Web durchgängig verdrahtet: Entwurf und Freigabe, Ausgangs- und
+Eingangsrechnungen, doppelte Buchführung, OPOS und Teilzahlungen, Ist-USt,
+Storno, Anlagen/AfA/Abgang, SuSa/GuV/Bilanz, DATEV sowie
+SQLite-zu-Postgres-Import.
 
 Der abschließende Full-Pro-E2E lief gegen einen frisch migrierten Postgres-Stack
-grün. Alle sieben Szenarien bestanden; das Artefakt liegt unter
-`test-results/server-mode/billme-e2e-msqejbh0-2ftmn` und der Stack wurde im
+grün. Alle acht Szenarien bestanden; das Artefakt liegt unter
+`test-results/server-mode/billme-e2e-msrm1he1-fbwr` und der Stack wurde im
 Teardown zerstört. Das EU-B2B-Szenario `EU_B2B_SERVICE_RC` prüft dabei
-unbedingt die Persistenz und den DATEV-Export der Felder 40/41/43. Damit ist
-die technische Pipeline im vereinbarten Umfang releasefähig; die fachliche
-Steuerprüfung, ein Kanzlei-DATEV-Import und ein Produktivdeployment bleiben
-externe Gates.
+unbedingt die Persistenz und den DATEV-Export der Felder 40/41/43. Dieser
+Nachweis ist eine technische Prüfung des beschriebenen Scopes, keine
+Release-, Steuer- oder Deploymentfreigabe.
+
+### Neue Non-Happy-Path-Abdeckung
+
+- Die Server-Suite enthält **20 adversariale Fälle innerhalb der 8/8
+  Full-E2E-Szenarien**.
+- Die Pro-Desktop-E2E enthält **9 adversariale Fälle innerhalb von 17/17
+  Szenarien**.
+- Das Reverse-Charge-Szenario bildet die USt-Zusammenfassung mit **genau einer
+  Steuerbasis 100,00 / 19,00 USt / 119,00 brutto** ab; eine dreifache
+  Zusammenfassung derselben Basis wird verhindert.
+- Die E2E deckt einen echten Soft-Lock-Lauf, exakte OPOS-Überzahlung sowie
+  belastbare BWA-/USt-Assertions ab, nicht nur HTTP-Erreichbarkeit.
 
 ## Berichtsprofile und Kataloge
 
@@ -165,6 +178,24 @@ Die Kerninvarianten sind damit explizit:
 - Importläufe sind tenant-sicher, idempotent und behalten einen sichtbaren
   Fehlerstatus. ID-Kollisionen mit fremden Mandanten werden nicht als Erfolg
   gezählt.
+- Die Tenant-Advisory-Serialisierung erfolgt vor der Prüfung auf einen leeren
+  Zielmandanten. Damit ist die Prüfung nicht mehr ein ungeschütztes
+  Check-then-import-Rennen; die Sperre bleibt für den Import atomar bestehen.
+- Große Identitätsmengen verwenden Array-Parameter, einschließlich der
+  **66.000er-Grenze**, statt eine ungebundene Zahl einzelner Bindings zu
+  erzeugen.
+- Der unveränderliche globale Katalog mit **2.427 Zeilen** wird beim Import
+  validiert. Effective-dated Mappings prüfen Datumsformat, tatsächliche
+  Kalenderdaten sowie `valid_from <= valid_to`.
+- Tenant-Identität und alle logischen Parent-Referenzen werden geprüft,
+  einschließlich der Kundenreferenz von Nummernreservierungen. Fremde
+  Mandanten-IDs werden nicht als erfolgreicher Import akzeptiert.
+- Der gesamte Import bleibt transaktional: bei einer Kollision, einer
+  ungültigen Referenz oder einer Audit-Fehlvalidierung erfolgt atomarer
+  Rollback.
+- Audit-Sequenzen bleiben `BIGINT`; importierte Audit-Heads und Hashes werden
+  tenant-scoped geprüft und fortgeschrieben. Die Hash-Eindeutigkeit gilt pro
+  Tenant, nicht fälschlich global.
 - Effective-dated Report-Mappings bleiben beim Desktop-zu-Postgres-Import mit
   ihren 2025-/2026-Gültigkeiten erhalten. Generische Legacy-Mappings werden
   separat als Legacy-Provenienz importiert und nicht still in einen
@@ -174,8 +205,10 @@ Die Kerninvarianten sind damit explizit:
   `0009` DATEV-Bytes, `0010` Ausgangsrechnungs-Postingmetadaten,
   `0011` tenant-scoped Steuerkonten-Mappings mit globalem Fallback,
   `0012` Asset-Guard, `0013` Asset-Härtung, `0014` DATEV-Steuer-Evidenz,
-  `0015` Reporting/Tax-Submissions, `0016` EÜR-Metadaten und `0017` kanonischer
-  107-Zeilen-EÜR-Katalog.
+  `0015` Reporting/Tax-Submissions, `0016` EÜR-Metadaten, `0017` kanonischer
+  107-Zeilen-EÜR-Katalog, `0018` unveränderliche globale Ledger-/Steuerkataloge
+  mit **2.427** kanonischen Zeilen und `0019` tenant-scoped Audit-Hash-
+  Eindeutigkeit einschließlich Audit-Head-Import.
 
 ## UI/UX-Stand
 
@@ -219,6 +252,9 @@ Diese Punkte sind keine offenen Integritätsfehler:
   anderen Mandanten.
 - Gebuchte Dokumentzeilen, DATEV-Manifest/-Bytes und Journalquellen sind durch
   Repository-Regeln und Datenbank-Trigger geschützt.
+- Die Import-Auditkette validiert `BIGINT`-Sequenzen, den importierten
+  `audit_heads`-Stand und die Hash-Verkettung je Tenant; die
+  `0019`-Eindeutigkeit verhindert keine gültigen Hashes anderer Mandanten.
 - Typed Errors unterscheiden Konflikt, Validierungsfehler, fehlende Quelle und
   nicht verfügbaren historischen Export; normale Accounting-Konflikte werden
   nicht als unspezifischer HTTP 500 ausgegeben.
@@ -232,27 +268,27 @@ Diese Punkte sind keine offenen Integritätsfehler:
 
 | Scope | Ergebnis |
 |---|---:|
-| Full Pro Server E2E gegen frisch migrierten Postgres-Stack (`test-results/server-mode/billme-e2e-msqejbh0-2ftmn`) | **7/7 Szenarien bestanden**, inklusive unbedingter `EU_B2B_SERVICE_RC`-Persistenz-/DATEV-Felder-40/41/43-Prüfung; Stack im Teardown zerstört |
-| Accounting Engine | **39/39 Tests**, Typecheck bestanden |
-| Accounting UI Pro | **65/65 Tests**, Typecheck und Build bestanden |
-| Desktop Data | **63/63 Tests**, Typecheck bestanden |
-| Lite Desktop | **200/200 Tests**, Typecheck und Build bestanden |
-| Pro Desktop | **309/309 Tests**, Typecheck und Build bestanden |
-| Server API | **37/37 Tests**, Typecheck bestanden |
-| Server Data am finalen HEAD ohne DB-URL | **53 bestanden, 19 erwartete DB-Skips**, Typecheck bestanden |
-| SQLite-zu-Postgres-Import gegen echtes Postgres | **12/12 Tests bestanden** |
-| Server Core | **32/32 Tests**, Typecheck bestanden |
-| Lite Web | **1/1 Test**, Typecheck und Build bestanden |
-| Web Pro | **14/14 Tests**, Typecheck und Build bestanden |
-| Server-E2E-Artefakt-Hygiene | `compose.env`/`runtime-state.json` ausgeschlossen; **3 Uploadstellen** geprüft |
+| Full Pro Server E2E gegen frisch migrierten Postgres-Stack (`test-results/server-mode/billme-e2e-msrm1he1-fbwr`) | **8/8 Szenarien bestanden**, inklusive **20 adversarial cases**, unbedingter `EU_B2B_SERVICE_RC`-Persistenz-/DATEV-Felder-40/41/43-Prüfung; Stack im Teardown zerstört |
+| Accounting Engine | **39/39 Tests** |
+| Accounting UI Pro | **65/65 Tests** |
+| Pro Desktop | **310/310 Tests**, Typecheck und Build bestanden |
+| Pro Desktop E2E | **17/17 Szenarien**, darin **9 adversariale Fälle** |
+| Server API | **37/37 Tests** |
+| Server Data ohne DB-URL (Defaultlauf) | **57 bestanden, 30 erwartete DB-Skips** |
+| Server Data/Worker gegen echtes Postgres (Full-Lauf) | **87/87 Tests** |
+| Web Pro | Typecheck bestanden |
 
 Zum Prüfzeitpunkt war der getrackte Arbeitsbaum sauber; einzig das
-benutzerseitige, nicht zu versionierende `.test-artifacts/` blieb erhalten.
+benutzerseitige, nicht zu versionierende `.test-artifacts/` blieb erhalten und
+wurde nicht verändert. Ältere Zahlen für nicht erneut ausgeführte Scopes
+(unter anderem Lite Desktop, Desktop Data, Server Core, Lite Web und frühere
+Importläufe) werden hier bewusst nicht als aktuelle Ergebnisse ausgewiesen.
 
 Der Full-Pro-E2E deckt Stack-Smoke, Pro-Smoke, Session-Wiederherstellung,
 Katalog, kanonischen Entwurf/Post, Ausgangs- und Eingangsrechnung, OPOS mit
-Retry, Backfill mit Retry, Dokumentstorno, GuV/SuSa/Bilanz, unveränderlichen
-DATEV-Download, Produkt-/Routengrenzen und Worker-Flows ab.
+Retry einschließlich exakter Überzahlung, Backfill mit Retry,
+Dokumentstorno, Soft-Lock-Lauf, GuV/SuSa/Bilanz, BWA-/USt-Assertions,
+unveränderlichen DATEV-Download, Produkt-/Routengrenzen und Worker-Flows ab.
 
 ## Bewusste fachliche Grenzen
 
@@ -279,8 +315,9 @@ DATEV-Download, Produkt-/Routengrenzen und Worker-Flows ab.
 
 ## Gesamturteil
 
-Technisch ist die geprüfte Buchungspipeline kohärent und durch fokussierte
-Tests sowie einen realen Full-Pro-Postgres-E2E abgesichert. Es bestehen auf
-diesem Stand keine bekannten P0/P1-Integritäts- oder Erreichbarkeitslücken im
-vereinbarten Scope. Eine fachliche Steuer-/DATEV-Freigabe und die eigentliche
+Die im Scope geprüfte Buchungspipeline ist durch fokussierte Tests sowie einen
+realen Full-Pro-Postgres-E2E abgesichert. Die abschließende Luna-Prüfung für
+Server und Desktop-zu-Postgres-Import ist als freigegeben dokumentiert; eine
+separate finale Pro-Desktop-Freigabe wird hier nicht behauptet. Eine fachliche
+Steuer-/DATEV-Freigabe, ein Kanzleiimport und die eigentliche
 Produktionsausrollung bleiben bewusst getrennt.

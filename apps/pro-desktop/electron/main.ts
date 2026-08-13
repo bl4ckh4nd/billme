@@ -132,15 +132,6 @@ const requireDb = () => {
   return initDb(userDataPath, { dbFileName: PRODUCT_PROFILE.dbFileName });
 };
 
-registerIpcHandlers(ipcMain, {
-  requireDb,
-  getUserDataPath: () => {
-    if (!userDataPath) throw new Error('userDataPath not initialized');
-    return userDataPath;
-  },
-  getMainWindow: () => mainWindow,
-});
-
 // Global error handlers
 process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
   logger.error('UnhandledRejection', 'Unhandled promise rejection',
@@ -174,6 +165,14 @@ app.whenReady().then(async () => {
   }
 
   userDataPath = app.getPath('userData');
+  registerIpcHandlers(ipcMain, {
+    requireDb,
+    getUserDataPath: () => {
+      if (!userDataPath) throw new Error('userDataPath not initialized');
+      return userDataPath;
+    },
+    getMainWindow: () => mainWindow,
+  });
   const db = initDb(userDataPath, { dbFileName: PRODUCT_PROFILE.dbFileName });
   const drizzleDb = createDrizzle(db);
 

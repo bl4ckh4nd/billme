@@ -119,7 +119,7 @@ export const runProSourceRunScenario = async () => {
   const state = await readServerHarnessState();
   const session = await ensureHarnessSession(state, { product: 'pro', ...owner });
   const namespace = `source-runs-${Date.now()}`;
-  await seedHarnessProTenant(state, { tenantId: session.tenantId, namespace });
+  await seedHarnessProTenant(state, { tenantId: session.tenantId, namespace, includeEurCatalog2026: true });
   await mapAccounts(state, session);
 
   let cases = 0;
@@ -307,6 +307,18 @@ export const runProSourceRunScenario = async () => {
   const incomeItem = eurItems.find((item) => item.sourceId.includes(`payment:${eurSource.paymentId}:allocation`));
   const expenseItem = eurItems.find((item) => item.sourceId === `${namespace}-workflow-transaction`);
   assert.ok(incomeItem?.sourceId && expenseItem?.sourceId, '2026 EÜR cash sources missing');
+  for (const item of eurItems) {
+    await json(state, session, '/api/v1/pro/accounting/reports/eur/classifications', undefined, {
+      method: 'PUT',
+      body: {
+        sourceType: item.sourceType,
+        sourceId: item.sourceId,
+        taxYear: 2026,
+        eurLineId: item.flowType === 'income' ? 'E2026_KZ112' : 'E2026_KZ280',
+        reason: 'EÜR 2026 source classification',
+      },
+    });
+  }
   cases++;
 
   const incomeFact = await json(state, session, '/api/v1/pro/accounting/reports/eur/facts/cash', undefined, { method: 'POST', body: {

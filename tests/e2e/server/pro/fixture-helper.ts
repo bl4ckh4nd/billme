@@ -2,8 +2,9 @@ import fs from 'node:fs/promises';
 import { randomUUID, scryptSync } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { getCatalogForYear, getCatalogManifestForYear } from '@billme/desktop-services/eurCatalog';
 import { createServerApiClient, type ServerProduct } from '@billme/server-core';
-import { createPostgresPool, seedServerModeProTenant } from '@billme/server-data';
+import { createPostgresPool, saveServerEurLine, seedServerModeProTenant } from '@billme/server-data';
 
 type HarnessState = {
   env?: Record<string, string>;
@@ -159,6 +160,7 @@ export const applyHarnessProSeed = async (options: {
   tenantId: string;
   namespace: string;
   includeEurCashFixtures?: boolean;
+  includeEurCatalog2026?: boolean;
 }) => {
   const state = await readHarnessState(options.stateFile);
   const env = await readHarnessEnv(state);
@@ -170,6 +172,27 @@ export const applyHarnessProSeed = async (options: {
       namespace: options.namespace,
       includeEurCashFixtures: options.includeEurCashFixtures,
     });
+    if (options.includeEurCatalog2026) {
+      const manifest = getCatalogManifestForYear(2026);
+      const createdAt = new Date().toISOString();
+      for (const [sortOrder, line] of getCatalogForYear(2026).entries()) {
+        await saveServerEurLine(pool, {
+          id: line.id,
+          taxYear: 2026,
+          kennziffer: line.kennziffer || undefined,
+          providerPath: line.providerPath,
+          label: line.label,
+          kind: line.kind,
+          exportable: line.exportable,
+          sortOrder,
+          computedFromJson: line.computedFromIds?.length ? JSON.stringify(line.computedFromIds) : undefined,
+          computedTermsJson: line.computedTerms?.length ? JSON.stringify(line.computedTerms) : undefined,
+          sourceVersion: manifest.version,
+          createdAt,
+          updatedAt: createdAt,
+        });
+      }
+    }
 
     return {
       namespace: seed.namespace,
@@ -277,6 +300,7 @@ const runCli = async () => {
       tenantId: requireFlag(flags, 'tenant-id'),
       namespace: requireFlag(flags, 'namespace'),
       includeEurCashFixtures: flags.get('include-eur-cash-fixtures') === 'true',
+      includeEurCatalog2026: flags.get('include-eur-catalog-2026') === 'true',
     });
     process.stdout.write(`${JSON.stringify(seed)}\n`);
     return;

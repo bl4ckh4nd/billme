@@ -86,7 +86,7 @@ export const createHarnessProTenant = async (state, { email, password, fullName 
   '--full-name', fullName,
 ]);
 
-export const seedHarnessProTenant = async (state, { tenantId, namespace, includeEurCashFixtures = false }) => {
+export const seedHarnessProTenant = async (state, { tenantId, namespace, includeEurCashFixtures = false, includeEurCatalog2026 = false }) => {
   const args = [
     'seed-pro',
     '--state-file',
@@ -97,6 +97,7 @@ export const seedHarnessProTenant = async (state, { tenantId, namespace, include
     namespace,
   ];
   if (includeEurCashFixtures) args.push('--include-eur-cash-fixtures', 'true');
+  if (includeEurCatalog2026) args.push('--include-eur-catalog-2026', 'true');
   return runFixtureHelper(args);
 };
 

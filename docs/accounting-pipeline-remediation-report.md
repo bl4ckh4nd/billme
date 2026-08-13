@@ -2,9 +2,9 @@
 
 **Stand:** 13.08.2026 · **Codebasis:** Branch
 `fix/accounting-pipeline-hardening`, aktueller Code-HEAD vor dieser
-Dokumentaktualisierung `a66353d` (`test: fix Pro soft-lock E2E fixture`). Der
-unmittelbar folgende Commit ist ausschließlich report-only und ändert keinen
-Code.
+Dokumentaktualisierung `a66353d` (`test: fix Pro soft-lock E2E fixture`). Alle
+nach a66353d folgenden Änderungen bis zum aktuellen Report-HEAD betreffen
+ausschließlich dieses Dokument und ändern keinen Produktcode.
 
 Dieser Report bewertet den technischen Stand der Pro-Buchungspipeline nach der
 Umsetzung. Er ist keine steuerliche oder rechtliche Beratung und keine GoBD-,
@@ -316,7 +316,7 @@ unveränderlichen DATEV-Download, Produkt-/Routengrenzen und Worker-Flows ab.
 ## Gesamturteil
 
 Die im Scope geprüfte Buchungspipeline ist durch fokussierte Tests sowie einen
-realen Full-Pro-Postgres-E2E abgesichert. Die abschließende Luna-Prüfung für
+realen Full-Pro-Postgres-E2E abgesichert. Die abschließenden Luna-Prüfungen für
 Server, Desktop-zu-Postgres-Import und Pro Desktop sind als freigegeben
 dokumentiert; es bestehen in diesem Scope keine offenen P0/P1/P2-Befunde. Eine
 fachliche Steuer-/DATEV-Freigabe, ein Kanzleiimport und die eigentliche

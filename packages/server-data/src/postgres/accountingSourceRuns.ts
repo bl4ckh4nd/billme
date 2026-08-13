@@ -357,7 +357,10 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
     const built = buildClosingResult(commandName, sourceInput);
     if (built.status === 'rejected' || built.status === 'invalid') throw new Error(`CLOSING_COMMAND_REJECTED:${built.errors?.[0]?.code ?? 'INVALID'}`);
     const value = built.value ?? built;
-    const command = value.command ?? value.commands?.[0];
+    // Source facts and single-command validators return the JournalCommand
+    // directly, while schedule/closing builders wrap it in `command` or
+    // `commands`. Normalize all shapes before persisting the journal link.
+    const command = value.command ?? value.commands?.[0] ?? (value.entry ? value : undefined);
     const resultJson = { command: commandName, result: value, status: built.status };
     const idempotencyKey = required(input.idempotencyKey, 'IDEMPOTENCY_KEY_REQUIRED');
     return inTx(db, async (tx) => {

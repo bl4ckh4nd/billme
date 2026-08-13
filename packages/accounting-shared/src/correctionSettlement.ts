@@ -242,7 +242,12 @@ export const createLinkedCorrection = (input: LinkedCorrectionInput): LinkedCorr
     if (!Number.isFinite(inputDelta.rate) || !sourceByRate.has(inputDelta.rate)) {
       throw new CorrectionSettlementError('INVALID_FACTS', `VAT rate ${inputDelta.rate} is not present on the original document`);
     }
-    const grossCents = finiteCents(inputDelta.grossAmount, 'correction gross amount');
+    let grossCents: number;
+    try {
+      grossCents = finiteCents(inputDelta.grossAmount, 'correction gross amount');
+    } catch (error) {
+      throw new CorrectionSettlementError('INVALID_AMOUNT', error instanceof Error ? error.message : 'correction gross amount is invalid');
+    }
     if (grossCents <= 0) throw new CorrectionSettlementError('INVALID_AMOUNT', 'correction amount must be positive');
     requestedByRate.set(inputDelta.rate, (requestedByRate.get(inputDelta.rate) ?? 0) + grossCents);
   }
@@ -441,6 +446,16 @@ const settlementLinesFor = (
     if (normalized.some((entry) => !finalRates.has(entry.rate))) {
       throw new CorrectionSettlementError('INVALID_FACTS', 'settlement VAT rate is not present on the final invoice');
     }
+    const grossCents = normalized.reduce((sum, entry) => sum + entry.grossCents, 0);
+    if (document.grossAmount !== undefined) {
+      let expectedGrossCents: number;
+      try {
+        expectedGrossCents = finiteCents(document.grossAmount, 'settlement gross amount');
+      } catch (error) {
+        throw new CorrectionSettlementError('INVALID_AMOUNT', error instanceof Error ? error.message : 'settlement gross amount is invalid');
+      }
+      if (expectedGrossCents !== grossCents) throw new CorrectionSettlementError('INVALID_AMOUNT', 'settlement gross amount does not match tax breakdown');
+    }
     return normalized.map((entry) => ({
       rate: entry.rate,
       grossAmount: fromCents(entry.grossCents),
@@ -468,8 +483,14 @@ export const calculateInvoiceSettlement = (input: InvoiceSettlementInput): Invoi
     throw new CorrectionSettlementError('INVALID_FACTS', error instanceof Error ? error.message : 'final invoice tax facts are invalid');
   }
   const finalGrossCents = finalBreakdown.reduce((sum, entry) => sum + entry.grossCents, 0);
-  if (input.finalInvoice.grossAmount !== undefined && finiteCents(input.finalInvoice.grossAmount, 'final invoice gross amount') !== finalGrossCents) {
-    throw new CorrectionSettlementError('INVALID_AMOUNT', 'final invoice gross amount does not match tax breakdown');
+  if (input.finalInvoice.grossAmount !== undefined) {
+    let expectedGrossCents: number;
+    try {
+      expectedGrossCents = finiteCents(input.finalInvoice.grossAmount, 'final invoice gross amount');
+    } catch (error) {
+      throw new CorrectionSettlementError('INVALID_AMOUNT', error instanceof Error ? error.message : 'final invoice gross amount is invalid');
+    }
+    if (expectedGrossCents !== finalGrossCents) throw new CorrectionSettlementError('INVALID_AMOUNT', 'final invoice gross amount does not match tax breakdown');
   }
   const credits = [...(input.advances ?? []), ...(input.partialInvoices ?? [])];
   const finalByRate = new Map<number, number>(finalBreakdown.map((entry) => [entry.rate, entry.grossCents]));

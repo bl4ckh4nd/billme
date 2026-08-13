@@ -15,11 +15,16 @@ const outputPath = process.argv[3]
   ? path.resolve(process.argv[3])
   : path.join(sourceDir, 'skr-kontenrahmen.sqlite');
 const canonicalOutputPath = path.join(repoRoot, 'packages/server-data/src/postgres/canonicalLedgerCatalog.ts');
+const trackedSourceDbPath = path.join(repoRoot, 'doppelteBuchhaltung/skr-kontenrahmen.sqlite');
 
 const CSV_FILES = [
   { chart: 'SKR03', file: 'skr03_konten_strikt.csv' },
   { chart: 'SKR04', file: 'skr04_konten_strikt.csv' },
 ];
+const GENERATED_AT = '1970-01-01T00:00:00.000Z';
+
+const normalizeAccountNumber = (value) => String(value ?? '').replace(/\s+/g, '').trim();
+const normalizeName = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 
 const readCsv = (filePath) => {
   const content = fs.readFileSync(filePath, 'utf8');
@@ -32,14 +37,67 @@ const readCsv = (filePath) => {
   return parsed.data;
 };
 
-const normalizeAccountNumber = (value) => String(value ?? '').replace(/\s+/g, '').trim();
-const normalizeName = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+const readCsvSources = () => {
+  const sourceRows = [];
+  for (const entry of CSV_FILES) {
+    const filePath = path.join(sourceDir, entry.file);
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Missing CSV source: ${filePath}`);
+    }
+    for (const row of readCsv(filePath)) {
+      const accountNumber = normalizeAccountNumber(row.konto);
+      const name = normalizeName(row.bezeichnung);
+      if (!/^\d{3,8}$/.test(accountNumber) || !name) continue;
+      sourceRows.push({
+        chart: entry.chart,
+        accountNumber,
+        name,
+        marker: row.marker ? String(row.marker).trim() : null,
+        sourceFile: entry.file,
+      });
+    }
+  }
+  return sourceRows;
+};
+
+const readTrackedDatabase = () => {
+  if (!fs.existsSync(trackedSourceDbPath)) {
+    throw new Error(`Missing tracked SQLite source: ${trackedSourceDbPath}`);
+  }
+  const db = new Database(trackedSourceDbPath, { readonly: true });
+  try {
+    const rows = db.prepare(`
+      SELECT chart, account_number AS accountNumber, name, marker, source_file AS sourceFile
+      FROM skr_accounts
+      ORDER BY chart, account_number
+    `).all();
+    if (rows.length === 0) throw new Error(`Tracked SQLite source is empty: ${trackedSourceDbPath}`);
+    return rows.map((row) => ({
+      chart: String(row.chart),
+      accountNumber: normalizeAccountNumber(row.accountNumber),
+      name: normalizeName(row.name),
+      marker: row.marker == null ? null : String(row.marker).trim(),
+      sourceFile: String(row.sourceFile),
+    }));
+  } finally {
+    db.close();
+  }
+};
+
+const readSources = () => process.argv[2] ? readCsvSources() : readTrackedDatabase();
+
+const sourceRows = readSources();
+const sourceHash = crypto.createHash('sha256')
+  .update(JSON.stringify(sourceRows))
+  .digest('hex');
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+// Remove sidecars left by older WAL-mode builds before creating the deterministic file.
+for (const suffix of ['-wal', '-shm']) fs.rmSync(`${outputPath}${suffix}`, { force: true });
 
 const db = new Database(outputPath);
-db.pragma('journal_mode = WAL');
+db.pragma('journal_mode = DELETE');
 db.exec(`
   CREATE TABLE skr_accounts (
     id TEXT PRIMARY KEY,
@@ -63,52 +121,28 @@ const insert = db.prepare(`
     source_file = excluded.source_file
 `);
 
-const now = new Date().toISOString();
 let inserted = 0;
 const canonicalRows = new Map();
-
 const tx = db.transaction(() => {
-  for (const entry of CSV_FILES) {
-    const filePath = path.join(sourceDir, entry.file);
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`Missing CSV source: ${filePath}`);
+  for (const row of sourceRows) {
+    const canonicalKey = `${row.chart}:${row.accountNumber}`;
+    const existingCanonical = canonicalRows.get(canonicalKey);
+    if (!existingCanonical || existingCanonical.name.length < row.name.length) {
+      canonicalRows.set(canonicalKey, { chart: row.chart, accountNumber: row.accountNumber, name: row.name });
     }
-    const rows = readCsv(filePath);
-    for (const row of rows) {
-      const accountNumber = normalizeAccountNumber(row.konto);
-      const name = normalizeName(row.bezeichnung);
-      if (!/^\d{3,8}$/.test(accountNumber) || !name) continue;
-      const canonicalKey = `${entry.chart}:${accountNumber}`;
-      const existingCanonical = canonicalRows.get(canonicalKey);
-      if (!existingCanonical || existingCanonical.name.length < name.length) {
-        canonicalRows.set(canonicalKey, { chart: entry.chart, accountNumber, name });
-      }
-      insert.run({
-        id: `${entry.chart}:${accountNumber}`,
-        chart: entry.chart,
-        accountNumber,
-        name,
-        marker: row.marker ? String(row.marker).trim() : null,
-        sourceFile: entry.file,
-        createdAt: now,
-      });
-      inserted += 1;
-    }
+    insert.run({ ...row, id: canonicalKey, createdAt: GENERATED_AT });
+    inserted += 1;
   }
 });
-
 tx();
 db.close();
 
 if (!process.argv[2]) {
-  const sourceHash = crypto.createHash('sha256')
-    .update(fs.readFileSync(path.join(sourceDir, 'skr03_konten_strikt.csv')))
-    .update(fs.readFileSync(path.join(sourceDir, 'skr04_konten_strikt.csv')))
-    .digest('hex');
+  const rows = [...canonicalRows.values()].sort((a, b) => a.chart.localeCompare(b.chart) || a.accountNumber.localeCompare(b.accountNumber));
   fs.writeFileSync(canonicalOutputPath, [
-    `// Generated from shipped doppelteBuchhaltung/*_konten_strikt.csv assets; source hash ${sourceHash}.`,
+    `// Generated from tracked doppelteBuchhaltung/skr-kontenrahmen.sqlite; normalized source hash ${sourceHash}.`,
     'export const CANONICAL_LEDGER_ACCOUNTS = [',
-    ...[...canonicalRows.values()].map((row) => `  { chart: '${row.chart}', accountNumber: ${JSON.stringify(row.accountNumber)}, name: ${JSON.stringify(row.name)} },`),
+    ...rows.map((row) => `  { chart: '${row.chart}', accountNumber: ${JSON.stringify(row.accountNumber)}, name: ${JSON.stringify(row.name)} },`),
     '] as const;',
     '',
   ].join('\n'));

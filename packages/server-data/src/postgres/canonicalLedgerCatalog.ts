@@ -1,4 +1,4 @@
-// Generated from shipped doppelteBuchhaltung/*_konten_strikt.csv assets; source hash 3a0e2803a6022b9cb2f0cd226ad35cc0a2c43917786e12276bd79cbdfe7cd34e.
+// Generated from tracked doppelteBuchhaltung/skr-kontenrahmen.sqlite; normalized source hash b2190532f22555e61573fac489efd2a6f92e3234d41880db42a6861fa28421b9.
 export const CANONICAL_LEDGER_ACCOUNTS = [
   { chart: 'SKR03', accountNumber: "0005", name: "Rückständige fällige Einzahlungen auf Geschäftsanteile Immaterielle Vermögensgegen- stände" },
   { chart: 'SKR03', accountNumber: "0010", name: "Entgeltlich erworbene Konzessio- nen, gewerbliche Schutzrechte und ähnliche Rechte und Werte sowie Lizenzen an solchen Rech- ten und Werten" },
@@ -365,7 +365,7 @@ export const CANONICAL_LEDGER_ACCOUNTS = [
   { chart: 'SKR03', accountNumber: "1675", name: "Verbindlichkeiten gegenüber Kommanditisten" },
   { chart: 'SKR03', accountNumber: "1676", name: "- Restlaufzeit bis 1 Jahr" },
   { chart: 'SKR03', accountNumber: "1677", name: "- Restlaufzeit 1 bis 5 Jahre" },
-  { chart: 'SKR03', accountNumber: "1678", name: "und 1695-1698 bei Aufteilung 0790-0798 Kapitalgesellschaft" },
+  { chart: 'SKR03', accountNumber: "1678", name: "- Restlaufzeit größer 5 Jahre" },
   { chart: 'SKR03', accountNumber: "1691", name: "Verbindlichkeiten gegenüber Arbeitsgemeinschaften" },
   { chart: 'SKR03', accountNumber: "1692", name: "Neutralisierung aufwandswirksamer Sachverhalte für § 4 Abs. 3 EStG" },
   { chart: 'SKR03', accountNumber: "1693", name: "Ergebnisneutrale Sachverhalte für § 4 Abs. 3 EStG" },
@@ -2397,7 +2397,7 @@ export const CANONICAL_LEDGER_ACCOUNTS = [
   { chart: 'SKR04', accountNumber: "9912", name: "Erhöhung der Entnahmen § 4 Abs. 4a EStG" },
   { chart: 'SKR04', accountNumber: "9913", name: "Gegenkonto zur Erhöhung der Entnahmen § 4 Abs. 4a EStG (Haben) Statistische Konten für den au- ßerhalb der Bilanz zu berück- sichtigenden Investitionsab- zugsbetrag nach § 7g EStG" },
   { chart: 'SKR04', accountNumber: "9918", name: "Rückgängigmachung Investiti- onsabzugsbetrag § 7g Abs. 3 und 4 EStG im 2. vorangegangenen Wirtschaftsjahr" },
-  { chart: 'SKR04', accountNumber: "9919", name: "Rückgängigmachung Investiti- onsabzugsbetrag § 7g Abs. 3 und 4 EStG im 3. vorangegangenen Wirtschaftsjahr Konten zu Bewertungskorrek- turen" },
+  { chart: 'SKR04', accountNumber: "9919", name: "Konten für die § 4h EStG bzw." },
   { chart: 'SKR04', accountNumber: "9960", name: "Bewertungskorrektur zu Forde- rungen aus Lieferungen und Leis- tungen (Währungsumrechnung)" },
   { chart: 'SKR04', accountNumber: "9961", name: "Bewertungskorrektur zu sonsti- gen Verbindlichkeiten (Währungsumrechnung)" },
   { chart: 'SKR04', accountNumber: "9962", name: "Bewertungskorrektur zu Gutha- ben bei Kreditinstituten (Bewertung Finanzmittelfonds)" },

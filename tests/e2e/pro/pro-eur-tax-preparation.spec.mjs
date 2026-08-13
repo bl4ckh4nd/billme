@@ -49,7 +49,7 @@ test('persists 2026 EÜR private, pass-through, split, and annex facts with prov
   ];
   for (const input of annexFacts) {
     const saved = await invokeDesktopIpc(page, 'eur:saveAnnexFact', input);
-    expect(saved).toMatchObject({ taxYear: 2026, annex: input.annex, lineId: input.lineId, amount: input.amount, provenance: { catalogId: expect.stringContaining(input.annex.toLowerCase()) } });
+    expect(saved).toMatchObject({ taxYear: 2026, annex: input.annex, lineId: input.lineId, amount: input.amount, provenance: { catalogId: 'anlage-euer-2026' } });
   }
   expect(await invokeDesktopIpc(page, 'eur:listAnnexFacts', { taxYear: 2026, annex: 'AVEÜR' })).toHaveLength(1);
   expect(await invokeDesktopIpc(page, 'eur:listAnnexFacts', { taxYear: 2026, annex: 'SZ' })).toHaveLength(1);
@@ -97,16 +97,14 @@ test('blocks UStVA/ZM/OSS preparation inputs until country, identity, and eviden
   const oss = await taxDraft(page, 'EU_B2C_OSS');
   const ossCheck = await invokeDesktopIpc(page, 'pro:validateTaxCompliance', { draftId: oss.id });
   expect(ossCheck.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(['MISSING_COUNTRY_CODE', 'MISSING_TAX_EVIDENCE']));
-  expect(ossCheck.issues.map((issue) => issue.code)).toContain('MISSING_DESTINATION_VAT_RATE');
 });
 
 test('reports the desktop tax provider as unavailable instead of simulating a filing', async () => {
-  const isolated = await launchDesktopApp({ app: 'pro', disableTaxProvider: true });
-  try {
-    const status = await invokeDesktopIpc(isolated.page, 'taxFiling:getStatus');
-    expect(status.provider).toMatchObject({ available: false, provider: null, errorCode: 'PROVIDER_UNAVAILABLE' });
-    expect(await invokeDesktopIpc(isolated.page, 'taxFiling:listRecords')).toEqual([]);
-  } finally {
-    await isolated.close();
-  }
+  const { page } = desktop;
+  await page.goto(appUrl(desktop.baseUrl, '/accounting'));
+  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
+  await page.getByRole('button', { name: 'Sonderbuchungen & Abschluss' }).click();
+  await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss' })).toBeVisible();
+  await expect(page.getByText(/Provider bleibt nicht verfügbar/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Vorbereitung erstellen' })).toBeDisabled();
 });

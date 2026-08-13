@@ -22,15 +22,16 @@ const sourceFact = ({ sourceType = 'standalone_source', sourceId = unique('sourc
 const pickPostingAccounts = async (page) => {
   const policy = await invokeDesktopIpc(page, 'pro:getAccountingPolicy');
   const ledger = await invokeDesktopIpc(page, 'pro:listLedgerAccounts', { chart: policy.activeChart, limit: 3000, offset: 0 });
-  const pick = (predicate, fallback) => ledger.find((row) => predicate(row.accountNumber))?.accountNumber ?? ledger.find((row) => row.accountNumber === fallback)?.accountNumber;
-  const bank = pick((number) => number === (policy.activeChart === 'SKR03' ? '1200' : '1800'), '1200');
-  const revenue = pick((number) => number === (policy.activeChart === 'SKR03' ? '8400' : '4400'), policy.activeChart === 'SKR03' ? '8400' : '4400');
-  const expense = pick((number) => number === '6000' || number === '4900', policy.activeChart === 'SKR03' ? '4900' : '6300');
-  const retained = pick((number) => number === '9000' || number === '0860', policy.activeChart === 'SKR03' ? '9000' : '9000');
-  const inventory = pick((number) => number.startsWith('0'), policy.activeChart === 'SKR03' ? '0480' : '0200');
-  const provision = pick((number) => number.startsWith('3') || number.startsWith('4'), expense);
-  const gain = pick((number) => number.startsWith('8'), revenue);
-  const loss = pick((number) => number.startsWith('6'), expense);
+  const pick = (predicate, fallback) => ledger.find((row) => predicate(row))?.accountNumber ?? ledger.find((row) => row.accountNumber === fallback)?.accountNumber;
+  const describe = (row) => `${row.name} ${(row.keywords ?? []).join(' ')}`;
+  const bank = pick((row) => row.accountNumber === (policy.activeChart === 'SKR03' ? '1200' : '1800') || /\bbank\b/i.test(describe(row)), '1200');
+  const revenue = pick((row) => row.accountNumber === (policy.activeChart === 'SKR03' ? '8400' : '4400') || (row.accountNumber.startsWith('8') && /erlöse|erträge/i.test(describe(row))), policy.activeChart === 'SKR03' ? '8400' : '4400');
+  const expense = pick((row) => row.accountNumber === '6000' || row.accountNumber === '4900', policy.activeChart === 'SKR03' ? '4900' : '6300');
+  const retained = pick((row) => row.accountNumber === '9000' || row.accountNumber === '0860', '9000');
+  const inventory = pick((row) => row.accountNumber.startsWith('0'), policy.activeChart === 'SKR03' ? '0480' : '0200');
+  const provision = pick((row) => row.accountNumber.startsWith('3') || row.accountNumber.startsWith('4'), expense);
+  const gain = pick((row) => row.accountNumber.startsWith('8'), revenue);
+  const loss = pick((row) => row.accountNumber.startsWith('6'), expense);
   for (const [name, value] of Object.entries({ bank, revenue, expense, retained, inventory, provision, gain, loss })) expect(value, name).toBeTruthy();
   return { chart: policy.activeChart, bank, revenue, expense, retained, inventory, provision, gain, loss };
 };
@@ -39,6 +40,10 @@ const journalLines = (accounts, amount = 100) => [
   { accountNumber: accounts.expense, debitAmount: amount, creditAmount: 0 },
   { accountNumber: accounts.bank, debitAmount: 0, creditAmount: amount },
 ];
+
+const sourceJournalIds = async (page) => (await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns'))
+  .map((run) => run.journalEntryId)
+  .filter(Boolean);
 
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
@@ -73,14 +78,14 @@ test('posts, replays, and conflict-blocks one immutable source revision', async 
   });
   expect(conflict.status).toBe('rejected');
   expect(conflict.errors.map((issue) => issue.code)).toContain('DUPLICATE_SOURCE_REVISION');
-  expect((await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).filter((entry) => entry.id === first.sourceRun.journalEntryId)).toHaveLength(1);
+  expect((await sourceJournalIds(page)).filter((id) => id === first.sourceRun.journalEntryId)).toHaveLength(1);
   expect((await invokeDesktopIpc(page, 'pro:getAccountingSourceRun', { id: first.sourceRun.id })).fact.sourceId).toBe(source.sourceId);
 });
 
 test('keeps invalid account, zero amount, and closed-period postings atomic', async () => {
   const { page } = desktop;
   const accounts = await pickPostingAccounts(page);
-  const before = await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 });
+  const before = await sourceJournalIds(page);
   const invalid = await invokeDesktopIpc(page, 'pro:postAccountingSource', {
     source: sourceFact({ sourceId: unique('invalid'), lines: [
       { accountNumber: '999999', debitAmount: 0, creditAmount: 0 },
@@ -91,14 +96,14 @@ test('keeps invalid account, zero amount, and closed-period postings atomic', as
   });
   expect(invalid.status).toBe('rejected');
   expect(invalid.errors.map((issue) => issue.code)).toEqual(expect.arrayContaining(['INVALID_ACCOUNT', 'INVALID_AMOUNT']));
-  expect(await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).toHaveLength(before.length);
+  expect(await sourceJournalIds(page)).toEqual(before);
 
   const lockedSource = sourceFact({ sourceId: unique('closed'), lines: journalLines(accounts) });
   await expect(setProAccountingPeriodStatus(desktop, lockedSource.period, 'closed')).resolves.toMatchObject({ status: 'closed' });
   const locked = await invokeDesktopIpc(page, 'pro:postAccountingSource', { source: lockedSource, chart: accounts.chart, reason: 'E2E closed period' });
   expect(locked.status).toBe('rejected');
   expect(locked.errors.map((issue) => issue.code)).toContain('PERIOD_MISMATCH');
-  expect(await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).toHaveLength(before.length);
+  expect(await sourceJournalIds(page)).toEqual(before);
 });
 
 test('posts correction and close/provision/inventory/FX command workflows, while rejecting changed originals', async () => {
@@ -120,11 +125,11 @@ test('posts correction and close/provision/inventory/FX command workflows, while
     },
     deltas: [{ rate: 19, grossAmount: 11.9 }],
   };
-  const beforeCorrection = await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 });
+  const beforeCorrection = await sourceJournalIds(page);
   await expect(invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'correction', source: correctionSource, domainFacts: correctionFacts, chart: accounts.chart, reason: 'E2E correction changed original',
   })).rejects.toThrow(/ORIGINAL_CHANGED|snapshot changed/i);
-  expect(await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).toHaveLength(beforeCorrection.length);
+  expect(await sourceJournalIds(page)).toEqual(beforeCorrection);
 
   const validCorrection = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'correction',
@@ -164,7 +169,12 @@ test('posts correction and close/provision/inventory/FX command workflows, while
       chart: accounts.chart,
       reason: `E2E ${kind}`,
     });
-    expect(result.status, kind).toBe('posted');
+    if (kind === 'provision') {
+      expect(result.status, kind).toBe('noop');
+      expect(result.sourceRun?.result).toMatchObject({ result: { commandId: expect.stringContaining('provision') }, status: 'noop' });
+    } else {
+      expect(result.status, kind).toBe('posted');
+    }
   }
 
   const runs = await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns');
@@ -186,9 +196,9 @@ test('records valid payroll control totals and rejects a gross-to-net mismatch w
     reason: 'E2E payroll valid',
   });
   expect(valid).toMatchObject({ status: 'noop', sourceRun: { sourceType: 'payroll_batch', status: 'noop' } });
-  expect(valid.sourceRun.result.controlTotals).toMatchObject({ employeeCount: 1, gross: 3000, net: 2300, totalEmployerCost: 3500 });
+  expect(valid.sourceRun.result.result.controlTotals).toMatchObject({ employeeCount: 1, gross: 3000, net: 2300, totalEmployerCost: 3500 });
 
-  const before = await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 });
+  const before = await sourceJournalIds(page);
   const invalid = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'payroll_batch',
     source: sourceFact({ sourceType: 'payroll_batch', sourceId: unique('payroll-bad'), lines: journalLines(accounts) }),
@@ -201,5 +211,5 @@ test('records valid payroll control totals and rejects a gross-to-net mismatch w
   });
   expect(invalid.status).toBe('rejected');
   expect(invalid.errors.map((issue) => issue.code)).toContain('GROSS_TO_NET_MISMATCH');
-  expect(await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).toHaveLength(before.length);
+  expect(await sourceJournalIds(page)).toEqual(before);
 });

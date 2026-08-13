@@ -420,21 +420,12 @@ export async function launchDesktopApp(options = {}) {
   const userDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), `billme-${app}-e2e-`));
   const cacheDir = path.join(userDataDir, 'cache');
   await fs.promises.mkdir(cacheDir, { recursive: true });
-  const launchEnv = {
-    ...process.env,
-    ...(options.disableTaxProvider ? {
-      BILLME_ERIC_BINARY: '',
-      BILLME_ERIC_RESOURCES: path.join(userDataDir, 'missing-eric-provider'),
-    } : {}),
-    ...(options.env ?? {}),
-  };
-
   const launchedApp = await electron.launch({
     executablePath: electronBinary,
     cwd,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu-sandbox', `--user-data-dir=${userDataDir}`, '.'],
     env: {
-      ...launchEnv,
+      ...process.env,
       ELECTRON_DISABLE_SANDBOX: '1',
       BILLME_E2E: '1',
       BILLME_E2E_USER_DATA_DIR: userDataDir,
@@ -576,7 +567,15 @@ export async function setProAccountingPeriodStatus(desktop, period, status = 'so
     const db = new Database(dbPath);
     try {
       const periodRow = db.prepare('SELECT period, status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get('default', args.period);
-      if (!periodRow) throw new Error(`Accounting period not found: ${args.period}`);
+      if (!periodRow) {
+        const [year, month] = args.period.split('-').map(Number);
+        const startsAt = `${args.period}-01`;
+        const endsAt = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+        const now = new Date().toISOString();
+        db.prepare(`INSERT OR IGNORE INTO accounting_periods
+          (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at)
+          VALUES (?, 'default', ?, ?, 'open', ?, ?, ?, ?)`).run(`e2e-period-${args.period}`, args.period, year, startsAt, endsAt, now, now);
+      }
       db.prepare('UPDATE accounting_periods SET status = ?, updated_at = ? WHERE tenant_id = ? AND period = ?').run(args.status, new Date().toISOString(), 'default', args.period);
       return db.prepare('SELECT period, status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get('default', args.period);
     } finally {

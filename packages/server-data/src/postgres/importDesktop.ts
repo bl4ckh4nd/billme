@@ -766,15 +766,16 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         for (const row of loadEmailLog(sqliteDb)) { await insertEmailLogRow(client, tenantId, { id: row.id, documentType: row.document_type, documentId: row.document_id, documentNumber: row.document_number, recipientEmail: row.recipient_email, recipientName: row.recipient_name, subject: row.subject, bodyText: row.body_text, provider: row.provider, status: row.status, errorMessage: row.error_message, sentAt: row.sent_at, createdAt: row.created_at }); counts.emailLog += 1; }
         for (const row of loadDunningHistory(sqliteDb)) { await createDrizzle(client).insert(schema.dunningHistory).values({ id: row.id, tenantId, invoiceId: row.invoice_id, invoiceNumber: row.invoice_number, dunningLevel: row.dunning_level, daysOverdue: row.days_overdue, feeApplied: row.fee_applied, emailSent: Boolean(row.email_sent), emailLogId: row.email_log_id, processedAt: row.processed_at, createdAt: row.created_at } as any); counts.dunningHistory += 1; }
         for (const row of sourceAuditRows) { await insertAuditRow(client, tenantId, { sequence: row.sequence, ts: row.ts, entityType: row.entity_type, entityId: row.entity_id, action: row.action, reason: row.reason, beforeJson: row.before_json, afterJson: row.after_json, prevHash: row.prev_hash, hash: row.hash, actor: row.actor }); counts.auditLog += 1; }
+        const importedAuditHead = sourceAuditRows.reduce<SqliteAuditRow | undefined>((head, row) => !head || row.sequence > head.sequence ? row : head, undefined);
         await createDrizzle(client).insert(schema.auditHeads).values({
           tenantId,
-          sequence: sourceAuditVerification.count > 0 ? sourceAuditRows[sourceAuditRows.length - 1]!.sequence : 0,
-          hash: sourceAuditVerification.headHash,
+          sequence: importedAuditHead?.sequence ?? 0,
+          hash: importedAuditHead?.hash ?? null,
         }).onConflictDoUpdate({
           target: schema.auditHeads.tenantId,
           set: {
-            sequence: sourceAuditVerification.count > 0 ? sourceAuditRows[sourceAuditRows.length - 1]!.sequence : 0,
-            hash: sourceAuditVerification.headHash,
+            sequence: importedAuditHead?.sequence ?? 0,
+            hash: importedAuditHead?.hash ?? null,
           },
         });
         const importedVerification = await verifyPostgresAuditChain(client, tenantId);

@@ -871,6 +871,6 @@ export const assetMovements = pgTable("asset_movements", {
 
 export const auditHeads = pgTable("audit_heads", {
   tenantId: text("tenant_id").primaryKey(),
-  sequence: integer("sequence").notNull(),
+  sequence: bigint("sequence", { mode: "number" }).notNull(),
   hash: text("hash"),
 });

@@ -456,7 +456,9 @@ test('SQLite import initializes per-tenant audit heads and scopes duplicate hist
     sqlite.close();
 
     await importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: firstTenantId, slug: firstTenantId, displayName: 'Audit A' } });
-    assert.deepEqual((await pool.query('SELECT sequence, hash FROM audit_heads WHERE tenant_id=$1', [firstTenantId])).rows, [{ sequence: 1, hash }]);
+    const importedHead = (await pool.query('SELECT sequence, hash FROM audit_heads WHERE tenant_id=$1', [firstTenantId])).rows[0];
+    assert.equal(Number(importedHead?.sequence), 1);
+    assert.equal(importedHead?.hash, hash);
     assert.match(String((await pool.query('SELECT id::text FROM audit_log WHERE tenant_id=$1', [firstTenantId])).rows[0]?.id), /^\d+$/);
 
     const appended = await createPostgresAuditLogPort(pool).append(createSingleTenantScope(firstTenantId, 'pro'), {

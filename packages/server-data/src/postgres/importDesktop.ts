@@ -18,6 +18,7 @@ import {
 import { withPostgresTransaction, type PostgresTransactionClient } from './connection.js';
 import { createDrizzle, schema } from './drizzle.js';
 import { runPostgresMigrations } from './migrations.js';
+import { CANONICAL_LEDGER_ACCOUNTS, CANONICAL_TAX_CASES } from './canonicalCatalog.js';
 import { importRawTenantRows, restoreIncomingInvoiceAccountingRows } from './oposImport.js';
 import {
   saveServerAccountKeyword,
@@ -438,7 +439,7 @@ export const loadAccountMappingsHgb = (db: SqliteDatabaseType, tenantId: string)
     const identity = `${tenantId}:${reportType}:${chart}:${accountNumber}:${validFrom ?? 'baseline'}`;
     if (seen.has(identity)) throw new Error(`REPORT_MAPPING_COLLISION:${identity}`);
     seen.add(identity);
-    const source = { chart, reportType, accountNumber, positionKey, positionLabel, balanceSide: row.balance_side ?? null, validFrom, validTo: normalizeImportedEffectiveDate(row.valid_to) };
+    const source = { tenantId, chart, reportType, accountNumber, positionKey, positionLabel, balanceSide: row.balance_side ?? null, validFrom, validTo: normalizeImportedEffectiveDate(row.valid_to) };
     const sourceHash = createHash('sha256').update(JSON.stringify(source)).digest('hex');
     return {
       id: `report-import:${sourceHash}`,
@@ -522,13 +523,46 @@ const validateCanonicalGlobalCatalog = async (
   client: PostgresTransactionClient,
   sqliteDb: SqliteDatabaseType,
 ): Promise<void> => {
+  const drizzle = createDrizzle(client);
+  const now = new Date().toISOString();
+  const ledgerValues = sql.join(CANONICAL_LEDGER_ACCOUNTS.map((account) => sql`(
+    ${`server-catalog:${account.chart}:${account.accountNumber}`}, ${account.chart}, ${account.accountNumber}, ${account.name}, 'server-catalog', ${now}, ${now}
+  )`), sql`, `);
+  await drizzle.execute(sql`INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at)
+    VALUES ${ledgerValues} ON CONFLICT (chart, account_number) DO NOTHING`);
+  const taxValues = sql.join(CANONICAL_TAX_CASES.map((taxCase) => sql`(
+    ${taxCase.key}, ${taxCase.label}, ${taxCase.mechanism}, ${taxCase.defaultRate}, ${taxCase.requiresCounterpartyVatId}, ${taxCase.requiresCountry}, ${taxCase.requiresEvidence}, ${taxCase.active}, ${now}
+  )`), sql`, `);
+  await drizzle.execute(sql`INSERT INTO tax_cases (key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active, updated_at)
+    VALUES ${taxValues} ON CONFLICT (key) DO NOTHING`);
+
+  const canonicalLedgerByKey = new Map(CANONICAL_LEDGER_ACCOUNTS.map((row) => [`${row.chart}:${row.accountNumber}`, row]));
+  const persistedLedger = (await drizzle.execute(sql`SELECT chart, account_number, name FROM ledger_accounts`)).rows as Array<{ chart: string; account_number: string; name: string }>;
+  for (const row of persistedLedger) {
+    const canonical = canonicalLedgerByKey.get(`${row.chart}:${row.account_number}`);
+    if (canonical && canonical.name !== row.name) throw new Error(`IMPORT_GLOBAL_LEDGER_CANONICAL_MISMATCH:${row.chart}:${row.account_number}`);
+  }
+  const canonicalTaxByKey = new Map<string, (typeof CANONICAL_TAX_CASES)[number]>(CANONICAL_TAX_CASES.map((row) => [row.key, row]));
+  const persistedTaxCases = (await drizzle.execute(sql`SELECT key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active FROM tax_cases`)).rows as Array<{
+    key: string; label: string; mechanism: string; default_rate: string | number;
+    requires_counterparty_vat_id: boolean; requires_country: boolean; requires_evidence: boolean; active: boolean;
+  }>;
+  for (const row of persistedTaxCases) {
+    const canonical = canonicalTaxByKey.get(row.key);
+    if (canonical && (canonical.label !== row.label || canonical.mechanism !== row.mechanism
+      || canonical.defaultRate !== Number(row.default_rate)
+      || canonical.requiresCounterpartyVatId !== Boolean(row.requires_counterparty_vat_id)
+      || canonical.requiresCountry !== Boolean(row.requires_country)
+      || canonical.requiresEvidence !== Boolean(row.requires_evidence)
+      || canonical.active !== Boolean(row.active))) {
+      throw new Error(`IMPORT_GLOBAL_TAX_CANONICAL_MISMATCH:${row.key}`);
+    }
+  }
   const sourceLedgerAccounts = loadLedgerAccounts(sqliteDb);
   if (sourceLedgerAccounts.length > 0) {
-    const canonicalLedgerAccounts = (await createDrizzle(client).execute(sql`SELECT chart, account_number, name FROM ledger_accounts`)).rows as Array<{ chart: string; account_number: string; name: string }>;
-    const canonicalByKey = new Map(canonicalLedgerAccounts.map((row) => [`${row.chart}:${row.account_number}`, row]));
     for (const source of sourceLedgerAccounts) {
       const key = `${source.chart}:${source.account_number}`;
-      const canonical = canonicalByKey.get(key);
+      const canonical = canonicalLedgerByKey.get(key);
       if (!canonical || canonical.name !== source.name) {
         throw new Error(`IMPORT_GLOBAL_LEDGER_CATALOG_MISMATCH:${key}`);
       }
@@ -537,27 +571,16 @@ const validateCanonicalGlobalCatalog = async (
 
   const sourceTaxCases = loadTaxCases(sqliteDb);
   if (sourceTaxCases.length > 0) {
-    const canonicalTaxCases = (await createDrizzle(client).execute(sql`SELECT key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active FROM tax_cases`)).rows as Array<{
-      key: string;
-      label: string;
-      mechanism: string;
-      default_rate: string | number;
-      requires_counterparty_vat_id: boolean;
-      requires_country: boolean;
-      requires_evidence: boolean;
-      active: boolean;
-    }>;
-    const canonicalByKey = new Map(canonicalTaxCases.map((row) => [row.key, row]));
     for (const source of sourceTaxCases) {
-      const canonical = canonicalByKey.get(source.key);
+      const canonical = canonicalTaxByKey.get(source.key);
       if (!canonical
         || canonical.label !== source.label
         || canonical.mechanism !== source.mechanism
-        || Number(canonical.default_rate) !== source.defaultRate
-        || Boolean(canonical.requires_counterparty_vat_id) !== source.requiresCounterpartyVatId
-        || Boolean(canonical.requires_country) !== source.requiresCountry
-        || Boolean(canonical.requires_evidence) !== source.requiresEvidence
-        || Boolean(canonical.active) !== source.active) {
+        || canonical.defaultRate !== source.defaultRate
+        || canonical.requiresCounterpartyVatId !== source.requiresCounterpartyVatId
+        || canonical.requiresCountry !== source.requiresCountry
+        || canonical.requiresEvidence !== source.requiresEvidence
+        || canonical.active !== source.active) {
         throw new Error(`IMPORT_GLOBAL_TAX_CATALOG_MISMATCH:${source.key}`);
       }
     }

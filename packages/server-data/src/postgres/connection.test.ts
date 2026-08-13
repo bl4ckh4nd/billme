@@ -65,9 +65,11 @@ test('recognizes pg PoolClient even when it exposes connect', () => {
     release: () => undefined,
   } as unknown as PostgresQueryable;
   const pool = { connect: async () => client, query: async () => ({ rows: [] }) } as unknown as PostgresQueryable;
+  const queryOnly = { query: async () => ({ rows: [] }) } as unknown as PostgresQueryable;
 
   assert.equal(isPostgresPool(client), false);
   assert.equal(isPostgresPool(pool), true);
+  assert.equal(isPostgresPool(queryOnly), false);
 });
 
 test('does not retry non-transaction errors', async () => {

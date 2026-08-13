@@ -151,6 +151,9 @@ test('Desktop reporting mappings preserve effective-date history and legacy SQLi
     { validFrom: '2026-01-01', positionKey: 'material.services', version: 20260101 },
   ]);
   assert.deepEqual(first.map((row) => [row.id, row.sourceHash]), second.map((row) => [row.id, row.sourceHash]));
+  const otherTenant = loadAccountMappingsHgb(current, 'other-tenant-import');
+  assert.notEqual(first[0]?.id, otherTenant[0]?.id);
+  assert.notEqual(first[0]?.sourceHash, otherTenant[0]?.sourceHash);
   current.close();
 
   const legacy = new Database(':memory:');
@@ -193,9 +196,6 @@ test('tenant-scoped postgres tables stay covered by import overwrite guards', as
   const tenantScopedTables = await extractTenantScopedPostgresTables(postgresMigrationUrls);
   const excludedTables = new Set([
     'tenant_memberships', 'sqlite_import_runs', 'audit_heads',
-    'report_account_mappings', 'report_snapshot_positions', 'report_catalog_refs',
-    'tax_adjustments', 'tax_submissions', 'tax_submission_approvals',
-    'tax_submission_receipts', 'tax_credentials', 'tax_submission_jobs',
   ]);
   const expected = tenantScopedTables.filter((table) => !excludedTables.has(table)).sort();
 
@@ -402,38 +402,33 @@ test('SQLite import validates global accounting catalogs without mutating them',
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
   const suffix = randomUUID();
   const tenantId = `import-global-catalog-${suffix}`;
-  const ledgerId = `canonical-ledger-${suffix}`;
-  const accountNumber = `9${suffix.replaceAll('-', '').slice(0, 7)}`;
-  const taxCaseKey = `IMPORT_TAX_${suffix.replaceAll('-', '').slice(0, 12)}`;
+  const accountNumber = '1776';
+  const taxCaseKey = 'DE_STD_19';
   const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-global-catalog-'));
   const sqlitePath = path.join(tempDir, 'source.sqlite');
   const sqlite = new Database(sqlitePath);
   try {
     await runPostgresMigrations(pool);
     const now = new Date().toISOString();
-    await pool.query(`INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at) VALUES ($1,'SKR03',$2,'Canonical account','server-catalog',$3,$3)`, [ledgerId, accountNumber, now]);
-    await pool.query(`INSERT INTO tax_cases (key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active, updated_at) VALUES ($1,'Canonical tax','standard_vat',19,false,false,false,true,$2)`, [taxCaseKey, now]);
     sqlite.exec(`
       CREATE TABLE ledger_accounts (id TEXT PRIMARY KEY, chart TEXT, account_number TEXT, name TEXT, source TEXT, created_at TEXT, updated_at TEXT);
       CREATE TABLE tax_cases (key TEXT PRIMARY KEY, label TEXT, mechanism TEXT, default_rate REAL, requires_counterparty_vat_id INTEGER, requires_country INTEGER, requires_evidence INTEGER, active INTEGER, updated_at TEXT);
       CREATE TABLE tax_case_account_mappings (id TEXT PRIMARY KEY, chart TEXT, tax_case_key TEXT, role TEXT, account_number TEXT, datev_bu_key TEXT, valid_from TEXT, valid_to TEXT, updated_at TEXT);
     `);
-    sqlite.prepare('INSERT INTO ledger_accounts VALUES (?,?,?,?,?,?,?)').run(`desktop-${ledgerId}`, 'SKR03', accountNumber, 'Canonical account', 'desktop', now, now);
-    sqlite.prepare('INSERT INTO tax_cases VALUES (?,?,?,?,?,?,?,?,?)').run(taxCaseKey, 'Canonical tax', 'standard_vat', 19, 0, 0, 0, 1, now);
+    sqlite.prepare('INSERT INTO ledger_accounts VALUES (?,?,?,?,?,?,?)').run(`desktop-${accountNumber}`, 'SKR03', accountNumber, 'Umsatzsteuer 19 %', 'desktop', now, now);
+    sqlite.prepare('INSERT INTO tax_cases VALUES (?,?,?,?,?,?,?,?,?)').run(taxCaseKey, 'Inland steuerpflichtig 19%', 'standard_vat', 19, 0, 0, 0, 1, now);
     sqlite.prepare('INSERT INTO tax_case_account_mappings VALUES (?,?,?,?,?,?,?,?,?)').run(`mapping-${suffix}`, 'SKR03', taxCaseKey, 'output_tax', accountNumber, 'BU19', null, null, now);
     sqlite.close();
 
     const result = await importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: tenantId, slug: tenantId, displayName: 'Global catalog import' } });
     assert.equal(result.counts.ledgerAccounts, 0);
     assert.equal(result.counts.taxCases, 0);
-    assert.deepEqual((await pool.query('SELECT id, name, source FROM ledger_accounts WHERE id=$1', [ledgerId])).rows, [{ id: ledgerId, name: 'Canonical account', source: 'server-catalog' }]);
-    assert.deepEqual((await pool.query('SELECT key, label, default_rate FROM tax_cases WHERE key=$1', [taxCaseKey])).rows, [{ key: taxCaseKey, label: 'Canonical tax', default_rate: '19' }]);
+    assert.equal((await pool.query('SELECT name FROM ledger_accounts WHERE chart=\'SKR03\' AND account_number=$1', [accountNumber])).rows[0]?.name, 'Umsatzsteuer 19 %');
+    assert.deepEqual((await pool.query('SELECT key, label, default_rate FROM tax_cases WHERE key=$1', [taxCaseKey])).rows, [{ key: taxCaseKey, label: 'Inland steuerpflichtig 19%', default_rate: '19' }]);
     assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM tax_case_account_mappings WHERE tenant_id=$1', [tenantId])).rows[0].count), 1);
   } finally {
     if (sqlite.open) sqlite.close();
     await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
-    await pool.query('DELETE FROM tax_cases WHERE key=$1', [taxCaseKey]).catch(() => undefined);
-    await pool.query('DELETE FROM ledger_accounts WHERE id=$1', [ledgerId]).catch(() => undefined);
     await pool.end();
     await rm(tempDir, { recursive: true, force: true });
   }

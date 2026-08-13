@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Papa from 'papaparse';
@@ -13,6 +14,7 @@ const sourceDir = process.argv[2]
 const outputPath = process.argv[3]
   ? path.resolve(process.argv[3])
   : path.join(sourceDir, 'skr-kontenrahmen.sqlite');
+const canonicalOutputPath = path.join(repoRoot, 'packages/server-data/src/postgres/canonicalLedgerCatalog.ts');
 
 const CSV_FILES = [
   { chart: 'SKR03', file: 'skr03_konten_strikt.csv' },
@@ -63,6 +65,7 @@ const insert = db.prepare(`
 
 const now = new Date().toISOString();
 let inserted = 0;
+const canonicalRows = new Map();
 
 const tx = db.transaction(() => {
   for (const entry of CSV_FILES) {
@@ -75,6 +78,11 @@ const tx = db.transaction(() => {
       const accountNumber = normalizeAccountNumber(row.konto);
       const name = normalizeName(row.bezeichnung);
       if (!/^\d{3,8}$/.test(accountNumber) || !name) continue;
+      const canonicalKey = `${entry.chart}:${accountNumber}`;
+      const existingCanonical = canonicalRows.get(canonicalKey);
+      if (!existingCanonical || existingCanonical.name.length < name.length) {
+        canonicalRows.set(canonicalKey, { chart: entry.chart, accountNumber, name });
+      }
       insert.run({
         id: `${entry.chart}:${accountNumber}`,
         chart: entry.chart,
@@ -91,6 +99,20 @@ const tx = db.transaction(() => {
 
 tx();
 db.close();
+
+if (!process.argv[2]) {
+  const sourceHash = crypto.createHash('sha256')
+    .update(fs.readFileSync(path.join(sourceDir, 'skr03_konten_strikt.csv')))
+    .update(fs.readFileSync(path.join(sourceDir, 'skr04_konten_strikt.csv')))
+    .digest('hex');
+  fs.writeFileSync(canonicalOutputPath, [
+    `// Generated from shipped doppelteBuchhaltung/*_konten_strikt.csv assets; source hash ${sourceHash}.`,
+    'export const CANONICAL_LEDGER_ACCOUNTS = [',
+    ...[...canonicalRows.values()].map((row) => `  { chart: '${row.chart}', accountNumber: ${JSON.stringify(row.accountNumber)}, name: ${JSON.stringify(row.name)} },`),
+    '] as const;',
+    '',
+  ].join('\n'));
+}
 
 console.log(`Created ${outputPath}`);
 console.log(`Inserted rows: ${inserted}`);

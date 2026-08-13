@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
 import { and, asc, count, eq } from 'drizzle-orm';
 import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
+import { CANONICAL_TAX_CASES } from '@billme/accounting-shared';
 
 export type TaxMechanism = 'standard_vat' | 'reverse_charge' | 'zero_rate' | 'exempt';
 
@@ -49,148 +50,7 @@ export interface TaxCaseAccountMapping {
   updatedAt: string;
 }
 
-const TAX_CASE_DEFINITIONS: TaxCaseDefinition[] = [
-  {
-    key: 'DE_STD_19',
-    label: 'Inland steuerpflichtig 19%',
-    mechanism: 'standard_vat',
-    defaultRate: 19,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: false,
-    active: true,
-  },
-  {
-    key: 'DE_STD_7',
-    label: 'Inland steuerpflichtig 7%',
-    mechanism: 'standard_vat',
-    defaultRate: 7,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: false,
-    active: true,
-  },
-  {
-    key: 'DE_ZERO_EXEMPT',
-    label: 'Inland steuerfrei / nicht steuerbar',
-    mechanism: 'exempt',
-    defaultRate: 0,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'DE_KU19',
-    label: 'Kleinunternehmer §19 UStG',
-    mechanism: 'exempt',
-    defaultRate: 0,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'DE_RC_13B_DOMESTIC',
-    label: 'Reverse Charge §13b Inland',
-    mechanism: 'reverse_charge',
-    defaultRate: 19,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'EU_B2C_OSS',
-    label: 'EU B2C OSS (One-Stop-Shop)',
-    mechanism: 'standard_vat',
-    defaultRate: 19,
-    requiresCounterpartyVatId: false,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'DE_MARGIN_25A',
-    label: 'Differenzbesteuerung §25a UStG',
-    mechanism: 'exempt',
-    defaultRate: 0,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'DE_BAUABZUG_48',
-    label: 'Bauabzugsteuer §48 EStG',
-    mechanism: 'exempt',
-    defaultRate: 0,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'DE_TRIANGULAR_25B',
-    label: 'Innergemeinschaftliches Dreiecksgeschäft §25b',
-    mechanism: 'zero_rate',
-    defaultRate: 0,
-    requiresCounterpartyVatId: true,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'EU_B2B_SERVICE_RC',
-    label: 'EU B2B Dienstleistung RC',
-    mechanism: 'reverse_charge',
-    defaultRate: 19,
-    requiresCounterpartyVatId: true,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'EU_IGL_GOODS_0',
-    label: 'Innergemeinschaftliche Lieferung 0%',
-    mechanism: 'zero_rate',
-    defaultRate: 0,
-    requiresCounterpartyVatId: true,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'EU_IGE_GOODS_RC',
-    label: 'Innergemeinschaftlicher Erwerb RC',
-    mechanism: 'reverse_charge',
-    defaultRate: 19,
-    requiresCounterpartyVatId: true,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'NON_EU_EXPORT_0',
-    label: 'Ausfuhrlieferung Drittland 0%',
-    mechanism: 'zero_rate',
-    defaultRate: 0,
-    requiresCounterpartyVatId: false,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'NON_EU_SERVICE_RC',
-    label: 'Drittland Dienstleistungsbezug RC',
-    mechanism: 'reverse_charge',
-    defaultRate: 19,
-    requiresCounterpartyVatId: false,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-];
+const TAX_CASE_DEFINITIONS: TaxCaseDefinition[] = [...CANONICAL_TAX_CASES];
 
 const DEFAULT_TAX_MAPPINGS: Array<Omit<TaxCaseAccountMapping, 'id' | 'updatedAt'>> = [
   // SKR03 standard VAT

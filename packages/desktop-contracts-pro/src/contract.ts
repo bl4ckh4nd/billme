@@ -77,6 +77,11 @@ import {
   proListReportMappingPositionsArgsSchema,
   reportMappingPositionSchema,
   proUpsertReportMappingOverrideArgsSchema,
+  proPostAccountingSourceArgsSchema,
+  proPostAccountingCommandArgsSchema,
+  proAccountingSourcePostResultSchema,
+  proGetAccountingSourceRunArgsSchema,
+  proAccountingSourceRunSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -1254,6 +1259,10 @@ export const ipcRoutes = {
   'pro:reverseDocumentAccounting': { channel: 'pro:reverseDocumentAccounting', args: proReverseDocumentAccountingArgsSchema, result: z.object({ ok: z.literal(true), reversalEntryId: z.string() }) },
   'pro:previewAccountingBackfill': { channel: 'pro:previewAccountingBackfill', args: z.undefined(), result: accountingBackfillPreviewSchema },
   'pro:confirmAccountingBackfill': { channel: 'pro:confirmAccountingBackfill', args: proConfirmAccountingBackfillArgsSchema, result: accountingBackfillResultSchema },
+  'pro:postAccountingSource': { channel: 'pro:postAccountingSource', args: proPostAccountingSourceArgsSchema, result: proAccountingSourcePostResultSchema },
+  'pro:postAccountingCommand': { channel: 'pro:postAccountingCommand', args: proPostAccountingCommandArgsSchema, result: proAccountingSourcePostResultSchema },
+  'pro:listAccountingSourceRuns': { channel: 'pro:listAccountingSourceRuns', args: z.undefined(), result: z.array(proAccountingSourceRunSchema) },
+  'pro:getAccountingSourceRun': { channel: 'pro:getAccountingSourceRun', args: proGetAccountingSourceRunArgsSchema, result: proAccountingSourceRunSchema.nullable() },
 
   'eur:getReport': {
     channel: 'eur:getReport',

@@ -1457,6 +1457,13 @@ const reverseJournalEntryInternal = (
   if (entry.source_type === 'payment' || entry.source_type === 'payment_vat') {
     throw new Error('PAYMENT_REVERSAL_REQUIRED: use payment-specific reversal with allocation reversal');
   }
+  if (['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'correction'].includes(entry.source_type)) {
+    throw new Error('AGGREGATE_REVERSAL_BLOCKED: use the source-specific correction flow');
+  }
+  if (!allowOwnedSource && db.prepare(`SELECT 1 FROM accounting_source_runs
+    WHERE tenant_id = ? AND journal_entry_id = ? LIMIT 1`).get(tenantId, entryId)) {
+    throw new Error('SOURCE_REVERSAL_REQUIRED: use the accounting source command reversal flow');
+  }
   if (!allowOwnedSource) {
     const ownership = db.prepare(`SELECT
       EXISTS (SELECT 1 FROM invoices WHERE accounting_journal_entry_id = ?) AS outgoing_document,

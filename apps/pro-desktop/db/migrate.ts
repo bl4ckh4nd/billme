@@ -448,6 +448,43 @@ export const runMigrations = (db: Database.Database): void => {
     CREATE INDEX IF NOT EXISTS idx_journal_entries_tenant_posting_date
       ON journal_entries(tenant_id, posting_date DESC);
 
+    /* One append-only provenance seam for all non-document accounting sources. */
+    CREATE TABLE IF NOT EXISTS accounting_source_runs (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_revision TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      fact_json TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('posted', 'rejected', 'noop')),
+      journal_entry_id TEXT,
+      effective_date TEXT NOT NULL,
+      posting_date TEXT NOT NULL,
+      period TEXT NOT NULL,
+      fiscal_year INTEGER NOT NULL,
+      currency TEXT NOT NULL,
+      booking_text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_accounting_source_runs_revision
+      ON accounting_source_runs(tenant_id, source_type, source_id, source_revision);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_accounting_source_runs_idempotency
+      ON accounting_source_runs(tenant_id, idempotency_key);
+    CREATE INDEX IF NOT EXISTS idx_accounting_source_runs_created
+      ON accounting_source_runs(tenant_id, created_at DESC);
+    CREATE TRIGGER IF NOT EXISTS accounting_source_runs_no_update
+    BEFORE UPDATE ON accounting_source_runs
+    BEGIN
+      SELECT RAISE(ABORT, 'accounting_source_runs are immutable');
+    END;
+    CREATE TRIGGER IF NOT EXISTS accounting_source_runs_no_delete
+    BEFORE DELETE ON accounting_source_runs
+    BEGIN
+      SELECT RAISE(ABORT, 'accounting_source_runs are immutable');
+    END;
+
     CREATE TABLE IF NOT EXISTS journal_lines (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL DEFAULT 'default',

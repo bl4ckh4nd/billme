@@ -106,6 +106,12 @@ import {
   runDepreciation,
   upsertAsset,
 } from '../db/assetsRepo';
+import {
+  getAccountingSourceRun,
+  listAccountingSourceRuns,
+  postAccountingCommand,
+  postAccountingSource,
+} from '../db/accountingSourceRepo';
 /**
  * Resolves the document's tax mode against the business settings and stores the
  * resulting snapshot alongside the gross amount. Pro must use the same shared
@@ -1440,6 +1446,16 @@ export const registerIpcHandlers = (
   });
   register(ipcMain, 'pro:previewAccountingBackfill', () => getProAccountingService().previewAccountingBackfill());
   register(ipcMain, 'pro:confirmAccountingBackfill', (input) => getProAccountingService().confirmAccountingBackfill(input));
+  register(ipcMain, 'pro:postAccountingSource', ({ source, chart, softLockOverride, overrideReason, reason, provenance }) => {
+    if (softLockOverride) assertLocalOwner('pro:postAccountingSource');
+    return postAccountingSource(requireDb(), source, getProScope(), { chart, softLockOverride, overrideReason, reason, provenance });
+  });
+  register(ipcMain, 'pro:postAccountingCommand', ({ kind, source, domainFacts, chart, softLockOverride, overrideReason, reason, provenance }) => {
+    if (softLockOverride) assertLocalOwner('pro:postAccountingCommand');
+    return postAccountingCommand(requireDb(), { kind, source, domainFacts }, getProScope(), { chart, softLockOverride, overrideReason, reason, provenance });
+  });
+  register(ipcMain, 'pro:listAccountingSourceRuns', () => listAccountingSourceRuns(requireDb(), getProScope()));
+  register(ipcMain, 'pro:getAccountingSourceRun', ({ id }) => getAccountingSourceRun(requireDb(), id, getProScope()));
 
   register(ipcMain, 'updater:getStatus', () => {
     return getCurrentUpdateStatus();

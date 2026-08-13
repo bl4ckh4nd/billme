@@ -527,9 +527,9 @@ export const proWorkflowEntrySchema = z.object({
   updatedAt: z.string(),
 });
 
-const accountingSourceTypeSchema = z.enum(['outgoing_invoice', 'incoming_invoice', 'legacy_transaction']);
+const accountingDocumentSourceTypeSchema = z.enum(['outgoing_invoice', 'incoming_invoice', 'legacy_transaction']);
 const accountingSnapshotSchema = z.object({
-  sourceType: accountingSourceTypeSchema,
+  sourceType: accountingDocumentSourceTypeSchema,
   sourceId: z.string(),
   sourceVersion: z.string(),
   chart: ledgerChartSchema,
@@ -541,7 +541,7 @@ const accountingSnapshotSchema = z.object({
   capturedAt: z.string(),
 });
 export const accountingPostingPreviewSchema = z.object({
-  sourceType: accountingSourceTypeSchema,
+  sourceType: accountingDocumentSourceTypeSchema,
   sourceId: z.string(),
   status: z.enum(['ready', 'unresolved']),
   reason: z.string().optional(),
@@ -553,8 +553,8 @@ export const accountingAccountMappingSchema = z.object({ id: z.string(), tenantI
 export const vendorSchema = z.object({ id: z.string(), tenantId: z.string(), vendorNumber: z.string().optional(), name: z.string().min(1), email: z.string().optional(), address: z.string().optional(), vatId: z.string().optional(), iban: z.string().optional(), defaultExpenseAccount: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
 const incomingInvoiceLineSchema = z.object({ id: z.string(), incomingInvoiceId: z.string(), position: z.number().int(), description: z.string(), quantity: z.number(), unitPrice: z.number(), netAmount: z.number(), taxRate: z.number(), taxAmount: z.number(), grossAmount: z.number(), accountNumber: z.string().optional(), assetAccountNumber: z.string().optional() });
 export const incomingInvoiceSchema = z.object({ id: z.string(), tenantId: z.string(), vendorId: z.string(), number: z.string(), invoiceDate: z.string(), dueDate: z.string(), servicePeriod: z.string().optional(), netAmount: z.number(), taxAmount: z.number(), grossAmount: z.number(), status: z.enum(['draft', 'open', 'paid', 'cancelled', 'unresolved']), taxRate: z.number(), taxCaseKey: z.string().optional(), notes: z.string().optional(), lines: z.array(incomingInvoiceLineSchema), accountingStatus: z.enum(['unposted', 'posted', 'unresolved', 'reversed']), accountingSnapshot: accountingSnapshotSchema.optional(), createdAt: z.string(), updatedAt: z.string() });
-export const openItemSchema = z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string(), sourceType: accountingSourceTypeSchema, sourceId: z.string(), documentNumber: z.string(), documentDate: z.string(), dueDate: z.string(), originalAmount: z.number(), allocatedAmount: z.number(), residualAmount: z.number(), status: z.enum(['open', 'partially_paid', 'paid', 'overpaid', 'unresolved']), journalEntryId: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
-const accountingCandidateSchema = z.object({ sourceType: accountingSourceTypeSchema, sourceId: z.string(), status: z.enum(['ready', 'unresolved']), reason: z.string().optional(), sourceVersion: z.string(), snapshot: z.unknown().optional() });
+export const openItemSchema = z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string(), sourceType: accountingDocumentSourceTypeSchema, sourceId: z.string(), documentNumber: z.string(), documentDate: z.string(), dueDate: z.string(), originalAmount: z.number(), allocatedAmount: z.number(), residualAmount: z.number(), status: z.enum(['open', 'partially_paid', 'paid', 'overpaid', 'unresolved']), journalEntryId: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
+const accountingCandidateSchema = z.object({ sourceType: accountingDocumentSourceTypeSchema, sourceId: z.string(), status: z.enum(['ready', 'unresolved']), reason: z.string().optional(), sourceVersion: z.string(), snapshot: z.unknown().optional() });
 export const accountingBackfillPreviewSchema = z.object({ runId: z.string(), status: z.enum(['preview', 'confirmed', 'completed']), candidates: z.array(accountingCandidateSchema), readyCount: z.number().int(), unresolvedCount: z.number().int(), confirmationHash: z.string() });
 export const accountingBackfillResultSchema = z.object({ runId: z.string(), postedCount: z.number().int(), unresolvedCount: z.number().int(), status: z.literal('completed') });
 
@@ -1164,3 +1164,102 @@ export const proUpsertReportMappingOverrideArgsSchema = z.object({
   side: z.enum(['asset', 'liability']).optional(),
   reason: z.string().trim().min(1),
 });
+
+export const accountingSourceTypeSchema = z.enum([
+  'standalone_source',
+  'fiscal_close',
+  'carry_forward',
+  'provision',
+  'accrual',
+  'inventory_closing',
+  'fx_valuation',
+  'loan_schedule',
+  'payroll_batch',
+]);
+
+export const accountingSourceFactLineSchema = z.object({
+  accountNumber: z.string().trim().min(1),
+  debitAmount: z.number().finite().nonnegative(),
+  creditAmount: z.number().finite().nonnegative(),
+  memo: z.string().optional(),
+});
+
+export const accountingSourceFactSchema = z.object({
+  sourceType: accountingSourceTypeSchema,
+  sourceId: z.string().trim().min(1),
+  sourceRevision: z.string().trim().min(1),
+  effectiveDate: z.string().date(),
+  postingDate: z.string().date(),
+  period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  fiscalYear: z.number().int().positive(),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  bookingText: z.string().trim().min(1),
+  reference: z.string().optional(),
+  provenance: z.unknown().optional(),
+  lines: z.array(accountingSourceFactLineSchema).min(1),
+});
+
+export const accountingCommandKindSchema = z.enum([
+  'standalone',
+  'correction',
+  'credit',
+  'skonto',
+  'bad_debt',
+  'ustg17',
+  'advance_settlement',
+  'fiscal_close',
+  'carry_forward',
+  'provision',
+  'accrual',
+  'inventory_closing',
+  'fx_valuation',
+  'loan_schedule',
+  'payroll_batch',
+  'shareholder_flow',
+]);
+
+export const proAccountingSourceRunSchema = z.object({
+  id: z.string().min(1),
+  tenantId: z.string().min(1),
+  sourceType: accountingSourceTypeSchema,
+  sourceId: z.string().min(1),
+  sourceRevision: z.string().min(1),
+  idempotencyKey: z.string().min(1),
+  fact: accountingSourceFactSchema,
+  result: z.unknown(),
+  status: z.enum(['posted', 'rejected', 'noop']),
+  journalEntryId: z.string().optional(),
+  createdAt: z.string().datetime(),
+});
+
+const proPostAccountingSourceArgsBaseSchema = z.object({
+  source: accountingSourceFactSchema,
+  chart: ledgerChartSchema.optional(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().trim().min(1).optional(),
+  reason: z.string().trim().min(1),
+  provenance: z.unknown().optional(),
+});
+
+export const proPostAccountingSourceArgsSchema = proPostAccountingSourceArgsBaseSchema.refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), {
+  path: ['overrideReason'], message: 'overrideReason required for soft-lock override',
+});
+
+export const proPostAccountingCommandArgsSchema = proPostAccountingSourceArgsBaseSchema.extend({
+  kind: accountingCommandKindSchema,
+  domainFacts: z.unknown().optional(),
+}).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), {
+  path: ['overrideReason'], message: 'overrideReason required for soft-lock override',
+});
+
+export const proAccountingSourcePostResultSchema = z.object({
+  status: z.enum(['posted', 'rejected', 'duplicate', 'noop']),
+  sourceRun: proAccountingSourceRunSchema.optional(),
+  command: z.unknown().optional(),
+  errors: z.array(z.object({
+    code: z.string(), message: z.string(), field: z.string().optional(), blocking: z.literal(true),
+  })),
+  idempotencyKey: z.string().min(1),
+});
+
+export const proGetAccountingSourceRunArgsSchema = z.object({ id: z.string().trim().min(1) });

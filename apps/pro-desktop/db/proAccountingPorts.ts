@@ -37,6 +37,15 @@ import type {
   ReportMappingOverrideInput,
 } from './proAccountingRepo';
 import { listProWorkflowEntries, upsertProWorkflowEntry } from './proWorkflowRepo';
+import {
+  getAccountingSourceRun,
+  listAccountingSourceRuns,
+  postAccountingCommand,
+  postAccountingSource,
+  type PostAccountingCommandInput,
+  type PostAccountingSourceOptions,
+} from './accountingSourceRepo';
+import type { AccountingSourceFact } from '@billme/accounting-shared';
 import { getLedgerAccountStats, listLedgerAccounts } from './ledgerAccountsRepo';
 import {
   deleteAccountSuggestionRule,
@@ -109,6 +118,10 @@ export const createSqliteProAccountingRepository = (db: Database.Database): ProA
   getReportMappingHealth: typeof readReportMappingHealth;
   getReportingReport: (scope: TenantScope, args: Parameters<typeof runReportingReport>[1]) => ReturnType<typeof runReportingReport>;
   upsertReportMappingOverride: typeof persistReportMappingOverride;
+  postAccountingSource: (scope: TenantScope, fact: AccountingSourceFact, options?: PostAccountingSourceOptions) => ReturnType<typeof postAccountingSource> | Promise<ReturnType<typeof postAccountingSource>>;
+  postAccountingCommand: (scope: TenantScope, input: PostAccountingCommandInput, options?: PostAccountingSourceOptions) => ReturnType<typeof postAccountingCommand> | Promise<ReturnType<typeof postAccountingCommand>>;
+  listAccountingSourceRuns: (scope: TenantScope) => ReturnType<typeof listAccountingSourceRuns> | Promise<ReturnType<typeof listAccountingSourceRuns>>;
+  getAccountingSourceRun: (scope: TenantScope, id: string) => ReturnType<typeof getAccountingSourceRun> | Promise<ReturnType<typeof getAccountingSourceRun>>;
 } => ({
   listBankTransactions: async (scope) => listBankTransactions(db, scope),
   getDraftByTransactionId: async (scope, transactionId) => getDraftByTransactionId(db, transactionId, scope),
@@ -154,6 +167,10 @@ export const createSqliteProAccountingRepository = (db: Database.Database): ProA
   ensureSeedData: async (scope) => {
     ensureProAccountingSeedData(db, scope);
   },
+  postAccountingSource: async (scope, fact: AccountingSourceFact, options?: PostAccountingSourceOptions) => postAccountingSource(db, fact, scope, options),
+  postAccountingCommand: async (scope, input: PostAccountingCommandInput, options?: PostAccountingSourceOptions) => postAccountingCommand(db, input, scope, options),
+  listAccountingSourceRuns: async (scope) => listAccountingSourceRuns(db, scope),
+  getAccountingSourceRun: async (scope, id) => getAccountingSourceRun(db, id, scope),
 });
 
 export const createSqliteProWorkflowRepository = (db: Database.Database): ProWorkflowRepository => ({

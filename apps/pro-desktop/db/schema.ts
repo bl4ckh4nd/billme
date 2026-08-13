@@ -575,6 +575,34 @@ export const journalEntries = sqliteTable(
   }),
 );
 
+export const accountingSourceRuns = sqliteTable(
+  'accounting_source_runs',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    sourceType: text('source_type').notNull(),
+    sourceId: text('source_id').notNull(),
+    sourceRevision: text('source_revision').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    factJson: text('fact_json').notNull(),
+    resultJson: text('result_json').notNull(),
+    status: text('status').notNull(),
+    journalEntryId: text('journal_entry_id').references(() => journalEntries.id),
+    effectiveDate: text('effective_date').notNull(),
+    postingDate: text('posting_date').notNull(),
+    period: text('period').notNull(),
+    fiscalYear: integer('fiscal_year').notNull(),
+    currency: text('currency').notNull(),
+    bookingText: text('booking_text').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => ({
+    byTenantRevision: uniqueIndex('idx_accounting_source_runs_revision').on(t.tenantId, t.sourceType, t.sourceId, t.sourceRevision),
+    byTenantIdempotency: uniqueIndex('idx_accounting_source_runs_idempotency').on(t.tenantId, t.idempotencyKey),
+    byTenantCreated: index('idx_accounting_source_runs_created').on(t.tenantId, t.createdAt),
+  }),
+);
+
 export const journalLines = sqliteTable(
   'journal_lines',
   {

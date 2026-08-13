@@ -275,7 +275,7 @@ export const runProSourceRunScenario = async () => {
   cases++;
   await expectError(state, session, '/api/v1/pro/accounting/tax-exports/prepare', undefined, {
     method: 'POST', body: { ...ustvaBody, entries: [{ ...taxEntries[0], lines: [{ ...taxEntries[0].lines[0], netAmount: 101, grossAmount: 120.19 }] }] },
-  }, 500, /SOURCE_RUN_CONFLICT/);
+  }, 409, /SOURCE_RUN_CONFLICT/);
   cases++;
 
   const zm = await json(state, session, '/api/v1/pro/accounting/tax-exports/prepare', undefined, { method: 'POST', body: {

@@ -22,6 +22,7 @@ import {
   importDesktopSqliteToPostgres,
   loadAccountMappingsHgb,
   loadLegacyAccountMappingsHgb,
+  maxAuditHead,
   validateCanonicalEurLines,
 } from './importDesktop.js';
 import type { ServerEurLineRecord, ServerReportAccountMappingRecord } from './proAccounting.js';
@@ -118,6 +119,10 @@ test('desktop sqlite onboarding schemas stay mapped to import coverage', async (
 
 test('desktop sqlite onboarding only ignores explicit safe metadata tables', () => {
   assert.deepEqual([...desktopSqliteIgnoredTables], ['migration_log']);
+});
+
+test('SQLite audit head selection uses the maximum sequence independent of row order', () => {
+  assert.deepEqual(maxAuditHead([{ sequence: 2, hash: 'hash-2' }, { sequence: 1, hash: 'hash-1' }]), { sequence: 2, hash: 'hash-2' });
 });
 
 test('SQLite import rejects tenant-owned mutations of the global EÜR catalog', () => {

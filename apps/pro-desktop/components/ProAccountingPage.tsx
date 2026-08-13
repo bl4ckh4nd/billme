@@ -13,6 +13,12 @@ import {
   type Account as ProUiAccount,
   type BookingDraft as ProUiBookingDraft,
   type EurCashItem,
+  type AccountingCommandInput,
+  type AccountingSourceRun,
+  type EurCashFact,
+  type EurCashFactInput,
+  type EurAnnexFact,
+  type EurAnnexFactInput,
 } from '@billme/accounting-ui-pro';
 import { ipc } from '../ipc/client';
 import { useAccountsQuery } from '../hooks/useAccounts';
@@ -45,6 +51,10 @@ import {
 const reportPeriodRange = (filters: ReportFilterState): { from?: string; to?: string } =>
   reportDateRange(filters);
 
+const nativeEurRange = (taxYear: number) => taxYear === 2026
+  ? { from: '2026-01-01', to: '2026-12-31', label: '2026' }
+  : NATIVE_EUR_2025_RANGE;
+
 const requireMutationReason = (reason: string, operation: string): string => {
   const normalized = reason.trim();
   if (!normalized) throw new Error(`${operation}: Audit-Grund erforderlich.`);
@@ -53,14 +63,11 @@ const requireMutationReason = (reason: string, operation: string): string => {
 
 type NativeEurListItem = IpcResult<'eur:listItems'>[number];
 
-/** The native EÜR UI is deliberately limited to the verified 2025 filing. */
 const mapNativeEurCashItem = (item: NativeEurListItem): EurCashItem => {
-  if (item.classification && item.classification.taxYear !== 2025) {
+  if (item.classification && item.classification.taxYear !== 2025 && item.classification.taxYear !== 2026) {
     throw new Error(`EUR_UNSUPPORTED_TAX_YEAR:${item.classification.taxYear}`);
   }
-  const classification = item.classification
-    ? { ...item.classification, taxYear: 2025 as const }
-    : undefined;
+  const classification = item.classification ? { ...item.classification } : undefined;
   return {
     sourceType: item.sourceType,
     sourceId: item.sourceId,
@@ -515,19 +522,40 @@ export const ProAccountingPage: React.FC = () => {
         const report = await ipc.pro.getGuvReport(range);
         return mapGuvReport(report);
       },
-      async getEurReport(_filters) {
-        const report = await ipc.eur.getReport({ taxYear: 2025, ...NATIVE_EUR_2025_RANGE });
+      async getEurReport(filters) {
+        const year = Number(filters.asOfDate.slice(0, 4));
+        const range = nativeEurRange(year);
+        const report = await ipc.eur.getReport({ taxYear: year, ...range });
         return mapEurReport(report);
       },
-      listEurCashItems() {
-        return ipc.eur.listItems({ taxYear: 2025, ...NATIVE_EUR_2025_RANGE }).then((items) => items.map(mapNativeEurCashItem));
+      listEurCashItems(taxYear = 2025) {
+        const range = nativeEurRange(taxYear);
+        return ipc.eur.listItems({ taxYear, ...range }).then((items) => items.map(mapNativeEurCashItem));
       },
       upsertEurClassification(input) {
         return runMutation(() => ipc.eur.upsertClassification({
           ...input,
-          taxYear: 2025,
+          taxYear: input.taxYear,
           reason: requireMutationReason(input.reason, 'EÜR-Klassifikation speichern'),
         }));
+      },
+      async postAccountingCommand(input: AccountingCommandInput) {
+        return ipc.pro.postAccountingCommand({ ...input, chart: activeChart });
+      },
+      listAccountingSourceRuns(): Promise<AccountingSourceRun[]> {
+        return ipc.pro.listAccountingSourceRuns();
+      },
+      async saveEurCashFact(input: EurCashFactInput): Promise<EurCashFact> {
+        return ipc.eur.saveCashFact(input);
+      },
+      listEurCashFacts(taxYear: number): Promise<EurCashFact[]> {
+        return ipc.eur.listCashFacts({ taxYear });
+      },
+      async saveEurAnnexFact(input: EurAnnexFactInput): Promise<EurAnnexFact> {
+        return ipc.eur.saveAnnexFact(input);
+      },
+      listEurAnnexFacts(taxYear: number, annex?: string): Promise<EurAnnexFact[]> {
+        return ipc.eur.listAnnexFacts({ taxYear, annex });
       },
       listReportSnapshots(reportType) {
         return ipc.pro.listReportSnapshots({ reportType }).then((rows) => rows.map((row) => ({

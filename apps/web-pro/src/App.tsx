@@ -16,7 +16,7 @@ import {
   type ProAccountingDataAdapter,
   type OposBankTransaction,
   permissionContextForRole,
-  NATIVE_EUR_2025_RANGE,
+  nativeEurRange,
   reportDateRange,
 } from '@billme/accounting-ui-pro';
 import type {
@@ -26,6 +26,12 @@ import type {
   ReportDrilldownSelection,
   ReportFilterState,
   SusaReport,
+  AccountingCommandInput,
+  AccountingSourceRun,
+  EurCashFact,
+  EurCashFactInput,
+  EurAnnexFact,
+  EurAnnexFactInput,
 } from '@billme/accounting-ui-pro';
 import type { OpenItemPaymentEntity } from '@billme/accounting-shared';
 import { createProWebClient, type ProWebClient } from './api';
@@ -1154,10 +1160,11 @@ export default function App() {
           quality: reportQuality(report.mappingHealth),
         };
       },
-      async getEurReport(_filters: ReportFilterState): Promise<GuvReport> {
+      async getEurReport(filters: ReportFilterState): Promise<GuvReport> {
         // EÜR is a calendar-year cash report; do not send the double-entry
         // chart or current fiscal-year filter to its native endpoint.
-        const report = await client.getEurReport(NATIVE_EUR_2025_RANGE);
+        const taxYear = Number(filters.asOfDate.slice(0, 4));
+        const report = await client.getEurReport({ taxYear, ...nativeEurRange(taxYear) });
         const rows = report.rows.map((row) => ({
           position: row.id,
           label: row.kennziffer ? `${row.kennziffer} · ${row.label}` : row.label,
@@ -1184,14 +1191,14 @@ export default function App() {
           },
         };
       },
-      listEurCashItems() {
-        return client.listEurCashItems(NATIVE_EUR_2025_RANGE);
+      listEurCashItems(taxYear = 2025) {
+        return client.listEurCashItems({ taxYear, ...nativeEurRange(taxYear) });
       },
       upsertEurClassification(input) {
         return client.upsertEurClassification({
           sourceType: input.sourceType,
           sourceId: input.sourceId,
-          taxYear: 2025,
+          taxYear: input.taxYear,
           eurLineId: input.eurLineId,
           excluded: input.excluded,
           vatMode: input.vatMode,
@@ -1199,6 +1206,37 @@ export default function App() {
           note: input.note,
           reason: requireMutationReason(input.reason, 'EÜR-Klassifikation speichern'),
         });
+      },
+      async postAccountingCommand(input: AccountingCommandInput) {
+        const result = await client.postAccountingCommand(input);
+        return {
+          status: result.replayed ? 'duplicate' as const : result.run.status === 'posted' ? 'posted' as const : 'noop' as const,
+          sourceRun: { ...result.run, sourceRevision: result.run.sourceRevision ?? '1' } as AccountingSourceRun,
+          errors: [],
+          idempotencyKey: `${result.run.sourceType}:${result.run.sourceId}:${result.run.sourceRevision ?? '1'}`,
+        };
+      },
+      async listAccountingSourceRuns(): Promise<AccountingSourceRun[]> {
+        return (await client.listAccountingSourceRuns()).map((run) => ({ ...run, sourceRevision: run.sourceRevision ?? '1' } as AccountingSourceRun));
+      },
+      async prepareTaxExport(input) {
+        const result = await client.prepareTaxExport(input);
+        return { artifact: result.artifact as any, run: result.run as any, replayed: result.replayed };
+      },
+      exportTaxArtifact(kind, id) {
+        return client.exportTaxArtifact(kind, id);
+      },
+      async saveEurCashFact(input: EurCashFactInput): Promise<EurCashFact> {
+        return client.saveEurCashFact({ ...input, reason: requireMutationReason(input.reason, 'EÜR-Fakt speichern') }) as Promise<EurCashFact>;
+      },
+      listEurCashFacts(taxYear: number): Promise<EurCashFact[]> {
+        return client.listEurCashFacts(taxYear) as Promise<EurCashFact[]>;
+      },
+      async saveEurAnnexFact(input: EurAnnexFactInput): Promise<EurAnnexFact> {
+        return client.saveEurAnnexFact({ ...input, reason: requireMutationReason(input.reason, 'EÜR-Anlage speichern') }) as Promise<EurAnnexFact>;
+      },
+      listEurAnnexFacts(taxYear: number, annex?: string): Promise<EurAnnexFact[]> {
+        return client.listEurAnnexFacts(taxYear, annex) as Promise<EurAnnexFact[]>;
       },
       async getManagementGuvReport(filters: ReportFilterState): Promise<GuvReport> {
         const report = await client.getManagementGuvReport(reportFilter(filters));

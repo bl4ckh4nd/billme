@@ -104,7 +104,7 @@ export interface EurCashClassification {
   id?: string;
   sourceType: 'transaction' | 'invoice';
   sourceId: string;
-  taxYear: 2025;
+  taxYear: number;
   eurLineId?: string;
   excluded: boolean;
   vatMode: 'none' | 'default';
@@ -123,6 +123,8 @@ export interface EurCashItem {
   counterparty: string;
   purpose: string;
   vatWarning?: string;
+  kind?: 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through';
+  splits?: Array<{ amountNet: number; deductibility?: 'deductible' | 'non-deductible'; lineId?: string; reason: string }>;
   classification?: EurCashClassification;
 }
 

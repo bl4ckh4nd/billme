@@ -1,6 +1,23 @@
 export { default as ProAccountingWorkspace } from './App';
+export { default as SonderbuchungenWorkspace } from './components/SonderbuchungenWorkspace';
 export type { ProAccountingWorkspaceProps, ProAccountingSeed } from './App';
 export type { ProAccountingDataAdapter } from './services/mockBookingStore';
+export type {
+  AccountingCommandInput,
+  AccountingCommandKind,
+  AccountingSourceFact,
+  AccountingSourcePostResult,
+  AccountingSourceRun,
+  EurAnnexFact,
+  EurAnnexFactInput,
+  EurCashFact,
+  EurCashFactInput,
+  EurExpenseSplit,
+  EurFactKind,
+  TaxPreparationArtifact,
+  TaxPreparationInput,
+  TaxPreparationKind,
+} from './sourceRuns';
 export type { OposBankTransaction } from './services/mockBookingStore';
 export { permissionContextForRole } from './mocks/users';
 export type {
@@ -28,6 +45,8 @@ export {
   monthToFirstDay,
   monthToLastDay,
   NATIVE_EUR_2025_RANGE,
+  NATIVE_EUR_2026_RANGE,
+  nativeEurRange,
   reportDateRange,
   reportFiscalYearRange,
   reportPeriodRangeForPreset,

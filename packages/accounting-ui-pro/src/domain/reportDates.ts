@@ -3,12 +3,20 @@ import type { BusinessReportingProfile, ReportFilterState, ReportPeriodPreset } 
 
 const MONTH_PATTERN = /^(\d{4})-(\d{2})$/;
 
-/** Native EÜR is currently a print-only 2025 filing surface. */
+/** EÜR is calendar-year based; both catalog years are supported by the native runtime. */
 export const NATIVE_EUR_2025_RANGE = Object.freeze({
   from: '2025-01-01',
   to: '2025-12-31',
   label: '2025',
 });
+
+export const NATIVE_EUR_2026_RANGE = Object.freeze({
+  from: '2026-01-01',
+  to: '2026-12-31',
+  label: '2026',
+});
+
+export const nativeEurRange = (taxYear: number) => taxYear === 2026 ? NATIVE_EUR_2026_RANGE : NATIVE_EUR_2025_RANGE;
 
 export const monthToFirstDay = (month?: string): string | undefined => {
   const match = month?.match(MONTH_PATTERN);

@@ -1,7 +1,7 @@
 import { FileDown, FileText, RotateCcw } from 'lucide-react';
 import { Button } from '@billme/ui';
 import { ReportFilterState, ReportTabId } from '../../domain/reportTypes';
-import { defaultReportFilters, NATIVE_EUR_2025_RANGE, reportPeriodRangeForPreset } from '../../domain/reportDates';
+import { defaultReportFilters, nativeEurRange, reportPeriodRangeForPreset } from '../../domain/reportDates';
 
 interface ReportToolbarProps {
   filters: ReportFilterState;
@@ -12,17 +12,18 @@ interface ReportToolbarProps {
   exportBlockedReason?: string;
   /** Native EÜR is currently a fixed, print-only 2025 report. */
   lockNativeEurPeriod?: boolean;
+  nativeEurTaxYear?: number;
 }
 
-export default function ReportToolbar({ filters, onChange, activeTab, onExport, exporting = false, exportBlockedReason, lockNativeEurPeriod = false }: ReportToolbarProps) {
+export default function ReportToolbar({ filters, onChange, activeTab, onExport, exporting = false, exportBlockedReason, lockNativeEurPeriod = false, nativeEurTaxYear = 2025 }: ReportToolbarProps) {
   const nativeEurPeriodDescriptionId = 'native-eur-period-description';
   const forceNativeEurPeriod = () => onChange({
     ...filters,
-    asOfDate: NATIVE_EUR_2025_RANGE.to,
-    periodFrom: NATIVE_EUR_2025_RANGE.from.slice(0, 7),
-    periodTo: NATIVE_EUR_2025_RANGE.to.slice(0, 7),
-    periodFromDate: NATIVE_EUR_2025_RANGE.from,
-    periodToDate: NATIVE_EUR_2025_RANGE.to,
+    asOfDate: nativeEurRange(nativeEurTaxYear).to,
+    periodFrom: nativeEurRange(nativeEurTaxYear).from.slice(0, 7),
+    periodTo: nativeEurRange(nativeEurTaxYear).to.slice(0, 7),
+    periodFromDate: nativeEurRange(nativeEurTaxYear).from,
+    periodToDate: nativeEurRange(nativeEurTaxYear).to,
     periodPreset: 'current',
     compareMode: 'none',
   });
@@ -65,7 +66,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
     <div className="rounded-xl border border-border bg-surface px-4 py-3 space-y-2">
       {lockNativeEurPeriod ? (
         <p id={nativeEurPeriodDescriptionId} className="text-xs text-muted" role="status">
-          Die native EÜR ist derzeit nur für das Druckformular 2025 verfügbar. Der Zeitraum ist deshalb fest auf 01.01.2025–31.12.2025 eingestellt.
+          {nativeEurTaxYear === 2025 ? 'Die native EÜR ist derzeit nur für das Druckformular 2025 verfügbar. Der Zeitraum ist deshalb fest auf 01.01.2025–31.12.2025 eingestellt.' : `Die native EÜR ist für das Katalogjahr ${nativeEurTaxYear} verfügbar. Der Zeitraum ist deshalb fest auf 01.01.${nativeEurTaxYear}–31.12.${nativeEurTaxYear} eingestellt.`}
         </p>
       ) : null}
       <div className="flex flex-wrap items-end gap-3">

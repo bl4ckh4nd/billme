@@ -126,9 +126,9 @@ const guvReportSchema = z.object({
   mappingHealth: mappingHealthSchema,
 });
 const eurReportSchema = z.object({
-  taxYear: z.literal(2025),
-  from: z.literal('2025-01-01'),
-  to: z.literal('2025-12-31'),
+  taxYear: z.union([z.literal(2025), z.literal(2026)]),
+  from: z.string(),
+  to: z.string(),
   rows: z.array(z.object({
     id: z.string(),
     kennziffer: z.string().optional(),
@@ -157,7 +157,7 @@ const eurCashItemSchema = z.object({
   purpose: z.string(),
   vatWarning: z.string().optional(),
   classification: z.object({
-    id: z.string(), sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string(), taxYear: z.literal(2025), eurLineId: z.string().optional(), excluded: z.boolean(), vatMode: z.enum(['none', 'default']), vatRate: z.number().optional(), note: z.string().optional(), updatedAt: z.string(),
+    id: z.string(), sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string(), taxYear: z.union([z.literal(2025), z.literal(2026)]), eurLineId: z.string().optional(), excluded: z.boolean(), vatMode: z.enum(['none', 'default']), vatRate: z.number().optional(), note: z.string().optional(), updatedAt: z.string(),
   }).optional(),
 });
 const bwa01ReportSchema = z.object({
@@ -185,6 +185,11 @@ const bilanzReportSchema = z.object({
   totals: z.object({ assets: z.number(), liabilities: z.number(), delta: z.number() }),
   snapshot: reportSnapshotSchema,
   mappingHealth: mappingHealthSchema,
+});
+const accountingSourceRunSchema = z.object({
+  id: z.string(), sourceType: z.string(), sourceId: z.string(), sourceRevision: z.string().optional(),
+  status: z.enum(['posted', 'rejected', 'noop', 'prepared']), journalEntryId: z.string().optional(), createdAt: z.string(),
+  fact: z.unknown().optional(),
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
@@ -504,14 +509,39 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     getSusaReport(query?: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }) {
       return requestJson({ parser: susaReportSchema, query }, '/api/v1/pro/accounting/reports/susa');
     },
-    getEurReport(query?: { from?: string; to?: string }) {
+    getEurReport(query?: { taxYear?: number; from?: string; to?: string }) {
       return requestJson({ parser: eurReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/eur');
     },
-    listEurCashItems(query?: { from?: string; to?: string }) {
+    listEurCashItems(query?: { taxYear?: number; from?: string; to?: string }) {
       return requestJson({ parser: parseArray(eurCashItemSchema), query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/eur/items');
     },
-    upsertEurClassification(input: { sourceType: 'transaction' | 'invoice'; sourceId: string; taxYear: 2025; eurLineId?: string; excluded?: boolean; vatMode?: 'none' | 'default'; vatRate?: number; note?: string; reason: string }) {
+    upsertEurClassification(input: { sourceType: 'transaction' | 'invoice'; sourceId: string; taxYear: number; eurLineId?: string; excluded?: boolean; vatMode?: 'none' | 'default'; vatRate?: number; note?: string; reason: string }) {
       return requestJson({ method: 'PUT', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/eur/classifications');
+    },
+    saveEurCashFact(input: { sourceType: 'transaction' | 'invoice'; sourceId: string; taxYear: number; kind: string; amountNet: number; flowType?: 'income' | 'expense'; eurLineId?: string; splits?: unknown[]; reason: string; idempotencyKey?: string }) {
+      return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/eur/facts/cash');
+    },
+    listEurCashFacts(taxYear: number) {
+      return requestJson({ parser: parseArray((input) => input), query: { taxYear } }, '/api/v1/pro/accounting/reports/eur/facts/cash');
+    },
+    saveEurAnnexFact(input: { taxYear: number; annex: string; lineId: string; amount: number; sourceId?: string; date?: string; reason: string; idempotencyKey?: string }) {
+      return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/eur/facts/annex');
+    },
+    listEurAnnexFacts(taxYear: number, annex?: string) {
+      return requestJson({ parser: parseArray((input) => input), query: { taxYear, annex } }, '/api/v1/pro/accounting/reports/eur/facts/annex');
+    },
+    listAccountingSourceRuns() {
+      return requestJson({ parser: parseArray(accountingSourceRunSchema) }, '/api/v1/pro/accounting/source-runs');
+    },
+    postAccountingCommand(input: { kind: string; source: unknown; domainFacts?: Record<string, unknown>; reason: string }) {
+      const source = input.source as Record<string, unknown>;
+      return requestJson({ method: 'POST', body: { command: 'source_fact', input: { ...source, reference: source.reference ?? input.kind, ...(input.domainFacts ?? {}) }, sourceId: source.sourceId, sourceRevision: source.sourceRevision, idempotencyKey: `source:${source.sourceId ?? Date.now()}`, reason: input.reason }, parser: (payload) => payload as { run: z.infer<typeof accountingSourceRunSchema>; result: unknown; replayed: boolean } }, '/api/v1/pro/accounting/closing');
+    },
+    prepareTaxExport(input: { kind: 'ustva' | 'zm' | 'oss'; period: string; year?: number; reason: string; idempotencyKey?: string }) {
+      return requestJson({ method: 'POST', body: { ...input, idempotencyKey: input.idempotencyKey ?? `tax:${input.kind}:${input.period}` }, parser: (payload) => payload as { artifact: unknown; run?: unknown; replayed?: boolean } }, '/api/v1/pro/accounting/tax-exports/prepare');
+    },
+    exportTaxArtifact(kind: 'ustva' | 'zm' | 'oss', id: string) {
+      return requestBlob(`/api/v1/pro/accounting/tax-exports/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/export`);
     },
     getGuvReport(query?: unknown) {
       return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/guv');

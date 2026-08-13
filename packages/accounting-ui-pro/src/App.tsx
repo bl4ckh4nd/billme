@@ -6,6 +6,7 @@ import ExceptionCenter from './components/ExceptionCenter';
 import AssetManagementView from './components/AssetManagementView';
 import ReportsView from './components/ReportsView';
 import OposView from './components/OposView';
+import SonderbuchungenWorkspace from './components/SonderbuchungenWorkspace';
 import {
   configureStoreAdapter,
   configureStorePersistence,
@@ -16,7 +17,7 @@ import {
 import { Account, BookingDraft, Transaction, UserRole } from './types';
 import { reportTabsForBusinessProfile, type BusinessReportingProfile } from './domain/reportTypes';
 
-type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos';
+type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos' | 'special';
 
 export interface ProAccountingSeed {
   transactions?: Transaction[];
@@ -103,6 +104,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
               ...(assetsAvailable ? [{ view: 'assets' as const, label: 'Anlagen' }] : []),
               { view: 'reports', label: 'Auswertungen' },
               { view: 'opos', label: 'OPOS' },
+              { view: 'special', label: 'Sonderbuchungen & Abschluss' },
             ] as { view: AppView; label: string }[]
           ).map(({ view, label }) => (
             <button
@@ -172,6 +174,8 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
             />
           ) : currentView === 'opos' ? (
             <OposView dataAdapter={dataAdapter} role={role} />
+          ) : currentView === 'special' ? (
+            <SonderbuchungenWorkspace dataAdapter={dataAdapter} role={role} />
           ) : currentView === 'assets' && !assetsAvailable ? (
             <div className="p-6 text-sm text-muted">Anlagen sind in dieser Verbindung nicht verfügbar.</div>
           ) : (

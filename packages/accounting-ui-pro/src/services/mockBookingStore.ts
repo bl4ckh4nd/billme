@@ -34,6 +34,17 @@ import type {
   VendorEntity,
 } from '@billme/accounting-shared';
 import type { ProBankTransaction } from '@billme/accounting-shared';
+import type {
+  AccountingCommandInput,
+  AccountingSourcePostResult,
+  AccountingSourceRun,
+  EurAnnexFact,
+  EurAnnexFactInput,
+  EurCashFact,
+  EurCashFactInput,
+  TaxPreparationArtifact,
+  TaxPreparationInput,
+} from '../sourceRuns';
 
 // The desktop IPC transaction schema intentionally omits tenantId because the
 // tenant is fixed by the local Pro database. Keep the source identity and
@@ -98,8 +109,17 @@ export interface ProAccountingDataAdapter {
   getBalanceSheetPreview?: (filters: ReportFilterState) => Promise<BalanceSheetPreview>;
   getReportDrilldownEntries?: (selection: ReportDrilldownSelection) => Promise<ReportDrilldownEntry[]>;
   getEurReport?: (filters: ReportFilterState) => Promise<GuvReport>;
-  listEurCashItems?: () => Promise<EurCashItem[]>;
+  listEurCashItems?: (taxYear?: number) => Promise<EurCashItem[]>;
   upsertEurClassification?: (input: EurCashClassification & { reason: string }) => Promise<unknown>;
+  postAccountingCommand?: (input: AccountingCommandInput) => Promise<AccountingSourcePostResult>;
+  listAccountingSourceRuns?: () => Promise<AccountingSourceRun[]>;
+  getAccountingSourceRun?: (id: string) => Promise<AccountingSourceRun | null>;
+  prepareTaxExport?: (input: TaxPreparationInput) => Promise<{ artifact: TaxPreparationArtifact; run?: AccountingSourceRun; replayed?: boolean }>;
+  exportTaxArtifact?: (kind: TaxPreparationInput['kind'], id: string) => Promise<Blob | Uint8Array | string>;
+  saveEurCashFact?: (input: EurCashFactInput) => Promise<EurCashFact>;
+  listEurCashFacts?: (taxYear: number) => Promise<EurCashFact[]>;
+  saveEurAnnexFact?: (input: EurAnnexFactInput) => Promise<EurAnnexFact>;
+  listEurAnnexFacts?: (taxYear: number, annex?: string) => Promise<EurAnnexFact[]>;
   getBwaReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   getManagementGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   getHgbGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;

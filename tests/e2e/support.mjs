@@ -560,9 +560,10 @@ export async function importPendingProTransaction(page, label, options = {}) {
 }
 
 export async function setProAccountingPeriodStatus(desktop, period, status = 'soft_locked') {
-  return desktop.app.evaluate(async ({ app }, args) => {
-    const { default: Database } = await import('better-sqlite3');
-    const pathModule = await import('node:path');
+  return desktop.app.evaluate(({ app }, args) => {
+    const pathModule = process.getBuiltinModule('node:path');
+    const { createRequire } = process.getBuiltinModule('node:module');
+    const Database = createRequire(pathModule.join(app.getAppPath(), 'package.json'))('better-sqlite3');
     const dbPath = pathModule.join(app.getPath('userData'), 'billme-pro-v2.sqlite');
     const db = new Database(dbPath);
     try {

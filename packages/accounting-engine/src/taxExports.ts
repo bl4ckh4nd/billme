@@ -65,6 +65,8 @@ const assertIsoDate = (value: string, field = 'date'): void => {
   if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)) {
     throw new TaxExportError('INVALID_PERIOD', `${field} must use YYYY-MM-DD`);
   }
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (date.toISOString().slice(0, 10) !== value) throw new TaxExportError('INVALID_PERIOD', `${field} is not a calendar date`);
 };
 
 const periodBounds = (input: TaxExportPeriod): { period: string; year: number; from: string; to: string } => {

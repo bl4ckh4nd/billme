@@ -1852,7 +1852,6 @@ export const insertAuditRow = async (
 ): Promise<void> => {
   const drizzleDb = requireDrizzle(db);
   await drizzleDb.insert(schema.auditLog).values({
-    id: randomId(),
     tenantId,
     sequence: row.sequence,
     ts: row.ts,

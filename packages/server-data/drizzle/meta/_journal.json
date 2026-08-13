@@ -134,6 +134,13 @@
       "when": 1786538400006,
       "tag": "0018_server_data_canonical_catalog",
       "breakpoints": false
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786538400007,
+      "tag": "0019_server_data_audit_tenant_hash",
+      "breakpoints": false
     }
   ]
 }

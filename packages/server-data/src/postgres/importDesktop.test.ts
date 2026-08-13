@@ -8,6 +8,7 @@ import test from 'node:test';
 import Database from 'better-sqlite3';
 import { createSingleTenantScope } from '@billme/server-core';
 import { EUR_SOURCE_VERSION_2025, getCatalogForYear } from '@billme/desktop-services/eurCatalog';
+import { createPostgresAuditLogPort, sha256Hex, stableStringify } from './audit.js';
 import { createPostgresPool } from './connection.js';
 import { runPostgresMigrations } from './migrations.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
@@ -48,6 +49,7 @@ const postgresMigrationUrls = [
   new URL('../../drizzle/0016_server_data_eur_native.sql', import.meta.url),
   new URL('../../drizzle/0017_server_data_eur_catalog.sql', import.meta.url),
   new URL('../../drizzle/0018_server_data_canonical_catalog.sql', import.meta.url),
+  new URL('../../drizzle/0019_server_data_audit_tenant_hash.sql', import.meta.url),
 ];
 
 const extractSqliteTableNames = async (schemaUrl: URL): Promise<string[]> => {
@@ -166,6 +168,20 @@ test('Desktop reporting mappings preserve effective-date history and legacy SQLi
   legacy.close();
 });
 
+test('Desktop reporting mappings reject impossible and inverted effective dates', () => {
+  const invalidDate = new Database(':memory:');
+  invalidDate.exec(`CREATE TABLE account_mappings_hgb (id TEXT PRIMARY KEY, chart TEXT, account_number TEXT, statement_type TEXT, position_key TEXT, position_label TEXT, balance_side TEXT, valid_from TEXT, valid_to TEXT, updated_at TEXT)`);
+  invalidDate.prepare('INSERT INTO account_mappings_hgb VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('invalid-date', 'SKR03', '8400', 'hgb-guv', 'revenue', 'Umsatz', null, '2026-02-31', null, '2026-01-01T00:00:00.000Z');
+  assert.throws(() => loadAccountMappingsHgb(invalidDate, 'tenant-import'), /REPORT_MAPPING_DATE_INVALID/);
+  invalidDate.close();
+
+  const inverted = new Database(':memory:');
+  inverted.exec(`CREATE TABLE account_mappings_hgb (id TEXT PRIMARY KEY, chart TEXT, account_number TEXT, statement_type TEXT, position_key TEXT, position_label TEXT, balance_side TEXT, valid_from TEXT, valid_to TEXT, updated_at TEXT)`);
+  inverted.prepare('INSERT INTO account_mappings_hgb VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('inverted', 'SKR03', '8400', 'hgb-guv', 'revenue', 'Umsatz', null, '2026-12-31', '2026-01-01', '2026-01-01T00:00:00.000Z');
+  assert.throws(() => loadAccountMappingsHgb(inverted, 'tenant-import'), /REPORT_MAPPING_INVALID_VALIDITY/);
+  inverted.close();
+});
+
 test('Postgres report mapping persistence keeps 2025 and 2026 imported overrides idempotent', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
   const suffix = randomUUID();
@@ -217,7 +233,7 @@ test('Drizzle migration journal contains incremental migrations', async () => {
   const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ tag: string }> };
   assert.deepEqual(journal.entries.map((entry) => entry.tag), [
     '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
-    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog', '0018_server_data_canonical_catalog',
+    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog', '0018_server_data_canonical_catalog', '0019_server_data_audit_tenant_hash',
   ]);
 });
 
@@ -377,6 +393,87 @@ test('SQLite import serializes cross-tenant identity checks under concurrent imp
     const runs = (await pool.query('SELECT tenant_id, status FROM sqlite_import_runs WHERE tenant_id = ANY($1::text[]) ORDER BY tenant_id', [[firstTenantId, secondTenantId]])).rows;
     assert.deepEqual(runs, [{ tenant_id: firstTenantId, status: firstTenantId === winnerTenantId ? 'completed' : 'failed' }, { tenant_id: secondTenantId, status: secondTenantId === winnerTenantId ? 'completed' : 'failed' }]);
   } finally {
+    await pool.query('DELETE FROM tenants WHERE id = ANY($1::text[])', [[firstTenantId, secondTenantId]]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SQLite import serializes same-tenant imports before the empty-target check', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tenantId = `import-same-tenant-${randomUUID()}`;
+  const clientId = `same-tenant-client-${randomUUID()}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-same-tenant-'));
+  const sqlitePaths = [path.join(tempDir, 'first.sqlite'), path.join(tempDir, 'second.sqlite')];
+  try {
+    for (const sqlitePath of sqlitePaths) {
+      const sqlite = new Database(sqlitePath);
+      sqlite.exec(`CREATE TABLE clients (id TEXT PRIMARY KEY, customer_number TEXT, company TEXT, contact_person TEXT, email TEXT, phone TEXT, address TEXT, status TEXT, avatar TEXT, tags_json TEXT, notes TEXT)`);
+      sqlite.prepare('INSERT INTO clients VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(clientId, null, 'Same tenant source', 'Customer', 'same-tenant@example.test', '', '', 'active', null, '[]', 'source');
+      sqlite.close();
+    }
+
+    const results = await Promise.allSettled([
+      importDesktopSqliteToPostgres({ pool, sqlitePath: sqlitePaths[0], product: 'pro', tenant: { id: tenantId, slug: tenantId, displayName: 'Same tenant' } }),
+      importDesktopSqliteToPostgres({ pool, sqlitePath: sqlitePaths[1], product: 'pro', tenant: { id: tenantId, slug: tenantId, displayName: 'Same tenant' } }),
+    ]);
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+    assert.deepEqual((await pool.query('SELECT tenant_id, company FROM clients WHERE id=$1', [clientId])).rows, [{ tenant_id: tenantId, company: 'Same tenant source' }]);
+    assert.deepEqual((await pool.query('SELECT status FROM sqlite_import_runs WHERE tenant_id=$1', [tenantId])).rows.map((row) => row.status).sort(), ['completed', 'failed']);
+  } finally {
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SQLite import initializes per-tenant audit heads and scopes duplicate history hashes', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const firstTenantId = `import-audit-a-${randomUUID()}`;
+  const secondTenantId = `import-audit-b-${randomUUID()}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-audit-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const occurredAt = '2026-08-13T12:00:00.000Z';
+  const afterJson = JSON.stringify({ status: 'open' });
+  const payload = {
+    sequence: 1,
+    ts: occurredAt,
+    entityType: 'client',
+    entityId: 'client-1',
+    action: 'create',
+    reason: 'Imported history',
+    before: null,
+    after: { status: 'open' },
+    prevHash: null,
+    actor: 'local',
+  };
+  const hash = sha256Hex(`:${stableStringify(payload)}`);
+  const sqlite = new Database(sqlitePath);
+  try {
+    sqlite.exec(`CREATE TABLE audit_log (sequence INTEGER, ts TEXT, entity_type TEXT, entity_id TEXT, action TEXT, reason TEXT, before_json TEXT, after_json TEXT, prev_hash TEXT, hash TEXT, actor TEXT)`);
+    sqlite.prepare('INSERT INTO audit_log VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(1, occurredAt, 'client', 'client-1', 'create', 'Imported history', null, afterJson, null, hash, 'local');
+    sqlite.close();
+
+    await importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: firstTenantId, slug: firstTenantId, displayName: 'Audit A' } });
+    assert.deepEqual((await pool.query('SELECT sequence, hash FROM audit_heads WHERE tenant_id=$1', [firstTenantId])).rows, [{ sequence: 1, hash }]);
+    assert.match(String((await pool.query('SELECT id::text FROM audit_log WHERE tenant_id=$1', [firstTenantId])).rows[0]?.id), /^\d+$/);
+
+    const appended = await createPostgresAuditLogPort(pool).append(createSingleTenantScope(firstTenantId, 'pro'), {
+      occurredAt: '2026-08-13T12:01:00.000Z',
+      action: 'import.test',
+      reason: 'Continue imported history',
+      actor: { type: 'system', displayName: 'local' },
+      subject: { entityType: 'client', entityId: 'client-1', tenantId: firstTenantId },
+      change: { before: { status: 'open' }, after: { status: 'closed' } },
+    });
+    assert.equal(appended.sequence, 2);
+    assert.equal(appended.prevHash, hash);
+
+    await importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: secondTenantId, slug: secondTenantId, displayName: 'Audit B' } });
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM audit_log WHERE hash=$1', [hash])).rows[0].count), 2);
+  } finally {
+    if (sqlite.open) sqlite.close();
     await pool.query('DELETE FROM tenants WHERE id = ANY($1::text[])', [[firstTenantId, secondTenantId]]).catch(() => undefined);
     await pool.end();
     await rm(tempDir, { recursive: true, force: true });

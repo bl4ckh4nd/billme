@@ -7,6 +7,7 @@ import {
   numeric,
   pgTable,
   text,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { pgSchema } from "drizzle-orm/pg-core";
 
@@ -235,7 +236,7 @@ export const dunningHistory = pgTable("dunning_history", {
 });
 
 export const auditLog = pgTable("audit_log", {
-  id: text("id"),
+  id: bigint("id", { mode: "number" }),
   tenantId: text("tenant_id"),
   sequence: integer("sequence"),
   ts: text("ts"),
@@ -248,7 +249,9 @@ export const auditLog = pgTable("audit_log", {
   prevHash: text("prev_hash"),
   hash: text("hash"),
   actor: text("actor"),
-});
+}, (table) => ({
+  tenantHashUnique: uniqueIndex("audit_log_tenant_hash_unique").on(table.tenantId, table.hash),
+}));
 
 export const sqliteImportRuns = pgTable("sqlite_import_runs", {
   id: text("id"),

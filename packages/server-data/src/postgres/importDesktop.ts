@@ -263,6 +263,10 @@ const pgTextArrayParam = (values: string[]) => sql.param(values, {
   mapToDriverValue: (items: string[]) => `{${items.map((item) => `"${item.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`).join(',')}}`,
 });
 
+const lockDesktopImportTenant = async (client: PostgresTransactionClient, tenantId: string): Promise<void> => {
+  await createDrizzle(client).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billme:desktop-import:${tenantId}`}, 0))`);
+};
+
 // Repository upserts are intentionally tenant-scoped at read time, but most
 // imported tables still have a globally unique legacy id.  Refuse those ids
 // before any upsert can move another tenant's row into the import target.
@@ -405,9 +409,14 @@ const normalizeImportedReportType = (value: string): ServerReportAccountMappingR
 };
 const normalizeImportedEffectiveDate = (value: string | null | undefined): string | undefined => {
   if (!value) return undefined;
-  const date = value.slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`REPORT_MAPPING_DATE_INVALID:${value}`);
-  return date;
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(value.trim());
+  if (!match) throw new Error(`REPORT_MAPPING_DATE_INVALID:${value}`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const daysInMonth = month >= 1 && month <= 12 ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 0;
+  if (year < 1 || day < 1 || day > daysInMonth) throw new Error(`REPORT_MAPPING_DATE_INVALID:${value}`);
+  return `${match[1]}-${match[2]}-${match[3]}`;
 };
 const importedMappingVersion = (validFrom: string | undefined): number => validFrom ? Number(validFrom.replaceAll('-', '')) : 1;
 const loadAccountMappingRows = (db: SqliteDatabaseType): SqliteAccountMappingHgbRow[] => {
@@ -439,7 +448,9 @@ export const loadAccountMappingsHgb = (db: SqliteDatabaseType, tenantId: string)
     const identity = `${tenantId}:${reportType}:${chart}:${accountNumber}:${validFrom ?? 'baseline'}`;
     if (seen.has(identity)) throw new Error(`REPORT_MAPPING_COLLISION:${identity}`);
     seen.add(identity);
-    const source = { tenantId, chart, reportType, accountNumber, positionKey, positionLabel, balanceSide: row.balance_side ?? null, validFrom, validTo: normalizeImportedEffectiveDate(row.valid_to) };
+    const validTo = normalizeImportedEffectiveDate(row.valid_to);
+    if (validFrom && validTo && validFrom > validTo) throw new Error(`REPORT_MAPPING_INVALID_VALIDITY:${row.id}`);
+    const source = { tenantId, chart, reportType, accountNumber, positionKey, positionLabel, balanceSide: row.balance_side ?? null, validFrom, validTo };
     const sourceHash = createHash('sha256').update(JSON.stringify(source)).digest('hex');
     return {
       id: `report-import:${sourceHash}`,
@@ -450,7 +461,7 @@ export const loadAccountMappingsHgb = (db: SqliteDatabaseType, tenantId: string)
       positionKey: row.balance_side ? `${row.balance_side}:${positionKey}` : positionKey,
       positionLabel,
       validFrom,
-      validTo: source.validTo,
+      validTo,
       version: importedMappingVersion(validFrom),
       source: 'desktop-import',
       sourceHash,
@@ -669,6 +680,7 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
       detailsJson: JSON.stringify({ unsupportedTables }), startedAt: importRunStartedAt, completedAt: null });
     try {
       await withPostgresTransaction(options.pool, async (client) => {
+        await lockDesktopImportTenant(client, tenantId);
         const transactionDependencies = createPostgresBillingDependencies(client);
         if ((await countTenantCoreRows(client, tenantId)) > 0) throw new Error(`Target tenant ${tenantId} already contains server billing data`);
         const auditCount = await createDrizzle(client).select({ count: count() }).from(schema.auditLog)
@@ -754,6 +766,17 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         for (const row of loadEmailLog(sqliteDb)) { await insertEmailLogRow(client, tenantId, { id: row.id, documentType: row.document_type, documentId: row.document_id, documentNumber: row.document_number, recipientEmail: row.recipient_email, recipientName: row.recipient_name, subject: row.subject, bodyText: row.body_text, provider: row.provider, status: row.status, errorMessage: row.error_message, sentAt: row.sent_at, createdAt: row.created_at }); counts.emailLog += 1; }
         for (const row of loadDunningHistory(sqliteDb)) { await createDrizzle(client).insert(schema.dunningHistory).values({ id: row.id, tenantId, invoiceId: row.invoice_id, invoiceNumber: row.invoice_number, dunningLevel: row.dunning_level, daysOverdue: row.days_overdue, feeApplied: row.fee_applied, emailSent: Boolean(row.email_sent), emailLogId: row.email_log_id, processedAt: row.processed_at, createdAt: row.created_at } as any); counts.dunningHistory += 1; }
         for (const row of sourceAuditRows) { await insertAuditRow(client, tenantId, { sequence: row.sequence, ts: row.ts, entityType: row.entity_type, entityId: row.entity_id, action: row.action, reason: row.reason, beforeJson: row.before_json, afterJson: row.after_json, prevHash: row.prev_hash, hash: row.hash, actor: row.actor }); counts.auditLog += 1; }
+        await createDrizzle(client).insert(schema.auditHeads).values({
+          tenantId,
+          sequence: sourceAuditVerification.count > 0 ? sourceAuditRows[sourceAuditRows.length - 1]!.sequence : 0,
+          hash: sourceAuditVerification.headHash,
+        }).onConflictDoUpdate({
+          target: schema.auditHeads.tenantId,
+          set: {
+            sequence: sourceAuditVerification.count > 0 ? sourceAuditRows[sourceAuditRows.length - 1]!.sequence : 0,
+            hash: sourceAuditVerification.headHash,
+          },
+        });
         const importedVerification = await verifyPostgresAuditChain(client, tenantId);
         if (!importedVerification.ok) throw new Error(`Imported audit log verification failed: ${importedVerification.errors.map((entry) => `#${entry.sequence} ${entry.message}`).join(', ')}`);
       });

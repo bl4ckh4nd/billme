@@ -295,6 +295,38 @@ test('SQLite import rejects a child-only cross-tenant offer reference and rolls 
   }
 });
 
+test('SQLite import rejects a child-only cross-tenant customer reservation and rolls back the target', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const ownerTenantId = `import-reservation-owner-${randomUUID()}`;
+  const targetTenantId = `import-reservation-target-${randomUUID()}`;
+  const ownerClientId = `import-reservation-client-${randomUUID()}`;
+  const reservationId = `import-reservation-${randomUUID()}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-reservation-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  const now = new Date().toISOString();
+  try {
+    await runPostgresMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at) VALUES ($1,$1,'Reservation owner','pro','single-tenant','active',$2,$2)`, [ownerTenantId, now]);
+    await pool.query(`INSERT INTO clients (id, tenant_id, company, contact_person, email, phone, address, status, tags_json, notes) VALUES ($1,$2,'Owner client','Owner','owner@example.test','','','active','[]','keep')`, [ownerClientId, ownerTenantId]);
+    sqlite.exec(`CREATE TABLE number_reservations (id TEXT PRIMARY KEY, kind TEXT, number TEXT, counter_value INTEGER, status TEXT, document_id TEXT, created_at TEXT, updated_at TEXT)`);
+    sqlite.prepare(`INSERT INTO number_reservations VALUES (?,?,?,?,?,?,?,?)`).run(reservationId, 'customer', 'K-FOREIGN', 1, 'finalized', ownerClientId, now, now);
+    sqlite.close();
+
+    await assert.rejects(
+      importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: targetTenantId, slug: targetTenantId, displayName: 'Reservation target' } }),
+      /IMPORT_CROSS_TENANT_REFERENCE:number_reservations\.document_id/,
+    );
+    assert.deepEqual((await pool.query('SELECT tenant_id, company, notes FROM clients WHERE id=$1', [ownerClientId])).rows[0], { tenant_id: ownerTenantId, company: 'Owner client', notes: 'keep' });
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM number_reservations WHERE tenant_id=$1', [targetTenantId])).rows[0].count), 0);
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id = ANY($1::text[])', [[ownerTenantId, targetTenantId]]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('SQLite import treats a tenant tax-case mapping as occupied target data', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
   const tenantId = `import-tax-mapping-only-${randomUUID()}`;

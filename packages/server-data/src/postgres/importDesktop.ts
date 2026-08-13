@@ -324,6 +324,7 @@ const desktopImportTenantReferenceChecks: readonly DesktopImportTenantReferenceC
   { childTable: 'recurring_profiles', childReferenceColumn: 'client_id', parentTable: 'clients' },
   { childTable: 'number_reservations', childReferenceColumn: 'document_id', parentTable: 'invoices', where: "c.kind = 'invoice'" },
   { childTable: 'number_reservations', childReferenceColumn: 'document_id', parentTable: 'offers', where: "c.kind = 'offer'" },
+  { childTable: 'number_reservations', childReferenceColumn: 'document_id', parentTable: 'clients', where: "c.kind = 'customer'" },
   { childTable: 'email_log', childReferenceColumn: 'document_id', parentTable: 'invoices', where: "c.document_type = 'invoice'" },
   { childTable: 'email_log', childReferenceColumn: 'document_id', parentTable: 'offers', where: "c.document_type = 'offer'" },
   { childTable: 'dunning_history', childReferenceColumn: 'invoice_id', parentTable: 'invoices' },

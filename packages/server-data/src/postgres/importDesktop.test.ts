@@ -11,7 +11,7 @@ import { EUR_SOURCE_VERSION_2025, getCatalogForYear } from '@billme/desktop-serv
 import { createPostgresPool } from './connection.js';
 import { runPostgresMigrations } from './migrations.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
-import { saveServerReportAccountMapping } from './proAccounting.js';
+import { saveServerAccountMappingHgb, saveServerReportAccountMapping } from './proAccounting.js';
 import { tenantCoreRowCountTables } from './billing.js';
 import {
   desktopSqliteIgnoredTables,
@@ -276,6 +276,111 @@ test('SQLite import records a failed run when the target already contains billin
     const failedRun = (await pool.query('SELECT status, details_json FROM sqlite_import_runs WHERE tenant_id=$1', [tenantId])).rows[0];
     assert.equal(failedRun.status, 'failed');
     assert.match(failedRun.details_json, /already contains server billing data/);
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SQLite import rejects a cross-tenant id collision without stealing the existing row', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const ownerTenantId = `import-owner-${randomUUID()}`;
+  const targetTenantId = `import-collision-${randomUUID()}`;
+  const clientId = `collision-client-${randomUUID()}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-collision-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  try {
+    await runPostgresMigrations(pool);
+    const now = new Date().toISOString();
+    await pool.query(`INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at) VALUES ($1,$2,$3,'pro','single-tenant','active',$4,$4)`, [ownerTenantId, ownerTenantId, 'Existing owner', now]);
+    await pool.query(`INSERT INTO clients (id, tenant_id, company, contact_person, email, phone, address, status, tags_json, notes) VALUES ($1,$2,'Existing owner','Owner','owner@example.test','+49','Main Street','active','[]','keep')`, [clientId, ownerTenantId]);
+    sqlite.exec(`CREATE TABLE clients (id TEXT PRIMARY KEY, customer_number TEXT, company TEXT, contact_person TEXT, email TEXT, phone TEXT, address TEXT, status TEXT, avatar TEXT, tags_json TEXT, notes TEXT)`);
+    sqlite.prepare('INSERT INTO clients VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(clientId, null, 'Imported owner', 'Imported', 'import@example.test', '', '', 'active', null, '[]', 'must not overwrite');
+    sqlite.close();
+
+    await assert.rejects(
+      importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: targetTenantId, slug: targetTenantId, displayName: 'Collision target' } }),
+      new RegExp(`IMPORT_ID_TENANT_COLLISION:clients:${clientId}`),
+    );
+    assert.deepEqual((await pool.query('SELECT tenant_id, company, notes FROM clients WHERE id=$1', [clientId])).rows[0], { tenant_id: ownerTenantId, company: 'Existing owner', notes: 'keep' });
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM clients WHERE tenant_id=$1', [targetTenantId])).rows[0].count), 0);
+    const failedRun = (await pool.query('SELECT status, details_json FROM sqlite_import_runs WHERE tenant_id=$1', [targetTenantId])).rows[0];
+    assert.equal(failedRun.status, 'failed');
+    assert.match(failedRun.details_json, /IMPORT_ID_TENANT_COLLISION/);
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id IN ($1,$2)', [ownerTenantId, targetTenantId]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SQLite import rolls back rows and leaves a visible failed run after a mid-import validation error', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tenantId = `import-rollback-${randomUUID()}`;
+  const clientId = `rollback-client-${randomUUID()}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-rollback-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  try {
+    sqlite.exec(`
+      CREATE TABLE clients (id TEXT PRIMARY KEY, customer_number TEXT, company TEXT, contact_person TEXT, email TEXT, phone TEXT, address TEXT, status TEXT, avatar TEXT, tags_json TEXT, notes TEXT);
+      CREATE TABLE eur_lines (id TEXT PRIMARY KEY, tax_year INTEGER, kennziffer TEXT, provider_path TEXT, label TEXT, kind TEXT, exportable INTEGER, sort_order INTEGER, computed_from_json TEXT, computed_terms_json TEXT, source_version TEXT, created_at TEXT, updated_at TEXT);
+    `);
+    sqlite.prepare('INSERT INTO clients VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(clientId, null, 'Rollback customer', 'Customer', 'rollback@example.test', '', '', 'active', null, '[]', 'will roll back');
+    sqlite.prepare('INSERT INTO eur_lines VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run('bad-eur-line', 2025, null, 'main', 'tampered', 'line', 1, 0, '[]', '[]', EUR_SOURCE_VERSION_2025, '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z');
+    sqlite.close();
+
+    await assert.rejects(
+      importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: tenantId, slug: tenantId, displayName: 'Rollback test' } }),
+      /does not match canonical 2025 catalog/,
+    );
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM clients WHERE tenant_id=$1', [tenantId])).rows[0].count), 0);
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM audit_log WHERE tenant_id=$1', [tenantId])).rows[0].count), 0);
+    const failedRun = (await pool.query('SELECT status, details_json FROM sqlite_import_runs WHERE tenant_id=$1', [tenantId])).rows[0];
+    assert.equal(failedRun.status, 'failed');
+    assert.match(failedRun.details_json, /canonical 2025 catalog/);
+    assert.match(failedRun.details_json, /"clients":1/);
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SQLite import keeps effective-date and legacy mappings traceable and idempotent on retry', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tenantId = `import-mappings-${randomUUID()}`;
+  const suffix = randomUUID();
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-mappings-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  try {
+    sqlite.exec(`CREATE TABLE account_mappings_hgb (id TEXT PRIMARY KEY, chart TEXT, account_number TEXT, statement_type TEXT, position_key TEXT, position_label TEXT, balance_side TEXT, valid_from TEXT, valid_to TEXT, updated_at TEXT)`);
+    const insert = sqlite.prepare('INSERT INTO account_mappings_hgb VALUES (?,?,?,?,?,?,?,?,?,?)');
+    insert.run(`modern-2025-${suffix}`, 'SKR03', '8400', 'hgb-guv', 'revenue', 'Revenue', null, '2025-01-01', '2025-12-31', '2025-01-01T00:00:00.000Z');
+    insert.run(`modern-2026-${suffix}`, 'SKR03', '8400', 'hgb-guv', 'material.services', 'Material', null, '2026-01-01', null, '2026-01-01T00:00:00.000Z');
+    insert.run(`legacy-${suffix}`, 'SKR03', '1200', 'guv', 'cash', 'Bank', 'asset', null, null, '2024-01-01T00:00:00.000Z');
+    const modernRows = loadAccountMappingsHgb(sqlite, tenantId);
+    const legacyRows = loadLegacyAccountMappingsHgb(sqlite, tenantId);
+    sqlite.close();
+
+    const result = await importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: tenantId, slug: tenantId, displayName: 'Mapping import' } });
+    assert.equal(result.counts.accountMappingsHgb, 3);
+    assert.deepEqual((await pool.query(`SELECT valid_from, position_key, version, source FROM report_account_mappings WHERE tenant_id=$1 ORDER BY valid_from`, [tenantId])).rows, [
+      { valid_from: '2025-01-01', position_key: 'revenue', version: 20250101, source: 'desktop-import' },
+      { valid_from: '2026-01-01', position_key: 'material.services', version: 20260101, source: 'desktop-import' },
+    ]);
+    assert.deepEqual((await pool.query(`SELECT id, statement_type, position_key, balance_side FROM account_mappings_hgb WHERE tenant_id=$1`, [tenantId])).rows, [{ id: legacyRows[0].id, statement_type: 'guv', position_key: 'cash', balance_side: 'asset' }]);
+
+    await saveServerReportAccountMapping(pool, modernRows[0]);
+    await saveServerAccountMappingHgb(pool, legacyRows[0]);
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM report_account_mappings WHERE tenant_id=$1', [tenantId])).rows[0].count), 2);
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM account_mappings_hgb WHERE tenant_id=$1', [tenantId])).rows[0].count), 1);
   } finally {
     if (sqlite.open) sqlite.close();
     await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);

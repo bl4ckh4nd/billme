@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { Database as SqliteDatabaseType } from 'better-sqlite3';
 import type { Pool } from 'pg';
-import { count, eq } from 'drizzle-orm';
+import { count, eq, sql } from 'drizzle-orm';
 import { billingLineItemSchema, createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile, type ServerProduct, type Tenant } from '@billme/server-core';
 import { DEFAULT_TAX_MODE } from '@billme/server-core/services';
 import { EUR_SOURCE_VERSION_2025, getCatalogForYear, type EurLineDef } from '@billme/desktop-services/eurCatalog';
@@ -15,7 +15,7 @@ import {
   saveServerNumberReservation,
   saveServerSettings,
 } from './billing.js';
-import { withPostgresTransaction } from './connection.js';
+import { withPostgresTransaction, type PostgresTransactionClient } from './connection.js';
 import { createDrizzle, schema } from './drizzle.js';
 import { runPostgresMigrations } from './migrations.js';
 import { importRawTenantRows, restoreIncomingInvoiceAccountingRows } from './oposImport.js';
@@ -260,6 +260,37 @@ const tableExists = (db: SqliteDatabaseType, table: string): boolean => Boolean(
 const tableColumns = (db: SqliteDatabaseType, table: string): Set<string> => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
 const listTables = (db: SqliteDatabaseType): string[] => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as SqliteTableRow[]).map((row) => row.name).filter(Boolean);
 const countTable = (db: SqliteDatabaseType, table: string): number => Number(((db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count) ?? 0);
+
+// Repository upserts are intentionally tenant-scoped at read time, but most
+// imported tables still have a globally unique legacy id.  Refuse those ids
+// before any upsert can move another tenant's row into the import target.
+const tenantScopedIdentityTables = [
+  'number_reservations', 'clients', 'invoices', 'offers', 'recurring_profiles',
+  'articles', 'accounts', 'bank_transactions', 'booking_drafts', 'booking_draft_lines',
+  'draft_validation_issues', 'accounting_periods', 'journal_entries', 'journal_lines',
+  'assets', 'asset_depreciation_schedule', 'asset_movements', 'account_mappings_hgb',
+  'report_snapshots', 'datev_exports', 'vat_evidence', 'journal_posting_pairs',
+  'transactions', 'eur_classifications', 'eur_rules', 'account_keywords',
+  'account_suggestion_rules', 'import_batches', 'templates', 'email_log',
+  'dunning_history', 'accounting_account_mappings', 'vendors', 'incoming_invoices',
+  'incoming_invoice_lines', 'open_items', 'open_item_payments', 'open_item_allocations',
+  'accounting_backfill_runs',
+] as const;
+
+const assertNoCrossTenantIdentityCollisions = async (
+  client: PostgresTransactionClient,
+  sqliteDb: SqliteDatabaseType,
+  tenantId: string,
+): Promise<void> => {
+  for (const table of tenantScopedIdentityTables) {
+    if (!tableExists(sqliteDb, table)) continue;
+    const ids = (sqliteDb.prepare(`SELECT id FROM ${table} WHERE id IS NOT NULL`).all() as Array<{ id: string }>).map((row) => String(row.id));
+    if (ids.length === 0) continue;
+    const existing = await createDrizzle(client).execute(sql`SELECT id, tenant_id FROM ${sql.raw(table)} WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`);
+    const collision = (existing.rows as Array<{ id: string; tenant_id: string }>).find((row) => row.tenant_id !== tenantId);
+    if (collision) throw new Error(`IMPORT_ID_TENANT_COLLISION:${table}:${String(collision.id)}`);
+  }
+};
 
 export const detectUnsupportedSqliteTables = (tables: string[], countLookup: (table: string) => number): Array<{ table: string; rowCount: number }> => {
   return tables.filter((table) => !systemTable(table) && !importableTables.has(table)).map((table) => ({ table, rowCount: countLookup(table) })).filter((entry) => entry.rowCount > 0).sort((left, right) => left.table.localeCompare(right.table));
@@ -568,10 +599,12 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
       detailsJson: JSON.stringify({ unsupportedTables }), startedAt: importRunStartedAt, completedAt: null });
     try {
       await withPostgresTransaction(options.pool, async (client) => {
+        const transactionDependencies = createPostgresBillingDependencies(client);
         if ((await countTenantCoreRows(client, tenantId)) > 0) throw new Error(`Target tenant ${tenantId} already contains server billing data`);
         const auditCount = await createDrizzle(client).select({ count: count() }).from(schema.auditLog)
           .where(eq(schema.auditLog.tenantId, tenantId));
         if (Number(auditCount[0]?.count ?? 0) > 0) throw new Error(`Target tenant ${tenantId} already contains audit log rows`);
+        await assertNoCrossTenantIdentityCollisions(client, sqliteDb, tenantId);
         const settingsJson = loadSettingsJson(sqliteDb);
         if (settingsJson) await saveServerSettings(client, { tenantId, settingsJson, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         for (const reservation of loadNumberReservations(sqliteDb, tenantId)) { await saveServerNumberReservation(client, reservation); counts.numberReservations += 1; }
@@ -580,10 +613,10 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         for (const template of loadTemplates(sqliteDb, tenantId)) { await saveServerTemplate(client, template); counts.templates += 1; }
         const activeTemplates = loadActiveTemplates(sqliteDb, tenantId);
         if (activeTemplates) { await saveServerActiveTemplates(client, activeTemplates); counts.activeTemplates += 1; }
-        for (const clientRecord of loadClients(sqliteDb, tenantId)) { await dependencies.clientRepo.save(scope, clientRecord); counts.clients += 1; }
+        for (const clientRecord of loadClients(sqliteDb, tenantId)) { await transactionDependencies.clientRepo.save(scope, clientRecord); counts.clients += 1; }
         counts.invoices += await importOutgoingInvoices(client, loadInvoices(sqliteDb, tenantId), tenantId);
-        for (const offer of loadOffers(sqliteDb, tenantId)) { await dependencies.offerRepo.save(scope, offer); counts.offers += 1; }
-        for (const profile of loadRecurringProfiles(sqliteDb, tenantId)) { await dependencies.recurringProfileRepo.save(scope, profile); counts.recurringProfiles += 1; }
+        for (const offer of loadOffers(sqliteDb, tenantId)) { await transactionDependencies.offerRepo.save(scope, offer); counts.offers += 1; }
+        for (const profile of loadRecurringProfiles(sqliteDb, tenantId)) { await transactionDependencies.recurringProfileRepo.save(scope, profile); counts.recurringProfiles += 1; }
         for (const ledgerAccount of loadLedgerAccounts(sqliteDb)) { await saveServerLedgerAccount(client, { id: ledgerAccount.id, chart: ledgerAccount.chart, accountNumber: ledgerAccount.account_number, name: ledgerAccount.name, source: ledgerAccount.source, createdAt: ledgerAccount.created_at, updatedAt: ledgerAccount.updated_at }); counts.ledgerAccounts += 1; }
         for (const taxCase of loadTaxCases(sqliteDb)) { await saveServerTaxCase(client, taxCase); counts.taxCases += 1; }
         for (const mapping of loadTaxCaseAccountMappings(sqliteDb)) { await saveServerTaxCaseAccountMappingForTenant(client, mapping, tenantId); counts.taxCaseAccountMappings += 1; }

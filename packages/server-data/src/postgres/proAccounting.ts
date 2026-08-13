@@ -18,8 +18,7 @@ import type {
 } from '@billme/accounting-shared';
 import type { ProAccountingCatalogRepository, ProWorkflowRepository, TenantScope } from '@billme/server-core';
 import { and, asc, count, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
-import type { Pool } from 'pg';
-import { withSerializablePostgresTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
+import { isPostgresPool, withSerializablePostgresTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { appendWithClient } from './audit.js';
 import { createDrizzle, schema } from './drizzle.js';
 
@@ -28,9 +27,8 @@ const getTenantId = (scope: TenantScope): string => scope.tenantId;
 const nowIso = (): string => new Date().toISOString();
 const drizzleDb = (db: PostgresQueryable) => createDrizzle(db as never);
 const executeSql = (db: PostgresQueryable, statement: ReturnType<typeof sql>) => drizzleDb(db).execute(statement);
-const isPool = (db: PostgresQueryable): db is Pool => typeof (db as Pool).connect === 'function';
 const inTaxMappingTransaction = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
-  isPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
+  isPostgresPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
 const upsert = async (db: PostgresQueryable, table: any, values: any, target: any, set: any): Promise<void> => {
   await drizzleDb(db).insert(table).values(values).onConflictDoUpdate({ target, set });
 };

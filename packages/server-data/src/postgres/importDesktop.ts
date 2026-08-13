@@ -287,12 +287,10 @@ export const assertNoCrossTenantIdentityCollisions = async (
     if (!tableExists(sqliteDb, table)) continue;
     const ids = [...new Set((sqliteDb.prepare(`SELECT id FROM ${table} WHERE id IS NOT NULL`).all() as Array<{ id: string }>).map((row) => String(row.id)))].sort();
     if (ids.length === 0) continue;
-    // Lock every source identity before checking it.  Stable table/id order
-    // keeps concurrent imports from deadlocking while the transaction lock
-    // closes the check-then-upsert race across tenants.
-    await createDrizzle(client).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billme:desktop-import:${table}`} || ':' || source_id, 0))
-      FROM unnest(${pgTextArrayParam(ids)}::text[]) AS source_ids(source_id)
-      ORDER BY source_id`);
+    // Serialize imports for this table while checking and upserting its ids.
+    // One lock per table keeps PostgreSQL shared-memory usage bounded even for
+    // large desktop databases, while the fixed table order avoids deadlocks.
+    await createDrizzle(client).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billme:desktop-import:${table}`}, 0))`);
     const existing = await createDrizzle(client).execute(sql`SELECT id, tenant_id FROM ${sql.raw(table)} WHERE id = ANY(${pgTextArrayParam(ids)}::text[])`);
     const collision = (existing.rows as Array<{ id: string; tenant_id: string }>).find((row) => row.tenant_id !== tenantId);
     if (collision) throw new Error(`IMPORT_ID_TENANT_COLLISION:${table}:${String(collision.id)}`);

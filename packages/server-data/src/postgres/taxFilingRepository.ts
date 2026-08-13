@@ -2,8 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import type { TaxFilingRecord, TaxFilingSnapshot } from '@billme/accounting-shared';
 import type { TaxFilingRepository, TenantScope } from '@billme/server-core';
-import type { Pool } from 'pg';
-import { withPostgresTransaction, type PostgresQueryable } from './connection.js';
+import { isPostgresPool, withPostgresTransaction, type PostgresQueryable } from './connection.js';
 import { createDrizzle, schema } from './drizzle.js';
 import {
   createTaxSubmission,
@@ -120,9 +119,8 @@ const atomically = async <T>(
   db: PostgresQueryable,
   work: (connection: PostgresQueryable) => Promise<T>,
 ): Promise<T> => {
-  const candidate = db as PostgresQueryable & { connect?: () => Promise<unknown> };
-  if (typeof candidate.connect === 'function') {
-    return withPostgresTransaction(db as unknown as Pool, (client) => work(client));
+  if (isPostgresPool(db)) {
+    return withPostgresTransaction(db, (client) => work(client));
   }
   return work(db);
 };

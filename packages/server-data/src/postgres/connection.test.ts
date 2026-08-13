@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
-import { withSerializablePostgresTransaction } from './connection';
+import { isPostgresPool, withSerializablePostgresTransaction, type PostgresQueryable } from './connection';
 
 type FakeClient = {
   query: (sql: string) => Promise<void>;
@@ -56,6 +56,18 @@ test('retries a serialization failure with a fresh client', async () => {
   assert.deepEqual(second.queries, ['BEGIN ISOLATION LEVEL SERIALIZABLE', 'COMMIT']);
   assert.equal(first.released, true);
   assert.equal(second.released, true);
+});
+
+test('recognizes pg PoolClient even when it exposes connect', () => {
+  const client = {
+    connect: async () => { throw new Error('nested connect must not be called'); },
+    query: async () => ({ rows: [] }),
+    release: () => undefined,
+  } as unknown as PostgresQueryable;
+  const pool = { connect: async () => client, query: async () => ({ rows: [] }) } as unknown as PostgresQueryable;
+
+  assert.equal(isPostgresPool(client), false);
+  assert.equal(isPostgresPool(pool), true);
 });
 
 test('does not retry non-transaction errors', async () => {

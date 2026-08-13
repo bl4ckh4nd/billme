@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
 import {
   buildDepreciationSchedule,
   calculateReport,
@@ -26,8 +25,7 @@ import type {
   AssetItem, AssetMutationOptions, AssetStatus, AssetUpsertInput,
 } from '@billme/server-core';
 import { businessReportingProfileSchema } from '@billme/server-core';
-import type { PostgresQueryable, PostgresTransactionClient } from './connection.js';
-import { withSerializablePostgresTransaction } from './connection.js';
+import { isPostgresPool, withSerializablePostgresTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { appendWithClient } from './audit.js';
 import {
   createReportSnapshot,
@@ -41,9 +39,8 @@ import { assertServerEurCashSource, assertServerEurProfile, listServerEurCashIte
 import { saveServerEurClassification, type ServerEurClassificationRecord } from './proAccounting.js';
 
 const q = async <T = any>(db: PostgresQueryable, text: string, values: unknown[] = []): Promise<T[]> => (await db.query(text, values)).rows as T[];
-const isPool = (db: PostgresQueryable): db is Pool => typeof (db as Pool).connect === 'function';
 const inTx = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
-  isPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
+  isPostgresPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
 const tenant = (scope: TenantScope): string => scope.tenantId;
 const now = (): string => new Date().toISOString();
 const round = (n: unknown): number => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;

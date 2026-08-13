@@ -16,6 +16,9 @@ export const createPostgresPool = (config: string | PoolConfig): Pool => {
 export type PostgresQueryable = Pick<Pool, 'query'> | Pick<PoolClient, 'query'>;
 export type PostgresTransactionClient = PoolClient;
 
+/** PoolClient also exposes `connect` in pg, so use its release hook as the discriminator. */
+export const isPostgresPool = (target: PostgresQueryable): target is Pool => !('release' in target);
+
 const SERIALIZABLE_TRANSACTION_MAX_ATTEMPTS = 5;
 const SERIALIZABLE_TRANSACTION_RETRY_DELAY_MS = 25;
 const SERIALIZABLE_TRANSACTION_MAX_RETRY_DELAY_MS = 250;

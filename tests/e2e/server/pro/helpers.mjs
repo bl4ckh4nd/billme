@@ -92,6 +92,15 @@ export const seedHarnessProTenant = async (state, { tenantId, namespace, include
   return runFixtureHelper(args);
 };
 
+export const setHarnessProPeriodStatus = async (state, { tenantId, period, status }) =>
+  runFixtureHelper([
+    'set-pro-period-status',
+    '--state-file', state.stateFile,
+    '--tenant-id', tenantId,
+    '--period', period,
+    '--status', status,
+  ]);
+
 export const installProSession = async (page, state, session) => {
   await page.addInitScript(
     ({ apiKey, apiUrl, sessionKey, storedSession }) => {

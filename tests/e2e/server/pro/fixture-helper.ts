@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServerApiClient, type ServerProduct } from '@billme/server-core';
@@ -149,6 +150,32 @@ export const applyHarnessProSeed = async (options: {
   }
 };
 
+export const setHarnessProPeriodStatus = async (options: {
+  stateFile: string;
+  tenantId: string;
+  period: string;
+  status: 'open' | 'soft_locked' | 'closed';
+}) => {
+  const state = await readHarnessState(options.stateFile);
+  const env = await readHarnessEnv(state);
+  const pool = createPostgresPool(buildDatabaseUrl(state, env));
+  try {
+    const timestamp = new Date().toISOString();
+    const start = `${options.period}-01`;
+    const end = new Date(Date.UTC(Number(options.period.slice(0, 4)), Number(options.period.slice(5, 7)), 0))
+      .toISOString().slice(0, 10);
+    await pool.query(
+      `INSERT INTO accounting_periods (id,tenant_id,period,fiscal_year,status,starts_at,ends_at,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+       ON CONFLICT (tenant_id,period) DO UPDATE SET status=EXCLUDED.status,updated_at=EXCLUDED.updated_at`,
+      [randomUUID(), options.tenantId, options.period, Number(options.period.slice(0, 4)), options.status, start, end, timestamp],
+    );
+    return { tenantId: options.tenantId, period: options.period, status: options.status };
+  } finally {
+    await pool.end();
+  }
+};
+
 const runCli = async () => {
   const { action, flags } = parseArgs(process.argv.slice(2));
   const stateFile = requireFlag(flags, 'state-file');
@@ -174,6 +201,17 @@ const runCli = async () => {
       includeEurCashFixtures: flags.get('include-eur-cash-fixtures') === 'true',
     });
     process.stdout.write(`${JSON.stringify(seed)}\n`);
+    return;
+  }
+
+  if (action === 'set-pro-period-status') {
+    const result = await setHarnessProPeriodStatus({
+      stateFile,
+      tenantId: requireFlag(flags, 'tenant-id'),
+      period: requireFlag(flags, 'period'),
+      status: requireFlag(flags, 'status') as 'open' | 'soft_locked' | 'closed',
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
 

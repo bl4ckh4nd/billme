@@ -20,6 +20,7 @@ import {
   runProRouteGuardScenario,
   runProSmokeScenario,
 } from './pro/scenarios.mjs';
+import { runProNonHappyAccountingScenario } from './pro/nonhappy.mjs';
 
 const level = process.argv[2] === 'full' ? 'full' : 'smoke';
 const scope = process.argv[3] ?? 'all';
@@ -32,6 +33,7 @@ if (level === 'full') {
 
 const buildScenarioList = () => {
   const scenarios = [];
+  const includeNonHappy = level === 'full' && (scope === 'all' || scope === 'pro' || scope === 'pro-nonhappy');
   const includeStack = scope === 'all' || scope === 'stack' || scope === 'lite' || scope === 'pro';
   const includeLite = scope === 'all' || scope === 'lite';
   const includePro = scope === 'all' || scope === 'pro';
@@ -60,6 +62,10 @@ const buildScenarioList = () => {
       scenarios.push({ name: 'pro-route-guard', kind: 'browser', run: runProRouteGuardScenario });
       scenarios.push({ name: 'pro-worker-flows', kind: 'plain', run: () => runWorkerFlowScenario('pro') });
     }
+  }
+
+  if (includeNonHappy && level === 'full') {
+    scenarios.push({ name: 'pro-accounting-nonhappy', kind: 'plain', run: runProNonHappyAccountingScenario });
   }
 
   return scenarios;

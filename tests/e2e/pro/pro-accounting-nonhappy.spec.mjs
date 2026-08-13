@@ -255,7 +255,7 @@ test('OPOS rejects wrong party and preserves atomic residuals', async () => {
     expect(afterPartial.find((item) => item.id === first.item.id).residualAmount).toBe(69);
     const overpaid = await invokeDesktopIpc(page, 'pro:allocateOpenItemPayment', payment({ sourceId: unique('overpaid-payment'), partyType: 'creditor', partyId: second.vendorId, amount: 150, openItemId: second.item.id }));
     expect(overpaid.residualAmount).toBe(31);
-    expect(overpaid.status).toMatch(/overpaid|allocated/);
+    expect(overpaid.status).toBe('overpaid');
 
     await expectIpcError(
       invokeDesktopIpc(page, 'pro:allocateOpenItemPayment', payment({ sourceId: unique('atomic-overallocation'), partyType: 'creditor', partyId: first.vendorId, amount: 200, openItemId: first.item.id })),
@@ -316,8 +316,36 @@ test('missing report mapping blocks the report and unsupported 2027 EÜR fails c
 
 test('period soft-lock override is rejected unless an explicit reason is supplied', async () => {
   const { page } = desktop;
+  const assetAccount = (await invokeDesktopIpc(page, 'pro:listLedgerAccounts', {
+    chart: postingAccounts.chart,
+    limit: 3000,
+    offset: 0,
+  })).find((row) => row.accountNumber.startsWith('0'))?.accountNumber;
+  expect(assetAccount).toBeTruthy();
+  const assetId = unique('soft-lock-asset');
+  const activated = await invokeDesktopIpc(page, 'pro:upsertAsset', {
+    reason: 'E2E soft lock validation activation',
+    asset: {
+      id: assetId,
+      assetNumber: unique('ANL'),
+      name: 'Activated E2E soft-lock asset',
+      assetClass: 'IT-Hardware',
+      status: 'aktiv',
+      activationDate: '2026-04-01',
+      acquisitionCost: 1000,
+      usefulLifeYears: 5,
+      depreciationMethod: 'linear',
+      costCenter: 'E2E',
+      location: 'Berlin',
+      receiptLinked: false,
+      assetAccountNumber: assetAccount,
+      acquisitionOffsetAccountNumber: postingAccounts.expense,
+    },
+  });
+  expect(activated.status).toBe('aktiv');
+  expect(activated.activationJournalEntryId).toBeTruthy();
   await expectIpcError(
-    invokeDesktopIpc(page, 'pro:runDepreciation', { assetId: unique('soft-lock-asset'), year: 2026, postingDate: '2026-04-30', reason: 'E2E soft lock validation', softLockOverride: true }),
+    invokeDesktopIpc(page, 'pro:runDepreciation', { assetId, year: 2026, postingDate: '2026-04-30', reason: 'E2E soft lock validation', softLockOverride: true }),
     /overrideReason|required.*reason/i,
   );
 });

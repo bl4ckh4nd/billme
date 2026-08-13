@@ -51,6 +51,12 @@ test('shows pro report summaries and opens Auswertungen workspace', async () => 
   await expect(susaWarningsCard).toContainText(/\d+/);
   await expect(page.getByText('Summen- und Saldenliste', { exact: true })).toBeVisible();
 
+  await page.getByRole('button', { name: 'BWA01' }).click();
+  await expect(page.getByText('BWA01', { exact: true }).last()).toBeVisible();
+  await expect(page.locator('div.rounded-xl').filter({ hasText: 'Ergebnis' }).first()).toContainText('€');
+  await expect(page.getByText('Alle Konten sind report-spezifisch zugeordnet.')).toBeVisible();
+  await expect(page.getByText(/Live-Daten/)).toBeVisible();
+
   await page.getByRole('button', { name: 'Management-GuV' }).click();
   const guvRevenueCard = page.locator('div.rounded-xl').filter({ hasText: 'Umsätze' }).first();
   const guvResultCard = page.locator('div.rounded-xl').filter({ hasText: 'Ergebnis' }).first();

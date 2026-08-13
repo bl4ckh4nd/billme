@@ -172,6 +172,7 @@ test('posts tax-case variants and verifies VAT summary rows for mixed tax versio
 
   const { transaction: txStd } = await importPendingProTransaction(page, 'tax-standard');
   const { transaction: txRc } = await importPendingProTransaction(page, 'tax-reverse-charge');
+  const { transaction: txReduced } = await importPendingProTransaction(page, 'tax-reduced', { amount: -107, date: '2026-04-03' });
   expect(txStd).toBeTruthy();
   expect(txRc).toBeTruthy();
 
@@ -216,6 +217,24 @@ test('posts tax-case variants and verifies VAT summary rows for mixed tax versio
   });
   expect(post.issues.filter((issue) => issue.blocking)).toEqual([]);
 
+  const reducedDraft = await saveDraftForTx(page, {
+    txId: txReduced.id,
+    accountNumber: expenseAccount,
+    bankAccount,
+    taxCaseKey: 'DE_STD_7',
+    taxPayload: {
+      taxRate: 7,
+      netAmount: 100,
+      taxAmount: 7,
+      grossAmount: 107,
+    },
+  });
+  post = await invokeDesktopIpc(page, 'pro:postDraft', {
+    draftId: reducedDraft.id,
+    actorRole: 'accountant',
+  });
+  expect(post.issues.filter((issue) => issue.blocking)).toEqual([]);
+
   const rcDraft = await saveDraftForTx(page, {
     txId: txRc.id,
     accountNumber: expenseAccount,
@@ -250,4 +269,13 @@ test('posts tax-case variants and verifies VAT summary rows for mixed tax versio
   ];
   expect(keys).toContain('DE_STD_19');
   expect(keys).toContain('EU_B2B_SERVICE_RC');
+
+  const vatSummary = await invokeDesktopIpc(page, 'pro:getVatSummary', {
+    from: '2026-04-01',
+    to: '2026-04-03',
+  });
+  const vatByCase = new Map(vatSummary.rows.map((row) => [row.taxCaseKey, row]));
+  expect(vatByCase.get('DE_STD_19')).toMatchObject({ netAmount: 100, taxAmount: 19, grossAmount: 119 });
+  expect(vatByCase.get('DE_STD_7')).toMatchObject({ netAmount: 100, taxAmount: 7, grossAmount: 107 });
+  expect(vatByCase.get('EU_B2B_SERVICE_RC')).toBeTruthy();
 });

@@ -238,7 +238,7 @@ export const dunningHistory = pgTable("dunning_history", {
 export const auditLog = pgTable("audit_log", {
   id: bigint("id", { mode: "number" }),
   tenantId: text("tenant_id"),
-  sequence: integer("sequence"),
+  sequence: bigint("sequence", { mode: "number" }),
   ts: text("ts"),
   entityType: text("entity_type"),
   entityId: text("entity_id"),

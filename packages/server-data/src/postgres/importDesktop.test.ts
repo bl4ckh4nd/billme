@@ -229,7 +229,11 @@ test('tenant-scoped postgres tables stay covered by import overwrite guards', as
   const excludedTables = new Set([
     'tenant_memberships', 'sqlite_import_runs', 'audit_heads',
   ]);
-  const expected = tenantScopedTables.filter((table) => !excludedTables.has(table)).sort();
+  const expected = [...new Set([
+    ...tenantScopedTables,
+    // Added by ALTER TABLE in 0011 rather than a CREATE TABLE migration.
+    'tax_case_account_mappings',
+  ])].filter((table) => !excludedTables.has(table)).sort();
 
   assert.deepEqual([...tenantCoreRowCountTables].sort(), expected);
 });
@@ -251,6 +255,70 @@ test('tax columns are present in both incremental migration files', async () => 
   assert.match(sql, /tax_mode/);
   assert.match(sql, /tax_meta_json/);
   assert.match(sql, /tax_snapshot_json/);
+});
+
+test('audit log sequence uses the bigint number mapping in the Drizzle schema', async () => {
+  const source = await readFile(new URL('./schema.ts', import.meta.url), 'utf8');
+  assert.match(source, /sequence: bigint\("sequence", \{ mode: "number" \}\)/);
+});
+
+test('SQLite import rejects a child-only cross-tenant offer reference and rolls back the target', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const ownerTenantId = `import-ref-owner-${randomUUID()}`;
+  const targetTenantId = `import-ref-target-${randomUUID()}`;
+  const ownerClientId = `import-ref-client-${randomUUID()}`;
+  const offerId = `import-ref-offer-${randomUUID()}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-ref-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  const now = new Date().toISOString();
+  try {
+    await runPostgresMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at) VALUES ($1,$1,'Reference owner','pro','single-tenant','active',$2,$2)`, [ownerTenantId, now]);
+    await pool.query(`INSERT INTO clients (id, tenant_id, company, contact_person, email, phone, address, status, tags_json, notes) VALUES ($1,$2,'Owner client','Owner','owner@example.test','','','active','[]','keep')`, [ownerClientId, ownerTenantId]);
+    sqlite.exec(`CREATE TABLE offers (id TEXT PRIMARY KEY, client_id TEXT, client_number TEXT, project_id TEXT, number TEXT, client TEXT, client_email TEXT, client_address TEXT, billing_address_json TEXT, shipping_address_json TEXT, tax_mode TEXT, tax_meta_json TEXT, tax_snapshot_json TEXT, date TEXT, valid_until TEXT, amount REAL, status TEXT, share_token TEXT, share_published_at TEXT, accepted_at TEXT, accepted_by TEXT, accepted_email TEXT, accepted_user_agent TEXT, decision TEXT, decision_text_version TEXT, created_at TEXT, updated_at TEXT)`);
+    sqlite.prepare(`INSERT INTO offers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(offerId, ownerClientId, null, null, 'OF-FOREIGN', 'Owner client', 'owner@example.test', null, null, null, 'standard_vat', null, null, '2026-08-13', '2026-08-31', 0, 'draft', null, null, null, null, null, null, null, null, now, now);
+    sqlite.close();
+
+    await assert.rejects(
+      importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: targetTenantId, slug: targetTenantId, displayName: 'Reference target' } }),
+      /IMPORT_CROSS_TENANT_REFERENCE:offers\.client_id/,
+    );
+    assert.deepEqual((await pool.query('SELECT tenant_id, company, notes FROM clients WHERE id=$1', [ownerClientId])).rows[0], { tenant_id: ownerTenantId, company: 'Owner client', notes: 'keep' });
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM offers WHERE tenant_id=$1', [targetTenantId])).rows[0].count), 0);
+    assert.equal((await pool.query('SELECT status FROM sqlite_import_runs WHERE tenant_id=$1', [targetTenantId])).rows[0]?.status, 'failed');
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id = ANY($1::text[])', [[ownerTenantId, targetTenantId]]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SQLite import treats a tenant tax-case mapping as occupied target data', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tenantId = `import-tax-mapping-only-${randomUUID()}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-tax-mapping-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  try {
+    await runPostgresMigrations(pool);
+    sqlite.close();
+    const now = new Date().toISOString();
+    await pool.query(`INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at) VALUES ($1,$1,'Tax mapping target','pro','single-tenant','active',$2,$2)`, [tenantId, now]);
+    await pool.query(`INSERT INTO tax_case_account_mappings (id, tenant_id, chart, tax_case_key, role, account_number, updated_at) VALUES ($1,$2,'SKR03','DE_STD_19','output_tax','1776',$3)`, [`mapping-${randomUUID()}`, tenantId, now]);
+
+    await assert.rejects(
+      importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: tenantId, slug: tenantId, displayName: 'Tax mapping target' } }),
+      /already contains server billing data/,
+    );
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM tax_case_account_mappings WHERE tenant_id=$1', [tenantId])).rows[0].count), 1);
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('SQLite import preserves posted outgoing/incoming accounting metadata and line ordering', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {

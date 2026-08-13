@@ -302,6 +302,162 @@ export const assertNoCrossTenantIdentityCollisions = async (
   }
 };
 
+type DesktopImportTenantReferenceCheck = Readonly<{
+  childTable: string;
+  childReferenceColumn: string;
+  parentTable: string;
+  childIdColumn?: string;
+  parentIdColumn?: string;
+  where?: string;
+}>;
+
+/**
+ * PostgreSQL's legacy foreign keys validate global ids, not tenant ownership.
+ * Keep this list fixed and query it after all import writes, while the import
+ * transaction is still open.  The identifier guard makes the generated SQL
+ * safe; all entries below are source-controlled constants, never source data.
+ */
+const desktopImportTenantReferenceChecks: readonly DesktopImportTenantReferenceCheck[] = [
+  { childTable: 'invoices', childReferenceColumn: 'client_id', parentTable: 'clients' },
+  { childTable: 'invoices', childReferenceColumn: 'accounting_journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'offers', childReferenceColumn: 'client_id', parentTable: 'clients' },
+  { childTable: 'recurring_profiles', childReferenceColumn: 'client_id', parentTable: 'clients' },
+  { childTable: 'number_reservations', childReferenceColumn: 'document_id', parentTable: 'invoices', where: "c.kind = 'invoice'" },
+  { childTable: 'number_reservations', childReferenceColumn: 'document_id', parentTable: 'offers', where: "c.kind = 'offer'" },
+  { childTable: 'email_log', childReferenceColumn: 'document_id', parentTable: 'invoices', where: "c.document_type = 'invoice'" },
+  { childTable: 'email_log', childReferenceColumn: 'document_id', parentTable: 'offers', where: "c.document_type = 'offer'" },
+  { childTable: 'dunning_history', childReferenceColumn: 'invoice_id', parentTable: 'invoices' },
+  { childTable: 'dunning_history', childReferenceColumn: 'email_log_id', parentTable: 'email_log' },
+  { childTable: 'active_templates', childReferenceColumn: 'invoice_template_id', parentTable: 'templates' },
+  { childTable: 'active_templates', childReferenceColumn: 'offer_template_id', parentTable: 'templates' },
+  { childTable: 'pro_workflow_entries', childIdColumn: 'transaction_id', childReferenceColumn: 'transaction_id', parentTable: 'transactions' },
+  { childTable: 'bank_transactions', childReferenceColumn: 'account_id', parentTable: 'accounts' },
+  { childTable: 'bank_transactions', childReferenceColumn: 'linked_invoice_id', parentTable: 'invoices' },
+  { childTable: 'bank_transactions', childReferenceColumn: 'source_transaction_id', parentTable: 'transactions' },
+  { childTable: 'booking_drafts', childReferenceColumn: 'transaction_id', parentTable: 'transactions' },
+  { childTable: 'booking_draft_lines', childReferenceColumn: 'draft_id', parentTable: 'booking_drafts' },
+  { childTable: 'draft_validation_issues', childReferenceColumn: 'draft_id', parentTable: 'booking_drafts' },
+  { childTable: 'journal_entries', childReferenceColumn: 'source_draft_id', parentTable: 'booking_drafts' },
+  { childTable: 'journal_entries', childReferenceColumn: 'reversed_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'journal_lines', childReferenceColumn: 'entry_id', parentTable: 'journal_entries' },
+  { childTable: 'journal_posting_pairs', childReferenceColumn: 'entry_id', parentTable: 'journal_entries' },
+  { childTable: 'journal_posting_pairs', childReferenceColumn: 'debit_line_id', parentTable: 'journal_lines' },
+  { childTable: 'journal_posting_pairs', childReferenceColumn: 'credit_line_id', parentTable: 'journal_lines' },
+  { childTable: 'transactions', childReferenceColumn: 'account_id', parentTable: 'accounts' },
+  { childTable: 'transactions', childReferenceColumn: 'linked_invoice_id', parentTable: 'invoices' },
+  { childTable: 'transactions', childReferenceColumn: 'import_batch_id', parentTable: 'import_batches' },
+  { childTable: 'import_batches', childReferenceColumn: 'account_id', parentTable: 'accounts' },
+  { childTable: 'incoming_invoices', childReferenceColumn: 'vendor_id', parentTable: 'vendors' },
+  { childTable: 'incoming_invoices', childReferenceColumn: 'accounting_journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'incoming_invoice_lines', childReferenceColumn: 'incoming_invoice_id', parentTable: 'incoming_invoices' },
+  { childTable: 'open_items', childReferenceColumn: 'journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'open_items', childReferenceColumn: 'source_id', parentTable: 'invoices', where: "c.source_type = 'outgoing_invoice'" },
+  { childTable: 'open_items', childReferenceColumn: 'source_id', parentTable: 'incoming_invoices', where: "c.source_type = 'incoming_invoice'" },
+  { childTable: 'open_items', childReferenceColumn: 'party_id', parentTable: 'clients', where: "c.party_type = 'debtor'" },
+  { childTable: 'open_items', childReferenceColumn: 'party_id', parentTable: 'vendors', where: "c.party_type = 'creditor'" },
+  { childTable: 'open_item_payments', childReferenceColumn: 'journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'open_item_payments', childReferenceColumn: 'source_id', parentTable: 'bank_transactions', where: "c.source_type = 'bank_transaction'" },
+  { childTable: 'open_item_payments', childReferenceColumn: 'party_id', parentTable: 'clients', where: "c.party_type = 'debtor'" },
+  { childTable: 'open_item_payments', childReferenceColumn: 'party_id', parentTable: 'vendors', where: "c.party_type = 'creditor'" },
+  { childTable: 'open_item_allocations', childReferenceColumn: 'payment_id', parentTable: 'open_item_payments' },
+  { childTable: 'open_item_allocations', childReferenceColumn: 'open_item_id', parentTable: 'open_items' },
+  { childTable: 'assets', childReferenceColumn: 'source_incoming_invoice_id', parentTable: 'incoming_invoices' },
+  { childTable: 'assets', childReferenceColumn: 'activation_journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'asset_depreciation_schedule', childReferenceColumn: 'asset_id', parentTable: 'assets' },
+  { childTable: 'asset_depreciation_schedule', childReferenceColumn: 'journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'asset_movements', childReferenceColumn: 'asset_id', parentTable: 'assets' },
+  { childTable: 'asset_movements', childReferenceColumn: 'journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'vat_evidence', childReferenceColumn: 'draft_id', parentTable: 'booking_drafts' },
+  { childTable: 'vat_evidence', childReferenceColumn: 'entry_id', parentTable: 'journal_entries' },
+  { childTable: 'vat_evidence', childReferenceColumn: 'line_id', parentTable: 'journal_lines' },
+  { childTable: 'eur_classifications', childReferenceColumn: 'source_id', parentTable: 'invoices', where: "c.source_type = 'invoice'" },
+  { childTable: 'eur_classifications', childReferenceColumn: 'source_id', parentTable: 'transactions', where: "c.source_type = 'transaction'" },
+] as const;
+
+const desktopImportArticleJsonTables = ['invoices', 'offers', 'recurring_profiles'] as const;
+
+const quoteImportIdentifier = (identifier: string): string => {
+  if (!/^[a-z_][a-z0-9_]*$/.test(identifier)) throw new Error(`Invalid import assertion identifier: ${identifier}`);
+  return `"${identifier}"`;
+};
+
+export class DesktopImportCrossTenantReferenceError extends Error {
+  readonly code = 'IMPORT_CROSS_TENANT_REFERENCE';
+
+  constructor(
+    readonly details: {
+      childTable: string;
+      childId: string;
+      childReferenceColumn: string;
+      parentTable: string;
+      parentId: string;
+      parentTenantId: string;
+      tenantId: string;
+    },
+  ) {
+    super(`IMPORT_CROSS_TENANT_REFERENCE:${details.childTable}.${details.childReferenceColumn}:${details.childId}->${details.parentTable}:${details.parentId} (tenant ${details.parentTenantId}, expected ${details.tenantId})`);
+    this.name = 'DesktopImportCrossTenantReferenceError';
+  }
+}
+
+export const assertNoCrossTenantTenantReferences = async (
+  client: PostgresTransactionClient,
+  tenantId: string,
+): Promise<void> => {
+  for (const check of desktopImportTenantReferenceChecks) {
+    const childTable = quoteImportIdentifier(check.childTable);
+    const childIdColumn = quoteImportIdentifier(check.childIdColumn ?? 'id');
+    const childReferenceColumn = quoteImportIdentifier(check.childReferenceColumn);
+    const parentTable = quoteImportIdentifier(check.parentTable);
+    const parentIdColumn = quoteImportIdentifier(check.parentIdColumn ?? 'id');
+    const result = await createDrizzle(client).execute(
+      sql.raw(`SELECT c.${childIdColumn}::text AS child_id, c.${childReferenceColumn}::text AS parent_id, p.tenant_id::text AS parent_tenant_id
+       FROM ${childTable} c
+       JOIN ${parentTable} p ON p.${parentIdColumn} = c.${childReferenceColumn}
+       WHERE c.tenant_id = `).append(sql`${tenantId}`).append(sql.raw(` AND p.tenant_id IS DISTINCT FROM `)).append(sql`${tenantId}`).append(sql.raw(`${check.where ? ` AND ${check.where}` : ''}
+       ORDER BY c.${childIdColumn}::text
+       LIMIT 1`)),
+    );
+    const row = result.rows[0] as { child_id?: string; parent_id?: string; parent_tenant_id?: string } | undefined;
+    if (row?.child_id && row.parent_id && row.parent_tenant_id) {
+      throw new DesktopImportCrossTenantReferenceError({
+        childTable: check.childTable,
+        childId: row.child_id,
+        childReferenceColumn: check.childReferenceColumn,
+        parentTable: check.parentTable,
+        parentId: row.parent_id,
+        parentTenantId: row.parent_tenant_id,
+        tenantId,
+      });
+    }
+  }
+
+  for (const table of desktopImportArticleJsonTables) {
+    const childTable = quoteImportIdentifier(table);
+    const result = await createDrizzle(client).execute(
+      sql.raw(`SELECT c.id::text AS child_id, item->>'articleId' AS parent_id, a.tenant_id::text AS parent_tenant_id
+       FROM ${childTable} c
+       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.items_json, '[]')::jsonb) AS item
+       JOIN "articles" a ON a.id = item->>'articleId'
+       WHERE c.tenant_id = `).append(sql`${tenantId}`).append(sql.raw(` AND a.tenant_id IS DISTINCT FROM `)).append(sql`${tenantId}`).append(sql.raw(`
+       ORDER BY c.id::text
+       LIMIT 1`)),
+    );
+    const row = result.rows[0] as { child_id?: string; parent_id?: string; parent_tenant_id?: string } | undefined;
+    if (row?.child_id && row.parent_id && row.parent_tenant_id) {
+      throw new DesktopImportCrossTenantReferenceError({
+        childTable: table,
+        childId: row.child_id,
+        childReferenceColumn: 'items_json.articleId',
+        parentTable: 'articles',
+        parentId: row.parent_id,
+        parentTenantId: row.parent_tenant_id,
+        tenantId,
+      });
+    }
+  }
+};
+
 export const detectUnsupportedSqliteTables = (tables: string[], countLookup: (table: string) => number): Array<{ table: string; rowCount: number }> => {
   return tables.filter((table) => !systemTable(table) && !importableTables.has(table)).map((table) => ({ table, rowCount: countLookup(table) })).filter((entry) => entry.rowCount > 0).sort((left, right) => left.table.localeCompare(right.table));
 };
@@ -782,6 +938,7 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         });
         const importedVerification = await verifyPostgresAuditChain(client, tenantId);
         if (!importedVerification.ok) throw new Error(`Imported audit log verification failed: ${importedVerification.errors.map((entry) => `#${entry.sequence} ${entry.message}`).join(', ')}`);
+        await assertNoCrossTenantTenantReferences(client, tenantId);
       });
       await createDrizzle(options.pool).update(schema.sqliteImportRuns).set({ status: 'completed', detailsJson: JSON.stringify({ counts, unsupportedTables }), completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
     } catch (error) {

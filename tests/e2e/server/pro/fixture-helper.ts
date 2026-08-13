@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, scryptSync } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createServerApiClient, type ServerProduct } from '@billme/server-core';
@@ -111,6 +111,49 @@ export const ensureHarnessSession = async (options: {
   });
 };
 
+export const createHarnessProTenant = async (options: {
+  stateFile: string;
+  email: string;
+  password: string;
+  fullName: string;
+}) => {
+  const state = await readHarnessState(options.stateFile);
+  const env = await readHarnessEnv(state);
+  const pool = createPostgresPool(buildDatabaseUrl(state, env));
+  const tenantId = randomUUID();
+  const userId = randomUUID();
+  const membershipId = randomUUID();
+  const salt = randomUUID().replaceAll('-', '');
+  const now = new Date().toISOString();
+  try {
+    await pool.query('BEGIN');
+    await pool.query(
+      `INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at)
+       VALUES ($1,$2,$3,'pro','single-tenant','active',$4,$4)`,
+      [tenantId, `pro-e2e-${tenantId}`, 'Billme Pro isolated E2E tenant', now],
+    );
+    await pool.query(
+      `INSERT INTO user_accounts (id,email,full_name,status,created_at,updated_at) VALUES ($1,$2,$3,'active',$4,$4)`,
+      [userId, options.email, options.fullName, now],
+    );
+    await pool.query(
+      `INSERT INTO tenant_memberships (id,tenant_id,user_id,role,created_at,updated_at) VALUES ($1,$2,$3,'owner',$4,$4)`,
+      [membershipId, tenantId, userId, now],
+    );
+    await pool.query(
+      `INSERT INTO user_password_credentials (user_id,password_salt,password_hash,password_algorithm,created_at,updated_at) VALUES ($1,$2,$3,'scrypt-64',$4,$4)`,
+      [userId, salt, scryptSync(options.password, salt, 64).toString('hex'), now],
+    );
+    await pool.query('COMMIT');
+    return { tenantId, userId };
+  } catch (error) {
+    await pool.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    await pool.end();
+  }
+};
+
 export const applyHarnessProSeed = async (options: {
   stateFile: string;
   tenantId: string;
@@ -214,6 +257,17 @@ const runCli = async () => {
       fullName: requireFlag(flags, 'full-name'),
     });
     process.stdout.write(`${JSON.stringify(session)}\n`);
+    return;
+  }
+
+  if (action === 'create-pro-tenant') {
+    const created = await createHarnessProTenant({
+      stateFile,
+      email: requireFlag(flags, 'email'),
+      password: requireFlag(flags, 'password'),
+      fullName: requireFlag(flags, 'full-name'),
+    });
+    process.stdout.write(`${JSON.stringify(created)}\n`);
     return;
   }
 

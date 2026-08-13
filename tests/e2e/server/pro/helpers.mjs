@@ -52,7 +52,7 @@ export const createOwnerCredentials = (product) => ({
   email: `${product}-owner@billme-e2e.local`,
   fullName: product === 'pro' ? 'Billme Pro Owner' : 'Billme Lite Owner',
   password: 'billme-server-123',
-});
+  });
 
 export const getProAppUrl = (state, route = 'overview') => {
   if (route.startsWith('#')) {
@@ -77,6 +77,14 @@ export const ensureHarnessSession = async (state, { product, email, password, fu
     fullName,
   ]);
 };
+
+export const createHarnessProTenant = async (state, { email, password, fullName }) => runFixtureHelper([
+  'create-pro-tenant',
+  '--state-file', state.stateFile,
+  '--email', email,
+  '--password', password,
+  '--full-name', fullName,
+]);
 
 export const seedHarnessProTenant = async (state, { tenantId, namespace, includeEurCashFixtures = false }) => {
   const args = [
@@ -158,6 +166,7 @@ const request = async (state, session, requestPath, query, options = {}) => {
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
+
   if (response.ok) {
     return response;
   }

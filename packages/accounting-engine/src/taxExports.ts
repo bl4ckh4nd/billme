@@ -214,7 +214,7 @@ export const prepareUstva = (input: PrepareUstvaInput): UstvaArtifact => {
   const rows: UstvaRow[] = [...totals.values()]
     .sort((a, b) => a.entry.kennziffer.localeCompare(b.entry.kennziffer))
     .map(({ entry, net, tax, count }) => ({ taxCaseKey: entry.taxCaseKey, kennziffer: entry.kennziffer, direction: entry.direction ?? 'output', netAmount: amount(net), taxAmount: amount(tax), lineCount: count }));
-  return base('ustva', { period: bounds.period, year: bounds.year }, { period: bounds.period, catalog: input.catalog, rows }, { catalog: input.catalog, rows }) as UstvaArtifact;
+  return base('ustva', bounds, { period: bounds.period, catalog: input.catalog, rows }, { catalog: input.catalog, rows }) as UstvaArtifact;
 };
 
 export type AggregateTaxInput = {
@@ -247,7 +247,7 @@ export const aggregateZm = (input: AggregateTaxInput): ZmArtifact => {
     }
   }
   const rows = [...totals.values()].sort((a, b) => a.row.counterpartyVatId.localeCompare(b.row.counterpartyVatId) || a.row.taxCaseKey.localeCompare(b.row.taxCaseKey)).map(({ row, net }) => ({ ...row, netAmount: amount(net) }));
-  return base('zm', { period: bounds.period, year: bounds.year }, { period: bounds.period, rows }, { rows }) as ZmArtifact;
+  return base('zm', bounds, { period: bounds.period, rows }, { rows }) as ZmArtifact;
 };
 
 /** Aggregate EU B2C OSS supplies by destination and destination VAT rate. */
@@ -274,7 +274,7 @@ export const aggregateOss = (input: AggregateTaxInput): OssArtifact => {
     }
   }
   const rows: OssRow[] = [...totals.values()].sort((a, b) => a.countryCode.localeCompare(b.countryCode) || a.taxRate - b.taxRate).map((row) => ({ countryCode: row.countryCode, taxRate: row.taxRate, netAmount: amount(row.net), taxAmount: amount(row.tax), lineCount: row.count }));
-  return base('oss', { period: bounds.period, year: bounds.year }, { period: bounds.period, rows }, { rows }) as OssArtifact;
+  return base('oss', bounds, { period: bounds.period, rows }, { rows }) as OssArtifact;
 };
 
 type SnapshotInput = TaxReportSnapshotBinding | { id: string; sourceHash: string; snapshot?: ReportSnapshot };
@@ -306,7 +306,7 @@ export const prepareEBilanz = (input: PrepareEBilanzInput): EBilanzArtifact => {
   const catalog = input.catalog ?? PREPARATION_CATALOG;
   assertProvenance(catalog);
   const source = { period: bounds.period, taxonomy: input.taxonomy, facts: input.facts, reportSnapshot };
-  return base('e_bilanz', { period: bounds.period, year: bounds.year }, source, { taxonomy: '6.9', facts: input.facts, reportSnapshot, catalog }) as EBilanzArtifact;
+  return base('e_bilanz', bounds, source, { taxonomy: '6.9', facts: input.facts, reportSnapshot, catalog }) as EBilanzArtifact;
 };
 
 export type PrepareUnternehmensregisterInput = {
@@ -323,7 +323,7 @@ export const prepareUnternehmensregister = (input: PrepareUnternehmensregisterIn
   if (!input.companyName.trim() || !input.registerNumber.trim()) throw new TaxExportError('REPORT_SNAPSHOT_REQUIRED', 'Company and register identity are required');
   const reportSnapshot = snapshotBinding(input.reportSnapshot);
   const source = { period: bounds.period, companyName: input.companyName.trim(), registerNumber: input.registerNumber.trim(), reportSnapshot };
-  return base('unternehmensregister', { period: bounds.period, year: bounds.year }, source, { companyName: input.companyName.trim(), registerNumber: input.registerNumber.trim(), reportSnapshot }) as UnternehmensregisterArtifact;
+  return base('unternehmensregister', bounds, source, { companyName: input.companyName.trim(), registerNumber: input.registerNumber.trim(), reportSnapshot }) as UnternehmensregisterArtifact;
 };
 
 /** Provider validation is intentionally fail-closed; this package only prepares/exports. */

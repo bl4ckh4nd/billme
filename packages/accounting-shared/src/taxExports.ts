@@ -29,6 +29,8 @@ export type TaxExportPeriod = {
   /** YYYY-MM, YYYY-Q1..Q4, or YYYY for an annual preparation. */
   period: string;
   year?: number;
+  from?: string;
+  to?: string;
 };
 
 export type TaxCatalogProvenance = {

@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { asc, eq } from 'drizzle-orm';
 import {
-  EUR_SOURCE_VERSION_2025,
+  getCatalogManifestForYear,
   getCatalogForYear,
   type EurComputedTerm,
   type EurLineDef,
@@ -24,8 +24,7 @@ export interface EurLine {
 }
 
 const sourceVersionForYear = (year: number): string => {
-  if (year === 2025) return EUR_SOURCE_VERSION_2025;
-  return `unknown-${year}`;
+  return getCatalogManifestForYear(year).version;
 };
 
 export const seedEurCatalog = (db: Database.Database, year: number): number => {
@@ -75,7 +74,7 @@ export const seedEurCatalog = (db: Database.Database, year: number): number => {
 
 export const listEurLines = (db: Database.Database, taxYear: number): EurLine[] => {
   // Do not turn an unsupported year into a misleading successful empty report.
-  if (taxYear !== 2025) getCatalogForYear(taxYear);
+  getCatalogForYear(taxYear);
   const rows = createDrizzle(db)
     .select({
       id: schema.eurLines.id,
@@ -94,6 +93,24 @@ export const listEurLines = (db: Database.Database, taxYear: number): EurLine[] 
     .where(eq(schema.eurLines.taxYear, taxYear))
     .orderBy(asc(schema.eurLines.sortOrder), asc(schema.eurLines.id))
     .all();
+
+  if (rows.length === 0) {
+    // Existing desktop databases are upgraded lazily.  Keep a newly shipped
+    // catalog selectable before the next bootstrap/migration has seeded it.
+    return getCatalogForYear(taxYear).map((line, sortOrder) => ({
+      id: line.id,
+      taxYear,
+      providerPath: line.providerPath ?? 'main',
+      kennziffer: line.kennziffer,
+      label: line.label,
+      kind: line.kind,
+      exportable: line.exportable,
+      sortOrder,
+      computedFromIds: line.computedFromIds ?? [],
+      computedTerms: line.computedTerms,
+      sourceVersion: sourceVersionForYear(taxYear),
+    }));
+  }
 
   return rows.map((row) => ({
     id: row.id,

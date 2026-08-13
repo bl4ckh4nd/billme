@@ -1,5 +1,5 @@
-import { EUR_CATALOG_MANIFEST_2025 } from '@billme/desktop-services/eurCatalog';
-import { calculateEurRows, type EurCalculationItem, type EurCalculationLine } from '@billme/accounting-shared';
+import { getCatalogForYear, getCatalogManifestForYear } from '@billme/desktop-services/eurCatalog';
+import { calculateEurRows, type EurCalculationItem, type EurCalculationLine, type EurExpenseSplit } from '@billme/accounting-shared';
 import { paymentSchema, type TenantScope } from '@billme/server-core';
 import type { PostgresQueryable } from './connection.js';
 
@@ -20,12 +20,13 @@ const parseJsonArray = (value: unknown): unknown[] | undefined => {
     return Array.isArray(parsed) ? parsed : undefined;
   } catch { return undefined; }
 };
-const iso2025 = (date: string | undefined, fallback: string): string => date ?? fallback;
+const isoForYear = (year: number, date: string | undefined, edge: 'start' | 'end'): string => date ?? `${year}-${edge === 'start' ? '01-01' : '12-31'}`;
+const rangeError = (year: number): string => year === 2025 ? 'EUR_RANGE_2025_REQUIRED' : `EUR_RANGE_${year}_REQUIRED`;
 
 export interface ServerEurReportResult {
-  taxYear: 2025;
-  from: '2025-01-01';
-  to: '2025-12-31';
+  taxYear: number;
+  from: string;
+  to: string;
   rows: Array<EurCalculationLine & { total: number }>;
   summary: { incomeTotal: number; expenseTotal: number; surplus: number };
   unclassifiedCount: number;
@@ -49,11 +50,13 @@ export interface ServerEurCashItem {
   counterparty: string;
   purpose: string;
   vatWarning?: string;
+  kind?: 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through';
+  splits?: EurExpenseSplit[];
   classification?: {
     id: string;
     sourceType: 'transaction' | 'invoice';
     sourceId: string;
-    taxYear: 2025;
+    taxYear: number;
     eurLineId?: string;
     excluded: boolean;
     vatMode: 'none' | 'default';
@@ -216,10 +219,12 @@ const toNet = (gross: number, classification: ClassificationRow | undefined, sou
   return { amountNet: round(gross), warning: `VAT_RATE_REQUIRED:${sourceId}` };
 };
 
-export const assertServerEurProfile = async (db: PostgresQueryable, scope: TenantScope, args: { from?: string; to?: string }): Promise<{ from: '2025-01-01'; to: '2025-12-31'; smallBusiness: boolean }> => {
-  const from = iso2025(args.from, '2025-01-01');
-  const to = iso2025(args.to, '2025-12-31');
-  if (from !== '2025-01-01' || to !== '2025-12-31') throw new Error('EUR_RANGE_2025_REQUIRED');
+export const assertServerEurProfile = async (db: PostgresQueryable, scope: TenantScope, args: { taxYear?: number; from?: string; to?: string }): Promise<{ taxYear: number; from: string; to: string; smallBusiness: boolean }> => {
+  const year = args.taxYear ?? (args.from ? Number(args.from.slice(0, 4)) : 2025);
+  getCatalogForYear(year);
+  const from = isoForYear(year, args.from, 'start');
+  const to = isoForYear(year, args.to, 'end');
+  if (from !== `${year}-01-01` || to !== `${year}-12-31`) throw new Error(rangeError(year));
   const settings = (await q<{ settings_json: string }>(db, `SELECT settings_json FROM server_settings WHERE tenant_id=$1 LIMIT 1`, [tenant(scope)]))[0];
   const settingsJson = parseJson(settings?.settings_json);
   const profile = settingsJson?.businessReportingProfile;
@@ -227,18 +232,19 @@ export const assertServerEurProfile = async (db: PostgresQueryable, scope: Tenan
   if (!profile || typeof profile !== 'object' || (profile as any).jurisdiction !== 'DE' || (profile as any).legalForm !== 'sole_proprietor' || (profile as any).profitDetermination !== 'eur' || ((profile as any).fiscalYearStart !== undefined && (profile as any).fiscalYearStart !== '01-01')) {
     throw new Error('EUR_PROFILE_REQUIRED');
   }
-  return { from: '2025-01-01', to: '2025-12-31', smallBusiness: Boolean(settingsJson.legal && typeof settingsJson.legal === 'object' && (settingsJson.legal as any).smallBusinessRule === true) };
+  return { taxYear: year, from, to, smallBusiness: Boolean(settingsJson.legal && typeof settingsJson.legal === 'object' && (settingsJson.legal as any).smallBusinessRule === true) };
 };
 
-const loadClassifications = async (db: PostgresQueryable, scope: TenantScope): Promise<Map<string, ClassificationRow>> => {
-  const rows = await q<ClassificationRow>(db, `SELECT id,source_type,source_id,eur_line_id,excluded,vat_mode,vat_rate,note,updated_at FROM eur_classifications WHERE tenant_id=$1 AND tax_year=2025`, [tenant(scope)]);
+const loadClassifications = async (db: PostgresQueryable, scope: TenantScope, taxYear: number): Promise<Map<string, ClassificationRow>> => {
+  const rows = await q<ClassificationRow>(db, `SELECT id,source_type,source_id,eur_line_id,excluded,vat_mode,vat_rate,note,updated_at FROM eur_classifications WHERE tenant_id=$1 AND tax_year=$2`, [tenant(scope), taxYear]);
   return new Map(rows.map((row) => [`${row.source_type}:${row.source_id}`, row]));
 };
 
-export const listServerEurCashItems = async (db: PostgresQueryable, scope: TenantScope, args: { from?: string; to?: string; product?: EurProduct } = {}): Promise<ServerEurCashItem[]> => {
-  const { from, to, smallBusiness } = await assertServerEurProfile(db, scope, args);
+export const listServerEurCashItems = async (db: PostgresQueryable, scope: TenantScope, args: { taxYear?: number; from?: string; to?: string; product?: EurProduct } = {}): Promise<ServerEurCashItem[]> => {
+  const { taxYear, from, to, smallBusiness } = await assertServerEurProfile(db, scope, args);
   const product = args.product ?? 'pro';
-  const classifications = await loadClassifications(db, scope);
+  const classifications = await loadClassifications(db, scope, taxYear);
+  const facts = new Map((await q<Record<string, unknown>>(db, `SELECT id,source_type,source_id,kind,amount_net,eur_line_id,splits_json FROM eur_cash_facts WHERE tenant_id=$1 AND tax_year=$2`, [tenant(scope), taxYear])).map((fact) => [`${fact.source_type}:${fact.source_id}`, fact]));
   const items: ServerEurCashItem[] = [];
   for (const source of await listCashSources(db, scope, from, to, product)) {
     const basis = await invoiceBasis(db, scope, source, source.amountGross);
@@ -246,7 +252,9 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
       ?? (source.classificationSourceIds ?? []).map((sourceId) => classifications.get(`transaction:${sourceId}`)).find(Boolean)
       ?? (source.invoiceId ? classifications.get(`invoice:${source.invoiceId}`) : undefined);
     const net = toNet(source.amountGross, classification, basis.sourceNet, smallBusiness, source.sourceId);
-    items.push({ sourceType: source.sourceType as ServerEurCashItem['sourceType'], sourceId: source.sourceId, date: source.date, amountGross: source.amountGross, amountNet: net.amountNet, flowType: source.flowType, counterparty: basis.counterparty ?? source.counterparty, purpose: basis.purpose ?? source.purpose, vatWarning: net.warning, classification: classification ? { id: classification.id, sourceType: classification.source_type as ServerEurCashItem['sourceType'], sourceId: classification.source_id, taxYear: 2025, eurLineId: classification.eur_line_id ?? undefined, excluded: Boolean(classification.excluded), vatMode: classification.vat_mode === 'default' ? 'default' : 'none', vatRate: classification.vat_rate == null ? undefined : Number(classification.vat_rate), note: classification.note ?? undefined, updatedAt: classification.updated_at ?? '' } : undefined });
+    const fact = facts.get(`${source.sourceType}:${source.sourceId}`);
+    const persistedClassification = classification ?? (fact ? { id: String(fact.id), source_type: source.sourceType, source_id: source.sourceId, eur_line_id: fact.eur_line_id ? String(fact.eur_line_id) : null, excluded: false, vat_mode: 'none', vat_rate: null, note: null, updated_at: '' } : undefined);
+    items.push({ sourceType: source.sourceType as ServerEurCashItem['sourceType'], sourceId: source.sourceId, date: source.date, amountGross: source.amountGross, amountNet: fact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, counterparty: basis.counterparty ?? source.counterparty, purpose: basis.purpose ?? source.purpose, vatWarning: net.warning, kind: fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, classification: persistedClassification ? { id: persistedClassification.id, sourceType: persistedClassification.source_type as ServerEurCashItem['sourceType'], sourceId: persistedClassification.source_id, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
   }
   return items.sort((left, right) => left.date === right.date ? left.sourceId.localeCompare(right.sourceId) : left.date.localeCompare(right.date));
 };
@@ -264,8 +272,9 @@ export const assertServerEurCashSource = async (
   sourceType: 'transaction' | 'invoice',
   sourceId: string,
   product: EurProduct = 'pro',
+  taxYear = 2025,
 ): Promise<CashSource> => {
-  const { from, to } = await assertServerEurProfile(db, scope, {});
+  const { from, to } = await assertServerEurProfile(db, scope, { taxYear });
   const sources = await listCashSources(db, scope, from, to, product);
   const source = sources.find((candidate) => {
     if (sourceType === 'invoice') return candidate.invoiceType !== undefined && candidate.invoiceId === sourceId;
@@ -275,18 +284,36 @@ export const assertServerEurCashSource = async (
   return source;
 };
 
-export const getServerEurReport = async (db: PostgresQueryable, scope: TenantScope, args: { from?: string; to?: string; product?: EurProduct } = {}): Promise<ServerEurReportResult> => {
-  const { from, to } = await assertServerEurProfile(db, scope, args);
-  const lines = await q<Record<string, unknown>>(db, `SELECT id,tax_year,kennziffer,provider_path,label,kind,exportable,sort_order,computed_from_json,computed_terms_json FROM eur_lines WHERE tax_year=2025 ORDER BY sort_order,id`);
-  if (!lines.length) throw new Error('EUR_SERVER_REPORT_UNAVAILABLE');
-  const catalogLines: EurCalculationLine[] = lines.map((row) => ({
-    id: String(row.id), kennziffer: row.kennziffer ? String(row.kennziffer) : undefined, providerPath: String(row.provider_path ?? 'main'), label: String(row.label), kind: row.kind as EurCalculationLine['kind'], exportable: Boolean(row.exportable), sortOrder: Number(row.sort_order),
-    computedFromIds: parseJsonArray(row.computed_from_json)?.filter((id): id is string => typeof id === 'string'),
-    computedTerms: parseJsonArray(row.computed_terms_json)?.filter((term): term is { id: string; sign: 1 | -1 } => Boolean(term && typeof term === 'object' && typeof (term as any).id === 'string' && ((term as any).sign === 1 || (term as any).sign === -1))),
-  }));
-  const sourceItems = await listServerEurCashItems(db, scope, { from, to, product: args.product });
+export const getServerEurReport = async (db: PostgresQueryable, scope: TenantScope, args: { taxYear?: number; from?: string; to?: string; product?: EurProduct } = {}): Promise<ServerEurReportResult> => {
+  const { taxYear, from, to } = await assertServerEurProfile(db, scope, args);
+  const lines = await q<Record<string, unknown>>(db, `SELECT id,tax_year,kennziffer,provider_path,label,kind,exportable,sort_order,computed_from_json,computed_terms_json FROM eur_lines WHERE tax_year=$1 ORDER BY sort_order,id`, [taxYear]);
+  // Existing server databases may not have been seeded with the newly bundled
+  // 2026 print-form catalog yet.  Use the immutable shared catalog as a
+  // read-only fallback for that year; retain the 2025 fail-closed behavior so
+  // an unavailable legacy server schema is never silently masked.
+  const catalogLines: EurCalculationLine[] = lines.length > 0
+    ? lines.map((row) => ({
+      id: String(row.id), kennziffer: row.kennziffer ? String(row.kennziffer) : undefined, providerPath: String(row.provider_path ?? 'main'), label: String(row.label), kind: row.kind as EurCalculationLine['kind'], exportable: Boolean(row.exportable), sortOrder: Number(row.sort_order),
+      computedFromIds: parseJsonArray(row.computed_from_json)?.filter((id): id is string => typeof id === 'string'),
+      computedTerms: parseJsonArray(row.computed_terms_json)?.filter((term): term is { id: string; sign: 1 | -1 } => Boolean(term && typeof term === 'object' && typeof (term as any).id === 'string' && ((term as any).sign === 1 || (term as any).sign === -1))),
+    }))
+    : taxYear === 2026
+      ? getCatalogForYear(2026).map((line, sortOrder) => ({
+        id: line.id,
+        kennziffer: line.kennziffer || undefined,
+        providerPath: line.providerPath ?? 'main',
+        label: line.label,
+        kind: line.kind,
+        exportable: line.exportable,
+        sortOrder,
+        computedFromIds: line.computedFromIds,
+        computedTerms: line.computedTerms,
+      }))
+      : (() => { throw new Error('EUR_SERVER_REPORT_UNAVAILABLE'); })();
+  const sourceItems = await listServerEurCashItems(db, scope, { taxYear, from, to, product: args.product });
   const items: EurCalculationItem[] = [];
-  for (const source of sourceItems) items.push({ sourceType: source.sourceType, sourceId: source.sourceId, amountNet: source.amountNet, flowType: source.flowType, lineId: source.classification?.eurLineId, excluded: source.classification?.excluded, warning: source.vatWarning });
-  const calculation = calculateEurRows(catalogLines, items);
-  return { taxYear: 2025, from, to, ...calculation, catalog: { id: EUR_CATALOG_MANIFEST_2025.id, version: EUR_CATALOG_MANIFEST_2025.version, sourceHash: EUR_CATALOG_MANIFEST_2025.sha256, delivery: EUR_CATALOG_MANIFEST_2025.delivery, elsterReady: EUR_CATALOG_MANIFEST_2025.elsterReady } };
+  for (const source of sourceItems) items.push({ sourceType: source.sourceType, sourceId: source.sourceId, amountNet: source.amountNet, flowType: source.flowType, kind: source.kind, splits: source.splits, lineId: source.classification?.eurLineId, excluded: source.classification?.excluded, warning: source.vatWarning, date: source.date });
+  const calculation = calculateEurRows(catalogLines, items, { taxYear, from, to, requireCashDate: true });
+  const manifest = getCatalogManifestForYear(taxYear);
+  return { taxYear, from, to, ...calculation, catalog: { id: manifest.id, version: manifest.version, sourceHash: manifest.sha256, delivery: manifest.delivery, elsterReady: manifest.elsterReady } };
 };

@@ -2,11 +2,12 @@ import type Database from 'better-sqlite3';
 import { and, asc, eq, gte, isNull, lte, or } from 'drizzle-orm';
 import { listEurClassificationsMap, type EurClassification, type EurSourceType, upsertEurClassification } from './eurClassificationRepo';
 import { listEurLines, type EurLine } from './eurCatalogRepo';
-import { EUR_CATALOG_MANIFEST_2025 } from '@billme/desktop-services/eurCatalog';
+import { getCatalogManifestForYear } from '@billme/desktop-services/eurCatalog';
 import type { AppSettings } from '@billme/desktop-core/types';
 import { buildPipelineContext, classifyItem, type SuggestionLayer } from './eurClassificationPipeline';
 import { createDrizzle, schema } from './drizzle';
 import { calculateEurRows } from '@billme/accounting-shared';
+import { listEurCashFacts, type EurCashFact } from './eurFacts';
 
 export interface EurReportParams {
   taxYear: number;
@@ -67,6 +68,19 @@ export interface EurListItem {
   classification?: EurClassification;
   line?: EurLine;
   vatWarning?: string;
+  kind?: 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through';
+  splits?: EurClassificationSplit[];
+  cashDate?: string;
+}
+
+export interface EurClassificationSplit {
+  amountNet: number;
+  deductibility?: 'deductible' | 'non-deductible';
+  classification?: 'deductible' | 'non-deductible';
+  deductible?: boolean;
+  lineId?: string;
+  reason?: string;
+  auditId?: string;
 }
 
 export interface EurListItemsParams {
@@ -95,6 +109,7 @@ export const listEurItems = (db: Database.Database, params: EurListItemsParams):
   const lines = listEurLines(db, params.taxYear);
   const linesById = new Map(lines.map((line) => [line.id, line]));
   const classifications = listEurClassificationsMap(db, params.taxYear);
+  const facts = new Map(listEurCashFacts(db, params.taxYear).map((fact) => [`${fact.sourceType}:${fact.sourceId}`, fact]));
   const rawItems = listRawEurItems(db, from, to, params.product ?? 'lite');
   const pipelineCtx = buildPipelineContext(db, params.taxYear, lines);
 
@@ -112,6 +127,7 @@ export const listEurItems = (db: Database.Database, params: EurListItemsParams):
     return {
       ...publicItem,
       ...toNet(item.amountGross, classification, params.settings, item, params.product ?? 'lite'),
+      ...(facts.get(`${item.sourceType}:${item.sourceId}`) ? factProjection(facts.get(`${item.sourceType}:${item.sourceId}`)!) : {}),
       suggestedLineId: suggestion.lineId,
       suggestionReason: suggestion.reason,
       suggestionLayer: suggestion.layer,
@@ -135,8 +151,9 @@ export const listEurItems = (db: Database.Database, params: EurListItemsParams):
   const status = params.onlyUnclassified ? 'unclassified' : params.status;
   if (status && status !== 'all') {
     items = items.filter((item) => {
-      if (status === 'unclassified') return !item.classification?.eurLineId && !item.classification?.excluded;
-      if (status === 'classified') return Boolean(item.classification?.eurLineId) && !item.classification?.excluded;
+      const factClassified = Boolean(item.kind || item.splits?.length);
+      if (status === 'unclassified') return !item.classification?.eurLineId && !item.classification?.excluded && !factClassified;
+      if (status === 'classified') return (Boolean(item.classification?.eurLineId) || factClassified) && !item.classification?.excluded;
       return Boolean(item.classification?.excluded);
     });
   }
@@ -159,7 +176,7 @@ export const listEurItems = (db: Database.Database, params: EurListItemsParams):
   }
 
   if (params.onlyUnclassified) {
-    return items.filter((item) => !item.classification?.eurLineId && !item.classification?.excluded);
+    return items.filter((item) => !item.classification?.eurLineId && !item.classification?.excluded && !item.kind && !item.splits?.length);
   }
 
   return items;
@@ -184,7 +201,10 @@ export const getEurReport = (db: Database.Database, params: EurReportParams): Eu
     lineId: item.classification?.eurLineId,
     excluded: item.classification?.excluded,
     warning: item.vatWarning,
-  })));
+    kind: item.kind,
+    date: item.cashDate ?? item.date,
+    splits: item.splits,
+  })), { taxYear: params.taxYear, from, to, requireCashDate: true });
   const rows: EurReportRow[] = calculation.rows.map((line) => ({
     lineId: line.id,
     kennziffer: line.kennziffer,
@@ -208,15 +228,25 @@ export const getEurReport = (db: Database.Database, params: EurReportParams): Eu
     },
     unclassifiedCount: calculation.unclassifiedCount,
     warnings: calculation.warnings,
-    catalog: {
-      id: EUR_CATALOG_MANIFEST_2025.id,
-      version: EUR_CATALOG_MANIFEST_2025.version,
-      sourceHash: EUR_CATALOG_MANIFEST_2025.sha256,
-      delivery: EUR_CATALOG_MANIFEST_2025.delivery,
-      elsterReady: EUR_CATALOG_MANIFEST_2025.elsterReady,
-    },
+    catalog: (() => {
+      const manifest = getCatalogManifestForYear(params.taxYear);
+      return {
+        id: manifest.id,
+        version: manifest.version,
+        sourceHash: manifest.sha256,
+        delivery: manifest.delivery,
+        elsterReady: manifest.elsterReady,
+      };
+    })(),
   };
 };
+
+const factProjection = (fact: EurCashFact): Pick<EurListItem, 'kind' | 'splits' | 'cashDate' | 'amountNet'> => ({
+  kind: fact.kind,
+  splits: fact.splits,
+  cashDate: undefined,
+  amountNet: fact.amountNet,
+});
 
 export const upsertEurItemClassification = (
   db: Database.Database,

@@ -12,5 +12,6 @@ export * from './taxFilingRepository.js';
 export * from './taxFilingCredentials.js';
 export * from './reporting.js';
 export * from './eurReport.js';
+export * from './eurFacts.js';
 export * from './taxSubmission.js';
 export * from './accountingSourceRuns.js';

@@ -906,6 +906,58 @@ export const eurClassifications = sqliteTable(
   }),
 );
 
+/** User-entered EÜR facts are kept separate from the source classification. */
+export const eurCashFacts = sqliteTable(
+  'eur_cash_facts',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    sourceType: text('source_type').notNull(),
+    sourceId: text('source_id').notNull(),
+    taxYear: integer('tax_year').notNull(),
+    kind: text('kind').notNull(),
+    amountNet: real('amount_net').notNull(),
+    flowType: text('flow_type'),
+    eurLineId: text('eur_line_id'),
+    splitsJson: text('splits_json'),
+    reason: text('reason').notNull(),
+    actorId: text('actor_id').notNull(),
+    actorName: text('actor_name'),
+    idempotencyKey: text('idempotency_key'),
+    provenanceJson: text('provenance_json').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqueSourceYear: uniqueIndex('idx_eur_cash_facts_source_year').on(t.tenantId, t.sourceType, t.sourceId, t.taxYear),
+    uniqueIdempotency: uniqueIndex('idx_eur_cash_facts_idempotency').on(t.tenantId, t.idempotencyKey),
+  }),
+);
+
+export const eurAnnexFacts = sqliteTable(
+  'eur_annex_facts',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    taxYear: integer('tax_year').notNull(),
+    annex: text('annex').notNull(),
+    lineId: text('line_id').notNull(),
+    amount: real('amount').notNull(),
+    sourceId: text('source_id'),
+    factDate: text('fact_date'),
+    reason: text('reason').notNull(),
+    actorId: text('actor_id').notNull(),
+    actorName: text('actor_name'),
+    idempotencyKey: text('idempotency_key'),
+    provenanceJson: text('provenance_json').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => ({
+    uniqueIdempotency: uniqueIndex('idx_eur_annex_facts_idempotency').on(t.tenantId, t.idempotencyKey),
+    byYear: index('idx_eur_annex_facts_year').on(t.tenantId, t.taxYear, t.annex),
+  }),
+);
+
 export const eurRules = sqliteTable(
   'eur_rules',
   {

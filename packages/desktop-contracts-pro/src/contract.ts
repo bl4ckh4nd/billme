@@ -45,6 +45,11 @@ import {
   eurListItemSchema,
   eurUpsertClassificationArgsSchema,
   eurClassificationSchema,
+  eurCashFactSchema,
+  eurAnnexFactSchema,
+  eurSaveCashFactArgsSchema,
+  eurSaveAnnexFactArgsSchema,
+  eurListFactsArgsSchema,
   eurExportCsvArgsSchema,
   eurExportPdfArgsSchema,
   eurExportPdfResultSchema,
@@ -1278,6 +1283,26 @@ export const ipcRoutes = {
     channel: 'eur:upsertClassification',
     args: eurUpsertClassificationArgsSchema,
     result: eurClassificationSchema,
+  },
+  'eur:saveCashFact': {
+    channel: 'eur:saveCashFact',
+    args: eurSaveCashFactArgsSchema,
+    result: eurCashFactSchema,
+  },
+  'eur:listCashFacts': {
+    channel: 'eur:listCashFacts',
+    args: eurListFactsArgsSchema,
+    result: z.array(eurCashFactSchema),
+  },
+  'eur:saveAnnexFact': {
+    channel: 'eur:saveAnnexFact',
+    args: eurSaveAnnexFactArgsSchema,
+    result: eurAnnexFactSchema,
+  },
+  'eur:listAnnexFacts': {
+    channel: 'eur:listAnnexFacts',
+    args: eurListFactsArgsSchema,
+    result: z.array(eurAnnexFactSchema),
   },
   'eur:exportCsv': {
     channel: 'eur:exportCsv',

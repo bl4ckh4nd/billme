@@ -99,6 +99,7 @@ import { buildTaxAuditExportPackage } from '../services/auditExportPackage';
 import { seedAccountKeywords } from '../services/accountKeywordSeed';
 import { resolveRuntimeProTenantScope } from '../tenantScope';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import { listEurAnnexFacts, listEurCashFacts, saveEurAnnexFact, saveEurCashFact } from '@billme/desktop-data/eurFacts';
 import {
   disposeAsset,
   getDepreciationSchedule,
@@ -1537,6 +1538,20 @@ export const registerIpcHandlers = (
       settings,
     });
   });
+
+  register(ipcMain, 'eur:saveCashFact', (args) => {
+    const scope = getProScope();
+    return saveEurCashFact(requireDb(), { ...args, tenantId: scope.tenantId, actor: { id: scope.tenantId, displayName: 'pro-desktop' } });
+  });
+
+  register(ipcMain, 'eur:listCashFacts', ({ taxYear }) => listEurCashFacts(requireDb(), taxYear, getProScope().tenantId));
+
+  register(ipcMain, 'eur:saveAnnexFact', (args) => {
+    const scope = getProScope();
+    return saveEurAnnexFact(requireDb(), { ...args, tenantId: scope.tenantId, actor: { id: scope.tenantId, displayName: 'pro-desktop' } });
+  });
+
+  register(ipcMain, 'eur:listAnnexFacts', ({ taxYear, annex }) => listEurAnnexFacts(requireDb(), taxYear, annex, getProScope().tenantId));
 
   register(ipcMain, 'eur:exportCsv', ({ taxYear, from, to }) => {
     const db = requireDb();

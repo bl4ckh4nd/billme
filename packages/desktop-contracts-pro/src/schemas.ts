@@ -262,6 +262,37 @@ export const eurClassificationSchema = z.object({
   updatedAt: z.string(),
 });
 
+const eurFactKindSchema = z.enum(['income', 'expense', 'private-withdrawal', 'private-contribution', 'pass-through']);
+const eurExpenseSplitSchema = z.object({
+  amountNet: z.number().nonnegative(),
+  deductibility: z.enum(['deductible', 'non-deductible']).optional(),
+  classification: z.enum(['deductible', 'non-deductible']).optional(),
+  deductible: z.boolean().optional(),
+  lineId: z.string().optional(),
+  reason: z.string().optional(),
+  auditId: z.string().optional(),
+});
+export const eurCashFactSchema = z.object({
+  id: z.string(), tenantId: z.string(), sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string(), taxYear: z.number().int(),
+  kind: eurFactKindSchema, amountNet: z.number(), flowType: z.enum(['income', 'expense']).optional(), eurLineId: z.string().optional(), splits: z.array(eurExpenseSplitSchema).optional(),
+  reason: z.string(), actorId: z.string(), actorName: z.string().optional(), idempotencyKey: z.string().optional(),
+  provenance: z.object({ catalogId: z.string(), catalogVersion: z.string(), catalogSourceHash: z.string(), sourceSnapshotHash: z.string().optional() }), createdAt: z.string(), updatedAt: z.string(),
+});
+export const eurAnnexFactSchema = z.object({
+  id: z.string(), tenantId: z.string(), taxYear: z.number().int(), annex: z.string(), lineId: z.string(), amount: z.number(), sourceId: z.string().optional(), date: z.string().optional(),
+  reason: z.string(), actorId: z.string(), actorName: z.string().optional(), idempotencyKey: z.string().optional(),
+  provenance: z.object({ catalogId: z.string(), catalogVersion: z.string(), catalogSourceHash: z.string(), sourceSnapshotHash: z.string().optional() }), createdAt: z.string(),
+});
+export const eurSaveCashFactArgsSchema = z.object({
+  sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string().min(1), taxYear: z.number().int().min(2025), kind: eurFactKindSchema,
+  amountNet: z.number().finite().nonnegative(), flowType: z.enum(['income', 'expense']).optional(), eurLineId: z.string().optional(), splits: z.array(eurExpenseSplitSchema).optional(),
+  idempotencyKey: z.string().min(1).optional(), reason: z.string().trim().min(1),
+});
+export const eurSaveAnnexFactArgsSchema = z.object({
+  taxYear: z.number().int().min(2025), annex: z.string().min(1), lineId: z.string().min(1), amount: z.number().finite(), sourceId: z.string().optional(), date: z.string().optional(), idempotencyKey: z.string().min(1).optional(), reason: z.string().trim().min(1),
+});
+export const eurListFactsArgsSchema = z.object({ taxYear: z.number().int().min(2025), annex: z.string().min(1).optional() });
+
 export const eurReportRowSchema = z.object({
   lineId: z.string(),
   kennziffer: z.string().optional(),
@@ -320,6 +351,8 @@ export const eurListItemSchema = z.object({
   counterparty: z.string(),
   purpose: z.string(),
   vatWarning: z.string().optional(),
+  kind: eurFactKindSchema.optional(),
+  splits: z.array(eurExpenseSplitSchema).optional(),
   suggestedLineId: z.string().optional(),
   suggestionReason: z.string().optional(),
   suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword']).optional(),

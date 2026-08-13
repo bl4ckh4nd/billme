@@ -734,6 +734,59 @@ export const eurClassifications = pgTable("eur_classifications", {
   updatedAt: text("updated_at"),
 });
 
+export const eurCashFacts = pgTable("eur_cash_facts", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  sourceType: text("source_type"),
+  sourceId: text("source_id"),
+  taxYear: integer("tax_year"),
+  kind: text("kind"),
+  amountNet: numeric("amount_net"),
+  flowType: text("flow_type"),
+  eurLineId: text("eur_line_id"),
+  splitsJson: text("splits_json"),
+  reason: text("reason"),
+  actorId: text("actor_id"),
+  actorName: text("actor_name"),
+  idempotencyKey: text("idempotency_key"),
+  provenanceJson: text("provenance_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const eurAnnexFacts = pgTable("eur_annex_facts", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  taxYear: integer("tax_year"),
+  annex: text("annex"),
+  lineId: text("line_id"),
+  amount: numeric("amount"),
+  sourceId: text("source_id"),
+  factDate: text("fact_date"),
+  reason: text("reason"),
+  actorId: text("actor_id"),
+  actorName: text("actor_name"),
+  idempotencyKey: text("idempotency_key"),
+  provenanceJson: text("provenance_json"),
+  createdAt: text("created_at"),
+});
+
+export const eurReportSnapshots = pgTable("eur_report_snapshots", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  taxYear: integer("tax_year"),
+  fromDate: text("from_date"),
+  toDate: text("to_date"),
+  payloadJson: text("payload_json"),
+  sourceHash: text("source_hash"),
+  catalogId: text("catalog_id"),
+  catalogVersion: text("catalog_version"),
+  catalogSourceHash: text("catalog_source_hash"),
+  reason: text("reason"),
+  actorId: text("actor_id"),
+  createdAt: text("created_at"),
+});
+
 export const eurRules = pgTable("eur_rules", {
   id: text("id"),
   tenantId: text("tenant_id"),

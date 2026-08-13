@@ -2001,6 +2001,7 @@ export const runMigrations = (db: Database.Database): void => {
   ensureTaxCaseSeedData(db);
 
   seedEurCatalog(db, 2025);
+  seedEurCatalog(db, 2026);
 
   db.exec(`
       CREATE TABLE IF NOT EXISTS number_reservations (

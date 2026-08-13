@@ -5,3 +5,4 @@ export * from './depreciation';
 export * from './reporting';
 export * from './reportMappingCatalog';
 export * from './taxFiling';
+export * from './closingDomain';

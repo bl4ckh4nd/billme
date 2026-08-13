@@ -6,3 +6,4 @@ export * from './taxFiling';
 export * from './eurReport';
 
 export * from "./openItems";
+export * from './closing';

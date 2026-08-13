@@ -68,7 +68,16 @@ export type JournalSourceType =
   | 'legacy_transaction'
   | 'asset_activation'
   | 'asset_depreciation'
-  | 'asset_disposal';
+  | 'asset_disposal'
+  | 'standalone_source'
+  | 'fiscal_close'
+  | 'carry_forward'
+  | 'provision'
+  | 'accrual'
+  | 'inventory_closing'
+  | 'fx_valuation'
+  | 'loan_schedule'
+  | 'payroll_batch';
 
 export interface LedgerBalance {
   accountNumber: string;

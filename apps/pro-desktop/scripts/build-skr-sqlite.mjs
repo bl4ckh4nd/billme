@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
-import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Papa from 'papaparse';
@@ -14,7 +13,7 @@ const sourceDir = process.argv[2]
 const outputPath = process.argv[3]
   ? path.resolve(process.argv[3])
   : path.join(sourceDir, 'skr-kontenrahmen.sqlite');
-const canonicalOutputPath = path.join(repoRoot, 'packages/server-data/src/postgres/canonicalLedgerCatalog.ts');
+const canonicalSourcePath = path.join(repoRoot, 'packages/server-data/src/postgres/canonicalLedgerCatalog.ts');
 const trackedSourceDbPath = path.join(repoRoot, 'doppelteBuchhaltung/skr-kontenrahmen.sqlite');
 
 const CSV_FILES = [
@@ -87,9 +86,24 @@ const readTrackedDatabase = () => {
 const readSources = () => process.argv[2] ? readCsvSources() : readTrackedDatabase();
 
 const sourceRows = readSources();
-const sourceHash = crypto.createHash('sha256')
-  .update(JSON.stringify(sourceRows))
-  .digest('hex');
+
+const readCanonicalRows = () => {
+  const source = fs.readFileSync(canonicalSourcePath, 'utf8');
+  const rows = [...source.matchAll(/^  \{ chart: '([^']+)', accountNumber: ("(?:\\\\.|[^"\\\\])*")\, name: ("(?:\\\\.|[^"\\\\])*") \},$/gm)]
+    .map(([, chart, accountNumber, name]) => ({ chart, accountNumber: JSON.parse(accountNumber), name: JSON.parse(name) }));
+  if (rows.length === 0) throw new Error(`Canonical ledger catalog is empty: ${canonicalSourcePath}`);
+  return rows;
+};
+
+const assertMatchesCanonical = (rows) => {
+  const actual = new Map(rows.map((row) => [`${row.chart}:${row.accountNumber}`, row.name]));
+  const expected = new Map(readCanonicalRows().map((row) => [`${row.chart}:${row.accountNumber}`, row.name]));
+  if (actual.size !== expected.size || [...expected].some(([key, name]) => actual.get(key) !== name)) {
+    throw new Error(`Tracked SQLite source does not match immutable canonical catalog: ${trackedSourceDbPath}`);
+  }
+};
+
+if (!process.argv[2]) assertMatchesCanonical(sourceRows);
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
@@ -122,31 +136,15 @@ const insert = db.prepare(`
 `);
 
 let inserted = 0;
-const canonicalRows = new Map();
 const tx = db.transaction(() => {
   for (const row of sourceRows) {
     const canonicalKey = `${row.chart}:${row.accountNumber}`;
-    const existingCanonical = canonicalRows.get(canonicalKey);
-    if (!existingCanonical || existingCanonical.name.length < row.name.length) {
-      canonicalRows.set(canonicalKey, { chart: row.chart, accountNumber: row.accountNumber, name: row.name });
-    }
     insert.run({ ...row, id: canonicalKey, createdAt: GENERATED_AT });
     inserted += 1;
   }
 });
 tx();
 db.close();
-
-if (!process.argv[2]) {
-  const rows = [...canonicalRows.values()].sort((a, b) => a.chart.localeCompare(b.chart) || a.accountNumber.localeCompare(b.accountNumber));
-  fs.writeFileSync(canonicalOutputPath, [
-    `// Generated from tracked doppelteBuchhaltung/skr-kontenrahmen.sqlite; normalized source hash ${sourceHash}.`,
-    'export const CANONICAL_LEDGER_ACCOUNTS = [',
-    ...rows.map((row) => `  { chart: '${row.chart}', accountNumber: ${JSON.stringify(row.accountNumber)}, name: ${JSON.stringify(row.name)} },`),
-    '] as const;',
-    '',
-  ].join('\n'));
-}
 
 console.log(`Created ${outputPath}`);
 console.log(`Inserted rows: ${inserted}`);

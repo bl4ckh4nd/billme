@@ -1371,8 +1371,10 @@ export const postDraft = (
     if (taxAmount <= 0) return;
     const taxAccounts = resolveTaxAccountsForCase(db, chart, taxCaseKey);
     if (!taxAccounts.inputTaxAccount || !taxAccounts.outputTaxAccount) return;
-    postingLines.push({ id: randomUUID(), accountNumber: taxAccounts.inputTaxAccount, debitAmount: taxAmount, creditAmount: 0, taxCode: toLegacyTaxCode(taxCaseKey), taxCaseKey, taxRate: Number(line.taxRate || taxCase.defaultRate || 0), netAmount: line.netAmount, taxAmount, grossAmount: line.grossAmount, countryCode: line.countryCode, counterpartyVatId: line.counterpartyVatId, evidenceType: line.evidenceType, evidenceReference: line.evidenceReference, memo: `RC Vorsteuer ${taxCaseKey}` });
-    postingLines.push({ id: randomUUID(), accountNumber: taxAccounts.outputTaxAccount, debitAmount: 0, creditAmount: taxAmount, taxCode: toLegacyTaxCode(taxCaseKey), taxCaseKey, taxRate: Number(line.taxRate || taxCase.defaultRate || 0), netAmount: line.netAmount, taxAmount, grossAmount: line.grossAmount, countryCode: line.countryCode, counterpartyVatId: line.counterpartyVatId, evidenceType: line.evidenceType, evidenceReference: line.evidenceReference, memo: `RC Umsatzsteuer ${taxCaseKey}` });
+    // The source line owns the tax basis. Control lines keep only their
+    // accounts and memo so VAT summaries and evidence are not duplicated.
+    postingLines.push({ id: randomUUID(), accountNumber: taxAccounts.inputTaxAccount, debitAmount: taxAmount, creditAmount: 0, memo: `RC Vorsteuer ${taxCaseKey}` });
+    postingLines.push({ id: randomUUID(), accountNumber: taxAccounts.outputTaxAccount, debitAmount: 0, creditAmount: taxAmount, memo: `RC Umsatzsteuer ${taxCaseKey}` });
   });
 
   const entryId = randomUUID();

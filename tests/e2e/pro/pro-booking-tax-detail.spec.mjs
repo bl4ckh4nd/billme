@@ -277,5 +277,10 @@ test('posts tax-case variants and verifies VAT summary rows for mixed tax versio
   const vatByCase = new Map(vatSummary.rows.map((row) => [row.taxCaseKey, row]));
   expect(vatByCase.get('DE_STD_19')).toMatchObject({ netAmount: 100, taxAmount: 19, grossAmount: 119 });
   expect(vatByCase.get('DE_STD_7')).toMatchObject({ netAmount: 100, taxAmount: 7, grossAmount: 107 });
-  expect(vatByCase.get('EU_B2B_SERVICE_RC')).toBeTruthy();
+  expect(vatByCase.get('EU_B2B_SERVICE_RC')).toMatchObject({
+    netAmount: 100,
+    taxAmount: 19,
+    grossAmount: 119,
+    lineCount: 1,
+  });
 });

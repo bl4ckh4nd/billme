@@ -482,6 +482,65 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     expect(reversalPairs).toEqual(expect.arrayContaining([expect.objectContaining({ tax_case_key: 'DE_STD_19', datev_bu_key: '1' })]));
   });
 
+  it('reports reverse-charge VAT from the single tax-basis line', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    seedBankTransaction(db, 'tx-rc-vat-summary-1', '2026-03-01', -119);
+    const draft = getDraftByTransactionId(db, 'tx-rc-vat-summary-1', scope)!;
+    const saved = saveDraft(db, {
+      ...draft,
+      postingDate: '2026-03-01',
+      documentDate: '2026-03-01',
+      period: '2026-03',
+      fiscalYear: 2026,
+      workflowStatus: 'approved',
+      lines: [
+        {
+          ...draft.lines[0]!,
+          id: 'tx-rc-vat-summary-1-debit',
+          accountNumber: '6000',
+          debitAmount: 119,
+          creditAmount: 0,
+          taxCaseKey: 'EU_B2B_SERVICE_RC',
+          taxRate: 19,
+          netAmount: 100,
+          taxAmount: 19,
+          grossAmount: 119,
+          countryCode: 'FR',
+          counterpartyVatId: 'FR12345678901',
+          evidenceType: 'Invoice',
+          evidenceReference: '13',
+        },
+        {
+          ...draft.lines[1]!,
+          id: 'tx-rc-vat-summary-1-credit',
+          accountNumber: '1200',
+          debitAmount: 0,
+          creditAmount: 119,
+        },
+      ],
+    }, scope);
+    expect(saved.validationIssues.filter((issue) => issue.blocking)).toEqual([]);
+
+    const posted = postDraft(db, saved.id, { postingDate: '2026-03-01' }, scope);
+    expect(posted.issues.filter((issue) => issue.blocking)).toEqual([]);
+    const summary = getVatSummary(db, {}, scope).rows;
+    expect(summary).toEqual([{ taxCaseKey: 'EU_B2B_SERVICE_RC', netAmount: 100, taxAmount: 19, grossAmount: 119, lineCount: 1 }]);
+
+    const controls = db.prepare(`
+      SELECT account_number, tax_case_key, tax_rate, net_amount, tax_amount, gross_amount
+      FROM journal_lines
+      WHERE entry_id = ? AND memo LIKE 'RC %'
+      ORDER BY account_number
+    `).all(posted.entry.id) as Array<Record<string, unknown>>;
+    expect(controls).toEqual([
+      { account_number: '1574', tax_case_key: null, tax_rate: null, net_amount: null, tax_amount: null, gross_amount: null },
+      { account_number: '1774', tax_case_key: null, tax_rate: null, net_amount: null, tax_amount: null, gross_amount: null },
+    ]);
+    expect(db.prepare('SELECT tax_case_key, datev_bu_key FROM journal_posting_pairs WHERE entry_id = ? AND tax_case_key IS NOT NULL').all(posted.entry.id)).toEqual([{ tax_case_key: 'EU_B2B_SERVICE_RC', datev_bu_key: '94' }]);
+    expect(db.prepare('SELECT tax_case_key, evidence_reference FROM vat_evidence WHERE entry_id = ?').all(posted.entry.id)).toEqual([{ tax_case_key: 'EU_B2B_SERVICE_RC', evidence_reference: '13' }]);
+  });
+
   it('rejects generic reversal of asset-owned journals', () => {
     const db = createDb();
     const entryId = 'asset-owned-journal';

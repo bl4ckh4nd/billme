@@ -30,6 +30,8 @@ export const appUrl = (baseUrl, route = '/') => {
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
+let proImportSequence = 0;
+
 const mergeRecord = (target, source) => {
   const output = { ...target };
   for (const [key, value] of Object.entries(source ?? {})) {
@@ -516,4 +518,43 @@ export async function seedDesktopData(page, options = {}) {
       await invokeDesktopIpc(page, 'pro:importSkr', { preferredSource: 'auto' });
     }
   }
+}
+
+export async function importPendingProTransaction(page, label, options = {}) {
+  const nonce = `${process.pid}-${Date.now()}-${proImportSequence++}`;
+  const externalId = `e2e-pro-${label}-${nonce}`;
+  const csvPath = path.join(os.tmpdir(), `${externalId}.csv`);
+  const date = options.date ?? '2026-04-01';
+  const amount = options.amount ?? -120;
+  const counterparty = options.counterparty ?? `E2E ${label}`;
+  const purpose = options.purpose ?? `E2E ${label}`;
+  await fs.promises.writeFile(
+    csvPath,
+    `date,amount,counterparty,purpose,status,externalId\n${date},${amount},${counterparty},${purpose},pending,${externalId}\n`,
+    'utf8',
+  );
+  try {
+    const imported = await invokeDesktopIpc(page, 'finance:importCommit', {
+      path: csvPath,
+      accountId: 'acc1',
+      profile: 'generic',
+      mapping: {
+        dateColumn: 'date',
+        amountColumn: 'amount',
+        counterpartyColumn: 'counterparty',
+        purposeColumn: 'purpose',
+        statusColumn: 'status',
+        externalIdColumn: 'externalId',
+      },
+    });
+    if (imported.imported !== 1) throw new Error(`Expected one imported Pro transaction, got ${imported.imported}`);
+  } finally {
+    await fs.promises.unlink(csvPath).catch(() => undefined);
+  }
+
+  const transaction = (await invokeDesktopIpc(page, 'pro:listBankTransactions')).find((row) => row.id === externalId || row.purpose === purpose);
+  if (!transaction) throw new Error(`Imported Pro transaction not found: ${purpose}`);
+  const draft = await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: transaction.id });
+  if (!draft?.id) throw new Error(`Imported Pro draft not found: ${transaction.id}`);
+  return { transaction, draft };
 }

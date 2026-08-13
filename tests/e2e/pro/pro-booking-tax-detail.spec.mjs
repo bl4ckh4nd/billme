@@ -1,18 +1,18 @@
 import { expect, test } from '@playwright/test';
-import { appUrl, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
+import { appUrl, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
 
 let desktop;
 
 const pickAccounts = async (page) => {
-  const stats = await invokeDesktopIpc(page, 'pro:getLedgerStats');
-  const chart = (stats?.byChart?.SKR03 ?? 0) >= (stats?.byChart?.SKR04 ?? 0) ? 'SKR03' : 'SKR04';
+  const policy = await invokeDesktopIpc(page, 'pro:getAccountingPolicy');
+  const chart = policy.activeChart;
   const ledger = await invokeDesktopIpc(page, 'pro:listLedgerAccounts', {
     chart,
     limit: 3000,
     offset: 0,
   });
   const bankAccount =
-    ledger.find((row) => row.accountNumber === '1200')?.accountNumber
+    ledger.find((row) => row.accountNumber === (chart === 'SKR03' ? '1200' : '1800'))?.accountNumber
     ?? ledger.find((row) => row.accountNumber.startsWith('1'))?.accountNumber
     ?? ledger[0]?.accountNumber;
   const expenseAccount =
@@ -104,13 +104,7 @@ test.afterEach(async () => {
 
 test('booking detail UI enforces tax-case requirements and clears blockers after field completion', async () => {
   const { page, baseUrl } = desktop;
-  const allTx = await invokeDesktopIpc(page, 'pro:listBankTransactions');
-  const targetTx = allTx.find((row) => !row.linkedInvoiceId) ?? allTx[0];
-  expect(targetTx).toBeTruthy();
-  const editableDraft = await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', {
-    transactionId: targetTx.id,
-  });
-  expect(editableDraft?.id).toBeTruthy();
+  const { transaction: targetTx, draft: editableDraft } = await importPendingProTransaction(page, 'tax-detail');
   await invokeDesktopIpc(page, 'pro:saveDraft', {
     draft: {
       ...editableDraft,
@@ -176,9 +170,8 @@ test('posts tax-case variants and verifies VAT summary rows for mixed tax versio
   await page.goto(appUrl(baseUrl, '/accounting'));
   await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
 
-  const rows = await invokeDesktopIpc(page, 'pro:listBankTransactions');
-  const txStd = rows.find((row) => !row.linkedInvoiceId) ?? rows[0];
-  const txRc = rows.find((row) => row.id !== txStd.id) ?? txStd;
+  const { transaction: txStd } = await importPendingProTransaction(page, 'tax-standard');
+  const { transaction: txRc } = await importPendingProTransaction(page, 'tax-reverse-charge');
   expect(txStd).toBeTruthy();
   expect(txRc).toBeTruthy();
 

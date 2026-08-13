@@ -1,25 +1,23 @@
 import { expect, test } from '@playwright/test';
-import { appUrl, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
+import { appUrl, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
 
 let desktop;
 
 const ensureWorkflowDraft = async (page) => {
-  const transactions = await invokeDesktopIpc(page, 'pro:listBankTransactions');
-  expect(transactions.length).toBeGreaterThan(0);
-  const tx = transactions.find((row) => !row.linkedInvoiceId) ?? transactions[0];
-  const existingDraft = await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: tx.id });
-  if (existingDraft) {
-    return { tx, draft: existingDraft };
-  }
+  const { transaction: tx, draft: importedDraft } = await importPendingProTransaction(page, 'workflow');
+  const policy = await invokeDesktopIpc(page, 'pro:getAccountingPolicy');
+  const ledger = await invokeDesktopIpc(page, 'pro:listLedgerAccounts', { chart: policy.activeChart, limit: 3000, offset: 0 });
+  const bankAccount = ledger.find((row) => row.accountNumber === (policy.activeChart === 'SKR03' ? '1200' : '1800'))?.accountNumber
+    ?? ledger.find((row) => row.accountNumber.startsWith('1'))?.accountNumber;
+  const expenseAccount = ledger.find((row) => row.accountNumber.startsWith('6'))?.accountNumber
+    ?? ledger.find((row) => row.accountNumber.startsWith('4'))?.accountNumber;
+  expect(bankAccount).toBeTruthy();
+  expect(expenseAccount).toBeTruthy();
   const postingDate = tx.date ?? new Date().toISOString().slice(0, 10);
   const amount = Math.abs(Number(tx.amount || 0)) || 1;
-  const isExpense = tx.type === 'expense';
-
   const draft = await invokeDesktopIpc(page, 'pro:saveDraft', {
     draft: {
-      id: `e2e-draft-${tx.id}`,
-      tenantId: 'default',
-      transactionId: tx.id,
+      ...importedDraft,
       workflowStatus: 'suggested',
       postingDate,
       documentDate: postingDate,
@@ -28,24 +26,13 @@ const ensureWorkflowDraft = async (page) => {
       period: postingDate.slice(0, 7),
       fiscalYear: Number(postingDate.slice(0, 4)),
       lines: [
-        {
-          id: `line-${tx.id}-1`,
-          accountNumber: isExpense ? '4930' : '1200',
-          debitAmount: amount,
-          creditAmount: 0,
-        },
-        {
-          id: `line-${tx.id}-2`,
-          accountNumber: isExpense ? '1200' : '8400',
-          debitAmount: 0,
-          creditAmount: amount,
-        },
+        { ...importedDraft.lines[0], accountNumber: expenseAccount, debitAmount: amount, creditAmount: 0 },
+        { ...importedDraft.lines[1], accountNumber: bankAccount, debitAmount: 0, creditAmount: amount },
       ],
       validationIssues: [],
       updatedAt: new Date().toISOString(),
     },
   });
-
   return { tx, draft };
 };
 

@@ -1,23 +1,23 @@
 import { expect, test } from '@playwright/test';
-import { appUrl, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
+import { appUrl, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
 
 let desktop;
 
 const resolveLedgerAccounts = async (page) => {
-  const stats = await invokeDesktopIpc(page, 'pro:getLedgerStats');
-  const chart = (stats?.byChart?.SKR03 ?? 0) >= (stats?.byChart?.SKR04 ?? 0) ? 'SKR03' : 'SKR04';
+  const policy = await invokeDesktopIpc(page, 'pro:getAccountingPolicy');
+  const chart = policy.activeChart;
   const ledger = await invokeDesktopIpc(page, 'pro:listLedgerAccounts', {
     chart,
     limit: 3000,
     offset: 0,
   });
   const bankAccount =
-    ledger.find((row) => row.accountNumber === '1200')?.accountNumber
+    ledger.find((row) => row.accountNumber === (chart === 'SKR03' ? '1200' : '1800'))?.accountNumber
     ?? ledger.find((row) => row.accountNumber.startsWith('1'))?.accountNumber
     ?? ledger[0]?.accountNumber;
   const trainingAccount =
-    ledger.find((row) => /^[235679]/.test(row.accountNumber))?.accountNumber
-    ?? ledger.find((row) => !/^[01]/.test(row.accountNumber))?.accountNumber;
+    ledger.find((row) => /^[4567]/.test(row.accountNumber))?.accountNumber
+    ?? ledger.find((row) => !/^[0123]/.test(row.accountNumber))?.accountNumber;
 
   expect(bankAccount).toBeTruthy();
   expect(trainingAccount).toBeTruthy();
@@ -46,13 +46,19 @@ const postExpenseDraft = async (page, { txId, amount, trainingAccount, bankAccou
     reference: txId,
     period: postingDate.slice(0, 7),
     fiscalYear: Number(postingDate.slice(0, 4)),
-    lines: [
-      {
-        id: `line-${txId}-1-${lineNonce}`,
-        accountNumber: trainingAccount,
-        debitAmount: abs,
-        creditAmount: 0,
-      },
+      lines: [
+        {
+          id: `line-${txId}-1-${lineNonce}`,
+          accountNumber: trainingAccount,
+          debitAmount: abs,
+          creditAmount: 0,
+          taxCaseKey: 'DE_STD_19',
+          taxCode: 'USt19',
+          taxRate: 19,
+          netAmount: 100,
+          taxAmount: 19,
+          grossAmount: 119,
+        },
       {
         id: `line-${txId}-2-${lineNonce}`,
         accountNumber: bankAccount,
@@ -91,15 +97,16 @@ test('covers rule engine and ML suggestion layers (rule, counterparty, bayes)', 
   await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
 
   const { chart, bankAccount, trainingAccount } = await resolveLedgerAccounts(page);
-  const allTx = await invokeDesktopIpc(page, 'pro:listBankTransactions');
-  const openTx = allTx.filter((row) => !row.linkedInvoiceId);
-  const trainingTx = openTx[0] ?? allTx[0];
-  const bayesProbeTx = openTx.find((row) => row.id !== trainingTx.id)
-    ?? allTx.find((row) => row.id !== trainingTx.id)
-    ?? trainingTx;
-  expect(trainingTx).toBeTruthy();
-  expect(bayesProbeTx).toBeTruthy();
-  expect(bayesProbeTx.id).not.toBe(trainingTx.id);
+  const trainingCounterparty = `E2E ML Training ${process.pid}-${Date.now()}`;
+  const { transaction: trainingTx } = await importPendingProTransaction(page, 'ml-training', {
+    amount: -119,
+    counterparty: trainingCounterparty,
+    purpose: 'E2E ML training',
+  });
+  const { transaction: bayesProbeTx } = await importPendingProTransaction(page, 'ml-probe', {
+    counterparty: `E2E ML Probe ${process.pid}-${Date.now()}`,
+    purpose: 'E2E ML probe',
+  });
 
   const ruleNeedle = String(bayesProbeTx.counterparty || '').trim();
   expect(ruleNeedle.length).toBeGreaterThan(1);
@@ -142,9 +149,14 @@ test('covers rule engine and ML suggestion layers (rule, counterparty, bayes)', 
     .toBe('counterparty');
 
   for (let i = 0; i < 22; i += 1) {
+    const { transaction: repeatTx } = await importPendingProTransaction(page, `ml-bayes-${i}`, {
+      amount: -119,
+      counterparty: trainingCounterparty,
+      purpose: `E2E ML training repeat ${i}`,
+    });
     await postExpenseDraft(page, {
-      txId: trainingTx.id,
-      amount: Number(trainingTx.amount || 0),
+      txId: repeatTx.id,
+      amount: Number(repeatTx.amount || 0),
       trainingAccount,
       bankAccount,
       bookingText: `E2E Bayes Training Repeat ${i}`,

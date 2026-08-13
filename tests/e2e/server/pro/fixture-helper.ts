@@ -176,6 +176,30 @@ export const setHarnessProPeriodStatus = async (options: {
   }
 };
 
+export const setHarnessProBankTransactionStatus = async (options: {
+  stateFile: string;
+  tenantId: string;
+  transactionId: string;
+  status: 'pending' | 'booked';
+}) => {
+  const state = await readHarnessState(options.stateFile);
+  const env = await readHarnessEnv(state);
+  const pool = createPostgresPool(buildDatabaseUrl(state, env));
+  try {
+    const result = await pool.query(
+      `UPDATE bank_transactions
+       SET status=$1,linked_invoice_id=NULL,updated_at=$2
+       WHERE tenant_id=$3 AND id=$4
+       RETURNING id,status,linked_invoice_id`,
+      [options.status, new Date().toISOString(), options.tenantId, options.transactionId],
+    );
+    if (!result.rows[0]) throw new Error(`Bank transaction not found: ${options.transactionId}`);
+    return result.rows[0];
+  } finally {
+    await pool.end();
+  }
+};
+
 const runCli = async () => {
   const { action, flags } = parseArgs(process.argv.slice(2));
   const stateFile = requireFlag(flags, 'state-file');
@@ -210,6 +234,17 @@ const runCli = async () => {
       tenantId: requireFlag(flags, 'tenant-id'),
       period: requireFlag(flags, 'period'),
       status: requireFlag(flags, 'status') as 'open' | 'soft_locked' | 'closed',
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+
+  if (action === 'set-pro-bank-transaction-status') {
+    const result = await setHarnessProBankTransactionStatus({
+      stateFile,
+      tenantId: requireFlag(flags, 'tenant-id'),
+      transactionId: requireFlag(flags, 'transaction-id'),
+      status: requireFlag(flags, 'status') as 'pending' | 'booked',
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;

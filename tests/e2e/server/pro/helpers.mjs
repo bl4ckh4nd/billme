@@ -101,6 +101,15 @@ export const setHarnessProPeriodStatus = async (state, { tenantId, period, statu
     '--status', status,
   ]);
 
+export const setHarnessProBankTransactionStatus = async (state, { tenantId, transactionId, status }) =>
+  runFixtureHelper([
+    'set-pro-bank-transaction-status',
+    '--state-file', state.stateFile,
+    '--tenant-id', tenantId,
+    '--transaction-id', transactionId,
+    '--status', status,
+  ]);
+
 export const installProSession = async (page, state, session) => {
   await page.addInitScript(
     ({ apiKey, apiUrl, sessionKey, storedSession }) => {

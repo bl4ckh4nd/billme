@@ -7,6 +7,7 @@ import {
   requestJson,
   requestText,
   seedHarnessProTenant,
+  setHarnessProBankTransactionStatus,
   setHarnessProPeriodStatus,
 } from './helpers.mjs';
 
@@ -77,6 +78,71 @@ const assertNoAccountingWrite = async (state, session, before, label) => {
   assert.deepEqual(await counts(state, session), before, `${label}: failed request left an accounting write`);
 };
 
+const stablePreview = (preview) => preview
+  ? {
+      ...preview,
+      snapshot: preview.snapshot ? { ...preview.snapshot, capturedAt: '<volatile>' } : undefined,
+    }
+  : preview;
+
+const publicDocumentState = async (state, session, id, { bankTransactionId } = {}) => {
+  const [invoice, preview, journal, openItems, transactions] = await Promise.all([
+    requestJson(state, session, `/api/v1/pro/invoices/${encodeURIComponent(id)}`),
+    json(state, session, '/api/v1/pro/accounting/outgoing-invoices/preview', undefined, {
+      method: 'POST',
+      body: { reason: `nonhappy inspect ${id}`, invoiceId: id },
+    }),
+    requestJson(state, session, '/api/v1/pro/accounting/journal'),
+    requestJson(state, session, '/api/v1/pro/accounting/open-items'),
+    requestJson(state, session, '/api/v1/pro/accounting/transactions'),
+  ]);
+  return {
+    invoice: invoice && {
+      status: invoice.status,
+      accountingStatus: invoice.accountingStatus,
+      accountingSnapshot: invoice.accountingSnapshot,
+      accountingJournalEntryId: invoice.accountingJournalEntryId,
+      taxSnapshot: invoice.taxSnapshot,
+      items: invoice.items,
+      payments: invoice.payments,
+      history: invoice.history,
+    },
+    preview: stablePreview(preview),
+    journal: journal
+      .filter((entry) => entry.sourceType === 'outgoing_invoice' && entry.sourceId === id)
+      .map(({ id: entryId, status, sourceType, sourceKey, reversedEntryId, lines }) => ({
+        id: entryId,
+        status,
+        sourceType,
+        sourceKey,
+        reversedEntryId,
+        lines,
+      })),
+    openItem: openItems
+      .filter((item) => item.sourceType === 'outgoing_invoice' && item.sourceId === id)
+      .map(({ id: itemId, allocatedAmount, residualAmount, status, journalEntryId }) => ({
+        id: itemId,
+        allocatedAmount,
+        residualAmount,
+        status,
+        journalEntryId,
+      })),
+    bankTransaction: bankTransactionId
+      ? transactions.find((transaction) => transaction.id === bankTransactionId) ?? null
+      : undefined,
+  };
+};
+
+const assertPublicDocumentStateUnchanged = async (state, session, id, before, label, options) => {
+  assert.deepEqual(await publicDocumentState(state, session, id, options), before, `${label}: public accounting state changed`);
+};
+
+const draftState = (state, session, transactionId) => requestJson(
+  state,
+  session,
+  `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}`,
+);
+
 const makeInvoice = async (state, session, client, id, date = '2026-08-20', tax = {}) => {
   const reservation = await json(state, session, '/api/v1/pro/numbers/reserve', undefined, {
     method: 'POST',
@@ -130,10 +196,11 @@ const postInvoice = async (state, session, id, reservationId, reason = `nonhappy
   { method: 'POST', body: { reason, invoiceId: id, reservationId } },
 );
 
-const expectNoDocumentAccounting = async (state, session, id, before, label) => {
+const expectNoDocumentAccounting = async (state, session, id, before, label, beforePublicState, publicStateOptions) => {
   const invoice = await requestJson(state, session, `/api/v1/pro/invoices/${encodeURIComponent(id)}`);
   assert.equal(invoice?.id, id);
   assert.notEqual(invoice?.status, 'paid', `${label}: invoice unexpectedly paid`);
+  if (beforePublicState) await assertPublicDocumentStateUnchanged(state, session, id, beforePublicState, label, publicStateOptions);
   await assertNoAccountingWrite(state, session, before, label);
 };
 
@@ -160,8 +227,10 @@ export const runProNonHappyAccountingScenario = async () => {
   }
 
   const clients = await requestJson(state, session, '/api/v1/pro/clients');
-  const client = clients.find((entry) => entry.company === 'Beta Digital AG') ?? clients[0];
-  assert.ok(client?.id, 'seeded Pro client missing');
+  const clientId = `${namespace}-client-beta`;
+  const client = clients.find((entry) => entry.id === clientId);
+  assert.ok(client?.id, `deterministic seeded Pro client missing: ${clientId}`);
+  assert.equal(client.company, 'Beta Digital AG');
   let cases = 0;
 
   // 1. Viewer cannot mutate Pro accounting, and the protected state is unchanged.
@@ -199,46 +268,55 @@ export const runProNonHappyAccountingScenario = async () => {
     method: 'POST', body: { reason: 'nonhappy save unbalanced draft', draft: invalidDraft },
   });
   assert.ok(savedInvalid.validationIssues.some((issue) => issue.code === 'UNBALANCED_ENTRY'));
+  const beforeInvalidDraft = await draftState(state, session, transactionId);
   const beforeInvalidPost = await counts(state, session);
   const invalidPost = await json(state, session, `/api/v1/pro/accounting/drafts/${encodeURIComponent(draftBefore.id)}/post`, undefined, {
     method: 'POST', body: { reason: 'nonhappy post unbalanced draft', idempotencyKey: `${namespace}-invalid-post` },
   });
   assert.ok(invalidPost.issues.some((issue) => issue.code === 'UNBALANCED_ENTRY'));
   assert.equal(invalidPost.entry.id, '');
+  assert.deepEqual(await draftState(state, session, transactionId), beforeInvalidDraft, 'unbalanced draft post changed public draft state');
   await assertNoAccountingWrite(state, session, beforeInvalidPost, 'unbalanced draft post');
   cases++;
 
   // 4. Invalid workflow transition is not allowed to skip approval.
+  const beforeTransitionDraft = await draftState(state, session, transactionId);
   const beforeTransition = await counts(state, session);
   await expectError(state, session, `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}/action`, undefined, {
     method: 'POST', body: { action: 'approve', reason: 'nonhappy approve incomplete draft' },
   }, 409, 'Invalid workflow transition');
+  assert.deepEqual(await draftState(state, session, transactionId), beforeTransitionDraft, 'invalid workflow transition changed public draft state');
   await assertNoAccountingWrite(state, session, beforeTransition, 'invalid workflow transition');
   cases++;
 
   // 5. Outgoing posting requires the exact finalized reservation.
   const missingReservation = await makeInvoice(state, session, client, `${namespace}-missing-reservation`);
+  const wrongReservationInvoice = await makeInvoice(state, session, client, `${namespace}-wrong-reservation`);
+  const beforeMissingReservationPublic = await publicDocumentState(state, session, missingReservation.invoice.id);
   const beforeMissingReservation = await counts(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/outgoing-invoices/post', undefined, {
     method: 'POST', body: { reason: 'nonhappy missing reservation', invoiceId: missingReservation.invoice.id },
   }, 400, 'reservationId|Required');
-  await assertNoAccountingWrite(state, session, beforeMissingReservation, 'missing finalized reservation');
-  const wrongReservation = await json(state, session, '/api/v1/pro/numbers/reserve', undefined, { method: 'POST', body: { kind: 'invoice' } });
+  await expectNoDocumentAccounting(state, session, missingReservation.invoice.id, beforeMissingReservation, 'missing finalized reservation', beforeMissingReservationPublic);
+  const wrongReservation = wrongReservationInvoice.reservation;
+  assert.notEqual(wrongReservation.reservationId, missingReservation.reservation.reservationId);
   const beforeWrongReservation = await counts(state, session);
+  const beforeWrongReservationPublic = await publicDocumentState(state, session, missingReservation.invoice.id);
   await expectError(state, session, '/api/v1/pro/accounting/outgoing-invoices/post', undefined, {
     method: 'POST', body: { reason: 'nonhappy wrong reservation', invoiceId: missingReservation.invoice.id, reservationId: wrongReservation.reservationId },
   }, 409, 'FINALIZED_RESERVATION_REQUIRED');
-  await expectNoDocumentAccounting(state, session, missingReservation.invoice.id, beforeWrongReservation, 'wrong reservation');
+  await expectNoDocumentAccounting(state, session, missingReservation.invoice.id, beforeWrongReservation, 'wrong finalized reservation', beforeWrongReservationPublic);
   cases++;
 
   // 6. A closed posting period blocks the public document-post route atomically.
   const lockedInvoice = await makeInvoice(state, session, client, `${namespace}-period-locked`, '2026-08-27');
   await setHarnessProPeriodStatus(state, { tenantId: session.tenantId, period: '2026-08', status: 'closed' });
+  const beforeClosedPeriodPublic = await publicDocumentState(state, session, lockedInvoice.invoice.id);
   const beforeClosedPeriod = await counts(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/outgoing-invoices/post', undefined, {
     method: 'POST', body: { reason: 'nonhappy closed period', invoiceId: lockedInvoice.invoice.id, reservationId: lockedInvoice.reservation.reservationId },
   }, 409, 'POSTING_DATE_IN_CLOSED_PERIOD');
-  await expectNoDocumentAccounting(state, session, lockedInvoice.invoice.id, beforeClosedPeriod, 'closed period');
+  await expectNoDocumentAccounting(state, session, lockedInvoice.invoice.id, beforeClosedPeriod, 'closed period', beforeClosedPeriodPublic);
   await setHarnessProPeriodStatus(state, { tenantId: session.tenantId, period: '2026-08', status: 'open' });
   cases++;
 
@@ -257,6 +335,7 @@ export const runProNonHappyAccountingScenario = async () => {
   assert.ok(itemA?.id, 'posted invoice OPOS item missing');
 
   // 8. OPOS under/over-allocation and party mismatch never create a payment journal.
+  const beforeUnderPublic = await publicDocumentState(state, session, postedA.invoice.id);
   const beforeUnder = await counts(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/open-items/payments', undefined, {
     method: 'POST', body: {
@@ -264,7 +343,9 @@ export const runProNonHappyAccountingScenario = async () => {
       payment: { sourceType: 'manual', sourceId: `${namespace}-under`, partyType: 'debtor', partyId: client.id, paymentDate: '2026-08-20', amount: 10, bankAccountNumber: '1200', allocations: [{ openItemId: itemA.id, amount: 11 }], allocationEventId: `${namespace}-under-event` },
     },
   }, 400, 'PAYMENT_ALLOCATION_EXCEEDS_PAYMENT');
+  await assertPublicDocumentStateUnchanged(state, session, postedA.invoice.id, beforeUnderPublic, 'OPOS over payment amount');
   await assertNoAccountingWrite(state, session, beforeUnder, 'OPOS over payment amount');
+  const beforeOverPublic = await publicDocumentState(state, session, postedA.invoice.id);
   const beforeOver = await counts(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/open-items/payments', undefined, {
     method: 'POST', body: {
@@ -272,7 +353,9 @@ export const runProNonHappyAccountingScenario = async () => {
       payment: { sourceType: 'manual', sourceId: `${namespace}-over`, partyType: 'debtor', partyId: client.id, paymentDate: '2026-08-20', amount: 200, bankAccountNumber: '1200', allocations: [{ openItemId: itemA.id, amount: 200 }], allocationEventId: `${namespace}-over-event` },
     },
   }, 400, 'OPEN_ITEM_ALLOCATION_EXCEEDS_RESIDUAL');
+  await assertPublicDocumentStateUnchanged(state, session, postedA.invoice.id, beforeOverPublic, 'OPOS over residual');
   await assertNoAccountingWrite(state, session, beforeOver, 'OPOS over residual');
+  const beforePartyPublic = await publicDocumentState(state, session, postedA.invoice.id);
   const beforeParty = await counts(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/open-items/payments', undefined, {
     method: 'POST', body: {
@@ -280,24 +363,34 @@ export const runProNonHappyAccountingScenario = async () => {
       payment: { sourceType: 'manual', sourceId: `${namespace}-party`, partyType: 'creditor', partyId: 'wrong-party', paymentDate: '2026-08-20', amount: 119, bankAccountNumber: '1200', allocations: [{ openItemId: itemA.id, amount: 119 }], allocationEventId: `${namespace}-party-event` },
     },
   }, 422, 'PAYMENT_PARTY_MISMATCH');
+  await assertPublicDocumentStateUnchanged(state, session, postedA.invoice.id, beforePartyPublic, 'OPOS party mismatch');
   await assertNoAccountingWrite(state, session, beforeParty, 'OPOS party mismatch');
   cases += 3;
 
   // 9. A bank source with the wrong amount and wrong direction is rejected before payment posting.
+  const incomeSourceId = `${namespace}-transaction-income`;
+  const beforeSourcePublic = await publicDocumentState(state, session, postedA.invoice.id, { bankTransactionId: incomeSourceId });
   const beforeSource = await counts(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/open-items/payments', undefined, {
     method: 'POST', body: {
       reason: 'nonhappy bank source mismatch',
-      payment: { sourceType: 'bank_transaction', sourceId: `${namespace}-transaction-income`, partyType: 'debtor', partyId: client.id, paymentDate: '2026-02-12', amount: 1, bankAccountNumber: '1200', allocations: [{ openItemId: itemA.id, amount: 1 }], allocationEventId: `${namespace}-source-mismatch` },
+      payment: { sourceType: 'bank_transaction', sourceId: incomeSourceId, partyType: 'debtor', partyId: client.id, paymentDate: '2026-02-12', amount: 1, bankAccountNumber: '1200', allocations: [{ openItemId: itemA.id, amount: 1 }], allocationEventId: `${namespace}-source-mismatch` },
     },
   }, 422, 'PAYMENT_SOURCE_MISMATCH');
+  await assertPublicDocumentStateUnchanged(state, session, postedA.invoice.id, beforeSourcePublic, 'OPOS source mismatch', { bankTransactionId: incomeSourceId });
   await assertNoAccountingWrite(state, session, beforeSource, 'OPOS source mismatch');
+  const directionSourceId = `${namespace}-workflow-transaction`;
+  await setHarnessProBankTransactionStatus(state, { tenantId: session.tenantId, transactionId: directionSourceId, status: 'pending' });
+  const beforeDirectionPublic = await publicDocumentState(state, session, postedA.invoice.id, { bankTransactionId: directionSourceId });
+  assert.equal(beforeDirectionPublic.bankTransaction?.status, 'pending');
+  assert.equal(beforeDirectionPublic.bankTransaction?.type, 'expense');
   await expectError(state, session, '/api/v1/pro/accounting/open-items/payments', undefined, {
     method: 'POST', body: {
       reason: 'nonhappy bank source direction mismatch',
-      payment: { sourceType: 'bank_transaction', sourceId: `${namespace}-workflow-transaction`, partyType: 'debtor', partyId: client.id, paymentDate: '2026-03-05', amount: 119, bankAccountNumber: '1200', allocations: [{ openItemId: itemA.id, amount: 1 }], allocationEventId: `${namespace}-direction-mismatch` },
+      payment: { sourceType: 'bank_transaction', sourceId: directionSourceId, partyType: 'debtor', partyId: client.id, paymentDate: '2026-03-05', amount: 119, bankAccountNumber: '1200', allocations: [{ openItemId: itemA.id, amount: 1 }], allocationEventId: `${namespace}-direction-mismatch` },
     },
-  }, 409, 'PAYMENT_SOURCE_ALREADY_BOOKED');
+  }, 422, 'PAYMENT_SOURCE_DIRECTION_MISMATCH');
+  await assertPublicDocumentStateUnchanged(state, session, postedA.invoice.id, beforeDirectionPublic, 'OPOS direction mismatch', { bankTransactionId: directionSourceId });
   await assertNoAccountingWrite(state, session, beforeSource, 'OPOS direction mismatch');
   cases += 2;
 
@@ -309,10 +402,12 @@ export const runProNonHappyAccountingScenario = async () => {
     },
   });
   assert.equal(partialPayment.allocatedAmount, 50);
+  const beforeDependencyReversePublic = await publicDocumentState(state, session, postedA.invoice.id);
   const beforeDependencyReverse = await counts(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/documents/reverse', undefined, {
     method: 'POST', body: { reason: 'nonhappy reverse allocated document', documentType: 'outgoing_invoice', documentId: postedA.invoice.id, postingDate: '2026-08-21' },
   }, 409, 'DOCUMENT_HAS_ALLOCATIONS');
+  await assertPublicDocumentStateUnchanged(state, session, postedA.invoice.id, beforeDependencyReversePublic, 'reverse with OPOS dependency');
   await assertNoAccountingWrite(state, session, beforeDependencyReverse, 'reverse with OPOS dependency');
   const postedB = await makeInvoice(state, session, client, `${namespace}-posted-b`, '2026-08-22');
   await postInvoice(state, session, postedB.invoice.id, postedB.reservation.reservationId);
@@ -320,10 +415,12 @@ export const runProNonHappyAccountingScenario = async () => {
     method: 'POST', body: { reason: 'nonhappy first document reversal', documentType: 'outgoing_invoice', documentId: postedB.invoice.id, postingDate: '2026-08-23' },
   });
   assert.ok(reversedB.reversalEntryId);
+  const beforeDoubleReversePublic = await publicDocumentState(state, session, postedB.invoice.id);
   const beforeDoubleReverse = await counts(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/documents/reverse', undefined, {
     method: 'POST', body: { reason: 'nonhappy duplicate document reversal', documentType: 'outgoing_invoice', documentId: postedB.invoice.id, postingDate: '2026-08-24' },
   }, 409, 'DOCUMENT_NOT_POSTED');
+  await assertPublicDocumentStateUnchanged(state, session, postedB.invoice.id, beforeDoubleReversePublic, 'duplicate document reversal');
   await assertNoAccountingWrite(state, session, beforeDoubleReverse, 'duplicate document reversal');
   cases += 2;
 
@@ -334,10 +431,12 @@ export const runProNonHappyAccountingScenario = async () => {
   await json(state, session, '/api/v1/pro/invoices', undefined, {
     method: 'POST', body: { reason: 'nonhappy make backfill source terminal', invoice: { ...stale.invoice, status: 'cancelled' } },
   });
+  const beforeStaleBackfillPublic = await publicDocumentState(state, session, stale.invoice.id);
   const beforeStaleBackfill = await counts(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/backfill/confirm', undefined, {
     method: 'POST', body: { reason: 'nonhappy stale backfill', runId: backfill.runId, confirmationHash: backfill.confirmationHash },
   }, 409, 'BACKFILL_STALE_PREVIEW');
+  await assertPublicDocumentStateUnchanged(state, session, stale.invoice.id, beforeStaleBackfillPublic, 'stale backfill');
   await assertNoAccountingWrite(state, session, beforeStaleBackfill, 'stale backfill');
   cases++;
 
@@ -349,10 +448,12 @@ export const runProNonHappyAccountingScenario = async () => {
     amount: 100,
     taxRate: 0,
   });
+  const beforeMissingEvidencePublic = await publicDocumentState(state, session, missingEvidence.invoice.id);
   const beforeMissingEvidence = await counts(state, session);
   const previewMissingEvidence = await postInvoice(state, session, missingEvidence.invoice.id, missingEvidence.reservation.reservationId, 'nonhappy missing reverse-charge evidence');
   assert.equal(previewMissingEvidence.status, 'unresolved');
   assert.equal(previewMissingEvidence.reason, 'MISSING_TAX_EVIDENCE');
+  await assertPublicDocumentStateUnchanged(state, session, missingEvidence.invoice.id, beforeMissingEvidencePublic, 'missing reverse-charge evidence');
   await expectNoDocumentAccounting(state, session, missingEvidence.invoice.id, beforeMissingEvidence, 'missing reverse-charge evidence');
   cases++;
 
@@ -383,5 +484,5 @@ export const runProNonHappyAccountingScenario = async () => {
   cases++;
 
   console.log(`PRO_NONHAPPY_CASES=${cases}`);
-  assert.ok(cases >= 12);
+  assert.ok(cases >= 20, `expected at least 20 meaningful Pro non-happy cases, got ${cases}`);
 };

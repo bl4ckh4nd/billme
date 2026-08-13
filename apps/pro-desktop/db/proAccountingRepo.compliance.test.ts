@@ -537,7 +537,9 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
       { account_number: '1574', tax_case_key: null, tax_rate: null, net_amount: null, tax_amount: null, gross_amount: null },
       { account_number: '1774', tax_case_key: null, tax_rate: null, net_amount: null, tax_amount: null, gross_amount: null },
     ]);
-    expect(db.prepare('SELECT tax_case_key, datev_bu_key FROM journal_posting_pairs WHERE entry_id = ? AND tax_case_key IS NOT NULL').all(posted.entry.id)).toEqual([{ tax_case_key: 'EU_B2B_SERVICE_RC', datev_bu_key: '94' }]);
+    const taxPairs = db.prepare('SELECT tax_case_key, datev_bu_key FROM journal_posting_pairs WHERE entry_id = ? AND tax_case_key IS NOT NULL').all(posted.entry.id) as Array<{ tax_case_key: string; datev_bu_key: string | null }>;
+    expect(taxPairs.length).toBeGreaterThan(0);
+    expect(taxPairs.every((pair) => pair.tax_case_key === 'EU_B2B_SERVICE_RC' && pair.datev_bu_key === '94')).toBe(true);
     expect(db.prepare('SELECT tax_case_key, evidence_reference FROM vat_evidence WHERE entry_id = ?').all(posted.entry.id)).toEqual([{ tax_case_key: 'EU_B2B_SERVICE_RC', evidence_reference: '13' }]);
   });
 

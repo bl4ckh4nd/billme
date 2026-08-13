@@ -17,6 +17,7 @@ import {
   desktopSqliteIgnoredTables,
   desktopSqliteImportedTables,
   detectUnsupportedSqliteTables,
+  assertNoCrossTenantIdentityCollisions,
   importDesktopSqliteToPostgres,
   loadAccountMappingsHgb,
   loadLegacyAccountMappingsHgb,
@@ -37,7 +38,15 @@ const postgresMigrationUrls = [
   new URL('../../drizzle/0006_server_data_opos.sql', import.meta.url),
   new URL('../../drizzle/0007_server_data_opos_hardening.sql', import.meta.url),
   new URL('../../drizzle/0008_server_data_asset_accounting.sql', import.meta.url),
+  new URL('../../drizzle/0009_server_data_datev_export_bytes.sql', import.meta.url),
+  new URL('../../drizzle/0010_server_data_invoice_accounting_posted_at.sql', import.meta.url),
+  new URL('../../drizzle/0011_server_data_tax_case_mapping_tenancy.sql', import.meta.url),
+  new URL('../../drizzle/0012_server_data_asset_ownership_guard.sql', import.meta.url),
+  new URL('../../drizzle/0013_server_data_asset_ownership_hardening.sql', import.meta.url),
+  new URL('../../drizzle/0014_server_data_datev_tax_evidence.sql', import.meta.url),
+  new URL('../../drizzle/0015_server_data_reporting_tax_submissions.sql', import.meta.url),
   new URL('../../drizzle/0016_server_data_eur_native.sql', import.meta.url),
+  new URL('../../drizzle/0017_server_data_eur_catalog.sql', import.meta.url),
 ];
 
 const extractSqliteTableNames = async (schemaUrl: URL): Promise<string[]> => {
@@ -182,7 +191,12 @@ test('Postgres report mapping persistence keeps 2025 and 2026 imported overrides
 
 test('tenant-scoped postgres tables stay covered by import overwrite guards', async () => {
   const tenantScopedTables = await extractTenantScopedPostgresTables(postgresMigrationUrls);
-  const excludedTables = new Set(['tenant_memberships', 'sqlite_import_runs', 'audit_heads']);
+  const excludedTables = new Set([
+    'tenant_memberships', 'sqlite_import_runs', 'audit_heads',
+    'report_account_mappings', 'report_snapshot_positions', 'report_catalog_refs',
+    'tax_adjustments', 'tax_submissions', 'tax_submission_approvals',
+    'tax_submission_receipts', 'tax_credentials', 'tax_submission_jobs',
+  ]);
   const expected = tenantScopedTables.filter((table) => !excludedTables.has(table)).sort();
 
   assert.deepEqual([...tenantCoreRowCountTables].sort(), expected);
@@ -318,6 +332,113 @@ test('SQLite import rejects a cross-tenant id collision without stealing the exi
   }
 });
 
+test('SQLite import serializes cross-tenant identity checks under concurrent imports', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const suffix = randomUUID();
+  const firstTenantId = `import-concurrent-a-${suffix}`;
+  const secondTenantId = `import-concurrent-b-${suffix}`;
+  const clientId = `concurrent-client-${suffix}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-concurrent-'));
+  const sqlitePaths = [path.join(tempDir, 'first.sqlite'), path.join(tempDir, 'second.sqlite')];
+  try {
+    await runPostgresMigrations(pool);
+    const now = new Date().toISOString();
+    for (const [tenantId, displayName] of [[firstTenantId, 'Concurrent first'], [secondTenantId, 'Concurrent second']] as const) {
+      await pool.query(`INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at) VALUES ($1,$2,$3,'pro','single-tenant','active',$4,$4)`, [tenantId, tenantId, displayName, now]);
+    }
+    for (const sqlitePath of sqlitePaths) {
+      const sqlite = new Database(sqlitePath);
+      sqlite.exec(`CREATE TABLE clients (id TEXT PRIMARY KEY, customer_number TEXT, company TEXT, contact_person TEXT, email TEXT, phone TEXT, address TEXT, status TEXT, avatar TEXT, tags_json TEXT, notes TEXT)`);
+      sqlite.prepare('INSERT INTO clients VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(clientId, null, 'Concurrent source', 'Customer', 'concurrent@example.test', '', '', 'active', null, '[]', 'source');
+      sqlite.close();
+    }
+
+    const results = await Promise.allSettled([
+      importDesktopSqliteToPostgres({ pool, sqlitePath: sqlitePaths[0], product: 'pro', tenant: { id: firstTenantId, slug: firstTenantId, displayName: 'Concurrent first' } }),
+      importDesktopSqliteToPostgres({ pool, sqlitePath: sqlitePaths[1], product: 'pro', tenant: { id: secondTenantId, slug: secondTenantId, displayName: 'Concurrent second' } }),
+    ]);
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+    const winnerTenantId = results[0].status === 'fulfilled' ? firstTenantId : secondTenantId;
+    const imported = (await pool.query('SELECT tenant_id, company FROM clients WHERE id=$1', [clientId])).rows;
+    assert.equal(imported.length, 1);
+    assert.deepEqual(imported[0], { tenant_id: winnerTenantId, company: 'Concurrent source' });
+    const runs = (await pool.query('SELECT tenant_id, status FROM sqlite_import_runs WHERE tenant_id = ANY($1::text[]) ORDER BY tenant_id', [[firstTenantId, secondTenantId]])).rows;
+    assert.deepEqual(runs, [{ tenant_id: firstTenantId, status: firstTenantId === winnerTenantId ? 'completed' : 'failed' }, { tenant_id: secondTenantId, status: secondTenantId === winnerTenantId ? 'completed' : 'failed' }]);
+  } finally {
+    await pool.query('DELETE FROM tenants WHERE id = ANY($1::text[])', [[firstTenantId, secondTenantId]]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SQLite import identity checks use array parameters for large source tables', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-large-ids-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  const client = await pool.connect();
+  try {
+    await runPostgresMigrations(pool);
+    sqlite.exec('CREATE TABLE clients (id TEXT PRIMARY KEY)');
+    const insert = sqlite.prepare('INSERT INTO clients (id) VALUES (?)');
+    const transaction = sqlite.transaction(() => {
+      for (let index = 0; index < 66_000; index += 1) insert.run(`large-client-${index}`);
+    });
+    transaction();
+    await client.query('BEGIN');
+    await assertNoCrossTenantIdentityCollisions(client, sqlite, `large-id-${randomUUID()}`);
+    await client.query('ROLLBACK');
+  } finally {
+    await client.query('ROLLBACK').catch(() => undefined);
+    client.release();
+    sqlite.close();
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SQLite import validates global accounting catalogs without mutating them', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const suffix = randomUUID();
+  const tenantId = `import-global-catalog-${suffix}`;
+  const ledgerId = `canonical-ledger-${suffix}`;
+  const accountNumber = `9${suffix.replaceAll('-', '').slice(0, 7)}`;
+  const taxCaseKey = `IMPORT_TAX_${suffix.replaceAll('-', '').slice(0, 12)}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-global-catalog-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  try {
+    await runPostgresMigrations(pool);
+    const now = new Date().toISOString();
+    await pool.query(`INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at) VALUES ($1,'SKR03',$2,'Canonical account','server-catalog',$3,$3)`, [ledgerId, accountNumber, now]);
+    await pool.query(`INSERT INTO tax_cases (key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active, updated_at) VALUES ($1,'Canonical tax','standard_vat',19,false,false,false,true,$2)`, [taxCaseKey, now]);
+    sqlite.exec(`
+      CREATE TABLE ledger_accounts (id TEXT PRIMARY KEY, chart TEXT, account_number TEXT, name TEXT, source TEXT, created_at TEXT, updated_at TEXT);
+      CREATE TABLE tax_cases (key TEXT PRIMARY KEY, label TEXT, mechanism TEXT, default_rate REAL, requires_counterparty_vat_id INTEGER, requires_country INTEGER, requires_evidence INTEGER, active INTEGER, updated_at TEXT);
+      CREATE TABLE tax_case_account_mappings (id TEXT PRIMARY KEY, chart TEXT, tax_case_key TEXT, role TEXT, account_number TEXT, datev_bu_key TEXT, valid_from TEXT, valid_to TEXT, updated_at TEXT);
+    `);
+    sqlite.prepare('INSERT INTO ledger_accounts VALUES (?,?,?,?,?,?,?)').run(`desktop-${ledgerId}`, 'SKR03', accountNumber, 'Canonical account', 'desktop', now, now);
+    sqlite.prepare('INSERT INTO tax_cases VALUES (?,?,?,?,?,?,?,?,?)').run(taxCaseKey, 'Canonical tax', 'standard_vat', 19, 0, 0, 0, 1, now);
+    sqlite.prepare('INSERT INTO tax_case_account_mappings VALUES (?,?,?,?,?,?,?,?,?)').run(`mapping-${suffix}`, 'SKR03', taxCaseKey, 'output_tax', accountNumber, 'BU19', null, null, now);
+    sqlite.close();
+
+    const result = await importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: tenantId, slug: tenantId, displayName: 'Global catalog import' } });
+    assert.equal(result.counts.ledgerAccounts, 0);
+    assert.equal(result.counts.taxCases, 0);
+    assert.deepEqual((await pool.query('SELECT id, name, source FROM ledger_accounts WHERE id=$1', [ledgerId])).rows, [{ id: ledgerId, name: 'Canonical account', source: 'server-catalog' }]);
+    assert.deepEqual((await pool.query('SELECT key, label, default_rate FROM tax_cases WHERE key=$1', [taxCaseKey])).rows, [{ key: taxCaseKey, label: 'Canonical tax', default_rate: '19' }]);
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM tax_case_account_mappings WHERE tenant_id=$1', [tenantId])).rows[0].count), 1);
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
+    await pool.query('DELETE FROM tax_cases WHERE key=$1', [taxCaseKey]).catch(() => undefined);
+    await pool.query('DELETE FROM ledger_accounts WHERE id=$1', [ledgerId]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('SQLite import rolls back rows and leaves a visible failed run after a mid-import validation error', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
   const tenantId = `import-rollback-${randomUUID()}`;
@@ -407,6 +528,7 @@ test('rerunning a fully migrated Postgres database preserves reporting evidence,
       journal: (await pool.query('SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY id')).rows,
       snapshot: (await pool.query('SELECT id, source_hash, from_date, to_date, as_of_date, payload_json FROM report_snapshots WHERE id=$1', [snapshotId])).rows,
       positions: (await pool.query('SELECT snapshot_id, position_key, amount FROM report_snapshot_positions WHERE tenant_id=$1', [tenantId])).rows,
+      catalogRefs: (await pool.query('SELECT id, report_type, catalog_key, catalog_version, source_hash, payload_json FROM report_catalog_refs WHERE tenant_id=$1', [tenantId])).rows,
       submission: (await pool.query('SELECT id, idempotency_key, status, payload_json FROM tax_submissions WHERE id=$1', [submissionId])).rows,
       eur: (await pool.query(`SELECT COUNT(*)::int AS count, MIN(source_version) AS source_version, MAX(source_version) AS max_source_version FROM eur_lines WHERE tax_year=2025`)).rows,
     };
@@ -416,6 +538,7 @@ test('rerunning a fully migrated Postgres database preserves reporting evidence,
     assert.deepEqual((await pool.query('SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY id')).rows, before.journal);
     assert.deepEqual((await pool.query('SELECT id, source_hash, from_date, to_date, as_of_date, payload_json FROM report_snapshots WHERE id=$1', [snapshotId])).rows, before.snapshot);
     assert.deepEqual((await pool.query('SELECT snapshot_id, position_key, amount FROM report_snapshot_positions WHERE tenant_id=$1', [tenantId])).rows, before.positions);
+    assert.deepEqual((await pool.query('SELECT id, report_type, catalog_key, catalog_version, source_hash, payload_json FROM report_catalog_refs WHERE tenant_id=$1', [tenantId])).rows, before.catalogRefs);
     assert.deepEqual((await pool.query('SELECT id, idempotency_key, status, payload_json FROM tax_submissions WHERE id=$1', [submissionId])).rows, before.submission);
     assert.deepEqual((await pool.query(`SELECT COUNT(*)::int AS count, MIN(source_version) AS source_version, MAX(source_version) AS max_source_version FROM eur_lines WHERE tax_year=2025`)).rows, before.eur);
     await assert.rejects(pool.query('UPDATE report_snapshots SET payload_json=$1 WHERE id=$2', ['{"tampered":true}', snapshotId]), /report_snapshots is immutable/);

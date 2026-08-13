@@ -38,12 +38,10 @@ import {
   saveServerJournalEntry,
   saveServerJournalLine,
   saveServerJournalPostingPair,
-  saveServerLedgerAccount,
   saveServerProWorkflowEntry,
   saveServerReportSnapshot,
   saveServerAccountMappingHgb,
   saveServerReportAccountMapping,
-  saveServerTaxCase,
   saveServerTaxCaseAccountMapping,
   saveServerTaxCaseAccountMappingForTenant,
   saveServerTemplate,
@@ -260,6 +258,9 @@ const tableExists = (db: SqliteDatabaseType, table: string): boolean => Boolean(
 const tableColumns = (db: SqliteDatabaseType, table: string): Set<string> => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
 const listTables = (db: SqliteDatabaseType): string[] => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as SqliteTableRow[]).map((row) => row.name).filter(Boolean);
 const countTable = (db: SqliteDatabaseType, table: string): number => Number(((db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count) ?? 0);
+const pgTextArrayParam = (values: string[]) => sql.param(values, {
+  mapToDriverValue: (items: string[]) => `{${items.map((item) => `"${item.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`).join(',')}}`,
+});
 
 // Repository upserts are intentionally tenant-scoped at read time, but most
 // imported tables still have a globally unique legacy id.  Refuse those ids
@@ -277,16 +278,22 @@ const tenantScopedIdentityTables = [
   'accounting_backfill_runs',
 ] as const;
 
-const assertNoCrossTenantIdentityCollisions = async (
+export const assertNoCrossTenantIdentityCollisions = async (
   client: PostgresTransactionClient,
   sqliteDb: SqliteDatabaseType,
   tenantId: string,
 ): Promise<void> => {
   for (const table of tenantScopedIdentityTables) {
     if (!tableExists(sqliteDb, table)) continue;
-    const ids = (sqliteDb.prepare(`SELECT id FROM ${table} WHERE id IS NOT NULL`).all() as Array<{ id: string }>).map((row) => String(row.id));
+    const ids = [...new Set((sqliteDb.prepare(`SELECT id FROM ${table} WHERE id IS NOT NULL`).all() as Array<{ id: string }>).map((row) => String(row.id)))].sort();
     if (ids.length === 0) continue;
-    const existing = await createDrizzle(client).execute(sql`SELECT id, tenant_id FROM ${sql.raw(table)} WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`);
+    // Lock every source identity before checking it.  Stable table/id order
+    // keeps concurrent imports from deadlocking while the transaction lock
+    // closes the check-then-upsert race across tenants.
+    await createDrizzle(client).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billme:desktop-import:${table}`} || ':' || source_id, 0))
+      FROM unnest(${pgTextArrayParam(ids)}::text[]) AS source_ids(source_id)
+      ORDER BY source_id`);
+    const existing = await createDrizzle(client).execute(sql`SELECT id, tenant_id FROM ${sql.raw(table)} WHERE id = ANY(${pgTextArrayParam(ids)}::text[])`);
     const collision = (existing.rows as Array<{ id: string; tenant_id: string }>).find((row) => row.tenant_id !== tenantId);
     if (collision) throw new Error(`IMPORT_ID_TENANT_COLLISION:${table}:${String(collision.id)}`);
   }
@@ -513,6 +520,52 @@ export const validateCanonicalEurLines = (rows: ServerEurLineRecord[]): void => 
   }
 };
 
+const validateCanonicalGlobalCatalog = async (
+  client: PostgresTransactionClient,
+  sqliteDb: SqliteDatabaseType,
+): Promise<void> => {
+  const sourceLedgerAccounts = loadLedgerAccounts(sqliteDb);
+  if (sourceLedgerAccounts.length > 0) {
+    const canonicalLedgerAccounts = (await createDrizzle(client).execute(sql`SELECT chart, account_number, name FROM ledger_accounts`)).rows as Array<{ chart: string; account_number: string; name: string }>;
+    const canonicalByKey = new Map(canonicalLedgerAccounts.map((row) => [`${row.chart}:${row.account_number}`, row]));
+    for (const source of sourceLedgerAccounts) {
+      const key = `${source.chart}:${source.account_number}`;
+      const canonical = canonicalByKey.get(key);
+      if (!canonical || canonical.name !== source.name) {
+        throw new Error(`IMPORT_GLOBAL_LEDGER_CATALOG_MISMATCH:${key}`);
+      }
+    }
+  }
+
+  const sourceTaxCases = loadTaxCases(sqliteDb);
+  if (sourceTaxCases.length > 0) {
+    const canonicalTaxCases = (await createDrizzle(client).execute(sql`SELECT key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active FROM tax_cases`)).rows as Array<{
+      key: string;
+      label: string;
+      mechanism: string;
+      default_rate: string | number;
+      requires_counterparty_vat_id: boolean;
+      requires_country: boolean;
+      requires_evidence: boolean;
+      active: boolean;
+    }>;
+    const canonicalByKey = new Map(canonicalTaxCases.map((row) => [row.key, row]));
+    for (const source of sourceTaxCases) {
+      const canonical = canonicalByKey.get(source.key);
+      if (!canonical
+        || canonical.label !== source.label
+        || canonical.mechanism !== source.mechanism
+        || Number(canonical.default_rate) !== source.defaultRate
+        || Boolean(canonical.requires_counterparty_vat_id) !== source.requiresCounterpartyVatId
+        || Boolean(canonical.requires_country) !== source.requiresCountry
+        || Boolean(canonical.requires_evidence) !== source.requiresEvidence
+        || Boolean(canonical.active) !== source.active) {
+        throw new Error(`IMPORT_GLOBAL_TAX_CATALOG_MISMATCH:${source.key}`);
+      }
+    }
+  }
+};
+
 const emptyCounts = (): DesktopSqliteImportCounts => ({
   clients: 0,
   invoices: 0,
@@ -605,6 +658,7 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
           .where(eq(schema.auditLog.tenantId, tenantId));
         if (Number(auditCount[0]?.count ?? 0) > 0) throw new Error(`Target tenant ${tenantId} already contains audit log rows`);
         await assertNoCrossTenantIdentityCollisions(client, sqliteDb, tenantId);
+        await validateCanonicalGlobalCatalog(client, sqliteDb);
         const settingsJson = loadSettingsJson(sqliteDb);
         if (settingsJson) await saveServerSettings(client, { tenantId, settingsJson, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         for (const reservation of loadNumberReservations(sqliteDb, tenantId)) { await saveServerNumberReservation(client, reservation); counts.numberReservations += 1; }
@@ -617,8 +671,6 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         counts.invoices += await importOutgoingInvoices(client, loadInvoices(sqliteDb, tenantId), tenantId);
         for (const offer of loadOffers(sqliteDb, tenantId)) { await transactionDependencies.offerRepo.save(scope, offer); counts.offers += 1; }
         for (const profile of loadRecurringProfiles(sqliteDb, tenantId)) { await transactionDependencies.recurringProfileRepo.save(scope, profile); counts.recurringProfiles += 1; }
-        for (const ledgerAccount of loadLedgerAccounts(sqliteDb)) { await saveServerLedgerAccount(client, { id: ledgerAccount.id, chart: ledgerAccount.chart, accountNumber: ledgerAccount.account_number, name: ledgerAccount.name, source: ledgerAccount.source, createdAt: ledgerAccount.created_at, updatedAt: ledgerAccount.updated_at }); counts.ledgerAccounts += 1; }
-        for (const taxCase of loadTaxCases(sqliteDb)) { await saveServerTaxCase(client, taxCase); counts.taxCases += 1; }
         for (const mapping of loadTaxCaseAccountMappings(sqliteDb)) { await saveServerTaxCaseAccountMappingForTenant(client, mapping, tenantId); counts.taxCaseAccountMappings += 1; }
         if (tableExists(sqliteDb, 'accounting_policies')) counts.accountingPolicies += await importRawTenantRows(client, 'accounting_policies', sqliteDb.prepare('SELECT * FROM accounting_policies').all() as Array<Record<string, unknown>>, tenantId, ['tenant_id', 'active_chart', 'vat_method', 'period_policy', 'updated_at']);
         if (tableExists(sqliteDb, 'accounting_account_mappings')) counts.accountingAccountMappings += await importRawTenantRows(client, 'accounting_account_mappings', sqliteDb.prepare('SELECT * FROM accounting_account_mappings').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'chart', 'role', 'account_number', 'updated_at']);

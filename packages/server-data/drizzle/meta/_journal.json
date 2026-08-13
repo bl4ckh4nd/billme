@@ -127,6 +127,13 @@
       "when": 1786538400005,
       "tag": "0017_server_data_eur_catalog",
       "breakpoints": false
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786538400006,
+      "tag": "0018_server_data_canonical_catalog",
+      "breakpoints": false
     }
   ]
 }

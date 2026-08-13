@@ -524,20 +524,13 @@ const validateCanonicalGlobalCatalog = async (
   sqliteDb: SqliteDatabaseType,
 ): Promise<void> => {
   const drizzle = createDrizzle(client);
-  const now = new Date().toISOString();
-  const ledgerValues = sql.join(CANONICAL_LEDGER_ACCOUNTS.map((account) => sql`(
-    ${`server-catalog:${account.chart}:${account.accountNumber}`}, ${account.chart}, ${account.accountNumber}, ${account.name}, 'server-catalog', ${now}, ${now}
-  )`), sql`, `);
-  await drizzle.execute(sql`INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at)
-    VALUES ${ledgerValues} ON CONFLICT (chart, account_number) DO NOTHING`);
-  const taxValues = sql.join(CANONICAL_TAX_CASES.map((taxCase) => sql`(
-    ${taxCase.key}, ${taxCase.label}, ${taxCase.mechanism}, ${taxCase.defaultRate}, ${taxCase.requiresCounterpartyVatId}, ${taxCase.requiresCountry}, ${taxCase.requiresEvidence}, ${taxCase.active}, ${now}
-  )`), sql`, `);
-  await drizzle.execute(sql`INSERT INTO tax_cases (key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active, updated_at)
-    VALUES ${taxValues} ON CONFLICT (key) DO NOTHING`);
 
   const canonicalLedgerByKey = new Map(CANONICAL_LEDGER_ACCOUNTS.map((row) => [`${row.chart}:${row.accountNumber}`, row]));
   const persistedLedger = (await drizzle.execute(sql`SELECT chart, account_number, name FROM ledger_accounts`)).rows as Array<{ chart: string; account_number: string; name: string }>;
+  const persistedLedgerByKey = new Map(persistedLedger.map((row) => [`${row.chart}:${row.account_number}`, row]));
+  for (const [key] of canonicalLedgerByKey) {
+    if (!persistedLedgerByKey.has(key)) throw new Error(`IMPORT_GLOBAL_LEDGER_CANONICAL_MISSING:${key}`);
+  }
   for (const row of persistedLedger) {
     const canonical = canonicalLedgerByKey.get(`${row.chart}:${row.account_number}`);
     if (canonical && canonical.name !== row.name) throw new Error(`IMPORT_GLOBAL_LEDGER_CANONICAL_MISMATCH:${row.chart}:${row.account_number}`);
@@ -547,6 +540,9 @@ const validateCanonicalGlobalCatalog = async (
     key: string; label: string; mechanism: string; default_rate: string | number;
     requires_counterparty_vat_id: boolean; requires_country: boolean; requires_evidence: boolean; active: boolean;
   }>;
+  for (const [key] of canonicalTaxByKey) {
+    if (!persistedTaxCases.some((row) => row.key === key)) throw new Error(`IMPORT_GLOBAL_TAX_CANONICAL_MISSING:${key}`);
+  }
   for (const row of persistedTaxCases) {
     const canonical = canonicalTaxByKey.get(row.key);
     if (canonical && (canonical.label !== row.label || canonical.mechanism !== row.mechanism

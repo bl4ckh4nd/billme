@@ -456,13 +456,13 @@ export const saveServerActiveTemplates = async (
 };
 
 export const saveServerLedgerAccount = async (db: PostgresQueryable, account: LedgerAccount): Promise<LedgerAccount> => {
-  await upsert(db, schema.ledgerAccounts, { id: account.id, chart: account.chart, accountNumber: account.accountNumber, name: account.name, source: account.source, createdAt: account.createdAt, updatedAt: account.updatedAt },
-    [schema.ledgerAccounts.chart, schema.ledgerAccounts.accountNumber], { name: account.name, source: account.source, updatedAt: account.updatedAt });
+  await drizzleDb(db).insert(schema.ledgerAccounts).values({ id: account.id, chart: account.chart, accountNumber: account.accountNumber, name: account.name, source: account.source, createdAt: account.createdAt, updatedAt: account.updatedAt })
+    .onConflictDoNothing({ target: [schema.ledgerAccounts.chart, schema.ledgerAccounts.accountNumber] });
   return account;
 };
 export const saveServerTaxCase = async (db: PostgresQueryable, record: ServerTaxCaseRecord): Promise<ServerTaxCaseRecord> => {
-  await upsert(db, schema.taxCases, { key: record.key, label: record.label, mechanism: record.mechanism, defaultRate: record.defaultRate, requiresCounterpartyVatId: record.requiresCounterpartyVatId, requiresCountry: record.requiresCountry, requiresEvidence: record.requiresEvidence, active: record.active, updatedAt: record.updatedAt }, schema.taxCases.key,
-    { label: record.label, mechanism: record.mechanism, defaultRate: record.defaultRate, requiresCounterpartyVatId: record.requiresCounterpartyVatId, requiresCountry: record.requiresCountry, requiresEvidence: record.requiresEvidence, active: record.active, updatedAt: record.updatedAt });
+  await drizzleDb(db).insert(schema.taxCases).values({ key: record.key, label: record.label, mechanism: record.mechanism, defaultRate: record.defaultRate, requiresCounterpartyVatId: record.requiresCounterpartyVatId, requiresCountry: record.requiresCountry, requiresEvidence: record.requiresEvidence, active: record.active, updatedAt: record.updatedAt } as any)
+    .onConflictDoNothing({ target: schema.taxCases.key });
   return record;
 };
 export const saveServerTaxCaseAccountMapping = async (db: PostgresQueryable, mapping: TaxCaseAccountMapping): Promise<TaxCaseAccountMapping> => {

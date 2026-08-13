@@ -47,6 +47,7 @@ const postgresMigrationUrls = [
   new URL('../../drizzle/0015_server_data_reporting_tax_submissions.sql', import.meta.url),
   new URL('../../drizzle/0016_server_data_eur_native.sql', import.meta.url),
   new URL('../../drizzle/0017_server_data_eur_catalog.sql', import.meta.url),
+  new URL('../../drizzle/0018_server_data_canonical_catalog.sql', import.meta.url),
 ];
 
 const extractSqliteTableNames = async (schemaUrl: URL): Promise<string[]> => {
@@ -168,26 +169,36 @@ test('Desktop reporting mappings preserve effective-date history and legacy SQLi
 test('Postgres report mapping persistence keeps 2025 and 2026 imported overrides idempotent', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
   const suffix = randomUUID();
-  const tenantId = `report-import-${suffix}`;
+  const tenantId = `report-import-a-${suffix}`;
+  const secondTenantId = `report-import-b-${suffix}`;
   let createdTable = false;
   try {
     createdTable = !(await pool.query(`SELECT to_regclass('public.report_account_mappings') AS name`)).rows[0]?.name;
     if (createdTable) await pool.query(`CREATE TABLE report_account_mappings (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, report_type TEXT NOT NULL, chart TEXT NOT NULL, account_number TEXT NOT NULL, position_key TEXT NOT NULL, position_label TEXT NOT NULL, valid_from TEXT, valid_to TEXT, version INTEGER NOT NULL, source TEXT NOT NULL, source_hash TEXT NOT NULL, created_by TEXT, created_at TEXT NOT NULL)`);
+    if (!createdTable) {
+      await pool.query(`INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at) VALUES ($1,$1,'Report import A','pro','single-tenant','active',now()::text,now()::text),($2,$2,'Report import B','pro','single-tenant','active',now()::text,now()::text)`, [tenantId, secondTenantId]);
+    }
     const rows: ServerReportAccountMappingRecord[] = [
-      { id: `import-${suffix}-2025`, tenantId, reportType: 'hgb-guv', chart: 'SKR03', accountNumber: '8400', positionKey: 'revenue', positionLabel: 'Umsatz', validFrom: '2025-01-01', version: 20250101, source: 'desktop-import', sourceHash: `hash-${suffix}-2025`, createdAt: '2025-01-01T00:00:00.000Z' },
-      { id: `import-${suffix}-2026`, tenantId, reportType: 'hgb-guv', chart: 'SKR03', accountNumber: '8400', positionKey: 'material.services', positionLabel: 'Material', validFrom: '2026-01-01', version: 20260101, source: 'desktop-import', sourceHash: `hash-${suffix}-2026`, createdAt: '2026-01-01T00:00:00.000Z' },
+      { id: `import-${tenantId}-2025`, tenantId, reportType: 'hgb-guv', chart: 'SKR03', accountNumber: '8400', positionKey: 'revenue', positionLabel: 'Umsatz', validFrom: '2025-01-01', version: 20250101, source: 'desktop-import', sourceHash: `hash-${suffix}-2025`, createdAt: '2025-01-01T00:00:00.000Z' },
+      { id: `import-${tenantId}-2026`, tenantId, reportType: 'hgb-guv', chart: 'SKR03', accountNumber: '8400', positionKey: 'material.services', positionLabel: 'Material', validFrom: '2026-01-01', version: 20260101, source: 'desktop-import', sourceHash: `hash-${suffix}-2026`, createdAt: '2026-01-01T00:00:00.000Z' },
     ];
     for (const row of rows) {
       await saveServerReportAccountMapping(pool, row);
       await saveServerReportAccountMapping(pool, row);
     }
+    const secondTenantRows = rows.map((row) => ({ ...row, id: row.id.replace(tenantId, secondTenantId), tenantId: secondTenantId, sourceHash: row.sourceHash.replace(suffix, `${suffix}-second`) }));
+    for (const row of secondTenantRows) await saveServerReportAccountMapping(pool, row);
+    assert.notEqual(rows[0]?.id, secondTenantRows[0]?.id);
     const effective = async (date: string) => (await pool.query(`SELECT DISTINCT ON (account_number,report_type) position_key FROM report_account_mappings WHERE tenant_id=$1 AND chart='SKR03' AND report_type='hgb-guv' AND account_number='8400' AND valid_from <= $2 ORDER BY account_number,report_type,valid_from DESC,version DESC`, [tenantId, date])).rows[0]?.position_key;
     assert.equal(await effective('2025-12-31'), 'revenue');
     assert.equal(await effective('2026-12-31'), 'material.services');
     assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM report_account_mappings WHERE tenant_id=$1', [tenantId])).rows[0].count), 2);
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM report_account_mappings WHERE tenant_id=$1', [secondTenantId])).rows[0].count), 2);
   } finally {
     if (createdTable) await pool.query('DROP TABLE report_account_mappings').catch(() => undefined);
-    else await pool.query('DELETE FROM report_account_mappings WHERE tenant_id=$1', [tenantId]).catch(() => undefined);
+    else {
+      await pool.query('DELETE FROM tenants WHERE id = ANY($1::text[])', [[tenantId, secondTenantId]]).catch(() => undefined);
+    }
     await pool.end();
   }
 });
@@ -206,7 +217,7 @@ test('Drizzle migration journal contains incremental migrations', async () => {
   const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ tag: string }> };
   assert.deepEqual(journal.entries.map((entry) => entry.tag), [
     '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
-    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog',
+    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog', '0018_server_data_canonical_catalog',
   ]);
 });
 

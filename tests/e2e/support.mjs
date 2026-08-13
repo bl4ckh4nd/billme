@@ -420,13 +420,21 @@ export async function launchDesktopApp(options = {}) {
   const userDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), `billme-${app}-e2e-`));
   const cacheDir = path.join(userDataDir, 'cache');
   await fs.promises.mkdir(cacheDir, { recursive: true });
+  const launchEnv = {
+    ...process.env,
+    ...(options.disableTaxProvider ? {
+      BILLME_ERIC_BINARY: '',
+      BILLME_ERIC_RESOURCES: path.join(userDataDir, 'missing-eric-provider'),
+    } : {}),
+    ...(options.env ?? {}),
+  };
 
   const launchedApp = await electron.launch({
     executablePath: electronBinary,
     cwd,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu-sandbox', `--user-data-dir=${userDataDir}`, '.'],
     env: {
-      ...process.env,
+      ...launchEnv,
       ELECTRON_DISABLE_SANDBOX: '1',
       BILLME_E2E: '1',
       BILLME_E2E_USER_DATA_DIR: userDataDir,

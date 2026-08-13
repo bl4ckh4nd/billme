@@ -275,7 +275,7 @@ Diese Punkte sind keine offenen Integritätsfehler:
 | Pro Desktop E2E | **17/17 Szenarien**, darin **9 adversariale Fälle** |
 | Server API | **37/37 Tests** |
 | Server Data ohne DB-URL (Defaultlauf) | **57 bestanden, 30 erwartete DB-Skips** |
-| Server Data/Worker gegen echtes Postgres (Full-Lauf) | **87/87 Tests** |
+| Server Data gegen echtes Postgres (Full-Lauf) | **87/87 Tests** |
 | Web Pro | Typecheck bestanden |
 
 Zum Prüfzeitpunkt war der getrackte Arbeitsbaum sauber; einzig das
@@ -317,7 +317,7 @@ unveränderlichen DATEV-Download, Produkt-/Routengrenzen und Worker-Flows ab.
 
 Die im Scope geprüfte Buchungspipeline ist durch fokussierte Tests sowie einen
 realen Full-Pro-Postgres-E2E abgesichert. Die abschließende Luna-Prüfung für
-Server und Desktop-zu-Postgres-Import ist als freigegeben dokumentiert; eine
-separate finale Pro-Desktop-Freigabe wird hier nicht behauptet. Eine fachliche
-Steuer-/DATEV-Freigabe, ein Kanzleiimport und die eigentliche
+Server, Desktop-zu-Postgres-Import und Pro Desktop sind als freigegeben
+dokumentiert; es bestehen in diesem Scope keine offenen P0/P1/P2-Befunde. Eine
+fachliche Steuer-/DATEV-Freigabe, ein Kanzleiimport und die eigentliche
 Produktionsausrollung bleiben bewusst getrennt.

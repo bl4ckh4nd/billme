@@ -259,6 +259,50 @@ const disposalBody = z.object({
   overrideReason: z.string().min(1).optional(),
 }).refine((value) => !value.softLockOverride || Boolean(value.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
 
+const correctionOriginalSchema = z.object({
+  documentId: z.string().min(1),
+  documentNumber: z.string().min(1),
+  revision: z.string().min(1),
+  snapshotHash: z.string().min(1),
+  currentSnapshotHash: z.string().optional(),
+  taxEffectiveDate: z.string(),
+  taxBreakdown: z.array(z.object({ rate: z.number(), netAmount: z.number(), taxAmount: z.number(), grossAmount: z.number().optional() })).min(1),
+});
+export const correctionSettlementBodySchema = z.object({
+  id: z.string().min(1),
+  idempotencyKey: z.string().min(1),
+  correctionDate: z.string(),
+  taxEffectiveDate: z.string().optional(),
+  original: correctionOriginalSchema,
+  deltas: z.array(z.object({ rate: z.number(), grossAmount: z.number() })).min(1),
+  documentType: z.enum(['outgoing_invoice', 'incoming_invoice']).optional(),
+  postingDate: z.string().optional(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().optional(),
+  reason: reasonSchema,
+});
+export const closingCommandBodySchema = z.object({
+  command: z.enum(['source_fact', 'fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'shareholder_flow']).optional(),
+  commandType: z.string().optional(),
+  sourceId: z.string().min(1).optional(),
+  sourceRevision: z.string().min(1).optional(),
+  idempotencyKey: z.string().min(1),
+  input: z.record(z.unknown()).optional(),
+  reason: reasonSchema,
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().optional(),
+}).passthrough();
+export const taxExportKindSchema = z.enum(['ustva', 'zm', 'oss']);
+export const taxExportPreparationBodySchema = z.object({
+  kind: taxExportKindSchema,
+  period: z.string().min(1),
+  year: z.number().int().optional(),
+  idempotencyKey: z.string().min(1),
+  reason: reasonSchema,
+  entries: z.array(z.object({ postingDate: z.string(), status: z.enum(['posted', 'reversed']), lines: z.array(z.record(z.unknown())) })).optional(),
+});
+const sourceRunQuery = z.object({ sourceType: z.string().min(1).optional(), limit: z.coerce.number().int().positive().max(500).optional() });
+
 const requireProSession = async (app: FastifyInstance, authHeader: string | undefined) =>
   requireSession(app, 'pro', authHeader);
 
@@ -293,6 +337,109 @@ const CLIENT_CONTROLLED_WORKFLOW_STATUSES = new Set([
 
 export const registerProAccountingRoutes = (app: FastifyInstance) => {
   const prefix = '/api/v1/pro/accounting';
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/source-runs`,
+    query: sourceRunQuery,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return repositoryFor(app).listAccountingSourceRuns(session.scope, query);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/source-runs/:id`,
+    params: idParams,
+    async handler({ request, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      const run = await repositoryFor(app).getAccountingSourceRun(session.scope, params.id);
+      if (!run) throw new ApiError(404, 'Accounting source run not found');
+      return run;
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/corrections`,
+    body: correctionSettlementBodySchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      try {
+        return await repositoryFor(app).createCorrectionSettlement(session.scope, { ...body, mutation: mutationFor(session, body.reason) });
+      } catch (error) {
+        if (error instanceof Error && /IDEMPOTENCY|SOURCE_RUN_CONFLICT|OVER_CREDIT|POSTING_DATE_IN_CLOSED_PERIOD|SOFT_LOCK|UNKNOWN_ACCOUNT|OPOS/.test(error.message)) throw new ApiError(409, error.message);
+        if (error instanceof Error && /INVALID|REQUIRED|ORIGINAL_CHANGED|TAX_EFFECTIVE/.test(error.message)) throw new ApiError(400, error.message);
+        throw error;
+      }
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/closing`,
+    body: closingCommandBodySchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      try {
+        return await repositoryFor(app).runClosingCommand(session.scope, { ...body, mutation: mutationFor(session, body.reason) });
+      } catch (error) {
+        if (error instanceof Error && /SOURCE_RUN_CONFLICT|POSTING_DATE_IN_CLOSED_PERIOD|SOFT_LOCK|UNKNOWN_ACCOUNT|AGGREGATE/.test(error.message)) throw new ApiError(409, error.message);
+        if (error instanceof Error && /INVALID|REJECTED|REQUIRED|MISSING/.test(error.message)) throw new ApiError(400, error.message);
+        throw error;
+      }
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/tax-exports/prepare`,
+    body: taxExportPreparationBodySchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      try {
+        return await repositoryFor(app).prepareTaxExport(session.scope, { ...body, mutation: mutationFor(session, body.reason) });
+      } catch (error) {
+        if (error instanceof Error && /MISSING_EVIDENCE|INVALID_COUNTRY|INVALID_VAT_ID|INVALID_RATE|CATALOG|UNSUPPORTED|INVALID_PERIOD/.test(error.message)) throw new ApiError(422, error.message);
+        throw error;
+      }
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/tax-exports/:kind/:id`,
+    params: z.object({ kind: taxExportKindSchema, id: z.string().min(1) }),
+    async handler({ request, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      try {
+        return await repositoryFor(app).getTaxExportArtifact(session.scope, params.kind, params.id);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'TAX_EXPORT_NOT_FOUND') throw new ApiError(404, 'Tax export preparation not found');
+        throw error;
+      }
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/tax-exports/:kind/:id/export`,
+    params: z.object({ kind: taxExportKindSchema, id: z.string().min(1) }),
+    async handler({ request, reply, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      let content: Uint8Array;
+      try {
+        content = await repositoryFor(app).exportTaxArtifact(session.scope, params.kind, params.id);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'TAX_EXPORT_NOT_FOUND') throw new ApiError(404, 'Tax export preparation not found');
+        throw error;
+      }
+      reply.header('content-type', 'application/json; charset=utf-8');
+      reply.header('content-disposition', `attachment; filename="${params.kind}-preparation.json"`);
+      return reply.send(Buffer.from(content));
+    },
+  });
 
   typedRoute(app, {
     method: 'GET',

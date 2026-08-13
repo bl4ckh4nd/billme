@@ -874,3 +874,20 @@ export const auditHeads = pgTable("audit_heads", {
   sequence: bigint("sequence", { mode: "number" }).notNull(),
   hash: text("hash"),
 });
+
+export const accountingSourceRuns = pgTable("accounting_source_runs", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  sourceType: text("source_type"),
+  sourceId: text("source_id"),
+  sourceRevision: text("source_revision"),
+  idempotencyKey: text("idempotency_key"),
+  status: text("status"),
+  sourceJson: text("source_json"),
+  resultJson: text("result_json"),
+  journalEntryId: text("journal_entry_id"),
+  sourceHash: text("source_hash"),
+  createdBy: text("created_by"),
+  reason: text("reason"),
+  createdAt: text("created_at"),
+});

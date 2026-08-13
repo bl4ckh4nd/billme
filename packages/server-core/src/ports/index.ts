@@ -33,6 +33,12 @@ import type {
   TaxFilingMutation,
   TaxFilingProviderResult,
   TaxFilingRecord,
+  CorrectionDeltaInput,
+  ImmutableOriginalDocument,
+  LinkedCorrectionDocument,
+  TaxExportEntry,
+  TaxExportPeriod,
+  TaxExportPreparation,
 } from '@billme/accounting-shared';
 
 export type { AccountingMutationContext } from '@billme/accounting-shared';
@@ -535,6 +541,71 @@ export interface ProAccountingRepository {
   previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
   confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(scope: TenantScope): Promise<void>;
+}
+
+/**
+ * Server-only persistence seam for immutable source facts and their results.
+ * Every write is keyed by (tenant, source type, source id, source revision).
+ */
+export interface AccountingSourceRunRecord {
+  id: string;
+  tenantId: string;
+  sourceType: string;
+  sourceId: string;
+  sourceRevision: string;
+  idempotencyKey: string;
+  status: 'posted' | 'prepared' | 'noop';
+  source: unknown;
+  result: unknown;
+  journalEntryId?: string;
+  sourceHash: string;
+  createdBy?: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface AccountingSourceRunRepository {
+  listAccountingSourceRuns(scope: TenantScope, args?: { sourceType?: string; limit?: number }): Promise<AccountingSourceRunRecord[]>;
+  getAccountingSourceRun(scope: TenantScope, id: string): Promise<AccountingSourceRunRecord | null>;
+  createCorrectionSettlement(scope: TenantScope, input: {
+    id: string;
+    idempotencyKey: string;
+    correctionDate: string;
+    taxEffectiveDate?: string;
+    original: ImmutableOriginalDocument;
+    deltas: readonly CorrectionDeltaInput[];
+    documentType?: 'outgoing_invoice' | 'incoming_invoice';
+    reason: string;
+    postingDate?: string;
+    softLockOverride?: boolean;
+    overrideReason?: string;
+    mutation?: AccountingMutationContext;
+  }): Promise<{ run: AccountingSourceRunRecord; document: LinkedCorrectionDocument; replayed: boolean }>;
+  runClosingCommand(scope: TenantScope, input: {
+    command?: string;
+    commandType?: string;
+    sourceId?: string;
+    sourceRevision?: string;
+    idempotencyKey?: string;
+    input?: Record<string, unknown>;
+    reason: string;
+    softLockOverride?: boolean;
+    overrideReason?: string;
+    mutation?: AccountingMutationContext;
+    [key: string]: unknown;
+  }): Promise<{ run: AccountingSourceRunRecord; result: unknown; replayed: boolean }>;
+  prepareTaxExport(scope: TenantScope, input: {
+    kind: 'ustva' | 'zm' | 'oss';
+    period: string | TaxExportPeriod;
+    year?: number;
+    entries?: readonly TaxExportEntry[];
+    catalog?: unknown;
+    idempotencyKey?: string;
+    reason: string;
+    mutation?: AccountingMutationContext;
+  }): Promise<{ run: AccountingSourceRunRecord; artifact: TaxExportPreparation; replayed: boolean }>;
+  getTaxExportArtifact(scope: TenantScope, kind: 'ustva' | 'zm' | 'oss', id: string): Promise<TaxExportPreparation>;
+  exportTaxArtifact(scope: TenantScope, kind: 'ustva' | 'zm' | 'oss', id: string): Promise<Uint8Array>;
 }
 
 export type AssetStatus = 'entwurf' | 'aktiv' | 'voll_abgeschrieben' | 'verkauft' | 'stillgelegt';

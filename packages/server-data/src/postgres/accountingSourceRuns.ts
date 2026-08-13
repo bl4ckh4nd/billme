@@ -1,0 +1,415 @@
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  CANONICAL_TAX_CASES,
+  type AccountingMutationContext,
+  type AccountingSourceFact,
+  type CorrectionDeltaInput,
+  type ImmutableOriginalDocument,
+  type LinkedCorrectionDocument,
+  type TaxExportEntry,
+  type TaxExportPreparation,
+  type TaxExportPeriod,
+} from '@billme/accounting-shared';
+import {
+  aggregateOss,
+  aggregateZm,
+  buildCarryForward,
+  buildFiscalClose,
+  buildFxValuation,
+  buildInventoryClosingValuation,
+  buildJournalCommand,
+  buildProvisionCommand,
+  createLinkedCorrection,
+  planAccrualSchedule,
+  planLoanSchedule,
+  prepareUstva,
+  type TaxExportError,
+  validatePayrollBatch,
+  validateShareholderFlow,
+} from '@billme/accounting-engine';
+import type { TenantScope } from '@billme/server-core';
+import { appendWithClient } from './audit.js';
+import {
+  isPostgresPool,
+  withSerializablePostgresTransaction,
+  type PostgresQueryable,
+  type PostgresTransactionClient,
+} from './connection.js';
+
+type SourceRunStatus = 'posted' | 'prepared' | 'noop';
+type TaxExportKind = 'ustva' | 'zm' | 'oss';
+
+export interface AccountingSourceRunRecord {
+  id: string;
+  tenantId: string;
+  sourceType: string;
+  sourceId: string;
+  sourceRevision: string;
+  idempotencyKey: string;
+  status: SourceRunStatus;
+  source: unknown;
+  result: unknown;
+  journalEntryId?: string;
+  sourceHash: string;
+  createdBy?: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface CorrectionSettlementInput {
+  id: string;
+  idempotencyKey: string;
+  correctionDate: string;
+  taxEffectiveDate?: string;
+  original: ImmutableOriginalDocument;
+  deltas: readonly CorrectionDeltaInput[];
+  documentType?: 'outgoing_invoice' | 'incoming_invoice';
+  reason: string;
+  postingDate?: string;
+  softLockOverride?: boolean;
+  overrideReason?: string;
+  mutation?: AccountingMutationContext;
+}
+
+export interface ClosingCommandInput {
+  command?: string;
+  commandType?: string;
+  sourceId?: string;
+  sourceRevision?: string;
+  idempotencyKey?: string;
+  input?: Record<string, unknown>;
+  reason: string;
+  softLockOverride?: boolean;
+  overrideReason?: string;
+  mutation?: AccountingMutationContext;
+  [key: string]: unknown;
+}
+
+export interface TaxExportPreparationInput {
+  kind: TaxExportKind;
+  period: string | TaxExportPeriod;
+  year?: number;
+  entries?: readonly TaxExportEntry[];
+  catalog?: Parameters<typeof prepareUstva>[0]['catalog'];
+  idempotencyKey?: string;
+  reason: string;
+  mutation?: AccountingMutationContext;
+}
+
+export interface AccountingSourceRunRepository {
+  listAccountingSourceRuns(scope: TenantScope, args?: { sourceType?: string; limit?: number }): Promise<AccountingSourceRunRecord[]>;
+  getAccountingSourceRun(scope: TenantScope, id: string): Promise<AccountingSourceRunRecord | null>;
+  createCorrectionSettlement(scope: TenantScope, input: CorrectionSettlementInput): Promise<{ run: AccountingSourceRunRecord; document: LinkedCorrectionDocument; replayed: boolean }>;
+  runClosingCommand(scope: TenantScope, input: ClosingCommandInput): Promise<{ run: AccountingSourceRunRecord; result: unknown; replayed: boolean }>;
+  prepareTaxExport(scope: TenantScope, input: TaxExportPreparationInput): Promise<{ run: AccountingSourceRunRecord; artifact: TaxExportPreparation; replayed: boolean }>;
+  getTaxExportArtifact(scope: TenantScope, kind: TaxExportKind, id: string): Promise<TaxExportPreparation>;
+  exportTaxArtifact(scope: TenantScope, kind: TaxExportKind, id: string): Promise<Uint8Array>;
+}
+
+const q = async <T = any>(db: PostgresQueryable, text: string, values: unknown[] = []): Promise<T[]> => (await db.query(text, values)).rows as T[];
+const inTx = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
+  isPostgresPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
+const tenant = (scope: TenantScope): string => scope.tenantId;
+const now = (): string => new Date().toISOString();
+const isoDate = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+};
+const periodOf = (date: string): string => date.slice(0, 7);
+const round = (value: unknown): number => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+const parse = <T>(value: unknown, fallback: T): T => {
+  if (value == null) return fallback;
+  try { return typeof value === 'string' ? JSON.parse(value) as T : value as T; } catch { return fallback; }
+};
+const canonical = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]));
+};
+const stableJson = (value: unknown): string => JSON.stringify(canonical(value));
+const hash = (value: unknown): string => createHash('sha256').update(stableJson(value)).digest('hex');
+const required = (value: unknown, code: string): string => {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(code);
+  return value.trim();
+};
+
+const mapRun = (row: any): AccountingSourceRunRecord => ({
+  id: row.id,
+  tenantId: row.tenant_id,
+  sourceType: row.source_type,
+  sourceId: row.source_id,
+  sourceRevision: row.source_revision,
+  idempotencyKey: row.idempotency_key,
+  status: row.status,
+  source: parse(row.source_json, {}),
+  result: parse(row.result_json, {}),
+  journalEntryId: row.journal_entry_id ?? undefined,
+  sourceHash: row.source_hash,
+  createdBy: row.created_by ?? undefined,
+  reason: row.reason,
+  createdAt: row.created_at,
+});
+
+const mutationReason = (input: { reason: string; mutation?: AccountingMutationContext }): string => {
+  const reason = input.mutation?.reason?.trim() || input.reason.trim();
+  if (!reason) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
+  return reason;
+};
+
+const assertPeriod = async (
+  db: PostgresQueryable,
+  scope: TenantScope,
+  postingDate: string,
+  period: string,
+  softLockOverride?: boolean,
+  overrideReason?: string,
+): Promise<void> => {
+  if (!isoDate(postingDate)) throw new Error('INVALID_POSTING_DATE');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period) || period !== periodOf(postingDate)) throw new Error('INVALID_PERIOD');
+  const rows = await q<any>(db, `SELECT status FROM accounting_periods WHERE tenant_id=$1 AND period=$2 FOR UPDATE`, [tenant(scope), period]);
+  const status = rows[0]?.status ?? 'open';
+  if (status === 'closed') throw new Error('POSTING_DATE_IN_CLOSED_PERIOD');
+  if (status === 'soft_locked' && (!softLockOverride || !overrideReason?.trim())) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED');
+};
+
+const assertAccounts = async (db: PostgresQueryable, accounts: readonly string[]): Promise<void> => {
+  const requested = [...new Set(accounts.filter(Boolean))];
+  if (!requested.length) throw new Error('INVALID_ACCOUNT');
+  const rows = await q<any>(db, `SELECT account_number FROM ledger_accounts WHERE account_number = ANY($1::text[])`, [requested]);
+  // A fresh test/tenant database can be initialized before the optional
+  // catalog projection. Existing posting code treats that state as open.
+  if (!rows.length) {
+    const count = await q<any>(db, `SELECT COUNT(*)::int AS count FROM ledger_accounts`);
+    if (Number(count[0]?.count ?? 0) === 0) return;
+  }
+  const found = new Set(rows.map((row) => String(row.account_number)));
+  const missing = requested.find((account) => !found.has(account));
+  if (missing) throw new Error(`UNKNOWN_ACCOUNT:${missing}`);
+};
+
+const chartAndMappings = async (db: PostgresQueryable, scope: TenantScope): Promise<{ chart: string; mappings: Record<string, string> }> => {
+  const policy = (await q<any>(db, `SELECT active_chart FROM accounting_policies WHERE tenant_id=$1`, [tenant(scope)]))[0];
+  const chart = policy?.active_chart === 'SKR04' ? 'SKR04' : 'SKR03';
+  const defaults = chart === 'SKR04'
+    ? { accounts_receivable: '1200', accounts_payable: '3300', revenue: '4400', expense: '6300', output_vat: '3806', input_vat: '1406' }
+    : { accounts_receivable: '1400', accounts_payable: '1600', revenue: '8400', expense: '4900', output_vat: '1776', input_vat: '1576' };
+  const rows = await q<any>(db, `SELECT role,account_number FROM accounting_account_mappings WHERE tenant_id=$1 AND chart=$2`, [tenant(scope), chart]);
+  for (const row of rows) if (row.role in defaults) defaults[row.role as keyof typeof defaults] = String(row.account_number);
+  return { chart, mappings: defaults };
+};
+
+const createRun = async (
+  db: PostgresQueryable,
+  scope: TenantScope,
+  input: {
+    sourceType: string;
+    sourceId: string;
+    sourceRevision: string;
+    idempotencyKey: string;
+    status: SourceRunStatus;
+    source: unknown;
+    result: unknown;
+    journalEntryId?: string;
+    reason: string;
+    mutation?: AccountingMutationContext;
+  },
+): Promise<{ run: AccountingSourceRunRecord; replayed: boolean }> => {
+  const t = tenant(scope);
+  const sourceHash = hash(input.source);
+  const keyOwner = (await q<any>(db, `SELECT source_type,source_id,source_revision FROM accounting_source_runs WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE`, [t, input.idempotencyKey]))[0];
+  if (keyOwner && (keyOwner.source_type !== input.sourceType || keyOwner.source_id !== input.sourceId || keyOwner.source_revision !== input.sourceRevision)) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
+  const existing = (await q<any>(db, `SELECT * FROM accounting_source_runs WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND source_revision=$4 FOR UPDATE`, [t, input.sourceType, input.sourceId, input.sourceRevision]))[0];
+  if (existing) {
+    if (existing.source_hash !== sourceHash || existing.idempotency_key !== input.idempotencyKey) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
+    return { run: mapRun(existing), replayed: true };
+  }
+  const id = randomUUID();
+  const createdAt = now();
+  await q(db, `INSERT INTO accounting_source_runs (id,tenant_id,source_type,source_id,source_revision,idempotency_key,status,source_json,result_json,journal_entry_id,source_hash,created_by,reason,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, [id, t, input.sourceType, input.sourceId, input.sourceRevision, input.idempotencyKey, input.status, stableJson(input.source), stableJson(input.result), input.journalEntryId ?? null, sourceHash, input.mutation?.actor?.id ?? input.mutation?.actor?.displayName ?? null, input.reason, createdAt]);
+  await appendWithClient(db as PostgresTransactionClient, scope, { occurredAt: createdAt, action: 'accounting_source_run.create', reason: input.reason, actor: input.mutation?.actor ?? { type: 'service', displayName: 'server-accounting' }, subject: { entityType: 'accounting_source_run', entityId: id, tenantId: t }, change: { before: undefined, after: { sourceType: input.sourceType, sourceId: input.sourceId, sourceRevision: input.sourceRevision, status: input.status, journalEntryId: input.journalEntryId } } });
+  return { run: mapRun((await q<any>(db, `SELECT * FROM accounting_source_runs WHERE tenant_id=$1 AND id=$2`, [t, id]))[0]), replayed: false };
+};
+
+const insertCommand = async (
+  db: PostgresQueryable,
+  scope: TenantScope,
+  command: any,
+  options: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext },
+): Promise<string> => {
+  const entry = command.entry;
+  await assertPeriod(db, scope, entry.postingDate, entry.period, options.softLockOverride, options.overrideReason);
+  await assertAccounts(db, entry.lines.map((line: any) => line.accountNumber));
+  const existing = (await q<any>(db, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), entry.id]))[0];
+  if (existing) return existing.id;
+  const numberRows = await q<any>(db, `SELECT COALESCE(MAX(entry_number),0)+1 AS next_number FROM journal_entries WHERE tenant_id=$1`, [tenant(scope)]);
+  const entryNumber = Number(numberRows[0]?.next_number ?? 1);
+  const createdAt = now();
+  await q(db, `INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'posted',$10,$11,$12)`, [entry.id, tenant(scope), entryNumber, entry.postingDate, entry.documentDate ?? entry.postingDate, entry.bookingText, entry.reference ?? null, entry.period, entry.fiscalYear, entry.sourceType ?? 'standalone_source', entry.sourceKey ?? entry.id, createdAt]);
+  for (const [index, line] of entry.lines.entries()) {
+    await q(db, `INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount,tax_case_key,tax_rate,net_amount,tax_amount,gross_amount,country_code,counterparty_vat_id,evidence_type,evidence_reference,datev_sachverhalt_ll,memo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, [`${entry.id}:line:${index + 1}`, tenant(scope), entry.id, index + 1, line.accountNumber, round(line.debitAmount), round(line.creditAmount), line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, line.evidenceType ?? null, line.evidenceReference ?? null, line.datevSachverhaltLl ?? null, line.memo ?? null]);
+  }
+  return entry.id;
+};
+
+const correctionLines = async (db: PostgresQueryable, scope: TenantScope, document: LinkedCorrectionDocument, documentType: 'outgoing_invoice' | 'incoming_invoice'): Promise<any[]> => {
+  const { mappings } = await chartAndMappings(db, scope);
+  const lines: any[] = [];
+  for (const [index, delta] of document.deltas.entries()) {
+    const taxCaseKey = delta.rate === 19 ? 'DE_STD_19' : delta.rate === 7 ? 'DE_STD_7' : 'DE_ZERO_EXEMPT';
+    if (documentType === 'incoming_invoice') {
+      lines.push({ id: `${document.id}:expense:${index}`, accountNumber: mappings.expense, debitAmount: 0, creditAmount: -delta.netAmount, taxCaseKey, netAmount: delta.netAmount, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction' });
+      if (delta.taxAmount) lines.push({ id: `${document.id}:tax:${index}`, accountNumber: mappings.input_vat, debitAmount: 0, creditAmount: -delta.taxAmount, taxCaseKey, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction VAT' });
+      lines.push({ id: `${document.id}:payable:${index}`, accountNumber: mappings.accounts_payable, debitAmount: -delta.grossAmount, creditAmount: 0, memo: 'Linked correction payable' });
+    } else {
+      lines.push({ id: `${document.id}:revenue:${index}`, accountNumber: mappings.revenue, debitAmount: -delta.netAmount, creditAmount: 0, taxCaseKey, netAmount: delta.netAmount, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction' });
+      if (delta.taxAmount) lines.push({ id: `${document.id}:tax:${index}`, accountNumber: mappings.output_vat, debitAmount: -delta.taxAmount, creditAmount: 0, taxCaseKey, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction VAT' });
+      lines.push({ id: `${document.id}:receivable:${index}`, accountNumber: mappings.accounts_receivable, debitAmount: 0, creditAmount: -delta.grossAmount, memo: 'Linked correction receivable' });
+    }
+  }
+  return lines;
+};
+
+const sourceEntries = async (db: PostgresQueryable, scope: TenantScope, supplied?: readonly TaxExportEntry[]): Promise<TaxExportEntry[]> => {
+  if (supplied) return [...supplied];
+  const rows = await q<any>(db, `SELECT je.id AS entry_id,je.posting_date,je.status,jl.tax_case_key,jl.tax_rate,jl.net_amount,jl.tax_amount,jl.gross_amount,jl.country_code,jl.counterparty_vat_id,jl.evidence_type,jl.evidence_reference,jl.datev_sachverhalt_ll,jl.debit_amount,jl.credit_amount FROM journal_entries je JOIN journal_lines jl ON jl.tenant_id=je.tenant_id AND jl.entry_id=je.id WHERE je.tenant_id=$1 AND je.status IN ('posted','reversed') ORDER BY je.posting_date,je.entry_number,jl.line_no`, [tenant(scope)]);
+  const grouped = new Map<string, TaxExportEntry>();
+  for (const row of rows) {
+    const key = `${row.posting_date}:${row.status}:${row.entry_id ?? ''}`;
+    const current: TaxExportEntry = grouped.get(key) ?? { postingDate: row.posting_date, status: row.status, lines: [] };
+    if (row.tax_case_key) current.lines.push({ taxCaseKey: row.tax_case_key, direction: 'output', netAmount: row.net_amount == null ? undefined : Number(row.net_amount), taxAmount: row.tax_amount == null ? undefined : Number(row.tax_amount), grossAmount: row.gross_amount == null ? undefined : Number(row.gross_amount), taxRate: row.tax_rate == null ? undefined : Number(row.tax_rate), countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, datevSachverhaltLl: row.datev_sachverhalt_ll ?? undefined });
+    grouped.set(key, current);
+  }
+  return [...grouped.values()];
+};
+
+const defaultUstvaCatalog = (taxYear: number) => {
+  const source = CANONICAL_TAX_CASES.map((entry) => entry.key).join('|');
+  return { id: `billme-tax-catalog-${taxYear}`, taxYear, version: 'canonical-1', source: 'billme-canonical-tax-catalog', sourceHash: hash(source), official: false, entries: CANONICAL_TAX_CASES.map((entry, index) => ({ taxCaseKey: entry.key, kennziffer: String(index + 1).padStart(2, '0'), direction: 'output' as const })) };
+};
+
+const closingSourceType = (command: string): string => ({ fiscal_close: 'fiscal_close', carry_forward: 'carry_forward', provision: 'provision', accrual: 'accrual', inventory_closing: 'inventory_closing', fx_valuation: 'fx_valuation', loan_schedule: 'loan_schedule', payroll_batch: 'payroll_batch', shareholder_flow: 'shareholder_flow', source_fact: 'standalone_source' }[command] ?? command);
+
+const buildClosingResult = (command: string, input: Record<string, any>): any => {
+  switch (command) {
+    case 'source_fact': return buildJournalCommand(input as AccountingSourceFact);
+    case 'fiscal_close': return buildFiscalClose(input as any);
+    case 'carry_forward': return buildCarryForward(input as any);
+    case 'provision': return buildProvisionCommand(input as any);
+    case 'accrual': return planAccrualSchedule(input as any);
+    case 'inventory_closing': return buildInventoryClosingValuation(input as any);
+    case 'fx_valuation': return buildFxValuation(input as any);
+    case 'loan_schedule': return planLoanSchedule(input as any);
+    case 'payroll_batch': return validatePayrollBatch(input as any);
+    case 'shareholder_flow': return validateShareholderFlow(input as any);
+    default: throw new Error('UNKNOWN_CLOSING_COMMAND');
+  }
+};
+
+export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryable): AccountingSourceRunRepository => ({
+  async listAccountingSourceRuns(scope, args = {}) {
+    const values: unknown[] = [tenant(scope)];
+    const condition = ['tenant_id=$1'];
+    if (args.sourceType) { values.push(args.sourceType); condition.push(`source_type=$${values.length}`); }
+    values.push(Math.min(500, Math.max(1, args.limit ?? 100)));
+    return (await q<any>(db, `SELECT * FROM accounting_source_runs WHERE ${condition.join(' AND ')} ORDER BY created_at DESC LIMIT $${values.length}`, values)).map(mapRun);
+  },
+  async getAccountingSourceRun(scope, id) {
+    const row = (await q<any>(db, `SELECT * FROM accounting_source_runs WHERE tenant_id=$1 AND id=$2`, [tenant(scope), id]))[0];
+    return row ? mapRun(row) : null;
+  },
+  async createCorrectionSettlement(scope, input) {
+    const reason = mutationReason(input);
+    const correction = createLinkedCorrection({ id: required(input.id, 'CORRECTION_ID_REQUIRED'), idempotencyKey: required(input.idempotencyKey, 'IDEMPOTENCY_KEY_REQUIRED'), correctionDate: input.correctionDate, taxEffectiveDate: input.taxEffectiveDate, original: input.original, deltas: input.deltas });
+    const sourceType = 'correction';
+    const source = { ...input, mutation: undefined, reason: undefined, document: correction.document };
+    return inTx(db, async (tx) => {
+      const existing = (await q<any>(tx, `SELECT * FROM accounting_source_runs WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND source_revision=$4 FOR UPDATE`, [tenant(scope), sourceType, correction.document.id, correction.document.originalRevision]))[0];
+      if (existing) {
+        if (existing.source_hash !== hash(source) || existing.idempotency_key !== correction.document.idempotencyKey) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
+        return { run: mapRun(existing), document: parse(existing.result_json, correction.document), replayed: true };
+      }
+      const keyOwner = (await q<any>(tx, `SELECT source_type,source_id,source_revision FROM accounting_source_runs WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE`, [tenant(scope), correction.document.idempotencyKey]))[0];
+      if (keyOwner) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
+      const postingDate = input.postingDate ?? correction.document.correctionDate;
+      const lines = await correctionLines(tx, scope, correction.document, input.documentType ?? 'outgoing_invoice');
+      const command = { entry: { id: `correction:${correction.document.id}`, postingDate, documentDate: correction.document.taxEffectiveDate, bookingText: `Korrektur zu ${correction.document.originalDocumentNumber}`, reference: correction.document.originalDocumentNumber, period: periodOf(postingDate), fiscalYear: Number(postingDate.slice(0, 4)), status: 'posted', sourceType: 'standalone_source', sourceKey: correction.document.id, lines } };
+      const journalEntryId = await insertCommand(tx, scope, command, input);
+      const run = await createRun(tx, scope, { sourceType, sourceId: correction.document.id, sourceRevision: correction.document.originalRevision, idempotencyKey: correction.document.idempotencyKey, status: 'posted', source, result: correction.document, journalEntryId, reason, mutation: input.mutation });
+      const originalItem = (await q<any>(tx, `SELECT * FROM open_items WHERE tenant_id=$1 AND source_id=$2 AND source_type IN ('outgoing_invoice','incoming_invoice') FOR UPDATE`, [tenant(scope), correction.document.originalDocumentId]))[0];
+      if (originalItem) {
+        const correctionItemId = `correction-open-item:${correction.document.id}`;
+        await q(tx, `INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,$3,$4,'correction',$5,$6,$7,$7,$8,0,$8,'open',$9,$10,$10) ON CONFLICT (id) DO NOTHING`, [correctionItemId, tenant(scope), originalItem.party_type, originalItem.party_id, correction.document.id, `Korrektur ${correction.document.originalDocumentNumber}`, postingDate, correction.document.creditGrossAmount, journalEntryId, now()]);
+      }
+      return { run: run.run, document: correction.document, replayed: run.replayed };
+    });
+  },
+  async runClosingCommand(scope, input) {
+    const reason = mutationReason(input);
+    const commandName = String(input.commandType ?? input.command ?? 'source_fact');
+    const sourceInput = { ...(input.input ?? input) } as Record<string, any>;
+    delete sourceInput.reason; delete sourceInput.command; delete sourceInput.commandType; delete sourceInput.input; delete sourceInput.mutation; delete sourceInput.idempotencyKey; delete sourceInput.softLockOverride; delete sourceInput.overrideReason;
+    const sourceType = closingSourceType(commandName);
+    const sourceId = required(input.sourceId ?? sourceInput.sourceId ?? sourceInput.batchId ?? sourceInput.flowId, 'MISSING_SOURCE_ID');
+    const sourceRevision = required(input.sourceRevision ?? sourceInput.sourceRevision, 'MISSING_SOURCE_REVISION');
+    sourceInput.sourceId ??= sourceId;
+    sourceInput.sourceRevision ??= sourceRevision;
+    const built = buildClosingResult(commandName, sourceInput);
+    if (built.status === 'rejected' || built.status === 'invalid') throw new Error(`CLOSING_COMMAND_REJECTED:${built.errors?.[0]?.code ?? 'INVALID'}`);
+    const value = built.value ?? built;
+    const command = value.command ?? value.commands?.[0];
+    const resultJson = { command: commandName, result: value, status: built.status };
+    const idempotencyKey = required(input.idempotencyKey, 'IDEMPOTENCY_KEY_REQUIRED');
+    return inTx(db, async (tx) => {
+      const existing = (await q<any>(tx, `SELECT * FROM accounting_source_runs WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND source_revision=$4 FOR UPDATE`, [tenant(scope), sourceType, sourceId, sourceRevision]))[0];
+      const source = { command: commandName, input: sourceInput };
+      if (existing) {
+        if (existing.source_hash !== hash(source) || existing.idempotency_key !== idempotencyKey) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
+        return { run: mapRun(existing), result: parse(existing.result_json, resultJson), replayed: true };
+      }
+      const journalEntryId = command ? await insertCommand(tx, scope, command, input) : undefined;
+      const run = await createRun(tx, scope, { sourceType, sourceId, sourceRevision, idempotencyKey, status: command ? 'posted' : 'noop', source, result: resultJson, journalEntryId, reason, mutation: input.mutation });
+      return { run: run.run, result: resultJson, replayed: run.replayed };
+    });
+  },
+  async prepareTaxExport(scope, input) {
+    const reason = mutationReason(input);
+    const period = typeof input.period === 'string' ? { period: input.period, year: input.year } : input.period;
+    const entries = await sourceEntries(db, scope, input.entries);
+    const catalog = input.catalog ?? defaultUstvaCatalog(Number(String(period.period).slice(0, 4)));
+    let artifact: TaxExportPreparation;
+    try {
+      artifact = input.kind === 'ustva'
+        ? prepareUstva({ period, catalog, entries })
+        : input.kind === 'zm'
+          ? aggregateZm({ period, entries })
+          : aggregateOss({ period, entries });
+    } catch (error) {
+      const taxError = error as TaxExportError;
+      throw new Error(`${taxError.code ?? 'TAX_EXPORT_INVALID'}:${taxError.message ?? 'tax export preparation failed'}`);
+    }
+    const sourceType = `tax_export_${input.kind}`;
+    const sourceId = period.period;
+    const source = { kind: input.kind, period, catalog: input.kind === 'ustva' ? catalog : undefined, entries };
+    const sourceRevision = hash(source);
+    const idempotencyKey = required(input.idempotencyKey, 'IDEMPOTENCY_KEY_REQUIRED');
+    return inTx(db, async (tx) => {
+      const existing = (await q<any>(tx, `SELECT * FROM accounting_source_runs WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND source_revision=$4 FOR UPDATE`, [tenant(scope), sourceType, sourceId, sourceRevision]))[0];
+      if (existing) {
+        if (existing.idempotency_key !== idempotencyKey) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
+        return { run: mapRun(existing), artifact: parse(existing.result_json, artifact), replayed: true };
+      }
+      const run = await createRun(tx, scope, { sourceType, sourceId, sourceRevision, idempotencyKey, status: 'prepared', source, result: artifact, reason, mutation: input.mutation });
+      return { run: run.run, artifact, replayed: run.replayed };
+    });
+  },
+  async getTaxExportArtifact(scope, kind, id) {
+    const run = await this.getAccountingSourceRun(scope, id);
+    if (!run || run.sourceType !== `tax_export_${kind}`) throw new Error('TAX_EXPORT_NOT_FOUND');
+    return run.result as TaxExportPreparation;
+  },
+  async exportTaxArtifact(scope, kind, id) {
+    const artifact = await this.getTaxExportArtifact(scope, kind, id);
+    return new TextEncoder().encode(stableJson(artifact));
+  },
+});

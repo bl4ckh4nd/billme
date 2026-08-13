@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
+    "@billme/accounting-shared": "workspace:*",
     "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/finance-intelligence": "workspace:*",
@@ -25,6 +26,14 @@
     "./eurCatalog": {
       "types": "./src/eurCatalog.ts",
       "default": "./src/eurCatalog.ts"
+    },
+    "./eur": {
+      "types": "./src/eur/index.ts",
+      "default": "./src/eur/index.ts"
+    },
+    "./eur/annexCatalog": {
+      "types": "./src/eur/annexCatalog.ts",
+      "default": "./src/eur/annexCatalog.ts"
     },
     "./eurSuggestion": {
       "types": "./src/eurSuggestion.ts",

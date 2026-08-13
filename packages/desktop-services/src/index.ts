@@ -1,5 +1,6 @@
 export * from './portalClient';
 export * from './eurCatalog';
+export * from './eur';
 export * from './eurSuggestion';
 export * from './csvImport';
 export * from './mockData';

@@ -916,6 +916,9 @@ importers:
 
   packages/desktop-services:
     dependencies:
+      '@billme/accounting-shared':
+        specifier: workspace:*
+        version: link:../accounting-shared
       '@billme/desktop-contracts':
         specifier: workspace:*
         version: link:../desktop-contracts

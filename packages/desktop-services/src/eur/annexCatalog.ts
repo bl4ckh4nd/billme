@@ -1,4 +1,11 @@
 import annexCatalog2025 from './annexes-2025.json';
+import annexCatalog2026 from './annexes-2026.json';
+import {
+  calculateEurAnnexValues,
+  type EurAnnexValueFact,
+  type EurAnnexValueOptions,
+  type EurAnnexValueResult,
+} from '@billme/accounting-shared';
 import {
   validateCatalogManifest,
   type CatalogManifest,
@@ -13,7 +20,9 @@ export type EurAnnexLineDef = {
   kennziffer?: string;
   label: string;
   kind: EurAnnexLineKind;
+  operation?: 'sum' | 'min' | 'max';
   computedFromIds?: string[];
+  computedTerms?: Array<{ id: string; sign: 1 | -1 }>;
 };
 
 export type EurAnnexCatalog = {
@@ -25,7 +34,7 @@ export type EurAnnexCatalog = {
   manifest: CatalogManifest;
 };
 
-const annexSource = annexCatalog2025 as {
+type AnnexSource = {
   year: number;
   sourceVersion: string;
   sourceName: string;
@@ -36,16 +45,20 @@ const annexSource = annexCatalog2025 as {
   scope: 'de-sole-proprietor';
   annexes: Array<{ id: EurAnnexId; title: string; lines: EurAnnexLineDef[] }>;
 };
+const annexSources: Record<number, AnnexSource> = {
+  2025: annexCatalog2025 as AnnexSource,
+  2026: annexCatalog2026 as AnnexSource,
+};
 
-const manifestFor = (annex: EurAnnexId): CatalogManifest => ({
-  id: `anlage-${annex.toLowerCase()}-2025`,
-  title: annexSource.annexes.find((entry) => entry.id === annex)?.title ?? annex,
-  version: annexSource.sourceVersion,
-  validFrom: annexSource.validFrom,
-  validTo: annexSource.validTo,
-  sourceName: annexSource.sourceName,
-  sourceUrl: annexSource.sourceUrl,
-  sha256: annexSource.sourceSha256,
+const manifestFor = (year: number, annex: EurAnnexId, source: AnnexSource): CatalogManifest => ({
+  id: `anlage-${annex.toLowerCase()}-${year}`,
+  title: source.annexes.find((entry) => entry.id === annex)?.title ?? annex,
+  version: source.sourceVersion,
+  validFrom: source.validFrom,
+  validTo: source.validTo,
+  sourceName: source.sourceName,
+  sourceUrl: source.sourceUrl,
+  sha256: source.sourceSha256,
   scope: 'de-sole-proprietor',
   delivery: 'print-form-only',
   elsterReady: false,
@@ -76,7 +89,13 @@ const validateLines = (annex: EurAnnexId, lines: EurAnnexLineDef[]): void => {
     if (visiting.has(id)) throw new Error(`Cycle detected in ${annex} lines at: ${id}`);
     visiting.add(id);
     const line = byId.get(id);
-    for (const childId of line?.computedFromIds ?? []) {
+    for (const term of line?.computedTerms ?? []) {
+      if (term.sign !== 1 && term.sign !== -1) throw new Error(`Invalid ${annex} term sign: ${line.id}`);
+    }
+    for (const childId of [
+      ...(line?.computedFromIds ?? []),
+      ...(line?.computedTerms ?? []).map((term) => term.id),
+    ]) {
       if (!byId.has(childId)) throw new Error(`${annex} line ${id} references missing id: ${childId}`);
       visit(childId);
     }
@@ -87,7 +106,7 @@ const validateLines = (annex: EurAnnexId, lines: EurAnnexLineDef[]): void => {
 };
 
 export const validateEurAnnexCatalog = (catalog: EurAnnexCatalog): void => {
-  if (catalog.year !== 2025 || !['AVEÜR', 'SZ'].includes(catalog.id)) {
+  if (![2025, 2026].includes(catalog.year) || !['AVEÜR', 'SZ'].includes(catalog.id)) {
     throw new Error(`Unsupported EÜR annex catalog: ${catalog.id}:${catalog.year}`);
   }
   if (catalog.scope !== 'de-sole-proprietor') throw new Error(`Unsupported EÜR annex scope: ${catalog.id}`);
@@ -96,7 +115,8 @@ export const validateEurAnnexCatalog = (catalog: EurAnnexCatalog): void => {
 };
 
 export const getEurAnnexCatalog = (year: number, annex: EurAnnexId): EurAnnexCatalog => {
-  if (year !== 2025) throw new Error(`EUR_ANNEX_CATALOG_UNAVAILABLE:${year}`);
+  const annexSource = annexSources[year];
+  if (!annexSource) throw new Error(`EUR_ANNEX_CATALOG_UNAVAILABLE:${year}`);
   const source = annexSource.annexes.find((entry) => entry.id === annex);
   if (!source) throw new Error(`EUR_ANNEX_CATALOG_UNAVAILABLE:${annex}:${year}`);
   const catalog: EurAnnexCatalog = {
@@ -105,16 +125,29 @@ export const getEurAnnexCatalog = (year: number, annex: EurAnnexId): EurAnnexCat
     title: source.title,
     scope: annexSource.scope,
     lines: source.lines,
-    manifest: manifestFor(source.id),
+    manifest: manifestFor(year, source.id, annexSource),
   };
   validateEurAnnexCatalog(catalog);
   return catalog;
 };
 
 export const getEurAnnexCatalogsForYear = (year: number): EurAnnexCatalog[] => {
-  if (year !== 2025) throw new Error(`EUR_ANNEX_CATALOG_UNAVAILABLE:${year}`);
+  if (!annexSources[year]) throw new Error(`EUR_ANNEX_CATALOG_UNAVAILABLE:${year}`);
   return (['AVEÜR', 'SZ'] as const).map((annex) => getEurAnnexCatalog(year, annex));
 };
+
+export const calculateEurAnnexFacts = (
+  year: number,
+  annex: EurAnnexId,
+  facts: readonly EurAnnexValueFact[],
+  options: Omit<EurAnnexValueOptions, 'taxYear'> = {},
+): EurAnnexValueResult => {
+  const catalog = getEurAnnexCatalog(year, annex);
+  const requiredLineIds = options.requiredLineIds ?? catalog.lines.filter((line) => line.kind !== 'computed').map((line) => line.id);
+  return calculateEurAnnexValues(catalog.lines, facts, { ...options, requiredLineIds, taxYear: year });
+};
+
+export const calculateEurAnnexTotals = calculateEurAnnexFacts;
 
 export const getAnnexCatalogForYear = getEurAnnexCatalog;
 export const listEurAnnexCatalogs = getEurAnnexCatalogsForYear;

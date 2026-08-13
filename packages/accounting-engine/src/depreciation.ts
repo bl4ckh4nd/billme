@@ -21,6 +21,35 @@ export interface AssetDisposalResult {
   gainLoss: number;
 }
 
+export interface IabLifecycleInput {
+  formedYear: number;
+  formedAmount: number;
+  usedAmount?: number;
+  repaidAmount?: number;
+  asOfYear?: number;
+}
+
+export interface IabLifecycleResult {
+  formedAmount: number;
+  usedAmount: number;
+  repaidAmount: number;
+  remainingAmount: number;
+  status: 'open' | 'partially-used' | 'used' | 'repaid' | 'expired';
+}
+
+export interface SpecialDepreciationLifecycleInput {
+  acquisitionCost: number;
+  recognizedAmount?: number;
+  maxRate?: number;
+  asOfYear?: number;
+}
+
+export interface SpecialDepreciationLifecycleResult {
+  eligibleAmount: number;
+  recognizedAmount: number;
+  remainingAmount: number;
+}
+
 /**
  * Small default subset of the German BMF AfA tables. It is intentionally not
  * exhaustive; callers may override usefulLifeYears per asset.
@@ -43,6 +72,41 @@ export const DEPRECIATION_EXPENSE_ACCOUNTS = {
 
 const toCents = (value: number): number => Math.round((value + Number.EPSILON) * 100);
 const fromCents = (value: number): number => value / 100;
+
+/** Minimal §7g IAB lifecycle facts; submission and tax authority validation stay outside this engine. */
+export const calculateIabLifecycle = (input: IabLifecycleInput): IabLifecycleResult => {
+  if (!Number.isInteger(input.formedYear) || input.formedYear < 2000) throw new RangeError('Invalid IAB formation year');
+  if (input.asOfYear !== undefined && (!Number.isInteger(input.asOfYear) || input.asOfYear < input.formedYear)) throw new RangeError('Invalid IAB as-of year');
+  const formed = toCents(input.formedAmount);
+  const used = toCents(input.usedAmount ?? 0);
+  const repaid = toCents(input.repaidAmount ?? 0);
+  if (![input.formedAmount, input.usedAmount ?? 0, input.repaidAmount ?? 0].every(Number.isFinite) || formed <= 0 || used < 0 || repaid < 0 || used + repaid > formed) throw new RangeError('IAB lifecycle allocation exceeds formed amount');
+  const remaining = formed - used - repaid;
+  const status = remaining === 0
+    ? (repaid > 0 && used === 0 ? 'repaid' : 'used')
+    : (input.asOfYear !== undefined && input.asOfYear > input.formedYear + 3 ? 'expired' : (used > 0 || repaid > 0 ? 'partially-used' : 'open'));
+  return {
+    formedAmount: fromCents(formed),
+    usedAmount: fromCents(used),
+    repaidAmount: fromCents(repaid),
+    remainingAmount: fromCents(remaining),
+    status,
+  };
+};
+
+/** Minimal §7g special-depreciation lifecycle facts with the statutory 20% ceiling. */
+export const calculateSpecialDepreciationLifecycle = (
+  input: SpecialDepreciationLifecycleInput,
+): SpecialDepreciationLifecycleResult => {
+  const acquisition = toCents(input.acquisitionCost);
+  const rate = input.maxRate ?? 0.2;
+  if (!Number.isFinite(input.acquisitionCost) || !Number.isFinite(input.recognizedAmount ?? 0) || acquisition < 0 || !Number.isFinite(rate) || rate < 0 || rate > 1) throw new RangeError('Invalid special depreciation base or rate');
+  if (input.asOfYear !== undefined && (!Number.isInteger(input.asOfYear) || input.asOfYear < 2000)) throw new RangeError('Invalid special depreciation year');
+  const eligible = Math.round(acquisition * rate);
+  const recognized = toCents(input.recognizedAmount ?? 0);
+  if (recognized < 0 || recognized > eligible) throw new RangeError('Special depreciation exceeds the eligible amount');
+  return { eligibleAmount: fromCents(eligible), recognizedAmount: fromCents(recognized), remainingAmount: fromCents(eligible - recognized) };
+};
 
 const parseDate = (value: string): Date => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error(`Invalid date: ${value}`);

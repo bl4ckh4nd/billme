@@ -1,4 +1,5 @@
 import lines2025 from './eur/lines-2025.json';
+import lines2026 from './eur/lines-2026.json';
 
 export type EurLineKind = 'income' | 'expense' | 'computed';
 
@@ -39,6 +40,8 @@ export type EurLineDef = {
 
 export const EUR_SOURCE_VERSION_2025 = 'BMF-2025-2025-08-29';
 export const EUR_SOURCE_URL_2025 = 'https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2025-08-29-anlage-EUER-2025.pdf?__blob=publicationFile&v=3';
+export const EUR_SOURCE_VERSION_2026 = 'BMF-2026-2026-08-14';
+export const EUR_SOURCE_URL_2026 = 'https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2026-08-14-anlage-EUER-2026.pdf?__blob=publicationFile&v=1';
 export const EUR_CATALOG_MANIFEST_2025: CatalogManifest = {
   id: 'anlage-euer-2025',
   title: 'Anlage EÜR 2025',
@@ -54,12 +57,38 @@ export const EUR_CATALOG_MANIFEST_2025: CatalogManifest = {
   elsterReady: false,
 };
 
+export const EUR_CATALOG_MANIFEST_2026: CatalogManifest = {
+  id: 'anlage-euer-2026',
+  title: 'Anlage EÜR 2026',
+  version: EUR_SOURCE_VERSION_2026,
+  validFrom: '2026-01-01',
+  validTo: '2026-12-31',
+  sourceName: 'Bundesministerium der Finanzen',
+  sourceUrl: EUR_SOURCE_URL_2026,
+  // SHA-256 of the immutable bundled 2026 print-form source snapshot.
+  sha256: '50d6c8c8d8c5fb7cab8c26f6255e7776f9bac6beac29562ccf3c741cb9d92f18',
+  scope: 'de-sole-proprietor',
+  delivery: 'print-form-only',
+  elsterReady: false,
+};
+
 export const getCatalogForYear = (year: number): EurLineDef[] => {
   if (year === 2025) {
     const lines = lines2025 as EurLineDef[];
     validateEurLineCatalog(lines);
     return lines;
   }
+  if (year === 2026) {
+    const lines = lines2026 as EurLineDef[];
+    validateEurLineCatalog(lines);
+    return lines;
+  }
+  throw new Error(`EUR_CATALOG_UNAVAILABLE:${year}`);
+};
+
+export const getCatalogManifestForYear = (year: number): CatalogManifest => {
+  if (year === 2025) return EUR_CATALOG_MANIFEST_2025;
+  if (year === 2026) return EUR_CATALOG_MANIFEST_2026;
   throw new Error(`EUR_CATALOG_UNAVAILABLE:${year}`);
 };
 
@@ -172,6 +201,7 @@ export const validateCatalogManifest = (manifest: CatalogManifest): void => {
 };
 
 validateCatalogManifest(EUR_CATALOG_MANIFEST_2025);
+validateCatalogManifest(EUR_CATALOG_MANIFEST_2026);
 
 export const assertEurElsterReady = (manifest: CatalogManifest = EUR_CATALOG_MANIFEST_2025): void => {
   validateCatalogManifest(manifest);

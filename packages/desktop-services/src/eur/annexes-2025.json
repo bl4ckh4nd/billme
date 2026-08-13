@@ -130,7 +130,7 @@
         { "id": "SZ_2025_L27", "lineNumber": 27, "label": "Korrekturbetrag zu den übrigen Schuldzinsen", "kind": "input" },
         { "id": "SZ_2025_L28", "lineNumber": 28, "label": "Kürzungsbetrag gemäß § 4 Abs. 4a Satz 4 EStG", "kind": "input" },
         { "id": "SZ_2025_L29", "lineNumber": 29, "label": "Höchstbetrag der nicht abziehbaren Schuldzinsen", "kind": "computed", "computedFromIds": ["SZ_2025_L25", "SZ_2025_L26", "SZ_2025_L27", "SZ_2025_L28"] },
-        { "id": "SZ_2025_L30", "lineNumber": 30, "label": "Niedrigerer Betrag aus Zeile 25 oder 29", "kind": "computed", "computedFromIds": ["SZ_2025_L25", "SZ_2025_L29"] }
+        { "id": "SZ_2025_L30", "lineNumber": 30, "label": "Niedrigerer Betrag aus Zeile 25 oder 29", "kind": "computed", "operation": "min", "computedFromIds": ["SZ_2025_L25", "SZ_2025_L29"] }
       ]
     }
   ]

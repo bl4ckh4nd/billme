@@ -157,7 +157,8 @@ const country = (value: string | undefined): string => {
 
 const vatId = (value: string | undefined, countryCode: string): string => {
   const normalized = value?.trim().toUpperCase() ?? '';
-  if (!/^[A-Z]{2}[A-Z0-9]{2,14}$/.test(normalized) || !normalized.startsWith(countryCode)) {
+  const prefixes = countryCode === 'GR' ? ['GR', 'EL'] : [countryCode];
+  if (!/^[A-Z]{2}[A-Z0-9]{2,14}$/.test(normalized) || !prefixes.some((prefix) => normalized.startsWith(prefix))) {
     throw new TaxExportError('INVALID_VAT_ID', `VAT ID does not match ${countryCode}`);
   }
   return normalized;

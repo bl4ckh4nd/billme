@@ -314,16 +314,22 @@ test('Postgres draft normalization persists the 04-15 fiscal-year boundary', { s
   const scope = createSingleTenantScope(tenantId, 'pro');
   try {
     await runDrizzleMigrations(pool);
-    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'Fiscal boundary test', now]);
-    await pool.query(`INSERT INTO server_settings (tenant_id,settings_json,created_at,updated_at) VALUES ($1,$2,$3,$3)`, [tenantId, JSON.stringify({ businessReportingProfile: { profitDetermination: 'double_entry', fiscalYearStart: '04-15' } }), now]);
-    await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
-    await pool.query(`INSERT INTO accounts (id,tenant_id,name,iban,balance,default_skr_account_number,type,color) VALUES ($1,$2,'Fiscal bank','DE00000000000000000000','0','1200','bank','#000000')`, [accountId, tenantId]);
-    await pool.query(`INSERT INTO bank_transactions (id,tenant_id,account_id,date,amount,type,counterparty,purpose,status,created_at,updated_at) VALUES ($1,$2,$3,'2026-04-15',20,'income','Boundary payer','Boundary','pending',$4,$4)`, [transactionId, tenantId, accountId, now]);
-    const draft = await createPostgresProAccountingRepository(pool).getDraftByTransactionId(scope, transactionId);
-    assert.equal(draft?.fiscalYear, 2026);
-    assert.equal((await pool.query(`SELECT fiscal_year FROM accounting_periods WHERE tenant_id=$1 AND period='2026-04'`, [tenantId])).rows[0]?.fiscal_year, 2026);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'Fiscal boundary test', now]);
+      await client.query(`INSERT INTO server_settings (tenant_id,settings_json,created_at,updated_at) VALUES ($1,$2,$3,$3)`, [tenantId, JSON.stringify({ businessReportingProfile: { profitDetermination: 'double_entry', fiscalYearStart: '04-15' } }), now]);
+      await client.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
+      await client.query(`INSERT INTO accounts (id,tenant_id,name,iban,balance,default_skr_account_number,type,color) VALUES ($1,$2,'Fiscal bank','DE00000000000000000000','0','1200','bank','#000000')`, [accountId, tenantId]);
+      await client.query(`INSERT INTO bank_transactions (id,tenant_id,account_id,date,amount,type,counterparty,purpose,status,created_at,updated_at) VALUES ($1,$2,$3,'2026-04-15',20,'income','Boundary payer','Boundary','pending',$4,$4)`, [transactionId, tenantId, accountId, now]);
+      const draft = await createPostgresProAccountingRepository({ query: client.query.bind(client) }).getDraftByTransactionId(scope, transactionId);
+      assert.equal(draft?.fiscalYear, 2026);
+      assert.equal((await client.query(`SELECT fiscal_year FROM accounting_periods WHERE tenant_id=$1 AND period='2026-04'`, [tenantId])).rows[0]?.fiscal_year, 2026);
+    } finally {
+      await client.query('ROLLBACK').catch(() => undefined);
+      client.release();
+    }
   } finally {
-    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]);
     await pool.end();
   }
 });
@@ -377,12 +383,17 @@ test('real Postgres carries EU DATEV evidence through posting, export, and rever
   const tenantId = `datev-tax-${suffix}`;
   const invoiceId = `datev-tax-invoice-${suffix}`;
   const reservationId = `datev-tax-reservation-${suffix}`;
+  const receivableLedgerAccountId = `datev-tax-receivable-${suffix}`;
+  const revenueLedgerAccountId = `datev-tax-revenue-${suffix}`;
   const number = `EU-${suffix}`;
   const now = new Date().toISOString();
   const scope = createSingleTenantScope(tenantId, 'pro');
   try {
     await runDrizzleMigrations(pool);
     await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'DATEV tax evidence test', now]);
+    for (const [id, accountNumber] of [[receivableLedgerAccountId, '1400'], [revenueLedgerAccountId, '8400']] as const) {
+      await pool.query(`INSERT INTO ledger_accounts (id,chart,account_number,name,source,created_at,updated_at) VALUES ($1,'SKR03',$2,$2,'test',$3,$3) ON CONFLICT (chart,account_number) DO NOTHING`, [id, accountNumber, now]);
+    }
     await pool.query(`INSERT INTO tax_cases (key,label,mechanism,default_rate,requires_counterparty_vat_id,requires_country,requires_evidence,active,updated_at) VALUES ('EU_B2B_SERVICE_RC','EU service reverse charge','reverse_charge',0,TRUE,TRUE,TRUE,TRUE,$1) ON CONFLICT (key) DO UPDATE SET requires_counterparty_vat_id=TRUE,requires_country=TRUE,requires_evidence=TRUE,active=TRUE,updated_at=EXCLUDED.updated_at`, [now]);
     const metadata = { buyerCountryCode: 'AT', buyerVatId: 'ATU12345678', destinationVatRate: 20, datevSachverhaltLl: '13', datevEvidenceType: 'reverse_charge', datevEvidenceReference: 'invoice-proof-1' };
     const snapshot = { netAmount: 100, taxAmount: 0, grossAmount: 100, vatBreakdown: [{ rate: 0, netAmount: 100, vatAmount: 0, taxCaseKey: 'EU_B2B_SERVICE_RC' }] };
@@ -409,6 +420,7 @@ test('real Postgres carries EU DATEV evidence through posting, export, and rever
     await pool.query('ALTER TABLE journal_entries DISABLE TRIGGER journal_entries_immutable').catch(() => undefined);
     await pool.query('ALTER TABLE journal_lines DISABLE TRIGGER journal_lines_immutable').catch(() => undefined);
     await pool.query('ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete').catch(() => undefined);
+    await pool.query(`DELETE FROM ledger_accounts WHERE id IN ($1,$2)`, [receivableLedgerAccountId, revenueLedgerAccountId]).catch(() => undefined);
     await pool.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]).catch(() => undefined);
     await pool.query('ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete').catch(() => undefined);
     await pool.query('ALTER TABLE journal_lines ENABLE TRIGGER journal_lines_immutable').catch(() => undefined);
@@ -628,6 +640,7 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     await runDrizzleMigrations(pool);
     await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'OPOS trigger test', now]);
     await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
+    await pool.query(`INSERT INTO server_settings (tenant_id,settings_json,created_at,updated_at) VALUES ($1,$2,$3,$3)`, [tenantId, JSON.stringify({ businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', fiscalYearStart: '01-01', hgbSizeClass: 'small', chart: 'SKR03', vatMethod: 'soll' } }), now]);
     await pool.query(`INSERT INTO accounts (id,tenant_id,name,iban,balance,default_skr_account_number,type,color) VALUES ($1,$2,'Test bank','DE00000000000000000000',0,$3,'bank','#000000')`, [bankAccountId, tenantId, bankAccount]);
     for (const [id, accountNumber] of [[`bank-${suffix}`, bankAccount], [`receivable-${suffix}`, receivableAccount], [`payable-${suffix}`, payableAccount], [`expense-${suffix}`, expenseAccount], [`input-vat-${suffix}`, inputVatAccount], [`mapped-input-vat-${suffix}`, mappedInputVatAccount], [`line19-${suffix}`, line19Account], [`line7-${suffix}`, line7Account], [`deferred-vat-${suffix}`, deferredVatAccount], [`output-vat-${suffix}`, outputVatAccount], [`mapped-output-vat-${suffix}`, mappedOutputVatAccount], [`revenue-${suffix}`, '8400']] as const) {
       await pool.query(`INSERT INTO ledger_accounts (id,chart,account_number,name,source,created_at,updated_at) VALUES ($1,'SKR03',$2,$2,'test',$3,$3) ON CONFLICT (chart,account_number) DO NOTHING`, [id, accountNumber, now]);

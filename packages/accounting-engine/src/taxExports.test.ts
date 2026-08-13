@@ -80,6 +80,10 @@ test('non-happy tax export evidence and catalog inputs fail closed', () => {
     period: '2025-01',
     entries: [{ postingDate: '2025-01-02', status: 'posted', lines: [{ taxCaseKey: 'EU_B2B_SERVICE_RC', netAmount: 100, countryCode: 'FR', counterpartyVatId: 'FR12345678901' }] }],
   }), (error: unknown) => error instanceof TaxExportError && error.code === 'MISSING_EVIDENCE');
+  assert.throws(() => aggregateZm({
+    period: '2025-01',
+    entries: [{ postingDate: '2025-01-02', status: 'posted', lines: [{ taxCaseKey: 'EU_B2B_SERVICE_RC', netAmount: 100, countryCode: 'FR', counterpartyVatId: 'DE12345678901', evidenceType: 'transport', evidenceReference: 'proof-1' }] }],
+  }), (error: unknown) => error instanceof TaxExportError && error.code === 'INVALID_VAT_ID');
   assert.throws(() => aggregateOss({
     period: '2025-01',
     entries: [{ postingDate: '2025-01-02', status: 'posted', lines: [{ taxCaseKey: 'EU_B2C_OSS', netAmount: 100, countryCode: 'XX', taxRate: 20 }] }],
@@ -89,5 +93,6 @@ test('non-happy tax export evidence and catalog inputs fail closed', () => {
     entries: [{ postingDate: '2025-01-02', status: 'posted', lines: [{ taxCaseKey: 'EU_B2C_OSS', netAmount: 100, countryCode: 'AT', taxRate: 20.001 }] }],
   }), (error: unknown) => error instanceof TaxExportError && error.code === 'INVALID_RATE');
   assert.throws(() => prepareEBilanz({ period: '2025-01', reportSnapshot: { id: 'report-1', sourceHash: 'b'.repeat(64) }, taxonomy: '6.8', facts: [] }), (error: unknown) => error instanceof TaxExportError && error.code === 'TAXONOMY_MISMATCH');
+  assert.throws(() => aggregateOss({ period: '2025-00', entries: [] }), (error: unknown) => error instanceof TaxExportError && error.code === 'UNSUPPORTED_PERIOD');
   assert.throws(() => prepareUstva({ period: '2024-01', catalog, entries: [] }), (error: unknown) => error instanceof TaxExportError && error.code === 'UNSUPPORTED_YEAR');
 });

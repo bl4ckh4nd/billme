@@ -331,17 +331,25 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
       }
       const keyOwner = (await q<any>(tx, `SELECT source_type,source_id,source_revision FROM accounting_source_runs WHERE tenant_id=$1 AND idempotency_key=$2 FOR UPDATE`, [tenant(scope), correction.document.idempotencyKey]))[0];
       if (keyOwner) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
+      // Existing corrections are the OPOS settlement ledger for this
+      // original. Feed them back into the pure validator so a second
+      // correction cannot credit more than the immutable original amount.
+      const priorRows = await q<any>(tx, `SELECT result_json FROM accounting_source_runs WHERE tenant_id=$1 AND source_type=$2 FOR UPDATE`, [tenant(scope), sourceType]);
+      const priorCorrections = priorRows
+        .map((row) => parse<LinkedCorrectionDocument | undefined>(row.result_json, undefined))
+        .filter((document): document is LinkedCorrectionDocument => document?.originalDocumentId === correction.document.originalDocumentId);
+      const linked = createLinkedCorrection({ id: correction.document.id, idempotencyKey: correction.document.idempotencyKey, correctionDate: correction.document.correctionDate, taxEffectiveDate: correction.document.taxEffectiveDate, original: input.original, deltas: input.deltas, existing: priorCorrections });
       const postingDate = input.postingDate ?? correction.document.correctionDate;
-      const lines = await correctionLines(tx, scope, correction.document, input.documentType ?? 'outgoing_invoice');
-      const command = { entry: { id: `correction:${correction.document.id}`, postingDate, documentDate: correction.document.taxEffectiveDate, bookingText: `Korrektur zu ${correction.document.originalDocumentNumber}`, reference: correction.document.originalDocumentNumber, period: periodOf(postingDate), fiscalYear: Number(postingDate.slice(0, 4)), status: 'posted', sourceType: 'standalone_source', sourceKey: correction.document.id, lines } };
+      const lines = await correctionLines(tx, scope, linked.document, input.documentType ?? 'outgoing_invoice');
+      const command = { entry: { id: `correction:${linked.document.id}`, postingDate, documentDate: linked.document.taxEffectiveDate, bookingText: `Korrektur zu ${linked.document.originalDocumentNumber}`, reference: linked.document.originalDocumentNumber, period: periodOf(postingDate), fiscalYear: Number(postingDate.slice(0, 4)), status: 'posted', sourceType: 'standalone_source', sourceKey: linked.document.id, lines } };
       const journalEntryId = await insertCommand(tx, scope, command, input);
-      const run = await createRun(tx, scope, { sourceType, sourceId: correction.document.id, sourceRevision: correction.document.originalRevision, idempotencyKey: correction.document.idempotencyKey, status: 'posted', source, result: correction.document, journalEntryId, reason, mutation: input.mutation });
+      const run = await createRun(tx, scope, { sourceType, sourceId: linked.document.id, sourceRevision: linked.document.originalRevision, idempotencyKey: linked.document.idempotencyKey, status: 'posted', source, result: linked.document, journalEntryId, reason, mutation: input.mutation });
       const originalItem = (await q<any>(tx, `SELECT * FROM open_items WHERE tenant_id=$1 AND source_id=$2 AND source_type IN ('outgoing_invoice','incoming_invoice') FOR UPDATE`, [tenant(scope), correction.document.originalDocumentId]))[0];
       if (originalItem) {
-        const correctionItemId = `correction-open-item:${correction.document.id}`;
-        await q(tx, `INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,$3,$4,'correction',$5,$6,$7,$7,$8,0,$8,'open',$9,$10,$10) ON CONFLICT (id) DO NOTHING`, [correctionItemId, tenant(scope), originalItem.party_type, originalItem.party_id, correction.document.id, `Korrektur ${correction.document.originalDocumentNumber}`, postingDate, correction.document.creditGrossAmount, journalEntryId, now()]);
+        const correctionItemId = `correction-open-item:${linked.document.id}`;
+        await q(tx, `INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,$3,$4,'correction',$5,$6,$7,$7,$8,0,$8,'open',$9,$10,$10) ON CONFLICT (id) DO NOTHING`, [correctionItemId, tenant(scope), originalItem.party_type, originalItem.party_id, linked.document.id, `Korrektur ${linked.document.originalDocumentNumber}`, postingDate, linked.document.creditGrossAmount, journalEntryId, now()]);
       }
-      return { run: run.run, document: correction.document, replayed: run.replayed };
+      return { run: run.run, document: linked.document, replayed: run.replayed };
     });
   },
   async runClosingCommand(scope, input) {

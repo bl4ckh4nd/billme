@@ -90,7 +90,7 @@ const validateLines = (annex: EurAnnexId, lines: EurAnnexLineDef[]): void => {
     visiting.add(id);
     const line = byId.get(id);
     for (const term of line?.computedTerms ?? []) {
-      if (term.sign !== 1 && term.sign !== -1) throw new Error(`Invalid ${annex} term sign: ${line.id}`);
+      if (term.sign !== 1 && term.sign !== -1) throw new Error(`Invalid ${annex} term sign: ${id}`);
     }
     for (const childId of [
       ...(line?.computedFromIds ?? []),

@@ -558,3 +558,20 @@ export async function importPendingProTransaction(page, label, options = {}) {
   if (!draft?.id) throw new Error(`Imported Pro draft not found: ${transaction.id}`);
   return { transaction, draft };
 }
+
+export async function setProAccountingPeriodStatus(desktop, period, status = 'soft_locked') {
+  return desktop.app.evaluate(async ({ app }, args) => {
+    const { default: Database } = await import('better-sqlite3');
+    const pathModule = await import('node:path');
+    const dbPath = pathModule.join(app.getPath('userData'), 'billme-pro-v2.sqlite');
+    const db = new Database(dbPath);
+    try {
+      const periodRow = db.prepare('SELECT period, status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get('default', args.period);
+      if (!periodRow) throw new Error(`Accounting period not found: ${args.period}`);
+      db.prepare('UPDATE accounting_periods SET status = ?, updated_at = ? WHERE tenant_id = ? AND period = ?').run(args.status, new Date().toISOString(), 'default', args.period);
+      return db.prepare('SELECT period, status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get('default', args.period);
+    } finally {
+      db.close();
+    }
+  }, { period, status });
+}

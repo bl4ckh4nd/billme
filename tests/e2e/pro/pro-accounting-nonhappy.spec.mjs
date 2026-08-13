@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { writeFile, unlink } from 'node:fs/promises';
-import { appUrl, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
+import { appUrl, invokeDesktopIpc, launchDesktopApp, seedDesktopData, setProAccountingPeriodStatus } from '../support.mjs';
 
 let desktop;
 let sequence = 0;
@@ -314,7 +314,7 @@ test('missing report mapping blocks the report and unsupported 2027 EÜR fails c
     await expectIpcError(invokeDesktopIpc(page, 'eur:getReport', { taxYear: 2027 }), /EUR_CATALOG_UNAVAILABLE|unavailable|2027/);
 });
 
-test('period soft-lock override is rejected unless an explicit reason is supplied', async () => {
+test('period soft-lock requires a runtime override reason before posting', async () => {
   const { page } = desktop;
   const assetAccount = (await invokeDesktopIpc(page, 'pro:listLedgerAccounts', {
     chart: postingAccounts.chart,
@@ -344,10 +344,16 @@ test('period soft-lock override is rejected unless an explicit reason is supplie
   });
   expect(activated.status).toBe('aktiv');
   expect(activated.activationJournalEntryId).toBeTruthy();
+  await expect(setProAccountingPeriodStatus(desktop, '2026-04')).resolves.toMatchObject({ period: '2026-04', status: 'soft_locked' });
+  const depreciation = { assetId, year: 2026, postingDate: '2026-04-30', reason: 'E2E soft lock validation' };
   await expectIpcError(
-    invokeDesktopIpc(page, 'pro:runDepreciation', { assetId, year: 2026, postingDate: '2026-04-30', reason: 'E2E soft lock validation', softLockOverride: true }),
-    /overrideReason|required.*reason/i,
+    invokeDesktopIpc(page, 'pro:runDepreciation', depreciation),
+    /SOFT_LOCK_OVERRIDE_REQUIRED/,
   );
+  const overridden = await invokeDesktopIpc(page, 'pro:runDepreciation', { ...depreciation, softLockOverride: true, overrideReason: 'Owner approval' });
+  expect(overridden.journalEntryId).toBeTruthy();
+  expect(overridden.scheduleEntry).toMatchObject({ status: 'posted', journalEntryId: overridden.journalEntryId });
+  expect((await invokeDesktopIpc(page, 'pro:listAssets')).find((asset) => asset.id === assetId)).toMatchObject({ id: assetId, status: 'aktiv' });
 });
 
 test('asset depreciation and disposal reject an unactivated asset', async () => {

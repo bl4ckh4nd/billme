@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { sha256Hex, stableStringify } from './audit.js';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { CorrectionSettlementError } from '@billme/accounting-shared';
 import { createSingleTenantScope } from '@billme/server-core';
 import { createPostgresPool, type PostgresQueryable } from './connection.js';
 import { runDrizzleMigrations } from './migrations.js';
@@ -138,7 +139,7 @@ test('source-fact validation rolls back invalid accounts and rejects incomplete 
       input: { ...invalid.input, sourceId: `invalid-skr04-${suffix}`, lines: [{ accountNumber: '9997', debitAmount: 10, creditAmount: 0 }, { accountNumber: '2000', debitAmount: 0, creditAmount: 10 }] },
     }), /UNKNOWN_ACCOUNT:9997/);
     await assert.rejects(() => repository.prepareTaxExport(scope, {
-      kind: 'zm', period: '2025-01', reason: 'Evidence test', entries: [{ postingDate: '2025-01-31', status: 'posted', lines: [{ taxCaseKey: 'EU_B2B_SERVICE_RC', netAmount: 100 }] }],
+      kind: 'zm', period: '2025-01', reason: 'Evidence test', entries: [{ postingDate: '2025-01-31', status: 'posted', lines: [{ taxCaseKey: 'EU_B2B_SERVICE_RC', netAmount: 100, countryCode: 'FR', counterpartyVatId: 'FR12345678901' }] }],
     }), /MISSING_EVIDENCE/);
   } finally {
     await pool.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]).catch(() => undefined);
@@ -174,7 +175,7 @@ test('settlement commands derive balanced journal lines, evidence, and replay id
         advanceClearingReceivable: '1593', advanceClearingPayable: '1518', sourceId: `${sourceId}-duplicate`, sourceRevision: 'v1',
       },
     };
-    await assert.rejects(() => repository.runClosingCommand(scope, duplicateAdvance), /IDEMPOTENCY_CONFLICT/);
+    await assert.rejects(() => repository.runClosingCommand(scope, duplicateAdvance), (error: unknown) => error instanceof CorrectionSettlementError && error.code === 'IDEMPOTENCY_CONFLICT');
     const unchangedBeforeSettlement = (await pool.query(`SELECT allocated_amount,residual_amount,status FROM open_items WHERE tenant_id=$1 AND source_id=$2`, [tenantId, originalId])).rows[0];
     assert.equal(Number(unchangedBeforeSettlement.allocated_amount), 0);
     assert.equal(Number(unchangedBeforeSettlement.residual_amount), 119);

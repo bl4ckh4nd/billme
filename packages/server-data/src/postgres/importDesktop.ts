@@ -6,7 +6,7 @@ import { count, eq, sql } from 'drizzle-orm';
 import { billingLineItemSchema, createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile, type ServerProduct, type Tenant } from '@billme/server-core';
 import { DEFAULT_TAX_MODE } from '@billme/server-core/services';
 import { EUR_SOURCE_VERSION_2025, getCatalogForYear, type EurLineDef } from '@billme/desktop-services/eurCatalog';
-import { verifyAuditChainRows, verifyPostgresAuditChain } from './audit.js';
+import { sha256Hex, stableStringify, verifyAuditChainRows, verifyPostgresAuditChain } from './audit.js';
 import {
   countTenantCoreRows,
   createPostgresBillingDependencies,
@@ -744,6 +744,17 @@ const loadEurReportSnapshots = (db: SqliteDatabaseType, tenantId: string, auditR
   });
 };
 
+/** Match accountingSourceRuns.createRun: hash the canonical source value, not its JSON bytes. */
+export const accountingSourceRunHash = (sourceJson: string, id = 'unknown'): string => {
+  let source: unknown;
+  try {
+    source = JSON.parse(sourceJson);
+  } catch {
+    throw new Error(`IMPORT_ACCOUNTING_SOURCE_JSON_INVALID:${id}`);
+  }
+  return sha256Hex(stableStringify(source));
+};
+
 const loadAccountingSourceRuns = (db: SqliteDatabaseType, tenantId: string, auditRows: readonly SqliteAuditRow[]): Array<Record<string, unknown>> => {
   if (!tableExists(db, 'accounting_source_runs')) return [];
   return (db.prepare('SELECT * FROM accounting_source_runs ORDER BY created_at ASC, id ASC').all() as SqliteAccountingSourceRunRow[]).map((row) => {
@@ -760,7 +771,7 @@ const loadAccountingSourceRuns = (db: SqliteDatabaseType, tenantId: string, audi
       source_json: row.fact_json,
       result_json: row.result_json,
       journal_entry_id: row.journal_entry_id,
-      source_hash: createHash('sha256').update(row.fact_json).digest('hex'),
+      source_hash: accountingSourceRunHash(row.fact_json, row.id),
       created_by: audit?.actor?.trim() || 'desktop-import',
       reason: audit?.reason?.trim() || defaultReason,
       created_at: row.created_at,

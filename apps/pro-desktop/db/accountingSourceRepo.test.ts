@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { bootstrapSql } from './bootstrap';
 import { runMigrations } from './migrate';
@@ -14,9 +15,23 @@ const createDb = (): Database.Database => {
   db.exec(`
     INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at)
     VALUES ('source-1200', 'SKR03', '1200', 'Bank', 'test', datetime('now'), datetime('now')),
-           ('source-8400', 'SKR03', '8400', 'Revenue', 'test', datetime('now'), datetime('now'));
+           ('source-8400', 'SKR03', '8400', 'Revenue', 'test', datetime('now'), datetime('now')),
+           ('source-1400', 'SKR03', '1400', 'Receivable', 'test', datetime('now'), datetime('now')),
+           ('source-1776', 'SKR03', '1776', 'Output VAT', 'test', datetime('now'), datetime('now'));
     INSERT INTO accounting_periods (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at)
     VALUES ('source-period', 'default', '2026-03', 2026, 'open', '2026-03-01', '2026-03-31', datetime('now'), datetime('now'));
+    INSERT INTO invoices (id, number, client, client_email, date, due_date, amount, status, accounting_status,
+      accounting_snapshot_json, accounting_journal_entry_id, accounting_posted_at, created_at, updated_at)
+    VALUES ('invoice-1', 'RE-1', 'Original customer', 'customer@example.test', '2026-03-01', '2026-03-31', 119,
+      'open', 'posted', '{"sourceVersion":"invoice-r1","vatBreakdown":[{"rate":19,"netAmount":100,"taxAmount":19,"grossAmount":119}]}',
+      'invoice-journal-1', datetime('now'), datetime('now'), datetime('now'));
+    INSERT INTO journal_entries (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference,
+      period, fiscal_year, status, source_type, source_key, created_at)
+    VALUES ('invoice-journal-1', 'default', 1, '2026-03-01', '2026-03-01', 'Original invoice', 'RE-1',
+      '2026-03', 2026, 'posted', 'outgoing_invoice', 'outgoing-invoice:invoice-1', datetime('now'));
+    INSERT INTO journal_lines (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount)
+    VALUES ('invoice-journal-1-line-1', 'default', 'invoice-journal-1', 1, '1400', 119, 0),
+      ('invoice-journal-1-line-2', 'default', 'invoice-journal-1', 2, '8400', 0, 100);
   `);
   return db;
 };
@@ -110,7 +125,7 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
           documentId: 'invoice-1',
           documentNumber: 'RE-1',
           revision: 'invoice-r1',
-          snapshotHash: 'snapshot-hash',
+          snapshotHash: createHash('sha256').update(JSON.stringify({ sourceVersion: 'invoice-r1', vatBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] })).digest('hex'),
           taxEffectiveDate: '2026-03-15',
           taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }],
         },

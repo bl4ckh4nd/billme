@@ -498,6 +498,15 @@ const resolveCorrectionOriginal = (db: Database.Database, tenantId: string, requ
     ? db.prepare(`SELECT * FROM ${table} WHERE tenant_id = ? AND id = ?`).get(tenantId, requested.documentId) as any
     : db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(requested.documentId) as any;
   if (!row) throw new Error('ORIGINAL_DOCUMENT_NOT_FOUND');
+  const journal = row.accounting_status === 'posted' && row.accounting_journal_entry_id
+    ? db.prepare(`SELECT status, source_type, source_key FROM journal_entries WHERE tenant_id = ? AND id = ?`).get(tenantId, row.accounting_journal_entry_id) as { status?: string; source_type?: string; source_key?: string } | undefined
+    : undefined;
+  const sourceKey = documentType === 'incoming_invoice' ? `incoming-invoice:${row.id}` : `outgoing-invoice:${row.id}`;
+  if (row.accounting_status !== 'posted'
+    || !row.accounting_journal_entry_id
+    || journal?.status !== 'posted'
+    || journal.source_type !== documentType
+    || journal.source_key !== sourceKey) throw new Error('DOCUMENT_NOT_POSTED');
   if (row.number !== requested.documentNumber || row[dateColumn] !== requested.taxEffectiveDate) throw new Error('ORIGINAL_CHANGED');
   const lines = documentType === 'incoming_invoice'
     ? db.prepare('SELECT * FROM incoming_invoice_lines WHERE tenant_id = ? AND incoming_invoice_id = ? ORDER BY position').all(tenantId, row.id) as any[]

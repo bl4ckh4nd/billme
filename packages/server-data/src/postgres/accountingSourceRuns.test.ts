@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { sha256Hex, stableStringify } from './audit.js';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createSingleTenantScope } from '@billme/server-core';
@@ -109,11 +110,69 @@ test('source-fact validation rolls back invalid accounts and rejects incomplete 
     };
     await assert.rejects(() => repository.runClosingCommand(scope, invalid), /UNKNOWN_ACCOUNT/);
     assert.equal((await repository.listAccountingSourceRuns(scope)).length, 0);
+    await pool.query(`INSERT INTO ledger_accounts (id,chart,account_number,name,source,created_at,updated_at) VALUES ($1,'SKR04','3000','Other chart account','test',$2,$2) ON CONFLICT DO NOTHING`, [`source-invalid-skr04-${suffix}`, now]);
+    await assert.rejects(() => repository.runClosingCommand(scope, {
+      ...invalid,
+      sourceId: `invalid-skr04-${suffix}`,
+      idempotencyKey: `invalid-skr04-${suffix}:v1`,
+      input: { ...invalid.input, sourceId: `invalid-skr04-${suffix}`, lines: [{ accountNumber: '3000', debitAmount: 10, creditAmount: 0 }, { accountNumber: '2000', debitAmount: 0, creditAmount: 10 }] },
+    }), /UNKNOWN_ACCOUNT:3000/);
     await assert.rejects(() => repository.prepareTaxExport(scope, {
       kind: 'zm', period: '2025-01', reason: 'Evidence test', entries: [{ postingDate: '2025-01-31', status: 'posted', lines: [{ taxCaseKey: 'EU_B2B_SERVICE_RC', netAmount: 100 }] }],
     }), /MISSING_EVIDENCE/);
   } finally {
     await pool.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]).catch(() => undefined);
+    await pool.end();
+  }
+});
+
+test('corrections require a posted original with its document-owned journal', { skip: !databaseUrl }, async () => {
+  const pool = createPostgresPool(databaseUrl!);
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tenantId = `source-correction-original-${suffix}`;
+  const vendorId = `source-correction-vendor-${suffix}`;
+  const invoiceId = `source-correction-invoice-${suffix}`;
+  const journalId = `source-correction-journal-${suffix}`;
+  const now = new Date().toISOString();
+  const snapshot = { sourceVersion: 'original-r1', vatBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] };
+  const scope = createSingleTenantScope(tenantId, 'pro');
+  const input = {
+    id: `source-correction-${suffix}`,
+    idempotencyKey: `source-correction-key-${suffix}`,
+    correctionDate: '2026-11-20',
+    taxEffectiveDate: '2026-10-01',
+    documentType: 'incoming_invoice' as const,
+    original: {
+      documentId: invoiceId,
+      documentNumber: 'ER-SOURCE-CORRECTION',
+      revision: snapshot.sourceVersion,
+      snapshotHash: sha256Hex(stableStringify(snapshot)),
+      taxEffectiveDate: '2026-10-01',
+      taxBreakdown: snapshot.vatBreakdown,
+    },
+    deltas: [{ rate: 19, grossAmount: 11.9 }],
+    reason: 'source correction original ownership',
+  };
+  try {
+    await runDrizzleMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, tenantId, 'Source correction original', now]);
+    await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
+    await pool.query(`INSERT INTO vendors (id,tenant_id,name,created_at,updated_at) VALUES ($1,$2,'Source correction vendor',$3,$3)`, [vendorId, tenantId, now]);
+    for (const [accountNumber, name] of [['4900', 'Expense'], ['1576', 'Input VAT'], ['1600', 'Payable']] as const) {
+      await pool.query(`INSERT INTO ledger_accounts (id,chart,account_number,name,source,created_at,updated_at) VALUES ($1,'SKR03',$2,$3,'test',$4,$4) ON CONFLICT (chart,account_number) DO NOTHING`, [`${tenantId}-${accountNumber}`, accountNumber, name, now]);
+    }
+    await pool.query(`INSERT INTO incoming_invoices (id,tenant_id,vendor_id,number,invoice_date,due_date,net_amount,tax_amount,gross_amount,status,tax_rate,accounting_status,accounting_snapshot_json,created_at,updated_at) VALUES ($1,$2,$3,'ER-SOURCE-CORRECTION','2026-10-01','2026-10-31',100,19,119,'open',19,'unposted',$4,$5,$5)`, [invoiceId, tenantId, vendorId, JSON.stringify(snapshot), now]);
+    await assert.rejects(() => createPostgresProAccountingRepository(pool).createCorrectionSettlement(scope, input), /DOCUMENT_NOT_POSTED/);
+    await pool.query(`UPDATE incoming_invoices SET accounting_status='posted', accounting_journal_entry_id=$1 WHERE tenant_id=$2 AND id=$3`, [journalId, tenantId, invoiceId]);
+    await assert.rejects(() => createPostgresProAccountingRepository(pool).createCorrectionSettlement(scope, input), /DOCUMENT_NOT_POSTED/);
+    await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,1,'2026-10-01','2026-10-01','Source correction original','ER-SOURCE-CORRECTION','2026-10',2026,'posted','incoming_invoice','incoming_invoice:' || $3,$4)`, [journalId, tenantId, invoiceId, now]);
+    const posted = await createPostgresProAccountingRepository(pool).createCorrectionSettlement(scope, input);
+    assert.equal(posted.replayed, false);
+    assert.equal(posted.run.journalEntryId, `correction:${posted.document.id}`);
+  } finally {
+    await pool.query('ALTER TABLE incoming_invoices DISABLE TRIGGER incoming_invoices_posted_immutable').catch(() => undefined);
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
+    await pool.query('ALTER TABLE incoming_invoices ENABLE TRIGGER incoming_invoices_posted_immutable').catch(() => undefined);
     await pool.end();
   }
 });

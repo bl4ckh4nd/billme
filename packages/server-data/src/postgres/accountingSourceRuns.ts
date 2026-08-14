@@ -183,10 +183,16 @@ const assertPeriod = async (
   if (status === 'soft_locked' && (!softLockOverride || !overrideReason?.trim())) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED');
 };
 
-const assertAccounts = async (db: PostgresQueryable, accounts: readonly string[]): Promise<void> => {
+const activeChart = async (db: PostgresQueryable, scope: TenantScope): Promise<'SKR03' | 'SKR04'> => {
+  const policy = (await q<any>(db, `SELECT active_chart FROM accounting_policies WHERE tenant_id=$1`, [tenant(scope)]))[0];
+  return policy?.active_chart === 'SKR04' ? 'SKR04' : 'SKR03';
+};
+
+const assertAccounts = async (db: PostgresQueryable, scope: TenantScope, accounts: readonly string[]): Promise<void> => {
   const requested = [...new Set(accounts.filter(Boolean))];
   if (!requested.length) throw new Error('INVALID_ACCOUNT');
-  const rows = await q<any>(db, `SELECT account_number FROM ledger_accounts WHERE account_number = ANY($1::text[])`, [requested]);
+  const chart = await activeChart(db, scope);
+  const rows = await q<any>(db, `SELECT account_number FROM ledger_accounts WHERE chart=$1 AND account_number = ANY($2::text[])`, [chart, requested]);
   // A fresh test/tenant database can be initialized before the optional
   // catalog projection. Existing posting code treats that state as open.
   if (!rows.length) {
@@ -199,8 +205,7 @@ const assertAccounts = async (db: PostgresQueryable, accounts: readonly string[]
 };
 
 const chartAndMappings = async (db: PostgresQueryable, scope: TenantScope): Promise<{ chart: string; mappings: Record<string, string> }> => {
-  const policy = (await q<any>(db, `SELECT active_chart FROM accounting_policies WHERE tenant_id=$1`, [tenant(scope)]))[0];
-  const chart = policy?.active_chart === 'SKR04' ? 'SKR04' : 'SKR03';
+  const chart = await activeChart(db, scope);
   const defaults = chart === 'SKR04'
     ? { accounts_receivable: '1200', accounts_payable: '3300', revenue: '4400', expense: '6300', output_vat: '3806', input_vat: '1406' }
     : { accounts_receivable: '1400', accounts_payable: '1600', revenue: '8400', expense: '4900', output_vat: '1776', input_vat: '1576' };
@@ -249,7 +254,7 @@ const insertCommand = async (
 ): Promise<string> => {
   const entry = command.entry;
   await assertPeriod(db, scope, entry.postingDate, entry.period, entry.fiscalYear, options.softLockOverride, options.overrideReason);
-  await assertAccounts(db, entry.lines.map((line: any) => line.accountNumber));
+  await assertAccounts(db, scope, entry.lines.map((line: any) => line.accountNumber));
   const existing = (await q<any>(db, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), entry.id]))[0];
   if (existing) return existing.id;
   const numberRows = await q<any>(db, `SELECT COALESCE(MAX(entry_number),0)+1 AS next_number FROM journal_entries WHERE tenant_id=$1`, [tenant(scope)]);
@@ -318,6 +323,14 @@ const resolveCorrectionOriginal = async (
   const dateColumn = documentType === 'incoming_invoice' ? 'invoice_date' : 'date';
   const row = (await q<any>(db, `SELECT * FROM ${table} WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), requested.documentId]))[0];
   if (!row) throw new Error('ORIGINAL_DOCUMENT_NOT_FOUND');
+  const ownedJournal = row.accounting_status === 'posted' && row.accounting_journal_entry_id
+    ? (await q<any>(db, `SELECT status,source_type,source_key FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), row.accounting_journal_entry_id]))[0]
+    : undefined;
+  if (row.accounting_status !== 'posted'
+    || !row.accounting_journal_entry_id
+    || ownedJournal?.status !== 'posted'
+    || ownedJournal.source_type !== documentType
+    || ownedJournal.source_key !== `${documentType}:${row.id}`) throw new Error('DOCUMENT_NOT_POSTED');
   if (row.number !== requested.documentNumber) throw new Error('ORIGINAL_CHANGED');
   const incomingLines = documentType === 'incoming_invoice'
     ? await q<any>(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [tenant(scope), row.id])

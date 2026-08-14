@@ -20,6 +20,7 @@ import {
   detectUnsupportedSqliteTables,
   assertNoCrossTenantIdentityCollisions,
   importDesktopSqliteToPostgres,
+  accountingSourceRunHash,
   loadAccountMappingsHgb,
   loadLegacyAccountMappingsHgb,
   maxAuditHead,
@@ -95,6 +96,13 @@ test('detectUnsupportedSqliteTables ignores newly supported populated tables', (
   const result = detectUnsupportedSqliteTables([...counts.keys()], (table) => counts.get(table) ?? 0);
 
   assert.deepEqual(result, []);
+});
+
+test('imported accounting source hashes canonical source values for server replay', () => {
+  const sourceJson = '{"sourceRevision":"v1","sourceId":"source-1","sourceType":"standalone_source"}';
+  assert.equal(accountingSourceRunHash(sourceJson), sha256Hex(stableStringify(JSON.parse(sourceJson))));
+  assert.notEqual(accountingSourceRunHash(sourceJson), sha256Hex(sourceJson));
+  assert.throws(() => accountingSourceRunHash('{bad}', 'source-run-1'), /IMPORT_ACCOUNTING_SOURCE_JSON_INVALID:source-run-1/);
 });
 
 test('SQLite import preserves EÜR facts, immutable snapshots, and source-run provenance', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {

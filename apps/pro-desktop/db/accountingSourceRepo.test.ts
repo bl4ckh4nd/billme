@@ -144,6 +144,27 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     expect(result.status).toBe('posted');
     const refetched = getAccountingSourceRun(db, result.sourceRun!.id, scope);
     expect((refetched?.fact as AccountingSourceFact & { provenance?: { domainFacts?: { original?: { documentId?: string } } } }).provenance?.domainFacts?.original?.documentId).toBe('invoice-1');
+
+    const overCredit = postAccountingCommand(db, {
+      kind: 'correction',
+      source: source('correction-r2'),
+      domainFacts: {
+        id: 'correction-2',
+        idempotencyKey: 'correction-2:r1',
+        correctionDate: '2026-03-15',
+        original: {
+          documentId: 'invoice-1',
+          documentNumber: 'RE-1',
+          revision: 'invoice-r1',
+          snapshotHash: createHash('sha256').update(JSON.stringify({ sourceVersion: 'invoice-r1', vatBreakdown: [{ grossAmount: 119, netAmount: 100, rate: 19, taxAmount: 19 }] })).digest('hex'),
+          taxEffectiveDate: '2026-03-15',
+          taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }],
+        },
+        deltas: [{ rate: 19, grossAmount: 107.11 }],
+      },
+    }, scope, { reason: 'second correction cap' });
+    expect(overCredit.status).toBe('rejected');
+    expect(overCredit.errors.some((issue) => /OVER_CREDIT|exceeds/.test(issue.code + issue.message))).toBe(true);
     db.close();
   });
 

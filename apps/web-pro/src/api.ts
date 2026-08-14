@@ -199,7 +199,7 @@ const bilanzReportSchema = z.object({
 const accountingSourceRunSchema = z.object({
   id: z.string(), sourceType: z.string(), sourceId: z.string(), sourceRevision: z.string().optional(),
   status: z.enum(['posted', 'rejected', 'noop', 'prepared']), journalEntryId: z.string().optional(), createdAt: z.string(),
-  fact: z.unknown().optional(),
+  fact: z.unknown().optional(), result: z.unknown().optional(),
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;

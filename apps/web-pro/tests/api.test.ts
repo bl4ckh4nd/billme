@@ -186,6 +186,30 @@ test('Pro web client maps correction and settlement workflows to their domain co
   }
 });
 
+test('Pro web client preserves rejected accounting errors from the source run result', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    run: {
+      id: 'run-rejected', sourceType: 'standalone_source', sourceId: 'source-rejected', sourceRevision: '1',
+      status: 'rejected', createdAt: '2025-12-31T00:00:00.000Z',
+      result: { status: 'rejected', errors: [{ code: 'INVALID_ACCOUNT', message: 'Konto fehlt', blocking: true }] },
+    },
+    result: {}, replayed: false,
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    const result = await client.postAccountingCommand({
+      kind: 'skonto',
+      source: { sourceId: 'source-rejected', sourceRevision: '1', effectiveDate: '2025-12-31' },
+      domainFacts: { taxBreakdown: [], skontoAmount: 1 },
+      reason: 'Fehler geprüft',
+    });
+    assert.deepEqual((result.run.result as { errors: unknown[] }).errors, [{ code: 'INVALID_ACCOUNT', message: 'Konto fehlt', blocking: true }]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('Pro web client rejects missing or malformed domain facts before fetch', async () => {
   const previousFetch = globalThis.fetch;
   let calls = 0;

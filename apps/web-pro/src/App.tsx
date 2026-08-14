@@ -42,6 +42,21 @@ const DEFAULT_API_URL = (import.meta.env.VITE_SERVER_API_URL as string | undefin
 const SESSION_STORAGE_KEY = 'billme.web-pro.session.v1';
 const API_URL_STORAGE_KEY = 'billme.web-pro.api-url.v1';
 
+const accountingErrorsFrom = (value: unknown): Array<{ code: string; message: string; field?: string; blocking?: boolean }> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const record = value as Record<string, unknown>;
+  const direct = Array.isArray(record.errors)
+    ? record.errors.flatMap((error) => {
+      if (!error || typeof error !== 'object' || Array.isArray(error)) return [];
+      const issue = error as Record<string, unknown>;
+      return typeof issue.code === 'string' && typeof issue.message === 'string'
+        ? [{ code: issue.code, message: issue.message, ...(typeof issue.field === 'string' ? { field: issue.field } : {}), ...(typeof issue.blocking === 'boolean' ? { blocking: issue.blocking } : {}) }]
+        : [];
+    })
+    : [];
+  return [...direct, ...accountingErrorsFrom(record.result)].filter((issue, index, all) => all.findIndex((candidate) => candidate.code === issue.code && candidate.message === issue.message && candidate.field === issue.field) === index);
+};
+
 type AppRoute = 'overview' | 'documents' | 'clients' | 'catalog' | 'recurring' | 'settings' | 'accounting';
 
 type AppData = {
@@ -1218,7 +1233,9 @@ export default function App() {
         return {
           status: result.replayed ? 'duplicate' as const : result.run.status === 'posted' ? 'posted' as const : result.run.status === 'rejected' ? 'rejected' as const : 'noop' as const,
           sourceRun: { ...result.run, sourceRevision: result.run.sourceRevision ?? '1' } as AccountingSourceRun,
-          errors: [],
+          errors: result.run.status === 'rejected'
+            ? [...accountingErrorsFrom(result.result), ...accountingErrorsFrom(result.run.result)].filter((issue, index, all) => all.findIndex((candidate) => candidate.code === issue.code && candidate.message === issue.message && candidate.field === issue.field) === index)
+            : [],
           idempotencyKey: `${result.run.sourceType}:${result.run.sourceId}:${result.run.sourceRevision ?? '1'}`,
         };
       },

@@ -566,6 +566,30 @@ const resolveCorrectionOriginal = (db: Database.Database, tenantId: string, requ
   return { documentId: row.id, documentNumber: row.number, revision, snapshotHash: canonicalHash, currentSnapshotHash: canonicalHash, taxEffectiveDate: row[dateColumn], taxBreakdown: breakdown };
 };
 
+const loadPriorCorrections = (db: Database.Database, tenantId: string, originalDocumentId: string): ReturnType<typeof createLinkedCorrection>['document'][] => {
+  const rows = db.prepare(`SELECT fact_json, result_json FROM accounting_source_runs
+    WHERE tenant_id = ? AND source_type = 'standalone_source'`).all(tenantId) as Array<{ fact_json?: string; result_json?: string }>;
+  return rows.flatMap((row) => {
+    const result = parseJson<Record<string, any> | undefined>(row.result_json, undefined);
+    if (result?.originalDocumentId === originalDocumentId) return [result as ReturnType<typeof createLinkedCorrection>['document']];
+    const fact = parseJson<Record<string, any> | undefined>(row.fact_json, undefined);
+    const domainFacts = fact?.provenance?.domainFacts;
+    if (!domainFacts || domainFacts.original?.documentId !== originalDocumentId || !Array.isArray(domainFacts.deltas)) return [];
+    try {
+      return [createLinkedCorrection({
+        id: domainFacts.id,
+        idempotencyKey: domainFacts.idempotencyKey,
+        correctionDate: domainFacts.correctionDate,
+        taxEffectiveDate: domainFacts.taxEffectiveDate,
+        original: domainFacts.original,
+        deltas: domainFacts.deltas,
+      }).document];
+    } catch {
+      return [];
+    }
+  });
+};
+
 /** Validate a settlement/correction domain payload, then post its supplied lines atomically. */
 export const postAccountingCommand = (
   db: Database.Database,
@@ -580,7 +604,8 @@ export const postAccountingCommand = (
     const tenantId = getTenantId(scope);
     const documentType = facts.documentType === 'incoming_invoice' ? 'incoming_invoice' : 'outgoing_invoice';
     const original = resolveCorrectionOriginal(db, tenantId, facts.original as ImmutableOriginalDocument, documentType);
-    const linked = createLinkedCorrection({ ...facts, original } as unknown as LinkedCorrectionInput);
+    const existing = loadPriorCorrections(db, tenantId, original.documentId);
+    const linked = createLinkedCorrection({ ...facts, original, existing } as unknown as LinkedCorrectionInput);
     const chart = activeChart(db, tenantId, options.chart);
     const correctionSource: AccountingSourceFact = {
       ...input.source,

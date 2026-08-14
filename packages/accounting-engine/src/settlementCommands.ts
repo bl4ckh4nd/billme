@@ -17,6 +17,10 @@ export interface SettlementJournalAccounts {
   accountsPayable: string;
   revenue: string;
   expense: string;
+  /** Explicit expense account for outgoing bad-debt write-offs. */
+  badDebtExpense?: string;
+  /** Explicit balance-sheet account used when an advance is applied. */
+  advanceClearing?: string;
   outputVat: string;
   inputVat: string;
 }
@@ -80,6 +84,12 @@ const settlementLines = (
   const evidenceType = kind === 'bad_debt' ? 'ustg17_bad_debt' : kind;
   const evidenceReference = evidenceReferenceFor(kind, facts, source);
   const lines: JournalLine[] = [];
+  if (kind === 'bad_debt' && !text(accounts.badDebtExpense)) {
+    throw new CorrectionSettlementError('INVALID_FACTS', 'bad_debt requires an explicit bad-debt expense account');
+  }
+  if (kind === 'advance_settlement' && !text(accounts.advanceClearing)) {
+    throw new CorrectionSettlementError('INVALID_FACTS', 'advance_settlement requires an explicit advance clearing account');
+  }
   for (const [index, allocation] of byRate.entries()) {
     const net = euros(allocation.netAmount);
     const tax = euros(allocation.taxAmount);
@@ -96,13 +106,26 @@ const settlementLines = (
       evidenceReference,
       memo: `${kind} ${taxCaseKey}`,
     } satisfies Partial<JournalLine>;
-    if (incoming) {
+    if (kind === 'advance_settlement') {
+      // Applying an advance only clears the advance balance against the
+      // document open item. It must not recreate revenue or VAT from the
+      // final invoice.
+      if (incoming) {
+        lines.push({ id: `${kind}:payable:${index + 1}`, accountNumber: accounts.accountsPayable, debitAmount: gross, creditAmount: 0, evidenceType: 'opos', evidenceReference, memo: `${kind} payable` });
+        lines.push({ id: `${kind}:clearing:${index + 1}`, accountNumber: accounts.advanceClearing!, debitAmount: 0, creditAmount: gross, evidenceType: 'opos', evidenceReference, memo: `${kind} advance clearing` });
+      } else {
+        lines.push({ id: `${kind}:clearing:${index + 1}`, accountNumber: accounts.advanceClearing!, debitAmount: gross, creditAmount: 0, evidenceType: 'opos', evidenceReference, memo: `${kind} advance clearing` });
+        lines.push({ id: `${kind}:receivable:${index + 1}`, accountNumber: accounts.accountsReceivable, debitAmount: 0, creditAmount: gross, evidenceType: 'opos', evidenceReference, memo: `${kind} receivable` });
+      }
+    } else if (incoming) {
       lines.push({ id: `${kind}:base:${index + 1}`, accountNumber: accounts.expense, debitAmount: 0, creditAmount: net, ...base });
-      if (tax > 0) lines.push({ id: `${kind}:tax:${index + 1}`, accountNumber: accounts.inputVat, debitAmount: 0, creditAmount: tax, ...base, memo: `${kind} VAT ${taxCaseKey}` });
+      // VAT control lines intentionally carry no economic tax metadata.
+      if (tax > 0) lines.push({ id: `${kind}:tax:${index + 1}`, accountNumber: accounts.inputVat, debitAmount: 0, creditAmount: tax, memo: `${kind} VAT ${taxCaseKey}` });
       lines.push({ id: `${kind}:payable:${index + 1}`, accountNumber: accounts.accountsPayable, debitAmount: gross, creditAmount: 0, evidenceType: 'opos', evidenceReference, memo: `${kind} payable` });
     } else {
-      lines.push({ id: `${kind}:base:${index + 1}`, accountNumber: accounts.revenue, debitAmount: net, creditAmount: 0, ...base });
-      if (tax > 0) lines.push({ id: `${kind}:tax:${index + 1}`, accountNumber: accounts.outputVat, debitAmount: tax, creditAmount: 0, ...base, memo: `${kind} VAT ${taxCaseKey}` });
+      lines.push({ id: `${kind}:base:${index + 1}`, accountNumber: kind === 'bad_debt' ? accounts.badDebtExpense! : accounts.revenue, debitAmount: net, creditAmount: 0, ...base });
+      // VAT control lines intentionally carry no economic tax metadata.
+      if (tax > 0) lines.push({ id: `${kind}:tax:${index + 1}`, accountNumber: accounts.outputVat, debitAmount: tax, creditAmount: 0, memo: `${kind} VAT ${taxCaseKey}` });
       lines.push({ id: `${kind}:receivable:${index + 1}`, accountNumber: accounts.accountsReceivable, debitAmount: 0, creditAmount: gross, evidenceType: 'opos', evidenceReference, memo: `${kind} receivable` });
     }
   }
@@ -123,8 +146,19 @@ export const buildSettlementJournalCommand = (input: SettlementJournalBuildInput
     result = calculateBadDebtWriteOff(input.facts as unknown as BadDebtWriteOffInput);
     byRate = result.byRate;
   } else {
-    result = calculateInvoiceSettlement(input.facts as unknown as InvoiceSettlementInput);
-    byRate = result.dueByRate;
+    const settlement = calculateInvoiceSettlement(input.facts as unknown as InvoiceSettlementInput);
+    result = settlement;
+    const finalInvoice = input.facts.finalInvoice as { taxBreakdown?: ReadonlyArray<{ rate: number; netAmount: number; taxAmount: number; grossAmount?: number }> } | undefined;
+    // The settlement entry represents the amounts already covered by
+    // advances/partials, not the remaining invoice due. The final invoice
+    // itself owns its revenue and VAT posting.
+    byRate = (finalInvoice?.taxBreakdown ?? []).map((entry, index) => {
+      const due = settlement.dueByRate[index];
+      const grossAmount = (cents(entry.grossAmount ?? entry.netAmount + entry.taxAmount) - cents(due?.grossAmount ?? 0)) / 100;
+      const netAmount = (cents(entry.netAmount) - cents(due?.netAmount ?? 0)) / 100;
+      const taxAmount = (cents(entry.taxAmount) - cents(due?.taxAmount ?? 0)) / 100;
+      return { rate: entry.rate, grossAmount, netAmount, taxAmount };
+    });
   }
   const lines = settlementLines(input.kind, input.facts, input.source, input.accounts, byRate);
   const commandId = `journal-command:${input.kind}:${input.source.sourceId}:${input.source.sourceRevision}`;

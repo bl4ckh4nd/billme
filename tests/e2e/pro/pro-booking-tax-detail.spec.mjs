@@ -70,10 +70,12 @@ const saveDraftForTx = async (page, { txId, accountNumber, bankAccount, taxCaseK
           netAmount: taxPayload?.netAmount,
           taxAmount: taxPayload?.taxAmount,
           grossAmount: taxPayload?.grossAmount,
+          destinationVatRate: taxPayload?.destinationVatRate,
           countryCode: taxPayload?.countryCode,
           counterpartyVatId: taxPayload?.counterpartyVatId,
           evidenceType: taxPayload?.evidenceType,
           evidenceReference: taxPayload?.evidenceReference,
+          datevSachverhaltLl: taxPayload?.datevSachverhaltLl,
         },
         {
           id: `line-${txId}-2-${lineNonce}`,
@@ -105,9 +107,21 @@ test.afterEach(async () => {
 test('booking detail UI enforces tax-case requirements and clears blockers after field completion', async () => {
   const { page, baseUrl } = desktop;
   const { transaction: targetTx, draft: editableDraft } = await importPendingProTransaction(page, 'tax-detail');
+  const { chart, expenseAccount, bankAccount } = await pickAccounts(page);
+  await invokeDesktopIpc(page, 'pro:upsertTaxCaseAccountMapping', {
+    chart,
+    taxCaseKey: 'EU_B2B_SERVICE_RC',
+    role: 'datev_bu',
+    accountNumber: expenseAccount,
+    datevBuKey: '94',
+  });
   await invokeDesktopIpc(page, 'pro:saveDraft', {
     draft: {
       ...editableDraft,
+      lines: editableDraft.lines.map((line, index) => ({
+        ...line,
+        accountNumber: index === 0 ? expenseAccount : bankAccount,
+      })),
       workflowStatus: 'suggested',
     },
   });
@@ -163,6 +177,36 @@ test('booking detail UI enforces tax-case requirements and clears blockers after
   expect(check.issues.some((issue) => issue.code === 'MISSING_COUNTRY_CODE')).toBe(false);
   expect(check.issues.some((issue) => issue.code === 'MISSING_COUNTERPARTY_VAT_ID')).toBe(false);
   expect(check.issues.some((issue) => issue.code === 'MISSING_TAX_EVIDENCE')).toBe(false);
+  expect(check.issues.some((issue) => issue.code === 'MISSING_DESTINATION_VAT_RATE')).toBeTruthy();
+  expect(check.issues.some((issue) => issue.code === 'MISSING_DATEV_SACHVERHALT')).toBeTruthy();
+
+  // The current booking editor has no controls for these DATEV-only fields.
+  // Seed them through the typed IPC contract, then validate and explicitly
+  // re-approve the draft so the approval state reflects the final evidence.
+  const persisted = await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: targetTx.id });
+  expect(persisted?.id).toBeTruthy();
+  const rcLine = persisted.lines.find((line) => line.taxCaseKey === 'EU_B2B_SERVICE_RC');
+  expect(rcLine).toBeTruthy();
+  const enriched = await invokeDesktopIpc(page, 'pro:saveDraft', {
+    draft: {
+      ...persisted,
+      workflowStatus: 'pending_approval',
+      lines: persisted.lines.map((line) => line.id === rcLine.id
+        ? { ...line, destinationVatRate: 20, datevSachverhaltLl: '13' }
+        : line),
+    },
+  });
+  expect(enriched.validationIssues.some((issue) => issue.code === 'MISSING_DESTINATION_VAT_RATE')).toBe(false);
+  expect(enriched.validationIssues.some((issue) => issue.code === 'MISSING_DATEV_SACHVERHALT')).toBe(false);
+
+  check = await invokeDesktopIpc(page, 'pro:validateTaxCompliance', { transactionId: targetTx.id });
+  expect(check.ok).toBe(true);
+  expect(check.issues.filter((issue) => issue.blocking)).toEqual([]);
+  const approved = await invokeDesktopIpc(page, 'pro:dispatchDraftAction', {
+    transactionId: targetTx.id,
+    action: 'approve',
+  });
+  expect(approved.workflowStatus).toBe('approved');
 });
 
 test('posts tax-case variants and verifies VAT summary rows for mixed tax versions', async () => {
@@ -249,6 +293,8 @@ test('posts tax-case variants and verifies VAT summary rows for mixed tax versio
       counterpartyVatId: 'FR12345678901',
       evidenceType: 'Invoice',
       evidenceReference: 'RC-2026-03-12',
+      destinationVatRate: 20,
+      datevSachverhaltLl: '13',
     },
   });
 

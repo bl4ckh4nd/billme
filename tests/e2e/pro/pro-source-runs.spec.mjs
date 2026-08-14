@@ -1,10 +1,20 @@
 import { expect, test } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { appUrl, invokeDesktopIpc, launchDesktopApp, seedDesktopData, setProAccountingPeriodStatus } from '../support.mjs';
 
 let desktop;
 let sequence = 0;
 
 const unique = (prefix) => `${prefix}-${process.pid}-${Date.now()}-${sequence++}`;
+
+const stableJson = (value) => {
+  if (value === undefined) return 'null';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  return `{${Object.keys(value).filter((key) => value[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+};
+
+const snapshotHash = (snapshot) => createHash('sha256').update(stableJson(snapshot)).digest('hex');
 
 const sourceFact = ({ sourceType = 'standalone_source', sourceId = unique('source'), sourceRevision = 'r1', lines, date = '2026-04-15' } = {}) => ({
   sourceType,
@@ -106,35 +116,112 @@ test('keeps invalid account, zero amount, and closed-period postings atomic', as
   expect(await sourceJournalIds(page)).toEqual(before);
 });
 
-test('posts correction and close/provision/inventory/FX command workflows, while rejecting changed originals', async () => {
+test('posts correction and close/provision/inventory/FX command workflows, while rejecting missing originals', async () => {
   const { page } = desktop;
   const accounts = await pickPostingAccounts(page);
+  await invokeDesktopIpc(page, 'pro:upsertTaxCaseAccountMapping', {
+    chart: accounts.chart,
+    taxCaseKey: 'DE_STD_19',
+    role: 'input_tax',
+    accountNumber: accounts.expense,
+  });
+  await invokeDesktopIpc(page, 'pro:upsertAccountingAccountMapping', {
+    chart: accounts.chart,
+    role: 'input_vat',
+    accountNumber: accounts.expense,
+  });
+  const vendorId = unique('correction-vendor');
+  const originalId = unique('correction-original');
+  const originalLineId = unique('correction-original-line');
+  const timestamp = new Date().toISOString();
+  await invokeDesktopIpc(page, 'pro:upsertVendor', {
+    reason: 'E2E correction original',
+    vendor: {
+      id: vendorId,
+      tenantId: 'default',
+      vendorNumber: unique('vendor-number'),
+      name: 'E2E Correction Vendor',
+      email: 'correction-vendor@example.test',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  });
+  await invokeDesktopIpc(page, 'pro:upsertIncomingInvoice', {
+    reason: 'E2E correction original',
+    invoice: {
+      id: originalId,
+      tenantId: 'default',
+      vendorId,
+      number: unique('ER-correction'),
+      invoiceDate: '2026-04-01',
+      dueDate: '2026-04-30',
+      servicePeriod: '2026-04',
+      netAmount: 100,
+      taxAmount: 19,
+      grossAmount: 119,
+      taxRate: 19,
+      status: 'open',
+      lines: [{
+        id: originalLineId,
+        incomingInvoiceId: originalId,
+        position: 0,
+        description: 'E2E correction original',
+        quantity: 1,
+        unitPrice: 100,
+        netAmount: 100,
+        taxRate: 19,
+        taxAmount: 19,
+        grossAmount: 119,
+        accountNumber: accounts.expense,
+      }],
+      accountingStatus: 'unposted',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  });
+  const originalPosting = await invokeDesktopIpc(page, 'pro:postIncomingInvoiceAccounting', {
+    invoiceId: originalId,
+    reason: 'E2E correction original posting',
+  });
+  expect(originalPosting).toMatchObject({ status: 'ready', snapshot: { sourceId: originalId } });
+  const original = (await invokeDesktopIpc(page, 'pro:listIncomingInvoices')).find((invoice) => invoice.id === originalId);
+  expect(original?.accountingSnapshot).toBeTruthy();
+  const originalSnapshot = original.accountingSnapshot;
+  const originalSnapshotHash = snapshotHash(originalSnapshot);
   const correctionSource = sourceFact({ sourceType: 'standalone_source', sourceId: unique('correction'), lines: journalLines(accounts, 11.9) });
   const correctionFacts = {
     id: unique('linked-correction'),
     idempotencyKey: unique('correction-key'),
     correctionDate: '2026-04-15',
+    documentType: 'incoming_invoice',
     original: {
-      documentId: 'invoice-e2e-original',
-      documentNumber: 'RE-E2E-001',
-      revision: 'original-r1',
-      snapshotHash: 'snapshot-e2e',
+      documentId: original.id,
+      documentNumber: original.number,
+      revision: originalSnapshot.sourceVersion,
+      snapshotHash: originalSnapshotHash,
       currentSnapshotHash: 'changed-snapshot',
-      taxEffectiveDate: '2026-04-01',
+      taxEffectiveDate: original.invoiceDate,
       taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }],
     },
     deltas: [{ rate: 19, grossAmount: 11.9 }],
   };
   const beforeCorrection = await sourceJournalIds(page);
   await expect(invokeDesktopIpc(page, 'pro:postAccountingCommand', {
-    kind: 'correction', source: correctionSource, domainFacts: correctionFacts, chart: accounts.chart, reason: 'E2E correction changed original',
-  })).rejects.toThrow(/ORIGINAL_CHANGED|snapshot changed/i);
+    kind: 'correction',
+    source: correctionSource,
+    domainFacts: {
+      ...correctionFacts,
+      original: { ...correctionFacts.original, documentId: unique('missing-original'), currentSnapshotHash: originalSnapshotHash },
+    },
+    chart: accounts.chart,
+    reason: 'E2E correction missing original',
+  })).rejects.toThrow(/ORIGINAL_DOCUMENT_NOT_FOUND/);
   expect(await sourceJournalIds(page)).toEqual(beforeCorrection);
 
   const validCorrection = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'correction',
     source: correctionSource,
-    domainFacts: { ...correctionFacts, id: unique('linked-correction-ok'), idempotencyKey: unique('correction-key-ok'), original: { ...correctionFacts.original, currentSnapshotHash: 'snapshot-e2e' } },
+    domainFacts: { ...correctionFacts, id: unique('linked-correction-ok'), idempotencyKey: unique('correction-key-ok'), original: { ...correctionFacts.original, currentSnapshotHash: originalSnapshotHash } },
     chart: accounts.chart,
     reason: 'E2E correction accepted',
   });
@@ -179,7 +266,7 @@ test('posts correction and close/provision/inventory/FX command workflows, while
 
   const runs = await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns');
   expect(runs.map((run) => run.sourceType)).toEqual(expect.arrayContaining(['standalone_source', 'fiscal_close', 'provision', 'inventory_closing', 'fx_valuation']));
-  expect(runs.find((run) => run.sourceId === correctionSource.sourceId)?.fact.provenance).toMatchObject({ commandKind: 'correction' });
+  expect(runs.find((run) => run.fact.provenance?.commandKind === 'correction')?.fact.provenance).toMatchObject({ commandKind: 'correction' });
 });
 
 test('records valid payroll control totals and rejects a gross-to-net mismatch without a journal', async () => {

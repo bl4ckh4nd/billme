@@ -14,23 +14,31 @@ import type {
 
 void React;
 
-type WorkflowOption = { value: AccountingCommandKind; label: string };
+type WorkflowOption = { value: AccountingCommandKind; label: string; group: string; description: string };
 
 const workflows: WorkflowOption[] = [
-  { value: 'correction', label: 'Korrektur / Gutschrift' },
-  { value: 'skonto', label: 'Skonto' },
-  { value: 'bad_debt', label: 'Forderungsausfall' },
-  { value: 'advance_settlement', label: 'Vorauszahlung / Verrechnung' },
-  { value: 'fiscal_close', label: 'Geschäftsjahresabschluss' },
-  { value: 'carry_forward', label: 'Vortrag' },
-  { value: 'provision', label: 'Rückstellung' },
-  { value: 'accrual', label: 'Abgrenzung' },
-  { value: 'inventory_closing', label: 'Inventurabschluss' },
-  { value: 'fx_valuation', label: 'Fremdwährungsbewertung' },
-  { value: 'loan_schedule', label: 'Darlehen' },
-  { value: 'payroll_batch', label: 'Lohnlauf' },
-  { value: 'shareholder_flow', label: 'Gesellschaftervorgang' },
+  { value: 'correction', label: 'Korrektur / Gutschrift', group: 'Belege & Zahlungen', description: 'Einen gebuchten Beleg nachvollziehbar berichtigen.' },
+  { value: 'skonto', label: 'Skonto', group: 'Belege & Zahlungen', description: 'Zahlungsabzug und Umsatzsteuer anteilig korrigieren.' },
+  { value: 'bad_debt', label: 'Forderungsausfall', group: 'Belege & Zahlungen', description: 'Uneinbringliche Forderung mit Nachweis ausbuchen.' },
+  { value: 'advance_settlement', label: 'Vorauszahlung / Verrechnung', group: 'Belege & Zahlungen', description: 'Geleistete oder erhaltene Anzahlungen verrechnen.' },
+  { value: 'fiscal_close', label: 'Geschäftsjahresabschluss', group: 'Abschluss', description: 'Erfolgskonten zum Stichtag abschließen.' },
+  { value: 'carry_forward', label: 'Vortrag', group: 'Abschluss', description: 'Bestandskonten ins neue Geschäftsjahr vortragen.' },
+  { value: 'provision', label: 'Rückstellung', group: 'Abschluss', description: 'Rückstellung bilden, anpassen oder auflösen.' },
+  { value: 'accrual', label: 'Abgrenzung', group: 'Abschluss', description: 'Aufwand oder Ertrag periodengerecht abgrenzen.' },
+  { value: 'inventory_closing', label: 'Inventurabschluss', group: 'Abschluss', description: 'Bewertete Inventurbestände zum Stichtag buchen.' },
+  { value: 'fx_valuation', label: 'Fremdwährungsbewertung', group: 'Weitere Buchungen', description: 'Offene Fremdwährungsposition zum Stichtag bewerten.' },
+  { value: 'loan_schedule', label: 'Darlehen', group: 'Weitere Buchungen', description: 'Tilgung und Zins aus einem Darlehensplan buchen.' },
+  { value: 'payroll_batch', label: 'Lohnlauf', group: 'Weitere Buchungen', description: 'Freigegebenen Lohnlauf gesammelt verbuchen.' },
+  { value: 'shareholder_flow', label: 'Gesellschaftervorgang', group: 'Weitere Buchungen', description: 'Einlage, Entnahme oder Ausschüttung dokumentieren.' },
 ];
+
+const workflowGroups = [...new Set(workflows.map((workflow) => workflow.group))];
+const runStatusLabel: Record<AccountingSourceRun['status'], string> = {
+  posted: 'Gebucht',
+  rejected: 'Abgelehnt',
+  noop: 'Keine Änderung',
+  prepared: 'Vorbereitet',
+};
 
 const taxPreparations: Array<{ value: TaxPreparationKind; label: string }> = [
   { value: 'ustva', label: 'UStVA' },
@@ -48,6 +56,7 @@ type FormState = {
 
 const periodOf = (date: string): string => date.slice(0, 7);
 const yearOf = (date: string): number => Number(date.slice(0, 4));
+const SUPPORTED_TAX_YEAR = 2025;
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
 const synchronizeDomainFacts = (
@@ -156,6 +165,21 @@ const validDate = (value: string): boolean => {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 };
 
+const domainErrorMessage = (error: { code: string; message: string; field?: string }): string => {
+  if (error.code === 'ACCOUNTING_SOURCE_RUN_CONFLICT') {
+    return `${error.message || 'Quelllauf-Konflikt.'} Bitte Quellbeleg und Revision prüfen oder den bestehenden Lauf in der Historie öffnen.`;
+  }
+  return `${error.message}${error.field ? ` (${error.field})` : ''}`;
+};
+
+const caughtDomainErrorMessage = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('ACCOUNTING_SOURCE_RUN_CONFLICT')) {
+    return 'Konflikt beim Quelllauf. Bitte Quellbeleg und Revision prüfen oder den bestehenden Lauf in der Historie öffnen.';
+  }
+  return message;
+};
+
 const has = (facts: AccountingDomainFacts, key: string): boolean => Object.prototype.hasOwnProperty.call(facts, key) && facts[key] !== undefined && facts[key] !== null;
 const requiredFactKeys: Partial<Record<AccountingCommandKind, readonly string[]>> = {
   correction: ['id', 'idempotencyKey', 'correctionDate', 'original', 'deltas'],
@@ -233,24 +257,40 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [taxKind, setTaxKind] = useState<TaxPreparationKind>('ustva');
-  const [taxPeriod, setTaxPeriod] = useState(() => new Date().toISOString().slice(0, 7));
+  const [taxPeriod, setTaxPeriod] = useState(`${SUPPORTED_TAX_YEAR}-01`);
   const [taxReason, setTaxReason] = useState('');
   const [taxBusy, setTaxBusy] = useState(false);
   const [taxError, setTaxError] = useState<string | null>(null);
-  const [preparedArtifact, setPreparedArtifact] = useState<{ kind: TaxPreparationKind; id?: string; status: string } | null>(null);
+  const [preparedArtifact, setPreparedArtifact] = useState<{ kind: TaxPreparationKind; id?: string; status: string; rowCount?: number } | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const canMutate = permissionContextForRole(role).canMutate;
+  const selectedWorkflow = workflows.find((workflow) => workflow.value === form.kind) ?? workflows[0];
 
   const preview = useMemo(() => (form.domainFacts || form.date || form.reason ? validateForm(form) : []), [form]);
+  const parsedFacts = useMemo(() => parseDomainFacts(form).facts, [form]);
+  const fieldErrors = useMemo(() => ({
+    sourceId: form.sourceId.trim() ? null : 'Quellbeleg ist erforderlich.',
+    date: validDate(form.date) ? null : 'Buchungsdatum muss ein gültiges Datum sein.',
+    reason: form.reason.trim() ? null : 'Audit-Grund ist erforderlich.',
+  }), [form.date, form.reason, form.sourceId]);
+  const taxReasonError = taxReason.trim() ? null : 'Audit-Grund ist erforderlich.';
+  const taxPeriodError = /^\d{4}-(0[1-9]|1[0-2])$/.test(taxPeriod) ? null : 'Zeitraum muss YYYY-MM sein.';
 
   const refetchHistory = async () => {
     if (!dataAdapter?.listAccountingSourceRuns) return;
-    const next = await dataAdapter.listAccountingSourceRuns();
-    setHistory(next);
+    setHistoryError(null);
+    try {
+      const next = await dataAdapter.listAccountingSourceRuns();
+      setHistory(next);
+    } catch (error) {
+      setHistoryError(caughtDomainErrorMessage(error));
+      throw error;
+    }
   };
 
   useEffect(() => {
-    void refetchHistory().catch((error: unknown) => setErrors([error instanceof Error ? error.message : 'Historie konnte nicht geladen werden.']));
+    void refetchHistory().catch(() => undefined);
   }, [dataAdapter]);
 
   const update = (key: keyof FormState, value: string) => setForm((current) => {
@@ -280,15 +320,19 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
         reason: form.reason.trim(),
       };
       const result = await dataAdapter.postAccountingCommand(input);
-      if (result.errors.length || result.status === 'rejected') {
-        setErrors(result.errors.map((error) => error.message));
+      const resultErrors = result.errors.map(domainErrorMessage);
+      if (result.status === 'rejected' && resultErrors.length === 0) resultErrors.push('Buchung abgelehnt: Der Fachworkflow hat keinen buchbaren Vorgang zurückgegeben. Bitte Eingaben und Belegbezug prüfen.');
+      if (result.status === 'noop') resultErrors.push('Keine Buchung vorgenommen: Der Fachworkflow erzeugt keine Journalzeilen. Bitte Beträge, Zeitraum und Belegbezug prüfen.');
+      if (result.status === 'posted' && !result.sourceRun?.journalEntryId) resultErrors.push('Buchung nicht bestätigt: Es wurde keine Journal-ID erzeugt. Bitte den Quelllauf prüfen und erneut versuchen.');
+      if (result.errors.length || result.status === 'rejected' || result.status === 'noop' || (result.status === 'posted' && !result.sourceRun?.journalEntryId)) {
+        setErrors(resultErrors);
         return;
       }
       await refetchHistory();
-      setNotice(result.status === 'duplicate' ? 'Doppelte Quelle erkannt; bestehender Lauf bleibt maßgeblich.' : 'Sonderbuchung gespeichert und refetched.');
+      setNotice(result.status === 'duplicate' ? 'Diese Quelle wurde bereits gebucht. Der bestehende Lauf bleibt maßgeblich.' : 'Sonderbuchung wurde erfolgreich gebucht.');
       setForm(initialForm());
     } catch (error) {
-      setErrors([error instanceof Error ? error.message : 'Sonderbuchung konnte nicht gespeichert werden.']);
+      setErrors([caughtDomainErrorMessage(error) || 'Sonderbuchung konnte nicht gespeichert werden.']);
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -297,22 +341,25 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
 
   const prepareTax = async () => {
     if (taxBusy || !dataAdapter?.prepareTaxExport) return;
+    setPreparedArtifact(null);
     const reason = taxReason.trim();
     if (!reason) {
-      setTaxError('Audit-Grund ist erforderlich.');
+      setTaxError(taxReasonError ?? 'Audit-Grund ist erforderlich.');
       return;
     }
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(taxPeriod)) {
-      setTaxError('Zeitraum muss YYYY-MM sein.');
+    if (taxPeriodError) {
+      setTaxError(taxPeriodError);
       return;
     }
     setTaxBusy(true);
     setTaxError(null);
     try {
       const result = await dataAdapter.prepareTaxExport({ kind: taxKind, period: taxPeriod, reason, idempotencyKey: `tax:${taxKind}:${taxPeriod}` });
-      setPreparedArtifact({ kind: result.artifact.kind, id: result.run?.id, status: result.artifact.status });
+      const rows = result.artifact.rows;
+      setPreparedArtifact({ kind: result.artifact.kind, id: result.run?.id, status: result.artifact.status, rowCount: Array.isArray(rows) ? rows.length : undefined });
       await refetchHistory();
     } catch (error) {
+      setPreparedArtifact(null);
       setTaxError(error instanceof Error ? error.message : 'Vorbereitung konnte nicht erstellt werden.');
     } finally {
       setTaxBusy(false);
@@ -339,40 +386,59 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   };
 
   return (
-    <div className="h-full overflow-y-auto p-4 space-y-4" data-testid="sonderbuchungen-workspace">
-      <header>
-        <h1 className="text-lg font-black text-foreground">Sonderbuchungen &amp; Abschluss</h1>
-        <p className="text-sm text-muted">Domain-Fakten werden geprüft; die Buchungszeilen erzeugt ausschließlich der gewählte Workflow.</p>
+    <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-5" data-testid="sonderbuchungen-workspace">
+      <header className="max-w-3xl">
+        <p className="text-xs font-bold uppercase tracking-wide text-muted">Buchhaltung</p>
+        <h1 className="mt-1 text-xl font-black text-foreground text-balance">Sonderbuchungen &amp; Abschluss</h1>
+        <p className="mt-1 text-sm text-muted text-pretty">Vorgang auswählen, Angaben prüfen und erst danach verbindlich buchen. Die Buchungszeilen erzeugt der geprüfte Fachworkflow.</p>
       </header>
 
-      {!dataAdapter?.postAccountingCommand ? <p className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-muted" role="status">Source-Run-Adapter nicht verfügbar.</p> : null}
+      <ol className="grid max-w-3xl grid-cols-3 gap-2" aria-label="Buchungsablauf">
+        {['Vorgang', 'Angaben', 'Prüfen & buchen'].map((step, index) => <li key={step} className="flex min-h-10 items-center gap-2 rounded-xl border border-border-subtle bg-surface-muted px-3 text-xs font-bold text-foreground"><span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-dark-base text-[11px] text-dark-foreground">{index + 1}</span><span className="hidden sm:inline">{step}</span></li>)}
+      </ol>
+
+      {!dataAdapter?.postAccountingCommand ? <p className="rounded-xl border border-border bg-surface-muted p-3 text-sm text-muted" role="status">Sonderbuchungen sind in dieser Verbindung nur lesbar.</p> : null}
       {!canMutate ? <p className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-muted" role="status">Diese Rolle darf Sonderbuchungen nur lesen.</p> : null}
       <section className="rounded-xl border border-border bg-surface p-4 space-y-3" aria-labelledby="special-entry-form-heading">
-        <h2 id="special-entry-form-heading" className="text-sm font-bold">Domain-Fakten und Buchung</h2>
+        <div>
+          <h2 id="special-entry-form-heading" className="text-base font-black">1. Vorgang und Angaben</h2>
+          <p className="mt-1 text-sm text-muted">{selectedWorkflow.description}</p>
+        </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <label className="flex flex-col gap-1 text-xs font-semibold">Workflow
-            <select aria-label="Workflow" value={form.kind} onChange={(event) => selectWorkflow(event.target.value as AccountingCommandKind)} disabled={!canMutate || busy} className="rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal">
-              {workflows.map((workflow) => <option key={workflow.value} value={workflow.value}>{workflow.label}</option>)}
+            <select aria-label="Workflow" value={form.kind} onChange={(event) => selectWorkflow(event.target.value as AccountingCommandKind)} disabled={!canMutate || busy} className="min-h-10 rounded-xl border border-border bg-surface px-3 py-2 text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+              {workflowGroups.map((group) => <optgroup key={group} label={group}>{workflows.filter((workflow) => workflow.group === group).map((workflow) => <option key={workflow.value} value={workflow.value}>{workflow.label}</option>)}</optgroup>)}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold">Quellbeleg
-            <input aria-label="Quellbeleg" value={form.sourceId} onChange={(event) => update('sourceId', event.target.value)} disabled={!canMutate || busy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
+            <input id="source-id" aria-label="Quellbeleg" required aria-invalid={Boolean(fieldErrors.sourceId)} aria-describedby={fieldErrors.sourceId ? 'source-id-error' : undefined} value={form.sourceId} onChange={(event) => update('sourceId', event.target.value)} disabled={!canMutate || busy} className="min-h-10 rounded-xl border border-border px-3 py-2 text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" />
+            {fieldErrors.sourceId ? <span id="source-id-error" className="text-xs font-normal text-error">{fieldErrors.sourceId}</span> : null}
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold">Buchungsdatum
-            <input aria-label="Buchungsdatum" type="date" value={form.date} onChange={(event) => update('date', event.target.value)} disabled={!canMutate || busy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold sm:col-span-2 lg:col-span-3">Domain-Fakten (JSON)
-            <textarea aria-label="Domain-Fakten (JSON)" value={form.domainFacts} onChange={(event) => update('domainFacts', event.target.value)} disabled={!canMutate || busy} rows={12} spellCheck={false} className="rounded-lg border border-border bg-surface-muted px-2 py-2 font-mono text-xs font-normal" />
-            <span className="font-normal text-muted">Vorlage anpassen. Keine generischen Soll-/Habenzeilen; jeder Workflow validiert seine eigenen Fakten.</span>
+            <input id="booking-date" aria-label="Buchungsdatum" type="date" required aria-invalid={Boolean(fieldErrors.date)} aria-describedby={fieldErrors.date ? 'booking-date-error' : undefined} value={form.date} onChange={(event) => update('date', event.target.value)} disabled={!canMutate || busy} className="min-h-10 rounded-xl border border-border px-3 py-2 text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" />
+            {fieldErrors.date ? <span id="booking-date-error" className="text-xs font-normal text-error">{fieldErrors.date}</span> : null}
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold sm:col-span-2 lg:col-span-1">Audit-Grund (Pflicht)
-            <input aria-label="Audit-Grund" value={form.reason} onChange={(event) => update('reason', event.target.value)} disabled={!canMutate || busy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
+            <input id="audit-reason" aria-label="Audit-Grund" required aria-invalid={Boolean(fieldErrors.reason)} aria-describedby={fieldErrors.reason ? 'audit-reason-error' : undefined} value={form.reason} onChange={(event) => update('reason', event.target.value)} disabled={!canMutate || busy} placeholder="Warum wird diese Buchung vorgenommen?" className="min-h-10 rounded-xl border border-border px-3 py-2 text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" />
+            {fieldErrors.reason ? <span id="audit-reason-error" className="text-xs font-normal text-error">{fieldErrors.reason}</span> : null}
           </label>
         </div>
-        {preview.length > 0 ? <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert"><ul className="list-disc pl-4">{preview.map((error) => <li key={error}>{error}</li>)}</ul></div> : null}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="secondary" onClick={() => setErrors(validateForm(form))} disabled={busy || !canMutate}>Vorschau prüfen</Button>
-          <Button type="button" onClick={() => void submit()} disabled={busy || !canMutate || !dataAdapter?.postAccountingCommand} aria-busy={busy}>{busy ? 'Speichere…' : 'Sonderbuchung speichern'}</Button>
+        <details className="rounded-xl border border-border-subtle bg-surface-muted p-3">
+          <summary className="min-h-10 cursor-pointer select-none py-2 text-sm font-bold text-foreground">Fachdaten für Experten bearbeiten</summary>
+          <label className="mt-2 flex flex-col gap-1 text-xs font-semibold">Fachdaten (JSON)
+            <textarea id="domain-facts" aria-label="Domain-Fakten (JSON)" required aria-invalid={preview.length > 0} aria-describedby="domain-facts-help" value={form.domainFacts} onChange={(event) => update('domainFacts', event.target.value)} disabled={!canMutate || busy} rows={12} spellCheck={false} className="rounded-xl border border-border bg-surface px-3 py-3 font-mono text-xs font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" />
+            <span id="domain-facts-help" className="font-normal text-muted">Nur für fachkundige Bearbeitung. Konten und Beträge werden vor der Buchung erneut validiert.</span>
+          </label>
+        </details>
+        <div className={`rounded-xl border p-3 ${preview.length ? 'border-error-border bg-error-bg' : 'border-success-border bg-success-bg'}`} role={preview.length ? 'alert' : 'status'}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className={`text-sm font-black ${preview.length ? 'text-error' : 'text-success'}`}>2. {preview.length ? 'Angaben noch unvollständig' : 'Angaben vollständig'}</h3>
+            {parsedFacts ? <span className="text-xs tabular-nums text-muted">Periode {String(parsedFacts.period ?? periodOf(form.date))}</span> : null}
+          </div>
+          {preview.length ? <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-error">{preview.map((error) => <li key={error}>{error}</li>)}</ul> : <p className="mt-1 text-sm text-success">{selectedWorkflow.label} · {form.sourceId} · {form.date}</p>}
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border-subtle pt-3">
+          <Button type="button" onClick={() => void submit()} disabled={busy || preview.length > 0 || !canMutate || !dataAdapter?.postAccountingCommand} aria-busy={busy}>{busy ? 'Buchung läuft…' : 'Prüfen & verbindlich buchen'}</Button>
         </div>
         {notice ? <p className="text-sm text-success" role="status" aria-live="polite">{notice}</p> : null}
         {errors.length > 0 && preview.length === 0 ? <p className="text-sm text-error" role="alert">{errors.join(' ')}</p> : null}
@@ -385,20 +451,22 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-xs font-semibold">Meldung
-            <select aria-label="Steuervorbereitung" value={taxKind} onChange={(event) => setTaxKind(event.target.value as TaxPreparationKind)} disabled={taxBusy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal">
+            <select aria-label="Steuervorbereitung" value={taxKind} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxKind(event.target.value as TaxPreparationKind); }} disabled={taxBusy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal">
               {taxPreparations.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold">Zeitraum
-            <input aria-label="Steuerzeitraum" type="month" value={taxPeriod} onChange={(event) => setTaxPeriod(event.target.value)} disabled={taxBusy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
+            <input id="tax-period" aria-label="Steuerzeitraum" type="month" required aria-invalid={Boolean(taxPeriodError)} aria-describedby={taxPeriodError ? 'tax-period-error' : undefined} value={taxPeriod} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxPeriod(event.target.value); }} disabled={taxBusy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
+            {taxPeriodError ? <span id="tax-period-error" className="text-xs font-normal text-error">{taxPeriodError}</span> : null}
           </label>
           <label className="flex min-w-60 flex-1 flex-col gap-1 text-xs font-semibold">Audit-Grund (Pflicht)
-            <input aria-label="Audit-Grund Steuerexport" value={taxReason} onChange={(event) => setTaxReason(event.target.value)} disabled={taxBusy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
+            <input id="tax-audit-reason" aria-label="Audit-Grund Steuerexport" required aria-invalid={Boolean(taxReasonError)} aria-describedby={taxReasonError ? 'tax-audit-reason-error' : undefined} value={taxReason} onChange={(event) => setTaxReason(event.target.value)} disabled={taxBusy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
+            {taxReasonError ? <span id="tax-audit-reason-error" className="text-xs font-normal text-error">{taxReasonError}</span> : null}
           </label>
           <Button type="button" variant="secondary" onClick={() => void prepareTax()} disabled={taxBusy || !dataAdapter?.prepareTaxExport} aria-busy={taxBusy}>{taxBusy ? 'Bereite vor…' : 'Vorbereitung erstellen'}</Button>
         </div>
         {taxError ? <p className="text-sm text-error" role="alert">{taxError}</p> : null}
-        {preparedArtifact ? <div className="flex flex-wrap items-center gap-2"><p className="text-sm text-success" role="status">{preparedArtifact.kind.toUpperCase()} vorbereitet ({preparedArtifact.status}) – keine offizielle Übermittlung.</p>{preparedArtifact.id && dataAdapter?.exportTaxArtifact ? <Button type="button" size="sm" variant="secondary" onClick={() => void exportTax()} disabled={exportBusy} aria-busy={exportBusy}>{exportBusy ? 'Export läuft…' : 'Vorbereitungs-Export'}</Button> : null}</div> : null}
+        {preparedArtifact ? <div className="flex flex-wrap items-center gap-2"><p className={`text-sm ${preparedArtifact.rowCount === 0 ? 'text-muted' : 'text-success'}`} role="status">{preparedArtifact.rowCount === 0 ? `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind}: Keine meldepflichtigen Vorgänge (keine meldepflichtigen Zeilen).` : `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind} vorbereitet (${preparedArtifact.status}) – keine offizielle Übermittlung.`}</p>{preparedArtifact.id && dataAdapter?.exportTaxArtifact ? <Button type="button" size="sm" variant="secondary" onClick={() => void exportTax()} disabled={exportBusy} aria-busy={exportBusy}>{exportBusy ? 'Export läuft…' : 'Vorbereitungs-Export'}</Button> : null}</div> : null}
         <div className="grid gap-2 sm:grid-cols-2">
           <p className="rounded-lg border border-border-subtle bg-surface-muted p-3 text-sm text-muted"><strong>E-Bilanz:</strong> Vorbereitung möglich, offizieller Provider nicht verfügbar.</p>
           <p className="rounded-lg border border-border-subtle bg-surface-muted p-3 text-sm text-muted"><strong>Unternehmensregister:</strong> Vorbereitung möglich, offizieller Provider nicht verfügbar.</p>
@@ -406,8 +474,8 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
       </section>
 
       <section className="rounded-xl border border-border bg-surface p-4" aria-labelledby="source-run-history-heading">
-        <h2 id="source-run-history-heading" className="text-sm font-bold">Source-Run-Historie</h2>
-        {history.length === 0 ? <p className="mt-2 text-sm text-muted">Noch keine Läufe.</p> : <ul className="mt-2 space-y-2">{history.map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border-subtle bg-surface-muted p-2 text-sm"><span>{run.sourceType} · {run.sourceId} · {run.status}</span>{run.journalEntryId ? <a className="text-accent underline" href={`#/accounting/journal/${encodeURIComponent(run.journalEntryId)}`}>Journal {run.journalEntryId}</a> : null}</li>)}</ul>}
+        <h2 id="source-run-history-heading" className="text-base font-black">Letzte Buchungsläufe</h2>
+        {historyError ? <div className="mt-2 flex flex-wrap items-center gap-2" role="alert"><p className="text-sm text-error">Buchungshistorie konnte nicht geladen werden: {historyError}</p><Button type="button" size="sm" variant="secondary" onClick={() => void refetchHistory().catch(() => undefined)}>Erneut versuchen</Button></div> : history.length === 0 ? <p className="mt-2 text-sm text-muted">Noch keine Sonderbuchung vorhanden.</p> : <ul className="mt-3 space-y-2">{history.map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-surface-muted p-3 text-sm"><span className="min-w-0"><strong className="block truncate text-foreground">{run.sourceId}</strong><span className="text-xs text-muted">{runStatusLabel[run.status]} · {new Date(run.createdAt).toLocaleString('de-DE')}</span></span>{run.journalEntryId ? <a className="min-h-10 rounded-lg px-3 py-2 font-bold text-accent underline underline-offset-2" href={`#/accounting/journal/${encodeURIComponent(run.journalEntryId)}`}>Journal öffnen</a> : null}</li>)}</ul>}
       </section>
     </div>
   );

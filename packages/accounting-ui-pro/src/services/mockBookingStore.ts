@@ -45,6 +45,7 @@ import type {
   TaxPreparationArtifact,
   TaxPreparationInput,
 } from '../sourceRuns';
+import type { JournalEntryEntity } from '@billme/accounting-shared';
 
 // The desktop IPC transaction schema intentionally omits tenantId because the
 // tenant is fixed by the local Pro database. Keep the source identity and
@@ -87,6 +88,7 @@ export interface ProAccountingDataAdapter {
   listBookingDrafts?: () => BookingDraft[];
   getTransactionById?: (id: string) => Transaction | undefined;
   getBookingDraftByTransactionId?: (transactionId: string) => BookingDraft | undefined;
+  getJournalEntryById?: (id: string) => MaybePromise<JournalEntryEntity | null>;
   saveDraft?: (draft: BookingDraft, actorName?: string) => MaybePromise<BookingDraft>;
   dispatchBookingAction?: (
     transactionId: string,

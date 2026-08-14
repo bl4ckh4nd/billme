@@ -966,6 +966,10 @@ export default function App() {
       getBookingDraftByTransactionId(transactionId: string) {
         return structuredClone(drafts.find((row) => row.transactionId === transactionId));
       },
+      async getJournalEntryById(id: string) {
+        const entries = await client.listAccountingJournalEntries({ limit: 5000, offset: 0 });
+        return entries.find((entry) => entry.id === id) ?? null;
+      },
       async saveDraft(draft: WorkspaceBookingDraft, actorName = 'Web Pro') {
         if (!canonical) return readOnly('Draft mutation');
         const saved = await client.saveAccountingDraft(

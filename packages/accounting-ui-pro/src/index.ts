@@ -1,5 +1,7 @@
 export { default as ProAccountingWorkspace } from './App';
 export { default as SonderbuchungenWorkspace } from './components/SonderbuchungenWorkspace';
+export { default as JournalEntryDetail } from './components/JournalEntryDetail';
+export type { JournalEntryDetailProps } from './components/JournalEntryDetail';
 export type { ProAccountingWorkspaceProps, ProAccountingSeed } from './App';
 export type { ProAccountingDataAdapter } from './services/mockBookingStore';
 export type {

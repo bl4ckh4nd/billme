@@ -75,8 +75,31 @@ const fiscalBoundaryErrors = (
 
 const currency = (value: string): boolean => /^[A-Z]{3}$/.test(value);
 
-const sourceKey = (sourceType: string, sourceId: string, sourceRevision: string): string =>
-  `${sourceType}:${sourceId}:${sourceRevision}`;
+/**
+ * Identity values are framed instead of concatenated.  The length prefix is
+ * deliberately boring: unlike a delimiter, it remains injective for source
+ * values that contain punctuation (and it works in every runtime importing
+ * the pure accounting engine).
+ */
+const frame = (value: string): string => `${value.length}:${value}`;
+
+export interface JournalIdentityContext {
+  tenantId?: string;
+}
+
+export const journalSourceIdentity = (
+  tenantId: string | undefined,
+  sourceType: string,
+  sourceId: string,
+  sourceRevision: string,
+): string => `source:${[tenantId ?? 'default', sourceType, sourceId, sourceRevision].map(frame).join('')}`;
+
+const sourceKey = (
+  sourceType: string,
+  sourceId: string,
+  sourceRevision: string,
+  context: JournalIdentityContext = {},
+): string => journalSourceIdentity(context.tenantId, sourceType, sourceId, sourceRevision);
 
 const invalidResult = <T>(errors: ClosingDomainError[], idempotencyKey?: string): ClosingDomainResult<T> => ({
   status: 'rejected',
@@ -144,13 +167,14 @@ export const validateSourceFact = (fact: AccountingSourceFact): ClosingDomainErr
 export const buildJournalCommand = (
   fact: AccountingSourceFact,
   existingIdempotencyKeys: readonly string[] = [],
+  context: JournalIdentityContext = {},
 ): ClosingDomainResult<JournalCommand> => {
-  const idempotencyKey = sourceKey(fact.sourceType, fact.sourceId, fact.sourceRevision);
+  const idempotencyKey = sourceKey(fact.sourceType, fact.sourceId, fact.sourceRevision, context);
   const issues = sourceFactErrors(fact);
   if (issues.length) return invalidResult(issues, idempotencyKey);
   if (existingIdempotencyKeys.includes(idempotencyKey)) return { status: 'duplicate', errors: [], idempotencyKey };
 
-  const commandId = `journal-command:${idempotencyKey}`;
+  const commandId = `journal-command:${idempotencyKey.slice('source:'.length)}`;
   const entry: JournalEntry = {
     id: commandId,
     postingDate: fact.postingDate,
@@ -246,7 +270,7 @@ export const reconcileRollForward = (input: RollForwardInput): RollForwardReconc
   return { balanced: differences.length === 0, differences };
 };
 
-export const buildFiscalClose = (input: FiscalCloseInput): ClosingDomainResult<FiscalCloseResult> => {
+export const buildFiscalClose = (input: FiscalCloseInput, context: JournalIdentityContext = {}): ClosingDomainResult<FiscalCloseResult> => {
   const errors: ClosingDomainError[] = [];
   if (!dateValue(input.closingDate)) errors.push(error('INVALID_DATE', 'Closing date must be valid.', 'closingDate'));
   if (!ISO_PERIOD.test(input.period) || periodForDate(input.closingDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Closing date does not belong to period.', 'period'));
@@ -282,7 +306,7 @@ export const buildFiscalClose = (input: FiscalCloseInput): ClosingDomainResult<F
   if (netResultCents > 0) lines.push(line(input.retainedEarningsAccount, 0, netResultCents, 'Fiscal close result'));
   if (netResultCents < 0) lines.push(line(input.retainedEarningsAccount, -netResultCents, 0, 'Fiscal close loss'));
 
-  const command = buildJournalCommand(source('fiscal_close', input.sourceId, input.sourceRevision, input.closingDate, input.period, input.fiscalYear, input.currency, lines, `Fiscal year ${input.fiscalYear} close`, input.fiscalYearStart));
+  const command = buildJournalCommand(source('fiscal_close', input.sourceId, input.sourceRevision, input.closingDate, input.period, input.fiscalYear, input.currency, lines, `Fiscal year ${input.fiscalYear} close`, input.fiscalYearStart), [], context);
   if (command.status !== 'ready' || !command.value) return mapError(command);
   const check = reconcileRollForward({ opening: input.balances, movements: [], closing: input.balances });
   return { status: 'ready', errors: [], value: { netResult: euros(netResultCents), command: command.value, reconciliation: check }, idempotencyKey: command.idempotencyKey };
@@ -290,7 +314,7 @@ export const buildFiscalClose = (input: FiscalCloseInput): ClosingDomainResult<F
 
 export const closeFiscalYear = buildFiscalClose;
 
-export const buildCarryForward = (input: CarryForwardInput): ClosingDomainResult<CarryForwardResult> => {
+export const buildCarryForward = (input: CarryForwardInput, context: JournalIdentityContext = {}): ClosingDomainResult<CarryForwardResult> => {
   const errors: ClosingDomainError[] = [];
   if (!dateValue(input.effectiveDate)) errors.push(error('INVALID_DATE', 'Effective date must be valid.', 'effectiveDate'));
   if (!ISO_PERIOD.test(input.period) || periodForDate(input.effectiveDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Effective date does not belong to period.', 'period'));
@@ -316,7 +340,7 @@ export const buildCarryForward = (input: CarryForwardInput): ClosingDomainResult
   if (debit > credit) lines.push(line(input.openingBalanceAccount, 0, debit - credit, 'Carry-forward clearing'));
   if (credit > debit) lines.push(line(input.openingBalanceAccount, credit - debit, 0, 'Carry-forward clearing'));
   if (!lines.length) return { status: 'noop', errors: [], value: { lines: [], command: undefined, reconciliation: { balanced: true, differences: [] } } };
-  const command = buildJournalCommand(source('carry_forward', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, `Carry-forward ${input.fiscalYear}`, input.fiscalYearStart));
+  const command = buildJournalCommand(source('carry_forward', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, `Carry-forward ${input.fiscalYear}`, input.fiscalYearStart), [], context);
   if (command.status !== 'ready' || !command.value) return mapError(command);
   return {
     status: 'ready',
@@ -330,7 +354,7 @@ export const buildCarryForward = (input: CarryForwardInput): ClosingDomainResult
   };
 };
 
-export const buildProvisionCommand = (input: ProvisionInput): ClosingDomainResult<JournalCommand> => {
+export const buildProvisionCommand = (input: ProvisionInput, context: JournalIdentityContext = {}): ClosingDomainResult<JournalCommand> => {
   const previous = cents(input.previousAmount);
   const target = cents(input.targetAmount);
   const errors: ClosingDomainError[] = [];
@@ -348,7 +372,7 @@ export const buildProvisionCommand = (input: ProvisionInput): ClosingDomainResul
   const lines = adjustment > 0
     ? [line(input.expenseAccount, adjustment, 0, 'Provision increase'), line(input.provisionAccount, 0, adjustment, 'Provision increase')]
     : [line(input.provisionAccount, -adjustment, 0, 'Provision release'), line(input.expenseAccount, 0, -adjustment, 'Provision release')];
-  return buildJournalCommand(source('provision', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, input.bookingText ?? 'Provision adjustment', input.fiscalYearStart));
+  return buildJournalCommand(source('provision', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, input.bookingText ?? 'Provision adjustment', input.fiscalYearStart), [], context);
 };
 
 const monthStart = (value: string): Date | null => {
@@ -364,7 +388,7 @@ const monthsInclusive = (start: Date, end: Date): Date[] => {
   return result;
 };
 
-export const planAccrualSchedule = (input: AccrualInput): ClosingDomainResult<AccrualSchedule> => {
+export const planAccrualSchedule = (input: AccrualInput, context: JournalIdentityContext = {}): ClosingDomainResult<AccrualSchedule> => {
   const start = monthStart(input.startDate);
   const end = monthStart(input.endDate);
   const total = cents(input.totalAmount);
@@ -395,20 +419,20 @@ export const planAccrualSchedule = (input: AccrualInput): ClosingDomainResult<Ac
       [line(input.expenseAccount, cents(item.amount)!, 0, 'Accrual release'), line(input.deferralAccount, 0, cents(item.amount)!, 'Accrual release')],
       `Accrual ${input.sourceId} ${item.period}`,
       input.fiscalYearStart,
-    ));
+    ), [], context);
     if (command.status !== 'ready' || !command.value) return mapError(command);
     commands.push(command.value);
   }
   return { status: 'ready', errors: [], value: { periods, totalAmount: euros(total!), commands } };
 };
 
-export const buildAccrualSchedule = (input: AccrualInput): AccrualSchedule => {
-  const result = planAccrualSchedule(input);
+export const buildAccrualSchedule = (input: AccrualInput, context: JournalIdentityContext = {}): AccrualSchedule => {
+  const result = planAccrualSchedule(input, context);
   if (result.status !== 'ready' || !result.value) throw new Error(result.errors[0]?.message ?? 'Unable to build accrual schedule');
   return result.value;
 };
 
-export const buildInventoryClosingValuation = (input: InventoryClosingInput): ClosingDomainResult<InventoryClosingResult> => {
+export const buildInventoryClosingValuation = (input: InventoryClosingInput, context: JournalIdentityContext = {}): ClosingDomainResult<InventoryClosingResult> => {
   const errors: ClosingDomainError[] = [];
   if (!dateValue(input.effectiveDate)) errors.push(error('INVALID_DATE', 'Effective date must be valid.', 'effectiveDate'));
   if (!ISO_PERIOD.test(input.period) || periodForDate(input.effectiveDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Effective date does not belong to period.', 'period'));
@@ -446,14 +470,14 @@ export const buildInventoryClosingValuation = (input: InventoryClosingInput): Cl
     });
     const lines = [...expense].map(([account, amount]) => line(account, amount, 0, 'Inventory lower-of-cost valuation'));
     lines.push(...[...inventory].map(([account, amount]) => line(account, 0, amount, 'Inventory lower-of-cost valuation')));
-    const built = buildJournalCommand(source('inventory_closing', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, 'Inventory closing valuation', input.fiscalYearStart));
+    const built = buildJournalCommand(source('inventory_closing', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, 'Inventory closing valuation', input.fiscalYearStart), [], context);
     if (built.status !== 'ready' || !built.value) return mapError(built);
     command = built.value;
   }
   return { status: totalWriteDown ? 'ready' : 'noop', errors: [], value: { valuations, totalCost, totalClosingValue, totalWriteDown, command } };
 };
 
-export const buildFxValuation = (input: FxValuationInput): ClosingDomainResult<FxValuationResult> => {
+export const buildFxValuation = (input: FxValuationInput, context: JournalIdentityContext = {}): ClosingDomainResult<FxValuationResult> => {
   const errors: ClosingDomainError[] = [];
   if (!dateValue(input.effectiveDate)) errors.push(error('INVALID_DATE', 'Valuation date must be valid.', 'effectiveDate'));
   if (!ISO_PERIOD.test(input.period) || periodForDate(input.effectiveDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Valuation date does not belong to period.', 'period'));
@@ -478,7 +502,7 @@ export const buildFxValuation = (input: FxValuationInput): ClosingDomainResult<F
     : gain
       ? [line(input.positionAccount, amount, 0, 'FX valuation'), line(input.gainAccount, 0, amount, 'FX valuation')]
       : [line(input.lossAccount, amount, 0, 'FX valuation'), line(input.positionAccount, 0, amount, 'FX valuation')];
-  const built = buildJournalCommand(source('fx_valuation', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.functionalCurrency, lines, 'FX closing valuation', input.fiscalYearStart));
+  const built = buildJournalCommand(source('fx_valuation', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.functionalCurrency, lines, 'FX closing valuation', input.fiscalYearStart), [], context);
   if (built.status !== 'ready' || !built.value) return mapError(built);
   return { status: 'ready', errors: [], idempotencyKey: built.idempotencyKey, value: { translatedAmount: euros(translated), difference: euros(difference), command: built.value } };
 };
@@ -489,7 +513,7 @@ const addMonths = (value: string, months: number): string => {
   return monthDate(result);
 };
 
-export const planLoanSchedule = (input: LoanScheduleInput): ClosingDomainResult<LoanSchedule> => {
+export const planLoanSchedule = (input: LoanScheduleInput, context: JournalIdentityContext = {}): ClosingDomainResult<LoanSchedule> => {
   const principal = cents(input.principal);
   const errors: ClosingDomainError[] = [];
   if (!dateValue(input.startDate)) errors.push(error('INVALID_DATE', 'Loan start date must be valid.', 'startDate'));
@@ -533,7 +557,7 @@ export const planLoanSchedule = (input: LoanScheduleInput): ClosingDomainResult<
       loanLines,
       `Loan payment ${index + 1}/${input.termMonths}`,
       input.fiscalYearStart,
-    ));
+    ), [], context);
     if (built.status !== 'ready' || !built.value) return mapError(built);
     commands.push(built.value);
     opening = closing;
@@ -541,8 +565,8 @@ export const planLoanSchedule = (input: LoanScheduleInput): ClosingDomainResult<
   return { status: 'ready', errors: [], value: { periods, commands } };
 };
 
-export const buildLoanSchedule = (input: LoanScheduleInput): LoanSchedule => {
-  const result = planLoanSchedule(input);
+export const buildLoanSchedule = (input: LoanScheduleInput, context: JournalIdentityContext = {}): LoanSchedule => {
+  const result = planLoanSchedule(input, context);
   if (result.status !== 'ready' || !result.value) throw new Error(result.errors[0]?.message ?? 'Unable to build loan schedule');
   return result.value;
 };

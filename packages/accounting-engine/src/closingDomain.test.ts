@@ -41,6 +41,25 @@ test('source facts produce cent-exact deterministic commands and reject repeats'
   assert.equal(buildJournalCommand(fact({ fiscalYear: 2025 })).errors[0]?.code, 'PERIOD_MISMATCH');
 });
 
+test('journal identity is tenant-scoped and delimiter-safe', () => {
+  const sameTenant = { tenantId: 'tenant-a' };
+  const first = buildJournalCommand(fact({ sourceId: 'source:a', sourceRevision: 'revision' }), [], sameTenant);
+  const collisionCandidate = buildJournalCommand(fact({ sourceId: 'source', sourceRevision: 'a:revision' }), [], sameTenant);
+  const otherTenant = buildJournalCommand(fact({ sourceId: 'source:a', sourceRevision: 'revision' }), [], { tenantId: 'tenant-b' });
+
+  assert.equal(first.status, 'ready');
+  assert.equal(collisionCandidate.status, 'ready');
+  assert.equal(otherTenant.status, 'ready');
+  assert.notEqual(first.value?.entry.id, collisionCandidate.value?.entry.id);
+  assert.notEqual(first.value?.entry.lines[0]?.id, collisionCandidate.value?.entry.lines[0]?.id);
+  assert.notEqual(first.value?.entry.id, otherTenant.value?.entry.id);
+  assert.notEqual(first.value?.entry.sourceKey, otherTenant.value?.entry.sourceKey);
+  assert.deepEqual(
+    buildJournalCommand(fact({ sourceId: 'source:a', sourceRevision: 'revision' }), [], sameTenant).value,
+    first.value,
+  );
+});
+
 test('fiscal close clears P&L and carries a profit to retained earnings', () => {
   const result = buildFiscalClose({
     sourceId: 'close-2026', sourceRevision: 'v1', fiscalYear: 2026, period: '2026-12', closingDate: '2026-12-31', currency: 'EUR',

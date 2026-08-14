@@ -3,8 +3,8 @@ import { getCatalogForYear, getCatalogManifestForYear } from '@billme/desktop-se
 import { getEurAnnexCatalog } from '@billme/desktop-services/eur/annexCatalog';
 import type { EurExpenseSplit } from '@billme/accounting-shared';
 import type { AccountingMutationContext, TenantScope } from '@billme/server-core';
-import { createPostgresAuditLogPort } from './audit.js';
-import type { PostgresQueryable } from './connection.js';
+import { appendWithClient, createPostgresAuditLogPort } from './audit.js';
+import { isPostgresPool, withSerializablePostgresTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { assertServerEurCashSource, type ServerEurReportResult } from './eurReport.js';
 
 type EurCashFactKind = 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through';
@@ -48,6 +48,8 @@ export interface ServerEurAnnexFact {
 }
 
 const q = async <T = Record<string, unknown>>(db: PostgresQueryable, text: string, values: unknown[] = []): Promise<T[]> => (await db.query(text, values)).rows as T[];
+const inTx = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
+  isPostgresPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
 const cents = (value: number): number => Math.round((value + Number.EPSILON) * 100);
 const amount = (value: number): number => cents(value) / 100;
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -71,6 +73,14 @@ const rowAnnex = (row: Record<string, unknown>): ServerEurAnnexFact => ({
   reason: String(row.reason), actor: { id: String(row.actor_id), displayName: row.actor_name ? String(row.actor_name) : undefined }, idempotencyKey: row.idempotency_key ? String(row.idempotency_key) : undefined, provenance: parse<EurProvenance>(row.provenance_json, {} as EurProvenance), createdAt: String(row.created_at),
 });
 
+const sameProvenance = (actual: EurProvenance, expected: EurProvenance): boolean =>
+  actual.catalogId === expected.catalogId
+  && actual.catalogVersion === expected.catalogVersion
+  && actual.catalogSourceHash === expected.catalogSourceHash
+  && actual.sourceSnapshotHash === expected.sourceSnapshotHash;
+const sameSplits = (actual: EurExpenseSplit[] | undefined, expected: EurExpenseSplit[] | undefined): boolean => JSON.stringify(actual ?? []) === JSON.stringify(expected ?? []);
+const sameOptional = (actual: string | undefined, expected: string | undefined): boolean => (actual || undefined) === (expected || undefined);
+
 const assertMutation = (mutation: AccountingMutationContext | undefined): { reason: string; actor: EurActor } => {
   const reason = mutation?.reason?.trim();
   if (!reason) throw new Error('EUR_FACT_REASON_REQUIRED');
@@ -79,13 +89,13 @@ const assertMutation = (mutation: AccountingMutationContext | undefined): { reas
   return { reason, actor };
 };
 
-const assertCashFact = async (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurCashFactInput): Promise<{ sourceSnapshotHash: string }> => {
+const assertCashFact = async (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurCashFactInput): Promise<{ sourceSnapshotHash: string; sourceType: EurSourceType; sourceId: string }> => {
   getCatalogForYear(input.taxYear);
-  const source = await assertServerEurCashSource(db, scope, input.sourceType, input.sourceId, input.product ?? 'pro', input.taxYear);
+  const source = await assertServerEurCashSource(db, scope, input.sourceType, input.sourceId.trim(), input.product ?? 'pro', input.taxYear);
   if (!Number.isFinite(input.amountNet) || input.amountNet < 0) throw new Error('EUR_FACT_AMOUNT_INVALID');
   if (input.kind === 'private-withdrawal' || input.kind === 'private-contribution' || input.kind === 'pass-through') {
     if (input.eurLineId || input.splits?.length) throw new Error('EUR_NEUTRAL_FACT_MUST_NOT_HAVE_LINE');
-    return { sourceSnapshotHash: hash(source) };
+    return { sourceSnapshotHash: hash(source), sourceType: source.sourceType as EurSourceType, sourceId: source.sourceId };
   }
   if ((input.kind === 'income' && input.flowType !== 'income') || (input.kind === 'expense' && input.flowType !== 'expense')) throw new Error('EUR_FACT_FLOW_MISMATCH');
   const lines = new Map(getCatalogForYear(input.taxYear).map((line) => [line.id, line]));
@@ -110,7 +120,7 @@ const assertCashFact = async (db: PostgresQueryable, scope: TenantScope, input: 
     }, 0);
     if (total !== cents(input.amountNet)) throw new Error('EUR_SPLIT_ALLOCATION_MISMATCH');
   }
-  return { sourceSnapshotHash: hash(source) };
+  return { sourceSnapshotHash: hash(source), sourceType: source.sourceType as EurSourceType, sourceId: source.sourceId };
 };
 
 export interface SaveServerEurCashFactInput {
@@ -143,49 +153,54 @@ export interface SaveServerEurClassificationInput {
 /** EÜR-only classification adapter; the generic accounting repository remains 2025-compatible. */
 export const saveServerEurClassificationFact = async (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurClassificationInput): Promise<Record<string, unknown>> => {
   const { reason, actor } = assertMutation(input.mutation);
-  const source = await assertServerEurCashSource(db, scope, input.sourceType, input.sourceId, input.product ?? 'pro', input.taxYear);
+  const source = await assertServerEurCashSource(db, scope, input.sourceType, input.sourceId.trim(), input.product ?? 'pro', input.taxYear);
   if (input.eurLineId) {
     const line = getCatalogForYear(input.taxYear).find((candidate) => candidate.id === input.eurLineId);
     if (!line) throw new Error('EUR_LINE_NOT_FOUND');
     if (line.kind === 'computed') throw new Error('EUR_COMPUTED_LINE_NOT_CLASSIFIABLE');
     if (!input.excluded && line.kind !== source.flowType) throw new Error('EUR_LINE_FLOW_MISMATCH');
   }
-  const existing = (await q(db, 'SELECT * FROM eur_classifications WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND tax_year=$4 LIMIT 1', [scope.tenantId, input.sourceType, input.sourceId, input.taxYear]))[0];
+  const sourceType = source.sourceType;
+  const sourceId = source.sourceId;
+  const existing = (await q(db, 'SELECT * FROM eur_classifications WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND tax_year=$4 LIMIT 1', [scope.tenantId, sourceType, sourceId, input.taxYear]))[0];
   const now = new Date().toISOString();
   const id = String(existing?.id ?? randomUUID());
-  const record = { id, tenant_id: scope.tenantId, source_type: input.sourceType, source_id: input.sourceId, tax_year: input.taxYear, eur_line_id: input.excluded ? null : input.eurLineId ?? null, excluded: input.excluded === true, vat_mode: input.vatMode ?? 'none', vat_rate: input.vatRate ?? null, note: input.note ?? null, updated_at: now };
-  await db.query(`INSERT INTO eur_classifications (id,tenant_id,source_type,source_id,tax_year,eur_line_id,excluded,vat_mode,vat_rate,note,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (tenant_id,source_type,source_id,tax_year) DO UPDATE SET eur_line_id=EXCLUDED.eur_line_id,excluded=EXCLUDED.excluded,vat_mode=EXCLUDED.vat_mode,vat_rate=EXCLUDED.vat_rate,note=EXCLUDED.note,updated_at=EXCLUDED.updated_at`, [id, scope.tenantId, input.sourceType, input.sourceId, input.taxYear, record.eur_line_id, record.excluded, record.vat_mode, record.vat_rate, record.note, now]);
+  const record = { id, tenant_id: scope.tenantId, source_type: sourceType, source_id: sourceId, tax_year: input.taxYear, eur_line_id: input.excluded ? null : input.eurLineId ?? null, excluded: input.excluded === true, vat_mode: input.vatMode ?? 'none', vat_rate: input.vatRate ?? null, note: input.note ?? null, updated_at: now };
+  await db.query(`INSERT INTO eur_classifications (id,tenant_id,source_type,source_id,tax_year,eur_line_id,excluded,vat_mode,vat_rate,note,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (tenant_id,source_type,source_id,tax_year) DO UPDATE SET eur_line_id=EXCLUDED.eur_line_id,excluded=EXCLUDED.excluded,vat_mode=EXCLUDED.vat_mode,vat_rate=EXCLUDED.vat_rate,note=EXCLUDED.note,updated_at=EXCLUDED.updated_at`, [id, scope.tenantId, sourceType, sourceId, input.taxYear, record.eur_line_id, record.excluded, record.vat_mode, record.vat_rate, record.note, now]);
   const saved = (await q(db, 'SELECT * FROM eur_classifications WHERE tenant_id=$1 AND id=$2', [scope.tenantId, id]))[0] ?? record;
-  await createPostgresAuditLogPort(db as any).append(scope, { occurredAt: now, action: existing ? 'update' : 'create', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_classification', entityId: `${input.sourceType}:${input.sourceId}:${input.taxYear}`, tenantId: scope.tenantId }, change: { before: existing ?? null, after: saved } });
+  await createPostgresAuditLogPort(db as any).append(scope, { occurredAt: now, action: existing ? 'update' : 'create', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_classification', entityId: `${sourceType}:${sourceId}:${input.taxYear}`, tenantId: scope.tenantId }, change: { before: existing ?? null, after: saved } });
   return saved;
 };
 
-export const saveServerEurCashFact = async (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurCashFactInput): Promise<ServerEurCashFact> => {
+const saveServerEurCashFactInTransaction = async (db: PostgresTransactionClient, scope: TenantScope, input: SaveServerEurCashFactInput): Promise<ServerEurCashFact> => {
   const { reason, actor } = assertMutation(input.mutation);
-  const { sourceSnapshotHash } = await assertCashFact(db, scope, input);
+  const { sourceSnapshotHash, sourceType, sourceId } = await assertCashFact(db, scope, input);
   const tenantId = scope.tenantId;
+  const provenance = manifestProvenance(input.taxYear, sourceSnapshotHash);
   if (input.idempotencyKey) {
     const duplicate = (await q(db, 'SELECT * FROM eur_cash_facts WHERE tenant_id=$1 AND idempotency_key=$2 LIMIT 1', [tenantId, input.idempotencyKey]))[0];
     if (duplicate) {
       const saved = rowCash(duplicate);
-      if (saved.amountNet === amount(input.amountNet) && saved.kind === input.kind && JSON.stringify(saved.splits ?? []) === JSON.stringify(input.splits ?? [])) return saved;
+      if (saved.tenantId === tenantId && saved.sourceType === sourceType && saved.sourceId === sourceId && saved.taxYear === input.taxYear && saved.kind === input.kind && saved.amountNet === amount(input.amountNet) && saved.flowType === input.flowType && sameOptional(saved.eurLineId, input.eurLineId) && sameSplits(saved.splits, input.splits) && sameProvenance(saved.provenance, provenance)) return saved;
       throw new Error('EUR_FACT_IDEMPOTENCY_CONFLICT');
     }
   }
-  const existing = (await q(db, 'SELECT * FROM eur_cash_facts WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND tax_year=$4 LIMIT 1', [tenantId, input.sourceType, input.sourceId, input.taxYear]))[0];
+  const existing = (await q(db, 'SELECT * FROM eur_cash_facts WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND tax_year=$4 LIMIT 1', [tenantId, sourceType, sourceId, input.taxYear]))[0];
   const now = new Date().toISOString();
   const id = String(existing?.id ?? randomUUID());
-  const provenance = manifestProvenance(input.taxYear, sourceSnapshotHash);
   await db.query(`INSERT INTO eur_cash_facts
     (id,tenant_id,source_type,source_id,tax_year,kind,amount_net,flow_type,eur_line_id,splits_json,reason,actor_id,actor_name,idempotency_key,provenance_json,created_at,updated_at)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
     ON CONFLICT (tenant_id,source_type,source_id,tax_year) DO UPDATE SET
       kind=EXCLUDED.kind,amount_net=EXCLUDED.amount_net,flow_type=EXCLUDED.flow_type,eur_line_id=EXCLUDED.eur_line_id,splits_json=EXCLUDED.splits_json,reason=EXCLUDED.reason,actor_id=EXCLUDED.actor_id,actor_name=EXCLUDED.actor_name,idempotency_key=EXCLUDED.idempotency_key,provenance_json=EXCLUDED.provenance_json,updated_at=EXCLUDED.updated_at`,
-  [id, tenantId, input.sourceType, input.sourceId, input.taxYear, input.kind, amount(input.amountNet), input.flowType ?? null, input.eurLineId ?? null, input.splits?.length ? JSON.stringify(input.splits) : null, reason, actor.id, actor.displayName ?? null, input.idempotencyKey ?? null, JSON.stringify(provenance), String(existing?.created_at ?? now), now]);
+  [id, tenantId, sourceType, sourceId, input.taxYear, input.kind, amount(input.amountNet), input.flowType ?? null, input.eurLineId ?? null, input.splits?.length ? JSON.stringify(input.splits) : null, reason, actor.id, actor.displayName ?? null, input.idempotencyKey ?? null, JSON.stringify(provenance), String(existing?.created_at ?? now), now]);
   const saved = rowCash((await q(db, 'SELECT * FROM eur_cash_facts WHERE id=$1 AND tenant_id=$2', [id, tenantId]))[0]!);
-  await createPostgresAuditLogPort(db as any).append(scope, { occurredAt: now, action: existing ? 'update' : 'create', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_cash_fact', entityId: `${input.sourceType}:${input.sourceId}:${input.taxYear}`, tenantId }, change: { before: existing ?? null, after: saved } });
+  await appendWithClient(db, scope, { occurredAt: now, action: existing ? 'update' : 'create', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_cash_fact', entityId: `${sourceType}:${sourceId}:${input.taxYear}`, tenantId }, change: { before: existing ?? null, after: saved } });
   return saved;
 };
+
+export const saveServerEurCashFact = (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurCashFactInput): Promise<ServerEurCashFact> =>
+  inTx(db, (tx) => saveServerEurCashFactInTransaction(tx, scope, input));
 
 export const listServerEurCashFacts = async (db: PostgresQueryable, scope: TenantScope, taxYear: number): Promise<ServerEurCashFact[]> => (await q(db, 'SELECT * FROM eur_cash_facts WHERE tenant_id=$1 AND tax_year=$2 ORDER BY source_type,source_id', [scope.tenantId, taxYear])).map(rowCash);
 
@@ -197,39 +212,45 @@ export interface SaveServerEurAnnexFactInput {
   sourceId?: string;
   date?: string;
   idempotencyKey?: string;
+  sourceSnapshotHash?: string;
   mutation?: AccountingMutationContext;
 }
 
-export const saveServerEurAnnexFact = async (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurAnnexFactInput): Promise<ServerEurAnnexFact> => {
+const saveServerEurAnnexFactInTransaction = async (db: PostgresTransactionClient, scope: TenantScope, input: SaveServerEurAnnexFactInput): Promise<ServerEurAnnexFact> => {
   const { reason, actor } = assertMutation(input.mutation);
   getCatalogForYear(input.taxYear);
   const annex = input.annex.trim();
-  if (!annex || !input.lineId.trim()) throw new Error('EUR_ANNEX_FACT_LINE_REQUIRED');
+  const lineId = input.lineId.trim();
+  const sourceId = input.sourceId?.trim() || undefined;
+  if (!annex || !lineId) throw new Error('EUR_ANNEX_FACT_LINE_REQUIRED');
   if (annex === 'AVEÜR' || annex === 'SZ') {
-    const line = getEurAnnexCatalog(input.taxYear, annex).lines.find((candidate) => candidate.id === input.lineId);
+    const line = getEurAnnexCatalog(input.taxYear, annex).lines.find((candidate) => candidate.id === lineId);
     if (!line) throw new Error('EUR_ANNEX_LINE_NOT_FOUND');
     if (line.kind === 'computed' && (line.computedFromIds?.length || line.computedTerms?.length)) throw new Error('EUR_COMPUTED_LINE_NOT_CLASSIFIABLE');
   }
   if (!Number.isFinite(input.amount)) throw new Error('EUR_ANNEX_AMOUNT_INVALID');
   if (input.date && (!/^\d{4}-\d{2}-\d{2}$/.test(input.date) || !input.date.startsWith(`${input.taxYear}-`))) throw new Error('EUR_ANNEX_DATE_INVALID');
   const tenantId = scope.tenantId;
+  const provenance = manifestProvenance(input.taxYear, input.sourceSnapshotHash);
   if (input.idempotencyKey) {
     const duplicate = (await q(db, 'SELECT * FROM eur_annex_facts WHERE tenant_id=$1 AND idempotency_key=$2 LIMIT 1', [tenantId, input.idempotencyKey]))[0];
     if (duplicate) {
       const saved = rowAnnex(duplicate);
-      if (saved.taxYear === input.taxYear && saved.annex === annex && saved.lineId === input.lineId && saved.amount === amount(input.amount)) return saved;
+      if (saved.tenantId === tenantId && saved.taxYear === input.taxYear && saved.annex === annex && saved.lineId === lineId && saved.amount === amount(input.amount) && sameOptional(saved.sourceId, sourceId) && sameOptional(saved.date, input.date) && sameProvenance(saved.provenance, provenance)) return saved;
       throw new Error('EUR_FACT_IDEMPOTENCY_CONFLICT');
     }
   }
   const now = new Date().toISOString();
   const id = randomUUID();
-  const provenance = manifestProvenance(input.taxYear);
   await db.query(`INSERT INTO eur_annex_facts (id,tenant_id,tax_year,annex,line_id,amount,source_id,fact_date,reason,actor_id,actor_name,idempotency_key,provenance_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-    [id, tenantId, input.taxYear, annex, input.lineId, amount(input.amount), input.sourceId ?? null, input.date ?? null, reason, actor.id, actor.displayName ?? null, input.idempotencyKey ?? null, JSON.stringify(provenance), now]);
+    [id, tenantId, input.taxYear, annex, lineId, amount(input.amount), sourceId ?? null, input.date ?? null, reason, actor.id, actor.displayName ?? null, input.idempotencyKey ?? null, JSON.stringify(provenance), now]);
   const saved = rowAnnex((await q(db, 'SELECT * FROM eur_annex_facts WHERE id=$1 AND tenant_id=$2', [id, tenantId]))[0]!);
-  await createPostgresAuditLogPort(db as any).append(scope, { occurredAt: now, action: 'create', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_annex_fact', entityId: id, tenantId }, change: { before: null, after: saved } });
+  await appendWithClient(db, scope, { occurredAt: now, action: 'create', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_annex_fact', entityId: id, tenantId }, change: { before: null, after: saved } });
   return saved;
 };
+
+export const saveServerEurAnnexFact = (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurAnnexFactInput): Promise<ServerEurAnnexFact> =>
+  inTx(db, (tx) => saveServerEurAnnexFactInTransaction(tx, scope, input));
 
 export const listServerEurAnnexFacts = async (db: PostgresQueryable, scope: TenantScope, taxYear: number, annex?: string): Promise<ServerEurAnnexFact[]> => {
   const rows = annex

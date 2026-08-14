@@ -79,7 +79,7 @@ type ClassificationRow = {
 };
 
 type CashSource = {
-  sourceType: string;
+  sourceType: 'transaction' | 'invoice';
   sourceId: string;
   date: string;
   amountGross: number;
@@ -252,9 +252,11 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
       ?? (source.classificationSourceIds ?? []).map((sourceId) => classifications.get(`transaction:${sourceId}`)).find(Boolean)
       ?? (source.invoiceId ? classifications.get(`invoice:${source.invoiceId}`) : undefined);
     const net = toNet(source.amountGross, classification, basis.sourceNet, smallBusiness, source.sourceId);
-    const fact = facts.get(`${source.sourceType}:${source.sourceId}`);
+    const fact = facts.get(`${source.sourceType}:${source.sourceId}`)
+      ?? (source.classificationSourceIds ?? []).map((sourceId) => facts.get(`transaction:${sourceId}`)).find(Boolean)
+      ?? (source.invoiceId ? facts.get(`invoice:${source.invoiceId}`) : undefined);
     const persistedClassification = classification ?? (fact ? { id: String(fact.id), source_type: source.sourceType, source_id: source.sourceId, eur_line_id: fact.eur_line_id ? String(fact.eur_line_id) : null, excluded: false, vat_mode: 'none', vat_rate: null, note: null, updated_at: '' } : undefined);
-    items.push({ sourceType: source.sourceType as ServerEurCashItem['sourceType'], sourceId: source.sourceId, date: source.date, amountGross: source.amountGross, amountNet: fact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, counterparty: basis.counterparty ?? source.counterparty, purpose: basis.purpose ?? source.purpose, vatWarning: net.warning, kind: fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, classification: persistedClassification ? { id: persistedClassification.id, sourceType: persistedClassification.source_type as ServerEurCashItem['sourceType'], sourceId: persistedClassification.source_id, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
+    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, amountGross: source.amountGross, amountNet: fact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, counterparty: basis.counterparty ?? source.counterparty, purpose: basis.purpose ?? source.purpose, vatWarning: net.warning, kind: fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
   }
   return items.sort((left, right) => left.date === right.date ? left.sourceId.localeCompare(right.sourceId) : left.date.localeCompare(right.date));
 };
@@ -276,9 +278,10 @@ export const assertServerEurCashSource = async (
 ): Promise<CashSource> => {
   const { from, to } = await assertServerEurProfile(db, scope, { taxYear });
   const sources = await listCashSources(db, scope, from, to, product);
+  const normalizedSourceId = sourceId.trim();
   const source = sources.find((candidate) => {
-    if (sourceType === 'invoice') return candidate.invoiceType !== undefined && candidate.invoiceId === sourceId;
-    return candidate.sourceId === sourceId || (candidate.classificationSourceIds ?? []).includes(sourceId);
+    if (sourceType === 'invoice') return candidate.invoiceType !== undefined && candidate.invoiceId === normalizedSourceId;
+    return candidate.sourceId === normalizedSourceId || (candidate.classificationSourceIds ?? []).includes(normalizedSourceId);
   });
   if (!source) throw new Error('EUR_SOURCE_NOT_FOUND');
   return source;

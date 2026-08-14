@@ -12,6 +12,7 @@ import {
   planLoanSchedule,
   validatePayrollBatch,
   validateShareholderFlow,
+  type SettlementCommandKind,
   createLinkedCorrection,
   validateUstg17AdjustmentFacts,
   type SettlementJournalAccounts,
@@ -426,6 +427,78 @@ const settlementAccounts = (mapping: Record<string, string>, facts: Record<strin
   advanceClearingPayable: typeof facts.advanceClearingPayable === 'string' && facts.advanceClearingPayable.trim() ? facts.advanceClearingPayable.trim() : undefined,
 });
 
+const settlementDocumentType = (facts: Record<string, any>): 'outgoing_invoice' | 'incoming_invoice' =>
+  facts.documentType === 'incoming_invoice' || facts.direction === 'input' ? 'incoming_invoice' : 'outgoing_invoice';
+
+const nestedSettlementFacts = (facts: Record<string, any>): Record<string, any> =>
+  facts.facts && typeof facts.facts === 'object' ? facts.facts : {};
+
+const settlementReference = (facts: Record<string, any>): string | undefined => {
+  const nested = nestedSettlementFacts(facts);
+  const original = facts.original && typeof facts.original === 'object' ? facts.original : {};
+  const value = facts.originalDocumentId ?? nested.originalDocumentId ?? original.documentId;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+};
+
+const assertOpenItemEligible = (db: Database.Database, tenantId: string, item: any): void => {
+  if (!item || !['open', 'partially_paid'].includes(String(item.status)) || Number(item.residual_amount) <= 0) throw new Error('OPEN_ITEM_NOT_ELIGIBLE');
+  if (!item.journal_entry_id) throw new Error('OPEN_ITEM_NOT_POSTED');
+  const journal = db.prepare('SELECT status FROM journal_entries WHERE tenant_id = ? AND id = ?').get(tenantId, item.journal_entry_id) as { status?: string } | undefined;
+  if (journal?.status !== 'posted') throw new Error('OPEN_ITEM_NOT_POSTED');
+};
+
+const findSettlementOpenItem = (db: Database.Database, tenantId: string, id: string, documentType?: string): any => {
+  const item = documentType
+    ? db.prepare('SELECT * FROM open_items WHERE tenant_id = ? AND (id = ? OR source_id = ?) AND source_type = ?').get(tenantId, id, id, documentType)
+    : db.prepare('SELECT * FROM open_items WHERE tenant_id = ? AND (id = ? OR source_id = ?)').get(tenantId, id, id);
+  if (!item) throw new Error('OPEN_ITEM_NOT_FOUND');
+  assertOpenItemEligible(db, tenantId, item);
+  return item;
+};
+
+const assertSettlementReferences = (db: Database.Database, tenantId: string, kind: SettlementCommandKind, facts: Record<string, any>): void => {
+  const documentType = settlementDocumentType(facts);
+  const table = documentType === 'incoming_invoice' ? 'incoming_invoices' : 'invoices';
+  let originalId = settlementReference(facts);
+  if (kind !== 'advance_settlement') {
+    const requestedOpenItemId = typeof facts.openItemId === 'string' && facts.openItemId.trim() ? facts.openItemId.trim() : undefined;
+    const referencedItem = !originalId && requestedOpenItemId
+      ? findSettlementOpenItem(db, tenantId, requestedOpenItemId, documentType)
+      : undefined;
+    originalId ??= referencedItem?.source_id;
+    if (!originalId) throw new Error('ORIGINAL_DOCUMENT_REQUIRED');
+    const original = documentType === 'incoming_invoice'
+      ? db.prepare(`SELECT id,number,accounting_status,accounting_journal_entry_id FROM ${table} WHERE tenant_id = ? AND id = ?`).get(tenantId, originalId) as any
+      : db.prepare(`SELECT id,number,accounting_status,accounting_journal_entry_id FROM ${table} WHERE id = ?`).get(originalId) as any;
+    if (!original) throw new Error('ORIGINAL_DOCUMENT_NOT_FOUND');
+    const journal = original.accounting_journal_entry_id
+      ? db.prepare('SELECT status,source_type,source_key FROM journal_entries WHERE tenant_id = ? AND id = ?').get(tenantId, original.accounting_journal_entry_id) as { status?: string; source_type?: string; source_key?: string } | undefined
+      : undefined;
+    if (original.accounting_status !== 'posted' || journal?.status !== 'posted' || journal.source_type !== documentType || journal.source_key !== `${documentType}:${original.id}`) throw new Error('DOCUMENT_NOT_POSTED');
+    const item = referencedItem ?? findSettlementOpenItem(db, tenantId, original.id, documentType);
+    const nested = nestedSettlementFacts(facts);
+    const requestedNumber = typeof facts.originalDocumentNumber === 'string' && facts.originalDocumentNumber.trim() ? facts.originalDocumentNumber.trim() : typeof nested.originalDocumentNumber === 'string' && nested.originalDocumentNumber.trim() ? nested.originalDocumentNumber.trim() : undefined;
+    if (requestedNumber && requestedNumber !== original.number) throw new Error('ORIGINAL_CHANGED');
+    const requested = Number(kind === 'skonto' ? facts.skontoAmount : facts.writeOffGrossAmount);
+    if (Number.isFinite(requested) && requested > Number(item.residual_amount) + 0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
+    return;
+  }
+
+  const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? facts.finalInvoice : {};
+  const finalId = typeof finalInvoice.id === 'string' && finalInvoice.id.trim() ? finalInvoice.id.trim() : typeof facts.finalInvoiceId === 'string' && facts.finalInvoiceId.trim() ? facts.finalInvoiceId.trim() : originalId;
+  if (!finalId) throw new Error('FINAL_INVOICE_REQUIRED');
+  findSettlementOpenItem(db, tenantId, finalId, documentType);
+  const documents = [...(Array.isArray(facts.advances) ? facts.advances : []), ...(Array.isArray(facts.partialInvoices) ? facts.partialInvoices : [])];
+  if (!documents.length) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
+  for (const document of documents) {
+    const id = document && typeof document === 'object' && typeof document.id === 'string' && document.id.trim() ? document.id.trim() : undefined;
+    if (!id) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
+    const item = findSettlementOpenItem(db, tenantId, id);
+    const requested = Number(document.grossAmount);
+    if (Number.isFinite(requested) && requested > Number(item.residual_amount) + 0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
+  }
+};
+
 const generatedCommands = (kind: AccountingCommandKind, facts: Record<string, unknown>, source?: AccountingSourceFact, accounts?: SettlementJournalAccounts): GeneratedCommands | undefined => {
   if (source && accounts && (kind === 'skonto' || kind === 'bad_debt' || kind === 'advance_settlement')) {
     try {
@@ -591,7 +664,8 @@ const loadPriorCorrections = (db: Database.Database, tenantId: string, originalD
       AND runs.journal_entry_id IS NOT NULL
       AND journals.status = 'posted'
       AND journals.source_type = 'standalone_source'
-      AND journals.source_key = runs.source_id`).all(tenantId) as Array<{ fact_json?: string; result_json?: string }>;
+      AND (journals.source_key = runs.source_id
+        OR journals.source_key = runs.source_type || ':' || runs.source_id || ':' || runs.source_revision)`).all(tenantId) as Array<{ fact_json?: string; result_json?: string }>;
   return rows.flatMap((row) => {
     const result = parseJson<Record<string, any> | undefined>(row.result_json, undefined);
     if (result?.originalDocumentId === originalDocumentId) return [result as ReturnType<typeof createLinkedCorrection>['document']];
@@ -645,6 +719,10 @@ export const postAccountingCommand = (
   }
   if (input.kind === 'ustg17' && facts) validateUstg17AdjustmentFacts(facts as unknown as Ustg17AdjustmentFactsInput);
   const tenantId = getTenantId(scope);
+  if ((input.kind === 'skonto' || input.kind === 'bad_debt' || input.kind === 'advance_settlement') && !facts) throw new Error('SETTLEMENT_FACTS_REQUIRED');
+  if (facts && (input.kind === 'skonto' || input.kind === 'bad_debt' || input.kind === 'advance_settlement')) {
+    assertSettlementReferences(db, tenantId, input.kind, facts);
+  }
   const generated = facts
     ? generatedCommands(input.kind, facts, input.source, (input.kind === 'skonto' || input.kind === 'bad_debt' || input.kind === 'advance_settlement')
       ? (() => { const mapping = correctionMappings(db, tenantId, activeChart(db, tenantId, options.chart)); return settlementAccounts(mapping, facts); })()

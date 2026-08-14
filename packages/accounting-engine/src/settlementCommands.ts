@@ -55,6 +55,26 @@ const euros = (value: number): number => cents(value) / 100;
 const text = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 const documentType = (facts: Record<string, unknown>): 'outgoing_invoice' | 'incoming_invoice' => facts.documentType === 'incoming_invoice' || facts.direction === 'input' ? 'incoming_invoice' : 'outgoing_invoice';
 
+const validateSettlementAmounts = (kind: SettlementCommandKind, facts: Record<string, unknown>): void => {
+  const assertAmount = (value: unknown, field: string): void => {
+    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
+      throw new CorrectionSettlementError('INVALID_AMOUNT', `${field} must be a non-negative finite amount`);
+    }
+  };
+  if (kind === 'skonto') assertAmount(facts.skontoAmount, 'skontoAmount');
+  if (kind === 'bad_debt') assertAmount(facts.writeOffGrossAmount, 'writeOffGrossAmount');
+  if (kind === 'advance_settlement') {
+    const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? facts.finalInvoice as Record<string, unknown> : undefined;
+    assertAmount(finalInvoice?.grossAmount, 'finalInvoice.grossAmount');
+    for (const [collection, value] of [['advances', facts.advances], ['partialInvoices', facts.partialInvoices] as const]) {
+      if (!Array.isArray(value)) continue;
+      value.forEach((item, index) => {
+        if (item && typeof item === 'object') assertAmount((item as Record<string, unknown>).grossAmount, `${collection}[${index}].grossAmount`);
+      });
+    }
+  }
+};
+
 const taxCaseForRate = (rate: number): 'DE_STD_19' | 'DE_STD_7' | 'DE_ZERO_EXEMPT' => {
   if (rate === 19) return 'DE_STD_19';
   if (rate === 7) return 'DE_STD_7';
@@ -143,6 +163,7 @@ const settlementLines = (
 };
 
 export const buildSettlementJournalCommand = (input: SettlementJournalBuildInput): SettlementJournalBuildResult => {
+  validateSettlementAmounts(input.kind, input.facts);
   let result: SettlementJournalBuildResult['result'];
   let byRate: ReadonlyArray<{ rate: number; netAmount: number; taxAmount: number; grossAmount: number }>;
   if (input.kind === 'skonto') {

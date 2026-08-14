@@ -116,6 +116,14 @@ test('schedules derive fiscal years from each generated posting period', () => {
   assert.deepEqual(nonCalendar.value?.commands.map((command) => command.entry.fiscalYear), [2025, 2026, 2026]);
 });
 
+test('derived schedule commands have distinct persisted source keys', () => {
+  const accrual = planAccrualSchedule({ sourceId: 'a-source-key', sourceRevision: 'v1', startDate: '2026-01-01', endDate: '2026-03-01', period: '2026-01', fiscalYear: 2026, currency: 'EUR', totalAmount: 30, expenseAccount: '4900', deferralAccount: '2900' });
+  assert.equal(accrual.status, 'ready');
+  assert.equal(new Set(accrual.value?.commands.map((command) => command.entry.sourceKey)).size, 3);
+  const loan = buildLoanSchedule({ sourceId: 'l-source-key', sourceRevision: 'v1', startDate: '2026-01-01', period: '2026-01', fiscalYear: 2026, currency: 'EUR', principal: 300, annualInterestRate: 0, termMonths: 3, liabilityAccount: '4250', interestAccount: '7310', cashAccount: '1200' });
+  assert.equal(new Set(loan.commands.map((command) => command.entry.sourceKey)).size, 3);
+});
+
 test('shareholder flows classify private and related-party risk', () => {
   assert.equal(validateShareholderFlow({ flowId: 's1', shareholderId: 'person-1', companyId: 'co-1', amount: 100, flowType: 'private_withdrawal' }).classification, 'conflict');
   assert.equal(validateShareholderFlow({ flowId: 's2', shareholderId: 'person-1', companyId: 'co-1', amount: 100, flowType: 'loan_to_company' }).classification, 'related_party');

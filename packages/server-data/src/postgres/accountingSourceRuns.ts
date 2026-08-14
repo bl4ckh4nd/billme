@@ -26,6 +26,7 @@ import {
   planLoanSchedule,
   prepareUstva,
   type TaxExportError,
+  type SettlementCommandKind,
   validatePayrollBatch,
   validateShareholderFlow,
   type SettlementJournalAccounts,
@@ -428,6 +429,78 @@ const buildClosingResult = (command: string, input: Record<string, any>): any =>
 
 const settlementDate = (input: Record<string, any>): string => required(input.postingDate ?? input.effectiveDate ?? input.adjustmentDate ?? input.facts?.adjustmentDate ?? input.finalInvoice?.taxEffectiveDate, 'SETTLEMENT_DATE_REQUIRED');
 
+const settlementDocumentType = (facts: Record<string, any>): 'outgoing_invoice' | 'incoming_invoice' =>
+  facts.documentType === 'incoming_invoice' || facts.direction === 'input' ? 'incoming_invoice' : 'outgoing_invoice';
+
+const nestedSettlementFacts = (facts: Record<string, any>): Record<string, any> =>
+  facts.facts && typeof facts.facts === 'object' ? facts.facts : {};
+
+const settlementReference = (facts: Record<string, any>): string | undefined => {
+  const nested = nestedSettlementFacts(facts);
+  const original = facts.original && typeof facts.original === 'object' ? facts.original : {};
+  return textValue(facts.originalDocumentId)
+    ?? textValue(nested.originalDocumentId)
+    ?? textValue(original.documentId);
+};
+
+const assertOpenItemEligible = async (db: PostgresQueryable, scope: TenantScope, item: any): Promise<void> => {
+  if (!item || !['open', 'partially_paid'].includes(String(item.status)) || Number(item.residual_amount) <= 0) throw new Error('OPEN_ITEM_NOT_ELIGIBLE');
+  if (!item.journal_entry_id) throw new Error('OPEN_ITEM_NOT_POSTED');
+  const journal = (await q<any>(db, `SELECT status FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), item.journal_entry_id]))[0];
+  if (journal?.status !== 'posted') throw new Error('OPEN_ITEM_NOT_POSTED');
+};
+
+const findSettlementOpenItem = async (db: PostgresQueryable, scope: TenantScope, id: string, documentType?: string): Promise<any> => {
+  const values: unknown[] = [tenant(scope), id];
+  const typeClause = documentType ? ` AND source_type=$3` : '';
+  if (documentType) values.push(documentType);
+  const row = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 AND (id=$2 OR source_id=$2)${typeClause} FOR UPDATE`, values))[0];
+  if (!row) throw new Error('OPEN_ITEM_NOT_FOUND');
+  await assertOpenItemEligible(db, scope, row);
+  return row;
+};
+
+const assertSettlementReferences = async (db: PostgresQueryable, scope: TenantScope, kind: SettlementCommandKind, facts: Record<string, any>): Promise<void> => {
+  const documentType = settlementDocumentType(facts);
+  const table = documentType === 'incoming_invoice' ? 'incoming_invoices' : 'invoices';
+  let originalId = settlementReference(facts);
+  if (kind !== 'advance_settlement') {
+    const requestedOpenItemId = textValue(facts.openItemId);
+    const referencedItem = !originalId && requestedOpenItemId
+      ? await findSettlementOpenItem(db, scope, requestedOpenItemId, documentType)
+      : undefined;
+    originalId ??= referencedItem?.source_id;
+    if (!originalId) throw new Error('ORIGINAL_DOCUMENT_REQUIRED');
+    const original = (await q<any>(db, `SELECT id,number,accounting_status,accounting_journal_entry_id FROM ${table} WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), originalId]))[0];
+    if (!original) throw new Error('ORIGINAL_DOCUMENT_NOT_FOUND');
+    const journal = original.accounting_journal_entry_id
+      ? (await q<any>(db, `SELECT status,source_type,source_key FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), original.accounting_journal_entry_id]))[0]
+      : undefined;
+    if (original.accounting_status !== 'posted' || journal?.status !== 'posted' || journal.source_type !== documentType || journal.source_key !== `${documentType}:${original.id}`) throw new Error('DOCUMENT_NOT_POSTED');
+    const item = referencedItem ?? await findSettlementOpenItem(db, scope, original.id, documentType);
+    const nested = nestedSettlementFacts(facts);
+    const requestedNumber = textValue(facts.originalDocumentNumber) ?? textValue(nested.originalDocumentNumber);
+    if (requestedNumber && requestedNumber !== original.number) throw new Error('ORIGINAL_CHANGED');
+    const requested = Number(kind === 'skonto' ? facts.skontoAmount : facts.writeOffGrossAmount);
+    if (Number.isFinite(requested) && requested > Number(item.residual_amount) + 0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
+    return;
+  }
+
+  const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? facts.finalInvoice : {};
+  const finalId = textValue(finalInvoice.id) ?? textValue(facts.finalInvoiceId) ?? originalId;
+  if (!finalId) throw new Error('FINAL_INVOICE_REQUIRED');
+  await findSettlementOpenItem(db, scope, finalId, documentType);
+  const documents = [...(Array.isArray(facts.advances) ? facts.advances : []), ...(Array.isArray(facts.partialInvoices) ? facts.partialInvoices : [])];
+  if (!documents.length) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
+  for (const document of documents) {
+    const id = document && typeof document === 'object' ? textValue(document.id) : undefined;
+    if (!id) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
+    const item = await findSettlementOpenItem(db, scope, id);
+    const requested = Number(document.grossAmount);
+    if (Number.isFinite(requested) && requested > Number(item.residual_amount) + 0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
+  }
+};
+
 export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryable): AccountingSourceRunRepository => ({
   async listAccountingSourceRuns(scope, args = {}) {
     const values: unknown[] = [tenant(scope)];
@@ -488,43 +561,45 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
     const sourceRevision = required(input.sourceRevision ?? sourceInput.sourceRevision, 'MISSING_SOURCE_REVISION');
     sourceInput.sourceId ??= sourceId;
     sourceInput.sourceRevision ??= sourceRevision;
-    const built = commandName === 'skonto' || commandName === 'bad_debt' || commandName === 'advance_settlement'
-      ? await (async () => {
-        const date = settlementDate(sourceInput);
-        const mappings = await chartAndMappings(db, scope);
-        const settlement = buildSettlementJournalCommand({
-          kind: commandName,
-          facts: sourceInput,
-          source: {
-            sourceId,
-            sourceRevision,
-            effectiveDate: String(sourceInput.effectiveDate ?? date),
-            postingDate: date,
-            period: String(sourceInput.period ?? periodOf(date)),
-            fiscalYear: Number(sourceInput.fiscalYear ?? date.slice(0, 4)),
-            currency: String(sourceInput.currency ?? 'EUR'),
-            reference: textValue(sourceInput.reference),
-          },
-          accounts: settlementAccounts(mappings.mappings, sourceInput),
-        });
-        return { status: 'ready', value: { command: settlement.command, result: settlement.result } };
-      })()
-      : buildClosingResult(commandName, sourceInput);
-    if (built.status === 'rejected' || built.status === 'invalid') throw new Error(`CLOSING_COMMAND_REJECTED:${built.errors?.[0]?.code ?? 'INVALID'}`);
-    const value = built.value ?? built;
-    // Source facts and single-command validators return the JournalCommand
-    // directly, while schedules wrap all derived entries in `commands`.
-    // Persist every derived command; never trust a submitted command list.
-    const commands = [value.command, ...(value.commands ?? []), ...(value.entry ? [value] : [])].filter(Boolean) as any[];
-    const resultJson = { command: commandName, result: value, status: built.status };
     const idempotencyKey = required(input.idempotencyKey, 'IDEMPOTENCY_KEY_REQUIRED');
     return inTx(db, async (tx) => {
       const existing = (await q<any>(tx, `SELECT * FROM accounting_source_runs WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND source_revision=$4 FOR UPDATE`, [tenant(scope), sourceType, sourceId, sourceRevision]))[0];
       const source = { command: commandName, input: sourceInput };
       if (existing) {
         if (existing.source_hash !== hash(source) || existing.idempotency_key !== idempotencyKey) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
-        return { run: mapRun(existing), result: parse(existing.result_json, resultJson), replayed: true };
+        return { run: mapRun(existing), result: parse(existing.result_json, {}), replayed: true };
       }
+      const isSettlement = commandName === 'skonto' || commandName === 'bad_debt' || commandName === 'advance_settlement';
+      if (isSettlement) await assertSettlementReferences(tx, scope, commandName as SettlementCommandKind, sourceInput);
+      const built = isSettlement
+        ? await (async () => {
+          const date = settlementDate(sourceInput);
+          const mappings = await chartAndMappings(tx, scope);
+          const settlement = buildSettlementJournalCommand({
+            kind: commandName as SettlementCommandKind,
+            facts: sourceInput,
+            source: {
+              sourceId,
+              sourceRevision,
+              effectiveDate: String(sourceInput.effectiveDate ?? date),
+              postingDate: date,
+              period: String(sourceInput.period ?? periodOf(date)),
+              fiscalYear: Number(sourceInput.fiscalYear ?? date.slice(0, 4)),
+              currency: String(sourceInput.currency ?? 'EUR'),
+              reference: textValue(sourceInput.reference),
+            },
+            accounts: settlementAccounts(mappings.mappings, sourceInput),
+          });
+          return { status: 'ready', value: { command: settlement.command, result: settlement.result } };
+        })()
+        : buildClosingResult(commandName, sourceInput);
+      if (built.status === 'rejected' || built.status === 'invalid') throw new Error(`CLOSING_COMMAND_REJECTED:${built.errors?.[0]?.code ?? 'INVALID'}`);
+      const value = built.value ?? built;
+      // Source facts and single-command validators return the JournalCommand
+      // directly, while schedules wrap all derived entries in `commands`.
+      // Persist every derived command; never trust a submitted command list.
+      const commands = [value.command, ...(value.commands ?? []), ...(value.entry ? [value] : [])].filter(Boolean) as any[];
+      const resultJson = { command: commandName, result: value, status: built.status };
       const journalEntryIds: string[] = [];
       for (const derived of commands) journalEntryIds.push(await insertCommand(tx, scope, derived, input));
       const journalEntryId = journalEntryIds[0];

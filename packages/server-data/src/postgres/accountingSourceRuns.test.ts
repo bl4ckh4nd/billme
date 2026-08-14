@@ -132,12 +132,17 @@ test('settlement commands derive balanced journal lines, evidence, and replay id
   const tenantId = `source-settlement-${suffix}`;
   const now = new Date().toISOString();
   const sourceId = `settlement-${suffix}`;
-  const facts = { effectiveDate: '2025-01-31', postingDate: '2025-01-31', period: '2025-01', fiscalYear: 2025, currency: 'EUR', taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9 };
+  const originalId = `settlement-original-${suffix}`;
+  const originalJournalId = `settlement-original-journal-${suffix}`;
+  const facts = { effectiveDate: '2025-01-31', postingDate: '2025-01-31', period: '2025-01', fiscalYear: 2025, currency: 'EUR', taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9, originalDocumentId: originalId };
   try {
     await runDrizzleMigrations(pool);
     await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, tenantId, 'Settlement source', now]);
     await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
     await pool.query(`INSERT INTO ledger_accounts (id,chart,account_number,name,source,created_at,updated_at) VALUES ($1,'SKR03','1400','Receivable','test',$2,$2),($3,'SKR03','8400','Revenue','test',$2,$2),($4,'SKR03','1776','Output VAT','test',$2,$2) ON CONFLICT (chart,account_number) DO NOTHING`, [`settlement-1400-${suffix}`, now, `settlement-8400-${suffix}`, `settlement-1776-${suffix}`]);
+    await pool.query(`INSERT INTO invoices (id,tenant_id,number,client,client_email,date,due_date,amount,status,items_json,payments_json,history_json,accounting_status,accounting_snapshot_json,accounting_journal_entry_id,created_at,updated_at) VALUES ($1,$2,$3,'Settlement customer','customer@example.test','2025-01-31','2025-02-28',119,'open','[]','[]','[]','posted',$4,$5,$6,$6)`, [originalId, tenantId, `RE-${suffix}`, JSON.stringify({ sourceVersion: 'settlement-original-v1', vatBreakdown: facts.taxBreakdown }), originalJournalId, now]);
+    await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,1,'2025-01-31','2025-01-31','Original settlement invoice',$3,'2025-01',2025,'posted','outgoing_invoice',$4,$5)`, [originalJournalId, tenantId, `RE-${suffix}`, `outgoing_invoice:${originalId}`, now]);
+    await pool.query(`INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,'debtor','settlement-customer','outgoing_invoice',$3,$4,'2025-01-31','2025-02-28',119,0,119,'open',$5,$6,$6)`, [`settlement-open-${suffix}`, tenantId, originalId, `RE-${suffix}`, originalJournalId, now]);
     const repository = createPostgresProAccountingRepository(pool);
     const scope = createSingleTenantScope(tenantId, 'pro');
     const input = { commandType: 'skonto', sourceId, sourceRevision: 'v1', idempotencyKey: `${sourceId}:v1`, reason: 'Settlement source', input: { ...facts, sourceId, sourceRevision: 'v1' } };
@@ -239,4 +244,17 @@ test('repository source-run methods remain callable through the query-only seam'
   const repository = createPostgresProAccountingRepository(db);
   assert.deepEqual(await repository.listAccountingSourceRuns(createSingleTenantScope('query-only', 'pro')), []);
   assert.equal(calls.length, 1);
+});
+
+test('settlement commands reject fabricated sources without an original document', async () => {
+  const db = { query: async () => ({ rows: [] }) } as unknown as PostgresQueryable;
+  const repository = createPostgresProAccountingRepository(db);
+  await assert.rejects(() => repository.runClosingCommand(createSingleTenantScope('query-only', 'pro'), {
+    commandType: 'skonto',
+    sourceId: 'settlement-without-original',
+    sourceRevision: 'v1',
+    idempotencyKey: 'settlement-without-original:v1',
+    reason: 'must have persisted source',
+    input: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9 },
+  }), /ORIGINAL_DOCUMENT_REQUIRED/);
 });

@@ -54,3 +54,15 @@ test('settlement totals cannot silently produce an empty or unaccounted journal'
   const fullySettled = buildSettlementJournalCommand({ kind: 'advance_settlement', source, accounts, facts: { finalInvoice: { grossAmount: 119, taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] }, advances: [{ id: 'advance-1', kind: 'advance', grossAmount: 119 }] } });
   assert.deepEqual(total(fullySettled.command.entry.lines), { debit: 11900, credit: 11900 });
 });
+
+test('settlement amount errors identify the workflow field', () => {
+  assert.throws(() => buildSettlementJournalCommand({ kind: 'bad_debt', source, accounts, facts: {
+    taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }],
+    writeOffGrossAmount: -1,
+    facts: { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: 'invoice-1', originalDocumentNumber: 'RE-1', originalTaxEffectiveDate: '2026-03-01', adjustmentDate: '2026-03-15', evidenceReference: 'case-1' },
+  } }), /writeOffGrossAmount/);
+  assert.throws(() => buildSettlementJournalCommand({ kind: 'advance_settlement', source, accounts, facts: {
+    finalInvoice: { grossAmount: 119, taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] },
+    advances: [{ id: 'advance-1', kind: 'advance', grossAmount: -1 }],
+  } }), /advances\[0\]\.grossAmount/);
+});

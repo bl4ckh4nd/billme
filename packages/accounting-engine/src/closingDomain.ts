@@ -161,7 +161,10 @@ export const buildJournalCommand = (
     fiscalYear: fact.fiscalYear,
     status: 'posted',
     sourceType: fact.sourceType,
-    sourceKey: fact.sourceId,
+    // Journal source identity includes the immutable revision.  A schedule
+    // emits several entries for one source id, so source id alone collides
+    // with the append-only journal uniqueness constraint.
+    sourceKey: idempotencyKey,
     lines: fact.lines.map((item, index) => ({
       id: `${commandId}:line:${index + 1}`,
       accountNumber: item.accountNumber,

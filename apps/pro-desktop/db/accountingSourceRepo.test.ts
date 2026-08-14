@@ -32,6 +32,8 @@ const createDb = (): Database.Database => {
     INSERT INTO journal_lines (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount)
     VALUES ('invoice-journal-1-line-1', 'default', 'invoice-journal-1', 1, '1400', 119, 0),
       ('invoice-journal-1-line-2', 'default', 'invoice-journal-1', 2, '8400', 0, 100);
+    INSERT INTO open_items (id, tenant_id, party_type, party_id, source_type, source_id, document_number, document_date, due_date, original_amount, allocated_amount, residual_amount, status, journal_entry_id, created_at, updated_at)
+    VALUES ('invoice-open-item-1', 'default', 'debtor', 'client-1', 'outgoing_invoice', 'invoice-1', 'RE-1', '2026-03-15', '2026-03-31', 119, 0, 119, 'open', 'invoice-journal-1', datetime('now'), datetime('now'));
   `);
   return db;
 };
@@ -217,6 +219,17 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     expect(result.status).toBe('posted');
     expect(db.prepare("SELECT COUNT(*) AS count FROM journal_entries WHERE source_type = 'accrual'").get()).toEqual({ count: 3 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM accounting_source_runs WHERE source_type = 'accrual'").get()).toEqual({ count: 3 });
+    expect(db.prepare("SELECT COUNT(DISTINCT source_key) AS count FROM journal_entries WHERE source_type = 'accrual'").get()).toEqual({ count: 3 });
+    const replay = postAccountingCommand(db, {
+      kind: 'accrual',
+      source: { ...source('submitted'), lines: [{ accountNumber: '8400', debitAmount: 999, creditAmount: 0 }, { accountNumber: '1200', debitAmount: 0, creditAmount: 999 }] },
+      domainFacts: {
+        sourceId: 'accrual-1', sourceRevision: 'r1', startDate: '2026-03-01', endDate: '2026-05-01', period: '2026-03', fiscalYear: 2026,
+        currency: 'EUR', totalAmount: 30, expenseAccount: '8400', deferralAccount: '1200',
+      },
+    }, scope, { reason: 'derived schedule replay' });
+    expect(replay.status).toBe('duplicate');
+    expect(db.prepare("SELECT COUNT(*) AS count FROM journal_entries WHERE source_type = 'accrual'").get()).toEqual({ count: 3 });
     db.close();
   });
 
@@ -233,7 +246,7 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
   it('derives balanced settlement journals and rejects invalid totals without posting', () => {
     const db = createDb();
     const scope = createProTenantScope('default');
-    const facts = { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9 };
+    const facts = { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9, originalDocumentId: 'invoice-1' };
     const posted = postAccountingCommand(db, { kind: 'skonto', source: source('skonto'), domainFacts: facts }, scope, { reason: 'settlement test' });
     expect(posted.status).toBe('posted');
     const lines = db.prepare('SELECT debit_amount AS debit, credit_amount AS credit, tax_case_key, evidence_type FROM journal_lines WHERE entry_id = ?').all(posted.sourceRun!.journalEntryId) as Array<{ debit: number; credit: number; tax_case_key: string | null; evidence_type: string | null }>;

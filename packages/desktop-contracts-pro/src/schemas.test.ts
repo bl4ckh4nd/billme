@@ -6,6 +6,7 @@ import {
   journalEntryEntitySchema,
   openItemSchema,
   proAccountingSourcePostResultSchema,
+  proAccountingSourceRunSchema,
   proPostAccountingCommandArgsSchema,
   proPostAccountingSourceArgsSchema,
   standaloneAccountingSourceFactSchema,
@@ -106,6 +107,27 @@ test('accepts every supported journal source type', () => {
 
 test('rejects unknown journal source types', () => {
   assert.throws(() => journalEntryEntitySchema.parse(journalEntry('unknown_source')));
+});
+
+test('accepts server-emitted shareholder flow source runs and rejects unknown source types', () => {
+  const source = { ...sourceFact(), sourceType: 'shareholder_flow' as const };
+  const sourceRun = {
+    id: 'run-1',
+    tenantId: 'tenant-1',
+    sourceType: source.sourceType,
+    sourceId: source.sourceId,
+    sourceRevision: source.sourceRevision,
+    idempotencyKey: 'shareholder_flow:source-1:1',
+    fact: source,
+    result: { status: 'posted' },
+    status: 'posted' as const,
+    journalEntryId: 'journal-1',
+    createdAt: '2026-08-14T00:00:00.000Z',
+  };
+
+  assert.equal(proAccountingSourceRunSchema.parse(sourceRun).fact.sourceType, 'shareholder_flow');
+  assert.throws(() => proAccountingSourceRunSchema.parse({ ...sourceRun, sourceType: 'unknown_source' }));
+  assert.throws(() => proAccountingSourceRunSchema.parse({ ...sourceRun, fact: { ...source, sourceType: 'unknown_source' } }));
 });
 
 test('requires balanced non-empty lines for standalone source posting', () => {

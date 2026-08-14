@@ -1232,6 +1232,7 @@ export const accountingSourceTypeSchema = z.enum([
   'fx_valuation',
   'loan_schedule',
   'payroll_batch',
+  'shareholder_flow',
 ]);
 
 export const accountingSourceFactLineSchema = z.object({

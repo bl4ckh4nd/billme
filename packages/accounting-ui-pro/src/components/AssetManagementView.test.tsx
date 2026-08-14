@@ -61,6 +61,19 @@ describe('AssetManagementView productive mutations', () => {
     expect(screen.getAllByText('Server').length).toBeGreaterThan(0);
   });
 
+  it('shows German required-field feedback before calling the adapter', async () => {
+    const upsertAsset = vi.fn(async () => asset);
+    render(<AssetManagementView dataAdapter={{ listAssets: vi.fn(async () => [asset]), upsertAsset }} />);
+
+    await screen.findAllByText('Server');
+    fireEvent.click(screen.getByRole('button', { name: 'Bearbeiten' }));
+    fireEvent.change(screen.getByLabelText('Bezeichnung *'), { target: { value: '' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Anlage speichern' }).closest('form')!);
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Bitte Pflichtfelder ausfüllen: Bezeichnung.');
+    expect(upsertAsset).not.toHaveBeenCalled();
+  });
+
   it('refreshes the list and schedule only after a successful AfA booking', async () => {
     const updatedAsset = { ...asset, residualValue: 800, nextDepreciation: '2027-12-31' };
     const listAssets = vi.fn()

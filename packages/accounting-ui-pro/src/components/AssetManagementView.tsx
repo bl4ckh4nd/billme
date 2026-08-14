@@ -181,6 +181,7 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
     <div className="min-h-0 flex-1 overflow-y-auto p-6">
       <form
         className="mx-auto max-w-4xl rounded-2xl border border-border bg-surface p-5 space-y-5"
+        noValidate
         onSubmit={(event) => { event.preventDefault(); onSubmit(); }}
         aria-busy={busy}
       >
@@ -418,6 +419,22 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
     if (!canMutate || !editForm || !dataAdapter?.upsertAsset) return;
     const acquisitionCost = Number(editForm.acquisitionCost.replace(',', '.'));
     const usefulLifeYears = editForm.usefulLifeYears.trim() ? Number(editForm.usefulLifeYears) : undefined;
+    const missingFields = [
+      ['Anlagennummer', editForm.assetNumber],
+      ['Bezeichnung', editForm.name],
+      ['Anlagenklasse', editForm.assetClass],
+      ['Kostenstelle', editForm.costCenter],
+      ['Standort', editForm.location],
+      ['Anlagenkonto', editForm.assetAccountNumber],
+      ['Aktivierungsdatum', editForm.activationDate],
+      ['Anschaffungskosten netto', editForm.acquisitionCost],
+      ['Abschreibungsmethode', editForm.depreciationMethod],
+      ['Status', editForm.status],
+    ].filter(([, value]) => !value.trim()).map(([label]) => label);
+    if (missingFields.length > 0) {
+      setMutationError(`Bitte Pflichtfelder ausfüllen: ${missingFields.join(', ')}.`);
+      return;
+    }
     if (!editForm.reason.trim()) {
       setMutationError('Bitte einen Audit-Grund angeben.');
       return;
@@ -802,7 +819,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
 
               <section className="min-w-0 space-y-4">
                 {canMutate && dataAdapter?.runDepreciation && selected.status === 'aktiv' && (
-                  <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" onSubmit={(event) => { event.preventDefault(); void postDepreciation(); }} aria-busy={busyAction === 'depreciation'}>
+                  <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" noValidate onSubmit={(event) => { event.preventDefault(); void postDepreciation(); }} aria-busy={busyAction === 'depreciation'}>
                     <div>
                       <h3 className="text-sm font-bold text-foreground">Abschreibung buchen</h3>
                       <p className="mt-1 text-xs text-muted">Die Buchung wird erst nach erfolgreicher Antwort in Liste und Plan übernommen.</p>
@@ -817,7 +834,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                 )}
 
                 {canMutate && dataAdapter?.disposeAsset && !['verkauft', 'stillgelegt'].includes(selected.status) && (
-                  <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" onSubmit={(event) => { event.preventDefault(); void dispose(); }} aria-busy={busyAction === 'disposal'}>
+                  <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" noValidate onSubmit={(event) => { event.preventDefault(); void dispose(); }} aria-busy={busyAction === 'disposal'}>
                     <div>
                       <h3 className="text-sm font-bold text-foreground">Anlage ausbuchen</h3>
                       <p className="mt-1 text-xs text-muted">Verkaufserlös 0,00 € führt zur Stilllegung; ein Erlös führt zum Verkauf.</p>

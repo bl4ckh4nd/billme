@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import App from './App';
 
 describe('Pro accounting shell', () => {
@@ -9,5 +9,19 @@ describe('Pro accounting shell', () => {
     expect(navigation.parentElement?.classList.contains('overflow-x-auto')).toBe(true);
     expect(navigation.classList.contains('min-w-max')).toBe(true);
     expect(screen.getByRole('main').classList.contains('min-w-0')).toBe(true);
+  });
+
+  it('exposes the active accounting tab to assistive technology', () => {
+    render(<App />);
+    const inbox = screen.getByRole('button', { name: 'Inbox' });
+    const reports = screen.getByRole('button', { name: 'Auswertungen' });
+
+    expect(inbox.getAttribute('aria-current')).toBe('page');
+    expect(reports.getAttribute('aria-current')).toBeNull();
+
+    fireEvent.click(reports);
+
+    expect(reports.getAttribute('aria-current')).toBe('page');
+    expect(inbox.getAttribute('aria-current')).toBeNull();
   });
 });

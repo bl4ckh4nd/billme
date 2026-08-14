@@ -1629,6 +1629,7 @@ export default function App() {
             type="button"
             className={`route-button ${route === item.id ? 'route-button-active' : ''}`}
             onClick={() => navigate(item.id)}
+            aria-current={route === item.id ? 'page' : undefined}
           >
             <strong>{item.label}</strong>
             <span>{item.summary}</span>

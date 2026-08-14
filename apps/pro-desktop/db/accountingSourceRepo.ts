@@ -347,11 +347,11 @@ const postAccountingSourceInTransaction = (
   const reason = options.reason?.trim();
   if (!reason) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED: a reason is required for source posting');
   const tenantId = getTenantId(scope);
+  const chart = activeChart(db, tenantId, options.chart);
   const idempotencyKey = keyFor(fact);
   const existing = existingResult(db, tenantId, fact, options);
   if (existing) return existing;
 
-  const chart = activeChart(db, tenantId, options.chart);
   const domain = buildJournalCommand(fact);
   if (domain.status === 'ready') ensureAccountingPeriod(db, tenantId, fact);
   const persistenceErrors = validatePersistence(db, tenantId, fact, chart, options);

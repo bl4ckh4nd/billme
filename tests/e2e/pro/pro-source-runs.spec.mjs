@@ -94,6 +94,7 @@ test('posts, replays, and conflict-blocks one immutable source revision', async 
 
 test('posts a Sonderbuchung through the browser and refetches its journal link', async () => {
   const { page } = desktop;
+  const accounts = await pickPostingAccounts(page);
   const sourceId = unique('ui-source');
 
   await page.getByRole('button', { name: 'Sonderbuchungen & Abschluss' }).click();
@@ -105,6 +106,18 @@ test('posts a Sonderbuchung through the browser and refetches its journal link',
   await page.getByRole('textbox', { name: 'Quellbeleg' }).fill(sourceId);
   await page.getByRole('textbox', { name: 'Buchungsdatum' }).fill('2026-04-15');
   await page.getByRole('combobox', { name: 'Workflow' }).selectOption('fiscal_close');
+  const factsField = page.getByRole('textbox', { name: 'Domain-Fakten (JSON)' });
+  const facts = JSON.parse(await factsField.inputValue());
+  await factsField.fill(JSON.stringify({
+    ...facts,
+    revenueAccounts: [accounts.revenue],
+    expenseAccounts: [accounts.expense],
+    retainedEarningsAccount: accounts.retained,
+    balances: [
+      { ...facts.balances[0], accountNumber: accounts.revenue },
+      { ...facts.balances[1], accountNumber: accounts.expense },
+    ],
+  }, null, 2));
   await page.getByRole('textbox', { name: 'Audit-Grund', exact: true }).fill('E2E browser source posting');
   await page.getByRole('button', { name: 'Sonderbuchung speichern' }).click();
 
@@ -123,14 +136,24 @@ test('keeps invalid account, zero amount, and closed-period postings atomic', as
   const before = await sourceJournalIds(page);
   const invalid = await invokeDesktopIpc(page, 'pro:postAccountingSource', {
     source: sourceFact({ sourceId: unique('invalid'), lines: [
-      { accountNumber: '999999', debitAmount: 0, creditAmount: 0 },
-      { accountNumber: accounts.bank, debitAmount: 0, creditAmount: 0 },
+      { accountNumber: '999999', debitAmount: 100, creditAmount: 0 },
+      { accountNumber: accounts.bank, debitAmount: 0, creditAmount: 100 },
     ] }),
     chart: accounts.chart,
     reason: 'E2E invalid source',
   });
   expect(invalid.status).toBe('rejected');
-  expect(invalid.errors.map((issue) => issue.code)).toEqual(expect.arrayContaining(['INVALID_ACCOUNT', 'INVALID_AMOUNT']));
+  expect(invalid.errors.map((issue) => issue.code)).toContain('INVALID_ACCOUNT');
+  expect(await sourceJournalIds(page)).toEqual(before);
+
+  await expect(invokeDesktopIpc(page, 'pro:postAccountingSource', {
+    source: sourceFact({ sourceId: unique('zero-lines'), lines: [
+      { accountNumber: '999999', debitAmount: 0, creditAmount: 0 },
+      { accountNumber: accounts.bank, debitAmount: 0, creditAmount: 0 },
+    ] }),
+    chart: accounts.chart,
+    reason: 'E2E zero source',
+  })).rejects.toThrow(/journal line|Debit and credit/i);
   expect(await sourceJournalIds(page)).toEqual(before);
 
   const lockedSource = sourceFact({ sourceId: unique('closed'), lines: journalLines(accounts) });

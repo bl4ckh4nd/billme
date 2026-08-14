@@ -30,7 +30,7 @@ import type {
   Ustg17AdjustmentFactsInput,
 } from '@billme/accounting-shared';
 import type { TenantScope } from '@billme/server-core';
-import { AccountingPolicyError } from '@billme/accounting-shared';
+import { AccountingPolicyError, CorrectionSettlementError } from '@billme/accounting-shared';
 import { appendAuditLog } from './audit';
 import { getTenantId } from '../tenantScope';
 
@@ -519,8 +519,25 @@ const generatedCommands = (kind: AccountingCommandKind, facts: Record<string, un
       });
       return { result: built.result, commands: [built.command], status: 'ready', errors: [] };
     } catch (cause) {
+      const settlementError = cause instanceof CorrectionSettlementError
+        ? cause as CorrectionSettlementError & { field?: string; details?: unknown }
+        : undefined;
       const message = cause instanceof Error ? cause.message : 'Settlement facts are invalid';
-      return { result: cause, commands: [], status: 'rejected', errors: [error('INVALID_AMOUNT', message)] };
+      const translated = error(
+        (settlementError?.code ?? 'INVALID_AMOUNT') as ClosingDomainError['code'],
+        message,
+        settlementError?.field,
+      ) as ClosingDomainError & { details?: unknown };
+      if (settlementError?.details !== undefined) translated.details = settlementError.details;
+      const result = settlementError
+        ? {
+            code: settlementError.code,
+            message,
+            ...(settlementError.field === undefined ? {} : { field: settlementError.field }),
+            ...(settlementError.details === undefined ? {} : { details: settlementError.details }),
+          }
+        : cause;
+      return { result, commands: [], status: 'rejected', errors: [translated] };
     }
   }
   let built: DomainBuild;

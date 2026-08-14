@@ -5,6 +5,7 @@ import {
   businessReportingProfileSchema,
   journalEntryEntitySchema,
   openItemSchema,
+  proAccountingSourcePostResultSchema,
   proPostAccountingCommandArgsSchema,
   proPostAccountingSourceArgsSchema,
   standaloneAccountingSourceFactSchema,
@@ -139,4 +140,26 @@ test('requires explicit settlement accounts in domain facts', () => {
     proPostAccountingCommandArgsSchema.parse({ kind: 'advance_settlement', source, domainFacts: { advanceClearingReceivable: '1593', advanceClearingPayable: '1518' }, reason: 'Vorauszahlung geprüft' }).domainFacts,
     { advanceClearingReceivable: '1593', advanceClearingPayable: '1518' },
   );
+});
+
+
+test('preserves typed settlement error details across the IPC result contract', () => {
+  const result = proAccountingSourcePostResultSchema.parse({
+    status: 'rejected',
+    errors: [{
+      code: 'OVER_CREDIT',
+      message: 'settlement exceeds final invoice amount for VAT rate 19',
+      field: 'domainFacts.advances[0].grossAmount',
+      details: { remaining: 11.9 },
+      blocking: true,
+    }],
+    idempotencyKey: 'standalone_source:source-1:r1',
+  });
+  assert.deepEqual(result.errors[0], {
+    code: 'OVER_CREDIT',
+    message: 'settlement exceeds final invoice amount for VAT rate 19',
+    field: 'domainFacts.advances[0].grossAmount',
+    details: { remaining: 11.9 },
+    blocking: true,
+  });
 });

@@ -257,4 +257,73 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM journal_entries WHERE source_key LIKE 'standalone_source:source-1:skonto-invalid'").get()).toEqual({ count: 0 });
     db.close();
   });
+
+  it('returns typed settlement validation codes through the desktop result', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const settlementSource = (revision: string) => source(revision);
+    const settlementTax = [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }];
+    const post = (revision: string, kind: 'skonto' | 'advance_settlement', domainFacts: Record<string, unknown>) =>
+      postAccountingCommand(db, { kind, source: settlementSource(revision), domainFacts }, scope, { reason: `typed error ${revision}` });
+
+    const invalidFacts = post('typed-invalid-facts', 'skonto', {
+      taxBreakdown: [{ rate: 20, netAmount: 100, taxAmount: 20, grossAmount: 120 }],
+      skontoAmount: 11.9,
+      originalDocumentId: 'invoice-1',
+    });
+    expect(invalidFacts.errors[0]).toMatchObject({ code: 'INVALID_FACTS' });
+
+    let reads = 0;
+    const missingReference = { kind: 'advance', grossAmount: 1 } as { id?: string; kind: string; grossAmount: number };
+    Object.defineProperty(missingReference, 'id', {
+      enumerable: true,
+      get: () => (reads++ === 0 ? 'invoice-1' : undefined),
+    });
+    const referenceRequired = post('typed-reference-required', 'advance_settlement', {
+      finalInvoiceId: 'invoice-1',
+      finalInvoice: { grossAmount: 119, taxBreakdown: settlementTax },
+      advances: [missingReference],
+      advanceClearingReceivable: '1200',
+      advanceClearingPayable: '1600',
+    });
+    expect(referenceRequired.errors[0]).toMatchObject({ code: 'REFERENCE_REQUIRED' });
+
+    const idempotencyConflict = post('typed-idempotency-conflict', 'advance_settlement', {
+      finalInvoiceId: 'invoice-1',
+      finalInvoice: { grossAmount: 119, taxBreakdown: settlementTax },
+      advances: [
+        { id: 'invoice-1', kind: 'advance', grossAmount: 1 },
+        { id: 'invoice-1', kind: 'advance', grossAmount: 1 },
+      ],
+      advanceClearingReceivable: '1200',
+      advanceClearingPayable: '1600',
+    });
+    expect(idempotencyConflict.errors[0]).toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+
+    db.exec(`
+      INSERT INTO invoices (id, number, client, client_email, date, due_date, amount, status, accounting_status,
+        accounting_snapshot_json, accounting_journal_entry_id, accounting_posted_at, created_at, updated_at)
+      VALUES ('invoice-2', 'RE-2', 'Original customer', 'customer@example.test', '2026-03-15', '2026-03-31', 119,
+        'open', 'posted', '{"sourceVersion":"invoice-r2","vatBreakdown":[{"grossAmount":119,"netAmount":100,"rate":19,"taxAmount":19}]}',
+        'invoice-journal-2', datetime('now'), datetime('now'), datetime('now'));
+      INSERT INTO journal_entries (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference,
+        period, fiscal_year, status, source_type, source_key, created_at)
+      VALUES ('invoice-journal-2', 'default', 2, '2026-03-15', '2026-03-15', 'Original invoice', 'RE-2',
+        '2026-03', 2026, 'posted', 'outgoing_invoice', 'outgoing-invoice:invoice-2', datetime('now'));
+      INSERT INTO open_items (id, tenant_id, party_type, party_id, source_type, source_id, document_number, document_date, due_date,
+        original_amount, allocated_amount, residual_amount, status, journal_entry_id, created_at, updated_at)
+      VALUES ('invoice-open-item-2', 'default', 'debtor', 'client-1', 'outgoing_invoice', 'invoice-2', 'RE-2', '2026-03-15',
+        '2026-03-31', 119, 0, 119, 'open', 'invoice-journal-2', datetime('now'), datetime('now'));
+    `);
+    const overCredit = post('typed-over-credit', 'advance_settlement', {
+      finalInvoiceId: 'invoice-1',
+      finalInvoice: { id: 'invoice-1', grossAmount: 119, taxBreakdown: settlementTax },
+      advances: [{ id: 'invoice-2', kind: 'advance', grossAmount: 60 }],
+      partialInvoices: [{ id: 'invoice-1', kind: 'partial', grossAmount: 60 }],
+      advanceClearingReceivable: '1200',
+      advanceClearingPayable: '1600',
+    });
+    expect(overCredit.errors[0]).toMatchObject({ code: 'OVER_CREDIT' });
+    db.close();
+  });
 });

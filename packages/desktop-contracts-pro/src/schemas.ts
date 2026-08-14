@@ -1383,7 +1383,7 @@ export const proAccountingSourcePostResultSchema = z.object({
   sourceRun: proAccountingSourceRunSchema.optional(),
   command: z.unknown().optional(),
   errors: z.array(z.object({
-    code: z.string(), message: z.string(), field: z.string().optional(), blocking: z.literal(true),
+    code: z.string(), message: z.string(), field: z.string().optional(), details: z.unknown().optional(), blocking: z.literal(true),
   })),
   idempotencyKey: z.string().min(1),
 });

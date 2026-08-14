@@ -10,6 +10,8 @@ import { runDrizzleMigrations } from './migrations.js';
 import { createPostgresProAccountingRepository, fiscalYearForPostingDate, insertJournalPostingPair, normalizeDatevBuKey } from './proAccountingRepository.js';
 import { importRawTenantRows } from './oposImport.js';
 
+const databaseUrl = process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+
 test('journal posting-pair insert binds every persisted column', async () => {
   let captured: { text: string; values: unknown[] } | undefined;
   const db = {

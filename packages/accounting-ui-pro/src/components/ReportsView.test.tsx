@@ -355,4 +355,68 @@ describe('ReportsView drilldown ranges', () => {
     fireEvent.click(csv);
     await waitFor(() => expect(exportReport).toHaveBeenCalledWith(expect.objectContaining({ report: 'bwa01', format: 'csv' })));
   });
+
+  it('scopes report failures to the selected tab and blocks export until that tab is ready', async () => {
+    const getEurReport = vi.fn(async () => {
+      throw new Error('EÜR-Service ausgefallen');
+    });
+    const getBwaReport = vi.fn(async () => ({
+      lines: [],
+      totals: { revenue: 0, expenses: 0, result: 0 },
+      quality: { unmappedAccounts: [], warnings: 0, generatedAt: '', source: 'live' as const },
+    }));
+    const exportReport = vi.fn(async () => ({ format: 'csv' as const }));
+    render(<ReportsView dataAdapter={{ getEurReport, getBwaReport, exportReport }} availableTabs={['eur', 'bwa01']} />);
+
+    expect((await screen.findByRole('alert')).textContent).toContain('EÜR-Service ausgefallen');
+    expect(screen.getByRole('button', { name: 'CSV' })).toHaveProperty('disabled', true);
+    expect(screen.getByText(/Export nicht verfügbar/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'BWA01' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'BWA01' }).getAttribute('aria-pressed')).toBe('true'));
+    expect(screen.queryByText('EÜR-Service ausgefallen')).toBeNull();
+    expect(screen.getByRole('button', { name: 'CSV' })).toHaveProperty('disabled', false);
+    fireEvent.click(screen.getByRole('button', { name: 'CSV' }));
+    await waitFor(() => expect(exportReport).toHaveBeenCalledWith(expect.objectContaining({ report: 'bwa01', format: 'csv' })));
+  });
+
+  it('ignores a stale report response after a newer request starts', async () => {
+    type Report = {
+      rows: never[];
+      totals: { openingDebit: number; openingCredit: number; turnoverDebit: number; turnoverCredit: number; closingDebit: number; closingCredit: number };
+      quality: { unmappedAccounts: number; warnings: number; generatedAt: string; source: 'live' };
+    };
+    let rejectFirst!: (error: Error) => void;
+    let resolveSecond!: (report: Report) => void;
+    const first = new Promise<Report>((_, reject) => {
+      rejectFirst = reject;
+    });
+    const second = new Promise<Report>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const currentReport: Report = {
+      rows: [],
+      totals: { openingDebit: 0, openingCredit: 0, turnoverDebit: 0, turnoverCredit: 0, closingDebit: 0, closingCredit: 0 },
+      quality: { unmappedAccounts: 0, warnings: 0, generatedAt: 'new', source: 'live' },
+    };
+    const getReport = vi.fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+      .mockResolvedValue(currentReport);
+    const exportReport = vi.fn(async () => ({ format: 'csv' as const }));
+    render(<ReportsView dataAdapter={{ getSusaReport: getReport, exportReport }} availableTabs={['susa']} />);
+
+    await waitFor(() => expect(getReport).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'CSV' })).toHaveProperty('disabled', true);
+    fireEvent.change(screen.getByLabelText('Stichtag'), { target: { value: '2026-09-01' } });
+    await waitFor(() => expect(getReport).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('button', { name: 'CSV' })).toHaveProperty('disabled', true);
+    resolveSecond(currentReport);
+    await screen.findByText('Summen- und Saldenliste');
+    expect(screen.getByRole('button', { name: 'CSV' })).toHaveProperty('disabled', false);
+
+    rejectFirst(new Error('stale report failure'));
+    await waitFor(() => expect(screen.queryByText('stale report failure')).toBeNull());
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });

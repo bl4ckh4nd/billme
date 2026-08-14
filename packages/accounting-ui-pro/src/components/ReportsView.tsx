@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileBarChart2 } from 'lucide-react';
 import { Button } from '@billme/ui';
 import {
@@ -51,6 +51,12 @@ type EurClassificationDraft = {
   vatMode: 'none' | 'default';
   vatRate?: number;
   note?: string;
+};
+
+type ReportLoadState = {
+  status: 'loading' | 'success' | 'error';
+  error?: string;
+  requestId: number;
 };
 
 const eurCashItemKey = (item: EurCashItem): string => `${item.sourceType}:${item.sourceId}`;
@@ -122,10 +128,11 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   const [bwaReport, setBwaReport] = useState<GuvReport | null>(null);
   const [managementGuvReport, setManagementGuvReport] = useState<GuvReport | null>(null);
   const [hgbGuvReport, setHgbGuvReport] = useState<GuvReport | null>(null);
-  const [reportsLoading, setReportsLoading] = useState(true);
   const [reportsError, setReportsError] = useState<string | null>(null);
   const [reportsNotice, setReportsNotice] = useState<string | null>(null);
   const [reportsRetryKey, setReportsRetryKey] = useState(0);
+  const reportRequestId = useRef(0);
+  const [reportLoadStates, setReportLoadStates] = useState<Partial<Record<ReportTabId, ReportLoadState>>>({});
   const [eurItems, setEurItems] = useState<EurCashItem[]>([]);
   const [eurTaxYear, setEurTaxYear] = useState<2025 | 2026>(2025);
   const [eurItemsLoading, setEurItemsLoading] = useState(false);
@@ -178,14 +185,37 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   }, [activeTab, visibleTabs]);
 
   useEffect(() => {
-    let cancelled = false;
-    setReportsLoading(true);
     setReportsError(null);
     setReportsNotice(null);
+  }, [activeTab]);
+
+  useEffect(() => {
+    const requestId = ++reportRequestId.current;
+    let cancelled = false;
+    const isCurrent = () => !cancelled && reportRequestId.current === requestId;
+    const setLoadState = (tab: ReportTabId, state: Omit<ReportLoadState, 'requestId'>) => {
+      if (!isCurrent()) return;
+      setReportLoadStates((current) => ({ ...current, [tab]: { ...state, requestId } }));
+    };
+    const setReport = (tab: ReportTabId, report: unknown) => {
+      if (!isCurrent()) return;
+      switch (tab) {
+        case 'susa': setSusaReport(report as SusaReport); break;
+        case 'bilanz': setBalanceSheetPreview(report as BalanceSheetPreview); break;
+        case 'eur': setEurReport(report as GuvReport); break;
+        case 'bwa01': setBwaReport(report as GuvReport); break;
+        case 'management_guv': setManagementGuvReport(report as GuvReport); break;
+        case 'hgb_guv': setHgbGuvReport(report as GuvReport); break;
+      }
+    };
+    setReportLoadStates((current) => {
+      const next = { ...current };
+      for (const tab of visibleTabs) next[tab] = { status: 'loading', requestId };
+      return next;
+    });
 
     if (profileSetupError) {
-      setReportsError(profileSetupError);
-      setReportsLoading(false);
+      for (const tab of visibleTabs) setLoadState(tab, { status: 'error', error: profileSetupError });
       return () => {
         cancelled = true;
       };
@@ -198,32 +228,24 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
       if (!dataAdapter) return fallback(value);
       return method ? method(value) : missingReportMethod<T>(tab);
     };
-    const loadReports = Promise.all([
-      visibleTabs.includes('susa') ? load('susa', dataAdapter?.getSusaReport, getSusaReport, filtersForTab('susa')) : Promise.resolve(null),
-      visibleTabs.includes('bilanz') ? load('bilanz', dataAdapter?.getBalanceSheetPreview, getBalanceSheetPreview, filtersForTab('bilanz')) : Promise.resolve(null),
-      visibleTabs.includes('eur') ? load('eur', dataAdapter?.getEurReport, getEurReport, filtersForTab('eur')) : Promise.resolve(null),
-      visibleTabs.includes('bwa01') ? load('bwa01', dataAdapter?.getBwaReport, getBwaReport, filtersForTab('bwa01')) : Promise.resolve(null),
-      visibleTabs.includes('management_guv') ? load('management_guv', dataAdapter?.getManagementGuvReport, getManagementGuvReport, filtersForTab('management_guv')) : Promise.resolve(null),
-      visibleTabs.includes('hgb_guv') ? load('hgb_guv', dataAdapter?.getHgbGuvReport, getHgbGuvReport, filtersForTab('hgb_guv')) : Promise.resolve(null),
-    ]);
-
-    loadReports
-      .then(([susa, bilanz, eur, bwa, management, hgb]) => {
-        if (cancelled) return;
-        setSusaReport(susa);
-        setBalanceSheetPreview(bilanz);
-        setEurReport(eur);
-        setBwaReport(bwa);
-        setManagementGuvReport(management);
-        setHgbGuvReport(hgb);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setReportsError(error instanceof Error ? error.message : 'Auswertungen konnten nicht geladen werden.');
-      })
-      .finally(() => {
-        if (!cancelled) setReportsLoading(false);
-      });
+    const requests: Partial<Record<ReportTabId, Promise<unknown>>> = {
+      ...(visibleTabs.includes('susa') ? { susa: load('susa', dataAdapter?.getSusaReport, getSusaReport, filtersForTab('susa')) } : {}),
+      ...(visibleTabs.includes('bilanz') ? { bilanz: load('bilanz', dataAdapter?.getBalanceSheetPreview, getBalanceSheetPreview, filtersForTab('bilanz')) } : {}),
+      ...(visibleTabs.includes('eur') ? { eur: load('eur', dataAdapter?.getEurReport, getEurReport, filtersForTab('eur')) } : {}),
+      ...(visibleTabs.includes('bwa01') ? { bwa01: load('bwa01', dataAdapter?.getBwaReport, getBwaReport, filtersForTab('bwa01')) } : {}),
+      ...(visibleTabs.includes('management_guv') ? { management_guv: load('management_guv', dataAdapter?.getManagementGuvReport, getManagementGuvReport, filtersForTab('management_guv')) } : {}),
+      ...(visibleTabs.includes('hgb_guv') ? { hgb_guv: load('hgb_guv', dataAdapter?.getHgbGuvReport, getHgbGuvReport, filtersForTab('hgb_guv')) } : {}),
+    };
+    for (const [tab, request] of Object.entries(requests) as Array<[ReportTabId, Promise<unknown>]>) {
+      void request
+        .then((report) => {
+          setReport(tab, report);
+          setLoadState(tab, { status: 'success' });
+        })
+        .catch((error) => {
+          setLoadState(tab, { status: 'error', error: error instanceof Error ? error.message : 'Auswertungen konnten nicht geladen werden.' });
+        });
+    }
 
     return () => {
       cancelled = true;
@@ -348,9 +370,20 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
         ? eurReport
         : activeTab === 'bwa01'
           ? bwaReport
-          : activeTab === 'management_guv'
-            ? managementGuvReport
-            : hgbGuvReport;
+            : activeTab === 'management_guv'
+              ? managementGuvReport
+              : hgbGuvReport;
+  const activeReportLoadState = reportLoadStates[activeTab];
+  const activeReportLoading = !activeReportLoadState || activeReportLoadState.status === 'loading';
+  const activeReportLoadError = activeReportLoadState?.status === 'error' ? activeReportLoadState.error : null;
+  const activeReportUnavailable = activeReportLoadState?.status === 'success' && !activeReport;
+  const exportBlockedReason = activeReportLoading
+    ? 'Export ist erst möglich, wenn der aktuelle Report geladen ist.'
+    : activeReportLoadError
+      ? 'Export nicht verfügbar: Der aktuelle Report konnte nicht geladen werden.'
+      : activeReportUnavailable
+        ? 'Export nicht verfügbar: Für den aktuellen Report liegen keine Daten vor.'
+        : undefined;
   const activeQuality = activeReport?.quality;
   useEffect(() => {
     if (activeTab !== 'bilanz' || !balanceSheetPreview || !reportIsMappingBlocked(balanceSheetPreview.quality)) return;
@@ -473,7 +506,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   );
 
   const exportReport = async (format: 'pdf' | 'csv') => {
-    if (!dataAdapter) return;
+    if (!dataAdapter || activeReportLoading || activeReportLoadError || activeReportUnavailable) return;
     setExporting(true);
     setReportsError(null);
     const request: ReportExportRequest = { report: activeTab, filters: filtersForTab(activeTab), format };
@@ -610,6 +643,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
           activeTab={activeTab}
           onExport={dataAdapter ? exportReport : undefined}
           exporting={exporting}
+          exportBlockedReason={exportBlockedReason}
           lockNativeEurPeriod={activeTab === 'eur'}
           nativeEurTaxYear={eurTaxYear}
         />
@@ -771,22 +805,29 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
 
         <div className="flex flex-col xl:flex-row gap-4">
             <div className="flex-1 min-w-0 pr-1">
-              {reportsLoading ? (
+              {activeReportLoading ? (
                 <div className="rounded-2xl border border-border bg-surface p-8 text-sm text-muted">
                   Lade Auswertungen…
                 </div>
-              ) : reportsError ? (
+              ) : activeReportLoadError || reportsError ? (
                 <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-error-border bg-error-bg p-8 text-sm text-error" role="alert" aria-live="assertive">
-                  <span>{reportsError}</span>
+                  <span>{activeReportLoadError ?? reportsError}</span>
                   <Button
                     type="button"
                     size="sm"
                     variant="secondary"
                     onClick={() => setReportsRetryKey((current) => current + 1)}
-                    disabled={reportsLoading}
-                    aria-busy={reportsLoading}
+                    disabled={activeReportLoading}
+                    aria-busy={activeReportLoading}
                   >
-                    {reportsLoading ? 'Lade erneut…' : 'Erneut versuchen'}
+                    {activeReportLoading ? 'Lade erneut…' : 'Erneut versuchen'}
+                  </Button>
+                </div>
+              ) : activeReportUnavailable ? (
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-error-border bg-error-bg p-8 text-sm text-error" role="alert" aria-live="assertive">
+                  <span>Für den aktuellen Report liegen keine Daten vor.</span>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setReportsRetryKey((current) => current + 1)}>
+                    Erneut versuchen
                   </Button>
                 </div>
               ) : (

@@ -287,12 +287,11 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
       setHistory(next);
     } catch (error) {
       setHistoryError(caughtDomainErrorMessage(error));
-      throw error;
     }
   };
 
   useEffect(() => {
-    void refetchHistory().catch(() => undefined);
+    void refetchHistory();
   }, [dataAdapter]);
 
   const update = (key: keyof FormState, value: string) => setForm((current) => {
@@ -330,9 +329,9 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
         setErrors(resultErrors);
         return;
       }
-      await refetchHistory();
       setNotice(result.status === 'duplicate' ? 'Diese Quelle wurde bereits gebucht. Der bestehende Lauf bleibt maßgeblich.' : 'Sonderbuchung wurde erfolgreich gebucht.');
       setForm(initialForm());
+      await refetchHistory();
     } catch (error) {
       setErrors([caughtDomainErrorMessage(error) || 'Sonderbuchung konnte nicht gespeichert werden.']);
     } finally {

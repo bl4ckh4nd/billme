@@ -70,6 +70,27 @@ describe('SonderbuchungenWorkspace', () => {
     await waitFor(() => expect(screen.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toBeTruthy());
   });
 
+  it('keeps a successful booking when the follow-up history refresh fails', async () => {
+    const listAccountingSourceRuns = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('Historie vorübergehend nicht verfügbar'))
+      .mockResolvedValueOnce([]);
+    const adapter = { ...valid(), listAccountingSourceRuns };
+    render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
+    await waitFor(() => expect(listAccountingSourceRuns).toHaveBeenCalledTimes(1));
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'Prüfen & verbindlich buchen' }));
+
+    await waitFor(() => expect(screen.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toBeTruthy());
+    expect((screen.getByLabelText('Audit-Grund') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Domain-Fakten (JSON)') as HTMLTextAreaElement).value).not.toContain('correction-1');
+    expect(screen.getByText(/Historie vorübergehend nicht verfügbar/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }));
+    await waitFor(() => expect(listAccountingSourceRuns).toHaveBeenCalledTimes(3));
+    expect(screen.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toBeTruthy();
+  });
+
   it('posts selected workflow facts without generic journal lines', async () => {
     const adapter = valid();
     render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
@@ -196,6 +217,27 @@ describe('SonderbuchungenWorkspace', () => {
     fireEvent.change(screen.getByLabelText('Audit-Grund Steuerexport'), { target: { value: 'Prüfung' } });
     fireEvent.click(screen.getByRole('button', { name: 'Vorbereitung erstellen' }));
     expect((await screen.findByText(/Keine meldepflichtigen Vorgänge/)).textContent).toContain('Keine meldepflichtigen Vorgänge');
+  });
+
+  it('retains a prepared tax artifact when the follow-up history refresh fails', async () => {
+    const artifact = { kind: 'ustva' as const, status: 'prepared' as const, submissionReady: false as const, providerValidation: 'unavailable' as const, exportable: true as const, rows: [{ kennziffer: '81' }] };
+    const listAccountingSourceRuns = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('Historie vorübergehend nicht verfügbar'));
+    const adapter = {
+      prepareTaxExport: vi.fn(async () => ({ artifact, run: { id: 'tax-run-1' } })),
+      listAccountingSourceRuns,
+      exportTaxArtifact: vi.fn(async () => new Blob(['{}'], { type: 'application/json' })),
+    };
+    render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
+    await waitFor(() => expect(listAccountingSourceRuns).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText('Audit-Grund Steuerexport'), { target: { value: 'Prüfung' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Vorbereitung erstellen' }));
+
+    expect(await screen.findByText(/UStVA vorbereitet/)).toBeTruthy();
+    expect(screen.getByText(/Historie vorübergehend nicht verfügbar/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Vorbereitungs-Export' })).toBeTruthy();
+    expect(screen.queryByText(/Tax provider unavailable/)).toBeNull();
   });
 
   it('shows a retryable history error instead of an empty history', async () => {

@@ -24,4 +24,13 @@ describe('Pro accounting shell', () => {
     expect(reports.getAttribute('aria-current')).toBe('page');
     expect(inbox.getAttribute('aria-current')).toBeNull();
   });
+
+  it('keeps Inbox active while a transaction is open in BookingEditor', () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Software GmbH öffnen' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Erweitern' }));
+
+    expect(screen.getByRole('button', { name: 'Inbox' }).getAttribute('aria-current')).toBe('page');
+  });
 });

@@ -106,20 +106,24 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
               { view: 'opos', label: 'OPOS' },
               { view: 'special', label: 'Sonderbuchungen & Abschluss' },
             ] as { view: AppView; label: string }[]
-          ).map(({ view, label }) => (
-            <button
-              key={view}
-              onClick={() => setCurrentView(view)}
-              aria-current={currentView === view ? 'page' : undefined}
-              className={`relative min-h-10 rounded-t-lg px-4 py-2 text-sm font-bold transition-colors active:scale-[0.96] ${
-                currentView === view
-                  ? 'text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-dark-base'
-                  : 'text-muted hover:text-foreground'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+          ).map(({ view, label }) => {
+            const isActive = currentView === view || (view === 'inbox' && currentView === 'editor');
+
+            return (
+              <button
+                key={view}
+                onClick={() => setCurrentView(view)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`relative min-h-10 rounded-t-lg px-4 py-2 text-sm font-bold transition-colors active:scale-[0.96] ${
+                  isActive
+                    ? 'text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-dark-base'
+                    : 'text-muted hover:text-foreground'
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
         </nav>
       </div>
 

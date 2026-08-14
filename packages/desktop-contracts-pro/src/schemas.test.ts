@@ -3,11 +3,26 @@ import test from 'node:test';
 import {
   accountingSourceFactSchema,
   businessReportingProfileSchema,
+  journalEntryEntitySchema,
   openItemSchema,
   proPostAccountingCommandArgsSchema,
   proPostAccountingSourceArgsSchema,
   standaloneAccountingSourceFactSchema,
 } from './schemas.ts';
+
+const journalEntry = (sourceType: string) => ({
+  id: 'journal-1',
+  tenantId: 'tenant-1',
+  entryNumber: 1,
+  postingDate: '2026-08-14',
+  bookingText: 'Testbuchung',
+  period: '2026-08',
+  fiscalYear: 2026,
+  status: 'posted' as const,
+  sourceType,
+  createdAt: '2026-08-14T00:00:00.000Z',
+  lines: [],
+});
 
 const sourceFact = (lines: Array<{ accountNumber: string; debitAmount: number; creditAmount: number }> = []) => ({
   sourceType: 'standalone_source' as const,
@@ -55,6 +70,40 @@ test('accepts correction open items returned by the server accounting ledger', (
     updatedAt: '2026-11-20T00:00:00.000Z',
   });
   assert.equal(item.sourceType, 'correction');
+});
+
+test('accepts every supported journal source type', () => {
+  const sourceTypes = [
+    'booking_draft',
+    'reversal',
+    'depreciation',
+    'manual',
+    'outgoing_invoice',
+    'incoming_invoice',
+    'payment',
+    'payment_vat',
+    'legacy_transaction',
+    'asset_activation',
+    'asset_depreciation',
+    'asset_disposal',
+    'standalone_source',
+    'fiscal_close',
+    'carry_forward',
+    'provision',
+    'accrual',
+    'inventory_closing',
+    'fx_valuation',
+    'loan_schedule',
+    'payroll_batch',
+  ];
+
+  for (const sourceType of sourceTypes) {
+    assert.equal(journalEntryEntitySchema.parse(journalEntry(sourceType)).sourceType, sourceType);
+  }
+});
+
+test('rejects unknown journal source types', () => {
+  assert.throws(() => journalEntryEntitySchema.parse(journalEntry('unknown_source')));
 });
 
 test('requires balanced non-empty lines for standalone source posting', () => {

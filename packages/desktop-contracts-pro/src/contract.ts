@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { taxFilingRoutes } from '@billme/desktop-contracts/taxFiling';
 import {
   deleteByIdSchema,
   listTemplatesParamsSchema,
@@ -780,6 +781,7 @@ export type RouteDef<Args extends z.ZodTypeAny, Result extends z.ZodTypeAny> = {
 };
 
 export const ipcRoutes = {
+  ...taxFilingRoutes,
   'invoices:list': {
     channel: 'invoices:list',
     args: z.undefined(),

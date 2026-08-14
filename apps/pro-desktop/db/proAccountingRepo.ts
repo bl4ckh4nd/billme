@@ -15,7 +15,7 @@ import type {
   ReportingStatement,
 } from '@billme/accounting-shared';
 import { calculateReport, listReportMappingPositions } from '@billme/accounting-engine';
-import { fiscalYearForDate, fiscalYearRange } from '@billme/accounting-shared';
+import { fiscalYearForDate, fiscalYearRange, validateDatevTaxEvidence } from '@billme/accounting-shared';
 import { appendAuditLog } from './audit';
 import { getSettings } from './settingsRepo';
 import { listAccountSuggestionRules } from './accountSuggestionRulesRepo';
@@ -65,6 +65,7 @@ export interface BookingDraftLineEntity {
   taxCode?: string;
   taxCaseKey?: TaxCaseKey;
   taxRate?: number;
+  destinationVatRate?: number;
   netAmount?: number;
   taxAmount?: number;
   grossAmount?: number;
@@ -72,6 +73,7 @@ export interface BookingDraftLineEntity {
   counterpartyVatId?: string;
   evidenceType?: string;
   evidenceReference?: string;
+  datevSachverhaltLl?: string;
   costCenter?: string;
   memo?: string;
 }
@@ -316,6 +318,7 @@ const normalizeDraftLine = (line: BookingDraftLineEntity, idx: number): BookingD
   taxCode: line.taxCode || undefined,
   taxCaseKey: normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode),
   taxRate: line.taxRate !== undefined ? Number(line.taxRate || 0) : undefined,
+  destinationVatRate: line.destinationVatRate !== undefined ? Number(line.destinationVatRate || 0) : undefined,
   netAmount: line.netAmount !== undefined ? round2(Number(line.netAmount || 0)) : undefined,
   taxAmount: line.taxAmount !== undefined ? round2(Number(line.taxAmount || 0)) : undefined,
   grossAmount: line.grossAmount !== undefined ? round2(Number(line.grossAmount || 0)) : undefined,
@@ -323,6 +326,7 @@ const normalizeDraftLine = (line: BookingDraftLineEntity, idx: number): BookingD
   counterpartyVatId: line.counterpartyVatId ? String(line.counterpartyVatId).trim().toUpperCase() : undefined,
   evidenceType: line.evidenceType ? String(line.evidenceType).trim() : undefined,
   evidenceReference: line.evidenceReference ? String(line.evidenceReference).trim() : undefined,
+  datevSachverhaltLl: line.datevSachverhaltLl ? String(line.datevSachverhaltLl).trim() : undefined,
   costCenter: line.costCenter || undefined,
   memo: line.memo || undefined,
 });
@@ -446,6 +450,7 @@ const canonicalDraftSnapshot = (draft: BookingDraftEntity, tenantId: string): st
     taxCode: line.taxCode ?? null,
     taxCaseKey: line.taxCaseKey ?? null,
     taxRate: line.taxRate ?? null,
+    destinationVatRate: line.destinationVatRate ?? null,
     netAmount: line.netAmount ?? null,
     taxAmount: line.taxAmount ?? null,
     grossAmount: line.grossAmount ?? null,
@@ -453,6 +458,7 @@ const canonicalDraftSnapshot = (draft: BookingDraftEntity, tenantId: string): st
     counterpartyVatId: line.counterpartyVatId ?? null,
     evidenceType: line.evidenceType ?? null,
     evidenceReference: line.evidenceReference ?? null,
+    datevSachverhaltLl: line.datevSachverhaltLl ?? null,
     costCenter: line.costCenter ?? null,
     memo: line.memo ?? null,
   })),
@@ -696,37 +702,31 @@ const validateDraft = (
       return;
     }
 
-    if (taxCase.requiresCounterpartyVatId && !line.counterpartyVatId) {
+    const datevEvidence = validateDatevTaxEvidence(taxCase, {
+      buyerCountryCode: line.countryCode,
+      buyerVatId: line.counterpartyVatId,
+      destinationVatRate: line.destinationVatRate,
+      datevSachverhaltLl: line.datevSachverhaltLl,
+      datevEvidenceType: line.evidenceType,
+      datevEvidenceReference: line.evidenceReference,
+    });
+    for (const issue of datevEvidence) {
+      const code = issue.code === 'MISSING_TAX_COUNTRY' ? 'MISSING_COUNTRY_CODE' : issue.code;
+      const fieldPath = code === 'MISSING_COUNTERPARTY_VAT_ID'
+        ? `lines[${idx}].counterpartyVatId`
+        : code === 'MISSING_COUNTRY_CODE'
+          ? `lines[${idx}].countryCode`
+          : code === 'MISSING_DESTINATION_VAT_RATE'
+            ? `lines[${idx}].destinationVatRate`
+            : code === 'MISSING_DATEV_SACHVERHALT'
+              ? `lines[${idx}].datevSachverhaltLl`
+              : `lines[${idx}].evidenceReference`;
       issues.push({
         id: randomUUID(),
-        code: 'MISSING_COUNTERPARTY_VAT_ID',
+        code,
         severity: 'error',
-        message: 'USt-IdNr. des Gegenübers ist für diesen Steuerfall Pflicht.',
-        fieldPath: `lines[${idx}].counterpartyVatId`,
-        blocking: true,
-        source: 'system',
-      });
-    }
-
-    if (taxCase.requiresCountry && !line.countryCode) {
-      issues.push({
-        id: randomUUID(),
-        code: 'MISSING_COUNTRY_CODE',
-        severity: 'error',
-        message: 'Ländercode ist für diesen Steuerfall Pflicht.',
-        fieldPath: `lines[${idx}].countryCode`,
-        blocking: true,
-        source: 'system',
-      });
-    }
-
-    if (taxCase.requiresEvidence && (!line.evidenceType || !line.evidenceReference)) {
-      issues.push({
-        id: randomUUID(),
-        code: 'MISSING_TAX_EVIDENCE',
-        severity: 'error',
-        message: 'Steuernachweis (Typ und Referenz) ist für diesen Steuerfall Pflicht.',
-        fieldPath: `lines[${idx}].evidenceReference`,
+        message: issue.message,
+        fieldPath,
         blocking: true,
         source: 'system',
       });

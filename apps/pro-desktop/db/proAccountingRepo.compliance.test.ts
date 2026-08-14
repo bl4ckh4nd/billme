@@ -225,6 +225,49 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
       .toThrow('POSTED_DRAFT_IMMUTABLE');
   });
 
+  it('applies the shared DATEV evidence rule to require an OSS destination rate', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    seedBankTransaction(db, 'tx-oss-evidence-1', '2026-03-01');
+    const draft = getDraftByTransactionId(db, 'tx-oss-evidence-1', scope)!;
+
+    const saved = saveDraft(db, {
+      ...draft,
+      postingDate: '2026-03-01',
+      documentDate: '2026-03-01',
+      period: '2026-03',
+      fiscalYear: 2026,
+      workflowStatus: 'approved',
+      lines: [
+        {
+          ...draft.lines[0]!,
+          accountNumber: '6000',
+          debitAmount: 120,
+          creditAmount: 0,
+          taxCaseKey: 'EU_B2C_OSS',
+          taxRate: 20,
+          netAmount: 100,
+          taxAmount: 20,
+          grossAmount: 120,
+          countryCode: 'AT',
+          evidenceType: 'invoice',
+          evidenceReference: 'oss-proof-1',
+        },
+        {
+          ...draft.lines[1]!,
+          accountNumber: '1200',
+          debitAmount: 0,
+          creditAmount: 120,
+        },
+      ],
+    }, scope);
+
+    const validation = validateTaxCompliance(db, { draftId: saved.id }, scope);
+    expect(validation.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'MISSING_DESTINATION_VAT_RATE', blocking: true }),
+    ]));
+  });
+
   it('allows a virtual booked projection to validate and replay without writing, but never reverses it as a draft', () => {
     const db = createDb();
     const scope = createProTenantScope('default');

@@ -599,6 +599,7 @@ export const bookingDraftLineEntitySchema = z.object({
   taxCode: z.string().optional(),
   taxCaseKey: taxCaseKeySchema.optional(),
   taxRate: z.number().optional(),
+  destinationVatRate: z.number().min(0).max(99.99).optional(),
   netAmount: z.number().optional(),
   taxAmount: z.number().optional(),
   grossAmount: z.number().optional(),

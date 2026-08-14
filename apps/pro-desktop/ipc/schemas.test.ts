@@ -31,6 +31,33 @@ import {
   invoiceTaxMetaSchema,
 } from './schemas';
 import { ipcRoutes } from './contract';
+import { createBillmeApi } from './api';
+
+describe('Pro tax filing IPC contract', () => {
+  it('exposes the shared routes through the renderer API', async () => {
+    const keys = [
+      'taxFiling:getStatus',
+      'taxFiling:listRecords',
+      'taxFiling:installCertificate',
+      'taxFiling:removeCertificate',
+      'taxFiling:validate',
+      'taxFiling:export',
+      'taxFiling:submit',
+    ] as const;
+    for (const key of keys) expect(ipcRoutes[key].channel).toBe(key);
+
+    const calls: string[] = [];
+    const api = createBillmeApi(async (key) => {
+      calls.push(key);
+      return key === 'taxFiling:listRecords' ? [] : key === 'taxFiling:removeCertificate' ? true : {};
+    });
+    expect(typeof api.taxFiling.getStatus).toBe('function');
+    expect(typeof api.taxFiling.listRecords).toBe('function');
+    await api.taxFiling.getStatus();
+    await api.taxFiling.listRecords();
+    expect(calls).toEqual(['taxFiling:getStatus', 'taxFiling:listRecords']);
+  });
+});
 
 describe('Pro IPC route schemas', () => {
   it('exposes the authoritative accounting policy route', () => {

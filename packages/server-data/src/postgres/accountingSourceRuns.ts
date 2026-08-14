@@ -6,6 +6,7 @@ import {
   type CorrectionDeltaInput,
   type ImmutableOriginalDocument,
   type LinkedCorrectionDocument,
+  type TaxExportDirection,
   type TaxExportEntry,
   type TaxExportPreparation,
   type TaxExportPeriod,
@@ -252,11 +253,18 @@ const insertCommand = async (
   return entry.id;
 };
 
+export const taxCaseForCorrectionRate = (rate: number): 'DE_STD_19' | 'DE_STD_7' | 'DE_ZERO_EXEMPT' => {
+  if (rate === 19) return 'DE_STD_19';
+  if (rate === 7) return 'DE_STD_7';
+  if (rate === 0) return 'DE_ZERO_EXEMPT';
+  throw new Error(`CORRECTION_TAX_CASE_UNSUPPORTED:${rate}`);
+};
+
 const correctionLines = async (db: PostgresQueryable, scope: TenantScope, document: LinkedCorrectionDocument, documentType: 'outgoing_invoice' | 'incoming_invoice'): Promise<any[]> => {
   const { mappings } = await chartAndMappings(db, scope);
   const lines: any[] = [];
   for (const [index, delta] of document.deltas.entries()) {
-    const taxCaseKey = delta.rate === 19 ? 'DE_STD_19' : delta.rate === 7 ? 'DE_STD_7' : 'DE_ZERO_EXEMPT';
+    const taxCaseKey = taxCaseForCorrectionRate(delta.rate);
     if (documentType === 'incoming_invoice') {
       lines.push({ id: `${document.id}:expense:${index}`, accountNumber: mappings.expense, debitAmount: 0, creditAmount: -delta.netAmount, taxCaseKey, netAmount: delta.netAmount, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction' });
       if (delta.taxAmount) lines.push({ id: `${document.id}:tax:${index}`, accountNumber: mappings.input_vat, debitAmount: 0, creditAmount: -delta.taxAmount, taxCaseKey, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction VAT' });
@@ -270,22 +278,40 @@ const correctionLines = async (db: PostgresQueryable, scope: TenantScope, docume
   return lines;
 };
 
+type PersistedTaxSourceSemantics = {
+  source_type?: string | null;
+  source_key?: string | null;
+  reversed_source_type?: string | null;
+  account_role?: string | null;
+};
+
+/** Resolve tax direction from persisted ownership, never from the VAT rate. */
+export const taxExportDirectionFromPersistedSource = (source: PersistedTaxSourceSemantics): TaxExportDirection => {
+  const sourceType = source.reversed_source_type ?? source.source_type;
+  if (sourceType === 'incoming_invoice' || source.account_role === 'expense' || source.account_role === 'asset' || source.account_role === 'input_vat') return 'input';
+  if (sourceType === 'outgoing_invoice' || sourceType === 'payment_vat' || sourceType === 'asset_disposal' || source.account_role === 'revenue' || source.account_role === 'output_vat' || source.account_role === 'output_vat_deferred') return 'output';
+  throw new Error('TAX_EXPORT_DIRECTION_UNRESOLVED');
+};
+
 const sourceEntries = async (db: PostgresQueryable, scope: TenantScope, supplied?: readonly TaxExportEntry[]): Promise<TaxExportEntry[]> => {
   if (supplied) return [...supplied];
-  const rows = await q<any>(db, `SELECT je.id AS entry_id,je.posting_date,je.status,jl.tax_case_key,jl.tax_rate,jl.net_amount,jl.tax_amount,jl.gross_amount,jl.country_code,jl.counterparty_vat_id,jl.evidence_type,jl.evidence_reference,jl.datev_sachverhalt_ll,jl.debit_amount,jl.credit_amount FROM journal_entries je JOIN journal_lines jl ON jl.tenant_id=je.tenant_id AND jl.entry_id=je.id WHERE je.tenant_id=$1 AND je.status IN ('posted','reversed') ORDER BY je.posting_date,je.entry_number,jl.line_no`, [tenant(scope)]);
+  const rows = await q<any>(db, `SELECT je.id AS entry_id,je.posting_date,je.status,je.source_type,je.source_key,reversed_source.source_type AS reversed_source_type,aam.role AS account_role,jl.tax_case_key,jl.tax_rate,jl.net_amount,jl.tax_amount,jl.gross_amount,jl.country_code,jl.counterparty_vat_id,jl.evidence_type,jl.evidence_reference,jl.datev_sachverhalt_ll,jl.debit_amount,jl.credit_amount FROM journal_entries je JOIN journal_lines jl ON jl.tenant_id=je.tenant_id AND jl.entry_id=je.id LEFT JOIN journal_entries reversed_source ON reversed_source.tenant_id=je.tenant_id AND reversed_source.reversed_entry_id=je.id LEFT JOIN accounting_account_mappings aam ON aam.tenant_id=je.tenant_id AND aam.account_number=jl.account_number AND aam.chart=COALESCE((SELECT active_chart FROM accounting_policies WHERE tenant_id=je.tenant_id),'SKR03') WHERE je.tenant_id=$1 AND je.status IN ('posted','reversed') ORDER BY je.posting_date,je.entry_number,jl.line_no`, [tenant(scope)]);
   const grouped = new Map<string, TaxExportEntry>();
   for (const row of rows) {
     const key = `${row.posting_date}:${row.status}:${row.entry_id ?? ''}`;
     const current: TaxExportEntry = grouped.get(key) ?? { postingDate: row.posting_date, status: row.status, lines: [] };
-    if (row.tax_case_key) current.lines.push({ taxCaseKey: row.tax_case_key, direction: 'output', netAmount: row.net_amount == null ? undefined : Number(row.net_amount), taxAmount: row.tax_amount == null ? undefined : Number(row.tax_amount), grossAmount: row.gross_amount == null ? undefined : Number(row.gross_amount), taxRate: row.tax_rate == null ? undefined : Number(row.tax_rate), countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, datevSachverhaltLl: row.datev_sachverhalt_ll ?? undefined });
+    if (row.tax_case_key) current.lines.push({ taxCaseKey: row.tax_case_key, direction: taxExportDirectionFromPersistedSource(row), netAmount: row.net_amount == null ? undefined : Number(row.net_amount), taxAmount: row.tax_amount == null ? undefined : Number(row.tax_amount), grossAmount: row.gross_amount == null ? undefined : Number(row.gross_amount), taxRate: row.tax_rate == null ? undefined : Number(row.tax_rate), countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, datevSachverhaltLl: row.datev_sachverhalt_ll ?? undefined });
     grouped.set(key, current);
   }
   return [...grouped.values()];
 };
 
 const defaultUstvaCatalog = (taxYear: number) => {
-  const source = CANONICAL_TAX_CASES.map((entry) => entry.key).join('|');
-  return { id: `billme-tax-catalog-${taxYear}`, taxYear, version: 'canonical-1', source: 'billme-canonical-tax-catalog', sourceHash: hash(source), official: false, entries: CANONICAL_TAX_CASES.map((entry, index) => ({ taxCaseKey: entry.key, kennziffer: String(index + 1).padStart(2, '0'), direction: 'output' as const })) };
+  const entries = CANONICAL_TAX_CASES.flatMap((entry, index) => ([
+    { taxCaseKey: entry.key, kennziffer: String(index + 1).padStart(2, '0'), direction: 'output' as const },
+    { taxCaseKey: entry.key, kennziffer: String(index + 1).padStart(2, '0'), direction: 'input' as const },
+  ]));
+  return { id: `billme-tax-catalog-${taxYear}`, taxYear, version: 'canonical-1', source: 'billme-canonical-tax-catalog', sourceHash: hash(entries), official: false, entries };
 };
 
 const closingSourceType = (command: string): string => ({ fiscal_close: 'fiscal_close', carry_forward: 'carry_forward', provision: 'provision', accrual: 'accrual', inventory_closing: 'inventory_closing', fx_valuation: 'fx_valuation', loan_schedule: 'loan_schedule', payroll_batch: 'payroll_batch', shareholder_flow: 'shareholder_flow', source_fact: 'standalone_source' }[command] ?? command);

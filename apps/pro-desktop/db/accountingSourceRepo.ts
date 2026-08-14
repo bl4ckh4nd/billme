@@ -8,6 +8,7 @@ import {
   buildProvisionCommand,
   buildJournalCommand,
   buildSettlementJournalCommand,
+  journalSourceIdentity,
   planAccrualSchedule,
   planLoanSchedule,
   validatePayrollBatch,
@@ -95,8 +96,10 @@ export interface PostAccountingCommandInput {
 const now = (): string => new Date().toISOString();
 const cents = (value: number): number => Math.round((value + Number.EPSILON) * 100);
 const amount = (value: number): number => cents(value) / 100;
-const keyFor = (fact: Pick<AccountingSourceFact, 'sourceType' | 'sourceId' | 'sourceRevision'>): string =>
-  `${fact.sourceType}:${fact.sourceId}:${fact.sourceRevision}`;
+const keyFor = (
+  fact: Pick<AccountingSourceFact, 'sourceType' | 'sourceId' | 'sourceRevision'>,
+  tenantId = 'default',
+): string => journalSourceIdentity(tenantId, fact.sourceType, fact.sourceId, fact.sourceRevision);
 const sourceRunId = (tenantId: string, key: string): string =>
   `accounting-source:${tenantId}:${crypto.createHash('sha256').update(key).digest('hex')}`;
 
@@ -163,8 +166,20 @@ type SourceRunRow = {
   created_at: string;
 };
 
-const loadRun = (db: Database.Database, tenantId: string, key: string): SourceRunRow | undefined =>
-  db.prepare('SELECT * FROM accounting_source_runs WHERE tenant_id = ? AND idempotency_key = ?').get(tenantId, key) as SourceRunRow | undefined;
+const loadRun = (
+  db: Database.Database,
+  tenantId: string,
+  key: string,
+  fact: Pick<AccountingSourceFact, 'sourceType' | 'sourceId' | 'sourceRevision'>,
+): SourceRunRow | undefined => db.prepare(`
+  SELECT * FROM accounting_source_runs
+  WHERE tenant_id = ? AND (
+    idempotency_key = ?
+    OR (source_type = ? AND source_id = ? AND source_revision = ?)
+  )
+  ORDER BY CASE WHEN idempotency_key = ? THEN 0 ELSE 1 END
+  LIMIT 1
+`).get(tenantId, key, fact.sourceType, fact.sourceId, fact.sourceRevision, key) as SourceRunRow | undefined;
 
 const activeChart = (db: Database.Database, tenantId: string, requested?: 'SKR03' | 'SKR04'): 'SKR03' | 'SKR04' => {
   const row = db.prepare('SELECT active_chart FROM accounting_policies WHERE tenant_id = ?').get(tenantId) as { active_chart?: string } | undefined;
@@ -188,7 +203,7 @@ const persistRejected = (
   result: unknown,
   options: PostAccountingSourceOptions,
 ): AccountingSourceRunEntity => {
-  const key = keyFor(fact);
+  const key = keyFor(fact, tenantId);
   const id = sourceRunId(tenantId, key);
   const createdAt = now();
   const runFact = { ...fact, provenance: options.provenance };
@@ -213,7 +228,7 @@ const persistNoop = (
   result: unknown,
   options: PostAccountingSourceOptions,
 ): AccountingSourceRunEntity => {
-  const key = keyFor(fact);
+  const key = keyFor(fact, tenantId);
   const id = sourceRunId(tenantId, key);
   const createdAt = now();
   const runFact = { ...fact, provenance: options.provenance };
@@ -237,8 +252,8 @@ const existingResult = (
   fact: AccountingSourceFact,
   options: PostAccountingSourceOptions,
 ): AccountingSourcePostResult | undefined => {
-  const idempotencyKey = keyFor(fact);
-  const existing = loadRun(db, tenantId, idempotencyKey);
+  const idempotencyKey = keyFor(fact, tenantId);
+  const existing = loadRun(db, tenantId, idempotencyKey, fact);
   if (!existing) return undefined;
   const sameFact = stableJson(parseJson(existing.fact_json, null)) === stableJson({ ...fact, provenance: options.provenance });
   if (!sameFact) return { status: 'rejected', sourceRun: rowToEntity(existing), errors: [error('DUPLICATE_SOURCE_REVISION', 'Source revision already exists with different facts.')], idempotencyKey };
@@ -253,7 +268,7 @@ const postJournal = (
   chart: 'SKR03' | 'SKR04',
 ): { id: string; entry: JournalCommand['entry'] } => {
   const entryId = command.commandId;
-  const sourceKey = command.entry.sourceKey ?? keyFor(fact);
+  const sourceKey = command.entry.sourceKey ?? keyFor(fact, tenantId);
   const entryNumber = Number((db.prepare('SELECT COALESCE(MAX(entry_number), 0) AS n FROM journal_entries WHERE tenant_id = ?').get(tenantId) as { n: number }).n) + 1;
   const createdAt = now();
   db.prepare(`INSERT INTO journal_entries
@@ -359,11 +374,11 @@ const postAccountingSourceInTransaction = (
   if (!reason) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED: a reason is required for source posting');
   const tenantId = getTenantId(scope);
   const chart = activeChart(db, tenantId, options.chart);
-  const idempotencyKey = keyFor(fact);
+  const idempotencyKey = keyFor(fact, tenantId);
   const existing = existingResult(db, tenantId, fact, options);
   if (existing) return existing;
 
-  const validated = buildJournalCommand(fact);
+  const validated = buildJournalCommand(fact, [], { tenantId });
   const domain = commandOverride && validated.status === 'ready' ? { ...validated, value: commandOverride } : validated;
   if (domain.status === 'ready') ensureAccountingPeriod(db, tenantId, fact);
   const persistenceErrors = validatePersistence(db, tenantId, fact, chart, options);
@@ -433,6 +448,9 @@ const settlementDocumentType = (facts: Record<string, any>): 'outgoing_invoice' 
 const nestedSettlementFacts = (facts: Record<string, any>): Record<string, any> =>
   facts.facts && typeof facts.facts === 'object' ? facts.facts : {};
 
+const nativeDocumentSourceKey = (documentType: 'outgoing_invoice' | 'incoming_invoice', id: string): string =>
+  `${documentType === 'incoming_invoice' ? 'incoming-invoice' : 'outgoing-invoice'}:${id}`;
+
 const settlementReference = (facts: Record<string, any>): string | undefined => {
   const nested = nestedSettlementFacts(facts);
   const original = facts.original && typeof facts.original === 'object' ? facts.original : {};
@@ -440,11 +458,18 @@ const settlementReference = (facts: Record<string, any>): string | undefined => 
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 };
 
-const assertOpenItemEligible = (db: Database.Database, tenantId: string, item: any): void => {
+const assertOpenItemEligible = (db: Database.Database, tenantId: string, item: any, documentType?: 'outgoing_invoice' | 'incoming_invoice'): void => {
   if (!item || !['open', 'partially_paid'].includes(String(item.status)) || Number(item.residual_amount) <= 0) throw new Error('OPEN_ITEM_NOT_ELIGIBLE');
   if (!item.journal_entry_id) throw new Error('OPEN_ITEM_NOT_POSTED');
-  const journal = db.prepare('SELECT status FROM journal_entries WHERE tenant_id = ? AND id = ?').get(tenantId, item.journal_entry_id) as { status?: string } | undefined;
+  const journal = db.prepare('SELECT status,source_type,source_key FROM journal_entries WHERE tenant_id = ? AND id = ?').get(tenantId, item.journal_entry_id) as { status?: string; source_type?: string; source_key?: string } | undefined;
   if (journal?.status !== 'posted') throw new Error('OPEN_ITEM_NOT_POSTED');
+  if (documentType) {
+    const table = documentType === 'incoming_invoice' ? 'incoming_invoices' : 'invoices';
+    const document = documentType === 'incoming_invoice'
+      ? db.prepare(`SELECT accounting_status,accounting_journal_entry_id FROM ${table} WHERE tenant_id = ? AND id = ?`).get(tenantId, item.source_id) as { accounting_status?: string; accounting_journal_entry_id?: string } | undefined
+      : db.prepare(`SELECT accounting_status,accounting_journal_entry_id FROM ${table} WHERE id = ?`).get(item.source_id) as { accounting_status?: string; accounting_journal_entry_id?: string } | undefined;
+    if (!document || document.accounting_status !== 'posted' || document.accounting_journal_entry_id !== item.journal_entry_id || item.source_type !== documentType || journal.source_type !== documentType || journal.source_key !== nativeDocumentSourceKey(documentType, item.source_id)) throw new Error('DOCUMENT_NOT_POSTED');
+  }
 };
 
 const findSettlementOpenItem = (db: Database.Database, tenantId: string, id: string, documentType?: string): any => {
@@ -452,7 +477,7 @@ const findSettlementOpenItem = (db: Database.Database, tenantId: string, id: str
     ? db.prepare('SELECT * FROM open_items WHERE tenant_id = ? AND (id = ? OR source_id = ?) AND source_type = ?').get(tenantId, id, id, documentType)
     : db.prepare('SELECT * FROM open_items WHERE tenant_id = ? AND (id = ? OR source_id = ?)').get(tenantId, id, id);
   if (!item) throw new Error('OPEN_ITEM_NOT_FOUND');
-  assertOpenItemEligible(db, tenantId, item);
+  assertOpenItemEligible(db, tenantId, item, documentType as 'outgoing_invoice' | 'incoming_invoice' | undefined);
   return item;
 };
 
@@ -462,9 +487,10 @@ const assertSettlementReferences = (db: Database.Database, tenantId: string, kin
   let originalId = settlementReference(facts);
   if (kind !== 'advance_settlement') {
     const requestedOpenItemId = typeof facts.openItemId === 'string' && facts.openItemId.trim() ? facts.openItemId.trim() : undefined;
-    const referencedItem = !originalId && requestedOpenItemId
+    const referencedItem = requestedOpenItemId
       ? findSettlementOpenItem(db, tenantId, requestedOpenItemId, documentType)
       : undefined;
+    if (referencedItem && originalId && referencedItem.source_id !== originalId) throw new Error('ORIGINAL_CHANGED');
     originalId ??= referencedItem?.source_id;
     if (!originalId) throw new Error('ORIGINAL_DOCUMENT_REQUIRED');
     const original = documentType === 'incoming_invoice'
@@ -474,7 +500,7 @@ const assertSettlementReferences = (db: Database.Database, tenantId: string, kin
     const journal = original.accounting_journal_entry_id
       ? db.prepare('SELECT status,source_type,source_key FROM journal_entries WHERE tenant_id = ? AND id = ?').get(tenantId, original.accounting_journal_entry_id) as { status?: string; source_type?: string; source_key?: string } | undefined
       : undefined;
-    if (original.accounting_status !== 'posted' || journal?.status !== 'posted' || journal.source_type !== documentType || journal.source_key !== `${documentType}:${original.id}`) throw new Error('DOCUMENT_NOT_POSTED');
+    if (original.accounting_status !== 'posted' || journal?.status !== 'posted' || journal.source_type !== documentType || journal.source_key !== nativeDocumentSourceKey(documentType, original.id)) throw new Error('DOCUMENT_NOT_POSTED');
     const item = referencedItem ?? findSettlementOpenItem(db, tenantId, original.id, documentType);
     const nested = nestedSettlementFacts(facts);
     const requestedNumber = typeof facts.originalDocumentNumber === 'string' && facts.originalDocumentNumber.trim() ? facts.originalDocumentNumber.trim() : typeof nested.originalDocumentNumber === 'string' && nested.originalDocumentNumber.trim() ? nested.originalDocumentNumber.trim() : undefined;
@@ -487,19 +513,61 @@ const assertSettlementReferences = (db: Database.Database, tenantId: string, kin
   const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? facts.finalInvoice : {};
   const finalId = typeof finalInvoice.id === 'string' && finalInvoice.id.trim() ? finalInvoice.id.trim() : typeof facts.finalInvoiceId === 'string' && facts.finalInvoiceId.trim() ? facts.finalInvoiceId.trim() : originalId;
   if (!finalId) throw new Error('FINAL_INVOICE_REQUIRED');
-  findSettlementOpenItem(db, tenantId, finalId, documentType);
+  const finalItem = findSettlementOpenItem(db, tenantId, finalId, documentType);
   const documents = [...(Array.isArray(facts.advances) ? facts.advances : []), ...(Array.isArray(facts.partialInvoices) ? facts.partialInvoices : [])];
   if (!documents.length) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
   for (const document of documents) {
     const id = document && typeof document === 'object' && typeof document.id === 'string' && document.id.trim() ? document.id.trim() : undefined;
     if (!id) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
-    const item = findSettlementOpenItem(db, tenantId, id);
+    const item = findSettlementOpenItem(db, tenantId, id, documentType);
+    if (item.party_type !== finalItem.party_type || item.party_id !== finalItem.party_id) throw new Error('SETTLEMENT_PARTY_MISMATCH');
     const requested = Number(document.grossAmount);
     if (Number.isFinite(requested) && requested > Number(item.residual_amount) + 0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
   }
 };
 
-const generatedCommands = (kind: AccountingCommandKind, facts: Record<string, unknown>, source?: AccountingSourceFact, accounts?: SettlementJournalAccounts): GeneratedCommands | undefined => {
+const updateSettlementOpenItem = (db: Database.Database, tenantId: string, item: any, value: number): void => {
+  const allocated = amount(Number(item.allocated_amount) + value);
+  const residual = amount(Number(item.original_amount) - allocated);
+  if (!Number.isFinite(value) || value <= 0 || value > Number(item.residual_amount) + 0.01 || residual < -0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
+  const status = residual <= 0.01 ? 'paid' : 'partially_paid';
+  const timestamp = now();
+  db.prepare('UPDATE open_items SET allocated_amount = ?, residual_amount = ?, status = ?, updated_at = ? WHERE tenant_id = ? AND id = ?').run(allocated, Math.max(0, residual), status, timestamp, tenantId, item.id);
+  if (item.source_type === 'outgoing_invoice') db.prepare("UPDATE invoices SET status = ? WHERE id = ? AND accounting_status = 'posted' AND status <> 'cancelled'").run(status === 'paid' ? 'paid' : 'open', item.source_id);
+  if (item.source_type === 'incoming_invoice') db.prepare("UPDATE incoming_invoices SET status = ? WHERE tenant_id = ? AND id = ? AND accounting_status = 'posted' AND status <> 'cancelled'").run(status === 'paid' ? 'paid' : 'open', tenantId, item.source_id);
+};
+
+const settlementDocumentAmount = (document: Record<string, any>): number => {
+  if (document.grossAmount !== undefined) return amount(Number(document.grossAmount));
+  return amount((Array.isArray(document.taxBreakdown) ? document.taxBreakdown : []).reduce((sum: number, line: any) => sum + Number(line.grossAmount ?? Number(line.netAmount) + Number(line.taxAmount)), 0));
+};
+
+const applySettlementOpenItems = (
+  db: Database.Database,
+  tenantId: string,
+  kind: SettlementCommandKind,
+  facts: Record<string, any>,
+  result: unknown,
+): void => {
+  const documentType = settlementDocumentType(facts);
+  if (kind !== 'advance_settlement') {
+    const originalId = settlementReference(facts) ?? String(facts.openItemId ?? '');
+    const item = findSettlementOpenItem(db, tenantId, originalId, documentType);
+    const value = Number(kind === 'skonto' ? (result as any).discountGrossAmount : (result as any).writeOffGrossAmount);
+    updateSettlementOpenItem(db, tenantId, item, value);
+    return;
+  }
+  const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? facts.finalInvoice : {};
+  const finalId = String(finalInvoice.id ?? facts.finalInvoiceId ?? settlementReference(facts) ?? '');
+  const finalItem = findSettlementOpenItem(db, tenantId, finalId, documentType);
+  updateSettlementOpenItem(db, tenantId, finalItem, Number((result as any).settledGrossAmount));
+  for (const document of [...(Array.isArray(facts.advances) ? facts.advances : []), ...(Array.isArray(facts.partialInvoices) ? facts.partialInvoices : [])]) {
+    const item = findSettlementOpenItem(db, tenantId, String(document.id), documentType);
+    updateSettlementOpenItem(db, tenantId, item, settlementDocumentAmount(document));
+  }
+};
+
+const generatedCommands = (kind: AccountingCommandKind, facts: Record<string, unknown>, source: AccountingSourceFact | undefined, accounts: SettlementJournalAccounts | undefined, tenantId: string): GeneratedCommands | undefined => {
   if (source && accounts && (kind === 'skonto' || kind === 'bad_debt' || kind === 'advance_settlement')) {
     try {
       const built = buildSettlementJournalCommand({
@@ -542,13 +610,13 @@ const generatedCommands = (kind: AccountingCommandKind, facts: Record<string, un
   }
   let built: DomainBuild;
   switch (kind) {
-    case 'fiscal_close': built = buildFiscalClose(facts as any); break;
-    case 'carry_forward': built = buildCarryForward(facts as any); break;
-    case 'provision': built = buildProvisionCommand(facts as any); break;
-    case 'accrual': built = planAccrualSchedule(facts as any); break;
-    case 'inventory_closing': built = buildInventoryClosingValuation(facts as any); break;
-    case 'fx_valuation': built = buildFxValuation(facts as any); break;
-    case 'loan_schedule': built = planLoanSchedule(facts as any); break;
+    case 'fiscal_close': built = buildFiscalClose(facts as any, { tenantId }); break;
+    case 'carry_forward': built = buildCarryForward(facts as any, { tenantId }); break;
+    case 'provision': built = buildProvisionCommand(facts as any, { tenantId }); break;
+    case 'accrual': built = planAccrualSchedule(facts as any, { tenantId }); break;
+    case 'inventory_closing': built = buildInventoryClosingValuation(facts as any, { tenantId }); break;
+    case 'fx_valuation': built = buildFxValuation(facts as any, { tenantId }); break;
+    case 'loan_schedule': built = planLoanSchedule(facts as any, { tenantId }); break;
     case 'payroll_batch': {
       const result = validatePayrollBatch(facts as any);
       return { result, commands: [], status: result.status === 'valid' ? 'noop' : 'rejected', errors: result.errors };
@@ -670,7 +738,7 @@ const resolveCorrectionOriginal = (db: Database.Database, tenantId: string, requ
 };
 
 const loadPriorCorrections = (db: Database.Database, tenantId: string, originalDocumentId: string): ReturnType<typeof createLinkedCorrection>['document'][] => {
-  const rows = db.prepare(`SELECT runs.fact_json, runs.result_json
+  const rows = db.prepare(`SELECT runs.fact_json, runs.result_json, runs.source_type, runs.source_id, runs.source_revision, journals.source_key
     FROM accounting_source_runs AS runs
     JOIN journal_entries AS journals
       ON journals.tenant_id = runs.tenant_id
@@ -680,10 +748,11 @@ const loadPriorCorrections = (db: Database.Database, tenantId: string, originalD
       AND runs.status = 'posted'
       AND runs.journal_entry_id IS NOT NULL
       AND journals.status = 'posted'
-      AND journals.source_type = 'standalone_source'
-      AND (journals.source_key = runs.source_id
-        OR journals.source_key = runs.source_type || ':' || runs.source_id || ':' || runs.source_revision)`).all(tenantId) as Array<{ fact_json?: string; result_json?: string }>;
+      AND journals.source_type = 'standalone_source'`).all(tenantId) as Array<{ fact_json?: string; result_json?: string; source_type?: string; source_id?: string; source_revision?: string; source_key?: string }>;
   return rows.flatMap((row) => {
+    if (row.source_key !== row.source_id
+      && row.source_key !== `${row.source_type}:${row.source_id}:${row.source_revision}`
+      && row.source_key !== journalSourceIdentity(tenantId, row.source_type ?? '', row.source_id ?? '', row.source_revision ?? '')) return [];
     const result = parseJson<Record<string, any> | undefined>(row.result_json, undefined);
     if (result?.originalDocumentId === originalDocumentId) return [result as ReturnType<typeof createLinkedCorrection>['document']];
     const fact = parseJson<Record<string, any> | undefined>(row.fact_json, undefined);
@@ -737,35 +806,36 @@ export const postAccountingCommand = (
   if (input.kind === 'ustg17' && facts) validateUstg17AdjustmentFacts(facts as unknown as Ustg17AdjustmentFactsInput);
   const tenantId = getTenantId(scope);
   if ((input.kind === 'skonto' || input.kind === 'bad_debt' || input.kind === 'advance_settlement') && !facts) throw new Error('SETTLEMENT_FACTS_REQUIRED');
-  if (facts && (input.kind === 'skonto' || input.kind === 'bad_debt' || input.kind === 'advance_settlement')) {
-    assertSettlementReferences(db, tenantId, input.kind, facts);
-  }
-  const generated = facts
-    ? generatedCommands(input.kind, facts, input.source, (input.kind === 'skonto' || input.kind === 'bad_debt' || input.kind === 'advance_settlement')
-      ? (() => { const mapping = correctionMappings(db, tenantId, activeChart(db, tenantId, options.chart)); return settlementAccounts(mapping, facts); })()
-      : undefined)
-    : undefined;
   const provenance = { commandKind: input.kind, domainFacts: input.domainFacts, ...((options.provenance as Record<string, unknown> | undefined) ?? {}) };
-  if (!generated) return postAccountingSource(db, input.source, scope, { ...options, provenance });
   const generatedOptions = { ...options, provenance };
-  if (generated.status === 'rejected') {
-    const existing = existingResult(db, tenantId, input.source, generatedOptions);
-    if (existing) return existing;
-    const sourceRun = db.transaction(() => persistRejected(db, tenantId, input.source, { status: 'rejected', errors: generated.errors, result: generated.result }, generatedOptions))();
-    return { status: 'rejected', sourceRun, errors: generated.errors, idempotencyKey: keyFor(input.source) };
-  }
-  if (generated.status === 'noop') {
-    const existing = existingResult(db, tenantId, input.source, generatedOptions);
-    if (existing) return existing;
-    const sourceRun = db.transaction(() => persistNoop(db, tenantId, input.source, { status: 'noop', result: generated.result }, generatedOptions))();
-    return { status: 'noop', sourceRun, errors: [], idempotencyKey: keyFor(input.source) };
-  }
-  let result: AccountingSourcePostResult | undefined;
-  result = db.transaction(() => {
-    for (const command of generated.commands) result = postAccountingSourceInTransaction(db, factFromCommand(command), scope, generatedOptions, command);
+  return db.transaction((): AccountingSourcePostResult => {
+    const settlementKind = input.kind === 'skonto' || input.kind === 'bad_debt' || input.kind === 'advance_settlement' ? input.kind : undefined;
+    if (facts && settlementKind) assertSettlementReferences(db, tenantId, settlementKind, facts);
+    const generated = facts
+      ? generatedCommands(input.kind, facts, input.source, settlementKind
+        ? (() => { const mapping = correctionMappings(db, tenantId, activeChart(db, tenantId, options.chart)); return settlementAccounts(mapping, facts); })()
+        : undefined, tenantId)
+      : undefined;
+    if (!generated) return postAccountingSourceInTransaction(db, input.source, scope, generatedOptions);
+    if (generated.status === 'rejected') {
+      const existing = existingResult(db, tenantId, input.source, generatedOptions);
+      if (existing) return existing;
+      const sourceRun = persistRejected(db, tenantId, input.source, { status: 'rejected', errors: generated.errors, result: generated.result }, generatedOptions);
+      return { status: 'rejected', sourceRun, errors: generated.errors, idempotencyKey: keyFor(input.source, tenantId) };
+    }
+    if (generated.status === 'noop') {
+      const existing = existingResult(db, tenantId, input.source, generatedOptions);
+      if (existing) return existing;
+      const sourceRun = persistNoop(db, tenantId, input.source, { status: 'noop', result: generated.result }, generatedOptions);
+      return { status: 'noop', sourceRun, errors: [], idempotencyKey: keyFor(input.source, tenantId) };
+    }
+    let result: AccountingSourcePostResult | undefined;
+    for (const command of generated.commands) {
+      result = postAccountingSourceInTransaction(db, factFromCommand(command), scope, generatedOptions, command);
+      if (result.status === 'posted' && settlementKind && facts) applySettlementOpenItems(db, tenantId, settlementKind, facts, generated.result);
+    }
     return result!;
   })();
-  return result!;
 };
 
 export type { BadDebtWriteOffInput, ImmutableOriginalDocument, InvoiceSettlementInput, LinkedCorrectionInput, SkontoVatApportionmentInput, Ustg17AdjustmentFactsInput };

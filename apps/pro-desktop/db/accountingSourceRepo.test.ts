@@ -78,6 +78,27 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     db.close();
   });
 
+  it('keeps generated journal identities tenant-scoped and delimiter-safe', () => {
+    const db = createDb();
+    db.exec(`
+      INSERT INTO accounting_policies (tenant_id, active_chart, period_policy, updated_at)
+      VALUES ('tenant-b', 'SKR03', 'calendar_month', datetime('now'));
+      INSERT INTO accounting_periods (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at)
+      VALUES ('source-period-b', 'tenant-b', '2026-03', 2026, 'open', '2026-03-01', '2026-03-31', datetime('now'), datetime('now'));
+    `);
+    const first = postAccountingSource(db, { ...source(), sourceId: 'source:a', sourceRevision: 'revision' }, createProTenantScope('default'), { reason: 'identity test' });
+    const delimiterCandidate = postAccountingSource(db, { ...source(), sourceId: 'source', sourceRevision: 'a:revision' }, createProTenantScope('default'), { reason: 'identity test' });
+    const otherTenant = postAccountingSource(db, { ...source(), sourceId: 'source:a', sourceRevision: 'revision' }, createProTenantScope('tenant-b'), { reason: 'identity test' });
+
+    expect(first.status).toBe('posted');
+    expect(delimiterCandidate.status).toBe('posted');
+    expect(otherTenant.status).toBe('posted');
+    expect(new Set([first.sourceRun?.journalEntryId, delimiterCandidate.sourceRun?.journalEntryId, otherTenant.sourceRun?.journalEntryId]).size).toBe(3);
+    expect(new Set((db.prepare('SELECT id FROM journal_lines ORDER BY id').all() as Array<{ id: string }>).map((row) => row.id)).size).toBe(6);
+    expect(first.command?.entry.sourceKey).not.toBe(otherTenant.command?.entry.sourceKey);
+    db.close();
+  });
+
   it('rejects a renderer chart that differs from the persisted policy', () => {
     const db = createDb();
     const scope = createProTenantScope('default');
@@ -255,6 +276,19 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     const invalid = postAccountingCommand(db, { kind: 'skonto', source: source('skonto-invalid'), domainFacts: { ...facts, skontoAmount: 120 } }, scope, { reason: 'invalid settlement' });
     expect(invalid.status).toBe('rejected');
     expect(db.prepare("SELECT COUNT(*) AS count FROM journal_entries WHERE source_key LIKE 'standalone_source:source-1:skonto-invalid'").get()).toEqual({ count: 0 });
+    db.close();
+  });
+
+  it('settles OPOS atomically and rejects a later revision that overbooks the residual', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const facts = { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9, originalDocumentId: 'invoice-1' };
+    expect(postAccountingCommand(db, { kind: 'skonto', source: source('skonto-opos-1'), domainFacts: facts }, scope, { reason: 'settle OPOS' }).status).toBe('posted');
+    expect(db.prepare('SELECT allocated_amount,residual_amount,status FROM open_items WHERE id = ?').get('invoice-open-item-1')).toEqual({ allocated_amount: 11.9, residual_amount: 107.1, status: 'partially_paid' });
+    expect(db.prepare('SELECT status FROM invoices WHERE id = ?').get('invoice-1')).toEqual({ status: 'open' });
+    const overbook = postAccountingCommand(db, { kind: 'skonto', source: source('skonto-opos-2'), domainFacts: { ...facts, skontoAmount: 108 } }, scope, { reason: 'reject OPOS overbooking' });
+    expect(overbook.status).toBe('rejected');
+    expect(db.prepare('SELECT allocated_amount,residual_amount,status FROM open_items WHERE id = ?').get('invoice-open-item-1')).toEqual({ allocated_amount: 11.9, residual_amount: 107.1, status: 'partially_paid' });
     db.close();
   });
 

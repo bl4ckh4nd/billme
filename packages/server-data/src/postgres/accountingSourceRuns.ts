@@ -352,7 +352,7 @@ const resolveCorrectionOriginal = async (
     || !row.accounting_journal_entry_id
     || ownedJournal?.status !== 'posted'
     || ownedJournal.source_type !== documentType
-    || ownedJournal.source_key !== `${documentType}:${row.id}`) throw new Error('DOCUMENT_NOT_POSTED');
+    || ownedJournal.source_key !== nativeDocumentSourceKey(documentType, row.id)) throw new Error('DOCUMENT_NOT_POSTED');
   if (row.number !== requested.documentNumber) throw new Error('ORIGINAL_CHANGED');
   const incomingLines = documentType === 'incoming_invoice'
     ? await q<any>(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [tenant(scope), row.id])
@@ -411,16 +411,16 @@ const defaultUstvaCatalog = (taxYear: number) => {
 
 const closingSourceType = (command: string): string => ({ fiscal_close: 'fiscal_close', carry_forward: 'carry_forward', provision: 'provision', accrual: 'accrual', inventory_closing: 'inventory_closing', fx_valuation: 'fx_valuation', loan_schedule: 'loan_schedule', payroll_batch: 'payroll_batch', shareholder_flow: 'shareholder_flow', source_fact: 'standalone_source' }[command] ?? command);
 
-const buildClosingResult = (command: string, input: Record<string, any>): any => {
+const buildClosingResult = (command: string, input: Record<string, any>, tenantId: string): any => {
   switch (command) {
-    case 'source_fact': return buildJournalCommand(input as AccountingSourceFact);
-    case 'fiscal_close': return buildFiscalClose(input as any);
-    case 'carry_forward': return buildCarryForward(input as any);
-    case 'provision': return buildProvisionCommand(input as any);
-    case 'accrual': return planAccrualSchedule(input as any);
-    case 'inventory_closing': return buildInventoryClosingValuation(input as any);
-    case 'fx_valuation': return buildFxValuation(input as any);
-    case 'loan_schedule': return planLoanSchedule(input as any);
+    case 'source_fact': return buildJournalCommand(input as AccountingSourceFact, [], { tenantId });
+    case 'fiscal_close': return buildFiscalClose(input as any, { tenantId });
+    case 'carry_forward': return buildCarryForward(input as any, { tenantId });
+    case 'provision': return buildProvisionCommand(input as any, { tenantId });
+    case 'accrual': return planAccrualSchedule(input as any, { tenantId });
+    case 'inventory_closing': return buildInventoryClosingValuation(input as any, { tenantId });
+    case 'fx_valuation': return buildFxValuation(input as any, { tenantId });
+    case 'loan_schedule': return planLoanSchedule(input as any, { tenantId });
     case 'payroll_batch': return validatePayrollBatch(input as any);
     case 'shareholder_flow': return validateShareholderFlow(input as any);
     default: throw new Error('UNKNOWN_CLOSING_COMMAND');
@@ -431,6 +431,9 @@ const settlementDate = (input: Record<string, any>): string => required(input.po
 
 const settlementDocumentType = (facts: Record<string, any>): 'outgoing_invoice' | 'incoming_invoice' =>
   facts.documentType === 'incoming_invoice' || facts.direction === 'input' ? 'incoming_invoice' : 'outgoing_invoice';
+
+const nativeDocumentSourceKey = (documentType: 'outgoing_invoice' | 'incoming_invoice', id: string): string =>
+  `${documentType === 'incoming_invoice' ? 'incoming-invoice' : 'outgoing-invoice'}:${id}`;
 
 const nestedSettlementFacts = (facts: Record<string, any>): Record<string, any> =>
   facts.facts && typeof facts.facts === 'object' ? facts.facts : {};
@@ -443,11 +446,16 @@ const settlementReference = (facts: Record<string, any>): string | undefined => 
     ?? textValue(original.documentId);
 };
 
-const assertOpenItemEligible = async (db: PostgresQueryable, scope: TenantScope, item: any): Promise<void> => {
+const assertOpenItemEligible = async (db: PostgresQueryable, scope: TenantScope, item: any, documentType?: 'outgoing_invoice' | 'incoming_invoice'): Promise<void> => {
   if (!item || !['open', 'partially_paid'].includes(String(item.status)) || Number(item.residual_amount) <= 0) throw new Error('OPEN_ITEM_NOT_ELIGIBLE');
   if (!item.journal_entry_id) throw new Error('OPEN_ITEM_NOT_POSTED');
-  const journal = (await q<any>(db, `SELECT status FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), item.journal_entry_id]))[0];
+  const journal = (await q<any>(db, `SELECT status,source_type,source_key FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), item.journal_entry_id]))[0];
   if (journal?.status !== 'posted') throw new Error('OPEN_ITEM_NOT_POSTED');
+  if (documentType) {
+    const table = documentType === 'incoming_invoice' ? 'incoming_invoices' : 'invoices';
+    const document = (await q<any>(db, `SELECT accounting_status,accounting_journal_entry_id FROM ${table} WHERE tenant_id=$1 AND id=$2`, [tenant(scope), item.source_id]))[0];
+    if (!document || document.accounting_status !== 'posted' || document.accounting_journal_entry_id !== item.journal_entry_id || item.source_type !== documentType || journal.source_type !== documentType || journal.source_key !== nativeDocumentSourceKey(documentType, item.source_id)) throw new Error('DOCUMENT_NOT_POSTED');
+  }
 };
 
 const findSettlementOpenItem = async (db: PostgresQueryable, scope: TenantScope, id: string, documentType?: string): Promise<any> => {
@@ -456,7 +464,7 @@ const findSettlementOpenItem = async (db: PostgresQueryable, scope: TenantScope,
   if (documentType) values.push(documentType);
   const row = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 AND (id=$2 OR source_id=$2)${typeClause} FOR UPDATE`, values))[0];
   if (!row) throw new Error('OPEN_ITEM_NOT_FOUND');
-  await assertOpenItemEligible(db, scope, row);
+  await assertOpenItemEligible(db, scope, row, documentType as 'outgoing_invoice' | 'incoming_invoice' | undefined);
   return row;
 };
 
@@ -466,9 +474,10 @@ const assertSettlementReferences = async (db: PostgresQueryable, scope: TenantSc
   let originalId = settlementReference(facts);
   if (kind !== 'advance_settlement') {
     const requestedOpenItemId = textValue(facts.openItemId);
-    const referencedItem = !originalId && requestedOpenItemId
+    const referencedItem = requestedOpenItemId
       ? await findSettlementOpenItem(db, scope, requestedOpenItemId, documentType)
       : undefined;
+    if (referencedItem && originalId && referencedItem.source_id !== originalId) throw new Error('ORIGINAL_CHANGED');
     originalId ??= referencedItem?.source_id;
     if (!originalId) throw new Error('ORIGINAL_DOCUMENT_REQUIRED');
     const original = (await q<any>(db, `SELECT id,number,accounting_status,accounting_journal_entry_id FROM ${table} WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), originalId]))[0];
@@ -476,7 +485,7 @@ const assertSettlementReferences = async (db: PostgresQueryable, scope: TenantSc
     const journal = original.accounting_journal_entry_id
       ? (await q<any>(db, `SELECT status,source_type,source_key FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), original.accounting_journal_entry_id]))[0]
       : undefined;
-    if (original.accounting_status !== 'posted' || journal?.status !== 'posted' || journal.source_type !== documentType || journal.source_key !== `${documentType}:${original.id}`) throw new Error('DOCUMENT_NOT_POSTED');
+    if (original.accounting_status !== 'posted' || journal?.status !== 'posted' || journal.source_type !== documentType || journal.source_key !== nativeDocumentSourceKey(documentType, original.id)) throw new Error('DOCUMENT_NOT_POSTED');
     const item = referencedItem ?? await findSettlementOpenItem(db, scope, original.id, documentType);
     const nested = nestedSettlementFacts(facts);
     const requestedNumber = textValue(facts.originalDocumentNumber) ?? textValue(nested.originalDocumentNumber);
@@ -489,15 +498,57 @@ const assertSettlementReferences = async (db: PostgresQueryable, scope: TenantSc
   const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? facts.finalInvoice : {};
   const finalId = textValue(finalInvoice.id) ?? textValue(facts.finalInvoiceId) ?? originalId;
   if (!finalId) throw new Error('FINAL_INVOICE_REQUIRED');
-  await findSettlementOpenItem(db, scope, finalId, documentType);
+  const finalItem = await findSettlementOpenItem(db, scope, finalId, documentType);
   const documents = [...(Array.isArray(facts.advances) ? facts.advances : []), ...(Array.isArray(facts.partialInvoices) ? facts.partialInvoices : [])];
   if (!documents.length) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
   for (const document of documents) {
     const id = document && typeof document === 'object' ? textValue(document.id) : undefined;
     if (!id) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
-    const item = await findSettlementOpenItem(db, scope, id);
+    const item = await findSettlementOpenItem(db, scope, id, documentType);
+    if (item.party_type !== finalItem.party_type || item.party_id !== finalItem.party_id) throw new Error('SETTLEMENT_PARTY_MISMATCH');
     const requested = Number(document.grossAmount);
     if (Number.isFinite(requested) && requested > Number(item.residual_amount) + 0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
+  }
+};
+
+const updateSettlementOpenItem = async (db: PostgresQueryable, scope: TenantScope, item: any, value: number): Promise<void> => {
+  const allocated = round(Number(item.allocated_amount) + value);
+  const residual = round(Number(item.original_amount) - allocated);
+  if (!Number.isFinite(value) || value <= 0 || value > Number(item.residual_amount) + 0.01 || residual < -0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
+  const status = residual <= 0.01 ? 'paid' : 'partially_paid';
+  const timestamp = now();
+  await q(db, `UPDATE open_items SET allocated_amount=$1,residual_amount=$2,status=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [allocated, Math.max(0, residual), status, timestamp, tenant(scope), item.id]);
+  if (item.source_type === 'outgoing_invoice') await q(db, `UPDATE invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted' AND status <> 'cancelled'`, [status === 'paid' ? 'paid' : 'open', timestamp, tenant(scope), item.source_id]);
+  if (item.source_type === 'incoming_invoice') await q(db, `UPDATE incoming_invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted' AND status <> 'cancelled'`, [status === 'paid' ? 'paid' : 'open', timestamp, tenant(scope), item.source_id]);
+};
+
+const settlementDocumentAmount = (document: Record<string, any>): number => {
+  if (document.grossAmount !== undefined) return round(Number(document.grossAmount));
+  return round((Array.isArray(document.taxBreakdown) ? document.taxBreakdown : []).reduce((sum: number, line: any) => sum + Number(line.grossAmount ?? Number(line.netAmount) + Number(line.taxAmount)), 0));
+};
+
+const applySettlementOpenItems = async (
+  db: PostgresQueryable,
+  scope: TenantScope,
+  kind: SettlementCommandKind,
+  facts: Record<string, any>,
+  result: unknown,
+): Promise<void> => {
+  const documentType = settlementDocumentType(facts);
+  if (kind !== 'advance_settlement') {
+    const originalId = settlementReference(facts) ?? String(facts.openItemId ?? '');
+    const item = await findSettlementOpenItem(db, scope, originalId, documentType);
+    const value = Number(kind === 'skonto' ? (result as any).discountGrossAmount : (result as any).writeOffGrossAmount);
+    await updateSettlementOpenItem(db, scope, item, value);
+    return;
+  }
+  const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? facts.finalInvoice : {};
+  const finalId = String(finalInvoice.id ?? facts.finalInvoiceId ?? settlementReference(facts) ?? '');
+  const finalItem = await findSettlementOpenItem(db, scope, finalId, documentType);
+  await updateSettlementOpenItem(db, scope, finalItem, Number((result as any).settledGrossAmount));
+  for (const document of [...(Array.isArray(facts.advances) ? facts.advances : []), ...(Array.isArray(facts.partialInvoices) ? facts.partialInvoices : [])]) {
+    const item = await findSettlementOpenItem(db, scope, String(document.id), documentType);
+    await updateSettlementOpenItem(db, scope, item, settlementDocumentAmount(document));
   }
 };
 
@@ -592,7 +643,7 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
           });
           return { status: 'ready', value: { command: settlement.command, result: settlement.result } };
         })()
-        : buildClosingResult(commandName, sourceInput);
+        : buildClosingResult(commandName, sourceInput, tenant(scope));
       if (built.status === 'rejected' || built.status === 'invalid') throw new Error(`CLOSING_COMMAND_REJECTED:${built.errors?.[0]?.code ?? 'INVALID'}`);
       const value = built.value ?? built;
       // Source facts and single-command validators return the JournalCommand
@@ -604,6 +655,7 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
       for (const derived of commands) journalEntryIds.push(await insertCommand(tx, scope, derived, input));
       const journalEntryId = journalEntryIds[0];
       const run = await createRun(tx, scope, { sourceType, sourceId, sourceRevision, idempotencyKey, status: journalEntryIds.length ? 'posted' : 'noop', source, result: { ...resultJson, journalEntryIds }, journalEntryId, reason, mutation: input.mutation });
+      if (isSettlement && journalEntryIds.length) await applySettlementOpenItems(tx, scope, commandName as SettlementCommandKind, sourceInput, (value as any).result);
       return { run: run.run, result: { ...resultJson, journalEntryIds }, replayed: run.replayed };
     });
   },

@@ -74,11 +74,31 @@ test('closing source facts persist once, replay deterministically, and remain te
     };
     const first = await repository.runClosingCommand(scopeA, input);
     const replay = await repository.runClosingCommand(scopeA, input);
+    const otherTenant = await repository.runClosingCommand(scopeB, input);
     assert.equal(first.replayed, false);
     assert.equal(replay.replayed, true);
-    assert.equal((await repository.listAccountingSourceRuns(scopeB)).length, 0);
+    assert.equal(otherTenant.replayed, false);
+    assert.notEqual(first.run.journalEntryId, otherTenant.run.journalEntryId);
+    const firstLineIds = (await pool.query(`SELECT id FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [tenantA, first.run.journalEntryId])).rows.map((row) => row.id);
+    const otherLineIds = (await pool.query(`SELECT id FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [tenantB, otherTenant.run.journalEntryId])).rows.map((row) => row.id);
+    assert.notDeepEqual(firstLineIds, otherLineIds);
+    assert.equal((await repository.listAccountingSourceRuns(scopeB)).length, 1);
+    const delimiterA = await repository.runClosingCommand(scopeA, {
+      ...input,
+      sourceId: `${input.sourceId}:part`,
+      idempotencyKey: `${input.idempotencyKey}:part`,
+      input: { ...input.input, sourceId: `${input.sourceId}:part`, sourceRevision: 'revision' },
+    });
+    const delimiterB = await repository.runClosingCommand(scopeA, {
+      ...input,
+      sourceId: input.sourceId,
+      sourceRevision: 'part:revision',
+      idempotencyKey: `${input.idempotencyKey}:other`,
+      input: { ...input.input, sourceId: input.sourceId, sourceRevision: 'part:revision' },
+    });
+    assert.notEqual(delimiterA.run.journalEntryId, delimiterB.run.journalEntryId);
     await assert.rejects(() => repository.runClosingCommand(scopeA, { ...input, input: { ...input.input, lines: [{ accountNumber: '1000', debitAmount: 20, creditAmount: 0 }, { accountNumber: '2000', debitAmount: 0, creditAmount: 20 }] } }), /ACCOUNTING_SOURCE_RUN_CONFLICT/);
-    assert.equal((await repository.listAccountingSourceRuns(scopeA)).length, 1);
+    assert.equal((await repository.listAccountingSourceRuns(scopeA)).length, 3);
   } finally {
     await pool.query(`DELETE FROM tenants WHERE id = ANY($1::text[])`, [[tenantA, tenantB]]).catch(() => undefined);
     await pool.end();
@@ -141,7 +161,7 @@ test('settlement commands derive balanced journal lines, evidence, and replay id
     await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
     await pool.query(`INSERT INTO ledger_accounts (id,chart,account_number,name,source,created_at,updated_at) VALUES ($1,'SKR03','1400','Receivable','test',$2,$2),($3,'SKR03','8400','Revenue','test',$2,$2),($4,'SKR03','1776','Output VAT','test',$2,$2) ON CONFLICT (chart,account_number) DO NOTHING`, [`settlement-1400-${suffix}`, now, `settlement-8400-${suffix}`, `settlement-1776-${suffix}`]);
     await pool.query(`INSERT INTO invoices (id,tenant_id,number,client,client_email,date,due_date,amount,status,items_json,payments_json,history_json,accounting_status,accounting_snapshot_json,accounting_journal_entry_id,created_at,updated_at) VALUES ($1,$2,$3,'Settlement customer','customer@example.test','2025-01-31','2025-02-28',119,'open','[]','[]','[]','posted',$4,$5,$6,$6)`, [originalId, tenantId, `RE-${suffix}`, JSON.stringify({ sourceVersion: 'settlement-original-v1', vatBreakdown: facts.taxBreakdown }), originalJournalId, now]);
-    await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,1,'2025-01-31','2025-01-31','Original settlement invoice',$3,'2025-01',2025,'posted','outgoing_invoice',$4,$5)`, [originalJournalId, tenantId, `RE-${suffix}`, `outgoing_invoice:${originalId}`, now]);
+    await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,1,'2025-01-31','2025-01-31','Original settlement invoice',$3,'2025-01',2025,'posted','outgoing_invoice',$4,$5)`, [originalJournalId, tenantId, `RE-${suffix}`, `outgoing-invoice:${originalId}`, now]);
     await pool.query(`INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,'debtor','settlement-customer','outgoing_invoice',$3,$4,'2025-01-31','2025-02-28',119,0,119,'open',$5,$6,$6)`, [`settlement-open-${suffix}`, tenantId, originalId, `RE-${suffix}`, originalJournalId, now]);
     const repository = createPostgresProAccountingRepository(pool);
     const scope = createSingleTenantScope(tenantId, 'pro');
@@ -150,10 +170,18 @@ test('settlement commands derive balanced journal lines, evidence, and replay id
     const replay = await repository.runClosingCommand(scope, input);
     assert.equal(first.replayed, false);
     assert.equal(replay.replayed, true);
+    const settledItem = (await pool.query(`SELECT allocated_amount,residual_amount,status FROM open_items WHERE tenant_id=$1 AND source_id=$2`, [tenantId, originalId])).rows[0];
+    assert.equal(Number(settledItem.allocated_amount), 11.9);
+    assert.equal(Number(settledItem.residual_amount), 107.1);
+    assert.equal(settledItem.status, 'partially_paid');
     const lines = (await pool.query(`SELECT debit_amount,credit_amount,tax_case_key,evidence_type FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2`, [tenantId, first.run.journalEntryId])).rows;
     assert.equal(lines.reduce((sum, row) => sum + Math.round(Number(row.debit_amount) * 100), 0), lines.reduce((sum, row) => sum + Math.round(Number(row.credit_amount) * 100), 0));
     assert.equal(lines.some((row) => row.tax_case_key === 'DE_STD_19' && row.evidence_type === 'skonto'), true);
     await assert.rejects(() => repository.runClosingCommand(scope, { ...input, sourceId: `${sourceId}-invalid`, idempotencyKey: `${sourceId}-invalid:v1`, input: { ...facts, sourceId: `${sourceId}-invalid`, sourceRevision: 'v1', skontoAmount: 120 } }), /INVALID_AMOUNT|exceeds/);
+    const unchanged = (await pool.query(`SELECT allocated_amount,residual_amount,status FROM open_items WHERE tenant_id=$1 AND source_id=$2`, [tenantId, originalId])).rows[0];
+    assert.equal(Number(unchanged.allocated_amount), 11.9);
+    assert.equal(Number(unchanged.residual_amount), 107.1);
+    assert.equal(unchanged.status, 'partially_paid');
     assert.equal((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count, 1);
   } finally {
     await pool.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]).catch(() => undefined);
@@ -200,7 +228,7 @@ test('corrections require a posted original with its document-owned journal', { 
     await assert.rejects(() => createPostgresProAccountingRepository(pool).createCorrectionSettlement(scope, input), /DOCUMENT_NOT_POSTED/);
     await pool.query(`UPDATE incoming_invoices SET accounting_status='posted', accounting_journal_entry_id=$1 WHERE tenant_id=$2 AND id=$3`, [journalId, tenantId, invoiceId]);
     await assert.rejects(() => createPostgresProAccountingRepository(pool).createCorrectionSettlement(scope, input), /DOCUMENT_NOT_POSTED/);
-    await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,1,'2026-10-01','2026-10-01','Source correction original','ER-SOURCE-CORRECTION','2026-10',2026,'posted','incoming_invoice','incoming_invoice:' || $3,$4)`, [journalId, tenantId, invoiceId, now]);
+    await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,1,'2026-10-01','2026-10-01','Source correction original','ER-SOURCE-CORRECTION','2026-10',2026,'posted','incoming_invoice','incoming-invoice:' || $3,$4)`, [journalId, tenantId, invoiceId, now]);
     const posted = await createPostgresProAccountingRepository(pool).createCorrectionSettlement(scope, input);
     assert.equal(posted.replayed, false);
     assert.equal(posted.run.journalEntryId, `correction:${posted.document.id}`);

@@ -192,7 +192,7 @@ test('settlement commands derive balanced journal lines, evidence, and replay id
     const lines = (await pool.query(`SELECT debit_amount,credit_amount,tax_case_key,evidence_type FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2`, [tenantId, first.run.journalEntryId])).rows;
     assert.equal(lines.reduce((sum, row) => sum + Math.round(Number(row.debit_amount) * 100), 0), lines.reduce((sum, row) => sum + Math.round(Number(row.credit_amount) * 100), 0));
     assert.equal(lines.some((row) => row.tax_case_key === 'DE_STD_19' && row.evidence_type === 'skonto'), true);
-    await assert.rejects(() => repository.runClosingCommand(scope, { ...input, sourceId: `${sourceId}-invalid`, idempotencyKey: `${sourceId}-invalid:v1`, input: { ...facts, sourceId: `${sourceId}-invalid`, sourceRevision: 'v1', skontoAmount: 120 } }), /INVALID_AMOUNT|exceeds/);
+    await assert.rejects(() => repository.runClosingCommand(scope, { ...input, sourceId: `${sourceId}-invalid`, idempotencyKey: `${sourceId}-invalid:v1`, input: { ...facts, sourceId: `${sourceId}-invalid`, sourceRevision: 'v1', skontoAmount: 120 } }), (error: unknown) => error instanceof Error && error.message === 'SETTLEMENT_EXCEEDS_OPEN_ITEM');
     const unchanged = (await pool.query(`SELECT allocated_amount,residual_amount,status FROM open_items WHERE tenant_id=$1 AND source_id=$2`, [tenantId, originalId])).rows[0];
     assert.equal(Number(unchanged.allocated_amount), 11.9);
     assert.equal(Number(unchanged.residual_amount), 107.1);

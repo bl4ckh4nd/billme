@@ -1303,7 +1303,7 @@ export const proAccountingSourceRunSchema = z.object({
   idempotencyKey: z.string().min(1),
   fact: accountingSourceFactSchema,
   result: z.unknown(),
-  status: z.enum(['posted', 'rejected', 'noop']),
+  status: z.enum(['posted', 'rejected', 'prepared', 'noop']),
   journalEntryId: z.string().optional(),
   createdAt: z.string().datetime(),
 });

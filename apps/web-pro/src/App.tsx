@@ -1216,7 +1216,7 @@ export default function App() {
       async postAccountingCommand(input: AccountingCommandInput) {
         const result = await client.postAccountingCommand(input);
         return {
-          status: result.replayed ? 'duplicate' as const : result.run.status === 'posted' ? 'posted' as const : 'noop' as const,
+          status: result.replayed ? 'duplicate' as const : result.run.status === 'posted' ? 'posted' as const : result.run.status === 'rejected' ? 'rejected' as const : 'noop' as const,
           sourceRun: { ...result.run, sourceRevision: result.run.sourceRevision ?? '1' } as AccountingSourceRun,
           errors: [],
           idempotencyKey: `${result.run.sourceType}:${result.run.sourceId}:${result.run.sourceRevision ?? '1'}`,

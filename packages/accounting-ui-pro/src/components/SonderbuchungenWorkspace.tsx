@@ -48,12 +48,67 @@ type FormState = {
 
 const periodOf = (date: string): string => date.slice(0, 7);
 const yearOf = (date: string): number => Number(date.slice(0, 4));
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const synchronizeDomainFacts = (
+  kind: AccountingCommandKind,
+  sourceId: string,
+  date: string,
+  facts: Record<string, unknown>,
+  previousSourceId?: string,
+): AccountingDomainFacts => {
+  const source = sourceId.trim();
+  const previousSource = previousSourceId?.trim();
+  const synced: AccountingDomainFacts = { ...facts, sourceId: source, date, period: periodOf(date), fiscalYear: yearOf(date) };
+  switch (kind) {
+    case 'correction':
+      if (previousSource && synced.id === `${previousSource}-correction`) synced.id = `${source}-correction`;
+      if (previousSource && synced.idempotencyKey === `${previousSource}:correction:1`) synced.idempotencyKey = `${source}:correction:1`;
+      synced.correctionDate = date;
+      synced.taxEffectiveDate = date;
+      break;
+    case 'bad_debt':
+      if (isRecord(synced.facts)) synced.facts = { ...synced.facts, adjustmentDate: date };
+      break;
+    case 'fiscal_close':
+      synced.closingDate = date;
+      break;
+    case 'carry_forward':
+    case 'provision':
+    case 'inventory_closing':
+    case 'fx_valuation':
+    case 'payroll_batch':
+      synced.effectiveDate = date;
+      if (previousSource && synced.batchId === previousSource) synced.batchId = source;
+      break;
+    case 'accrual':
+    case 'loan_schedule':
+      synced.startDate = date;
+      break;
+    case 'shareholder_flow':
+      if (previousSource && synced.flowId === previousSource) synced.flowId = source;
+      break;
+    default:
+      break;
+  }
+  return synced;
+};
+
+const synchronizeDomainFactsText = (kind: AccountingCommandKind, sourceId: string, date: string, text: string, previousSourceId?: string): string => {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return isRecord(parsed) ? JSON.stringify(synchronizeDomainFacts(kind, sourceId, date, parsed, previousSourceId), null, 2) : text;
+  } catch {
+    return text;
+  }
+};
 
 const domainTemplate = (kind: AccountingCommandKind, sourceId: string, date: string): AccountingDomainFacts => {
   const period = periodOf(date);
   const fiscalYear = yearOf(date);
   const taxBreakdown = [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }];
-  switch (kind) {
+  const template: Record<string, unknown> = (() => {
+    switch (kind) {
     case 'correction':
       return { id: `${sourceId}-correction`, idempotencyKey: `${sourceId}:correction:1`, correctionDate: date, taxEffectiveDate: date, documentType: 'outgoing_invoice', original: { documentId: 'invoice-id', documentNumber: 'RE-0001', revision: 'revision-1', snapshotHash: 'snapshot-sha256', taxEffectiveDate: date, taxBreakdown }, deltas: [{ rate: 19, grossAmount: 11.9 }] };
     case 'skonto':
@@ -82,7 +137,9 @@ const domainTemplate = (kind: AccountingCommandKind, sourceId: string, date: str
       return { flowId: sourceId, shareholderId: 'shareholder-1', companyId: 'company-1', amount: 100, flowType: 'capital_contribution', approved: true, purpose: 'Einlage' };
     default:
       return {};
-  }
+    }
+  })();
+  return synchronizeDomainFacts(kind, sourceId, date, template);
 };
 
 const formatFacts = (kind: AccountingCommandKind, sourceId: string, date: string): string => JSON.stringify(domainTemplate(kind, sourceId, date), null, 2);
@@ -99,7 +156,6 @@ const validDate = (value: string): boolean => {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const has = (facts: AccountingDomainFacts, key: string): boolean => Object.prototype.hasOwnProperty.call(facts, key) && facts[key] !== undefined && facts[key] !== null;
 const requiredFactKeys: Partial<Record<AccountingCommandKind, readonly string[]>> = {
   correction: ['id', 'idempotencyKey', 'correctionDate', 'original', 'deltas'],
@@ -130,14 +186,15 @@ const parseDomainFacts = (form: FormState): { facts?: AccountingDomainFacts; err
   let parsed: unknown;
   try { parsed = JSON.parse(form.domainFacts); } catch { return { errors: ['Domain-Fakten müssen gültiges JSON sein.'] }; }
   if (!isRecord(parsed)) return { errors: ['Domain-Fakten müssen ein JSON-Objekt sein.'] };
-  const missing = (requiredFactKeys[form.kind] ?? []).filter((key) => !has(parsed, key));
+  const facts = synchronizeDomainFacts(form.kind, form.sourceId, form.date, parsed);
+  const missing = (requiredFactKeys[form.kind] ?? []).filter((key) => !has(facts, key));
   if (missing.length) return { errors: [`Domain-Fakten fehlen: ${missing.join(', ')}.`] };
-  const invalidArrays = (arrayFactKeys[form.kind] ?? []).filter((key) => !Array.isArray(parsed[key]));
+  const invalidArrays = (arrayFactKeys[form.kind] ?? []).filter((key) => !Array.isArray(facts[key]));
   if (invalidArrays.length) return { errors: [`Domain-Fakten müssen Arrays enthalten: ${invalidArrays.join(', ')}.`] };
-  if (form.kind === 'correction' && (!isRecord(parsed.original) || !Array.isArray(parsed.deltas))) return { errors: ['Korrektur benötigt original als Objekt und deltas als Array.'] };
-  if (form.kind === 'bad_debt' && !isRecord(parsed.facts)) return { errors: ['Forderungsausfall benötigt facts als Objekt.'] };
-  if (form.kind === 'advance_settlement' && (!isRecord(parsed.finalInvoice) || !Array.isArray(parsed.finalInvoice.taxBreakdown))) return { errors: ['Vorauszahlung benötigt finalInvoice.taxBreakdown als Array.'] };
-  return { facts: parsed, errors: [] };
+  if (form.kind === 'correction' && (!isRecord(facts.original) || !Array.isArray(facts.deltas))) return { errors: ['Korrektur benötigt original als Objekt und deltas als Array.'] };
+  if (form.kind === 'bad_debt' && !isRecord(facts.facts)) return { errors: ['Forderungsausfall benötigt facts als Objekt.'] };
+  if (form.kind === 'advance_settlement' && (!isRecord(facts.finalInvoice) || !Array.isArray(facts.finalInvoice.taxBreakdown))) return { errors: ['Vorauszahlung benötigt finalInvoice.taxBreakdown als Array.'] };
+  return { facts, errors: [] };
 };
 
 const validateForm = (form: FormState): string[] => {
@@ -196,7 +253,13 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
     void refetchHistory().catch((error: unknown) => setErrors([error instanceof Error ? error.message : 'Historie konnte nicht geladen werden.']));
   }, [dataAdapter]);
 
-  const update = (key: keyof FormState, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const update = (key: keyof FormState, value: string) => setForm((current) => {
+    const next = { ...current, [key]: value };
+    if (key === 'sourceId' || key === 'date' || key === 'domainFacts') {
+      next.domainFacts = synchronizeDomainFactsText(next.kind, next.sourceId, next.date, next.domainFacts, key === 'sourceId' ? current.sourceId : undefined);
+    }
+    return next;
+  });
   const selectWorkflow = (kind: AccountingCommandKind) => setForm((current) => ({ ...current, kind, domainFacts: formatFacts(kind, current.sourceId, current.date) }));
 
   const submit = async () => {

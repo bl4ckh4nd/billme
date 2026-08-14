@@ -63,8 +63,13 @@ export type AccountingCommandInput = {
   reason: string;
 };
 
-/** Facts for a domain workflow, kept opaque at the transport seam. */
-export type AccountingDomainFacts = Record<string, unknown>;
+/** Facts for a domain workflow. The workspace owns this source context. */
+export type AccountingDomainFacts = Record<string, unknown> & {
+  sourceId: string;
+  date: string;
+  period: string;
+  fiscalYear: number;
+};
 
 export type TaxPreparationKind = 'ustva' | 'zm' | 'oss';
 

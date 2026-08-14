@@ -554,7 +554,7 @@ export interface AccountingSourceRunRecord {
   sourceId: string;
   sourceRevision: string;
   idempotencyKey: string;
-  status: 'posted' | 'prepared' | 'noop';
+  status: 'posted' | 'rejected' | 'prepared' | 'noop';
   source: unknown;
   result: unknown;
   journalEntryId?: string;

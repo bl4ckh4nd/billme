@@ -66,6 +66,24 @@ describe('SonderbuchungenWorkspace', () => {
     await waitFor(() => expect(adapter.postAccountingCommand).toHaveBeenCalledWith(expect.objectContaining({ kind: 'fiscal_close', domainFacts: expect.any(Object), source: expect.objectContaining({ lines: [] }) })));
   });
 
+  it('re-syncs source context when source and date change after selecting a workflow', async () => {
+    const adapter = valid();
+    render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
+    fireEvent.change(screen.getByLabelText('Workflow'), { target: { value: 'fiscal_close' } });
+    fireEvent.change(screen.getByLabelText('Quellbeleg'), { target: { value: 'close-2025' } });
+    fireEvent.change(screen.getByLabelText('Buchungsdatum'), { target: { value: '2025-12-31' } });
+
+    const facts = JSON.parse((screen.getByLabelText('Domain-Fakten (JSON)') as HTMLTextAreaElement).value) as Record<string, unknown>;
+    expect(facts).toMatchObject({ sourceId: 'close-2025', date: '2025-12-31', period: '2025-12', fiscalYear: 2025, closingDate: '2025-12-31' });
+
+    fireEvent.change(screen.getByLabelText('Audit-Grund'), { target: { value: 'Abschluss geprüft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sonderbuchung speichern' }));
+    await waitFor(() => expect(adapter.postAccountingCommand).toHaveBeenCalledWith(expect.objectContaining({
+      domainFacts: expect.objectContaining({ sourceId: 'close-2025', date: '2025-12-31', period: '2025-12', fiscalYear: 2025, closingDate: '2025-12-31' }),
+      source: expect.objectContaining({ sourceId: 'close-2025', effectiveDate: '2025-12-31', period: '2025-12', fiscalYear: 2025 }),
+    })));
+  });
+
   it('keeps entered facts after adapter failure and exposes the error', async () => {
     const adapter = valid();
     adapter.postAccountingCommand.mockRejectedValueOnce(new Error('Backend nicht erreichbar'));

@@ -1239,6 +1239,10 @@ export const registerIpcHandlers = (
     return getProAccountingService().listJournalEntries({ from, to, accountNumbers, limit, offset });
   });
 
+  register(ipcMain, 'pro:getJournalEntryById', ({ entryId }) => {
+    return getProAccountingService().getJournalEntryById(entryId);
+  });
+
   register(ipcMain, 'pro:getLedgerBalances', ({ asOfDate, from, to }) => {
     return getProAccountingService().getLedgerBalances({ asOfDate, from, to });
   });

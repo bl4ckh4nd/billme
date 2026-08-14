@@ -719,6 +719,7 @@ export const journalEntryEntitySchema = z.object({
     'fx_valuation',
     'loan_schedule',
     'payroll_batch',
+    'shareholder_flow',
   ]).optional(),
   sourceKey: z.string().optional(),
   reversedEntryId: z.string().optional(),

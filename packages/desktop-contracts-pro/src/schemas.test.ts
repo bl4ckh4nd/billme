@@ -95,6 +95,7 @@ test('accepts every supported journal source type', () => {
     'fx_valuation',
     'loan_schedule',
     'payroll_batch',
+    'shareholder_flow',
   ];
 
   for (const sourceType of sourceTypes) {

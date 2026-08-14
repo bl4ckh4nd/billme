@@ -489,6 +489,7 @@ export interface ProAccountingRepository {
   }>;
   reverseJournalEntry(scope: TenantScope, entryId: string, reason: string, options?: ReverseJournalEntryOptions): Promise<{ ok: true; reversalEntryId: string }>;
   listJournalEntries(scope: TenantScope, args?: ListJournalEntriesOptions): Promise<JournalEntryEntity[]>;
+  getJournalEntryById(scope: TenantScope, entryId: string): Promise<JournalEntryEntity | null>;
   getLedgerBalances(scope: TenantScope, args?: LedgerBalanceOptions): Promise<LedgerBalance[]>;
   getSusaReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<SusaReport>;
   getGuvReport(scope: TenantScope, args?: ReportRangeOptions): Promise<GuvReport>;

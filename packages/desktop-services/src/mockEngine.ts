@@ -2073,6 +2073,11 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       return rows.slice(offset, offset + limit) as IpcResult<K>;
     }
 
+    case 'pro:getJournalEntryById': {
+      const { entryId } = args as IpcArgs<'pro:getJournalEntryById'>;
+      return (mockJournalEntries.find((row) => row.id === entryId) ?? null) as IpcResult<K>;
+    }
+
     case 'pro:getLedgerBalances': {
       const { asOfDate } = args as IpcArgs<'pro:getLedgerBalances'>;
       const rows = mockJournalEntries

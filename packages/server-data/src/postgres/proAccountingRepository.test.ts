@@ -136,6 +136,29 @@ test('booked draft reads return virtual projections without creating periods', a
   assert.equal(calls.some((text) => text.includes('INSERT INTO accounting_periods')), false);
 });
 
+test('journal entry lookup is direct and tenant scoped', async () => {
+  const calls: Array<{ text: string; values: unknown[] }> = [];
+  const db = {
+    query: async (text: string, values?: unknown[]) => {
+      calls.push({ text, values: values ?? [] });
+      if (text.includes('FROM journal_entries WHERE tenant_id=$1 AND id=$2')) {
+        return { rows: [{
+          id: 'journal-direct', tenant_id: 'tenant-direct', entry_number: 7, posting_date: '2026-08-14',
+          document_date: null, booking_text: 'Direkte Buchung', reference: null, period: '2026-08', fiscal_year: 2026,
+          status: 'posted', source_draft_id: null, source_type: 'shareholder_flow', source_key: 'flow-1',
+          reversed_entry_id: null, created_at: '2026-08-14T00:00:00.000Z',
+        }] };
+      }
+      if (text.includes('FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2')) return { rows: [] };
+      throw new Error(`unexpected query: ${text}`);
+    },
+  } as unknown as PostgresQueryable;
+  const entry = await createPostgresProAccountingRepository(db).getJournalEntryById(createSingleTenantScope('tenant-direct', 'pro'), 'journal-direct');
+  assert.equal(entry?.id, 'journal-direct');
+  assert.deepEqual(calls[0]?.values, ['tenant-direct', 'journal-direct']);
+  assert.equal(calls.some(({ text }) => text.includes('LIMIT $')), false);
+});
+
 test('report adapters fail closed when the persisted profile or chart is not compatible', async () => {
   const calls: Array<{ text: string; values: unknown[] }> = [];
   const db = {

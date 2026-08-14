@@ -33,6 +33,27 @@ test('Pro web client reads canonical accounting transactions', async () => {
   }
 });
 
+test('Pro web client reads a journal entry by id without using the capped list', async () => {
+  const previousFetch = globalThis.fetch;
+  let requestUrl = '';
+  globalThis.fetch = (async (input) => {
+    requestUrl = String(input);
+    return new Response(JSON.stringify({
+      id: 'journal-1', tenantId: 'tenant-1', entryNumber: 1, postingDate: '2026-08-14',
+      bookingText: 'Testbuchung', period: '2026-08', fiscalYear: 2026, status: 'posted',
+      sourceType: 'shareholder_flow', createdAt: '2026-08-14T00:00:00.000Z', lines: [],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    const entry = await client.getAccountingJournalEntryById('journal-1');
+    assert.equal(entry?.id, 'journal-1');
+    assert.match(requestUrl, /\/api\/v1\/pro\/accounting\/journal\/journal-1$/);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('Pro web client accepts correction open items from the server', async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(JSON.stringify([{

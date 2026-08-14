@@ -77,7 +77,8 @@ export type JournalSourceType =
   | 'inventory_closing'
   | 'fx_valuation'
   | 'loan_schedule'
-  | 'payroll_batch';
+  | 'payroll_batch'
+  | 'shareholder_flow';
 
 export interface LedgerBalance {
   accountNumber: string;

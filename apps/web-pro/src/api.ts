@@ -507,6 +507,12 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
         '/api/v1/pro/accounting/journal',
       );
     },
+    getAccountingJournalEntryById(entryId: string) {
+      return requestJson(
+        { parser: (input) => (input === null ? null : journalEntryEntitySchema.parse(input)) },
+        `/api/v1/pro/accounting/journal/${encodeURIComponent(entryId)}`,
+      );
+    },
     getAccountingBalances(asOfDate?: string) {
       return requestJson({ parser: parseArray(ledgerBalanceRowSchema), query: { asOfDate } }, '/api/v1/pro/accounting/balances');
     },

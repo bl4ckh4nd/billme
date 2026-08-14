@@ -691,6 +691,17 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
   });
 
   typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/journal/:id`,
+    params: idParams,
+    response: journalEntryEntitySchema.nullable(),
+    async handler({ request, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return serviceFor(app).getJournalEntryById(session.scope, params.id);
+    },
+  });
+
+  typedRoute(app, {
     method: 'POST',
     url: `${prefix}/journal/:id/reverse`,
     params: idParams,

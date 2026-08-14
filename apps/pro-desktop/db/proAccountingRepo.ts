@@ -158,7 +158,7 @@ export interface JournalEntryEntity {
   fiscalYear: number;
   status: JournalEntryStatus;
   sourceDraftId?: string;
-  sourceType?: 'booking_draft' | 'reversal' | 'depreciation' | 'manual' | 'outgoing_invoice' | 'incoming_invoice' | 'payment' | 'payment_vat' | 'legacy_transaction' | 'asset_activation' | 'asset_depreciation' | 'asset_disposal';
+  sourceType?: 'booking_draft' | 'reversal' | 'depreciation' | 'manual' | 'outgoing_invoice' | 'incoming_invoice' | 'payment' | 'payment_vat' | 'legacy_transaction' | 'asset_activation' | 'asset_depreciation' | 'asset_disposal' | 'standalone_source' | 'fiscal_close' | 'carry_forward' | 'provision' | 'accrual' | 'inventory_closing' | 'fx_valuation' | 'loan_schedule' | 'payroll_batch' | 'shareholder_flow';
   sourceKey?: string;
   reversedEntryId?: string;
   createdAt: string;
@@ -1714,7 +1714,7 @@ const listDatevJournalEntries = (
 // Idempotent mutations must not depend on the paginated journal listing.
 // Keep this lookup intentionally direct so a replay remains correct after the
 // journal grows beyond the list endpoint's page cap.
-function getJournalEntryById(
+export function getJournalEntryById(
   db: Database.Database,
   entryId: string,
   scope: TenantScope,

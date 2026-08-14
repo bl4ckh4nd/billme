@@ -85,6 +85,11 @@ describe('Pro IPC route schemas', () => {
     ).toThrow();
   });
 
+  it('supports direct journal entry lookup with nullable not-found result', () => {
+    expect(ipcRoutes['pro:getJournalEntryById'].args.parse({ entryId: 'journal-1' })).toEqual({ entryId: 'journal-1' });
+    expect(ipcRoutes['pro:getJournalEntryById'].result.parse(null)).toBeNull();
+  });
+
   it('preserves report ranges, active chart and GuV drilldown refs in IPC contracts', () => {
     expect(ipcRoutes['pro:getSusaReport'].args.parse({ from: '2026-01-01', to: '2026-03-31', asOfDate: '2026-03-31' }))
       .toMatchObject({ from: '2026-01-01', to: '2026-03-31' });

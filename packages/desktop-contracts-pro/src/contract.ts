@@ -623,6 +623,10 @@ const proListJournalEntriesArgsSchema = z.object({
   offset: z.number().int().min(0).optional(),
 });
 
+const proGetJournalEntryByIdArgsSchema = z.object({
+  entryId: z.string().min(1),
+});
+
 const proGetLedgerBalancesArgsSchema = z.object({
   asOfDate: z.string().optional(),
   from: z.string().optional(),
@@ -1128,6 +1132,11 @@ export const ipcRoutes = {
     channel: 'pro:listJournalEntries',
     args: proListJournalEntriesArgsSchema,
     result: z.array(journalEntryEntitySchema),
+  },
+  'pro:getJournalEntryById': {
+    channel: 'pro:getJournalEntryById',
+    args: proGetJournalEntryByIdArgsSchema,
+    result: journalEntryEntitySchema.nullable(),
   },
   'pro:getLedgerBalances': {
     channel: 'pro:getLedgerBalances',

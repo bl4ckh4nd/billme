@@ -8,6 +8,7 @@ import { bootstrapSql } from './bootstrap';
 import { runMigrations } from './migrate';
 import {
   getDraftByTransactionId,
+  getJournalEntryById,
   insertDatevExport,
   listJournalEntries,
   postDraft,
@@ -316,6 +317,17 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
       .toHaveLength(1);
     expect(listJournalEntries(db, { accountNumbers: ['does-not-exist'] }, scope))
       .toEqual([]);
+  });
+
+  it('loads a journal entry directly within its tenant scope', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const draft = validDraft(db, 'tx-direct-journal-1', '2026-03-02');
+    const posted = postDraft(db, draft.id, { postingDate: '2026-03-02' }, scope);
+
+    expect(getJournalEntryById(db, posted.entry.id, scope)).toMatchObject({ id: posted.entry.id });
+    expect(getJournalEntryById(db, 'missing-journal', scope)).toBeNull();
+    expect(getJournalEntryById(db, posted.entry.id, createProTenantScope('other-tenant'))).toBeNull();
   });
 
   it('allocates one journal entry for repeated posting', () => {

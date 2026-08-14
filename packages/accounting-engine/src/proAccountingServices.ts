@@ -96,6 +96,7 @@ export interface ProAccountingService {
   }>;
   reverseJournalEntry(scope: TenantScope, entryId: string, reason: string, options?: ReverseJournalEntryOptions): Promise<{ ok: true; reversalEntryId: string }>;
   listJournalEntries(scope: TenantScope, args?: ListJournalEntriesOptions): Promise<JournalEntryEntity[]>;
+  getJournalEntryById(scope: TenantScope, entryId: string): Promise<JournalEntryEntity | null>;
   getLedgerBalances(scope: TenantScope, args?: LedgerBalanceOptions): Promise<LedgerBalance[]>;
   getSusaReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<SusaReport>;
   getGuvReport(scope: TenantScope, args?: ReportRangeOptions): Promise<GuvReport>;
@@ -153,6 +154,7 @@ export interface BoundProAccountingService {
   }>;
   reverseJournalEntry(entryId: string, reason: string, options?: ReverseJournalEntryOptions): Promise<{ ok: true; reversalEntryId: string }>;
   listJournalEntries(args?: ListJournalEntriesOptions): Promise<JournalEntryEntity[]>;
+  getJournalEntryById(entryId: string): Promise<JournalEntryEntity | null>;
   getLedgerBalances(args?: LedgerBalanceOptions): Promise<LedgerBalance[]>;
   getSusaReport(args?: LedgerBalanceOptions): Promise<SusaReport>;
   getGuvReport(args?: ReportRangeOptions): Promise<GuvReport>;
@@ -292,6 +294,7 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   reverseJournalEntry: (scope, entryId, reason, options) =>
     repository.reverseJournalEntry(scope, entryId, reason, options),
   listJournalEntries: (scope, args) => repository.listJournalEntries(scope, args),
+  getJournalEntryById: (scope, entryId) => repository.getJournalEntryById(scope, entryId),
   getLedgerBalances: (scope, args) => repository.getLedgerBalances(scope, args),
   getSusaReport: (scope, args) => repository.getSusaReport(scope, args),
   getGuvReport: (scope, args) => repository.getGuvReport(scope, args),
@@ -351,6 +354,7 @@ export const bindProAccountingScope = (
   postDraft: (draftId, options) => service.postDraft(scope, draftId, options),
   reverseJournalEntry: (entryId, reason, options) => service.reverseJournalEntry(scope, entryId, reason, options),
   listJournalEntries: (args) => service.listJournalEntries(scope, args),
+  getJournalEntryById: (entryId) => service.getJournalEntryById(scope, entryId),
   getLedgerBalances: (args) => service.getLedgerBalances(scope, args),
   getSusaReport: (args) => service.getSusaReport(scope, args),
   getGuvReport: (args) => service.getGuvReport(scope, args),

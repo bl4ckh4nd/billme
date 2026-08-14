@@ -445,8 +445,7 @@ export const ProAccountingPage: React.FC = () => {
         return draft ? structuredClone(draft) : undefined;
       },
       async getJournalEntryById(id: string) {
-        const entries = await ipc.pro.listJournalEntries({ limit: 5000, offset: 0 });
-        return entries.find((entry) => entry.id === id) ?? null;
+        return ipc.pro.getJournalEntryById({ entryId: id });
       },
       async saveDraft(draft) {
         return runMutation(async () => {

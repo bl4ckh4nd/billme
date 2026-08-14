@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { JournalEntryEntity } from '@billme/accounting-shared';
 import App from './App';
 
 describe('Pro accounting shell', () => {
@@ -32,5 +33,44 @@ describe('Pro accounting shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Erweitern' }));
 
     expect(screen.getByRole('button', { name: 'Inbox' }).getAttribute('aria-current')).toBe('page');
+  });
+});
+
+const journalEntry: JournalEntryEntity = {
+  id: 'journal-1', tenantId: 'tenant-1', entryNumber: 42, postingDate: '2026-08-14', documentDate: '2026-08-14',
+  bookingText: 'Erlöse', reference: 'REF-1', period: '2026-08', fiscalYear: 2026, status: 'posted', sourceType: 'manual',
+  createdAt: '2026-08-14T10:00:00.000Z', lines: [
+    { id: 'line-1', accountNumber: '8400', debitAmount: 0, creditAmount: 119 },
+    { id: 'line-2', accountNumber: '1200', debitAmount: 119, creditAmount: 0 },
+  ],
+};
+
+describe('ProAccountingWorkspace report journal drilldown', () => {
+  it('opens the shared journal detail modal from a report drilldown', async () => {
+    const getReportDrilldownEntries = vi.fn(async () => [{
+      id: 'drilldown-1', date: '2026-08-14', bookingText: 'Erlöse', reference: 'REF-1', journalEntryId: 'journal-1',
+      sourceType: 'journal_entry' as const, sourceId: 'journal-1', accountNumber: '8400', debit: 0, credit: 119, amount: -119, source: 'Manuell' as const,
+    }]);
+    const getJournalEntryById = vi.fn(async () => journalEntry);
+    render(<App dataAdapter={{
+      getSusaReport: vi.fn(async () => ({
+        rows: [{ accountNumber: '8400', accountName: 'Erlöse', openingBalance: 0, debitTurnover: 0, creditTurnover: 119, closingBalance: 119, normalBalance: 'credit' as const }],
+        totals: { openingDebit: 0, openingCredit: 0, turnoverDebit: 0, turnoverCredit: 119, closingDebit: 0, closingCredit: 119 },
+        quality: { unmappedAccounts: 0, warnings: 0, generatedAt: '2026-08-14T00:00:00.000Z', source: 'live' as const },
+      })),
+      getReportDrilldownEntries,
+      getJournalEntryById,
+    }} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auswertungen' }));
+    fireEvent.click(await screen.findByRole('button', { name: '8400' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Journal öffnen' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Journalbuchung' });
+    expect(await within(dialog).findByRole('heading', { name: 'Journal 42' })).toBeTruthy();
+    await waitFor(() => expect(getJournalEntryById).toHaveBeenCalledWith('journal-1'));
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Journalansicht schließen' }));
+    expect(screen.queryByRole('dialog', { name: 'Journalbuchung' })).toBeNull();
   });
 });

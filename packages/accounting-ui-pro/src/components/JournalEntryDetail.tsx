@@ -10,6 +10,10 @@ export interface JournalEntryDetailProps {
   dataAdapter?: ProAccountingDataAdapter;
 }
 
+export interface JournalEntryDetailModalProps extends JournalEntryDetailProps {
+  onClose: () => void;
+}
+
 export default function JournalEntryDetail({ entryId, dataAdapter }: JournalEntryDetailProps) {
   const [entry, setEntry] = useState<JournalEntryEntity | null>(null);
   const [loading, setLoading] = useState(Boolean(entryId));
@@ -109,5 +113,21 @@ export default function JournalEntryDetail({ entryId, dataAdapter }: JournalEntr
         })}
       </div>
     </section>
+  );
+}
+
+export function JournalEntryDetailModal({ entryId, dataAdapter, onClose }: JournalEntryDetailModalProps) {
+  if (!entryId) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-dark-base/40 p-4 sm:p-8" role="presentation">
+      <div className="w-full max-w-3xl rounded-2xl border border-border bg-surface p-4 shadow-xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="journal-entry-dialog-heading">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 id="journal-entry-dialog-heading" className="text-lg font-black text-foreground">Journalbuchung</h2>
+          <button type="button" className="min-h-10 rounded-lg border border-border px-3 py-2 text-sm font-bold text-foreground hover:bg-surface-muted" aria-label="Journalansicht schließen" onClick={onClose}>Schließen</button>
+        </div>
+        <JournalEntryDetail entryId={entryId} dataAdapter={dataAdapter} />
+      </div>
+    </div>
   );
 }

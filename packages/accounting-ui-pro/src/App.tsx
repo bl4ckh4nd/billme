@@ -7,6 +7,7 @@ import AssetManagementView from './components/AssetManagementView';
 import ReportsView from './components/ReportsView';
 import OposView from './components/OposView';
 import SonderbuchungenWorkspace from './components/SonderbuchungenWorkspace';
+import { JournalEntryDetailModal } from './components/JournalEntryDetail';
 import {
   configureStoreAdapter,
   configureStorePersistence,
@@ -42,6 +43,7 @@ export interface ProAccountingWorkspaceProps {
 export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, onPersistEntry }: ProAccountingWorkspaceProps) {
   const [currentView, setCurrentView] = useState<AppView>('inbox');
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
+  const [selectedJournalEntryId, setSelectedJournalEntryId] = useState<string | null>(null);
   const [inboxPreviewTransactionId, setInboxPreviewTransactionId] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
 
@@ -175,6 +177,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
               availableTabs={reportTabsForBusinessProfile(seed?.businessReportingProfile)}
               role={role}
               onOpenTransaction={handleOpenTransaction}
+              onOpenJournalEntry={setSelectedJournalEntryId}
             />
           ) : currentView === 'opos' ? (
             <OposView dataAdapter={dataAdapter} role={role} />
@@ -187,6 +190,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
           )}
         </div>
       </main>
+      <JournalEntryDetailModal entryId={selectedJournalEntryId} dataAdapter={dataAdapter} onClose={() => setSelectedJournalEntryId(null)} />
     </div>
   );
 }

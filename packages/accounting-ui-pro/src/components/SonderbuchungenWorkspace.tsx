@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@billme/ui';
-import JournalEntryDetail from './JournalEntryDetail';
+import { JournalEntryDetailModal } from './JournalEntryDetail';
 import type { UserRole } from '../types';
 import { permissionContextForRole } from '../mocks/users';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
@@ -478,15 +478,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
         <h2 id="source-run-history-heading" className="text-base font-black">Letzte Buchungsläufe</h2>
         {historyError ? <div className="mt-2 flex flex-wrap items-center gap-2" role="alert"><p className="text-sm text-error">Buchungshistorie konnte nicht geladen werden: {historyError}</p><Button type="button" size="sm" variant="secondary" onClick={() => void refetchHistory().catch(() => undefined)}>Erneut versuchen</Button></div> : history.length === 0 ? <p className="mt-2 text-sm text-muted">Noch keine Sonderbuchung vorhanden.</p> : <ul className="mt-3 space-y-2">{history.map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-surface-muted p-3 text-sm"><span className="min-w-0"><strong className="block truncate text-foreground">{run.sourceId}</strong><span className="text-xs text-muted">{runStatusLabel[run.status]} · {new Date(run.createdAt).toLocaleString('de-DE')}</span></span>{run.journalEntryId ? <button type="button" className="min-h-10 rounded-lg px-3 py-2 font-bold text-accent underline underline-offset-2" onClick={() => setSelectedJournalEntryId(run.journalEntryId ?? null)}>Journal öffnen</button> : null}</li>)}</ul>}
       </section>
-      {selectedJournalEntryId ? <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-dark-base/40 p-4 sm:p-8" role="presentation">
-        <div className="w-full max-w-3xl rounded-2xl border border-border bg-surface p-4 shadow-xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="journal-entry-dialog-heading">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <h2 id="journal-entry-dialog-heading" className="text-lg font-black text-foreground">Journalbuchung</h2>
-            <button type="button" className="min-h-10 rounded-lg border border-border px-3 py-2 text-sm font-bold text-foreground hover:bg-surface-muted" aria-label="Journalansicht schließen" onClick={() => setSelectedJournalEntryId(null)}>Schließen</button>
-          </div>
-          <JournalEntryDetail entryId={selectedJournalEntryId} dataAdapter={dataAdapter} />
-        </div>
-      </div> : null}
+      <JournalEntryDetailModal entryId={selectedJournalEntryId} dataAdapter={dataAdapter} onClose={() => setSelectedJournalEntryId(null)} />
     </div>
   );
 }

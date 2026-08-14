@@ -48,6 +48,27 @@ test('server policy rejects changing chart after a posted journal', async () => 
   assert.equal(calls.some((text) => text.includes('INSERT INTO accounting_policies')), false);
 });
 
+test('real Postgres policy rejects a chart change after a posted journal', { skip: !databaseUrl }, async () => {
+  const pool = createPostgresPool(databaseUrl!);
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tenantId = `policy-locked-${suffix}`;
+  const now = new Date().toISOString();
+  try {
+    await runDrizzleMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, tenantId, 'Policy locked', now]);
+    await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
+    await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,booking_text,period,fiscal_year,status,created_at) VALUES ($1,$2,1,'2026-08-14','Policy lock test','2026-08',2026,'posted',$3)`, [`policy-journal-${suffix}`, tenantId, now]);
+    await assert.rejects(
+      () => createPostgresProAccountingRepository(pool).setAccountingPolicy(createSingleTenantScope(tenantId, 'pro'), { activeChart: 'SKR04', vatMethod: 'soll' }),
+      /ACCOUNTING_CHART_LOCKED/,
+    );
+    assert.equal((await pool.query(`SELECT active_chart FROM accounting_policies WHERE tenant_id=$1`, [tenantId])).rows[0]?.active_chart, 'SKR03');
+  } finally {
+    await pool.query(`DELETE FROM tenants WHERE id=$1`, [tenantId]).catch(() => undefined);
+    await pool.end();
+  }
+});
+
 test('SuSa report maps inclusive from/to bounds into ledger opening and turnover dates', async () => {
   const calls: Array<{ text: string; values: unknown[] }> = [];
   const db = {

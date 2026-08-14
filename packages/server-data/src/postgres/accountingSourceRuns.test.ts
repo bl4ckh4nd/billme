@@ -164,6 +164,7 @@ test('settlement commands derive balanced journal lines, evidence, and replay id
     await pool.query(`INSERT INTO invoices (id,tenant_id,number,client,client_email,date,due_date,amount,status,items_json,payments_json,history_json,accounting_status,accounting_snapshot_json,accounting_journal_entry_id,created_at,updated_at) VALUES ($1,$2,$3,'Settlement customer','customer@example.test','2025-01-31','2025-02-28',119,'open','[]','[]','[]','posted',$4,$5,$6,$6)`, [originalId, tenantId, `RE-${suffix}`, JSON.stringify({ sourceVersion: 'settlement-original-v1', vatBreakdown: facts.taxBreakdown }), originalJournalId, now]);
     await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,1,'2025-01-31','2025-01-31','Original settlement invoice',$3,'2025-01',2025,'posted','outgoing_invoice',$4,$5)`, [originalJournalId, tenantId, `RE-${suffix}`, `outgoing-invoice:${originalId}`, now]);
     await pool.query(`INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,'debtor','settlement-customer','outgoing_invoice',$3,$4,'2025-01-31','2025-02-28',119,0,119,'open',$5,$6,$6)`, [`settlement-open-${suffix}`, tenantId, originalId, `RE-${suffix}`, originalJournalId, now]);
+    await pool.query(`UPDATE journal_entries SET source_key=$1 WHERE tenant_id=$2 AND id=$3`, [`outgoing_invoice:${originalId}`, tenantId, originalJournalId]);
     const repository = createPostgresProAccountingRepository(pool);
     const scope = createSingleTenantScope(tenantId, 'pro');
     const input = { commandType: 'skonto', sourceId, sourceRevision: 'v1', idempotencyKey: `${sourceId}:v1`, reason: 'Settlement source', input: { ...facts, sourceId, sourceRevision: 'v1' } };
@@ -183,7 +184,14 @@ test('settlement commands derive balanced journal lines, evidence, and replay id
     assert.equal(Number(unchanged.allocated_amount), 11.9);
     assert.equal(Number(unchanged.residual_amount), 107.1);
     assert.equal(unchanged.status, 'partially_paid');
-    assert.equal((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count, 1);
+    const paidInput = { ...input, sourceId: `${sourceId}-paid`, idempotencyKey: `${sourceId}-paid:v1`, input: { ...facts, sourceId: `${sourceId}-paid`, sourceRevision: 'v1', skontoAmount: 107.1 } };
+    const paid = await repository.runClosingCommand(scope, paidInput);
+    assert.equal(paid.replayed, false);
+    assert.equal((await repository.runClosingCommand(scope, paidInput)).replayed, true);
+    const paidItem = (await pool.query(`SELECT residual_amount,status FROM open_items WHERE tenant_id=$1 AND source_id=$2`, [tenantId, originalId])).rows[0];
+    assert.equal(Number(paidItem.residual_amount), 0);
+    assert.equal(paidItem.status, 'paid');
+    assert.equal((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count, 2);
   } finally {
     await pool.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]).catch(() => undefined);
     await pool.end();

@@ -288,7 +288,35 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     expect(db.prepare('SELECT status FROM invoices WHERE id = ?').get('invoice-1')).toEqual({ status: 'open' });
     const overbook = postAccountingCommand(db, { kind: 'skonto', source: source('skonto-opos-2'), domainFacts: { ...facts, skontoAmount: 108 } }, scope, { reason: 'reject OPOS overbooking' });
     expect(overbook.status).toBe('rejected');
+    expect(overbook.errors[0]).toMatchObject({ code: 'SETTLEMENT_EXCEEDS_OPEN_ITEM', details: { remaining: 107.1, requested: 108 } });
     expect(db.prepare('SELECT allocated_amount,residual_amount,status FROM open_items WHERE id = ?').get('invoice-open-item-1')).toEqual({ allocated_amount: 11.9, residual_amount: 107.1, status: 'partially_paid' });
+    db.close();
+  });
+
+  it('replays a settlement after the open item is paid without rechecking eligibility', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const input = {
+      kind: 'skonto' as const,
+      source: source('skonto-paid'),
+      domainFacts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 119, originalDocumentId: 'invoice-1' },
+    };
+    expect(postAccountingCommand(db, input, scope, { reason: 'pay OPOS item' }).status).toBe('posted');
+    expect(db.prepare('SELECT status,residual_amount FROM open_items WHERE id = ?').get('invoice-open-item-1')).toEqual({ status: 'paid', residual_amount: 0 });
+    expect(postAccountingCommand(db, input, scope, { reason: 'replay paid OPOS item' }).status).toBe('duplicate');
+    db.close();
+  });
+
+  it('accepts legacy underscore document source keys for settlement reads', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    db.prepare("UPDATE journal_entries SET source_key = 'outgoing_invoice:invoice-1' WHERE id = 'invoice-journal-1'").run();
+    const result = postAccountingCommand(db, {
+      kind: 'skonto', source: source('skonto-legacy-key'),
+      domainFacts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9, originalDocumentId: 'invoice-1' },
+    }, scope, { reason: 'legacy source key compatibility' });
+    expect(result.status).toBe('posted');
+    expect(result.command?.entry.sourceKey).toBe('settlement:skonto:source-1:skonto-legacy-key');
     db.close();
   });
 
@@ -358,6 +386,15 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
       advanceClearingPayable: '1600',
     });
     expect(overCredit.errors[0]).toMatchObject({ code: 'OVER_CREDIT' });
+    db.prepare("UPDATE open_items SET party_id = 'other-party' WHERE id = 'invoice-open-item-2'").run();
+    const partyMismatch = post('typed-party-mismatch', 'advance_settlement', {
+      finalInvoiceId: 'invoice-1',
+      finalInvoice: { id: 'invoice-1', grossAmount: 119, taxBreakdown: settlementTax },
+      advances: [{ id: 'invoice-2', kind: 'advance', grossAmount: 10 }],
+      advanceClearingReceivable: '1200',
+      advanceClearingPayable: '1600',
+    });
+    expect(partyMismatch.errors[0]).toMatchObject({ code: 'SETTLEMENT_PARTY_MISMATCH', details: { expected: { partyId: 'client-1' }, actual: { partyId: 'other-party' } } });
     db.close();
   });
 });

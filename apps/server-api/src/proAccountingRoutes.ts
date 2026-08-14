@@ -424,8 +424,8 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       try {
         return await repositoryFor(app).createCorrectionSettlement(session.scope, { ...body, mutation: mutationFor(session, body.reason) });
       } catch (error) {
-        if (error instanceof Error && /IDEMPOTENCY|SOURCE_RUN_CONFLICT|OVER_CREDIT|POSTING_DATE_IN_CLOSED_PERIOD|SOFT_LOCK|UNKNOWN_ACCOUNT|OPOS|ORIGINAL_CHANGED/.test(error.message)) throw new ApiError(409, error.message);
-        if (error instanceof Error && /INVALID|REQUIRED|ORIGINAL_DOCUMENT_NOT_FOUND|ORIGINAL_SNAPSHOT_REQUIRED|TAX_EFFECTIVE/.test(error.message)) throw new ApiError(400, error.message);
+        if (error instanceof Error && /IDEMPOTENCY|SOURCE_RUN_CONFLICT|OVER_CREDIT|POSTING_DATE_IN_CLOSED_PERIOD|SOFT_LOCK|UNKNOWN_ACCOUNT|OPOS|ORIGINAL_CHANGED|DOCUMENT_NOT_POSTED|OPEN_ITEM_NOT_ELIGIBLE|OPEN_ITEM_NOT_POSTED|SETTLEMENT_EXCEEDS_OPEN_ITEM|SETTLEMENT_PARTY_MISMATCH/.test(error.message)) throw new ApiError(409, error.message);
+        if (error instanceof Error && /INVALID|REQUIRED|ORIGINAL_DOCUMENT_NOT_FOUND|ORIGINAL_SNAPSHOT_REQUIRED|OPEN_ITEM_NOT_FOUND|TAX_EFFECTIVE/.test(error.message)) throw new ApiError(400, error.message);
         throw error;
       }
     },
@@ -444,8 +444,8 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
           if (error.code === 'OVER_CREDIT' || error.code === 'IDEMPOTENCY_CONFLICT') throw new ApiError(409, `${error.code}:${error.message}`);
           throw new ApiError(400, `${error.code}:${error.message}`);
         }
-        if (error instanceof Error && /SOURCE_RUN_CONFLICT|POSTING_DATE_IN_CLOSED_PERIOD|SOFT_LOCK|UNKNOWN_ACCOUNT|FISCAL_YEAR_PERIOD_MISMATCH|AGGREGATE/.test(error.message)) throw new ApiError(409, error.message);
-        if (error instanceof Error && /INVALID|REJECTED|REQUIRED|MISSING/.test(error.message)) throw new ApiError(400, error.message);
+        if (error instanceof Error && /SOURCE_RUN_CONFLICT|POSTING_DATE_IN_CLOSED_PERIOD|SOFT_LOCK|UNKNOWN_ACCOUNT|FISCAL_YEAR_PERIOD_MISMATCH|AGGREGATE|SETTLEMENT_EXCEEDS_OPEN_ITEM|SETTLEMENT_PARTY_MISMATCH|OPEN_ITEM_NOT_ELIGIBLE|OPEN_ITEM_NOT_POSTED|DOCUMENT_NOT_POSTED/.test(error.message)) throw new ApiError(409, error.message);
+        if (error instanceof Error && /INVALID|REJECTED|REQUIRED|MISSING|OPEN_ITEM_NOT_FOUND/.test(error.message)) throw new ApiError(400, error.message);
         throw error;
       }
     },

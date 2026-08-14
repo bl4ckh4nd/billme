@@ -121,6 +121,26 @@ const error = (code: ClosingDomainError['code'], message: string, field?: string
   blocking: true,
 });
 
+type SettlementRuntimeError = Error & { code?: string; field?: string; details?: unknown };
+
+const settlementFailure = (code: string, message = code, details?: unknown): SettlementRuntimeError => {
+  const failure = new Error(message) as SettlementRuntimeError;
+  failure.code = code;
+  if (details !== undefined) failure.details = details;
+  return failure;
+};
+
+const settlementIssue = (cause: unknown): ClosingDomainError & { details?: unknown } => {
+  const failure = cause as SettlementRuntimeError;
+  const translated = error(
+    (failure?.code ?? (cause instanceof CorrectionSettlementError ? cause.code : 'INVALID_AMOUNT')) as ClosingDomainError['code'],
+    cause instanceof Error ? cause.message : 'Settlement invariant failed',
+    failure?.field,
+  ) as ClosingDomainError & { details?: unknown };
+  if (failure?.details !== undefined) translated.details = failure.details;
+  return translated;
+};
+
 const rowToEntity = (row: SourceRunRow): AccountingSourceRunEntity => ({
   id: row.id,
   tenantId: row.tenant_id,
@@ -255,7 +275,10 @@ const existingResult = (
   const idempotencyKey = keyFor(fact, tenantId);
   const existing = loadRun(db, tenantId, idempotencyKey, fact);
   if (!existing) return undefined;
-  const sameFact = stableJson(parseJson(existing.fact_json, null)) === stableJson({ ...fact, provenance: options.provenance });
+  const existingFact = parseJson<AccountingSourceFact & { provenance?: unknown }>(existing.fact_json, {} as AccountingSourceFact);
+  const sameFact = options.provenance !== undefined && existingFact.provenance !== undefined
+    ? stableJson(existingFact.provenance) === stableJson(options.provenance)
+    : stableJson(existingFact) === stableJson({ ...fact, provenance: options.provenance });
   if (!sameFact) return { status: 'rejected', sourceRun: rowToEntity(existing), errors: [error('DUPLICATE_SOURCE_REVISION', 'Source revision already exists with different facts.')], idempotencyKey };
   return { status: 'duplicate', sourceRun: rowToEntity(existing), errors: [], idempotencyKey };
 };
@@ -451,6 +474,11 @@ const nestedSettlementFacts = (facts: Record<string, any>): Record<string, any> 
 const nativeDocumentSourceKey = (documentType: 'outgoing_invoice' | 'incoming_invoice', id: string): string =>
   `${documentType === 'incoming_invoice' ? 'incoming-invoice' : 'outgoing-invoice'}:${id}`;
 
+const documentSourceKeys = (documentType: 'outgoing_invoice' | 'incoming_invoice', id: string): readonly string[] => [
+  nativeDocumentSourceKey(documentType, id),
+  `${documentType}:${id}`,
+];
+
 const settlementReference = (facts: Record<string, any>): string | undefined => {
   const nested = nestedSettlementFacts(facts);
   const original = facts.original && typeof facts.original === 'object' ? facts.original : {};
@@ -459,16 +487,16 @@ const settlementReference = (facts: Record<string, any>): string | undefined => 
 };
 
 const assertOpenItemEligible = (db: Database.Database, tenantId: string, item: any, documentType?: 'outgoing_invoice' | 'incoming_invoice'): void => {
-  if (!item || !['open', 'partially_paid'].includes(String(item.status)) || Number(item.residual_amount) <= 0) throw new Error('OPEN_ITEM_NOT_ELIGIBLE');
-  if (!item.journal_entry_id) throw new Error('OPEN_ITEM_NOT_POSTED');
+  if (!item || !['open', 'partially_paid'].includes(String(item.status)) || Number(item.residual_amount) <= 0) throw settlementFailure('OPEN_ITEM_NOT_ELIGIBLE', 'Open item is no longer eligible for settlement.', { status: item?.status, remaining: Number(item?.residual_amount ?? 0) });
+  if (!item.journal_entry_id) throw settlementFailure('OPEN_ITEM_NOT_POSTED');
   const journal = db.prepare('SELECT status,source_type,source_key FROM journal_entries WHERE tenant_id = ? AND id = ?').get(tenantId, item.journal_entry_id) as { status?: string; source_type?: string; source_key?: string } | undefined;
-  if (journal?.status !== 'posted') throw new Error('OPEN_ITEM_NOT_POSTED');
+  if (journal?.status !== 'posted') throw settlementFailure('OPEN_ITEM_NOT_POSTED');
   if (documentType) {
     const table = documentType === 'incoming_invoice' ? 'incoming_invoices' : 'invoices';
     const document = documentType === 'incoming_invoice'
       ? db.prepare(`SELECT accounting_status,accounting_journal_entry_id FROM ${table} WHERE tenant_id = ? AND id = ?`).get(tenantId, item.source_id) as { accounting_status?: string; accounting_journal_entry_id?: string } | undefined
       : db.prepare(`SELECT accounting_status,accounting_journal_entry_id FROM ${table} WHERE id = ?`).get(item.source_id) as { accounting_status?: string; accounting_journal_entry_id?: string } | undefined;
-    if (!document || document.accounting_status !== 'posted' || document.accounting_journal_entry_id !== item.journal_entry_id || item.source_type !== documentType || journal.source_type !== documentType || journal.source_key !== nativeDocumentSourceKey(documentType, item.source_id)) throw new Error('DOCUMENT_NOT_POSTED');
+    if (!document || document.accounting_status !== 'posted' || document.accounting_journal_entry_id !== item.journal_entry_id || item.source_type !== documentType || journal.source_type !== documentType || !documentSourceKeys(documentType, item.source_id).includes(journal.source_key ?? '')) throw settlementFailure('DOCUMENT_NOT_POSTED');
   }
 };
 
@@ -476,7 +504,7 @@ const findSettlementOpenItem = (db: Database.Database, tenantId: string, id: str
   const item = documentType
     ? db.prepare('SELECT * FROM open_items WHERE tenant_id = ? AND (id = ? OR source_id = ?) AND source_type = ?').get(tenantId, id, id, documentType)
     : db.prepare('SELECT * FROM open_items WHERE tenant_id = ? AND (id = ? OR source_id = ?)').get(tenantId, id, id);
-  if (!item) throw new Error('OPEN_ITEM_NOT_FOUND');
+  if (!item) throw settlementFailure('OPEN_ITEM_NOT_FOUND');
   assertOpenItemEligible(db, tenantId, item, documentType as 'outgoing_invoice' | 'incoming_invoice' | undefined);
   return item;
 };
@@ -490,46 +518,46 @@ const assertSettlementReferences = (db: Database.Database, tenantId: string, kin
     const referencedItem = requestedOpenItemId
       ? findSettlementOpenItem(db, tenantId, requestedOpenItemId, documentType)
       : undefined;
-    if (referencedItem && originalId && referencedItem.source_id !== originalId) throw new Error('ORIGINAL_CHANGED');
+    if (referencedItem && originalId && referencedItem.source_id !== originalId) throw settlementFailure('ORIGINAL_CHANGED');
     originalId ??= referencedItem?.source_id;
-    if (!originalId) throw new Error('ORIGINAL_DOCUMENT_REQUIRED');
+    if (!originalId) throw settlementFailure('ORIGINAL_DOCUMENT_REQUIRED');
     const original = documentType === 'incoming_invoice'
       ? db.prepare(`SELECT id,number,accounting_status,accounting_journal_entry_id FROM ${table} WHERE tenant_id = ? AND id = ?`).get(tenantId, originalId) as any
       : db.prepare(`SELECT id,number,accounting_status,accounting_journal_entry_id FROM ${table} WHERE id = ?`).get(originalId) as any;
-    if (!original) throw new Error('ORIGINAL_DOCUMENT_NOT_FOUND');
+    if (!original) throw settlementFailure('ORIGINAL_DOCUMENT_NOT_FOUND');
     const journal = original.accounting_journal_entry_id
       ? db.prepare('SELECT status,source_type,source_key FROM journal_entries WHERE tenant_id = ? AND id = ?').get(tenantId, original.accounting_journal_entry_id) as { status?: string; source_type?: string; source_key?: string } | undefined
       : undefined;
-    if (original.accounting_status !== 'posted' || journal?.status !== 'posted' || journal.source_type !== documentType || journal.source_key !== nativeDocumentSourceKey(documentType, original.id)) throw new Error('DOCUMENT_NOT_POSTED');
+    if (original.accounting_status !== 'posted' || journal?.status !== 'posted' || journal.source_type !== documentType || !documentSourceKeys(documentType, original.id).includes(journal?.source_key ?? '')) throw settlementFailure('DOCUMENT_NOT_POSTED');
     const item = referencedItem ?? findSettlementOpenItem(db, tenantId, original.id, documentType);
     const nested = nestedSettlementFacts(facts);
     const requestedNumber = typeof facts.originalDocumentNumber === 'string' && facts.originalDocumentNumber.trim() ? facts.originalDocumentNumber.trim() : typeof nested.originalDocumentNumber === 'string' && nested.originalDocumentNumber.trim() ? nested.originalDocumentNumber.trim() : undefined;
-    if (requestedNumber && requestedNumber !== original.number) throw new Error('ORIGINAL_CHANGED');
+    if (requestedNumber && requestedNumber !== original.number) throw settlementFailure('ORIGINAL_CHANGED');
     const requested = Number(kind === 'skonto' ? facts.skontoAmount : facts.writeOffGrossAmount);
-    if (Number.isFinite(requested) && requested > Number(item.residual_amount) + 0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
+    if (Number.isFinite(requested) && requested > Number(item.residual_amount) + 0.01) throw settlementFailure('SETTLEMENT_EXCEEDS_OPEN_ITEM', 'Settlement exceeds the open-item residual.', { requested, remaining: Number(item.residual_amount) });
     return;
   }
 
   const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? facts.finalInvoice : {};
   const finalId = typeof finalInvoice.id === 'string' && finalInvoice.id.trim() ? finalInvoice.id.trim() : typeof facts.finalInvoiceId === 'string' && facts.finalInvoiceId.trim() ? facts.finalInvoiceId.trim() : originalId;
-  if (!finalId) throw new Error('FINAL_INVOICE_REQUIRED');
+  if (!finalId) throw settlementFailure('FINAL_INVOICE_REQUIRED');
   const finalItem = findSettlementOpenItem(db, tenantId, finalId, documentType);
   const documents = [...(Array.isArray(facts.advances) ? facts.advances : []), ...(Array.isArray(facts.partialInvoices) ? facts.partialInvoices : [])];
-  if (!documents.length) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
+  if (!documents.length) throw settlementFailure('SETTLEMENT_DOCUMENT_REQUIRED');
   for (const document of documents) {
     const id = document && typeof document === 'object' && typeof document.id === 'string' && document.id.trim() ? document.id.trim() : undefined;
-    if (!id) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
+    if (!id) throw settlementFailure('REFERENCE_REQUIRED', 'settlement document id is required', { collection: 'settlementDocuments' });
     const item = findSettlementOpenItem(db, tenantId, id, documentType);
-    if (item.party_type !== finalItem.party_type || item.party_id !== finalItem.party_id) throw new Error('SETTLEMENT_PARTY_MISMATCH');
+    if (item.party_type !== finalItem.party_type || item.party_id !== finalItem.party_id) throw settlementFailure('SETTLEMENT_PARTY_MISMATCH', 'Settlement documents must belong to the same party.', { expected: { partyType: finalItem.party_type, partyId: finalItem.party_id }, actual: { partyType: item.party_type, partyId: item.party_id } });
     const requested = Number(document.grossAmount);
-    if (Number.isFinite(requested) && requested > Number(item.residual_amount) + 0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
+    if (Number.isFinite(requested) && requested > Number(item.residual_amount) + 0.01) throw settlementFailure('SETTLEMENT_EXCEEDS_OPEN_ITEM', 'Settlement exceeds the open-item residual.', { requested, remaining: Number(item.residual_amount), documentId: id });
   }
 };
 
 const updateSettlementOpenItem = (db: Database.Database, tenantId: string, item: any, value: number): void => {
   const allocated = amount(Number(item.allocated_amount) + value);
   const residual = amount(Number(item.original_amount) - allocated);
-  if (!Number.isFinite(value) || value <= 0 || value > Number(item.residual_amount) + 0.01 || residual < -0.01) throw new Error('SETTLEMENT_EXCEEDS_OPEN_ITEM');
+  if (!Number.isFinite(value) || value <= 0 || value > Number(item.residual_amount) + 0.01 || residual < -0.01) throw settlementFailure('SETTLEMENT_EXCEEDS_OPEN_ITEM', 'Settlement exceeds the open-item residual.', { requested: value, remaining: Number(item.residual_amount), openItemId: item.id });
   const status = residual <= 0.01 ? 'paid' : 'partially_paid';
   const timestamp = now();
   db.prepare('UPDATE open_items SET allocated_amount = ?, residual_amount = ?, status = ?, updated_at = ? WHERE tenant_id = ? AND id = ?').run(allocated, Math.max(0, residual), status, timestamp, tenantId, item.id);
@@ -713,12 +741,11 @@ const resolveCorrectionOriginal = (db: Database.Database, tenantId: string, requ
   const journal = row.accounting_status === 'posted' && row.accounting_journal_entry_id
     ? db.prepare(`SELECT status, source_type, source_key FROM journal_entries WHERE tenant_id = ? AND id = ?`).get(tenantId, row.accounting_journal_entry_id) as { status?: string; source_type?: string; source_key?: string } | undefined
     : undefined;
-  const sourceKey = documentType === 'incoming_invoice' ? `incoming-invoice:${row.id}` : `outgoing-invoice:${row.id}`;
   if (row.accounting_status !== 'posted'
     || !row.accounting_journal_entry_id
     || journal?.status !== 'posted'
     || journal.source_type !== documentType
-    || journal.source_key !== sourceKey) throw new Error('DOCUMENT_NOT_POSTED');
+    || !documentSourceKeys(documentType, row.id).includes(journal.source_key ?? '')) throw settlementFailure('DOCUMENT_NOT_POSTED');
   if (row.number !== requested.documentNumber || row[dateColumn] !== requested.taxEffectiveDate) throw new Error('ORIGINAL_CHANGED');
   const lines = documentType === 'incoming_invoice'
     ? db.prepare('SELECT * FROM incoming_invoice_lines WHERE tenant_id = ? AND incoming_invoice_id = ? ORDER BY position').all(tenantId, row.id) as any[]
@@ -811,22 +838,30 @@ export const postAccountingCommand = (
   const generatedOptions = { ...options, provenance };
   return db.transaction((): AccountingSourcePostResult => {
     const settlementKind = input.kind === 'skonto' || input.kind === 'bad_debt' || input.kind === 'advance_settlement' ? input.kind : undefined;
-    if (facts && settlementKind) assertSettlementReferences(db, tenantId, settlementKind, facts);
     const generated = facts
       ? generatedCommands(input.kind, facts, input.source, settlementKind
         ? (() => { const mapping = correctionMappings(db, tenantId, activeChart(db, tenantId, options.chart)); return settlementAccounts(mapping, facts); })()
         : undefined, tenantId)
       : undefined;
+    const replayFact = generated?.commands[0] ? factFromCommand(generated.commands[0]) : input.source;
+    const existing = existingResult(db, tenantId, replayFact, generatedOptions);
+    if (existing) return existing;
+    if (facts && settlementKind) {
+      try {
+        assertSettlementReferences(db, tenantId, settlementKind, facts);
+      } catch (cause) {
+        const issue = settlementIssue(cause);
+        const result = { status: 'rejected', errors: [issue] };
+        const sourceRun = persistRejected(db, tenantId, input.source, result, generatedOptions);
+        return { status: 'rejected', sourceRun, errors: [issue], idempotencyKey: keyFor(input.source, tenantId) };
+      }
+    }
     if (!generated) return postAccountingSourceInTransaction(db, input.source, scope, generatedOptions);
     if (generated.status === 'rejected') {
-      const existing = existingResult(db, tenantId, input.source, generatedOptions);
-      if (existing) return existing;
       const sourceRun = persistRejected(db, tenantId, input.source, { status: 'rejected', errors: generated.errors, result: generated.result }, generatedOptions);
       return { status: 'rejected', sourceRun, errors: generated.errors, idempotencyKey: keyFor(input.source, tenantId) };
     }
     if (generated.status === 'noop') {
-      const existing = existingResult(db, tenantId, input.source, generatedOptions);
-      if (existing) return existing;
       const sourceRun = persistNoop(db, tenantId, input.source, { status: 'noop', result: generated.result }, generatedOptions);
       return { status: 'noop', sourceRun, errors: [], idempotencyKey: keyFor(input.source, tenantId) };
     }

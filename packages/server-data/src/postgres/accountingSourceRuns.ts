@@ -41,7 +41,7 @@ import {
   type PostgresTransactionClient,
 } from './connection.js';
 
-type SourceRunStatus = 'posted' | 'prepared' | 'noop';
+type SourceRunStatus = 'posted' | 'prepared' | 'rejected' | 'noop';
 type TaxExportKind = 'ustva' | 'zm' | 'oss';
 
 export interface AccountingSourceRunRecord {
@@ -353,7 +353,7 @@ const resolveCorrectionOriginal = async (
     || !row.accounting_journal_entry_id
     || ownedJournal?.status !== 'posted'
     || ownedJournal.source_type !== documentType
-    || ownedJournal.source_key !== nativeDocumentSourceKey(documentType, row.id)) throw new Error('DOCUMENT_NOT_POSTED');
+    || !documentSourceKeys(documentType, row.id).includes(ownedJournal?.source_key ?? '')) throw new Error('DOCUMENT_NOT_POSTED');
   if (row.number !== requested.documentNumber) throw new Error('ORIGINAL_CHANGED');
   const incomingLines = documentType === 'incoming_invoice'
     ? await q<any>(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [tenant(scope), row.id])
@@ -436,6 +436,11 @@ const settlementDocumentType = (facts: Record<string, any>): 'outgoing_invoice' 
 const nativeDocumentSourceKey = (documentType: 'outgoing_invoice' | 'incoming_invoice', id: string): string =>
   `${documentType === 'incoming_invoice' ? 'incoming-invoice' : 'outgoing-invoice'}:${id}`;
 
+const documentSourceKeys = (documentType: 'outgoing_invoice' | 'incoming_invoice', id: string): readonly string[] => [
+  nativeDocumentSourceKey(documentType, id),
+  `${documentType}:${id}`,
+];
+
 const nestedSettlementFacts = (facts: Record<string, any>): Record<string, any> =>
   facts.facts && typeof facts.facts === 'object' ? facts.facts : {};
 
@@ -455,7 +460,7 @@ const assertOpenItemEligible = async (db: PostgresQueryable, scope: TenantScope,
   if (documentType) {
     const table = documentType === 'incoming_invoice' ? 'incoming_invoices' : 'invoices';
     const document = (await q<any>(db, `SELECT accounting_status,accounting_journal_entry_id FROM ${table} WHERE tenant_id=$1 AND id=$2`, [tenant(scope), item.source_id]))[0];
-    if (!document || document.accounting_status !== 'posted' || document.accounting_journal_entry_id !== item.journal_entry_id || item.source_type !== documentType || journal.source_type !== documentType || journal.source_key !== nativeDocumentSourceKey(documentType, item.source_id)) throw new Error('DOCUMENT_NOT_POSTED');
+    if (!document || document.accounting_status !== 'posted' || document.accounting_journal_entry_id !== item.journal_entry_id || item.source_type !== documentType || journal.source_type !== documentType || !documentSourceKeys(documentType, item.source_id).includes(journal.source_key ?? '')) throw new Error('DOCUMENT_NOT_POSTED');
   }
 };
 
@@ -486,7 +491,7 @@ const assertSettlementReferences = async (db: PostgresQueryable, scope: TenantSc
     const journal = original.accounting_journal_entry_id
       ? (await q<any>(db, `SELECT status,source_type,source_key FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), original.accounting_journal_entry_id]))[0]
       : undefined;
-    if (original.accounting_status !== 'posted' || journal?.status !== 'posted' || journal.source_type !== documentType || journal.source_key !== nativeDocumentSourceKey(documentType, original.id)) throw new Error('DOCUMENT_NOT_POSTED');
+    if (original.accounting_status !== 'posted' || journal?.status !== 'posted' || journal.source_type !== documentType || !documentSourceKeys(documentType, original.id).includes(journal?.source_key ?? '')) throw new Error('DOCUMENT_NOT_POSTED');
     const item = referencedItem ?? await findSettlementOpenItem(db, scope, original.id, documentType);
     const nested = nestedSettlementFacts(facts);
     const requestedNumber = textValue(facts.originalDocumentNumber) ?? textValue(nested.originalDocumentNumber);

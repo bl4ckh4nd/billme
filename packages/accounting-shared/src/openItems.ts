@@ -2,7 +2,7 @@
 export type VatAccountingMethod = 'soll' | 'ist';
 export type OpenItemPartyType = 'debtor' | 'creditor';
 export type OpenItemStatus = 'open' | 'partially_paid' | 'paid' | 'overpaid' | 'unresolved';
-export type AccountingDocumentSource = 'outgoing_invoice' | 'incoming_invoice' | 'legacy_transaction';
+export type AccountingDocumentSource = 'outgoing_invoice' | 'incoming_invoice' | 'legacy_transaction' | 'correction';
 
 /** Caller supplied audit context for a server-side accounting mutation. */
 export interface AccountingMutationContext {

@@ -33,6 +33,23 @@ test('Pro web client reads canonical accounting transactions', async () => {
   }
 });
 
+test('Pro web client accepts correction open items from the server', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify([{
+    id: 'correction-open-item:c1', tenantId: 'tenant-1', partyType: 'creditor', partyId: 'vendor-1',
+    sourceType: 'correction', sourceId: 'c1', documentNumber: 'Korrektur ER-1', documentDate: '2026-11-20', dueDate: '2026-11-20',
+    originalAmount: 11.9, allocatedAmount: 0, residualAmount: 11.9, status: 'open', journalEntryId: 'journal-c1',
+    createdAt: '2026-11-20T00:00:00.000Z', updatedAt: '2026-11-20T00:00:00.000Z',
+  }]), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    const items = await client.listOpenItems();
+    assert.equal(items[0]?.sourceType, 'correction');
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('Pro web client sends inclusive SuSa date bounds', async () => {
   const previousFetch = globalThis.fetch;
   let requestUrl = '';

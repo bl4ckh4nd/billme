@@ -560,7 +560,7 @@ export const proWorkflowEntrySchema = z.object({
   updatedAt: z.string(),
 });
 
-const accountingDocumentSourceTypeSchema = z.enum(['outgoing_invoice', 'incoming_invoice', 'legacy_transaction']);
+const accountingDocumentSourceTypeSchema = z.enum(['outgoing_invoice', 'incoming_invoice', 'legacy_transaction', 'correction']);
 const accountingSnapshotSchema = z.object({
   sourceType: accountingDocumentSourceTypeSchema,
   sourceId: z.string(),

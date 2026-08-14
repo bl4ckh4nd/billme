@@ -26,6 +26,13 @@ describe('OposView', () => {
     expect(screen.getByRole('button', { name: 'Entwurf speichern' }).hasAttribute('disabled')).toBe(true);
   });
 
+  it('gives the stored-document combobox an accessible name', async () => {
+    const adapter = baseAdapter();
+    render(<OposView dataAdapter={adapter} />);
+    await screen.findByText('RE-1');
+    expect(screen.getByRole('combobox', { name: 'Gespeicherten Beleg wählen' })).toBeTruthy();
+  });
+
   it('reuses one allocation event id when a partial allocation is retried', async () => {
     const adapter = baseAdapter();
     const allocate = vi.fn()

@@ -162,6 +162,10 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
     draft.workflowStatus === 'posted' ||
     draft.workflowStatus === 'reversed' ||
     (draft.workflowStatus === 'pending_approval' && role === 'bookkeeper');
+  const readOnlyMessage =
+    draft.workflowStatus === 'posted' || draft.workflowStatus === 'reversed'
+      ? 'Gebuchte Buchungen sind gesperrt. Änderungen sind nur über eine Korrektur möglich.'
+      : 'Diese Buchung ist schreibgeschützt.';
 
   const totalSoll = draft.lines
     .filter((line) => line.type === 'Soll')
@@ -260,7 +264,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
   }
 
   return (
-    <div className="flex flex-col h-full bg-surface">
+    <div className="flex h-full min-w-0 flex-col bg-surface">
       <div className="sr-only" aria-live="polite">
         {announceMessage}
       </div>
@@ -269,6 +273,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         <div className="flex items-center gap-2.5 min-w-0">
           <button
             onClick={onBack}
+            aria-label="Zurück zur Inbox"
             className="w-8 h-8 flex items-center justify-center rounded-lg border border-border text-muted hover:bg-surface-muted shrink-0"
           >
             <ArrowLeft size={15} />
@@ -297,6 +302,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                 </span>
               )}
             </div>
+            {readOnly && <p className="mt-1 text-xs text-muted" role="status">{readOnlyMessage}</p>}
             <p className="text-xs text-muted font-medium mt-0.5">
               {transaction.payee} • {new Date(transaction.date).toLocaleDateString('de-DE')} •{' '}
               {formatCurrency(transaction.amount, transaction.currency)}
@@ -313,8 +319,8 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         />
       </div>
 
-      <div className="flex flex-1 overflow-hidden p-5 gap-5">
-        <div className="flex flex-col gap-4 w-80 shrink-0">
+      <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-auto p-5 md:flex-row">
+        <div className="flex w-full shrink-0 flex-col gap-4 md:w-80">
           <div className="border border-border rounded-2xl overflow-hidden">
             <div className="p-4 border-b border-subtle bg-surface-muted/50 flex items-center justify-between">
               <h3 className="text-sm font-bold text-foreground">Transaktion & Meta</h3>
@@ -390,7 +396,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
         </div>
 
-        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <ValidationSummary issues={validationIssues} />
 
           <div className="border border-border rounded-xl overflow-hidden flex-1 flex flex-col min-h-0">
@@ -631,14 +637,16 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                 <Plus size={15} />
                 Zeile hinzufügen
               </button>
-              <button
-                onClick={() => void handleWorkflowAction('save_draft')}
-                disabled={busy}
-                className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
-              >
-                <Save size={15} />
-                Speichern
-              </button>
+              {!readOnly && (
+                <button
+                  onClick={() => void handleWorkflowAction('save_draft')}
+                  disabled={busy}
+                  className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
+                >
+                  <Save size={15} />
+                  Speichern
+                </button>
+              )}
             </div>
           </div>
 
@@ -674,7 +682,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
           <div ref={shortcutDialogRef} className="w-full max-w-lg bg-surface rounded-2xl border border-border shadow-xl p-6" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title">
             <div className="flex items-center justify-between mb-4">
               <h3 id="shortcut-help-title" className="text-lg font-bold text-foreground">Tastenkürzel</h3>
-              <button ref={shortcutCloseRef} onClick={() => setShowShortcutHelp(false)} className="text-sm font-bold text-muted">
+              <button ref={shortcutCloseRef} aria-label="Schließen (Tastenkürzel-Hilfe)" onClick={() => setShowShortcutHelp(false)} className="text-sm font-bold text-muted">
                 Schließen
               </button>
             </div>

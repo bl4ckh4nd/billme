@@ -246,7 +246,7 @@ export default function OposView({ dataAdapter, role = 'admin' }: OposViewProps)
   };
 
   return (
-    <div className="h-full overflow-auto p-5" data-testid="opos-workspace">
+    <div className="h-full min-w-0 overflow-auto p-5" data-testid="opos-workspace">
       <div className="mb-5">
         <h2 className="text-xl font-black text-foreground">OPOS</h2>
         <p className="text-sm text-muted">Offene Posten, Zahlungszuordnung und Eingangsrechnungen.</p>
@@ -256,8 +256,8 @@ export default function OposView({ dataAdapter, role = 'admin' }: OposViewProps)
       {error ? <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive"><span>{error}</span><Button type="button" size="sm" variant="secondary" onClick={() => void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : 'OPOS-Daten konnten nicht geladen werden.'))}>Erneut versuchen</Button></div> : null}
       {message ? <div className="mb-3 rounded-lg border border-success-border bg-success-bg px-3 py-2 text-sm text-success" role="status" aria-live="polite">{message}</div> : null}
       {!canMutate ? <div className="mb-3 rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann OPOS-Daten nur lesen.</div> : null}
-      <div className="grid gap-5 xl:grid-cols-2">
-        <section className="rounded-xl border border-border p-4" aria-labelledby="open-items-heading">
+      <div className="grid min-w-0 gap-5 xl:grid-cols-2">
+        <section className="min-w-0 rounded-xl border border-border p-4" aria-labelledby="open-items-heading">
           <h3 id="open-items-heading" className="mb-3 text-base font-bold">Offene Posten</h3>
           {!loading && !error && items.length === 0 ? <p className="text-sm text-muted">Keine offenen Posten vorhanden.</p> : (
             <div className="overflow-x-auto">
@@ -276,7 +276,7 @@ export default function OposView({ dataAdapter, role = 'admin' }: OposViewProps)
           {lastPayment && lastPayment.residualAmount > 0 ? <div className="mt-4 rounded-lg border border-warning-border bg-warning-bg p-3"><p className="text-sm font-semibold">Restzahlung: {euro(lastPayment.residualAmount)}</p><div className="mt-2 grid gap-2 sm:grid-cols-2"><select disabled={!canMutate} className="rounded-lg border border-border px-3 py-2 text-sm" value={remainingItemId} onChange={(e) => setRemainingItemId(e.target.value)}><option value="">Weiteren offenen Posten wählen</option>{items.filter((item) => item.id !== selectedItemId && item.partyType === lastPayment.partyType).map((item) => <option key={item.id} value={item.id}>{item.documentNumber} ({euro(item.residualAmount)})</option>)}</select><input disabled={!canMutate} type="number" min="0.01" step="0.01" className="rounded-lg border border-border px-3 py-2 text-sm" value={remainingAmount} onChange={(e) => setRemainingAmount(e.target.value)} placeholder={String(lastPayment.residualAmount)} /></div><button type="button" className="mt-2 rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy} onClick={allocateRemaining}>Restbetrag zuordnen</button></div> : null}
         </section>
 
-        <section className="rounded-xl border border-border p-4" aria-labelledby="incoming-heading">
+        <section className="min-w-0 rounded-xl border border-border p-4" aria-labelledby="incoming-heading">
           <h3 id="incoming-heading" className="mb-3 text-base font-bold">Eingangsrechnungen</h3>
           <fieldset disabled={!canMutate} className="contents">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -292,7 +292,7 @@ export default function OposView({ dataAdapter, role = 'admin' }: OposViewProps)
           </div>
           </fieldset>
           <p className="mt-2 text-sm text-muted">Brutto: {euro(Number.isFinite(grossAmount) ? grossAmount : 0)}</p>
-          <div className="mt-3 flex flex-wrap gap-2"><button type="button" className="rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-50" disabled={!canMutate || busy} onClick={saveInvoice}>Entwurf speichern</button><select className="rounded-lg border border-border px-3 py-2 text-sm" value={selectedInvoiceId} onChange={(e) => { setSelectedInvoiceId(e.target.value); setPreview(null); }}><option value="">Gespeicherten Beleg wählen</option>{invoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.number} · {invoice.status} · {invoice.accountingStatus}</option>)}</select><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={busy || !selectedInvoice} onClick={previewInvoice}>Vorschau</button><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy || !selectedInvoice || selectedInvoice.status !== 'draft'} onClick={finalizeInvoice}>Für Buchung freigeben</button><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy || !selectedInvoice || selectedInvoice.status === 'draft'} onClick={postInvoice}>Buchen</button></div>
+          <div className="mt-3 flex min-w-0 flex-wrap gap-2"><button type="button" className="rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-50" disabled={!canMutate || busy} onClick={saveInvoice}>Entwurf speichern</button><select aria-label="Gespeicherten Beleg wählen" className="min-w-0 max-w-full rounded-lg border border-border px-3 py-2 text-sm" value={selectedInvoiceId} onChange={(e) => { setSelectedInvoiceId(e.target.value); setPreview(null); }}><option value="">Gespeicherten Beleg wählen</option>{invoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.number} · {invoice.status} · {invoice.accountingStatus}</option>)}</select><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={busy || !selectedInvoice} onClick={previewInvoice}>Vorschau</button><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy || !selectedInvoice || selectedInvoice.status !== 'draft'} onClick={finalizeInvoice}>Für Buchung freigeben</button><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy || !selectedInvoice || selectedInvoice.status === 'draft'} onClick={postInvoice}>Buchen</button></div>
           <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={softLockOverride} disabled={!canMutate} onChange={(e) => setSoftLockOverride(e.target.checked)} /> Soft-Lock übersteuern</label>
           {softLockOverride ? <label className="mt-2 block text-sm">Override-Begründung<input disabled={!canMutate} className="mt-1 w-full rounded-lg border border-border px-3 py-2" value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></label> : null}
           {preview ? <div className="mt-3 rounded-lg bg-surface-muted p-3 text-sm" role="status" aria-live="polite"><strong>Vorschau: {preview.status === 'ready' ? 'bereit' : 'nicht bereit'}</strong>{preview.issues.map((issue) => <p key={issue.code} className="mt-1 text-error">{issue.message}</p>)}</div> : null}

@@ -93,9 +93,9 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
   };
 
   return (
-    <div className="flex flex-col h-full w-full text-foreground">
-      <div className="flex items-center gap-1 px-6 pt-2 shrink-0 border-b border-subtle">
-        <nav className="flex items-center gap-0.5">
+    <div className="flex h-full min-w-0 w-full flex-col text-foreground">
+      <div className="shrink-0 overflow-x-auto border-b border-subtle px-3 pt-2 sm:px-6">
+        <nav className="flex min-w-max items-center gap-0.5" aria-label="Buchhaltungsbereiche">
           {(
             [
               { view: 'inbox', label: 'Inbox' },
@@ -111,7 +111,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
               key={view}
               onClick={() => setCurrentView(view)}
               aria-current={currentView === view ? 'page' : undefined}
-              className={`px-4 py-2 text-sm font-bold transition-colors rounded-t-lg relative ${
+              className={`relative min-h-10 rounded-t-lg px-4 py-2 text-sm font-bold transition-colors active:scale-[0.96] ${
                 currentView === view
                   ? 'text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-dark-base'
                   : 'text-muted hover:text-foreground'
@@ -123,9 +123,9 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
         </nav>
       </div>
 
-      <main className="flex-1 overflow-hidden">
+      <main className="min-w-0 flex-1 overflow-hidden">
         {busy ? <div className="sr-only" aria-live="polite">Speichere Änderung…</div> : null}
-        <div className="h-full overflow-hidden flex flex-col">
+        <div className="flex h-full min-w-0 flex-col overflow-hidden">
           {currentView === 'inbox' ? (
             <InboxView
               role={role}

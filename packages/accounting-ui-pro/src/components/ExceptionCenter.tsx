@@ -78,9 +78,19 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
     setResolutionNote(selectedTx.exceptionCase?.resolutionNote ?? '');
   }, [selectedTx?.id]);
 
+  const hasActiveExceptionMarkers =
+    selectedTx != null && (selectedTx.issueCounts.errors > 0 || selectedTx.issueCounts.warnings > 0 || selectedTx.flags.length > 0);
+  const exceptionMarkers = selectedTx
+    ? [
+        ...selectedTx.flags,
+        selectedTx.issueCounts.errors > 0 ? `${selectedTx.issueCounts.errors} Fehler` : null,
+        selectedTx.issueCounts.warnings > 0 ? `${selectedTx.issueCounts.warnings} Warnungen` : null,
+      ].filter((marker): marker is string => Boolean(marker))
+    : [];
+
   return (
-    <div className="flex h-full">
-      <div className="w-96 shrink-0 border-r border-subtle flex flex-col">
+    <div className="flex h-full min-w-0 flex-col lg:flex-row">
+      <div className="flex w-full max-h-80 shrink-0 flex-col border-b border-subtle lg:max-h-none lg:w-96 lg:border-b-0 lg:border-r">
         <div className="px-4 py-3 border-b border-subtle">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-dark-base text-accent flex items-center justify-center shrink-0">
@@ -159,7 +169,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
         </div>
       </div>
 
-      <div className="flex-1 min-w-0 p-6 overflow-auto">
+      <div className="min-w-0 flex-1 overflow-auto p-6">
         {!selectedTx || !selectedDraft ? (
           <div className="text-muted">Keine Exception ausgewählt.</div>
         ) : (
@@ -183,8 +193,12 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
 
               <div className="border border-border rounded-2xl bg-surface p-5">
                 <div className="text-sm font-bold text-foreground mb-2">Validierungsdetails</div>
-                {selectedDraft.validationIssues.length === 0 ? (
+                {selectedDraft.validationIssues.length === 0 && !hasActiveExceptionMarkers ? (
                   <div className="text-sm text-success">Keine aktiven Validierungsprobleme.</div>
+                ) : selectedDraft.validationIssues.length === 0 ? (
+                  <div className="text-sm text-warning" role="status">
+                    Aktive Exception-Marker: {exceptionMarkers.join(', ')}
+                  </div>
                 ) : (
                   <ul className="space-y-2">
                     {selectedDraft.validationIssues.map((issue) => (

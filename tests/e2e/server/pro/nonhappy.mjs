@@ -469,13 +469,43 @@ export const runProNonHappyAccountingScenario = async () => {
   assert.equal(refetchedExport.headers.get('x-billme-datev-content-sha256'), exported.headers.get('x-billme-datev-content-sha256'));
   cases += 2;
 
-  // 14. A report with no active chart mapping is fail-closed at snapshot creation.
-  await json(state, session, '/api/v1/pro/accounting/policy', undefined, { method: 'PUT', body: { reason: 'nonhappy switch to unmapped chart', activeChart: 'SKR04', vatMethod: 'soll' } });
+  // 14. Posted journals lock the active chart; reports still fail closed when
+  // their active-chart mappings are incomplete.
+  const beforeLockedChart = await counts(state, session);
+  await expectError(state, session, '/api/v1/pro/accounting/policy', undefined, {
+    method: 'PUT', body: { reason: 'nonhappy switch locked chart', activeChart: 'SKR04', vatMethod: 'soll' },
+  }, 409, 'ACCOUNTING_CHART_LOCKED');
+  await assertNoAccountingWrite(state, session, beforeLockedChart, 'locked accounting chart');
+  assert.equal((await requestJson(state, session, '/api/v1/pro/accounting/policy')).activeChart, 'SKR03');
+
+  const settings = await requestJson(state, session, '/api/v1/pro/settings');
+  await requestJson(state, session, '/api/v1/pro/settings', undefined, {
+    method: 'PUT',
+    body: {
+      settings: {
+        ...settings,
+        businessReportingProfile: {
+          jurisdiction: 'DE',
+          legalForm: 'gmbh',
+          profitDetermination: 'double_entry',
+          hgbSizeClass: 'micro',
+          fiscalYearStart: '01-01',
+          chart: 'SKR03',
+          vatMethod: 'soll',
+        },
+      },
+    },
+  });
+  const mappingHealth = await requestJson(state, session, '/api/v1/pro/accounting/mappings/health', {
+    chart: 'SKR03', reportType: 'management-guv', asOfDate: '2026-08-31',
+  });
+  assert.ok(mappingHealth.unmapped.length > 0, 'missing report mappings must be visible through the public health endpoint');
   const beforeMissingMapping = await counts(state, session);
-  await expectError(state, session, '/api/v1/pro/accounting/reports/snapshots', undefined, { method: 'POST', body: { reportType: 'management-guv', from: '2026-08-01', to: '2026-08-31', reason: 'nonhappy missing report mapping' } }, 422, 'REPORT_SNAPSHOT_BLOCKED');
+  await expectError(state, session, '/api/v1/pro/accounting/reports/snapshots', undefined, {
+    method: 'POST', body: { reportType: 'management-guv', chart: 'SKR03', from: '2026-08-01', to: '2026-08-31', reason: 'nonhappy missing report mapping' },
+  }, 422, 'REPORT_SNAPSHOT_BLOCKED');
   await assertNoAccountingWrite(state, session, beforeMissingMapping, 'missing report mapping');
-  await json(state, session, '/api/v1/pro/accounting/policy', undefined, { method: 'PUT', body: { reason: 'nonhappy restore chart', activeChart: 'SKR03', vatMethod: 'soll' } });
-  cases++;
+  cases += 2;
 
   // 15. EÜR is explicitly calendar-year 2025 and fails closed for 2027.
   const before2027 = await counts(state, session);

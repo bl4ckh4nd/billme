@@ -106,7 +106,10 @@ type SqliteAssetRow = { id: string; asset_number: string; name: string; asset_cl
 type SqliteAssetScheduleRow = { id: string; asset_id: string; year: number; amount: number; months: number; status: string; journal_entry_id: string | null; source_type?: string | null; source_key?: string | null; posted_at: string | null };
 type SqliteAssetMovementRow = { id: string; asset_id: string; type: string; movement_date: string; amount: number; proceeds: number | null; gain_loss: number | null; journal_entry_id?: string | null; source_type?: string | null; source_key?: string | null; reason: string; created_at: string };
 type SqliteAccountMappingHgbRow = { id: string; chart: string; account_number: string; statement_type: string; position_key: string; position_label: string; balance_side: string | null; valid_from?: string | null; valid_to?: string | null; updated_at: string };
-type SqliteReportSnapshotRow = { id: string; report_type: string; args_json: string; payload_json: string; created_at: string };
+type SqliteReportSnapshotRow = { id: string; report_type: string; args_json: string; payload_json: string; source_hash?: string | null; created_at: string };
+type SqliteEurCashFactRow = { id: string; source_type: string; source_id: string; tax_year: number; kind: string; amount_net: number; flow_type: string | null; eur_line_id: string | null; splits_json: string | null; reason: string; actor_id: string; actor_name: string | null; idempotency_key: string | null; provenance_json: string; created_at: string; updated_at: string };
+type SqliteEurAnnexFactRow = { id: string; tax_year: number; annex: string; line_id: string; amount: number; source_id: string | null; fact_date: string | null; reason: string; actor_id: string; actor_name: string | null; idempotency_key: string | null; provenance_json: string; created_at: string };
+type SqliteAccountingSourceRunRow = { id: string; source_type: string; source_id: string; source_revision: string; idempotency_key: string; fact_json: string; result_json: string; status: string; journal_entry_id: string | null; created_at: string };
 type SqliteDatevExportRow = { id: string; file_path: string; record_count: number; from_date: string | null; to_date: string | null; created_at: string; meta_json: string };
 type SqliteTaxCaseRow = { key: ServerTaxCaseRecord['key']; label: string; mechanism: ServerTaxCaseRecord['mechanism']; default_rate: number; requires_counterparty_vat_id: number; requires_country: number; requires_evidence: number; active: number; updated_at: string };
 type SqliteTaxCaseAccountMappingRow = { id: string; chart: 'SKR03' | 'SKR04'; tax_case_key: ServerTaxCaseRecord['key']; role: 'output_tax' | 'input_tax' | 'datev_bu'; account_number: string; datev_bu_key: string | null; valid_from: string | null; valid_to: string | null; updated_at: string };
@@ -154,6 +157,7 @@ export interface DesktopSqliteImportCounts {
   assetMovements: number;
   accountMappingsHgb: number;
   reportSnapshots: number;
+  eurReportSnapshots: number;
   datevExports: number;
   taxCases: number;
   taxCaseAccountMappings: number;
@@ -163,6 +167,8 @@ export interface DesktopSqliteImportCounts {
   eurLines: number;
   eurClassifications: number;
   eurRules: number;
+  eurCashFacts: number;
+  eurAnnexFacts: number;
   accountKeywords: number;
   accountSuggestionRules: number;
   importBatches: number;
@@ -179,6 +185,7 @@ export interface DesktopSqliteImportCounts {
   openItemPayments: number;
   openItemAllocations: number;
   accountingBackfillRuns: number;
+  accountingSourceRuns: number;
 }
 
 export interface DesktopSqliteImportResult {
@@ -217,6 +224,9 @@ export const desktopSqliteImportedTables = [
   'asset_movements',
   'account_mappings_hgb',
   'report_snapshots',
+  'eur_cash_facts',
+  'eur_annex_facts',
+  'accounting_source_runs',
   'datev_exports',
   'tax_cases',
   'tax_case_account_mappings',
@@ -275,7 +285,8 @@ const tenantScopedIdentityTables = [
   'articles', 'accounts', 'bank_transactions', 'booking_drafts', 'booking_draft_lines',
   'draft_validation_issues', 'accounting_periods', 'journal_entries', 'journal_lines',
   'assets', 'asset_depreciation_schedule', 'asset_movements', 'account_mappings_hgb',
-  'report_snapshots', 'datev_exports', 'vat_evidence', 'journal_posting_pairs',
+  'report_snapshots', 'eur_cash_facts', 'eur_annex_facts', 'accounting_source_runs',
+  'datev_exports', 'vat_evidence', 'journal_posting_pairs',
   'transactions', 'eur_classifications', 'eur_rules', 'account_keywords',
   'account_suggestion_rules', 'import_batches', 'templates', 'email_log',
   'dunning_history', 'accounting_account_mappings', 'vendors', 'incoming_invoices',
@@ -373,6 +384,9 @@ const desktopImportTenantReferenceChecks: readonly DesktopImportTenantReferenceC
   { childTable: 'vat_evidence', childReferenceColumn: 'line_id', parentTable: 'journal_lines' },
   { childTable: 'eur_classifications', childReferenceColumn: 'source_id', parentTable: 'invoices', where: "c.source_type = 'invoice'" },
   { childTable: 'eur_classifications', childReferenceColumn: 'source_id', parentTable: 'transactions', where: "c.source_type = 'transaction'" },
+  { childTable: 'eur_cash_facts', childReferenceColumn: 'source_id', parentTable: 'invoices', where: "c.source_type = 'invoice'" },
+  { childTable: 'eur_cash_facts', childReferenceColumn: 'source_id', parentTable: 'transactions', where: "c.source_type = 'transaction'" },
+  { childTable: 'accounting_source_runs', childReferenceColumn: 'journal_entry_id', parentTable: 'journal_entries' },
 ] as const;
 
 const desktopImportArticleJsonTables = ['invoices', 'offers', 'recurring_profiles'] as const;
@@ -457,6 +471,22 @@ export const assertNoCrossTenantTenantReferences = async (
       });
     }
   }
+
+  const missingCashSource = await createDrizzle(client).execute(sql`
+    SELECT c.id::text AS child_id, c.source_type, c.source_id::text AS parent_id
+    FROM eur_cash_facts c
+    LEFT JOIN invoices i ON i.id = c.source_id AND c.source_type = 'invoice'
+    LEFT JOIN transactions t ON t.id = c.source_id AND c.source_type = 'transaction'
+    WHERE c.tenant_id = ${tenantId}
+      AND c.source_id IS NOT NULL
+      AND ((c.source_type = 'invoice' AND i.id IS NULL)
+        OR (c.source_type = 'transaction' AND t.id IS NULL)
+        OR c.source_type NOT IN ('invoice', 'transaction'))
+    ORDER BY c.id::text
+    LIMIT 1
+  `);
+  const missing = missingCashSource.rows[0] as { child_id?: string; source_type?: string; parent_id?: string } | undefined;
+  if (missing?.child_id) throw new Error(`IMPORT_MISSING_PARENT:eur_cash_facts.source_id:${missing.child_id}:${missing.source_type ?? 'unknown'}:${missing.parent_id ?? ''}`);
 };
 
 export const detectUnsupportedSqliteTables = (tables: string[], countLookup: (table: string) => number): Array<{ table: string; rowCount: number }> => {
@@ -645,6 +675,98 @@ export const loadLegacyAccountMappingsHgb = (db: SqliteDatabaseType, tenantId: s
     };
   });
 const loadReportSnapshots = (db: SqliteDatabaseType, tenantId: string): ServerReportSnapshotRecord[] => tableExists(db, 'report_snapshots') ? (db.prepare('SELECT * FROM report_snapshots ORDER BY created_at ASC, id ASC').all() as SqliteReportSnapshotRow[]).map((row) => ({ id: row.id, tenantId, reportType: row.report_type, argsJson: row.args_json, payloadJson: row.payload_json, createdAt: row.created_at })) : [];
+const loadEurCashFacts = (db: SqliteDatabaseType): Array<Record<string, unknown>> => tableExists(db, 'eur_cash_facts') ? db.prepare('SELECT * FROM eur_cash_facts ORDER BY tax_year ASC, source_type ASC, source_id ASC, id ASC').all() as SqliteEurCashFactRow[] as Array<Record<string, unknown>> : [];
+const loadEurAnnexFacts = (db: SqliteDatabaseType): Array<Record<string, unknown>> => tableExists(db, 'eur_annex_facts') ? db.prepare('SELECT * FROM eur_annex_facts ORDER BY tax_year ASC, annex ASC, created_at ASC, id ASC').all() as SqliteEurAnnexFactRow[] as Array<Record<string, unknown>> : [];
+
+type ServerEurReportSnapshotImportRow = {
+  id: string;
+  tenant_id: string;
+  tax_year: number;
+  from_date: string;
+  to_date: string;
+  payload_json: string;
+  source_hash: string;
+  catalog_id: string;
+  catalog_version: string;
+  catalog_source_hash: string;
+  reason: string;
+  actor_id: string;
+  created_at: string;
+};
+
+const requiredJsonObject = (value: string, code: string): Record<string, unknown> => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // The import must fail closed for malformed immutable snapshot payloads.
+  }
+  throw new Error(code);
+};
+
+const auditFor = (rows: readonly SqliteAuditRow[], entityType: string, entityId: string, action?: string): SqliteAuditRow | undefined => rows
+  .filter((row) => row.entity_type === entityType && row.entity_id === entityId && (!action || row.action === action))
+  .sort((left, right) => right.sequence - left.sequence)[0];
+
+const loadEurReportSnapshots = (db: SqliteDatabaseType, tenantId: string, auditRows: readonly SqliteAuditRow[]): ServerEurReportSnapshotImportRow[] => {
+  if (!tableExists(db, 'report_snapshots')) return [];
+  return (db.prepare("SELECT * FROM report_snapshots WHERE lower(report_type) = 'eur' ORDER BY created_at ASC, id ASC").all() as SqliteReportSnapshotRow[]).map((row) => {
+    const args = requiredJsonObject(row.args_json, `IMPORT_EUR_SNAPSHOT_ARGS_INVALID:${row.id}`);
+    const payload = requiredJsonObject(row.payload_json, `IMPORT_EUR_SNAPSHOT_PAYLOAD_INVALID:${row.id}`);
+    const filing = payload.filing && typeof payload.filing === 'object' ? payload.filing as Record<string, unknown> : undefined;
+    const catalog = (payload.catalog ?? filing?.catalog) as Record<string, unknown> | undefined;
+    const taxYear = Number(payload.taxYear ?? args.taxYear ?? filing?.taxYear);
+    const fromDate = String(payload.from ?? args.from ?? '');
+    const toDate = String(payload.to ?? args.to ?? '');
+    const snapshotAudit = auditFor(auditRows, 'report_snapshot', row.id, 'freeze');
+    const auditAfter = snapshotAudit?.after_json ? parseJson<Record<string, unknown>>(snapshotAudit.after_json, {}) : {};
+    const sourceHash = String(row.source_hash ?? auditAfter.sourceHash ?? createHash('sha256').update(JSON.stringify({ reportType: 'eur', args, payload })).digest('hex')).trim();
+    const catalogId = String(catalog?.id ?? '');
+    const catalogVersion = String(catalog?.version ?? '');
+    const catalogSourceHash = String(catalog?.sourceHash ?? '');
+    if (!Number.isInteger(taxYear) || !/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) throw new Error(`IMPORT_EUR_SNAPSHOT_RANGE_INVALID:${row.id}`);
+    if (!catalogId || !catalogVersion || !catalogSourceHash) throw new Error(`IMPORT_EUR_SNAPSHOT_CATALOG_INVALID:${row.id}`);
+    return {
+      id: row.id,
+      tenant_id: tenantId,
+      tax_year: taxYear,
+      from_date: fromDate,
+      to_date: toDate,
+      payload_json: row.payload_json,
+      source_hash: sourceHash,
+      catalog_id: catalogId,
+      catalog_version: catalogVersion,
+      catalog_source_hash: catalogSourceHash,
+      reason: snapshotAudit?.reason?.trim() || 'Desktop EÜR snapshot import',
+      actor_id: snapshotAudit?.actor?.trim() || 'desktop-import',
+      created_at: row.created_at,
+    };
+  });
+};
+
+const loadAccountingSourceRuns = (db: SqliteDatabaseType, tenantId: string, auditRows: readonly SqliteAuditRow[]): Array<Record<string, unknown>> => {
+  if (!tableExists(db, 'accounting_source_runs')) return [];
+  return (db.prepare('SELECT * FROM accounting_source_runs ORDER BY created_at ASC, id ASC').all() as SqliteAccountingSourceRunRow[]).map((row) => {
+    const audit = auditFor(auditRows, 'accounting_source_run', row.id);
+    const defaultReason = row.status === 'rejected' ? 'Accounting source rejected' : row.status === 'noop' ? 'Accounting source noop' : 'Accounting source posted';
+    return {
+      id: row.id,
+      tenant_id: tenantId,
+      source_type: row.source_type,
+      source_id: row.source_id,
+      source_revision: row.source_revision,
+      idempotency_key: row.idempotency_key,
+      status: row.status,
+      source_json: row.fact_json,
+      result_json: row.result_json,
+      journal_entry_id: row.journal_entry_id,
+      source_hash: createHash('sha256').update(row.fact_json).digest('hex'),
+      created_by: audit?.actor?.trim() || 'desktop-import',
+      reason: audit?.reason?.trim() || defaultReason,
+      created_at: row.created_at,
+    };
+  });
+};
 const loadDatevExports = (db: SqliteDatabaseType, tenantId: string): ServerDatevExportRecord[] => tableExists(db, 'datev_exports') ? (db.prepare('SELECT * FROM datev_exports ORDER BY created_at ASC, id ASC').all() as SqliteDatevExportRow[]).map((row) => ({ id: row.id, tenantId, filePath: row.file_path, recordCount: row.record_count, fromDate: row.from_date ?? undefined, toDate: row.to_date ?? undefined, createdAt: row.created_at, metaJson: row.meta_json })) : [];
 const loadTaxCases = (db: SqliteDatabaseType): ServerTaxCaseRecord[] => tableExists(db, 'tax_cases') ? (db.prepare('SELECT * FROM tax_cases ORDER BY key ASC').all() as SqliteTaxCaseRow[]).map((row) => ({ key: row.key, label: row.label, mechanism: row.mechanism, defaultRate: row.default_rate, requiresCounterpartyVatId: Boolean(row.requires_counterparty_vat_id), requiresCountry: Boolean(row.requires_country), requiresEvidence: Boolean(row.requires_evidence), active: Boolean(row.active), updatedAt: row.updated_at })) : [];
 const loadTaxCaseAccountMappings = (db: SqliteDatabaseType) => tableExists(db, 'tax_case_account_mappings') ? (db.prepare('SELECT * FROM tax_case_account_mappings ORDER BY chart ASC, tax_case_key ASC, role ASC').all() as SqliteTaxCaseAccountMappingRow[]).map((row) => ({ id: row.id, chart: row.chart, taxCaseKey: row.tax_case_key, role: row.role, accountNumber: row.account_number, datevBuKey: row.datev_bu_key ?? undefined, validFrom: row.valid_from ?? undefined, validTo: row.valid_to ?? undefined, updatedAt: row.updated_at })) : [];
@@ -776,6 +898,7 @@ const emptyCounts = (): DesktopSqliteImportCounts => ({
   assetMovements: 0,
   accountMappingsHgb: 0,
   reportSnapshots: 0,
+  eurReportSnapshots: 0,
   datevExports: 0,
   taxCases: 0,
   taxCaseAccountMappings: 0,
@@ -785,6 +908,8 @@ const emptyCounts = (): DesktopSqliteImportCounts => ({
   eurLines: 0,
   eurClassifications: 0,
   eurRules: 0,
+  eurCashFacts: 0,
+  eurAnnexFacts: 0,
   accountKeywords: 0,
   accountSuggestionRules: 0,
   importBatches: 0,
@@ -801,6 +926,7 @@ const emptyCounts = (): DesktopSqliteImportCounts => ({
   openItemPayments: 0,
   openItemAllocations: 0,
   accountingBackfillRuns: 0,
+  accountingSourceRuns: 0,
 });
 
 export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImportOptions): Promise<DesktopSqliteImportResult> => {
@@ -883,6 +1009,8 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         for (const row of loadAccountingPeriods(sqliteDb, tenantId)) { await saveServerAccountingPeriod(client, row); counts.accountingPeriods += 1; }
         for (const row of loadJournalEntries(sqliteDb, tenantId)) { await saveServerJournalEntry(client, row); counts.journalEntries += 1; }
         for (const row of loadJournalLines(sqliteDb, tenantId)) { await saveServerJournalLine(client, row); counts.journalLines += 1; }
+        const accountingSourceRuns = loadAccountingSourceRuns(sqliteDb, tenantId, sourceAuditRows);
+        if (accountingSourceRuns.length) counts.accountingSourceRuns += await importRawTenantRows(client, 'accounting_source_runs', accountingSourceRuns, tenantId, ['id', 'tenant_id', 'source_type', 'source_id', 'source_revision', 'idempotency_key', 'status', 'source_json', 'result_json', 'journal_entry_id', 'source_hash', 'created_by', 'reason', 'created_at']);
         if (tableExists(sqliteDb, 'open_items')) counts.openItems += await importRawTenantRows(client, 'open_items', sqliteDb.prepare('SELECT * FROM open_items').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'party_type', 'party_id', 'source_type', 'source_id', 'document_number', 'document_date', 'due_date', 'original_amount', 'allocated_amount', 'residual_amount', 'status', 'journal_entry_id', 'created_at', 'updated_at']);
         if (tableExists(sqliteDb, 'open_item_payments')) counts.openItemPayments += await importRawTenantRows(client, 'open_item_payments', sqliteDb.prepare('SELECT * FROM open_item_payments').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'party_type', 'party_id', 'payment_date', 'amount', 'bank_account_number', 'method', 'source_type', 'source_id', 'allocated_amount', 'residual_amount', 'status', 'journal_entry_id', 'created_at']);
         if (tableExists(sqliteDb, 'open_item_allocations')) counts.openItemAllocations += await importRawTenantRows(client, 'open_item_allocations', sqliteDb.prepare('SELECT * FROM open_item_allocations').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'payment_id', 'open_item_id', 'amount', 'created_at', 'event_key']);
@@ -916,11 +1044,17 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         for (const row of loadAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerReportAccountMapping(client, row); counts.accountMappingsHgb += 1; }
         for (const row of loadLegacyAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerAccountMappingHgb(client, row); counts.accountMappingsHgb += 1; }
         for (const row of loadReportSnapshots(sqliteDb, tenantId)) { await saveServerReportSnapshot(client, row); counts.reportSnapshots += 1; }
+        const eurReportSnapshots = loadEurReportSnapshots(sqliteDb, tenantId, sourceAuditRows);
+        if (eurReportSnapshots.length) counts.eurReportSnapshots += await importRawTenantRows(client, 'eur_report_snapshots', eurReportSnapshots, tenantId, ['id', 'tenant_id', 'tax_year', 'from_date', 'to_date', 'payload_json', 'source_hash', 'catalog_id', 'catalog_version', 'catalog_source_hash', 'reason', 'actor_id', 'created_at']);
         for (const row of loadDatevExports(sqliteDb, tenantId)) { await saveServerDatevExport(client, row); counts.datevExports += 1; }
         for (const row of loadVatEvidence(sqliteDb, tenantId)) { await saveServerVatEvidence(client, row); counts.vatEvidence += 1; }
         for (const row of loadJournalPostingPairs(sqliteDb, tenantId)) { await saveServerJournalPostingPair(client, row); counts.journalPostingPairs += 1; }
         for (const row of loadImportBatches(sqliteDb, tenantId)) { await saveServerImportBatch(client, row); counts.importBatches += 1; }
         for (const row of loadTransactions(sqliteDb, tenantId)) { await saveServerImportedTransaction(client, row); counts.transactions += 1; }
+        const eurCashFacts = loadEurCashFacts(sqliteDb);
+        if (eurCashFacts.length) counts.eurCashFacts += await importRawTenantRows(client, 'eur_cash_facts', eurCashFacts, tenantId, ['id', 'tenant_id', 'source_type', 'source_id', 'tax_year', 'kind', 'amount_net', 'flow_type', 'eur_line_id', 'splits_json', 'reason', 'actor_id', 'actor_name', 'idempotency_key', 'provenance_json', 'created_at', 'updated_at']);
+        const eurAnnexFacts = loadEurAnnexFacts(sqliteDb);
+        if (eurAnnexFacts.length) counts.eurAnnexFacts += await importRawTenantRows(client, 'eur_annex_facts', eurAnnexFacts, tenantId, ['id', 'tenant_id', 'tax_year', 'annex', 'line_id', 'amount', 'source_id', 'fact_date', 'reason', 'actor_id', 'actor_name', 'idempotency_key', 'provenance_json', 'created_at']);
         for (const row of loadEurClassifications(sqliteDb, tenantId)) { await saveServerEurClassification(client, row); counts.eurClassifications += 1; }
         for (const row of loadEmailLog(sqliteDb)) { await insertEmailLogRow(client, tenantId, { id: row.id, documentType: row.document_type, documentId: row.document_id, documentNumber: row.document_number, recipientEmail: row.recipient_email, recipientName: row.recipient_name, subject: row.subject, bodyText: row.body_text, provider: row.provider, status: row.status, errorMessage: row.error_message, sentAt: row.sent_at, createdAt: row.created_at }); counts.emailLog += 1; }
         for (const row of loadDunningHistory(sqliteDb)) { await createDrizzle(client).insert(schema.dunningHistory).values({ id: row.id, tenantId, invoiceId: row.invoice_id, invoiceNumber: row.invoice_number, dunningLevel: row.dunning_level, daysOverdue: row.days_overdue, feeApplied: row.fee_applied, emailSent: Boolean(row.email_sent), emailLogId: row.email_log_id, processedAt: row.processed_at, createdAt: row.created_at } as any); counts.dunningHistory += 1; }

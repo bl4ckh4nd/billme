@@ -5,8 +5,24 @@ import { createSingleTenantScope } from '@billme/server-core';
 import { createPostgresPool, type PostgresQueryable } from './connection.js';
 import { runDrizzleMigrations } from './migrations.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
+import { taxCaseForCorrectionRate, taxExportDirectionFromPersistedSource } from './accountingSourceRuns.js';
 
 const databaseUrl = process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+
+test('tax export direction follows persisted source ownership and fails closed when it is absent', () => {
+  assert.equal(taxExportDirectionFromPersistedSource({ source_type: 'outgoing_invoice' }), 'output');
+  assert.equal(taxExportDirectionFromPersistedSource({ source_type: 'incoming_invoice' }), 'input');
+  assert.equal(taxExportDirectionFromPersistedSource({ source_type: 'standalone_source', account_role: 'expense' }), 'input');
+  assert.equal(taxExportDirectionFromPersistedSource({ source_type: 'standalone_source', account_role: 'revenue' }), 'output');
+  assert.throws(() => taxExportDirectionFromPersistedSource({ source_type: 'standalone_source' }), /TAX_EXPORT_DIRECTION_UNRESOLVED/);
+});
+
+test('correction tax mapping supports only canonical rates', () => {
+  assert.equal(taxCaseForCorrectionRate(19), 'DE_STD_19');
+  assert.equal(taxCaseForCorrectionRate(7), 'DE_STD_7');
+  assert.equal(taxCaseForCorrectionRate(0), 'DE_ZERO_EXEMPT');
+  assert.throws(() => taxCaseForCorrectionRate(8), /CORRECTION_TAX_CASE_UNSUPPORTED/);
+});
 
 test('accounting source-run migration is tenant-scoped, immutable, and replay-keyed', async () => {
   const sql = await readFile(new URL('../../drizzle/0022_server_data_accounting_source_runs.sql', import.meta.url), 'utf8');

@@ -53,10 +53,11 @@ const postgresMigrationUrls = [
   new URL('../../drizzle/0019_server_data_audit_tenant_hash.sql', import.meta.url),
   new URL('../../drizzle/0021_server_data_eur_facts.sql', import.meta.url),
   new URL('../../drizzle/0022_server_data_accounting_source_runs.sql', import.meta.url),
+  new URL('../../drizzle/0023_server_data_import_source_run_rejected.sql', import.meta.url),
 ];
-// These tenant tables are server-owned runtime facts, not part of the desktop
-// SQLite import contract. Keep them in migration coverage without counting
-// them as importable desktop tables.
+// The EÜR snapshot is transformed from the desktop report_snapshots row into
+// its immutable server table; the other three facts are imported directly.
+const transformedServerTables = new Set(['eur_report_snapshots']);
 const serverOwnedTenantTables = new Set([
   'eur_cash_facts', 'eur_annex_facts', 'eur_report_snapshots', 'accounting_source_runs',
 ]);
@@ -96,6 +97,84 @@ test('detectUnsupportedSqliteTables ignores newly supported populated tables', (
   assert.deepEqual(result, []);
 });
 
+test('SQLite import preserves EÜR facts, immutable snapshots, and source-run provenance', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const tenantId = `import-eur-${randomUUID()}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-eur-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  const now = '2026-08-13T12:00:00.000Z';
+  try {
+    sqlite.exec(`
+      CREATE TABLE accounts (id TEXT PRIMARY KEY, name TEXT, iban TEXT, balance REAL, default_skr_account_number TEXT, type TEXT, color TEXT);
+      CREATE TABLE transactions (id TEXT PRIMARY KEY, account_id TEXT, date TEXT, amount REAL, type TEXT, counterparty TEXT, purpose TEXT, linked_invoice_id TEXT, status TEXT, dedup_hash TEXT, import_batch_id TEXT, deleted_at TEXT);
+      CREATE TABLE eur_cash_facts (id TEXT PRIMARY KEY, tenant_id TEXT, source_type TEXT, source_id TEXT, tax_year INTEGER, kind TEXT, amount_net REAL, flow_type TEXT, eur_line_id TEXT, splits_json TEXT, reason TEXT, actor_id TEXT, actor_name TEXT, idempotency_key TEXT, provenance_json TEXT, created_at TEXT, updated_at TEXT);
+      CREATE TABLE eur_annex_facts (id TEXT PRIMARY KEY, tenant_id TEXT, tax_year INTEGER, annex TEXT, line_id TEXT, amount REAL, source_id TEXT, fact_date TEXT, reason TEXT, actor_id TEXT, actor_name TEXT, idempotency_key TEXT, provenance_json TEXT, created_at TEXT);
+      CREATE TABLE report_snapshots (id TEXT PRIMARY KEY, tenant_id TEXT, report_type TEXT, args_json TEXT, payload_json TEXT, source_hash TEXT, created_at TEXT);
+      CREATE TABLE accounting_source_runs (id TEXT PRIMARY KEY, tenant_id TEXT, source_type TEXT, source_id TEXT, source_revision TEXT, idempotency_key TEXT, fact_json TEXT, result_json TEXT, status TEXT, journal_entry_id TEXT, effective_date TEXT, posting_date TEXT, period TEXT, fiscal_year INTEGER, currency TEXT, booking_text TEXT, created_at TEXT);
+    `);
+    sqlite.prepare('INSERT INTO accounts VALUES (?,?,?,?,?,?,?)').run('account-1', 'Bank', 'DE00', 0, '1200', 'checking', '#123');
+    sqlite.prepare('INSERT INTO transactions VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run('transaction-1', 'account-1', '2025-03-01', 119, 'income', 'Customer', 'Invoice payment', null, 'unmatched', null, null, null);
+    sqlite.prepare('INSERT INTO eur_cash_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('cash-1', 'default', 'transaction', 'transaction-1', 2025, 'income', 100, 'income', 'E2025_KZ112', null, 'Imported cash fact', 'actor-1', 'Importer', 'cash-key-1', JSON.stringify({ catalogId: 'euer-2025', catalogVersion: '1', catalogSourceHash: 'catalog-hash', sourceSnapshotHash: 'source-hash' }), now, now);
+    sqlite.prepare('INSERT INTO eur_annex_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('annex-1', 'default', 2025, 'AVEÜR', 'line-1', 12.5, 'transaction-1', '2025-03-01', 'Imported annex fact', 'actor-1', 'Importer', 'annex-key-1', JSON.stringify({ catalogId: 'euer-2025', catalogVersion: '1', catalogSourceHash: 'catalog-hash' }), now);
+    const payload = JSON.stringify({ taxYear: 2025, from: '2025-01-01', to: '2025-12-31', warnings: [], unclassifiedCount: 0, catalog: { id: 'euer-2025', version: '1', sourceHash: 'catalog-hash' }, rows: [] });
+    sqlite.prepare('INSERT INTO report_snapshots VALUES (?,?,?,?,?,?,?)').run('snapshot-1', 'default', 'eur', JSON.stringify({ taxYear: 2025, from: '2025-01-01', to: '2025-12-31' }), payload, 'snapshot-hash-1', now);
+    sqlite.prepare('INSERT INTO accounting_source_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('source-run-1', 'default', 'closing', 'source-1', 'revision-1', 'source-key-1', JSON.stringify({ sourceType: 'closing', sourceId: 'source-1', sourceRevision: 'revision-1' }), JSON.stringify({ status: 'rejected' }), 'rejected', null, '2025-03-01', '2025-03-01', '2025-03', 2025, 'EUR', 'Closing', now);
+    sqlite.close();
+
+    const result = await importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: tenantId, slug: tenantId, displayName: 'EÜR import' } });
+    assert.equal(result.counts.eurCashFacts, 1);
+    assert.equal(result.counts.eurAnnexFacts, 1);
+    assert.equal(result.counts.eurReportSnapshots, 1);
+    assert.equal(result.counts.accountingSourceRuns, 1);
+    assert.deepEqual((await pool.query('SELECT id,tenant_id,source_id,provenance_json FROM eur_cash_facts WHERE id=$1', ['cash-1'])).rows[0], { id: 'cash-1', tenant_id: tenantId, source_id: 'transaction-1', provenance_json: JSON.stringify({ catalogId: 'euer-2025', catalogVersion: '1', catalogSourceHash: 'catalog-hash', sourceSnapshotHash: 'source-hash' }) });
+    assert.deepEqual((await pool.query('SELECT id,tenant_id,source_id,provenance_json FROM eur_annex_facts WHERE id=$1', ['annex-1'])).rows[0], { id: 'annex-1', tenant_id: tenantId, source_id: 'transaction-1', provenance_json: JSON.stringify({ catalogId: 'euer-2025', catalogVersion: '1', catalogSourceHash: 'catalog-hash' }) });
+    assert.deepEqual((await pool.query('SELECT id,tenant_id,tax_year,source_hash,catalog_id,reason,actor_id FROM eur_report_snapshots WHERE id=$1', ['snapshot-1'])).rows[0], { id: 'snapshot-1', tenant_id: tenantId, tax_year: 2025, source_hash: 'snapshot-hash-1', catalog_id: 'euer-2025', reason: 'Desktop EÜR snapshot import', actor_id: 'desktop-import' });
+    const sourceRun = (await pool.query('SELECT id,tenant_id,source_type,source_id,source_revision,idempotency_key,status,source_json,result_json,reason FROM accounting_source_runs WHERE id=$1', ['source-run-1'])).rows[0];
+    assert.equal(sourceRun.tenant_id, tenantId);
+    assert.equal(sourceRun.source_json, JSON.stringify({ sourceType: 'closing', sourceId: 'source-1', sourceRevision: 'revision-1' }));
+    assert.equal(sourceRun.status, 'rejected');
+    assert.equal(sourceRun.reason, 'Accounting source rejected');
+    await assert.rejects(pool.query('UPDATE eur_report_snapshots SET payload_json=$1 WHERE id=$2', ['{}', 'snapshot-1']), /eur_report_snapshots are immutable/);
+    await assert.rejects(pool.query('DELETE FROM accounting_source_runs WHERE id=$1', ['source-run-1']), /accounting_source_runs is immutable/);
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('SQLite import rejects a cross-tenant EÜR cash source and rolls back imported facts', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
+  const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
+  const ownerTenantId = `import-eur-owner-${randomUUID()}`;
+  const targetTenantId = `import-eur-target-${randomUUID()}`;
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'billme-import-eur-ref-'));
+  const sqlitePath = path.join(tempDir, 'source.sqlite');
+  const sqlite = new Database(sqlitePath);
+  try {
+    await runPostgresMigrations(pool);
+    const now = new Date().toISOString();
+    await pool.query(`INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at) VALUES ($1,$1,'EÜR owner','pro','single-tenant','active',$2,$2)`, [ownerTenantId, now]);
+    await pool.query(`INSERT INTO accounts (id,tenant_id,name,iban,balance,default_skr_account_number,type,color) VALUES ($1,$2,'Owner bank','DE00',0,'1200','checking','#123')`, ['owner-account', ownerTenantId]);
+    await pool.query(`INSERT INTO transactions (id,tenant_id,account_id,date,amount,type,counterparty,purpose,status) VALUES ($1,$2,'owner-account','2025-03-01',119,'income','Owner','Owner source','unmatched')`, ['foreign-transaction', ownerTenantId]);
+    sqlite.exec(`CREATE TABLE eur_cash_facts (id TEXT PRIMARY KEY, tenant_id TEXT, source_type TEXT, source_id TEXT, tax_year INTEGER, kind TEXT, amount_net REAL, flow_type TEXT, eur_line_id TEXT, splits_json TEXT, reason TEXT, actor_id TEXT, actor_name TEXT, idempotency_key TEXT, provenance_json TEXT, created_at TEXT, updated_at TEXT)`);
+    sqlite.prepare('INSERT INTO eur_cash_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run('foreign-cash', 'default', 'transaction', 'foreign-transaction', 2025, 'income', 100, 'income', 'E2025_KZ112', null, 'foreign', 'actor', null, null, '{}', now, now);
+    sqlite.close();
+    await assert.rejects(
+      importDesktopSqliteToPostgres({ pool, sqlitePath, product: 'pro', tenant: { id: targetTenantId, slug: targetTenantId, displayName: 'EÜR target' } }),
+      /IMPORT_CROSS_TENANT_REFERENCE:eur_cash_facts\.source_id/,
+    );
+    assert.equal(Number((await pool.query('SELECT COUNT(*)::int AS count FROM eur_cash_facts WHERE tenant_id=$1', [targetTenantId])).rows[0].count), 0);
+    assert.equal((await pool.query('SELECT status FROM sqlite_import_runs WHERE tenant_id=$1', [targetTenantId])).rows[0]?.status, 'failed');
+  } finally {
+    if (sqlite.open) sqlite.close();
+    await pool.query('DELETE FROM tenants WHERE id = ANY($1::text[])', [[ownerTenantId, targetTenantId]]).catch(() => undefined);
+    await pool.end();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('detectUnsupportedSqliteTables still reports unknown populated tables only', () => {
   const counts = new Map<string, number>([
     ['clients', 3],
@@ -116,7 +195,8 @@ test('desktop sqlite onboarding schemas stay mapped to import coverage', async (
     ...liteTables,
     ...proTables,
     ...desktopSqliteIgnoredTables,
-  ])].filter((table) => !serverOwnedTenantTables.has(table)).sort();
+    'eur_cash_facts', 'eur_annex_facts', 'accounting_source_runs',
+  ])].filter((table) => !transformedServerTables.has(table)).sort();
   const actual = [...new Set([
     ...desktopSqliteImportedTables,
     ...desktopSqliteIgnoredTables,
@@ -248,13 +328,14 @@ test('tenant-scoped postgres tables stay covered by import overwrite guards', as
 
 test('Drizzle migration journal contains incremental migrations', async () => {
   const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ idx: number; tag: string }> };
-  assert.deepEqual(journal.entries.slice(-2), [
+  assert.deepEqual(journal.entries.slice(-3), [
     { idx: 21, version: '7', when: 1786538400009, tag: '0021_server_data_eur_facts', breakpoints: false },
     { idx: 22, version: '7', when: 1786538400010, tag: '0022_server_data_accounting_source_runs', breakpoints: false },
+    { idx: 23, version: '7', when: 1786538400011, tag: '0023_server_data_import_source_run_rejected', breakpoints: false },
   ]);
   assert.deepEqual(journal.entries.map((entry) => entry.tag), [
     '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
-    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog', '0018_server_data_canonical_catalog', '0019_server_data_audit_tenant_hash', '0021_server_data_eur_facts', '0022_server_data_accounting_source_runs',
+    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog', '0018_server_data_canonical_catalog', '0019_server_data_audit_tenant_hash', '0021_server_data_eur_facts', '0022_server_data_accounting_source_runs', '0023_server_data_import_source_run_rejected',
   ]);
 });
 

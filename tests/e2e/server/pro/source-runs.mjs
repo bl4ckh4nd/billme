@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readServerHarnessState } from '../harness.mjs';
 import {
   createHarnessProTenant,
@@ -10,6 +11,15 @@ import {
 } from './helpers.mjs';
 
 const owner = createOwnerCredentials('pro');
+
+const stableJson = (value) => {
+  if (value === undefined) return 'null';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  return `{${Object.keys(value).filter((key) => value[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+};
+
+const snapshotHash = (snapshot) => createHash('sha256').update(stableJson(snapshot)).digest('hex');
 
 const rawRequest = async (state, session, requestPath, query, options = {}) => {
   const url = new URL(requestPath, `${state.urls.api}/`);
@@ -53,6 +63,7 @@ const accountingState = async (state, session) => {
 const mapAccounts = async (state, session) => {
   for (const [role, accountNumber] of [
     ['accounts_receivable', '1200'],
+    ['accounts_payable', '1200'],
     ['revenue', '8400'],
     ['output_vat', '1776'],
     ['expense', '3125'],
@@ -113,6 +124,37 @@ const makeEurInvoiceAndPayment = async (state, session, namespace, client) => {
   });
   assert.ok(payment?.id, 'EÜR source payment missing');
   return { invoiceId, paymentId: payment.id };
+};
+
+const makePersistedIncomingInvoice = async (state, session, namespace) => {
+  const vendorId = `${namespace}-correction-vendor`;
+  const invoiceId = `${namespace}-correction-original`;
+  await json(state, session, '/api/v1/pro/accounting/vendors', undefined, {
+    method: 'POST',
+    body: {
+      reason: 'Persist correction original vendor',
+      vendor: { id: vendorId, vendorNumber: `V-${namespace}`, name: 'Correction Original Vendor', email: `${namespace}@billme-e2e.local`, defaultExpenseAccount: '3125' },
+    },
+  });
+  await json(state, session, '/api/v1/pro/accounting/incoming-invoices', undefined, {
+    method: 'POST',
+    body: {
+      reason: 'Persist correction original invoice',
+      invoice: {
+        id: invoiceId, vendorId, number: `ER-${namespace}`, invoiceDate: '2026-10-01', dueDate: '2026-10-31',
+        netAmount: 100, taxAmount: 19, grossAmount: 119, status: 'open', taxRate: 19, taxCaseKey: 'DE_STD_19',
+        notes: 'Immutable correction source', accountingStatus: 'unposted',
+        lines: [{ id: `${invoiceId}-line`, incomingInvoiceId: invoiceId, position: 0, description: 'Correction source service', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119, accountNumber: '3125' }],
+      },
+    },
+  });
+  await json(state, session, '/api/v1/pro/accounting/incoming-invoices/post', undefined, {
+    method: 'POST', body: { reason: 'Post correction original invoice', invoiceId },
+  });
+  const invoices = await requestJson(state, session, '/api/v1/pro/accounting/incoming-invoices');
+  const original = invoices.find((invoice) => invoice.id === invoiceId);
+  assert.ok(original?.accountingSnapshot, 'posted correction original snapshot missing');
+  return { original, snapshot: original.accountingSnapshot };
 };
 
 export const runProSourceRunScenario = async () => {
@@ -191,9 +233,18 @@ export const runProSourceRunScenario = async () => {
   assert.equal(payroll.result.result.status, 'valid');
   cases++;
 
+  const correctionSource = await makePersistedIncomingInvoice(state, session, namespace);
+  const missingOriginalBody = {
+    id: `${namespace}-missing-correction`, idempotencyKey: `${namespace}-missing-correction-key`, correctionDate: '2026-11-20', taxEffectiveDate: '2026-10-01', documentType: 'incoming_invoice', postingDate: '2026-11-20', reason: 'Missing §17 original must fail',
+    original: { documentId: `${namespace}-missing-original`, documentNumber: 'ER-MISSING', revision: 'missing-revision', snapshotHash: snapshotHash(correctionSource.snapshot), taxEffectiveDate: '2026-10-01', taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] },
+    deltas: [{ rate: 19, grossAmount: 11.9 }],
+  };
+  await expectError(state, session, '/api/v1/pro/accounting/corrections', undefined, { method: 'POST', body: missingOriginalBody }, 400, /ORIGINAL_DOCUMENT_NOT_FOUND/);
+  cases++;
+
   const correctionBody = {
-    id: `${namespace}-correction`, idempotencyKey: `${namespace}-correction-key`, correctionDate: '2026-11-20', taxEffectiveDate: '2026-10-01', documentType: 'outgoing_invoice', postingDate: '2026-11-20', reason: '§17 invoice correction',
-    original: { documentId: `${namespace}-original`, documentNumber: 'RE-§17-001', revision: 'rev-1', snapshotHash: 'original-snapshot-1', taxEffectiveDate: '2026-10-01', taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] },
+    id: `${namespace}-correction`, idempotencyKey: `${namespace}-correction-key`, correctionDate: '2026-11-20', taxEffectiveDate: correctionSource.original.invoiceDate, documentType: 'incoming_invoice', postingDate: '2026-11-20', reason: '§17 invoice correction',
+    original: { documentId: correctionSource.original.id, documentNumber: correctionSource.original.number, revision: correctionSource.snapshot.sourceVersion, snapshotHash: snapshotHash(correctionSource.snapshot), currentSnapshotHash: snapshotHash(correctionSource.snapshot), taxEffectiveDate: correctionSource.original.invoiceDate, taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] },
     deltas: [{ rate: 19, grossAmount: 11.9 }],
   };
   const correction = await json(state, session, '/api/v1/pro/accounting/corrections', undefined, { method: 'POST', body: correctionBody });
@@ -360,6 +411,6 @@ export const runProSourceRunScenario = async () => {
   await expectError(state, session, `/api/v1/pro/tax-filings/${encodeURIComponent(filing.id)}/validate`, undefined, { method: 'POST', body: { reason: 'official EÜR provider unavailable', idempotencyKey: `${namespace}-unsupported-elster-validate` } }, 422, /EÜR|ELSTER|provider/i);
   cases++;
 
-  assert.equal(cases, 33, `expected exactly 33 Pro source-run/tax/EÜR cases, got ${cases}`);
+  assert.equal(cases, 34, `expected exactly 34 Pro source-run/tax/EÜR cases, got ${cases}`);
   console.log(`PRO_SOURCE_RUN_CASES=${cases}`);
 };

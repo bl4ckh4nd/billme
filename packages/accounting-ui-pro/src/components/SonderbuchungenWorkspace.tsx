@@ -141,10 +141,9 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
     setBusy(true);
     try {
       const input: AccountingCommandInput = {
-        // Workflow-specific domain facts are intentionally not guessed here;
-        // the source-run remains a balanced standalone command until its
-        // dedicated fact editor is supplied.
-        kind: 'standalone',
+        // Keep the selected workflow visible to the command handler. The
+        // source fact is only the balanced posting payload, not the command.
+        kind: form.kind,
         source: toSource(form),
         reason: form.reason.trim(),
       };

@@ -15,6 +15,7 @@ import {
   type UserRole,
   type ProAccountingDataAdapter,
   type OposBankTransaction,
+  type EurCashItem,
   permissionContextForRole,
   nativeEurRange,
   reportDateRange,
@@ -317,6 +318,11 @@ const reportLines = (rows: Array<{ position: string; label: string; amount: numb
   accountRefs: row.accountRefs ?? row.accountNumbers,
   isSubtotal: row.kind === 'heading' || row.kind === 'subtotal' || row.kind === 'result',
 }));
+
+const mapWebEurCashItem = (item: Awaited<ReturnType<ProWebClient['listEurCashItems']>>[number]): EurCashItem => ({
+  ...item,
+  splits: item.splits?.map((split) => ({ ...split, reason: split.reason ?? '' })),
+});
 
 const mapWorkflowTransactionToWorkspace = (
   row: ReturnType<ProWebClient['parseWorkflowTransaction']>,
@@ -1192,7 +1198,7 @@ export default function App() {
         };
       },
       listEurCashItems(taxYear = 2025) {
-        return client.listEurCashItems({ taxYear, ...nativeEurRange(taxYear) });
+        return client.listEurCashItems({ taxYear, ...nativeEurRange(taxYear) }).then((items) => items.map(mapWebEurCashItem));
       },
       upsertEurClassification(input) {
         return client.upsertEurClassification({

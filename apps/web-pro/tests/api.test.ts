@@ -107,6 +107,41 @@ test('Pro web client lists EÜR cash sources and persists tenant classifications
   }
 });
 
+test('Pro web client preserves EÜR facts and sends typed closing commands', async () => {
+  const previousFetch = globalThis.fetch;
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input, init) => {
+    calls.push({ input: String(input), init });
+    if (calls.length === 1) {
+      return new Response(JSON.stringify([{
+        sourceType: 'transaction', sourceId: 'bank-1', date: '2025-02-01', amountGross: 119, amountNet: 100,
+        flowType: 'expense', counterparty: 'Lieferant', purpose: 'Beleg', kind: 'expense',
+        splits: [{ amountNet: 60, deductibility: 'deductible', lineId: 'E2025_KZ123', reason: 'betrieblich' }, { amountNet: 40, deductibility: 'non-deductible', reason: 'privat' }],
+      }]), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ run: { id: 'run-1', sourceType: 'fiscal_close', sourceId: 'close-1', sourceRevision: '1', status: 'posted', createdAt: '2025-12-31T00:00:00.000Z' }, result: {}, replayed: false }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    const items = await client.listEurCashItems({ taxYear: 2025 });
+    assert.equal(items[0]?.kind, 'expense');
+    assert.deepEqual(items[0]?.splits, [
+      { amountNet: 60, deductibility: 'deductible', lineId: 'E2025_KZ123', reason: 'betrieblich' },
+      { amountNet: 40, deductibility: 'non-deductible', reason: 'privat' },
+    ]);
+    await client.postAccountingCommand({
+      kind: 'fiscal_close',
+      source: { sourceId: 'close-1', sourceRevision: '1', bookingText: 'Abschluss' },
+      reason: 'Abschluss geprüft',
+    });
+    const body = JSON.parse(String(calls[1]?.init?.body));
+    assert.equal(body.command, 'fiscal_close');
+    assert.equal(body.input.reference, 'fiscal_close');
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('Pro web client scopes mapping health and overrides to canonical report types', async () => {
   const previousFetch = globalThis.fetch;
   const calls: Array<{ input: string; init?: RequestInit }> = [];

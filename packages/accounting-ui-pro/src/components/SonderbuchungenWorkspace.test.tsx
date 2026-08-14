@@ -43,6 +43,15 @@ describe('SonderbuchungenWorkspace', () => {
     await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/refetched/));
   });
 
+  it('posts the selected workflow as the typed command kind', async () => {
+    const adapter = valid();
+    render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Workflow'), { target: { value: 'fiscal_close' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sonderbuchung speichern' }));
+    await waitFor(() => expect(adapter.postAccountingCommand).toHaveBeenCalledWith(expect.objectContaining({ kind: 'fiscal_close' })));
+  });
+
   it('keeps entered facts after adapter failure and exposes the error', async () => {
     const adapter = valid();
     adapter.postAccountingCommand.mockRejectedValueOnce(new Error('Backend nicht erreichbar'));

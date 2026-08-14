@@ -30,6 +30,7 @@ import {
   getSusaReport,
 } from '../services/mockReportService';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
+import type { EurAnnexFact, EurCashFact } from '../sourceRuns';
 import type { UserRole } from '../types';
 import { permissionContextForRole } from '../mocks/users';
 import ReportToolbar from './reports/ReportToolbar';
@@ -137,6 +138,10 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   const [eurAnnexAmount, setEurAnnexAmount] = useState('');
   const [eurClassificationReason, setEurClassificationReason] = useState('');
   const [eurClassifying, setEurClassifying] = useState<string | null>(null);
+  const [eurCashFacts, setEurCashFacts] = useState<EurCashFact[]>([]);
+  const [eurAnnexFacts, setEurAnnexFacts] = useState<EurAnnexFact[]>([]);
+  const [eurFactsError, setEurFactsError] = useState<string | null>(null);
+  const [eurAnnexBusy, setEurAnnexBusy] = useState(false);
 
   const filtersForTab = (tab: ReportTabId): ReportFilterState => tab === 'eur'
     ? {
@@ -268,6 +273,35 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   }, [dataAdapter, eurTaxYear, reportsRetryKey, visibleTabs]);
 
   useEffect(() => {
+    if (!visibleTabs.includes('eur')) {
+      setEurCashFacts([]);
+      setEurAnnexFacts([]);
+      setEurFactsError(null);
+      return;
+    }
+    const cashFacts = dataAdapter?.listEurCashFacts
+      ? dataAdapter.listEurCashFacts(eurTaxYear)
+      : Promise.resolve([] as EurCashFact[]);
+    const annexFacts = dataAdapter?.listEurAnnexFacts
+      ? dataAdapter.listEurAnnexFacts(eurTaxYear)
+      : Promise.resolve([] as EurAnnexFact[]);
+    let cancelled = false;
+    setEurFactsError(null);
+    Promise.all([cashFacts, annexFacts])
+      .then(([cash, annex]) => {
+        if (cancelled) return;
+        setEurCashFacts(cash);
+        setEurAnnexFacts(annex);
+      })
+      .catch((error) => {
+        if (!cancelled) setEurFactsError(error instanceof Error ? error.message : 'EÜR-Fakten konnten nicht geladen werden.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dataAdapter, eurTaxYear, reportsRetryKey, visibleTabs]);
+
+  useEffect(() => {
     if (!drilldownSelection) {
       setDrilldownEntries([]);
       return;
@@ -376,8 +410,20 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
     const reason = eurClassificationReason.trim();
     const key = eurCashItemKey(item);
     const splitAmount = Number(eurSplitAmounts[key]);
+    const splitCents = Number.isFinite(splitAmount) ? Math.round(splitAmount * 100) : 0;
+    const itemCents = Math.round(item.amountNet * 100);
     if (!reason) { setReportsError('Bitte geben Sie einen Audit-Grund für den EÜR-Fakt an.'); return; }
-    if (eurSplitAmounts[key] && (!Number.isFinite(splitAmount) || splitAmount <= 0 || splitAmount > item.amountNet)) { setReportsError('Aufteilung muss zwischen 0 und dem Netto-Betrag liegen.'); return; }
+    if (eurSplitAmounts[key] && (!Number.isFinite(splitAmount) || splitCents <= 0 || splitCents > itemCents)) { setReportsError('Aufteilung muss zwischen 0 und dem Netto-Betrag liegen.'); return; }
+    if (eurSplitAmounts[key] && (eurFactKinds[key] ?? item.flowType) !== 'expense') { setReportsError('Aufteilungen sind nur für Ausgaben möglich.'); return; }
+    if (eurSplitAmounts[key] && !eurDrafts[key]?.eurLineId) { setReportsError('Für den abzugsfähigen Split muss eine EÜR-Zeile gewählt werden.'); return; }
+    const splits = eurSplitAmounts[key]
+      ? [
+        { amountNet: splitCents / 100, deductibility: 'deductible' as const, lineId: eurDrafts[key]?.eurLineId, reason },
+        ...(itemCents > splitCents
+          ? [{ amountNet: (itemCents - splitCents) / 100, deductibility: 'non-deductible' as const, reason: `${reason} · Restbetrag nicht abzugsfähig` }]
+          : []),
+      ]
+      : undefined;
     setEurClassifying(key);
     try {
       await dataAdapter.saveEurCashFact({
@@ -388,7 +434,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
         amountNet: item.amountNet,
         flowType: item.flowType,
         eurLineId: eurDrafts[key]?.eurLineId,
-        splits: eurSplitAmounts[key] ? [{ amountNet: splitAmount, lineId: eurDrafts[key]?.eurLineId, reason }] : undefined,
+        splits,
         reason,
       });
       setReportsNotice('EÜR-Fakt gespeichert und refetched.');
@@ -399,16 +445,26 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   };
 
   const saveEurAnnexFact = async () => {
-    if (!dataAdapter?.saveEurAnnexFact) return;
+    if (!dataAdapter?.saveEurAnnexFact || eurAnnexBusy) return;
     const amount = Number(eurAnnexAmount);
     if (!eurClassificationReason.trim()) { setReportsError('Bitte geben Sie einen Audit-Grund für den Anlagen-Fakt an.'); return; }
     if (!Number.isFinite(amount) || amount === 0) { setReportsError('Anlagen-Betrag muss ungleich 0 sein.'); return; }
+    setEurAnnexBusy(true);
     try {
-      await dataAdapter.saveEurAnnexFact({ taxYear: eurTaxYear, annex: eurAnnex, lineId: eurAnnexLine, amount, reason: eurClassificationReason.trim(), date: nativeEurRange(eurTaxYear).to });
+      await dataAdapter.saveEurAnnexFact({
+        taxYear: eurTaxYear,
+        annex: eurAnnex,
+        lineId: eurAnnexLine,
+        amount,
+        reason: eurClassificationReason.trim(),
+        date: nativeEurRange(eurTaxYear).to,
+        idempotencyKey: `eur-annex:${eurTaxYear}:${eurAnnex}:${eurAnnexLine}:${nativeEurRange(eurTaxYear).to}:${amount}`,
+      });
       setReportsNotice('Anlagen-Fakt gespeichert und refetched.');
       setEurAnnexAmount('');
       setReportsRetryKey((current) => current + 1);
     } catch (error) { setReportsError(error instanceof Error ? error.message : 'Anlagen-Fakt konnte nicht gespeichert werden.'); }
+    finally { setEurAnnexBusy(false); }
   };
 
   const eurLines = useMemo(
@@ -459,7 +515,11 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
       await dataAdapter.saveReportSnapshot({
         reportType: activeTab,
         args: effectiveFilters,
-        payload: activeReport,
+        payload: {
+          ...activeReport,
+          ...(dataAdapter.listEurCashFacts ? { eurCashFacts } : {}),
+          ...(dataAdapter.listEurAnnexFacts ? { eurAnnexFacts } : {}),
+        },
         reason,
       });
       setFreezeReason('');
@@ -572,7 +632,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
             {activeQualityBlocksFreeze ? <p className="basis-full text-xs text-error" role="status">Snapshot kann wegen unvollständiger oder nicht-live Reportdaten nicht eingefroren werden.</p> : null}
           </div>
         ) : <div className="rounded-xl border border-border bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann EÜR-Snapshots nur lesen.</div> : null}
-        {activeTab === 'eur' && dataAdapter?.listEurCashItems ? (
+        {activeTab === 'eur' && (dataAdapter?.listEurCashItems || dataAdapter?.listEurCashFacts || dataAdapter?.listEurAnnexFacts) ? (
           <section className="space-y-3 rounded-xl border border-border bg-surface p-3" aria-labelledby="eur-classification-heading">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
@@ -590,7 +650,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
                 {eurItemsLoading ? 'Lade Quellen…' : 'Quellen aktualisieren'}
               </Button>
             </div>
-            {canMutate && dataAdapter.upsertEurClassification ? (
+            {canMutate && (dataAdapter.upsertEurClassification || dataAdapter.saveEurCashFact || dataAdapter.saveEurAnnexFact) ? (
               <label className="flex max-w-xl flex-col gap-1 text-xs font-semibold text-foreground" htmlFor="eur-classification-reason">
                 Audit-Grund für Klassifikationen
                 <input
@@ -604,6 +664,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
               </label>
             ) : <p className="rounded-lg border border-border-subtle bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann EÜR-Quellen prüfen, aber nicht klassifizieren.</p>}
             {eurItemsError ? <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert">{eurItemsError}</div> : null}
+            {eurFactsError ? <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert">{eurFactsError}</div> : null}
             {!eurItemsLoading && !eurItemsError && eurItems.length === 0 ? <p className="text-sm text-muted">Keine Cash-Basis-Quellen im Kalenderjahr 2025.</p> : null}
             {eurItems.length > 0 ? (
               <div className="space-y-2" role="list" aria-label="Unklassifizierte EÜR-Cash-Quellen">
@@ -618,7 +679,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
                         <p className="truncate text-xs text-muted">Quelle: {item.sourceType}:{item.sourceId}</p>
                         {item.vatWarning ? <p className="text-xs text-warning">{item.vatWarning}</p> : null}
                       </div>
-                      {canMutate && dataAdapter.upsertEurClassification ? <div className="grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_auto_auto] sm:items-end">
+                      {canMutate && (dataAdapter.upsertEurClassification || dataAdapter.saveEurCashFact) ? <div className="grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_auto_auto] sm:items-end">
                         {dataAdapter.saveEurCashFact ? <label className="flex flex-col gap-1 text-xs font-semibold text-foreground" htmlFor={`eur-kind-${key}`}>
                           Faktart
                           <select id={`eur-kind-${key}`} className="rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal" value={eurFactKinds[key] ?? item.flowType} onChange={(event) => setEurFactKinds((current) => ({ ...current, [key]: event.target.value as typeof eurFactKinds[string] }))}>
@@ -666,7 +727,8 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
                         ) : null}
                         {dataAdapter.saveEurCashFact ? <label className="flex flex-col gap-1 text-xs font-semibold text-foreground" htmlFor={`eur-split-${key}`}>
                           Split-Netto (optional)
-                          <input id={`eur-split-${key}`} type="number" min="0" step="0.01" className="rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal" value={eurSplitAmounts[key] ?? ''} onChange={(event) => setEurSplitAmounts((current) => ({ ...current, [key]: event.target.value }))} />
+                          <span className="text-[10px] font-normal text-muted">Restbetrag wird als nicht abzugsfähig gespeichert.</span>
+                          <input id={`eur-split-${key}`} aria-label="Split-Netto (optional)" type="number" min="0" step="0.01" className="rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal" value={eurSplitAmounts[key] ?? ''} onChange={(event) => setEurSplitAmounts((current) => ({ ...current, [key]: event.target.value }))} />
                         </label> : null}
                       </div> : null}
                       {canMutate && dataAdapter.upsertEurClassification ? <Button type="button" size="sm" variant="secondary" onClick={() => void saveEurClassification(item)} disabled={eurClassifying !== null || !eurClassificationReason.trim() || (draft.vatMode === 'default' && draft.vatRate === undefined)} aria-busy={eurClassifying === key}>
@@ -688,7 +750,13 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
               <label className="flex flex-col gap-1 text-xs font-semibold">Betrag
                 <input type="number" step="0.01" value={eurAnnexAmount} onChange={(event) => setEurAnnexAmount(event.target.value)} className="rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal" />
               </label>
-              <Button type="button" size="sm" variant="secondary" onClick={() => void saveEurAnnexFact()} disabled={!eurClassificationReason.trim() || eurAnnexAmount === ''}>Anlagen-Fakt speichern</Button>
+              <Button type="button" size="sm" variant="secondary" onClick={() => void saveEurAnnexFact()} disabled={eurAnnexBusy || !eurClassificationReason.trim() || eurAnnexAmount === ''} aria-busy={eurAnnexBusy}>{eurAnnexBusy ? 'Speichere…' : 'Anlagen-Fakt speichern'}</Button>
+            </div> : null}
+            {eurAnnexFacts.length > 0 ? <div className="rounded-lg border border-border-subtle bg-surface-muted p-3 text-sm" aria-label="Gespeicherte EÜR-Anlagen-Fakten">
+              <p className="font-semibold">Gespeicherte Anlagen-Fakten</p>
+              <ul className="mt-2 space-y-1 text-xs text-muted">
+                {eurAnnexFacts.map((fact) => <li key={fact.id}>{fact.annex} · {fact.lineId} · {fact.amount.toFixed(2)} €</li>)}
+              </ul>
             </div> : null}
           </section>
         ) : null}

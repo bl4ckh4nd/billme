@@ -21,6 +21,57 @@ function setFreezeForm(from: string, to: string) {
 }
 
 describe('ReportsView EÜR snapshots', () => {
+  it('makes annex facts idempotent, single-flight, and visible after refetch', async () => {
+    let resolveSave: (() => void) | undefined;
+    const saveEurAnnexFact = vi.fn(() => new Promise<any>((resolve) => { resolveSave = resolve; }));
+    const listEurAnnexFacts = vi.fn(async () => [{ id: 'annex-1', taxYear: 2025, annex: 'IAB', lineId: 'formed', amount: 120, createdAt: '2025-12-31T00:00:00.000Z' }]);
+    render(<ReportsView
+      dataAdapter={{
+        getEurReport: vi.fn(async () => eurReport),
+        listEurCashItems: vi.fn(async () => []),
+        upsertEurClassification: vi.fn(async () => ({})),
+        saveEurAnnexFact,
+        listEurAnnexFacts,
+      }}
+      availableTabs={['eur']}
+    />);
+
+    await screen.findByLabelText('EÜR-Anlagen-Fakt');
+    fireEvent.change(screen.getByLabelText('Audit-Grund für Klassifikationen'), { target: { value: 'Anlage geprüft' } });
+    fireEvent.change(screen.getByLabelText('Betrag'), { target: { value: '120' } });
+    const save = screen.getByRole('button', { name: 'Anlagen-Fakt speichern' });
+    fireEvent.click(save);
+    fireEvent.click(save);
+    expect(saveEurAnnexFact).toHaveBeenCalledTimes(1);
+    expect(saveEurAnnexFact).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: expect.stringContaining('eur-annex:2025:IAB:formed') }));
+    expect(save.getAttribute('aria-busy')).toBe('true');
+    resolveSave?.();
+    await waitFor(() => expect(listEurAnnexFacts).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Gespeicherte Anlagen-Fakten')).toBeTruthy();
+  });
+
+  it('includes authoritative EÜR facts in a supported snapshot adapter', async () => {
+    const saveReportSnapshot = vi.fn(async () => ({ id: 'snapshot-1', reportType: 'eur', args: {}, payload: {}, createdAt: '2025-12-31T23:00:00.000Z', sourceHash: 'a'.repeat(64) }));
+    const cashFact = { id: 'cash-1', taxYear: 2025, sourceType: 'transaction' as const, sourceId: 'tx-1', kind: 'expense' as const, amountNet: 10 };
+    const annexFact = { id: 'annex-1', taxYear: 2025, annex: 'IAB', lineId: 'formed', amount: 120 };
+    render(<ReportsView
+      dataAdapter={{
+        getEurReport: vi.fn(async () => eurReport),
+        listEurCashFacts: vi.fn(async () => [cashFact]),
+        listEurAnnexFacts: vi.fn(async () => [annexFact]),
+        saveReportSnapshot,
+      }}
+      availableTabs={['eur']}
+    />);
+
+    await screen.findByLabelText('Audit-Grund für EÜR-Snapshot');
+    fireEvent.change(screen.getByLabelText('Audit-Grund für EÜR-Snapshot'), { target: { value: 'Abschlussprüfung EÜR 2025' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Snapshot einfrieren' }));
+    await waitFor(() => expect(saveReportSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({ eurCashFacts: [cashFact], eurAnnexFacts: [annexFact] }),
+    })));
+  });
+
   it('keeps the native EÜR snapshot locked to the full 2025 period', async () => {
     const saveReportSnapshot = vi.fn(async () => ({ id: 'snapshot-1', reportType: 'eur', args: {}, payload: {}, createdAt: '2025-05-31T23:00:00.000Z', sourceHash: 'a'.repeat(64) }));
     render(<ReportsView dataAdapter={{ getEurReport: vi.fn(async () => eurReport), saveReportSnapshot }} availableTabs={['eur']} />);

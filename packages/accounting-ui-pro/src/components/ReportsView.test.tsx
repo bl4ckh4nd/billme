@@ -289,6 +289,35 @@ describe('ReportsView drilldown ranges', () => {
     })));
   });
 
+  it('reconciles an optional expense split with an explicit non-deductible remainder', async () => {
+    const saveEurCashFact = vi.fn(async () => ({}));
+    render(<ReportsView
+      dataAdapter={{
+        getEurReport: vi.fn(async () => ({
+          lines: [{ id: 'E2025_KZ123', code: '123', label: 'Betriebsausgaben', level: 0, amountCurrent: 0, isSubtotal: false }],
+          totals: { revenue: 0, expenses: 0, result: 0 },
+          quality: { unmappedAccounts: [], warnings: 0, generatedAt: '', source: 'live' as const },
+        })),
+        listEurCashItems: vi.fn(async () => [{ sourceType: 'transaction', sourceId: 'bank-1', date: '2025-02-01', amountGross: 119, amountNet: 100, flowType: 'expense', counterparty: 'Lieferant', purpose: 'Beleg' }]),
+        upsertEurClassification: vi.fn(async () => ({})),
+        saveEurCashFact,
+      }}
+      availableTabs={['eur']}
+    />);
+
+    await screen.findByText('Quelle: transaction:bank-1');
+    fireEvent.change(screen.getByLabelText('Audit-Grund für Klassifikationen'), { target: { value: 'Beleg geprüft' } });
+    fireEvent.change(screen.getByLabelText('EÜR-Zeile'), { target: { value: 'E2025_KZ123' } });
+    fireEvent.change(screen.getByLabelText(/Split-Netto/), { target: { value: '60' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Fakt speichern' }));
+    await waitFor(() => expect(saveEurCashFact).toHaveBeenCalledWith(expect.objectContaining({
+      splits: [
+        { amountNet: 60, deductibility: 'deductible', lineId: 'E2025_KZ123', reason: 'Beleg geprüft' },
+        { amountNet: 40, deductibility: 'non-deductible', reason: 'Beleg geprüft · Restbetrag nicht abzugsfähig' },
+      ],
+    })));
+  });
+
   it.each(['viewer', 'auditor'] as const)('keeps EÜR classification controls hidden for %s', async (role) => {
     const upsertEurClassification = vi.fn(async () => ({}));
     render(<ReportsView

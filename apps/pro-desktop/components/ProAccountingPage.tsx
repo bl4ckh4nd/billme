@@ -78,6 +78,8 @@ const mapNativeEurCashItem = (item: NativeEurListItem): EurCashItem => {
     counterparty: item.counterparty,
     purpose: item.purpose,
     vatWarning: item.vatWarning,
+    kind: item.kind,
+    splits: item.splits?.map((split) => ({ ...split, reason: split.reason ?? '' })),
     classification,
   };
 };

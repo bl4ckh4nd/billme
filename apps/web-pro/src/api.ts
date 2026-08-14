@@ -156,6 +156,16 @@ const eurCashItemSchema = z.object({
   counterparty: z.string(),
   purpose: z.string(),
   vatWarning: z.string().optional(),
+  kind: z.enum(['income', 'expense', 'private-withdrawal', 'private-contribution', 'pass-through']).optional(),
+  splits: z.array(z.object({
+    amountNet: z.number().nonnegative(),
+    deductibility: z.enum(['deductible', 'non-deductible']).optional(),
+    classification: z.enum(['deductible', 'non-deductible']).optional(),
+    deductible: z.boolean().optional(),
+    lineId: z.string().optional(),
+    reason: z.string().optional(),
+    auditId: z.string().optional(),
+  })).optional(),
   classification: z.object({
     id: z.string(), sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string(), taxYear: z.union([z.literal(2025), z.literal(2026)]), eurLineId: z.string().optional(), excluded: z.boolean(), vatMode: z.enum(['none', 'default']), vatRate: z.number().optional(), note: z.string().optional(), updatedAt: z.string(),
   }).optional(),
@@ -535,7 +545,8 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     },
     postAccountingCommand(input: { kind: string; source: unknown; domainFacts?: Record<string, unknown>; reason: string }) {
       const source = input.source as Record<string, unknown>;
-      return requestJson({ method: 'POST', body: { command: 'source_fact', input: { ...source, reference: source.reference ?? input.kind, ...(input.domainFacts ?? {}) }, sourceId: source.sourceId, sourceRevision: source.sourceRevision, idempotencyKey: `source:${source.sourceId ?? Date.now()}`, reason: input.reason }, parser: (payload) => payload as { run: z.infer<typeof accountingSourceRunSchema>; result: unknown; replayed: boolean } }, '/api/v1/pro/accounting/closing');
+      const command = input.kind === 'standalone' ? 'source_fact' : input.kind;
+      return requestJson({ method: 'POST', body: { command, input: { ...source, reference: source.reference ?? input.kind, ...(input.domainFacts ?? {}) }, sourceId: source.sourceId, sourceRevision: source.sourceRevision, idempotencyKey: `source:${source.sourceId ?? Date.now()}`, reason: input.reason }, parser: (payload) => payload as { run: z.infer<typeof accountingSourceRunSchema>; result: unknown; replayed: boolean } }, '/api/v1/pro/accounting/closing');
     },
     prepareTaxExport(input: { kind: 'ustva' | 'zm' | 'oss'; period: string; year?: number; reason: string; idempotencyKey?: string }) {
       return requestJson({ method: 'POST', body: { ...input, idempotencyKey: input.idempotencyKey ?? `tax:${input.kind}:${input.period}` }, parser: (payload) => payload as { artifact: unknown; run?: unknown; replayed?: boolean } }, '/api/v1/pro/accounting/tax-exports/prepare');

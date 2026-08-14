@@ -92,6 +92,36 @@ test('posts, replays, and conflict-blocks one immutable source revision', async 
   expect((await invokeDesktopIpc(page, 'pro:getAccountingSourceRun', { id: first.sourceRun.id })).fact.sourceId).toBe(source.sourceId);
 });
 
+test('posts a Sonderbuchung through the browser and refetches its journal link', async () => {
+  const { page } = desktop;
+  const accounts = await pickPostingAccounts(page);
+  const sourceId = unique('ui-source');
+
+  await page.getByRole('button', { name: 'Sonderbuchungen & Abschluss' }).click();
+  await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Sonderbuchung speichern' }).click();
+  await expect(page.getByRole('alert')).toContainText('Betrag muss größer als 0,00 € sein.');
+
+  await page.getByRole('combobox', { name: 'Workflow' }).selectOption('fiscal_close');
+  await page.getByRole('textbox', { name: 'Quellbeleg' }).fill(sourceId);
+  await page.getByRole('textbox', { name: 'Buchungsdatum' }).fill('2026-04-15');
+  await page.getByRole('spinbutton', { name: 'Betrag' }).fill('125');
+  await page.getByRole('textbox', { name: 'Sollkonto' }).fill(accounts.expense);
+  await page.getByRole('textbox', { name: 'Habenkonto' }).fill(accounts.bank);
+  await page.getByRole('textbox', { name: 'Buchungstext' }).fill('E2E Sonderbuchung');
+  await page.getByRole('textbox', { name: 'Audit-Grund', exact: true }).fill('E2E browser source posting');
+  await page.getByRole('button', { name: 'Sonderbuchung speichern' }).click();
+
+  await expect(page.getByRole('status')).toContainText('Sonderbuchung gespeichert und refetched.');
+  const historyRow = page.locator('section[aria-labelledby="source-run-history-heading"] li').filter({ hasText: sourceId });
+  await expect(historyRow).toContainText('standalone_source');
+  await expect(historyRow).toContainText('posted');
+  const journalLink = historyRow.getByRole('link', { name: /^Journal / });
+  await expect(journalLink).toBeVisible();
+  await expect(journalLink).toHaveAttribute('href', /#\/accounting\/journal\/.+/);
+});
+
 test('keeps invalid account, zero amount, and closed-period postings atomic', async () => {
   const { page } = desktop;
   const accounts = await pickPostingAccounts(page);

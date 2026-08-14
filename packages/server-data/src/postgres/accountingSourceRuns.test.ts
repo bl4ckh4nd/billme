@@ -118,6 +118,32 @@ test('source-fact validation rolls back invalid accounts and rejects incomplete 
   }
 });
 
+test('derived schedules persist every command atomically and honor period fiscal years', { skip: !databaseUrl }, async () => {
+  const pool = createPostgresPool(databaseUrl!);
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tenantId = `source-run-schedule-${suffix}`;
+  const now = new Date().toISOString();
+  try {
+    await runDrizzleMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, tenantId, now]);
+    await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
+    await pool.query(`INSERT INTO ledger_accounts (id,chart,account_number,name,source,created_at,updated_at) VALUES ($1,'SKR03','1000','Expense','test',$2,$2),($3,'SKR03','2000','Deferral','test',$2,$2) ON CONFLICT DO NOTHING`, [`schedule-account-a-${suffix}`, now, `schedule-account-b-${suffix}`]);
+    await pool.query(`INSERT INTO accounting_periods (id,tenant_id,period,fiscal_year,status,starts_at,ends_at,created_at,updated_at) VALUES ($1,$2,'2025-01',2025,'open','2025-01-01','2025-01-31',$3,$3),($4,$2,'2025-02',2024,'open','2025-02-01','2025-02-28',$3,$3)`, [`schedule-period-a-${suffix}`, tenantId, now, `schedule-period-b-${suffix}`]);
+    const repository = createPostgresProAccountingRepository(pool);
+    const scope = createSingleTenantScope(tenantId, 'pro');
+    const input = {
+      command: 'accrual' as const, sourceId: `accrual-${suffix}`, sourceRevision: 'v1', idempotencyKey: `accrual-${suffix}:v1`, reason: 'Schedule atomicity',
+      input: { sourceId: `accrual-${suffix}`, sourceRevision: 'v1', startDate: '2025-01-01', endDate: '2025-02-01', period: '2025-01', fiscalYear: 2025, currency: 'EUR', totalAmount: 20, expenseAccount: '1000', deferralAccount: '2000' },
+    };
+    await assert.rejects(() => repository.runClosingCommand(scope, input), /FISCAL_YEAR_PERIOD_MISMATCH/);
+    assert.equal((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count, 0);
+    assert.equal((await pool.query(`SELECT COUNT(*)::int AS count FROM accounting_source_runs WHERE tenant_id=$1`, [tenantId])).rows[0].count, 0);
+  } finally {
+    await pool.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]).catch(() => undefined);
+    await pool.end();
+  }
+});
+
 test('repository source-run methods remain callable through the query-only seam', async () => {
   const calls: string[] = [];
   const db = { query: async (text: string) => { calls.push(text); return { rows: [] }; } } as unknown as PostgresQueryable;

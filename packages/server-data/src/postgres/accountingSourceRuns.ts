@@ -163,12 +163,21 @@ const assertPeriod = async (
   scope: TenantScope,
   postingDate: string,
   period: string,
+  fiscalYear: number,
   softLockOverride?: boolean,
   overrideReason?: string,
 ): Promise<void> => {
   if (!isoDate(postingDate)) throw new Error('INVALID_POSTING_DATE');
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period) || period !== periodOf(postingDate)) throw new Error('INVALID_PERIOD');
-  const rows = await q<any>(db, `SELECT status FROM accounting_periods WHERE tenant_id=$1 AND period=$2 FOR UPDATE`, [tenant(scope), period]);
+  let rows = await q<any>(db, `SELECT status,fiscal_year FROM accounting_periods WHERE tenant_id=$1 AND period=$2 FOR UPDATE`, [tenant(scope), period]);
+  if (!rows[0]) {
+    const year = Number(period.slice(0, 4));
+    const month = Number(period.slice(5, 7));
+    const end = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+    await q(db, `INSERT INTO accounting_periods (id,tenant_id,period,fiscal_year,status,starts_at,ends_at,created_at,updated_at) VALUES ($1,$2,$3,$4,'open',$5,$6,$7,$7) ON CONFLICT (tenant_id,period) DO NOTHING`, [randomUUID(), tenant(scope), period, fiscalYear, `${period}-01`, end, now()]);
+    rows = await q<any>(db, `SELECT status,fiscal_year FROM accounting_periods WHERE tenant_id=$1 AND period=$2 FOR UPDATE`, [tenant(scope), period]);
+  }
+  if (rows[0] && Number(rows[0].fiscal_year) !== fiscalYear) throw new Error('FISCAL_YEAR_PERIOD_MISMATCH');
   const status = rows[0]?.status ?? 'open';
   if (status === 'closed') throw new Error('POSTING_DATE_IN_CLOSED_PERIOD');
   if (status === 'soft_locked' && (!softLockOverride || !overrideReason?.trim())) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED');
@@ -239,7 +248,7 @@ const insertCommand = async (
   options: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext },
 ): Promise<string> => {
   const entry = command.entry;
-  await assertPeriod(db, scope, entry.postingDate, entry.period, options.softLockOverride, options.overrideReason);
+  await assertPeriod(db, scope, entry.postingDate, entry.period, entry.fiscalYear, options.softLockOverride, options.overrideReason);
   await assertAccounts(db, entry.lines.map((line: any) => line.accountNumber));
   const existing = (await q<any>(db, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), entry.id]))[0];
   if (existing) return existing.id;
@@ -266,16 +275,67 @@ const correctionLines = async (db: PostgresQueryable, scope: TenantScope, docume
   for (const [index, delta] of document.deltas.entries()) {
     const taxCaseKey = taxCaseForCorrectionRate(delta.rate);
     if (documentType === 'incoming_invoice') {
-      lines.push({ id: `${document.id}:expense:${index}`, accountNumber: mappings.expense, debitAmount: 0, creditAmount: -delta.netAmount, taxCaseKey, netAmount: delta.netAmount, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction' });
-      if (delta.taxAmount) lines.push({ id: `${document.id}:tax:${index}`, accountNumber: mappings.input_vat, debitAmount: 0, creditAmount: -delta.taxAmount, taxCaseKey, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction VAT' });
-      lines.push({ id: `${document.id}:payable:${index}`, accountNumber: mappings.accounts_payable, debitAmount: -delta.grossAmount, creditAmount: 0, memo: 'Linked correction payable' });
+      lines.push({ id: `${document.id}:expense:${index}`, accountNumber: mappings.expense, debitAmount: 0, creditAmount: Math.abs(delta.netAmount), taxCaseKey, netAmount: delta.netAmount, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction' });
+      if (delta.taxAmount) lines.push({ id: `${document.id}:tax:${index}`, accountNumber: mappings.input_vat, debitAmount: 0, creditAmount: Math.abs(delta.taxAmount), taxCaseKey, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction VAT' });
+      lines.push({ id: `${document.id}:payable:${index}`, accountNumber: mappings.accounts_payable, debitAmount: Math.abs(delta.grossAmount), creditAmount: 0, memo: 'Linked correction payable' });
     } else {
-      lines.push({ id: `${document.id}:revenue:${index}`, accountNumber: mappings.revenue, debitAmount: -delta.netAmount, creditAmount: 0, taxCaseKey, netAmount: delta.netAmount, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction' });
-      if (delta.taxAmount) lines.push({ id: `${document.id}:tax:${index}`, accountNumber: mappings.output_vat, debitAmount: -delta.taxAmount, creditAmount: 0, taxCaseKey, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction VAT' });
-      lines.push({ id: `${document.id}:receivable:${index}`, accountNumber: mappings.accounts_receivable, debitAmount: 0, creditAmount: -delta.grossAmount, memo: 'Linked correction receivable' });
+      lines.push({ id: `${document.id}:revenue:${index}`, accountNumber: mappings.revenue, debitAmount: Math.abs(delta.netAmount), creditAmount: 0, taxCaseKey, netAmount: delta.netAmount, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction' });
+      if (delta.taxAmount) lines.push({ id: `${document.id}:tax:${index}`, accountNumber: mappings.output_vat, debitAmount: Math.abs(delta.taxAmount), creditAmount: 0, taxCaseKey, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction VAT' });
+      lines.push({ id: `${document.id}:receivable:${index}`, accountNumber: mappings.accounts_receivable, debitAmount: 0, creditAmount: Math.abs(delta.grossAmount), memo: 'Linked correction receivable' });
     }
   }
   return lines;
+};
+
+const correctionTaxBreakdown = (row: any, snapshot: any, lines: any[]): Array<{ rate: number; netAmount: number; taxAmount: number; grossAmount: number }> => {
+  const supplied = snapshot?.vatBreakdown ?? snapshot?.breakdown;
+  if (Array.isArray(supplied) && supplied.length) return supplied.map((entry: any) => ({ rate: Number(entry.rate), netAmount: Number(entry.netAmount), taxAmount: Number(entry.taxAmount ?? entry.vatAmount), grossAmount: Number(entry.grossAmount ?? entry.netAmount + (entry.taxAmount ?? entry.vatAmount)) }));
+  const grouped = new Map<number, { netAmount: number; taxAmount: number; grossAmount: number }>();
+  for (const line of lines) {
+    if (line.tax_rate == null && line.taxRate == null) continue;
+    const rate = Number(line.tax_rate ?? line.taxRate);
+    const current = grouped.get(rate) ?? { netAmount: 0, taxAmount: 0, grossAmount: 0 };
+    current.netAmount += Number(line.net_amount ?? line.netAmount ?? 0);
+    current.taxAmount += Number(line.tax_amount ?? line.taxAmount ?? 0);
+    current.grossAmount += Number(line.gross_amount ?? line.grossAmount ?? 0);
+    grouped.set(rate, current);
+  }
+  if (grouped.size) return [...grouped.entries()].map(([rate, value]) => ({ rate, ...value }));
+  const rate = Number(row.tax_rate ?? snapshot?.taxRate ?? 0);
+  const netAmount = Number(row.net_amount ?? snapshot?.netAmount ?? snapshot?.net ?? 0);
+  const taxAmount = Number(row.tax_amount ?? snapshot?.taxAmount ?? snapshot?.tax ?? 0);
+  const grossAmount = Number(row.gross_amount ?? snapshot?.grossAmount ?? snapshot?.gross ?? netAmount + taxAmount);
+  return [{ rate, netAmount, taxAmount, grossAmount }];
+};
+
+const resolveCorrectionOriginal = async (
+  db: PostgresQueryable,
+  scope: TenantScope,
+  requested: ImmutableOriginalDocument,
+  documentType: 'outgoing_invoice' | 'incoming_invoice',
+): Promise<ImmutableOriginalDocument> => {
+  const table = documentType === 'incoming_invoice' ? 'incoming_invoices' : 'invoices';
+  const dateColumn = documentType === 'incoming_invoice' ? 'invoice_date' : 'date';
+  const row = (await q<any>(db, `SELECT * FROM ${table} WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), requested.documentId]))[0];
+  if (!row) throw new Error('ORIGINAL_DOCUMENT_NOT_FOUND');
+  if (row.number !== requested.documentNumber) throw new Error('ORIGINAL_CHANGED');
+  const incomingLines = documentType === 'incoming_invoice'
+    ? await q<any>(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [tenant(scope), row.id])
+    : [];
+  const accountingSnapshot = parse<any>(row.accounting_snapshot_json, undefined);
+  const taxSnapshot = parse<any>(row.tax_snapshot_json, undefined);
+  const snapshot = taxSnapshot ?? accountingSnapshot;
+  if (!snapshot || typeof snapshot !== 'object') throw new Error('ORIGINAL_SNAPSHOT_REQUIRED');
+  const authoritativeLines = incomingLines.length ? incomingLines : (Array.isArray(accountingSnapshot?.lines) ? accountingSnapshot.lines : []);
+  const canonicalHash = hash(snapshot);
+  const revision = String(accountingSnapshot?.sourceVersion ?? snapshot.sourceVersion ?? canonicalHash);
+  const proofs = new Set([canonicalHash, revision, hash({ snapshot, lines: authoritativeLines }), hash({ accountingSnapshot, taxSnapshot, lines: authoritativeLines })]);
+  if (!proofs.has(requested.snapshotHash) || (requested.currentSnapshotHash !== undefined && requested.currentSnapshotHash !== requested.snapshotHash)) throw new Error('ORIGINAL_CHANGED');
+  if (requested.revision !== revision && requested.revision !== canonicalHash) throw new Error('ORIGINAL_CHANGED');
+  if (requested.taxEffectiveDate !== row[dateColumn]) throw new Error('ORIGINAL_CHANGED');
+  const breakdown = correctionTaxBreakdown(row, snapshot, authoritativeLines);
+  if (!breakdown.length || breakdown.some((entry) => !Number.isFinite(entry.rate) || !Number.isFinite(entry.netAmount) || !Number.isFinite(entry.taxAmount) || !Number.isFinite(entry.grossAmount))) throw new Error('ORIGINAL_SNAPSHOT_REQUIRED');
+  return { documentId: row.id, documentNumber: row.number, revision, snapshotHash: canonicalHash, currentSnapshotHash: canonicalHash, taxEffectiveDate: row[dateColumn], taxBreakdown: breakdown };
 };
 
 type PersistedTaxSourceSemantics = {
@@ -346,10 +406,14 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
   },
   async createCorrectionSettlement(scope, input) {
     const reason = mutationReason(input);
-    const correction = createLinkedCorrection({ id: required(input.id, 'CORRECTION_ID_REQUIRED'), idempotencyKey: required(input.idempotencyKey, 'IDEMPOTENCY_KEY_REQUIRED'), correctionDate: input.correctionDate, taxEffectiveDate: input.taxEffectiveDate, original: input.original, deltas: input.deltas });
+    const id = required(input.id, 'CORRECTION_ID_REQUIRED');
+    const idempotencyKey = required(input.idempotencyKey, 'IDEMPOTENCY_KEY_REQUIRED');
     const sourceType = 'correction';
-    const source = { ...input, mutation: undefined, reason: undefined, document: correction.document };
     return inTx(db, async (tx) => {
+      const documentType = input.documentType ?? 'outgoing_invoice';
+      const original = await resolveCorrectionOriginal(tx, scope, input.original, documentType);
+      const correction = createLinkedCorrection({ id, idempotencyKey, correctionDate: input.correctionDate, taxEffectiveDate: input.taxEffectiveDate, original, deltas: input.deltas });
+      const source = { ...input, mutation: undefined, reason: undefined, original, document: correction.document };
       const existing = (await q<any>(tx, `SELECT * FROM accounting_source_runs WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND source_revision=$4 FOR UPDATE`, [tenant(scope), sourceType, correction.document.id, correction.document.originalRevision]))[0];
       if (existing) {
         if (existing.source_hash !== hash(source) || existing.idempotency_key !== correction.document.idempotencyKey) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
@@ -364,9 +428,9 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
       const priorCorrections = priorRows
         .map((row) => parse<LinkedCorrectionDocument | undefined>(row.result_json, undefined))
         .filter((document): document is LinkedCorrectionDocument => document?.originalDocumentId === correction.document.originalDocumentId);
-      const linked = createLinkedCorrection({ id: correction.document.id, idempotencyKey: correction.document.idempotencyKey, correctionDate: correction.document.correctionDate, taxEffectiveDate: correction.document.taxEffectiveDate, original: input.original, deltas: input.deltas, existing: priorCorrections });
+      const linked = createLinkedCorrection({ id: correction.document.id, idempotencyKey: correction.document.idempotencyKey, correctionDate: correction.document.correctionDate, taxEffectiveDate: correction.document.taxEffectiveDate, original, deltas: input.deltas, existing: priorCorrections });
       const postingDate = input.postingDate ?? correction.document.correctionDate;
-      const lines = await correctionLines(tx, scope, linked.document, input.documentType ?? 'outgoing_invoice');
+      const lines = await correctionLines(tx, scope, linked.document, documentType);
       const command = { entry: { id: `correction:${linked.document.id}`, postingDate, documentDate: linked.document.taxEffectiveDate, bookingText: `Korrektur zu ${linked.document.originalDocumentNumber}`, reference: linked.document.originalDocumentNumber, period: periodOf(postingDate), fiscalYear: Number(postingDate.slice(0, 4)), status: 'posted', sourceType: 'standalone_source', sourceKey: `correction:${linked.document.id}`, lines } };
       const journalEntryId = await insertCommand(tx, scope, command, input);
       const run = await createRun(tx, scope, { sourceType, sourceId: linked.document.id, sourceRevision: linked.document.originalRevision, idempotencyKey: linked.document.idempotencyKey, status: 'posted', source, result: linked.document, journalEntryId, reason, mutation: input.mutation });
@@ -392,9 +456,9 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
     if (built.status === 'rejected' || built.status === 'invalid') throw new Error(`CLOSING_COMMAND_REJECTED:${built.errors?.[0]?.code ?? 'INVALID'}`);
     const value = built.value ?? built;
     // Source facts and single-command validators return the JournalCommand
-    // directly, while schedule/closing builders wrap it in `command` or
-    // `commands`. Normalize all shapes before persisting the journal link.
-    const command = value.command ?? value.commands?.[0] ?? (value.entry ? value : undefined);
+    // directly, while schedules wrap all derived entries in `commands`.
+    // Persist every derived command; never trust a submitted command list.
+    const commands = [value.command, ...(value.commands ?? []), ...(value.entry ? [value] : [])].filter(Boolean) as any[];
     const resultJson = { command: commandName, result: value, status: built.status };
     const idempotencyKey = required(input.idempotencyKey, 'IDEMPOTENCY_KEY_REQUIRED');
     return inTx(db, async (tx) => {
@@ -404,9 +468,11 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
         if (existing.source_hash !== hash(source) || existing.idempotency_key !== idempotencyKey) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
         return { run: mapRun(existing), result: parse(existing.result_json, resultJson), replayed: true };
       }
-      const journalEntryId = command ? await insertCommand(tx, scope, command, input) : undefined;
-      const run = await createRun(tx, scope, { sourceType, sourceId, sourceRevision, idempotencyKey, status: command ? 'posted' : 'noop', source, result: resultJson, journalEntryId, reason, mutation: input.mutation });
-      return { run: run.run, result: resultJson, replayed: run.replayed };
+      const journalEntryIds: string[] = [];
+      for (const derived of commands) journalEntryIds.push(await insertCommand(tx, scope, derived, input));
+      const journalEntryId = journalEntryIds[0];
+      const run = await createRun(tx, scope, { sourceType, sourceId, sourceRevision, idempotencyKey, status: journalEntryIds.length ? 'posted' : 'noop', source, result: { ...resultJson, journalEntryIds }, journalEntryId, reason, mutation: input.mutation });
+      return { run: run.run, result: { ...resultJson, journalEntryIds }, replayed: run.replayed };
     });
   },
   async prepareTaxExport(scope, input) {

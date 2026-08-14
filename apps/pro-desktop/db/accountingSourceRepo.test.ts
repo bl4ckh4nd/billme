@@ -122,4 +122,31 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     expect((refetched?.fact as AccountingSourceFact & { provenance?: { domainFacts?: { original?: { documentId?: string } } } }).provenance?.domainFacts?.original?.documentId).toBe('invoice-1');
     db.close();
   });
+
+  it('posts every derived schedule command atomically and ignores submitted lines', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const result = postAccountingCommand(db, {
+      kind: 'accrual',
+      source: { ...source('submitted'), lines: [{ accountNumber: '8400', debitAmount: 999, creditAmount: 0 }, { accountNumber: '1200', debitAmount: 0, creditAmount: 999 }] },
+      domainFacts: {
+        sourceId: 'accrual-1', sourceRevision: 'r1', startDate: '2026-03-01', endDate: '2026-05-01', period: '2026-03', fiscalYear: 2026,
+        currency: 'EUR', totalAmount: 30, expenseAccount: '8400', deferralAccount: '1200',
+      },
+    }, scope, { reason: 'derived schedule' });
+    expect(result.status).toBe('posted');
+    expect(db.prepare("SELECT COUNT(*) AS count FROM journal_entries WHERE source_type = 'accrual'").get()).toEqual({ count: 3 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM accounting_source_runs WHERE source_type = 'accrual'").get()).toEqual({ count: 3 });
+    db.close();
+  });
+
+  it('rejects a source whose fiscal year disagrees with the accounting period', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const result = postAccountingSource(db, { ...source('period-mismatch'), fiscalYear: 2025 }, scope, { reason: 'period mismatch' });
+    expect(result.status).toBe('rejected');
+    expect(result.errors.some((issue) => issue.code === 'PERIOD_MISMATCH')).toBe(true);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_entries').get()).toEqual({ count: 0 });
+    db.close();
+  });
 });

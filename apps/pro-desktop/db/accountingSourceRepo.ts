@@ -312,13 +312,26 @@ const validatePersistence = (
     if (!accountExists(db, chart, line.accountNumber)) errors.push(error('INVALID_ACCOUNT', `Account ${line.accountNumber} is not available in ${chart}.`, `lines.${index}.accountNumber`));
   }
   const periodStatus = (db.prepare('SELECT status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get(tenantId, fact.period) as { status?: string } | undefined)?.status ?? 'open';
+  const periodRow = db.prepare('SELECT fiscal_year FROM accounting_periods WHERE tenant_id = ? AND period = ?').get(tenantId, fact.period) as { fiscal_year?: number } | undefined;
+  if (periodRow && Number(periodRow.fiscal_year) !== fact.fiscalYear) errors.push(error('PERIOD_MISMATCH', 'Fiscal year does not match the accounting period.', 'fiscalYear'));
   if (periodStatus === 'closed') errors.push(error('PERIOD_MISMATCH', 'Posting period is closed.', 'period'));
   if (periodStatus === 'soft_locked' && !(options.softLockOverride && options.overrideReason?.trim())) errors.push(error('PERIOD_MISMATCH', 'Soft-locked period requires an override reason.', 'period'));
   return errors;
 };
 
+const ensureAccountingPeriod = (db: Database.Database, tenantId: string, fact: AccountingSourceFact): void => {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(fact.period) || fact.period !== fact.postingDate.slice(0, 7)) return;
+  const exists = db.prepare('SELECT 1 FROM accounting_periods WHERE tenant_id = ? AND period = ?').get(tenantId, fact.period);
+  if (exists) return;
+  const year = Number(fact.period.slice(0, 4));
+  const month = Number(fact.period.slice(5, 7));
+  const end = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  db.prepare(`INSERT INTO accounting_periods (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)`).run(crypto.randomUUID(), tenantId, fact.period, fact.fiscalYear, `${fact.period}-01`, end, now(), now());
+};
+
 /** Post one immutable source revision through the shared closing-domain boundary. */
-export const postAccountingSource = (
+const postAccountingSourceInTransaction = (
   db: Database.Database,
   fact: AccountingSourceFact,
   scope: TenantScope,
@@ -333,36 +346,42 @@ export const postAccountingSource = (
 
   const chart = activeChart(db, tenantId, options.chart);
   const domain = buildJournalCommand(fact);
+  if (domain.status === 'ready') ensureAccountingPeriod(db, tenantId, fact);
   const persistenceErrors = validatePersistence(db, tenantId, fact, chart, options);
   const errors = [...domain.errors, ...persistenceErrors];
   if (errors.length || domain.status === 'rejected' || !domain.value) {
     const result = { status: 'rejected', errors };
-    const sourceRun = db.transaction(() => persistRejected(db, tenantId, fact, result, options))();
+    const sourceRun = persistRejected(db, tenantId, fact, result, options);
     return { status: 'rejected', sourceRun, errors, idempotencyKey };
   }
 
   const command = domain.value;
-  const sourceRun = db.transaction(() => {
-    const posted = postJournal(db, tenantId, fact, command, chart);
-    const createdAt = now();
-    const id = sourceRunId(tenantId, idempotencyKey);
-    const runFact = { ...fact, provenance: options.provenance };
-    const result = { command: posted.entry, chart, status: 'posted' };
-    db.prepare(`INSERT INTO accounting_source_runs
-      (id, tenant_id, source_type, source_id, source_revision, idempotency_key, fact_json, result_json, status,
-       journal_entry_id, effective_date, posting_date, period, fiscal_year, currency, booking_text, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id, tenantId, fact.sourceType, fact.sourceId, fact.sourceRevision, idempotencyKey, stableJson(runFact), stableJson(result),
-      posted.id, fact.effectiveDate, fact.postingDate, fact.period, fact.fiscalYear, fact.currency, fact.bookingText, createdAt,
-    );
-    appendAuditLog(db, {
-      entityType: 'accounting_source_run', entityId: id, action: 'post', reason: options.reason ?? 'Accounting source posted',
-      before: null, after: { ...result, sourceType: fact.sourceType, sourceId: fact.sourceId, sourceRevision: fact.sourceRevision }, actor: 'pro',
-    });
-    return { run: rowToEntity(db.prepare('SELECT * FROM accounting_source_runs WHERE id = ?').get(id) as SourceRunRow), entry: posted.entry };
-  })();
+  const posted = postJournal(db, tenantId, fact, command, chart);
+  const createdAt = now();
+  const id = sourceRunId(tenantId, idempotencyKey);
+  const runFact = { ...fact, provenance: options.provenance };
+  const result = { command: posted.entry, chart, status: 'posted' };
+  db.prepare(`INSERT INTO accounting_source_runs
+    (id, tenant_id, source_type, source_id, source_revision, idempotency_key, fact_json, result_json, status,
+     journal_entry_id, effective_date, posting_date, period, fiscal_year, currency, booking_text, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    id, tenantId, fact.sourceType, fact.sourceId, fact.sourceRevision, idempotencyKey, stableJson(runFact), stableJson(result),
+    posted.id, fact.effectiveDate, fact.postingDate, fact.period, fact.fiscalYear, fact.currency, fact.bookingText, createdAt,
+  );
+  appendAuditLog(db, {
+    entityType: 'accounting_source_run', entityId: id, action: 'post', reason: options.reason ?? 'Accounting source posted',
+    before: null, after: { ...result, sourceType: fact.sourceType, sourceId: fact.sourceId, sourceRevision: fact.sourceRevision }, actor: 'pro',
+  });
+  const sourceRun = { run: rowToEntity(db.prepare('SELECT * FROM accounting_source_runs WHERE id = ?').get(id) as SourceRunRow), entry: posted.entry };
   return { status: 'posted', sourceRun: sourceRun.run, command: { ...command, entry: sourceRun.entry }, errors: [], idempotencyKey };
 };
+
+export const postAccountingSource = (
+  db: Database.Database,
+  fact: AccountingSourceFact,
+  scope: TenantScope,
+  options: PostAccountingSourceOptions = {},
+): AccountingSourcePostResult => db.transaction(() => postAccountingSourceInTransaction(db, fact, scope, options))();
 
 export const listAccountingSourceRuns = (db: Database.Database, scope: TenantScope): AccountingSourceRunEntity[] => {
   const tenantId = getTenantId(scope);
@@ -422,6 +441,82 @@ const factFromCommand = (command: JournalCommand): AccountingSourceFact => ({
   })),
 });
 
+const correctionMappings = (db: Database.Database, tenantId: string, chart: 'SKR03' | 'SKR04'): Record<string, string> => {
+  const defaults = chart === 'SKR04'
+    ? { accounts_receivable: '1200', accounts_payable: '3300', revenue: '4400', expense: '6300', output_vat: '3806', input_vat: '1406' }
+    : { accounts_receivable: '1400', accounts_payable: '1600', revenue: '8400', expense: '4900', output_vat: '1776', input_vat: '1576' };
+  for (const row of db.prepare('SELECT role, account_number FROM accounting_account_mappings WHERE tenant_id = ? AND chart = ?').all(tenantId, chart) as Array<{ role: string; account_number: string }>) {
+    if (row.role in defaults) defaults[row.role as keyof typeof defaults] = row.account_number;
+  }
+  return defaults;
+};
+
+const correctionLines = (db: Database.Database, tenantId: string, chart: 'SKR03' | 'SKR04', document: ReturnType<typeof createLinkedCorrection>['document'], documentType: 'outgoing_invoice' | 'incoming_invoice'): AccountingSourceFact['lines'] => {
+  const mappings = correctionMappings(db, tenantId, chart);
+  return document.deltas.flatMap((delta) => {
+    const taxCaseKey = delta.rate === 19 ? 'DE_STD_19' : delta.rate === 7 ? 'DE_STD_7' : 'DE_ZERO_EXEMPT';
+    const amount = (value: number): number => Math.abs(value);
+    return documentType === 'incoming_invoice'
+      ? [
+          { accountNumber: mappings.expense, debitAmount: 0, creditAmount: amount(delta.netAmount), memo: `Linked correction ${taxCaseKey}` },
+          ...(delta.taxAmount ? [{ accountNumber: mappings.input_vat, debitAmount: 0, creditAmount: amount(delta.taxAmount), memo: `Linked correction VAT ${taxCaseKey}` }] : []),
+          { accountNumber: mappings.accounts_payable, debitAmount: amount(delta.grossAmount), creditAmount: 0, memo: 'Linked correction payable' },
+        ]
+      : [
+          { accountNumber: mappings.revenue, debitAmount: amount(delta.netAmount), creditAmount: 0, memo: `Linked correction ${taxCaseKey}` },
+          ...(delta.taxAmount ? [{ accountNumber: mappings.output_vat, debitAmount: amount(delta.taxAmount), creditAmount: 0, memo: `Linked correction VAT ${taxCaseKey}` }] : []),
+          { accountNumber: mappings.accounts_receivable, debitAmount: 0, creditAmount: amount(delta.grossAmount), memo: 'Linked correction receivable' },
+        ];
+  });
+};
+
+const correctionBreakdown = (row: any, snapshot: any, lines: any[]): Array<{ rate: number; netAmount: number; taxAmount: number; grossAmount: number }> => {
+  const supplied = snapshot?.vatBreakdown ?? snapshot?.breakdown;
+  if (Array.isArray(supplied) && supplied.length) return supplied.map((entry: any) => ({ rate: Number(entry.rate), netAmount: Number(entry.netAmount), taxAmount: Number(entry.taxAmount ?? entry.vatAmount), grossAmount: Number(entry.grossAmount ?? entry.netAmount + (entry.taxAmount ?? entry.vatAmount)) }));
+  const grouped = new Map<number, { netAmount: number; taxAmount: number; grossAmount: number }>();
+  for (const line of lines) {
+    if (line.tax_rate == null && line.taxRate == null) continue;
+    const rate = Number(line.tax_rate ?? line.taxRate);
+    const current = grouped.get(rate) ?? { netAmount: 0, taxAmount: 0, grossAmount: 0 };
+    current.netAmount += Number(line.net_amount ?? line.netAmount ?? 0);
+    current.taxAmount += Number(line.tax_amount ?? line.taxAmount ?? 0);
+    current.grossAmount += Number(line.gross_amount ?? line.grossAmount ?? 0);
+    grouped.set(rate, current);
+  }
+  if (grouped.size) return [...grouped.entries()].map(([rate, value]) => ({ rate, ...value }));
+  const rate = Number(row.tax_rate ?? snapshot?.taxRate ?? 0);
+  const netAmount = Number(row.net_amount ?? snapshot?.netAmount ?? snapshot?.net ?? 0);
+  const taxAmount = Number(row.tax_amount ?? snapshot?.taxAmount ?? snapshot?.tax ?? 0);
+  const grossAmount = Number(row.gross_amount ?? snapshot?.grossAmount ?? snapshot?.gross ?? netAmount + taxAmount);
+  return [{ rate, netAmount, taxAmount, grossAmount }];
+};
+
+const resolveCorrectionOriginal = (db: Database.Database, tenantId: string, requested: ImmutableOriginalDocument, documentType: 'outgoing_invoice' | 'incoming_invoice'): ImmutableOriginalDocument => {
+  const table = documentType === 'incoming_invoice' ? 'incoming_invoices' : 'invoices';
+  const dateColumn = documentType === 'incoming_invoice' ? 'invoice_date' : 'date';
+  const row = documentType === 'incoming_invoice'
+    ? db.prepare(`SELECT * FROM ${table} WHERE tenant_id = ? AND id = ?`).get(tenantId, requested.documentId) as any
+    : db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(requested.documentId) as any;
+  if (!row) throw new Error('ORIGINAL_DOCUMENT_NOT_FOUND');
+  if (row.number !== requested.documentNumber || row[dateColumn] !== requested.taxEffectiveDate) throw new Error('ORIGINAL_CHANGED');
+  const lines = documentType === 'incoming_invoice'
+    ? db.prepare('SELECT * FROM incoming_invoice_lines WHERE tenant_id = ? AND incoming_invoice_id = ? ORDER BY position').all(tenantId, row.id) as any[]
+    : [];
+  const accountingSnapshot = parseJson<any>(row.accounting_snapshot_json, undefined);
+  const taxSnapshot = parseJson<any>(row.tax_snapshot_json, undefined);
+  const snapshot = taxSnapshot ?? accountingSnapshot;
+  if (!snapshot || typeof snapshot !== 'object') throw new Error('ORIGINAL_SNAPSHOT_REQUIRED');
+  const authoritativeLines = lines.length ? lines : (Array.isArray(accountingSnapshot?.lines) ? accountingSnapshot.lines : []);
+  const canonicalHash = crypto.createHash('sha256').update(stableJson(snapshot)).digest('hex');
+  const revision = String(accountingSnapshot?.sourceVersion ?? snapshot.sourceVersion ?? canonicalHash);
+  const proofs = new Set([canonicalHash, revision, crypto.createHash('sha256').update(stableJson({ snapshot, lines: authoritativeLines })).digest('hex'), crypto.createHash('sha256').update(stableJson({ accountingSnapshot, taxSnapshot, lines: authoritativeLines })).digest('hex')]);
+  if (!proofs.has(requested.snapshotHash) || (requested.currentSnapshotHash !== undefined && requested.currentSnapshotHash !== requested.snapshotHash)) throw new Error('ORIGINAL_CHANGED');
+  if (requested.revision !== revision && requested.revision !== canonicalHash) throw new Error('ORIGINAL_CHANGED');
+  const breakdown = correctionBreakdown(row, snapshot, authoritativeLines);
+  if (!breakdown.length || breakdown.some((entry) => !Object.values(entry).every(Number.isFinite))) throw new Error('ORIGINAL_SNAPSHOT_REQUIRED');
+  return { documentId: row.id, documentNumber: row.number, revision, snapshotHash: canonicalHash, currentSnapshotHash: canonicalHash, taxEffectiveDate: row[dateColumn], taxBreakdown: breakdown };
+};
+
 /** Validate a settlement/correction domain payload, then post its supplied lines atomically. */
 export const postAccountingCommand = (
   db: Database.Database,
@@ -431,8 +526,26 @@ export const postAccountingCommand = (
 ): AccountingSourcePostResult => {
   const reason = options.reason?.trim();
   if (!reason) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED: a reason is required for command posting');
-  const facts = input.domainFacts as Record<string, unknown> | undefined;
-  if (input.kind === 'correction' && facts) createLinkedCorrection(facts as unknown as LinkedCorrectionInput);
+  const facts = input.domainFacts as Record<string, any> | undefined;
+  if (input.kind === 'correction' && facts) {
+    const tenantId = getTenantId(scope);
+    const documentType = facts.documentType === 'incoming_invoice' ? 'incoming_invoice' : 'outgoing_invoice';
+    const original = resolveCorrectionOriginal(db, tenantId, facts.original as ImmutableOriginalDocument, documentType);
+    const linked = createLinkedCorrection({ ...facts, original } as unknown as LinkedCorrectionInput);
+    const chart = activeChart(db, tenantId, options.chart);
+    const correctionSource: AccountingSourceFact = {
+      ...input.source,
+      sourceType: 'standalone_source',
+      sourceId: linked.document.id,
+      sourceRevision: linked.document.originalRevision,
+      effectiveDate: linked.document.correctionDate,
+      postingDate: linked.document.correctionDate,
+      period: linked.document.correctionDate.slice(0, 7),
+      fiscalYear: Number(linked.document.correctionDate.slice(0, 4)),
+      lines: correctionLines(db, tenantId, chart, linked.document, documentType),
+    };
+    return postAccountingSource(db, correctionSource, scope, { ...options, provenance: { commandKind: input.kind, domainFacts: { ...facts, original }, ...((options.provenance as Record<string, unknown> | undefined) ?? {}) } });
+  }
   if (input.kind === 'skonto' && facts) calculateSkontoVatApportionment(facts as unknown as SkontoVatApportionmentInput);
   if (input.kind === 'bad_debt' && facts) calculateBadDebtWriteOff(facts as unknown as BadDebtWriteOffInput);
   if (input.kind === 'ustg17' && facts) validateUstg17AdjustmentFacts(facts as unknown as Ustg17AdjustmentFactsInput);
@@ -455,7 +568,10 @@ export const postAccountingCommand = (
     return { status: 'noop', sourceRun, errors: [], idempotencyKey: keyFor(input.source) };
   }
   let result: AccountingSourcePostResult | undefined;
-  for (const command of generated.commands) result = postAccountingSource(db, factFromCommand(command), scope, generatedOptions);
+  result = db.transaction(() => {
+    for (const command of generated.commands) result = postAccountingSourceInTransaction(db, factFromCommand(command), scope, generatedOptions);
+    return result!;
+  })();
   return result!;
 };
 

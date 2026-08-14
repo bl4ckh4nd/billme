@@ -1230,7 +1230,49 @@ export const accountingSourceFactSchema = z.object({
   bookingText: z.string().trim().min(1),
   reference: z.string().optional(),
   provenance: z.unknown().optional(),
-  lines: z.array(accountingSourceFactLineSchema).min(1),
+  // Domain commands derive their journal lines from domainFacts. Keep the
+  // transport fact shape permissive; command/source routes apply the
+  // appropriate standalone-vs-domain validation below.
+  lines: z.array(accountingSourceFactLineSchema),
+});
+
+const centValue = (value: number): number | null => {
+  const rounded = Math.round(value * 100);
+  return Math.abs(value * 100 - rounded) < 1e-7 ? rounded : null;
+};
+
+const validateBalancedSourceLines = (
+  lines: readonly z.infer<typeof accountingSourceFactLineSchema>[],
+  ctx: z.RefinementCtx,
+  path: (string | number)[] = ['lines'],
+): void => {
+  if (!lines.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path, message: 'At least one journal line is required.' });
+    return;
+  }
+  let debit = 0;
+  let credit = 0;
+  for (const [index, line] of lines.entries()) {
+    const debitCents = centValue(line.debitAmount);
+    const creditCents = centValue(line.creditAmount);
+    if (debitCents === null || creditCents === null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...path, index], message: 'Journal amounts must use cent precision.' });
+      continue;
+    }
+    if ((debitCents > 0) === (creditCents > 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...path, index], message: 'A journal line must contain either debit or credit.' });
+    }
+    debit += debitCents;
+    credit += creditCents;
+  }
+  if (debit !== credit || debit === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path, message: 'Debit and credit must match exactly to the cent.' });
+  }
+};
+
+/** Standalone source facts carry their own balanced journal lines. */
+export const standaloneAccountingSourceFactSchema = accountingSourceFactSchema.superRefine((source, ctx) => {
+  validateBalancedSourceLines(source.lines, ctx);
 });
 
 export const accountingCommandKindSchema = z.enum([
@@ -1275,15 +1317,30 @@ const proPostAccountingSourceArgsBaseSchema = z.object({
   provenance: z.unknown().optional(),
 });
 
-export const proPostAccountingSourceArgsSchema = proPostAccountingSourceArgsBaseSchema.refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), {
-  path: ['overrideReason'], message: 'overrideReason required for soft-lock override',
-});
+export const proPostAccountingSourceArgsSchema = proPostAccountingSourceArgsBaseSchema
+  .superRefine((input, ctx) => validateBalancedSourceLines(input.source.lines, ctx, ['source', 'lines']))
+  .refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), {
+    path: ['overrideReason'], message: 'overrideReason required for soft-lock override',
+  });
 
 export const proPostAccountingCommandArgsSchema = proPostAccountingSourceArgsBaseSchema.extend({
   kind: accountingCommandKindSchema,
   domainFacts: z.unknown().optional(),
-}).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), {
-  path: ['overrideReason'], message: 'overrideReason required for soft-lock override',
+}).superRefine((input, ctx) => {
+  if (input.kind === 'standalone') {
+    validateBalancedSourceLines(input.source.lines, ctx, ['source', 'lines']);
+  } else {
+    const facts = input.domainFacts;
+    if (!facts || typeof facts !== 'object' || Array.isArray(facts) || Object.keys(facts).length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['domainFacts'], message: 'Domain facts are required for this workflow.' });
+    }
+    // Derived commands own their lines, but supplied lines must not bypass
+    // the same trust-boundary checks when present.
+    if (input.source.lines.length) validateBalancedSourceLines(input.source.lines, ctx, ['source', 'lines']);
+  }
+  if (input.softLockOverride && !input.overrideReason?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
+  }
 });
 
 export const proAccountingSourcePostResultSchema = z.object({

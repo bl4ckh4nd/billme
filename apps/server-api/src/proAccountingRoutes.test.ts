@@ -123,6 +123,22 @@ test('new accounting mutation boundaries require reason and idempotency', () => 
   assert.equal(taxExportPreparationBodySchema.parse({ kind: 'ustva', period: '2025-01', idempotencyKey: 'tax-key', reason: 'UStVA vorbereiten' }).kind, 'ustva');
 });
 
+test('source-fact closing requests require balanced journal lines at the API boundary', () => {
+  const source = {
+    sourceType: 'standalone_source', sourceId: 'source-1', sourceRevision: 'v1',
+    effectiveDate: '2026-08-14', postingDate: '2026-08-14', period: '2026-08', fiscalYear: 2026,
+    currency: 'EUR', bookingText: 'Source fact',
+    lines: [
+      { accountNumber: '1200', debitAmount: 100, creditAmount: 0 },
+      { accountNumber: '8400', debitAmount: 0, creditAmount: 100 },
+    ],
+  };
+  assert.equal(closingCommandBodySchema.parse({ command: 'source_fact', sourceId: 'source-1', sourceRevision: 'v1', idempotencyKey: 'source-key', reason: 'Source geprüft', input: source }).input?.sourceId, 'source-1');
+  assert.throws(() => closingCommandBodySchema.parse({ command: 'source_fact', sourceId: 'source-1', sourceRevision: 'v1', idempotencyKey: 'source-key', reason: 'Source geprüft', input: { ...source, lines: [] } }), /At least one journal line/);
+  assert.throws(() => closingCommandBodySchema.parse({ command: 'source_fact', sourceId: 'source-1', sourceRevision: 'v1', idempotencyKey: 'source-key', reason: 'Source geprüft', input: { ...source, lines: [{ accountNumber: '1200', debitAmount: 100, creditAmount: 0 }] } }), /Debit and credit/);
+  assert.doesNotThrow(() => closingCommandBodySchema.parse({ command: 'fiscal_close', sourceId: 'close-1', sourceRevision: 'v1', idempotencyKey: 'close-key', reason: 'Abschluss geprüft', input: { closingDate: '2026-08-14' } }));
+});
+
 test('source-run and tax preparation routes enforce auth and mutation role before Postgres', async () => {
   const previousDatabaseUrl = process.env.DATABASE_URL;
   const previousSessionSecret = process.env.SESSION_SECRET;

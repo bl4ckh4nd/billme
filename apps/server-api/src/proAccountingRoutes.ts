@@ -27,6 +27,7 @@ import {
   journalEntryEntitySchema,
   ledgerBalanceRowSchema,
   openItemSchema,
+  standaloneAccountingSourceFactSchema,
   transactionSchema,
   vendorSchema,
 } from '@billme/desktop-contracts-pro/schemas';
@@ -314,7 +315,14 @@ export const closingCommandBodySchema = z.object({
   reason: reasonSchema,
   softLockOverride: z.boolean().optional(),
   overrideReason: z.string().optional(),
-}).passthrough();
+}).passthrough().superRefine((body, ctx) => {
+  if ((body.command ?? body.commandType ?? 'source_fact') !== 'source_fact') return;
+  const source = standaloneAccountingSourceFactSchema.safeParse(body.input);
+  if (source.success) return;
+  for (const issue of source.error.issues) {
+    ctx.addIssue({ ...issue, path: ['input', ...issue.path] });
+  }
+});
 export const taxExportKindSchema = z.enum(['ustva', 'zm', 'oss']);
 export const taxExportPreparationBodySchema = z.object({
   kind: taxExportKindSchema,

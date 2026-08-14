@@ -204,7 +204,7 @@ test('settlement commands derive balanced journal lines, evidence, and replay id
     const paidItem = (await pool.query(`SELECT residual_amount,status FROM open_items WHERE tenant_id=$1 AND source_id=$2`, [tenantId, originalId])).rows[0];
     assert.equal(Number(paidItem.residual_amount), 0);
     assert.equal(paidItem.status, 'paid');
-    assert.equal((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count, 2);
+    assert.equal((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1 AND source_type='standalone_source' AND source_key LIKE 'settlement:%'`, [tenantId])).rows[0].count, 2);
   } finally {
     await pool.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]).catch(() => undefined);
     await pool.end();

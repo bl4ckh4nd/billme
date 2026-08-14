@@ -27,6 +27,7 @@ import type {
   ShareholderFlowValidation,
   SourceFactLine,
 } from '@billme/accounting-shared';
+import { fiscalYearForDate } from '@billme/accounting-shared';
 import type { JournalEntry, LedgerBalance } from '@billme/accounting-shared';
 
 const CENTS = 100;
@@ -55,6 +56,22 @@ const dateValue = (value: string): Date | null => {
 };
 
 const periodForDate = (value: string): string => value.slice(0, 7);
+
+const fiscalBoundaryErrors = (
+  date: string,
+  fiscalYear: number,
+  fiscalYearStart: string | undefined,
+): ClosingDomainError[] => {
+  if (!Number.isInteger(fiscalYear) || fiscalYear < 1 || !dateValue(date)) return [];
+  try {
+    if (fiscalYearForDate(date, fiscalYearStart ?? '01-01') !== fiscalYear) {
+      return [error('PERIOD_MISMATCH', 'Fiscal year does not contain the posting date.', 'fiscalYear')];
+    }
+  } catch {
+    return [error('INVALID_FISCAL_YEAR', 'Fiscal year start must be a valid MM-DD date.', 'fiscalYearStart')];
+  }
+  return [];
+};
 
 const currency = (value: string): boolean => /^[A-Z]{3}$/.test(value);
 
@@ -97,6 +114,7 @@ const sourceFactErrors = (fact: AccountingSourceFact): ClosingDomainError[] => {
     issues.push(error('PERIOD_MISMATCH', 'Posting date does not belong to period.', 'period'));
   }
   if (!Number.isInteger(fact.fiscalYear) || fact.fiscalYear < 1) issues.push(error('INVALID_FISCAL_YEAR', 'Fiscal year must be positive.', 'fiscalYear'));
+  else issues.push(...fiscalBoundaryErrors(fact.postingDate, fact.fiscalYear, fact.fiscalYearStart));
   if (!currency(fact.currency)) issues.push(error('INVALID_CURRENCY', 'Currency must be a three-letter uppercase ISO code.', 'currency'));
   if (!fact.bookingText.trim()) issues.push(error('INVALID_LINE', 'Booking text is required.', 'bookingText'));
   if (!fact.lines.length) issues.push(error('INVALID_LINE', 'At least one journal line is required.', 'lines'));
@@ -181,6 +199,7 @@ const source = (
   currencyCode: string,
   lines: readonly SourceFactLine[],
   bookingText: string,
+  fiscalYearStart?: string,
 ): AccountingSourceFact => ({
   sourceType: type,
   sourceId: id,
@@ -189,6 +208,7 @@ const source = (
   postingDate: effectiveDate,
   period,
   fiscalYear,
+  fiscalYearStart,
   currency: currencyCode,
   lines,
   bookingText,
@@ -228,6 +248,7 @@ export const buildFiscalClose = (input: FiscalCloseInput): ClosingDomainResult<F
   if (!dateValue(input.closingDate)) errors.push(error('INVALID_DATE', 'Closing date must be valid.', 'closingDate'));
   if (!ISO_PERIOD.test(input.period) || periodForDate(input.closingDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Closing date does not belong to period.', 'period'));
   if (!Number.isInteger(input.fiscalYear) || input.fiscalYear < 1) errors.push(error('INVALID_FISCAL_YEAR', 'Fiscal year must be positive.', 'fiscalYear'));
+  else errors.push(...fiscalBoundaryErrors(input.closingDate, input.fiscalYear, input.fiscalYearStart));
   if (!currency(input.currency)) errors.push(error('INVALID_CURRENCY', 'Currency must be a three-letter uppercase ISO code.', 'currency'));
   if (!input.retainedEarningsAccount.trim()) errors.push(error('INVALID_ACCOUNT', 'Retained earnings account is required.', 'retainedEarningsAccount'));
   if (errors.length) return invalidResult(errors);
@@ -258,7 +279,7 @@ export const buildFiscalClose = (input: FiscalCloseInput): ClosingDomainResult<F
   if (netResultCents > 0) lines.push(line(input.retainedEarningsAccount, 0, netResultCents, 'Fiscal close result'));
   if (netResultCents < 0) lines.push(line(input.retainedEarningsAccount, -netResultCents, 0, 'Fiscal close loss'));
 
-  const command = buildJournalCommand(source('fiscal_close', input.sourceId, input.sourceRevision, input.closingDate, input.period, input.fiscalYear, input.currency, lines, `Fiscal year ${input.fiscalYear} close`));
+  const command = buildJournalCommand(source('fiscal_close', input.sourceId, input.sourceRevision, input.closingDate, input.period, input.fiscalYear, input.currency, lines, `Fiscal year ${input.fiscalYear} close`, input.fiscalYearStart));
   if (command.status !== 'ready' || !command.value) return mapError(command);
   const check = reconcileRollForward({ opening: input.balances, movements: [], closing: input.balances });
   return { status: 'ready', errors: [], value: { netResult: euros(netResultCents), command: command.value, reconciliation: check }, idempotencyKey: command.idempotencyKey };
@@ -270,6 +291,8 @@ export const buildCarryForward = (input: CarryForwardInput): ClosingDomainResult
   const errors: ClosingDomainError[] = [];
   if (!dateValue(input.effectiveDate)) errors.push(error('INVALID_DATE', 'Effective date must be valid.', 'effectiveDate'));
   if (!ISO_PERIOD.test(input.period) || periodForDate(input.effectiveDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Effective date does not belong to period.', 'period'));
+  if (!Number.isInteger(input.fiscalYear) || input.fiscalYear < 1) errors.push(error('INVALID_FISCAL_YEAR', 'Fiscal year must be positive.', 'fiscalYear'));
+  else errors.push(...fiscalBoundaryErrors(input.effectiveDate, input.fiscalYear, input.fiscalYearStart));
   if (!currency(input.currency)) errors.push(error('INVALID_CURRENCY', 'Currency must be a three-letter uppercase ISO code.', 'currency'));
   if (!input.openingBalanceAccount.trim()) errors.push(error('INVALID_ACCOUNT', 'Opening balance account is required.', 'openingBalanceAccount'));
   if (errors.length) return invalidResult(errors);
@@ -290,7 +313,7 @@ export const buildCarryForward = (input: CarryForwardInput): ClosingDomainResult
   if (debit > credit) lines.push(line(input.openingBalanceAccount, 0, debit - credit, 'Carry-forward clearing'));
   if (credit > debit) lines.push(line(input.openingBalanceAccount, credit - debit, 0, 'Carry-forward clearing'));
   if (!lines.length) return { status: 'noop', errors: [], value: { lines: [], command: undefined, reconciliation: { balanced: true, differences: [] } } };
-  const command = buildJournalCommand(source('carry_forward', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, `Carry-forward ${input.fiscalYear}`));
+  const command = buildJournalCommand(source('carry_forward', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, `Carry-forward ${input.fiscalYear}`, input.fiscalYearStart));
   if (command.status !== 'ready' || !command.value) return mapError(command);
   return {
     status: 'ready',
@@ -310,13 +333,19 @@ export const buildProvisionCommand = (input: ProvisionInput): ClosingDomainResul
   const errors: ClosingDomainError[] = [];
   if (previous === null || target === null) errors.push(error('INVALID_AMOUNT', 'Provision amounts must be cent values.'));
   if (previous !== null && previous < 0 || target !== null && target < 0) errors.push(error('NEGATIVE_AMOUNT', 'Provision amounts cannot be negative.'));
+  if (!dateValue(input.effectiveDate)) errors.push(error('INVALID_DATE', 'Effective date must be valid.', 'effectiveDate'));
+  if (!ISO_PERIOD.test(input.period) || periodForDate(input.effectiveDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Effective date does not belong to period.', 'period'));
+  if (!Number.isInteger(input.fiscalYear) || input.fiscalYear < 1) errors.push(error('INVALID_FISCAL_YEAR', 'Fiscal year must be positive.', 'fiscalYear'));
+  else errors.push(...fiscalBoundaryErrors(input.effectiveDate, input.fiscalYear, input.fiscalYearStart));
+  if (!currency(input.currency)) errors.push(error('INVALID_CURRENCY', 'Currency must be a three-letter uppercase ISO code.', 'currency'));
+  if (!input.expenseAccount.trim() || !input.provisionAccount.trim()) errors.push(error('INVALID_ACCOUNT', 'Provision accounts are required.'));
   if (errors.length) return invalidResult(errors);
   const adjustment = target! - previous!;
   if (adjustment === 0) return { status: 'noop', errors: [] };
   const lines = adjustment > 0
     ? [line(input.expenseAccount, adjustment, 0, 'Provision increase'), line(input.provisionAccount, 0, adjustment, 'Provision increase')]
     : [line(input.provisionAccount, -adjustment, 0, 'Provision release'), line(input.expenseAccount, 0, -adjustment, 'Provision release')];
-  return buildJournalCommand(source('provision', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, input.bookingText ?? 'Provision adjustment'));
+  return buildJournalCommand(source('provision', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, input.bookingText ?? 'Provision adjustment', input.fiscalYearStart));
 };
 
 const monthStart = (value: string): Date | null => {
@@ -342,6 +371,8 @@ export const planAccrualSchedule = (input: AccrualInput): ClosingDomainResult<Ac
   if (!ISO_PERIOD.test(input.period) || (start && monthDate(start).slice(0, 7) !== input.period)) errors.push(error('PERIOD_MISMATCH', 'Accrual start date does not belong to period.', 'period'));
   if (total === null) errors.push(error('INVALID_AMOUNT', 'Accrual total must be a cent value.', 'totalAmount'));
   if (total !== null && total < 0) errors.push(error('NEGATIVE_AMOUNT', 'Accrual total cannot be negative.', 'totalAmount'));
+  if (!Number.isInteger(input.fiscalYear) || input.fiscalYear < 1) errors.push(error('INVALID_FISCAL_YEAR', 'Fiscal year must be positive.', 'fiscalYear'));
+  else if (start) errors.push(...fiscalBoundaryErrors(monthDate(start), input.fiscalYear, input.fiscalYearStart));
   if (!currency(input.currency)) errors.push(error('INVALID_CURRENCY', 'Currency must be a three-letter uppercase ISO code.', 'currency'));
   if (errors.length) return invalidResult(errors);
   const dates = monthsInclusive(start!, end!);
@@ -354,11 +385,13 @@ export const planAccrualSchedule = (input: AccrualInput): ClosingDomainResult<Ac
   const commands: JournalCommand[] = [];
   for (const [index, item] of periods.entries()) {
     if (!item.amount) continue;
+    const itemFiscalYear = fiscalYearForDate(item.date, input.fiscalYearStart ?? '01-01');
     const command = buildJournalCommand(source(
-      'accrual', input.sourceId, `${input.sourceRevision}:${index + 1}`, item.date, item.period, input.fiscalYear,
+      'accrual', input.sourceId, `${input.sourceRevision}:${index + 1}`, item.date, item.period, itemFiscalYear,
       input.currency,
       [line(input.expenseAccount, cents(item.amount)!, 0, 'Accrual release'), line(input.deferralAccount, 0, cents(item.amount)!, 'Accrual release')],
       `Accrual ${input.sourceId} ${item.period}`,
+      input.fiscalYearStart,
     ));
     if (command.status !== 'ready' || !command.value) return mapError(command);
     commands.push(command.value);
@@ -376,6 +409,8 @@ export const buildInventoryClosingValuation = (input: InventoryClosingInput): Cl
   const errors: ClosingDomainError[] = [];
   if (!dateValue(input.effectiveDate)) errors.push(error('INVALID_DATE', 'Effective date must be valid.', 'effectiveDate'));
   if (!ISO_PERIOD.test(input.period) || periodForDate(input.effectiveDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Effective date does not belong to period.', 'period'));
+  if (!Number.isInteger(input.fiscalYear) || input.fiscalYear < 1) errors.push(error('INVALID_FISCAL_YEAR', 'Fiscal year must be positive.', 'fiscalYear'));
+  else errors.push(...fiscalBoundaryErrors(input.effectiveDate, input.fiscalYear, input.fiscalYearStart));
   if (!currency(input.currency)) errors.push(error('INVALID_CURRENCY', 'Currency must be a three-letter uppercase ISO code.', 'currency'));
   if (!input.items.length) errors.push(error('INVALID_LINE', 'At least one inventory item is required.', 'items'));
   const valuations: InventoryClosingValuation[] = [];
@@ -408,7 +443,7 @@ export const buildInventoryClosingValuation = (input: InventoryClosingInput): Cl
     });
     const lines = [...expense].map(([account, amount]) => line(account, amount, 0, 'Inventory lower-of-cost valuation'));
     lines.push(...[...inventory].map(([account, amount]) => line(account, 0, amount, 'Inventory lower-of-cost valuation')));
-    const built = buildJournalCommand(source('inventory_closing', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, 'Inventory closing valuation'));
+    const built = buildJournalCommand(source('inventory_closing', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, 'Inventory closing valuation', input.fiscalYearStart));
     if (built.status !== 'ready' || !built.value) return mapError(built);
     command = built.value;
   }
@@ -419,6 +454,8 @@ export const buildFxValuation = (input: FxValuationInput): ClosingDomainResult<F
   const errors: ClosingDomainError[] = [];
   if (!dateValue(input.effectiveDate)) errors.push(error('INVALID_DATE', 'Valuation date must be valid.', 'effectiveDate'));
   if (!ISO_PERIOD.test(input.period) || periodForDate(input.effectiveDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Valuation date does not belong to period.', 'period'));
+  if (!Number.isInteger(input.fiscalYear) || input.fiscalYear < 1) errors.push(error('INVALID_FISCAL_YEAR', 'Fiscal year must be positive.', 'fiscalYear'));
+  else errors.push(...fiscalBoundaryErrors(input.effectiveDate, input.fiscalYear, input.fiscalYearStart));
   if (!currency(input.foreignCurrency) || !currency(input.functionalCurrency) || input.foreignCurrency === input.functionalCurrency) errors.push(error('INVALID_CURRENCY', 'Foreign and functional currencies must be distinct ISO codes.', 'foreignCurrency'));
   const foreign = cents(input.foreignAmount);
   const carrying = cents(input.carryingAmount);
@@ -431,14 +468,14 @@ export const buildFxValuation = (input: FxValuationInput): ClosingDomainResult<F
   const positive = difference > 0;
   const gain = input.position === 'asset' ? positive : !positive;
   const amount = Math.abs(difference);
-  const lines = gain
-    ? input.position === 'asset'
+  const lines = input.position === 'asset'
+    ? gain
       ? [line(input.positionAccount, amount, 0, 'FX valuation'), line(input.gainAccount, 0, amount, 'FX valuation')]
-      : [line(input.gainAccount, amount, 0, 'FX valuation'), line(input.positionAccount, 0, amount, 'FX valuation')]
-    : input.position === 'asset'
-      ? [line(input.lossAccount, amount, 0, 'FX valuation'), line(input.positionAccount, 0, amount, 'FX valuation')]
-      : [line(input.positionAccount, amount, 0, 'FX valuation'), line(input.lossAccount, 0, amount, 'FX valuation')];
-  const built = buildJournalCommand(source('fx_valuation', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.functionalCurrency, lines, 'FX closing valuation'));
+      : [line(input.lossAccount, amount, 0, 'FX valuation'), line(input.positionAccount, 0, amount, 'FX valuation')]
+    : gain
+      ? [line(input.positionAccount, amount, 0, 'FX valuation'), line(input.gainAccount, 0, amount, 'FX valuation')]
+      : [line(input.lossAccount, amount, 0, 'FX valuation'), line(input.positionAccount, 0, amount, 'FX valuation')];
+  const built = buildJournalCommand(source('fx_valuation', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.functionalCurrency, lines, 'FX closing valuation', input.fiscalYearStart));
   if (built.status !== 'ready' || !built.value) return mapError(built);
   return { status: 'ready', errors: [], idempotencyKey: built.idempotencyKey, value: { translatedAmount: euros(translated), difference: euros(difference), command: built.value } };
 };
@@ -453,7 +490,9 @@ export const planLoanSchedule = (input: LoanScheduleInput): ClosingDomainResult<
   const principal = cents(input.principal);
   const errors: ClosingDomainError[] = [];
   if (!dateValue(input.startDate)) errors.push(error('INVALID_DATE', 'Loan start date must be valid.', 'startDate'));
-  if (!ISO_PERIOD.test(input.period)) errors.push(error('INVALID_PERIOD', 'Loan period must use YYYY-MM.', 'period'));
+  if (!ISO_PERIOD.test(input.period) || periodForDate(input.startDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Loan start date does not belong to period.', 'period'));
+  if (!Number.isInteger(input.fiscalYear) || input.fiscalYear < 1) errors.push(error('INVALID_FISCAL_YEAR', 'Fiscal year must be positive.', 'fiscalYear'));
+  else errors.push(...fiscalBoundaryErrors(input.startDate, input.fiscalYear, input.fiscalYearStart));
   if (principal === null || principal <= 0) errors.push(error('INVALID_AMOUNT', 'Loan principal must be positive cents.', 'principal'));
   if (!Number.isFinite(input.annualInterestRate) || input.annualInterestRate < 0) errors.push(error('INVALID_RATE', 'Interest rate cannot be negative.', 'annualInterestRate'));
   if (!Number.isInteger(input.termMonths) || input.termMonths <= 0) errors.push(error('INVALID_RANGE', 'Loan term must be a positive number of months.', 'termMonths'));
@@ -487,9 +526,10 @@ export const planLoanSchedule = (input: LoanScheduleInput): ClosingDomainResult<
       scheduledPayment ? line(input.cashAccount, 0, scheduledPayment, 'Loan payment') : undefined,
     ].filter((item): item is SourceFactLine => Boolean(item));
     const built = buildJournalCommand(source(
-      'loan_schedule', input.sourceId, `${input.sourceRevision}:${index + 1}`, item.date, item.date.slice(0, 7), input.fiscalYear, input.currency,
+      'loan_schedule', input.sourceId, `${input.sourceRevision}:${index + 1}`, item.date, item.date.slice(0, 7), fiscalYearForDate(item.date, input.fiscalYearStart ?? '01-01'), input.currency,
       loanLines,
       `Loan payment ${index + 1}/${input.termMonths}`,
+      input.fiscalYearStart,
     ));
     if (built.status !== 'ready' || !built.value) return mapError(built);
     commands.push(built.value);
@@ -510,6 +550,8 @@ export const validatePayrollBatch = (input: PayrollBatchInput): PayrollBatchVali
   if (!input.lines.length) errors.push(error('INVALID_LINE', 'Payroll batch must contain at least one employee.'));
   if (!dateValue(input.effectiveDate)) errors.push(error('INVALID_DATE', 'Payroll effective date must be valid.', 'effectiveDate'));
   if (!ISO_PERIOD.test(input.period) || periodForDate(input.effectiveDate) !== input.period) errors.push(error('PERIOD_MISMATCH', 'Payroll effective date does not belong to period.', 'period'));
+  if (!Number.isInteger(input.fiscalYear) || input.fiscalYear < 1) errors.push(error('INVALID_FISCAL_YEAR', 'Fiscal year must be positive.', 'fiscalYear'));
+  else errors.push(...fiscalBoundaryErrors(input.effectiveDate, input.fiscalYear, input.fiscalYearStart));
   if (!currency(input.currency)) errors.push(error('INVALID_CURRENCY', 'Currency must be a three-letter uppercase ISO code.', 'currency'));
   let gross = 0;
   let employeeTaxes = 0;

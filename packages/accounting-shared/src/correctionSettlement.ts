@@ -493,6 +493,14 @@ export const calculateInvoiceSettlement = (input: InvoiceSettlementInput): Invoi
     if (expectedGrossCents !== finalGrossCents) throw new CorrectionSettlementError('INVALID_AMOUNT', 'final invoice gross amount does not match tax breakdown');
   }
   const credits = [...(input.advances ?? []), ...(input.partialInvoices ?? [])];
+  const documentIds = new Set<string>();
+  for (const document of credits) {
+    const documentId = requireNonEmpty(document.id, 'REFERENCE_REQUIRED', 'settlement document id');
+    if (documentIds.has(documentId)) {
+      throw new CorrectionSettlementError('IDEMPOTENCY_CONFLICT', `settlement document id ${documentId} is duplicated`);
+    }
+    documentIds.add(documentId);
+  }
   const finalByRate = new Map<number, number>(finalBreakdown.map((entry) => [entry.rate, entry.grossCents]));
   const settledByRate = new Map<number, { netCents: number; taxCents: number; grossCents: number }>();
   let advanceGrossCents = 0;

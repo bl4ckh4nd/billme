@@ -38,6 +38,7 @@ test('source facts produce cent-exact deterministic commands and reject repeats'
   const repeat = buildJournalCommand(fact(), [first.idempotencyKey!]);
   assert.equal(repeat.status, 'duplicate');
   assert.equal(buildJournalCommand(fact({ lines: [{ accountNumber: '1200', debitAmount: 10.001, creditAmount: 0 }] })).status, 'rejected');
+  assert.equal(buildJournalCommand(fact({ fiscalYear: 2025 })).errors[0]?.code, 'PERIOD_MISMATCH');
 });
 
 test('fiscal close clears P&L and carries a profit to retained earnings', () => {
@@ -86,11 +87,33 @@ test('provisions, accruals, inventory and FX produce balanced adjustments', () =
   assert.equal(fx.value?.command?.entry.lines.reduce((d, item) => d + item.debitAmount, 0), fx.value?.command?.entry.lines.reduce((d, item) => d + item.creditAmount, 0));
 });
 
+test('FX liability valuations post gains and losses with liability-side signs', () => {
+  const gain = buildFxValuation({ sourceId: 'fx-liability-gain', sourceRevision: 'v1', effectiveDate: '2026-12-31', period: '2026-12', fiscalYear: 2026, foreignCurrency: 'USD', functionalCurrency: 'EUR', foreignAmount: 100, closingRate: 0.85, carryingAmount: 90, position: 'liability', positionAccount: '1600', gainAccount: '4840', lossAccount: '6880' });
+  assert.deepEqual(gain.value?.command?.entry.lines.map(({ accountNumber, debitAmount, creditAmount }) => ({ accountNumber, debitAmount, creditAmount })), [
+    { accountNumber: '1600', debitAmount: 5, creditAmount: 0 },
+    { accountNumber: '4840', debitAmount: 0, creditAmount: 5 },
+  ]);
+  const loss = buildFxValuation({ sourceId: 'fx-liability-loss', sourceRevision: 'v1', effectiveDate: '2026-12-31', period: '2026-12', fiscalYear: 2026, foreignCurrency: 'USD', functionalCurrency: 'EUR', foreignAmount: 100, closingRate: 0.95, carryingAmount: 90, position: 'liability', positionAccount: '1600', gainAccount: '4840', lossAccount: '6880' });
+  assert.deepEqual(loss.value?.command?.entry.lines.map(({ accountNumber, debitAmount, creditAmount }) => ({ accountNumber, debitAmount, creditAmount })), [
+    { accountNumber: '6880', debitAmount: 5, creditAmount: 0 },
+    { accountNumber: '1600', debitAmount: 0, creditAmount: 5 },
+  ]);
+});
+
 test('loan schedule closes to zero and payroll validates gross-to-net', () => {
   const loan = buildLoanSchedule({ sourceId: 'l1', sourceRevision: 'v1', startDate: '2026-01-01', period: '2026-01', fiscalYear: 2026, currency: 'EUR', principal: 1000, annualInterestRate: 0, termMonths: 3, liabilityAccount: '4250', interestAccount: '7310', cashAccount: '1200' });
   assert.equal(loan.periods.at(-1)?.closingBalance, 0);
   assert.equal(validatePayrollBatch({ batchId: 'pay-1', sourceRevision: 'v1', effectiveDate: '2026-01-31', period: '2026-01', fiscalYear: 2026, currency: 'EUR', lines: [{ employeeId: 'e1', gross: 1000, employeeTaxes: 200, otherDeductions: 50, net: 750 }] }).status, 'valid');
   assert.equal(validatePayrollBatch({ batchId: 'pay-2', sourceRevision: 'v1', effectiveDate: '2026-01-31', period: '2026-01', fiscalYear: 2026, currency: 'EUR', lines: [{ employeeId: 'e1', gross: 1000, employeeTaxes: 200, otherDeductions: 50, net: 751 }] }).status, 'invalid');
+});
+
+test('schedules derive fiscal years from each generated posting period', () => {
+  const accrual = planAccrualSchedule({ sourceId: 'a-cross-year', sourceRevision: 'v1', startDate: '2026-11-15', endDate: '2027-01-20', period: '2026-11', fiscalYear: 2026, currency: 'EUR', totalAmount: 3, expenseAccount: '4900', deferralAccount: '2900' });
+  assert.deepEqual(accrual.value?.commands.map((command) => command.entry.fiscalYear), [2026, 2026, 2027]);
+  const loan = buildLoanSchedule({ sourceId: 'l-cross-year', sourceRevision: 'v1', startDate: '2026-11-01', period: '2026-11', fiscalYear: 2026, currency: 'EUR', principal: 300, annualInterestRate: 0, termMonths: 3, liabilityAccount: '4250', interestAccount: '7310', cashAccount: '1200' });
+  assert.deepEqual(loan.commands.map((command) => command.entry.fiscalYear), [2026, 2027, 2027]);
+  const nonCalendar = planAccrualSchedule({ sourceId: 'a-non-calendar', sourceRevision: 'v1', startDate: '2026-06-15', endDate: '2026-08-20', period: '2026-06', fiscalYear: 2025, fiscalYearStart: '07-01', currency: 'EUR', totalAmount: 3, expenseAccount: '4900', deferralAccount: '2900' });
+  assert.deepEqual(nonCalendar.value?.commands.map((command) => command.entry.fiscalYear), [2025, 2026, 2026]);
 });
 
 test('shareholder flows classify private and related-party risk', () => {

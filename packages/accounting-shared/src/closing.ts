@@ -34,6 +34,8 @@ export interface AccountingSourceFact {
   postingDate: string;
   period: string;
   fiscalYear: number;
+  /** Optional non-calendar fiscal-year boundary (MM-DD); defaults to 01-01. */
+  fiscalYearStart?: string;
   currency: string;
   bookingText: string;
   reference?: string;
@@ -92,6 +94,7 @@ export interface FiscalCloseInput {
   sourceId: string;
   sourceRevision: string;
   fiscalYear: number;
+  fiscalYearStart?: string;
   period: string;
   closingDate: string;
   currency: string;
@@ -113,6 +116,7 @@ export interface CarryForwardInput {
   effectiveDate: string;
   period: string;
   fiscalYear: number;
+  fiscalYearStart?: string;
   currency: string;
   balanceSheetAccounts: readonly string[];
   openingBalanceAccount: string;
@@ -142,6 +146,7 @@ export interface ProvisionInput {
   effectiveDate: string;
   period: string;
   fiscalYear: number;
+  fiscalYearStart?: string;
   currency: string;
   previousAmount: number;
   targetAmount: number;
@@ -157,6 +162,7 @@ export interface AccrualInput {
   endDate: string;
   period: string;
   fiscalYear: number;
+  fiscalYearStart?: string;
   currency: string;
   totalAmount: number;
   expenseAccount: string;
@@ -190,6 +196,7 @@ export interface InventoryClosingInput {
   effectiveDate: string;
   period: string;
   fiscalYear: number;
+  fiscalYearStart?: string;
   currency: string;
   items: readonly InventoryClosingItem[];
 }
@@ -216,6 +223,7 @@ export interface FxValuationInput {
   effectiveDate: string;
   period: string;
   fiscalYear: number;
+  fiscalYearStart?: string;
   foreignCurrency: string;
   functionalCurrency: string;
   foreignAmount: number;
@@ -239,6 +247,7 @@ export interface LoanScheduleInput {
   startDate: string;
   period: string;
   fiscalYear: number;
+  fiscalYearStart?: string;
   currency: string;
   principal: number;
   annualInterestRate: number;
@@ -278,6 +287,7 @@ export interface PayrollBatchInput {
   effectiveDate: string;
   period: string;
   fiscalYear: number;
+  fiscalYearStart?: string;
   currency: string;
   lines: readonly PayrollBatchLine[];
 }

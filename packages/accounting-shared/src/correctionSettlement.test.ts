@@ -222,3 +222,14 @@ test('rejects an advance that settles more than the final invoice', () => {
     (error) => error instanceof CorrectionSettlementError && error.code === 'OVER_CREDIT',
   );
 });
+
+test('rejects duplicate advance and partial settlement document ids', () => {
+  assert.throws(
+    () => calculateInvoiceSettlement({
+      finalInvoice: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19 }] },
+      advances: [{ id: 'settlement-1', kind: 'advance', grossAmount: 1 }],
+      partialInvoices: [{ id: 'settlement-1', kind: 'partial', grossAmount: 1 }],
+    }),
+    (error) => error instanceof CorrectionSettlementError && error.code === 'IDEMPOTENCY_CONFLICT',
+  );
+});

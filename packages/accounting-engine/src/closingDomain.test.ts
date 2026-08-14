@@ -41,6 +41,13 @@ test('source facts produce cent-exact deterministic commands and reject repeats'
   assert.equal(buildJournalCommand(fact({ fiscalYear: 2025 })).errors[0]?.code, 'PERIOD_MISMATCH');
 });
 
+test('shareholder flow source types stay distinct at the journal boundary', () => {
+  const result = buildJournalCommand(fact({ sourceType: 'shareholder_flow', sourceId: 'flow-1' }));
+  assert.equal(result.status, 'ready');
+  assert.equal(result.value?.source.sourceType, 'shareholder_flow');
+  assert.equal(result.value?.entry.sourceType, 'shareholder_flow');
+});
+
 test('journal identity is tenant-scoped and delimiter-safe', () => {
   const sameTenant = { tenantId: 'tenant-a' };
   const first = buildJournalCommand(fact({ sourceId: 'source:a', sourceRevision: 'revision' }), [], sameTenant);

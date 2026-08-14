@@ -16,6 +16,7 @@ export type ClosingDomainSourceType = Extract<JournalSourceType,
   | 'fx_valuation'
   | 'loan_schedule'
   | 'payroll_batch'
+  | 'shareholder_flow'
 >;
 
 export interface SourceFactLine {

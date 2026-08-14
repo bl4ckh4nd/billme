@@ -78,6 +78,22 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     db.close();
   });
 
+  it('persists shareholder flow source types without falling back to standalone', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const result = postAccountingCommand(db, {
+      kind: 'shareholder_flow',
+      source: { ...source(), sourceType: 'shareholder_flow', sourceId: 'flow-1', sourceRevision: 'v1' },
+      domainFacts: { flowId: 'flow-1', shareholderId: 'person-1', companyId: 'company-1', amount: 100, flowType: 'capital_contribution' },
+    }, scope, { reason: 'shareholder flow source type' });
+
+    expect(result.status).toBe('noop');
+    expect(result.sourceRun?.sourceType).toBe('shareholder_flow');
+    expect(db.prepare('SELECT source_type FROM accounting_source_runs WHERE source_id = ?').get('flow-1')).toEqual({ source_type: 'shareholder_flow' });
+    expect(getAccountingSourceRun(db, result.sourceRun!.id, scope)?.sourceType).toBe('shareholder_flow');
+    db.close();
+  });
+
   it('keeps generated journal identities tenant-scoped and delimiter-safe', () => {
     const db = createDb();
     db.exec(`

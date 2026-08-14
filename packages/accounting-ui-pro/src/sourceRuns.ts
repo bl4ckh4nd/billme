@@ -16,8 +16,8 @@ export type AccountingCommandKind =
   | 'payroll_batch'
   | 'shareholder_flow';
 
-/** Source runs use the shared closing source identities plus shareholder flows. */
-export type AccountingSourceType = ClosingDomainSourceType | 'shareholder_flow';
+/** Source runs use the shared closing source identities. */
+export type AccountingSourceType = ClosingDomainSourceType;
 
 export type SourceFactLine = {
   accountNumber: string;

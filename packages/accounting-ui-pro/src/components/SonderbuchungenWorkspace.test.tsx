@@ -1,6 +1,7 @@
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { JournalEntryEntity } from '@billme/accounting-shared';
 import SonderbuchungenWorkspace from './SonderbuchungenWorkspace';
 
 const correctionFacts = {
@@ -13,6 +14,20 @@ const correctionFacts = {
     taxEffectiveDate: '2026-08-14', taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }],
   },
   deltas: [{ rate: 19, grossAmount: 11.9 }],
+};
+
+const journalEntry: JournalEntryEntity = {
+  id: 'journal-1', tenantId: 'tenant-1', entryNumber: 42, postingDate: '2026-08-14', documentDate: '2026-08-14',
+  bookingText: 'Sonderbuchung', reference: 'beleg-1', period: '2026-08', fiscalYear: 2026, status: 'posted', sourceType: 'manual',
+  createdAt: '2026-08-14T10:00:00.000Z', lines: [
+    { id: 'line-1', accountNumber: '4900', debitAmount: 119, creditAmount: 0 },
+    { id: 'line-2', accountNumber: '1200', debitAmount: 0, creditAmount: 119 },
+  ],
+};
+
+const historyWithJournal = {
+  id: 'run-1', sourceType: 'standalone_source', sourceId: 'beleg-1', sourceRevision: '1', status: 'posted' as const,
+  journalEntryId: 'journal-1', createdAt: '2026-08-14T10:00:00.000Z',
 };
 
 const valid = () => {
@@ -201,5 +216,34 @@ describe('SonderbuchungenWorkspace', () => {
     expect(reason.getAttribute('aria-invalid')).toBe('true');
     expect(reason.getAttribute('aria-describedby')).toBe('audit-reason-error');
     expect(screen.getAllByText('Audit-Grund ist erforderlich.').length).toBeGreaterThan(0);
+  });
+
+  it('opens journal details from history and closes the accessible dialog', async () => {
+    const getJournalEntryById = vi.fn(async () => journalEntry);
+    render(<SonderbuchungenWorkspace dataAdapter={{ listAccountingSourceRuns: vi.fn(async () => [historyWithJournal]), getJournalEntryById }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Journal öffnen' }));
+    const dialog = screen.getByRole('dialog', { name: 'Journalbuchung' });
+    expect(dialog).toBeTruthy();
+    expect(await within(dialog).findByRole('heading', { name: 'Journal 42' })).toBeTruthy();
+    expect(getJournalEntryById).toHaveBeenCalledWith('journal-1');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Journalansicht schließen' }));
+    expect(screen.queryByRole('dialog', { name: 'Journalbuchung' })).toBeNull();
+  });
+
+  it('surfaces journal not-found and adapter errors inside the dialog', async () => {
+    const notFoundAdapter = { listAccountingSourceRuns: vi.fn(async () => [historyWithJournal]), getJournalEntryById: vi.fn(async () => null) };
+    render(<SonderbuchungenWorkspace dataAdapter={notFoundAdapter} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Journal öffnen' }));
+    const notFoundDialog = screen.getByRole('dialog', { name: 'Journalbuchung' });
+    expect((await within(notFoundDialog).findByRole('status')).textContent).toContain('Journalbuchung nicht gefunden');
+
+    cleanup();
+    const errorAdapter = { listAccountingSourceRuns: vi.fn(async () => [historyWithJournal]), getJournalEntryById: vi.fn(async () => { throw new Error('Journal-Backend nicht erreichbar'); }) };
+    render(<SonderbuchungenWorkspace dataAdapter={errorAdapter} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Journal öffnen' }));
+    const errorDialog = screen.getByRole('dialog', { name: 'Journalbuchung' });
+    expect((await within(errorDialog).findByRole('alert')).textContent).toContain('Journal-Backend nicht erreichbar');
   });
 });

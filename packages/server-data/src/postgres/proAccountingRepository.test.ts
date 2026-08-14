@@ -31,6 +31,23 @@ test('server DATEV export pads legacy numeric BU keys to canonical four digits',
   assert.equal(normalizeDatevBuKey(undefined), undefined);
 });
 
+test('server policy rejects changing chart after a posted journal', async () => {
+  const calls: string[] = [];
+  const db = {
+    query: async (text: string) => {
+      calls.push(text);
+      if (text.includes('FROM accounting_policies')) return { rows: [{ active_chart: 'SKR03', vat_method: 'soll', updated_at: '2026-08-14T00:00:00.000Z' }] };
+      if (text.includes("FROM journal_entries WHERE tenant_id=$1 AND status='posted'")) return { rows: [{ id: 'posted-1' }] };
+      throw new Error(`unexpected query: ${text}`);
+    },
+  } as unknown as PostgresQueryable;
+  await assert.rejects(
+    () => createPostgresProAccountingRepository(db).setAccountingPolicy(createSingleTenantScope('policy-test', 'pro'), { activeChart: 'SKR04', vatMethod: 'soll' }),
+    /ACCOUNTING_CHART_LOCKED/,
+  );
+  assert.equal(calls.some((text) => text.includes('INSERT INTO accounting_policies')), false);
+});
+
 test('SuSa report maps inclusive from/to bounds into ledger opening and turnover dates', async () => {
   const calls: Array<{ text: string; values: unknown[] }> = [];
   const db = {

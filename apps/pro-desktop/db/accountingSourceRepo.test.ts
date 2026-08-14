@@ -76,6 +76,15 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     db.close();
   });
 
+  it('rejects a renderer chart that differs from the persisted policy', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    expect(() => postAccountingSource(db, source(), scope, { chart: 'SKR04', reason: 'stale chart' }))
+      .toThrow('ACCOUNTING_CHART_MISMATCH');
+    expect(db.prepare('SELECT COUNT(*) AS count FROM accounting_source_runs').get()).toEqual({ count: 0 });
+    db.close();
+  });
+
   it('rejects locked periods and unknown accounts without a journal', () => {
     const db = createDb();
     const scope = createProTenantScope('default');

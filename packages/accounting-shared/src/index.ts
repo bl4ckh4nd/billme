@@ -6,6 +6,7 @@ export * from './taxFiling';
 export * from './taxExports';
 export * from './eurReport';
 export * from './correctionSettlement';
+export * from './accountingPolicy';
 
 export * from "./openItems";
 export * from './closing';

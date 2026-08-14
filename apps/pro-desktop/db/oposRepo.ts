@@ -20,6 +20,7 @@ import type {
 import type { TenantScope } from '@billme/server-core';
 import { appendAuditLog } from './audit';
 import { getTenantId } from '../tenantScope';
+import { AccountingPolicyError } from '@billme/accounting-shared';
 import { getAccountingPolicy, reverseDocumentJournalEntry } from './proAccountingRepo';
 import { getTaxCaseByKey, listTaxCaseAccountMappings, resolveTaxAccountsForCase, type TaxCaseKey } from './taxCasesRepo';
 
@@ -327,11 +328,19 @@ export const getAccountingPolicyForPro = (db: Database.Database, scope: TenantSc
 
 export const setAccountingPolicyForPro = (db: Database.Database, scope: TenantScope, input: { activeChart: AccountingChart; vatMethod: VatAccountingMethod }): ReturnType<typeof getAccountingPolicyForPro> => {
   const tenantId = tenant(scope);
+  const before = getAccountingPolicyForPro(db, scope);
+  if (input.activeChart !== before.activeChart
+    && db.prepare("SELECT 1 FROM journal_entries WHERE tenant_id = ? AND status = 'posted' LIMIT 1").get(tenantId)) {
+    throw new AccountingPolicyError(
+      'ACCOUNTING_CHART_LOCKED',
+      'Der Kontenrahmen kann nach einer gebuchten Journalbuchung nicht mehr geändert werden.',
+    );
+  }
   ensureMappingDefaults(db, tenantId);
   const updatedAt = now();
   db.prepare(`INSERT INTO accounting_policies (tenant_id, active_chart, vat_method, period_policy, updated_at) VALUES (?, ?, ?, 'calendar_month', ?)
     ON CONFLICT(tenant_id) DO UPDATE SET active_chart = excluded.active_chart, vat_method = excluded.vat_method, updated_at = excluded.updated_at`).run(tenantId, input.activeChart, input.vatMethod, updatedAt);
-  appendAuditLog(db, { entityType: 'accounting_policy', entityId: tenantId, action: 'update', reason: 'accounting policy changed', before: null, after: input, actor: 'pro' });
+  appendAuditLog(db, { entityType: 'accounting_policy', entityId: tenantId, action: 'update', reason: 'accounting policy changed', before, after: input, actor: 'pro' });
   return getAccountingPolicyForPro(db, scope);
 };
 

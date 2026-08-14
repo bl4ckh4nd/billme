@@ -40,6 +40,15 @@ const createDb = () => {
 };
 
 describe('OPOS accounting', () => {
+  it('locks the active chart after the first posted journal', () => {
+    const db = createDb();
+    expect(() => setAccountingPolicyForPro(db, scope, { activeChart: 'SKR04', vatMethod: 'soll' }))
+      .toThrow('ACCOUNTING_CHART_LOCKED');
+    expect((db.prepare("SELECT active_chart FROM accounting_policies WHERE tenant_id = 'default'").get() as { active_chart: string }).active_chart)
+      .toBe('SKR03');
+    db.close();
+  });
+
   it('posts an outgoing invoice once and opens a debtor item', () => {
     const db = createDb();
     db.prepare(`INSERT INTO invoices (id, client_id, number, client, client_email, date, due_date, amount, status, tax_snapshot_json, created_at, updated_at) VALUES ('inv-1', 'client-1', 'RE-1', 'Acme', 'a@example.test', '2026-08-01', '2026-08-31', 119, 'open', ?, datetime('now'), datetime('now'))`).run(JSON.stringify({ netAmount: 100, vatAmount: 19, grossAmount: 119 }));

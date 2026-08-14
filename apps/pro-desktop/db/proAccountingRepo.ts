@@ -14,6 +14,7 @@ import type {
   ReportingMapping,
   ReportingStatement,
 } from '@billme/accounting-shared';
+import { AccountingPolicyError } from '@billme/accounting-shared';
 import { calculateReport, listReportMappingPositions } from '@billme/accounting-engine';
 import { fiscalYearForDate, fiscalYearRange, validateDatevTaxEvidence } from '@billme/accounting-shared';
 import { appendAuditLog } from './audit';
@@ -818,6 +819,16 @@ export const setAccountingPolicy = (
   scope: TenantScope,
 ) => {
   const tenantId = getTenantId(scope);
+  const before = getAccountingPolicy(db, tenantId);
+  if (policy.activeChart !== before.activeChart && createDrizzle(db).select({ id: schema.journalEntries.id })
+    .from(schema.journalEntries)
+    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.status, 'posted')))
+    .limit(1).get()) {
+    throw new AccountingPolicyError(
+      'ACCOUNTING_CHART_LOCKED',
+      'Der Kontenrahmen kann nach einer gebuchten Journalbuchung nicht mehr geändert werden.',
+    );
+  }
   const updatedAt = new Date().toISOString();
   const vatMethod = policy.vatMethod ?? getAccountingPolicy(db, tenantId).vatMethod;
   createDrizzle(db).insert(schema.accountingPolicies).values({

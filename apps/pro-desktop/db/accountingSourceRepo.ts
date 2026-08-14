@@ -29,6 +29,7 @@ import type {
   Ustg17AdjustmentFactsInput,
 } from '@billme/accounting-shared';
 import type { TenantScope } from '@billme/server-core';
+import { AccountingPolicyError } from '@billme/accounting-shared';
 import { appendAuditLog } from './audit';
 import { getTenantId } from '../tenantScope';
 
@@ -165,9 +166,15 @@ const loadRun = (db: Database.Database, tenantId: string, key: string): SourceRu
   db.prepare('SELECT * FROM accounting_source_runs WHERE tenant_id = ? AND idempotency_key = ?').get(tenantId, key) as SourceRunRow | undefined;
 
 const activeChart = (db: Database.Database, tenantId: string, requested?: 'SKR03' | 'SKR04'): 'SKR03' | 'SKR04' => {
-  if (requested) return requested;
   const row = db.prepare('SELECT active_chart FROM accounting_policies WHERE tenant_id = ?').get(tenantId) as { active_chart?: string } | undefined;
-  return row?.active_chart === 'SKR04' ? 'SKR04' : 'SKR03';
+  const authoritative = row?.active_chart === 'SKR04' ? 'SKR04' : 'SKR03';
+  if (requested && requested !== authoritative) {
+    throw new AccountingPolicyError(
+      'ACCOUNTING_CHART_MISMATCH',
+      `Source verwendet ${requested}, der maßgebliche Kontenrahmen ist ${authoritative}.`,
+    );
+  }
+  return authoritative;
 };
 
 const accountExists = (db: Database.Database, chart: 'SKR03' | 'SKR04', accountNumber: string): boolean =>

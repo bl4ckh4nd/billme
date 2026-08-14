@@ -1,3 +1,5 @@
+import type { ClosingDomainSourceType } from '@billme/accounting-shared';
+
 export type AccountingCommandKind =
   | 'standalone'
   | 'correction'
@@ -14,6 +16,9 @@ export type AccountingCommandKind =
   | 'payroll_batch'
   | 'shareholder_flow';
 
+/** Source runs use the shared closing source identities plus shareholder flows. */
+export type AccountingSourceType = ClosingDomainSourceType | 'shareholder_flow';
+
 export type SourceFactLine = {
   accountNumber: string;
   debitAmount: number;
@@ -22,7 +27,7 @@ export type SourceFactLine = {
 };
 
 export type AccountingSourceFact = {
-  sourceType: 'standalone_source' | 'fiscal_close' | 'carry_forward' | 'provision' | 'accrual' | 'inventory_closing' | 'fx_valuation' | 'loan_schedule' | 'payroll_batch';
+  sourceType: AccountingSourceType;
   sourceId: string;
   sourceRevision: string;
   effectiveDate: string;
@@ -40,7 +45,7 @@ export type DomainAccountingSourceFact = Omit<AccountingSourceFact, 'lines'> & {
 
 export type AccountingSourceRun = {
   id: string;
-  sourceType: string;
+  sourceType: AccountingSourceType;
   sourceId: string;
   sourceRevision: string;
   status: 'posted' | 'rejected' | 'noop' | 'prepared';

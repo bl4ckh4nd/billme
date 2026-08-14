@@ -7,6 +7,7 @@ export type { ProAccountingDataAdapter } from './services/mockBookingStore';
 export type {
   AccountingCommandInput,
   AccountingCommandKind,
+  AccountingSourceType,
   AccountingDomainFacts,
   AccountingSourceFact,
   DomainAccountingSourceFact,

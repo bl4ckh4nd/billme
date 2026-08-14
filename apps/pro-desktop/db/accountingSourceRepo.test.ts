@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { journalSourceIdentity } from '@billme/accounting-engine';
 import { bootstrapSql } from './bootstrap';
 import { runMigrations } from './migrate';
 import { getAccountingSourceRun, postAccountingCommand, postAccountingSource } from './accountingSourceRepo';
@@ -332,7 +333,7 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
       domainFacts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9, originalDocumentId: 'invoice-1' },
     }, scope, { reason: 'legacy source key compatibility' });
     expect(result.status).toBe('posted');
-    expect(result.command?.entry.sourceKey).toBe('settlement:skonto:source-1:skonto-legacy-key');
+    expect(result.command?.entry.sourceKey).toBe(`settlement:${journalSourceIdentity('default', 'settlement:skonto', 'source-1', 'skonto-legacy-key')}`);
     db.close();
   });
 
@@ -369,14 +370,13 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     const idempotencyConflict = post('typed-idempotency-conflict', 'advance_settlement', {
       finalInvoiceId: 'invoice-1',
       finalInvoice: { grossAmount: 119, taxBreakdown: settlementTax },
-      advances: [
-        { id: 'invoice-1', kind: 'advance', grossAmount: 1 },
-        { id: 'invoice-1', kind: 'advance', grossAmount: 1 },
-      ],
+      advances: [{ id: 'invoice-1', kind: 'advance', grossAmount: 1 }],
       advanceClearingReceivable: '1200',
       advanceClearingPayable: '1600',
     });
     expect(idempotencyConflict.errors[0]).toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM journal_entries WHERE source_type = 'standalone_source'").get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT allocated_amount,residual_amount,status FROM open_items WHERE id = ?').get('invoice-open-item-1')).toEqual({ allocated_amount: 0, residual_amount: 119, status: 'open' });
 
     db.exec(`
       INSERT INTO invoices (id, number, client, client_email, date, due_date, amount, status, accounting_status,

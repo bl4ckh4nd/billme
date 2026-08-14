@@ -233,3 +233,13 @@ test('rejects duplicate advance and partial settlement document ids', () => {
     (error) => error instanceof CorrectionSettlementError && error.code === 'IDEMPOTENCY_CONFLICT',
   );
 });
+
+test('rejects a credit that repeats the final invoice id', () => {
+  assert.throws(
+    () => calculateInvoiceSettlement({
+      finalInvoice: { id: 'invoice-final', taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19 }] },
+      advances: [{ id: 'invoice-final', kind: 'advance', grossAmount: 1 }],
+    }),
+    (error) => error instanceof CorrectionSettlementError && error.code === 'IDEMPOTENCY_CONFLICT',
+  );
+});

@@ -541,12 +541,18 @@ const assertSettlementReferences = (db: Database.Database, tenantId: string, kin
   const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? facts.finalInvoice : {};
   const finalId = typeof finalInvoice.id === 'string' && finalInvoice.id.trim() ? finalInvoice.id.trim() : typeof facts.finalInvoiceId === 'string' && facts.finalInvoiceId.trim() ? facts.finalInvoiceId.trim() : originalId;
   if (!finalId) throw settlementFailure('FINAL_INVOICE_REQUIRED');
-  const finalItem = findSettlementOpenItem(db, tenantId, finalId, documentType);
   const documents = [...(Array.isArray(facts.advances) ? facts.advances : []), ...(Array.isArray(facts.partialInvoices) ? facts.partialInvoices : [])];
   if (!documents.length) throw settlementFailure('SETTLEMENT_DOCUMENT_REQUIRED');
+  const documentIds: string[] = [];
   for (const document of documents) {
     const id = document && typeof document === 'object' && typeof document.id === 'string' && document.id.trim() ? document.id.trim() : undefined;
     if (!id) throw settlementFailure('REFERENCE_REQUIRED', 'settlement document id is required', { collection: 'settlementDocuments' });
+    if (id === finalId || documentIds.includes(id)) throw settlementFailure('IDEMPOTENCY_CONFLICT', `settlement document id ${id} is duplicated`);
+    documentIds.push(id);
+  }
+  const finalItem = findSettlementOpenItem(db, tenantId, finalId, documentType);
+  for (const [index, document] of documents.entries()) {
+    const id = documentIds[index]!;
     const item = findSettlementOpenItem(db, tenantId, id, documentType);
     if (item.party_type !== finalItem.party_type || item.party_id !== finalItem.party_id) throw settlementFailure('SETTLEMENT_PARTY_MISMATCH', 'Settlement documents must belong to the same party.', { expected: { partyType: finalItem.party_type, partyId: finalItem.party_id }, actual: { partyType: item.party_type, partyId: item.party_id } });
     const requested = Number(document.grossAmount);

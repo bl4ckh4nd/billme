@@ -158,7 +158,7 @@ test('settlement commands derive balanced journal lines, evidence, and replay id
   const facts = { effectiveDate: '2025-01-31', postingDate: '2025-01-31', period: '2025-01', fiscalYear: 2025, currency: 'EUR', taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9, originalDocumentId: originalId };
   try {
     await runDrizzleMigrations(pool);
-    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, tenantId, 'Settlement source', now]);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'Settlement source', now]);
     await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
     await pool.query(`INSERT INTO ledger_accounts (id,chart,account_number,name,source,created_at,updated_at) VALUES ($1,'SKR03','1400','Receivable','test',$2,$2),($3,'SKR03','8400','Revenue','test',$2,$2),($4,'SKR03','1776','Output VAT','test',$2,$2) ON CONFLICT (chart,account_number) DO NOTHING`, [`settlement-1400-${suffix}`, now, `settlement-8400-${suffix}`, `settlement-1776-${suffix}`]);
     await pool.query(`INSERT INTO invoices (id,tenant_id,number,client,client_email,date,due_date,amount,status,items_json,payments_json,history_json,accounting_status,accounting_snapshot_json,accounting_journal_entry_id,created_at,updated_at) VALUES ($1,$2,$3,'Settlement customer','customer@example.test','2025-01-31','2025-02-28',119,'open','[]','[]','[]','posted',$4,$5,$6,$6)`, [originalId, tenantId, `RE-${suffix}`, JSON.stringify({ sourceVersion: 'settlement-original-v1', vatBreakdown: facts.taxBreakdown }), originalJournalId, now]);
@@ -168,6 +168,20 @@ test('settlement commands derive balanced journal lines, evidence, and replay id
     const repository = createPostgresProAccountingRepository(pool);
     const scope = createSingleTenantScope(tenantId, 'pro');
     const input = { commandType: 'skonto', sourceId, sourceRevision: 'v1', idempotencyKey: `${sourceId}:v1`, reason: 'Settlement source', input: { ...facts, sourceId, sourceRevision: 'v1' } };
+    const duplicateAdvance = {
+      commandType: 'advance_settlement', sourceId: `${sourceId}-duplicate`, sourceRevision: 'v1', idempotencyKey: `${sourceId}-duplicate:v1`, reason: 'Reject duplicate settlement references',
+      input: {
+        effectiveDate: facts.effectiveDate, postingDate: facts.postingDate, period: facts.period, fiscalYear: facts.fiscalYear, currency: facts.currency,
+        finalInvoiceId: originalId, finalInvoice: { grossAmount: 119, taxBreakdown: facts.taxBreakdown }, advances: [{ id: originalId, kind: 'advance', grossAmount: 1 }],
+        advanceClearingReceivable: '1593', advanceClearingPayable: '1518', sourceId: `${sourceId}-duplicate`, sourceRevision: 'v1',
+      },
+    };
+    await assert.rejects(() => repository.runClosingCommand(scope, duplicateAdvance), /IDEMPOTENCY_CONFLICT/);
+    const unchangedBeforeSettlement = (await pool.query(`SELECT allocated_amount,residual_amount,status FROM open_items WHERE tenant_id=$1 AND source_id=$2`, [tenantId, originalId])).rows[0];
+    assert.equal(Number(unchangedBeforeSettlement.allocated_amount), 0);
+    assert.equal(Number(unchangedBeforeSettlement.residual_amount), 119);
+    assert.equal(unchangedBeforeSettlement.status, 'open');
+    assert.equal((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count, 1);
     const first = await repository.runClosingCommand(scope, input);
     const replay = await repository.runClosingCommand(scope, input);
     assert.equal(first.replayed, false);
@@ -227,7 +241,7 @@ test('corrections require a posted original with its document-owned journal', { 
   };
   try {
     await runDrizzleMigrations(pool);
-    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, tenantId, 'Source correction original', now]);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'Source correction original', now]);
     await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
     await pool.query(`INSERT INTO vendors (id,tenant_id,name,created_at,updated_at) VALUES ($1,$2,'Source correction vendor',$3,$3)`, [vendorId, tenantId, now]);
     for (const [accountNumber, name] of [['4900', 'Expense'], ['1576', 'Input VAT'], ['1600', 'Payable']] as const) {

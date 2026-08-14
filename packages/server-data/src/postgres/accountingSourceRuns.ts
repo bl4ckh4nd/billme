@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   CANONICAL_TAX_CASES,
+  CorrectionSettlementError,
   type AccountingMutationContext,
   type AccountingSourceFact,
   type CorrectionDeltaInput,
@@ -504,12 +505,18 @@ const assertSettlementReferences = async (db: PostgresQueryable, scope: TenantSc
   const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? facts.finalInvoice : {};
   const finalId = textValue(finalInvoice.id) ?? textValue(facts.finalInvoiceId) ?? originalId;
   if (!finalId) throw new Error('FINAL_INVOICE_REQUIRED');
-  const finalItem = await findSettlementOpenItem(db, scope, finalId, documentType);
   const documents = [...(Array.isArray(facts.advances) ? facts.advances : []), ...(Array.isArray(facts.partialInvoices) ? facts.partialInvoices : [])];
   if (!documents.length) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
+  const documentIds: string[] = [];
   for (const document of documents) {
     const id = document && typeof document === 'object' ? textValue(document.id) : undefined;
     if (!id) throw new Error('SETTLEMENT_DOCUMENT_REQUIRED');
+    if (id === finalId || documentIds.includes(id)) throw new CorrectionSettlementError('IDEMPOTENCY_CONFLICT', `settlement document id ${id} is duplicated`);
+    documentIds.push(id);
+  }
+  const finalItem = await findSettlementOpenItem(db, scope, finalId, documentType);
+  for (const [index, document] of documents.entries()) {
+    const id = documentIds[index]!;
     const item = await findSettlementOpenItem(db, scope, id, documentType);
     if (item.party_type !== finalItem.party_type || item.party_id !== finalItem.party_id) throw new Error('SETTLEMENT_PARTY_MISMATCH');
     const requested = Number(document.grossAmount);

@@ -412,6 +412,7 @@ export interface SettlementDocumentInput {
 
 export interface InvoiceSettlementInput {
   finalInvoice: {
+    id?: string;
     grossAmount?: number;
     taxBreakdown: readonly TaxBreakdownEntry[];
   };
@@ -493,10 +494,11 @@ export const calculateInvoiceSettlement = (input: InvoiceSettlementInput): Invoi
     if (expectedGrossCents !== finalGrossCents) throw new CorrectionSettlementError('INVALID_AMOUNT', 'final invoice gross amount does not match tax breakdown');
   }
   const credits = [...(input.advances ?? []), ...(input.partialInvoices ?? [])];
+  const finalInvoiceId = typeof input.finalInvoice.id === 'string' && input.finalInvoice.id.trim() ? input.finalInvoice.id.trim() : undefined;
   const documentIds = new Set<string>();
   for (const document of credits) {
     const documentId = requireNonEmpty(document.id, 'REFERENCE_REQUIRED', 'settlement document id');
-    if (documentIds.has(documentId)) {
+    if (documentId === finalInvoiceId || documentIds.has(documentId)) {
       throw new CorrectionSettlementError('IDEMPOTENCY_CONFLICT', `settlement document id ${documentId} is duplicated`);
     }
     documentIds.add(documentId);

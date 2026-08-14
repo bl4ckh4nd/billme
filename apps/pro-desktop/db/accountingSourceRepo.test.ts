@@ -22,12 +22,12 @@ const createDb = (): Database.Database => {
     VALUES ('source-period', 'default', '2026-03', 2026, 'open', '2026-03-01', '2026-03-31', datetime('now'), datetime('now'));
     INSERT INTO invoices (id, number, client, client_email, date, due_date, amount, status, accounting_status,
       accounting_snapshot_json, accounting_journal_entry_id, accounting_posted_at, created_at, updated_at)
-    VALUES ('invoice-1', 'RE-1', 'Original customer', 'customer@example.test', '2026-03-01', '2026-03-31', 119,
-      'open', 'posted', '{"sourceVersion":"invoice-r1","vatBreakdown":[{"rate":19,"netAmount":100,"taxAmount":19,"grossAmount":119}]}',
+    VALUES ('invoice-1', 'RE-1', 'Original customer', 'customer@example.test', '2026-03-15', '2026-03-31', 119,
+      'open', 'posted', '{"sourceVersion":"invoice-r1","vatBreakdown":[{"grossAmount":119,"netAmount":100,"rate":19,"taxAmount":19}]}',
       'invoice-journal-1', datetime('now'), datetime('now'), datetime('now'));
     INSERT INTO journal_entries (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference,
       period, fiscal_year, status, source_type, source_key, created_at)
-    VALUES ('invoice-journal-1', 'default', 1, '2026-03-01', '2026-03-01', 'Original invoice', 'RE-1',
+    VALUES ('invoice-journal-1', 'default', 1, '2026-03-15', '2026-03-15', 'Original invoice', 'RE-1',
       '2026-03', 2026, 'posted', 'outgoing_invoice', 'outgoing-invoice:invoice-1', datetime('now'));
     INSERT INTO journal_lines (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount)
     VALUES ('invoice-journal-1-line-1', 'default', 'invoice-journal-1', 1, '1400', 119, 0),
@@ -72,7 +72,7 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     expect(first.sourceRun?.journalEntryId).toBeTruthy();
     expect(postAccountingSource(db, source(), scope, { reason: 'replay' }).status).toBe('duplicate');
     expect(postAccountingSource(db, { ...source(), lines: [{ accountNumber: '8400', debitAmount: 90, creditAmount: 0 }, { accountNumber: '1200', debitAmount: 0, creditAmount: 90 }] }, scope, { reason: 'conflict' }).status).toBe('rejected');
-    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_entries').get()).toEqual({ count: 1 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_entries').get()).toEqual({ count: 2 });
     db.close();
   });
 
@@ -87,7 +87,7 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     db.prepare("UPDATE accounting_periods SET status = 'open' WHERE id = 'source-period'").run();
     const invalid = postAccountingSource(db, { ...source('invalid'), lines: [{ accountNumber: '9999', debitAmount: 100, creditAmount: 0 }, { accountNumber: '1200', debitAmount: 0, creditAmount: 100 }] }, scope, { reason: 'invalid account' });
     expect(invalid.status).toBe('rejected');
-    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_entries').get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_entries').get()).toEqual({ count: 1 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM accounting_source_runs WHERE status = \'rejected\'').get()).toEqual({ count: 2 });
     db.close();
   });
@@ -105,8 +105,8 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     const scope = createProTenantScope('default');
     db.exec(`CREATE TRIGGER fail_source_audit BEFORE INSERT ON audit_log BEGIN SELECT RAISE(ABORT, 'source audit failed'); END;`);
     expect(() => postAccountingSource(db, source(), scope, { reason: 'rollback test' })).toThrow('source audit failed');
-    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_entries').get()).toEqual({ count: 0 });
-    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_lines').get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_entries').get()).toEqual({ count: 1 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_lines').get()).toEqual({ count: 2 });
     expect(db.prepare('SELECT COUNT(*) AS count FROM accounting_source_runs').get()).toEqual({ count: 0 });
     db.close();
   });
@@ -125,7 +125,7 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
           documentId: 'invoice-1',
           documentNumber: 'RE-1',
           revision: 'invoice-r1',
-          snapshotHash: createHash('sha256').update(JSON.stringify({ sourceVersion: 'invoice-r1', vatBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] })).digest('hex'),
+          snapshotHash: createHash('sha256').update(JSON.stringify({ sourceVersion: 'invoice-r1', vatBreakdown: [{ grossAmount: 119, netAmount: 100, rate: 19, taxAmount: 19 }] })).digest('hex'),
           taxEffectiveDate: '2026-03-15',
           taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }],
         },
@@ -161,7 +161,7 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     const result = postAccountingSource(db, { ...source('period-mismatch'), fiscalYear: 2025 }, scope, { reason: 'period mismatch' });
     expect(result.status).toBe('rejected');
     expect(result.errors.some((issue) => issue.code === 'PERIOD_MISMATCH')).toBe(true);
-    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_entries').get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM journal_entries').get()).toEqual({ count: 1 });
     db.close();
   });
 });

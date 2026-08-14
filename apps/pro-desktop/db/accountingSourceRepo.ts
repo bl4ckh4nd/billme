@@ -574,6 +574,7 @@ const generatedCommands = (kind: AccountingCommandKind, facts: Record<string, un
         kind,
         facts,
         source: {
+          tenantId,
           sourceId: source.sourceId,
           sourceRevision: source.sourceRevision,
           effectiveDate: source.effectiveDate,

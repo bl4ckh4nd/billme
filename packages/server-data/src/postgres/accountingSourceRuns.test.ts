@@ -7,6 +7,7 @@ import { createPostgresPool, type PostgresQueryable } from './connection.js';
 import { runDrizzleMigrations } from './migrations.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
 import { taxCaseForCorrectionRate, taxExportDirectionFromPersistedSource } from './accountingSourceRuns.js';
+import { journalSourceIdentity } from '@billme/accounting-engine';
 
 const databaseUrl = process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 
@@ -231,7 +232,8 @@ test('corrections require a posted original with its document-owned journal', { 
     await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,1,'2026-10-01','2026-10-01','Source correction original','ER-SOURCE-CORRECTION','2026-10',2026,'posted','incoming_invoice','incoming-invoice:' || $3,$4)`, [journalId, tenantId, invoiceId, now]);
     const posted = await createPostgresProAccountingRepository(pool).createCorrectionSettlement(scope, input);
     assert.equal(posted.replayed, false);
-    assert.equal(posted.run.journalEntryId, `correction:${posted.document.id}`);
+    const correctionIdentity = journalSourceIdentity(tenantId, 'correction', posted.document.id, posted.document.originalRevision);
+    assert.equal(posted.run.journalEntryId, `journal-command:${correctionIdentity.slice('source:'.length)}`);
   } finally {
     await pool.query('ALTER TABLE incoming_invoices DISABLE TRIGGER incoming_invoices_posted_immutable').catch(() => undefined);
     await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);

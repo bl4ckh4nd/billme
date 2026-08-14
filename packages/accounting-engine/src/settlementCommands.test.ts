@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildSettlementJournalCommand } from './settlementCommands.js';
 
-const source = { sourceId: 'settlement-1', sourceRevision: 'v1', effectiveDate: '2026-03-15', postingDate: '2026-03-15', period: '2026-03', fiscalYear: 2026, currency: 'EUR' };
+const source = { tenantId: 'tenant-a', sourceId: 'settlement-1', sourceRevision: 'v1', effectiveDate: '2026-03-15', postingDate: '2026-03-15', period: '2026-03', fiscalYear: 2026, currency: 'EUR' };
 const accounts = { accountsReceivable: '1400', accountsPayable: '1600', revenue: '8400', expense: '4900', badDebtExpenseAccount: '2400', advanceClearingReceivable: '1593', advanceClearingPayable: '1518', outputVat: '1776', inputVat: '1576' };
 const total = (lines: Array<{ debitAmount: number; creditAmount: number }>) => ({ debit: lines.reduce((sum, line) => sum + Math.round(line.debitAmount * 100), 0), credit: lines.reduce((sum, line) => sum + Math.round(line.creditAmount * 100), 0) });
 
@@ -53,6 +53,21 @@ test('settlement totals cannot silently produce an empty or unaccounted journal'
   assert.throws(() => buildSettlementJournalCommand({ kind: 'advance_settlement', source, accounts: { ...accounts, advanceClearingPayable: undefined }, facts: { documentType: 'incoming_invoice', finalInvoice: { grossAmount: 119, taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] }, advances: [{ id: 'advance-1', kind: 'advance', grossAmount: 119 }] } }), /advanceClearingPayable/);
   const fullySettled = buildSettlementJournalCommand({ kind: 'advance_settlement', source, accounts, facts: { finalInvoice: { grossAmount: 119, taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] }, advances: [{ id: 'advance-1', kind: 'advance', grossAmount: 119 }] } });
   assert.deepEqual(total(fullySettled.command.entry.lines), { debit: 11900, credit: 11900 });
+});
+
+test('settlement journal identity is tenant-scoped, delimiter-safe, and replay-stable', () => {
+  const first = buildSettlementJournalCommand({ kind: 'skonto', source: { ...source, sourceId: 'source:a', sourceRevision: 'revision' }, accounts, facts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9 } });
+  const collisionCandidate = buildSettlementJournalCommand({ kind: 'skonto', source: { ...source, sourceId: 'source', sourceRevision: 'a:revision' }, accounts, facts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9 } });
+  const otherTenant = buildSettlementJournalCommand({ kind: 'skonto', source: { ...source, tenantId: 'tenant-b', sourceId: 'source:a', sourceRevision: 'revision' }, accounts, facts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9 } });
+
+  assert.notEqual(first.command.entry.id, collisionCandidate.command.entry.id);
+  assert.notEqual(first.command.entry.lines[0]?.id, collisionCandidate.command.entry.lines[0]?.id);
+  assert.notEqual(first.command.entry.id, otherTenant.command.entry.id);
+  assert.notEqual(first.command.entry.sourceKey, otherTenant.command.entry.sourceKey);
+  assert.deepEqual(
+    buildSettlementJournalCommand({ kind: 'skonto', source: { ...source, sourceId: 'source:a', sourceRevision: 'revision' }, accounts, facts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9 } }).command,
+    first.command,
+  );
 });
 
 test('settlement amount errors identify the workflow field', () => {

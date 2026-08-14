@@ -9,6 +9,7 @@ import {
   type JournalLine,
   type SkontoVatApportionmentInput,
 } from '@billme/accounting-shared';
+import { journalSourceIdentity } from './closingDomain';
 
 export type SettlementCommandKind = 'skonto' | 'bad_debt' | 'advance_settlement';
 
@@ -28,6 +29,7 @@ export interface SettlementJournalAccounts {
 }
 
 export interface SettlementJournalSource {
+  tenantId: string;
   sourceId: string;
   sourceRevision: string;
   effectiveDate: string;
@@ -188,7 +190,8 @@ export const buildSettlementJournalCommand = (input: SettlementJournalBuildInput
     });
   }
   const lines = settlementLines(input.kind, input.facts, input.source, input.accounts, byRate);
-  const commandId = `journal-command:${input.kind}:${input.source.sourceId}:${input.source.sourceRevision}`;
+  const identity = journalSourceIdentity(input.source.tenantId, `settlement:${input.kind}`, input.source.sourceId, input.source.sourceRevision);
+  const commandId = `journal-command:${identity.slice('source:'.length)}`;
   const entry: JournalCommand['entry'] = {
     id: commandId,
     postingDate: input.source.postingDate,
@@ -199,14 +202,14 @@ export const buildSettlementJournalCommand = (input: SettlementJournalBuildInput
     fiscalYear: input.source.fiscalYear,
     status: 'posted',
     sourceType: 'standalone_source',
-    sourceKey: `settlement:${input.kind}:${input.source.sourceId}:${input.source.sourceRevision}`,
+    sourceKey: `settlement:${identity}`,
     lines: lines.map((line) => ({ ...line, id: `${commandId}:${line.id}` })),
   };
   return {
     result,
     command: {
       commandId,
-      idempotencyKey: `standalone_source:${input.source.sourceId}:${input.source.sourceRevision}`,
+      idempotencyKey: identity,
       immutableRevision: input.source.sourceRevision,
       effectiveDate: input.source.effectiveDate,
       currency: input.source.currency,

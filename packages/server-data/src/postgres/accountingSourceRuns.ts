@@ -22,6 +22,7 @@ import {
   buildSettlementJournalCommand,
   buildProvisionCommand,
   createLinkedCorrection,
+  journalSourceIdentity,
   planAccrualSchedule,
   planLoanSchedule,
   prepareUstva,
@@ -590,8 +591,10 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
         .filter((document): document is LinkedCorrectionDocument => document?.originalDocumentId === correction.document.originalDocumentId);
       const linked = createLinkedCorrection({ id: correction.document.id, idempotencyKey: correction.document.idempotencyKey, correctionDate: correction.document.correctionDate, taxEffectiveDate: correction.document.taxEffectiveDate, original, deltas: input.deltas, existing: priorCorrections });
       const postingDate = input.postingDate ?? correction.document.correctionDate;
-      const lines = await correctionLines(tx, scope, linked.document, documentType);
-      const command = { entry: { id: `correction:${linked.document.id}`, postingDate, documentDate: linked.document.taxEffectiveDate, bookingText: `Korrektur zu ${linked.document.originalDocumentNumber}`, reference: linked.document.originalDocumentNumber, period: periodOf(postingDate), fiscalYear: Number(postingDate.slice(0, 4)), status: 'posted', sourceType: 'standalone_source', sourceKey: `correction:${linked.document.id}`, lines } };
+      const correctionIdentity = journalSourceIdentity(tenant(scope), 'correction', linked.document.id, linked.document.originalRevision);
+      const correctionCommandId = `journal-command:${correctionIdentity.slice('source:'.length)}`;
+      const lines = (await correctionLines(tx, scope, linked.document, documentType)).map((line, index) => ({ ...line, id: `${correctionCommandId}:line:${index + 1}` }));
+      const command = { entry: { id: correctionCommandId, postingDate, documentDate: linked.document.taxEffectiveDate, bookingText: `Korrektur zu ${linked.document.originalDocumentNumber}`, reference: linked.document.originalDocumentNumber, period: periodOf(postingDate), fiscalYear: Number(postingDate.slice(0, 4)), status: 'posted', sourceType: 'standalone_source', sourceKey: `correction:${correctionIdentity}`, lines } };
       const journalEntryId = await insertCommand(tx, scope, command, input);
       const run = await createRun(tx, scope, { sourceType, sourceId: linked.document.id, sourceRevision: linked.document.originalRevision, idempotencyKey: linked.document.idempotencyKey, status: 'posted', source, result: linked.document, journalEntryId, reason, mutation: input.mutation });
       const originalItem = (await q<any>(tx, `SELECT * FROM open_items WHERE tenant_id=$1 AND source_id=$2 AND source_type IN ('outgoing_invoice','incoming_invoice') FOR UPDATE`, [tenant(scope), correction.document.originalDocumentId]))[0];
@@ -630,6 +633,7 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
             kind: commandName as SettlementCommandKind,
             facts: sourceInput,
             source: {
+              tenantId: tenant(scope),
               sourceId,
               sourceRevision,
               effectiveDate: String(sourceInput.effectiveDate ?? date),

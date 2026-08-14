@@ -55,6 +55,11 @@ const sourceJournalIds = async (page) => (await invokeDesktopIpc(page, 'pro:list
   .map((run) => run.journalEntryId)
   .filter(Boolean);
 
+const accountingStateIds = async (page) => ({
+  sourceRuns: (await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).map((run) => run.id).sort(),
+  journalEntries: (await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).map((entry) => entry.id).sort(),
+});
+
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
   await seedDesktopData(desktop.page, { app: 'pro' });
@@ -92,7 +97,7 @@ test('posts, replays, and conflict-blocks one immutable source revision', async 
   expect((await invokeDesktopIpc(page, 'pro:getAccountingSourceRun', { id: first.sourceRun.id })).fact.sourceId).toBe(source.sourceId);
 });
 
-test('posts a Sonderbuchung through the browser and refetches its journal link', async () => {
+test('posts a Sonderbuchung through the browser and opens inline journal details', async () => {
   const { page } = desktop;
   const accounts = await pickPostingAccounts(page);
   const sourceId = unique('ui-source');
@@ -100,12 +105,13 @@ test('posts a Sonderbuchung through the browser and refetches its journal link',
   await page.getByRole('button', { name: 'Sonderbuchungen & Abschluss' }).click();
   await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Sonderbuchung speichern' }).click();
   await expect(page.getByRole('alert')).toContainText('Audit-Grund ist erforderlich.');
+  await expect(page.getByRole('button', { name: 'Prüfen & verbindlich buchen' })).toBeDisabled();
 
   await page.getByRole('textbox', { name: 'Quellbeleg' }).fill(sourceId);
   await page.getByRole('textbox', { name: 'Buchungsdatum' }).fill('2026-04-15');
   await page.getByRole('combobox', { name: 'Workflow' }).selectOption('fiscal_close');
+  await page.getByText('Fachdaten für Experten bearbeiten').click();
   const factsField = page.getByRole('textbox', { name: 'Domain-Fakten (JSON)' });
   const facts = JSON.parse(await factsField.inputValue());
   await factsField.fill(JSON.stringify({
@@ -119,15 +125,144 @@ test('posts a Sonderbuchung through the browser and refetches its journal link',
     ],
   }, null, 2));
   await page.getByRole('textbox', { name: 'Audit-Grund', exact: true }).fill('E2E browser source posting');
-  await page.getByRole('button', { name: 'Sonderbuchung speichern' }).click();
+  await page.getByRole('button', { name: 'Prüfen & verbindlich buchen' }).click();
 
-  await expect(page.getByRole('status')).toContainText('Sonderbuchung gespeichert und refetched.');
+  await expect(page.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toBeVisible();
   const historyRow = page.locator('section[aria-labelledby="source-run-history-heading"] li').filter({ hasText: sourceId });
-  await expect(historyRow).toContainText('fiscal_close');
-  await expect(historyRow).toContainText('posted');
-  const journalLink = historyRow.getByRole('link', { name: /^Journal / });
-  await expect(journalLink).toBeVisible();
-  await expect(journalLink).toHaveAttribute('href', /#\/accounting\/journal\/.+/);
+  await expect(historyRow).toContainText('Gebucht');
+  const journalButton = historyRow.getByRole('button', { name: 'Journal öffnen' });
+  await expect(journalButton).toBeVisible();
+  await journalButton.click();
+  const journalDialog = page.getByRole('dialog', { name: 'Journalbuchung' });
+  await expect(journalDialog).toBeVisible();
+  await expect(journalDialog.getByRole('heading', { name: /Journal \d+/ })).toBeVisible();
+  await expect(journalDialog.getByText(`Konto ${accounts.expense}`)).toBeVisible();
+  await expect(journalDialog.getByText(`Konto ${accounts.bank}`)).toBeVisible();
+});
+
+test('does not claim success for a noop or source-run conflict in the browser', async () => {
+  const { page } = desktop;
+  const accounts = await pickPostingAccounts(page);
+  await page.getByRole('button', { name: 'Sonderbuchungen & Abschluss' }).click();
+  await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss' })).toBeVisible();
+
+  await page.getByRole('combobox', { name: 'Workflow' }).selectOption('provision');
+  const noopId = unique('ui-noop');
+  await page.getByRole('textbox', { name: 'Quellbeleg' }).fill(noopId);
+  await page.getByRole('textbox', { name: 'Audit-Grund', exact: true }).fill('E2E noop must not book');
+  await page.getByText('Fachdaten für Experten bearbeiten').click();
+  const factsField = page.getByRole('textbox', { name: 'Domain-Fakten (JSON)' });
+  const noopFacts = JSON.parse(await factsField.inputValue());
+  await factsField.fill(JSON.stringify({ ...noopFacts, expenseAccount: accounts.expense, provisionAccount: accounts.provision, previousAmount: 25, targetAmount: 25 }, null, 2));
+  await page.getByRole('button', { name: 'Prüfen & verbindlich buchen' }).click();
+  await expect(page.getByRole('alert')).toContainText('Keine Buchung vorgenommen');
+  await expect(page.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toHaveCount(0);
+
+  const conflictId = unique('ui-conflict');
+  const conflictDate = '2026-04-15';
+  const conflictSource = sourceFact({ sourceType: 'provision', sourceId: conflictId, date: conflictDate, lines: journalLines(accounts) });
+  conflictSource.sourceRevision = '1';
+  const first = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+    kind: 'standalone',
+    source: conflictSource,
+    chart: accounts.chart,
+    reason: 'E2E conflict seed',
+  });
+  expect(first.status).toBe('posted');
+
+  await page.getByRole('combobox', { name: 'Workflow' }).selectOption('provision');
+  await page.getByRole('textbox', { name: 'Quellbeleg' }).fill(conflictId);
+  await page.getByRole('textbox', { name: 'Buchungsdatum' }).fill(conflictDate);
+  const conflictFactsField = page.getByRole('textbox', { name: 'Domain-Fakten (JSON)' });
+  const changedFacts = JSON.parse(await conflictFactsField.inputValue());
+  await conflictFactsField.fill(JSON.stringify({ ...changedFacts, expenseAccount: accounts.expense, provisionAccount: accounts.provision, previousAmount: 0, targetAmount: 11 }, null, 2));
+  await page.getByRole('textbox', { name: 'Audit-Grund', exact: true }).fill('E2E conflict must not book');
+  await page.getByRole('button', { name: 'Prüfen & verbindlich buchen' }).click();
+  await expect(page.getByRole('alert')).toContainText(/Source revision already exists|Konflikt beim Quelllauf/);
+  await expect(page.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toHaveCount(0);
+});
+
+test('persists unique journal entries for multi-period accrual and loan schedules on replay', async () => {
+  const { page } = desktop;
+  const accounts = await pickPostingAccounts(page);
+  const accrualId = unique('accrual-schedule');
+  const accrual = {
+    sourceId: accrualId,
+    sourceRevision: 'r1',
+    startDate: '2026-01-15',
+    endDate: '2026-03-15',
+    period: '2026-01',
+    fiscalYear: 2026,
+    currency: 'EUR',
+    totalAmount: 300,
+    expenseAccount: accounts.expense,
+    deferralAccount: accounts.provision,
+  };
+  const firstAccrual = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+    kind: 'accrual',
+    source: sourceFact({ sourceType: 'accrual', sourceId: accrualId, date: accrual.startDate, lines: journalLines(accounts) }),
+    domainFacts: accrual,
+    chart: accounts.chart,
+    reason: 'E2E multi-period accrual',
+  });
+  expect(firstAccrual.status).toBe('posted');
+  const accrualRuns = (await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).filter((run) => run.sourceType === 'accrual' && run.sourceId === accrualId);
+  expect(accrualRuns).toHaveLength(3);
+  expect(new Set(accrualRuns.map((run) => run.journalEntryId)).size).toBe(3);
+  const replayAccrual = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+    kind: 'accrual',
+    source: sourceFact({ sourceType: 'accrual', sourceId: accrualId, date: accrual.startDate, lines: journalLines(accounts) }),
+    domainFacts: accrual,
+    chart: accounts.chart,
+    reason: 'E2E multi-period accrual replay',
+  });
+  expect(replayAccrual.status).toBe('duplicate');
+  expect((await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).filter((run) => run.sourceType === 'accrual' && run.sourceId === accrualId)).toHaveLength(3);
+
+  const loanId = unique('loan-schedule');
+  const loan = {
+    sourceId: loanId,
+    sourceRevision: 'r1',
+    startDate: '2026-01-01',
+    period: '2026-01',
+    fiscalYear: 2026,
+    currency: 'EUR',
+    principal: 300,
+    annualInterestRate: 0,
+    termMonths: 3,
+    liabilityAccount: accounts.provision,
+    interestAccount: accounts.expense,
+    cashAccount: accounts.bank,
+  };
+  const firstLoan = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+    kind: 'loan_schedule',
+    source: sourceFact({ sourceType: 'loan_schedule', sourceId: loanId, date: loan.startDate, lines: journalLines(accounts) }),
+    domainFacts: loan,
+    chart: accounts.chart,
+    reason: 'E2E multi-period loan',
+  });
+  expect(firstLoan.status).toBe('posted');
+  const loanRuns = (await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).filter((run) => run.sourceType === 'loan_schedule' && run.sourceId === loanId);
+  expect(loanRuns).toHaveLength(3);
+  expect(new Set(loanRuns.map((run) => run.journalEntryId)).size).toBe(3);
+  const replayLoan = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+    kind: 'loan_schedule',
+    source: sourceFact({ sourceType: 'loan_schedule', sourceId: loanId, date: loan.startDate, lines: journalLines(accounts) }),
+    domainFacts: loan,
+    chart: accounts.chart,
+    reason: 'E2E multi-period loan replay',
+  });
+  expect(replayLoan.status).toBe('duplicate');
+  expect((await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).filter((run) => run.sourceType === 'loan_schedule' && run.sourceId === loanId)).toHaveLength(3);
+});
+
+test('keeps the Pro accounting workspace within a 390px viewport', async () => {
+  const { page } = desktop;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: 'Sonderbuchungen & Abschluss' }).click();
+  await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss' })).toBeVisible();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth || document.body.scrollWidth > document.body.clientWidth);
+  expect(overflow).toBe(false);
 });
 
 test('keeps invalid account, zero amount, and closed-period postings atomic', async () => {
@@ -253,6 +388,21 @@ test('posts correction and close/provision/inventory/FX command workflows, while
     },
     deltas: [{ rate: 19, grossAmount: 11.9 }],
   };
+  const beforeMissingSettlement = await accountingStateIds(page);
+  await expect(invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+    kind: 'bad_debt',
+    source: sourceFact({ sourceType: 'standalone_source', sourceId: unique('missing-settlement'), lines: journalLines(accounts) }),
+    domainFacts: {
+      taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }],
+      writeOffGrossAmount: 119,
+      badDebtExpenseAccount: accounts.expense,
+      facts: { originalDocumentId: unique('missing-settlement-original'), originalDocumentNumber: 'ER-MISSING' },
+    },
+    chart: accounts.chart,
+    reason: 'E2E missing settlement original',
+  })).rejects.toThrow(/ORIGINAL_DOCUMENT_NOT_FOUND/);
+  expect(await accountingStateIds(page)).toEqual(beforeMissingSettlement);
+
   const beforeCorrection = await sourceJournalIds(page);
   await expect(invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'correction',

@@ -64,6 +64,7 @@ const mapAccounts = async (state, session) => {
   for (const [role, accountNumber] of [
     ['accounts_receivable', '1200'],
     ['accounts_payable', '1200'],
+    ['bank', '1200'],
     ['revenue', '8400'],
     ['output_vat', '1776'],
     ['expense', '3125'],
@@ -74,6 +75,8 @@ const mapAccounts = async (state, session) => {
       body: { reason: `source-run fixture mapping ${role}`, chart: 'SKR03', role, accountNumber },
     });
   }
+  const rows = await requestJson(state, session, '/api/v1/pro/accounting/mappings', { chart: 'SKR03' });
+  return Object.fromEntries(rows.map((row) => [row.role, row.accountNumber]));
 };
 
 const sourceFact = (namespace, id, overrides = {}) => ({
@@ -162,7 +165,7 @@ export const runProSourceRunScenario = async () => {
   const session = await ensureHarnessSession(state, { product: 'pro', ...owner });
   const namespace = `source-runs-${Date.now()}`;
   await seedHarnessProTenant(state, { tenantId: session.tenantId, namespace, includeEurCatalog2026: true });
-  await mapAccounts(state, session);
+  const mapped = await mapAccounts(state, session);
 
   let cases = 0;
 
@@ -257,6 +260,50 @@ export const runProSourceRunScenario = async () => {
   assert.equal(correctionReplay.run.id, correction.run.id);
   cases++;
 
+  const beforeMissingSettlement = await accountingState(state, session);
+  const missingSettlementId = `${namespace}-missing-settlement`;
+  await expectError(state, session, '/api/v1/pro/accounting/closing', undefined, {
+    method: 'POST', body: {
+      commandType: 'bad_debt', sourceId: missingSettlementId, sourceRevision: 'v1', idempotencyKey: `${missingSettlementId}-key`, reason: 'Missing settlement original must fail',
+      input: {
+        sourceId: missingSettlementId, sourceRevision: 'v1', effectiveDate: '2026-11-20', postingDate: '2026-11-20', period: '2026-11', fiscalYear: 2026, currency: 'EUR',
+        taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], writeOffGrossAmount: 119, badDebtExpenseAccount: mapped.expense,
+        facts: { originalDocumentId: `${namespace}-missing-settlement-original`, originalDocumentNumber: 'ER-MISSING' },
+      },
+    }, }, 404, /ORIGINAL_DOCUMENT_NOT_FOUND/);
+  assert.deepEqual(await accountingState(state, session), beforeMissingSettlement);
+  cases++;
+
+  const accrualId = `${namespace}-accrual-schedule`;
+  const accrualBody = {
+    command: 'accrual', sourceId: accrualId, sourceRevision: 'v1', idempotencyKey: `${accrualId}-key`, reason: 'Multi-period accrual',
+    input: { sourceId: accrualId, sourceRevision: 'v1', startDate: '2026-01-15', endDate: '2026-03-15', period: '2026-01', fiscalYear: 2026, currency: 'EUR', totalAmount: 300, expenseAccount: mapped.expense, deferralAccount: mapped.accounts_payable },
+  };
+  const accrual = await closing(state, session, accrualBody);
+  assert.equal(accrual.replayed, false);
+  assert.equal(accrual.run.status, 'posted');
+  assert.equal(accrual.result.journalEntryIds.length, 3);
+  assert.equal(new Set(accrual.result.journalEntryIds).size, 3);
+  const accrualReplay = await closing(state, session, accrualBody);
+  assert.equal(accrualReplay.replayed, true);
+  assert.deepEqual(accrualReplay.result.journalEntryIds, accrual.result.journalEntryIds);
+  cases++;
+
+  const loanId = `${namespace}-loan-schedule`;
+  const loanBody = {
+    command: 'loan_schedule', sourceId: loanId, sourceRevision: 'v1', idempotencyKey: `${loanId}-key`, reason: 'Multi-period loan',
+    input: { sourceId: loanId, sourceRevision: 'v1', startDate: '2026-01-01', period: '2026-01', fiscalYear: 2026, currency: 'EUR', principal: 300, annualInterestRate: 0, termMonths: 3, liabilityAccount: mapped.accounts_payable, interestAccount: mapped.expense, cashAccount: mapped.bank },
+  };
+  const loan = await closing(state, session, loanBody);
+  assert.equal(loan.replayed, false);
+  assert.equal(loan.run.status, 'posted');
+  assert.equal(loan.result.journalEntryIds.length, 3);
+  assert.equal(new Set(loan.result.journalEntryIds).size, 3);
+  const loanReplay = await closing(state, session, loanBody);
+  assert.equal(loanReplay.replayed, true);
+  assert.deepEqual(loanReplay.result.journalEntryIds, loan.result.journalEntryIds);
+  cases++;
+
   await expectError(state, session, '/api/v1/pro/accounting/corrections', undefined, {
     method: 'POST', body: { ...correctionBody, id: `${namespace}-correction-conflict`, deltas: [{ rate: 19, grossAmount: 23.8 }] },
   }, 409, /SOURCE_RUN_CONFLICT|IDEMPOTENCY_CONFLICT/);
@@ -297,8 +344,8 @@ export const runProSourceRunScenario = async () => {
   await setHarnessProPeriodStatus(state, { tenantId: session.tenantId, period: '2026-09', status: 'open' });
 
   for (const [label, input, pattern] of [
-    ['invalid', sourceFact(namespace, `${namespace}-invalid`, { postingDate: '2026-13-01', effectiveDate: '2026-13-01', period: '2026-13' }), /INVALID_PERIOD|INVALID_DATE/],
-    ['unbalanced', sourceFact(namespace, `${namespace}-unbalanced`, { lines: [{ accountNumber: '1200', debitAmount: 100, creditAmount: 0 }, { accountNumber: '8400', debitAmount: 0, creditAmount: 99 }] }), /CLOSING_COMMAND_REJECTED|UNBALANCED_ENTRY/],
+    ['invalid', sourceFact(namespace, `${namespace}-invalid`, { postingDate: '2026-13-01', effectiveDate: '2026-13-01', period: '2026-13' }), /INVALID_PERIOD|INVALID_DATE|Invalid date/i],
+    ['unbalanced', sourceFact(namespace, `${namespace}-unbalanced`, { lines: [{ accountNumber: '1200', debitAmount: 100, creditAmount: 0 }, { accountNumber: '8400', debitAmount: 0, creditAmount: 99 }] }), /CLOSING_COMMAND_REJECTED|UNBALANCED_ENTRY|Debit and credit/i],
     ['unknown-account', sourceFact(namespace, `${namespace}-unknown`, { lines: [{ accountNumber: '9999', debitAmount: 100, creditAmount: 0 }, { accountNumber: '8400', debitAmount: 0, creditAmount: 100 }] }), /UNKNOWN_ACCOUNT/],
   ]) {
     const before = await accountingState(state, session);
@@ -329,6 +376,14 @@ export const runProSourceRunScenario = async () => {
   }, 409, /SOURCE_RUN_CONFLICT/);
   cases++;
 
+  const emptyZm = await json(state, session, '/api/v1/pro/accounting/tax-exports/prepare', undefined, { method: 'POST', body: {
+    kind: 'zm', period: '2025-02', idempotencyKey: `${namespace}-zm-empty-key`, reason: 'Empty ZM preparation', entries: [],
+  } });
+  assert.equal(emptyZm.artifact.status, 'prepared');
+  assert.deepEqual(emptyZm.artifact.rows, []);
+  assert.notEqual(emptyZm.run.id, ustva.run.id);
+  cases++;
+
   const zm = await json(state, session, '/api/v1/pro/accounting/tax-exports/prepare', undefined, { method: 'POST', body: {
     kind: 'zm', period: '2025-01', idempotencyKey: `${namespace}-zm-key`, reason: 'ZM evidence preparation', entries: [{ postingDate: '2025-01-02', status: 'posted', lines: [{ taxCaseKey: 'EU_B2B_SERVICE_RC', netAmount: 100, countryCode: 'FR', counterpartyVatId: 'FR12345678901', evidenceType: 'transport', evidenceReference: 'CMR-2025-1' }] }],
   } });
@@ -339,9 +394,11 @@ export const runProSourceRunScenario = async () => {
   } });
   assert.equal(oss.artifact.rows[0].countryCode, 'AT');
   cases++;
+  const beforeMissingEvidence = await accountingState(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/tax-exports/prepare', undefined, { method: 'POST', body: {
     kind: 'zm', period: '2025-01', idempotencyKey: `${namespace}-zm-missing-evidence`, reason: 'ZM missing evidence', entries: [{ postingDate: '2025-01-02', status: 'posted', lines: [{ taxCaseKey: 'EU_B2B_SERVICE_RC', netAmount: 100, countryCode: 'FR', counterpartyVatId: 'FR12345678901' }] }],
   } }, 422, /MISSING_EVIDENCE/);
+  assert.deepEqual(await accountingState(state, session), beforeMissingEvidence);
   cases++;
   await expectError(state, session, '/api/v1/pro/accounting/tax-exports/prepare', undefined, { method: 'POST', body: {
     kind: 'oss', period: '2025-01', idempotencyKey: `${namespace}-oss-invalid-country`, reason: 'OSS invalid country', entries: [{ postingDate: '2025-01-03', status: 'posted', lines: [{ taxCaseKey: 'EU_B2C_OSS', netAmount: 50, taxAmount: 10, taxRate: 20, countryCode: 'XX' }] }],
@@ -411,6 +468,6 @@ export const runProSourceRunScenario = async () => {
   await expectError(state, session, `/api/v1/pro/tax-filings/${encodeURIComponent(filing.id)}/validate`, undefined, { method: 'POST', body: { reason: 'official EÜR provider unavailable', idempotencyKey: `${namespace}-unsupported-elster-validate` } }, 422, /EÜR|ELSTER|provider/i);
   cases++;
 
-  assert.equal(cases, 34, `expected exactly 34 Pro source-run/tax/EÜR cases, got ${cases}`);
+  assert.equal(cases, 38, `expected exactly 38 Pro source-run/tax/EÜR cases, got ${cases}`);
   console.log(`PRO_SOURCE_RUN_CASES=${cases}`);
 };

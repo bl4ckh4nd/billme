@@ -232,7 +232,7 @@ const validateForm = (form: FormState): string[] => {
 };
 
 const toSource = (form: FormState): DomainAccountingSourceFact => ({
-  sourceType: ['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch'].includes(form.kind) ? form.kind as DomainAccountingSourceFact['sourceType'] : 'standalone_source',
+  sourceType: ['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'shareholder_flow'].includes(form.kind) ? form.kind as DomainAccountingSourceFact['sourceType'] : 'standalone_source',
   sourceId: form.sourceId.trim(),
   sourceRevision: '1',
   effectiveDate: form.date,
@@ -266,6 +266,8 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   const [preparedArtifact, setPreparedArtifact] = useState<{ kind: TaxPreparationKind; id?: string; status: string; rowCount?: number } | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const historyRequestId = useRef(0);
+  const mounted = useRef(true);
   const canMutate = permissionContextForRole(role).canMutate;
   const selectedWorkflow = workflows.find((workflow) => workflow.value === form.kind) ?? workflows[0];
 
@@ -280,12 +282,15 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   const taxPeriodError = /^\d{4}-(0[1-9]|1[0-2])$/.test(taxPeriod) ? null : 'Zeitraum muss YYYY-MM sein.';
 
   const refetchHistory = async () => {
+    const requestId = ++historyRequestId.current;
     if (!dataAdapter?.listAccountingSourceRuns) return;
     setHistoryError(null);
     try {
       const next = await dataAdapter.listAccountingSourceRuns();
+      if (!mounted.current || requestId !== historyRequestId.current) return;
       setHistory(next);
     } catch (error) {
+      if (!mounted.current || requestId !== historyRequestId.current) return;
       setHistoryError(caughtDomainErrorMessage(error));
     }
   };
@@ -293,6 +298,14 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   useEffect(() => {
     void refetchHistory();
   }, [dataAdapter]);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      historyRequestId.current += 1;
+    };
+  }, []);
 
   const update = (key: keyof FormState, value: string) => setForm((current) => {
     const next = { ...current, [key]: value };

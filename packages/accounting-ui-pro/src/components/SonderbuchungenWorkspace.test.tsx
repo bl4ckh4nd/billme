@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { JournalEntryEntity } from '@billme/accounting-shared';
 import SonderbuchungenWorkspace from './SonderbuchungenWorkspace';
@@ -91,6 +91,51 @@ describe('SonderbuchungenWorkspace', () => {
     expect(screen.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toBeTruthy();
   });
 
+  it('keeps the post-submit history when the mount request resolves out of order', async () => {
+    let resolveMount!: (runs: typeof historyWithJournal[]) => void;
+    let resolvePostSubmit!: (runs: typeof historyWithJournal[]) => void;
+    const mountRequest = new Promise<typeof historyWithJournal[]>((resolve) => { resolveMount = resolve; });
+    const postSubmitRequest = new Promise<typeof historyWithJournal[]>((resolve) => { resolvePostSubmit = resolve; });
+    const listAccountingSourceRuns = vi.fn()
+      .mockReturnValueOnce(mountRequest)
+      .mockReturnValueOnce(postSubmitRequest);
+    const adapter = { ...valid(), listAccountingSourceRuns };
+    render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
+    await waitFor(() => expect(listAccountingSourceRuns).toHaveBeenCalledTimes(1));
+
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'Prüfen & verbindlich buchen' }));
+    await waitFor(() => expect(listAccountingSourceRuns).toHaveBeenCalledTimes(2));
+
+    resolvePostSubmit([historyWithJournal]);
+    expect(await screen.findByText('beleg-1')).toBeTruthy();
+    await act(async () => {
+      resolveMount([]);
+      await Promise.resolve();
+    });
+    expect(screen.getByText('beleg-1')).toBeTruthy();
+  });
+
+  it('does not surface a stale mount history failure after a post-submit refresh succeeds', async () => {
+    let rejectMount!: (error: Error) => void;
+    const mountRequest = new Promise<typeof historyWithJournal[]>((_, reject) => { rejectMount = reject; });
+    const listAccountingSourceRuns = vi.fn()
+      .mockReturnValueOnce(mountRequest)
+      .mockResolvedValueOnce([historyWithJournal]);
+    const adapter = { ...valid(), listAccountingSourceRuns };
+    render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
+    await waitFor(() => expect(listAccountingSourceRuns).toHaveBeenCalledTimes(1));
+
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'Prüfen & verbindlich buchen' }));
+    expect(await screen.findByText('beleg-1')).toBeTruthy();
+    await act(async () => {
+      rejectMount(new Error('stale history failure'));
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/Buchungshistorie konnte nicht geladen werden/)).toBeNull();
+  });
+
   it('posts selected workflow facts without generic journal lines', async () => {
     const adapter = valid();
     render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
@@ -98,6 +143,18 @@ describe('SonderbuchungenWorkspace', () => {
     fireEvent.change(screen.getByLabelText('Audit-Grund'), { target: { value: 'Abschluss geprüft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Prüfen & verbindlich buchen' }));
     await waitFor(() => expect(adapter.postAccountingCommand).toHaveBeenCalledWith(expect.objectContaining({ kind: 'fiscal_close', domainFacts: expect.any(Object), source: expect.objectContaining({ lines: [] }) })));
+  });
+
+  it('keeps shareholder flows distinct from standalone sources', async () => {
+    const adapter = valid();
+    render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
+    fireEvent.change(screen.getByLabelText('Workflow'), { target: { value: 'shareholder_flow' } });
+    fireEvent.change(screen.getByLabelText('Audit-Grund'), { target: { value: 'Gesellschaftervorgang geprüft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Prüfen & verbindlich buchen' }));
+    await waitFor(() => expect(adapter.postAccountingCommand).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'shareholder_flow',
+      source: expect.objectContaining({ sourceType: 'shareholder_flow', lines: [] }),
+    })));
   });
 
   it('templates explicit settlement accounts by workflow direction', () => {

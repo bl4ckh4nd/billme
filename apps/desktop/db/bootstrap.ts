@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS invoices (
   tax_snapshot_json TEXT,
   amount REAL NOT NULL,
   status TEXT NOT NULL,
+  accounting_status TEXT NOT NULL DEFAULT 'unposted',
+  accounting_snapshot_json TEXT,
+  accounting_journal_entry_id TEXT,
+  accounting_posted_at TEXT,
   dunning_level INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

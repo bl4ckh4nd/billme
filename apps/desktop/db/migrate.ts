@@ -80,6 +80,10 @@ export const runMigrations = (db: Database.Database): void => {
   addColumnIfMissing(db, 'invoices', 'tax_mode', 'TEXT');
   addColumnIfMissing(db, 'invoices', 'tax_meta_json', 'TEXT');
   addColumnIfMissing(db, 'invoices', 'tax_snapshot_json', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'accounting_status', "TEXT NOT NULL DEFAULT 'unposted'");
+  addColumnIfMissing(db, 'invoices', 'accounting_snapshot_json', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'accounting_journal_entry_id', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'accounting_posted_at', 'TEXT');
 
   // Offers: structured address snapshots
   addColumnIfMissing(db, 'offers', 'billing_address_json', 'TEXT');

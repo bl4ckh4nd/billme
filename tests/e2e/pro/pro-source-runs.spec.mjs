@@ -137,7 +137,7 @@ test('posts a Sonderbuchung through the browser and opens inline journal details
   await expect(journalDialog).toBeVisible();
   await expect(journalDialog.getByRole('heading', { name: /Journal \d+/ })).toBeVisible();
   await expect(journalDialog.getByText(`Konto ${accounts.expense}`)).toBeVisible();
-  await expect(journalDialog.getByText(`Konto ${accounts.bank}`)).toBeVisible();
+  await expect(journalDialog.getByText(`Konto ${accounts.retained}`)).toBeVisible();
 });
 
 test('does not claim success for a noop or source-run conflict in the browser', async () => {

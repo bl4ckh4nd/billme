@@ -1338,6 +1338,18 @@ export const proPostAccountingCommandArgsSchema = proPostAccountingSourceArgsBas
     // the same trust-boundary checks when present.
     if (input.source.lines.length) validateBalancedSourceLines(input.source.lines, ctx, ['source', 'lines']);
   }
+  if (input.kind === 'bad_debt' || input.kind === 'advance_settlement') {
+    const facts = input.domainFacts && typeof input.domainFacts === 'object' && !Array.isArray(input.domainFacts)
+      ? input.domainFacts as Record<string, unknown>
+      : undefined;
+    const required = input.kind === 'bad_debt' ? ['badDebtExpenseAccount'] : ['advanceClearingReceivable', 'advanceClearingPayable'];
+    for (const key of required) {
+      const value = facts?.[key];
+      if (typeof value !== 'string' || !value.trim()) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['domainFacts', key], message: `${key} is required for ${input.kind}.` });
+      }
+    }
+  }
   if (input.softLockOverride && !input.overrideReason?.trim()) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
   }

@@ -66,6 +66,15 @@ describe('SonderbuchungenWorkspace', () => {
     await waitFor(() => expect(adapter.postAccountingCommand).toHaveBeenCalledWith(expect.objectContaining({ kind: 'fiscal_close', domainFacts: expect.any(Object), source: expect.objectContaining({ lines: [] }) })));
   });
 
+  it('templates explicit settlement accounts by workflow direction', () => {
+    const adapter = valid();
+    render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
+    fireEvent.change(screen.getByLabelText('Workflow'), { target: { value: 'bad_debt' } });
+    expect(JSON.parse((screen.getByLabelText('Domain-Fakten (JSON)') as HTMLTextAreaElement).value)).toMatchObject({ badDebtExpenseAccount: '2400' });
+    fireEvent.change(screen.getByLabelText('Workflow'), { target: { value: 'advance_settlement' } });
+    expect(JSON.parse((screen.getByLabelText('Domain-Fakten (JSON)') as HTMLTextAreaElement).value)).toMatchObject({ advanceClearingReceivable: '1593', advanceClearingPayable: '1518' });
+  });
+
   it('re-syncs source context when source and date change after selecting a workflow', async () => {
     const adapter = valid();
     render(<SonderbuchungenWorkspace dataAdapter={adapter} />);

@@ -28,6 +28,7 @@ import {
   type TaxExportError,
   validatePayrollBatch,
   validateShareholderFlow,
+  type SettlementJournalAccounts,
 } from '@billme/accounting-engine';
 import type { TenantScope } from '@billme/server-core';
 import { appendWithClient } from './audit.js';
@@ -136,6 +137,21 @@ const required = (value: unknown, code: string): string => {
   return value.trim();
 };
 const textValue = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+const settlementAccounts = (
+  mappings: Record<string, string>,
+  facts: Record<string, unknown>,
+): SettlementJournalAccounts => ({
+  accountsReceivable: mappings.accounts_receivable,
+  accountsPayable: mappings.accounts_payable,
+  revenue: mappings.revenue,
+  expense: mappings.expense,
+  outputVat: mappings.output_vat,
+  inputVat: mappings.input_vat,
+  badDebtExpenseAccount: textValue(facts.badDebtExpenseAccount),
+  advanceClearingReceivable: textValue(facts.advanceClearingReceivable),
+  advanceClearingPayable: textValue(facts.advanceClearingPayable),
+});
 
 const mapRun = (row: any): AccountingSourceRunRecord => ({
   id: row.id,
@@ -489,14 +505,7 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
             currency: String(sourceInput.currency ?? 'EUR'),
             reference: textValue(sourceInput.reference),
           },
-          accounts: {
-            accountsReceivable: mappings.mappings.accounts_receivable,
-            accountsPayable: mappings.mappings.accounts_payable,
-            revenue: mappings.mappings.revenue,
-            expense: mappings.mappings.expense,
-            outputVat: mappings.mappings.output_vat,
-            inputVat: mappings.mappings.input_vat,
-          },
+          accounts: settlementAccounts(mappings.mappings, sourceInput),
         });
         return { status: 'ready', value: { command: settlement.command, result: settlement.result } };
       })()

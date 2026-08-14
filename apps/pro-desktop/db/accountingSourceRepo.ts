@@ -14,6 +14,7 @@ import {
   validateShareholderFlow,
   createLinkedCorrection,
   validateUstg17AdjustmentFacts,
+  type SettlementJournalAccounts,
 } from '@billme/accounting-engine';
 import type {
   AccountingSourceFact,
@@ -413,7 +414,19 @@ export const getAccountingSourceRun = (db: Database.Database, id: string, scope:
 type DomainBuild = { status: string; errors?: ClosingDomainError[]; value?: any };
 type GeneratedCommands = { result: unknown; commands: JournalCommand[]; status: 'ready' | 'noop' | 'rejected'; errors: ClosingDomainError[] };
 
-const generatedCommands = (kind: AccountingCommandKind, facts: Record<string, unknown>, source?: AccountingSourceFact, accounts?: { accountsReceivable: string; accountsPayable: string; revenue: string; expense: string; outputVat: string; inputVat: string }): GeneratedCommands | undefined => {
+const settlementAccounts = (mapping: Record<string, string>, facts: Record<string, unknown>): SettlementJournalAccounts => ({
+  accountsReceivable: mapping.accounts_receivable,
+  accountsPayable: mapping.accounts_payable,
+  revenue: mapping.revenue,
+  expense: mapping.expense,
+  outputVat: mapping.output_vat,
+  inputVat: mapping.input_vat,
+  badDebtExpenseAccount: typeof facts.badDebtExpenseAccount === 'string' && facts.badDebtExpenseAccount.trim() ? facts.badDebtExpenseAccount.trim() : undefined,
+  advanceClearingReceivable: typeof facts.advanceClearingReceivable === 'string' && facts.advanceClearingReceivable.trim() ? facts.advanceClearingReceivable.trim() : undefined,
+  advanceClearingPayable: typeof facts.advanceClearingPayable === 'string' && facts.advanceClearingPayable.trim() ? facts.advanceClearingPayable.trim() : undefined,
+});
+
+const generatedCommands = (kind: AccountingCommandKind, facts: Record<string, unknown>, source?: AccountingSourceFact, accounts?: SettlementJournalAccounts): GeneratedCommands | undefined => {
   if (source && accounts && (kind === 'skonto' || kind === 'bad_debt' || kind === 'advance_settlement')) {
     try {
       const built = buildSettlementJournalCommand({
@@ -567,8 +580,18 @@ const resolveCorrectionOriginal = (db: Database.Database, tenantId: string, requ
 };
 
 const loadPriorCorrections = (db: Database.Database, tenantId: string, originalDocumentId: string): ReturnType<typeof createLinkedCorrection>['document'][] => {
-  const rows = db.prepare(`SELECT fact_json, result_json FROM accounting_source_runs
-    WHERE tenant_id = ? AND source_type = 'standalone_source'`).all(tenantId) as Array<{ fact_json?: string; result_json?: string }>;
+  const rows = db.prepare(`SELECT runs.fact_json, runs.result_json
+    FROM accounting_source_runs AS runs
+    JOIN journal_entries AS journals
+      ON journals.tenant_id = runs.tenant_id
+     AND journals.id = runs.journal_entry_id
+    WHERE runs.tenant_id = ?
+      AND runs.source_type = 'standalone_source'
+      AND runs.status = 'posted'
+      AND runs.journal_entry_id IS NOT NULL
+      AND journals.status = 'posted'
+      AND journals.source_type = 'standalone_source'
+      AND journals.source_key = runs.source_id`).all(tenantId) as Array<{ fact_json?: string; result_json?: string }>;
   return rows.flatMap((row) => {
     const result = parseJson<Record<string, any> | undefined>(row.result_json, undefined);
     if (result?.originalDocumentId === originalDocumentId) return [result as ReturnType<typeof createLinkedCorrection>['document']];
@@ -624,7 +647,7 @@ export const postAccountingCommand = (
   const tenantId = getTenantId(scope);
   const generated = facts
     ? generatedCommands(input.kind, facts, input.source, (input.kind === 'skonto' || input.kind === 'bad_debt' || input.kind === 'advance_settlement')
-      ? (() => { const mapping = correctionMappings(db, tenantId, activeChart(db, tenantId, options.chart)); return { accountsReceivable: mapping.accounts_receivable, accountsPayable: mapping.accounts_payable, revenue: mapping.revenue, expense: mapping.expense, outputVat: mapping.output_vat, inputVat: mapping.input_vat }; })()
+      ? (() => { const mapping = correctionMappings(db, tenantId, activeChart(db, tenantId, options.chart)); return settlementAccounts(mapping, facts); })()
       : undefined)
     : undefined;
   const provenance = { commandKind: input.kind, domainFacts: input.domainFacts, ...((options.provenance as Record<string, unknown> | undefined) ?? {}) };

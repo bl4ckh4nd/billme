@@ -81,3 +81,12 @@ test('allows empty lines only for domain commands with domain facts', () => {
   assert.throws(() => proPostAccountingCommandArgsSchema.parse({ kind: 'standalone', source, domainFacts: { ignored: true }, reason: 'Source geprüft' }), /At least one journal line/);
   assert.throws(() => proPostAccountingCommandArgsSchema.parse({ kind: 'fiscal_close', source, domainFacts: [], reason: 'Abschluss geprüft' }), /Domain facts are required/);
 });
+
+test('requires explicit settlement accounts in domain facts', () => {
+  const source = sourceFact([]);
+  assert.throws(() => proPostAccountingCommandArgsSchema.parse({ kind: 'bad_debt', source, domainFacts: { taxBreakdown: [] }, reason: 'Ausfall geprüft' }), /badDebtExpenseAccount/);
+  assert.deepEqual(
+    proPostAccountingCommandArgsSchema.parse({ kind: 'advance_settlement', source, domainFacts: { advanceClearingReceivable: '1593', advanceClearingPayable: '1518' }, reason: 'Vorauszahlung geprüft' }).domainFacts,
+    { advanceClearingReceivable: '1593', advanceClearingPayable: '1518' },
+  );
+});

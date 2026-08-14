@@ -3,7 +3,7 @@ import test from 'node:test';
 import { buildSettlementJournalCommand } from './settlementCommands.js';
 
 const source = { sourceId: 'settlement-1', sourceRevision: 'v1', effectiveDate: '2026-03-15', postingDate: '2026-03-15', period: '2026-03', fiscalYear: 2026, currency: 'EUR' };
-const accounts = { accountsReceivable: '1400', accountsPayable: '1600', revenue: '8400', expense: '4900', badDebtExpense: '2400', advanceClearing: '1593', outputVat: '1776', inputVat: '1576' };
+const accounts = { accountsReceivable: '1400', accountsPayable: '1600', revenue: '8400', expense: '4900', badDebtExpenseAccount: '2400', advanceClearingReceivable: '1593', advanceClearingPayable: '1518', outputVat: '1776', inputVat: '1576' };
 const total = (lines: Array<{ debitAmount: number; creditAmount: number }>) => ({ debit: lines.reduce((sum, line) => sum + Math.round(line.debitAmount * 100), 0), credit: lines.reduce((sum, line) => sum + Math.round(line.creditAmount * 100), 0) });
 
 test('settlement workflows derive balanced, evidenced journal commands', () => {
@@ -24,6 +24,8 @@ test('settlement workflows derive balanced, evidenced journal commands', () => {
   assert.deepEqual(total(advance.command.entry.lines), { debit: 5950, credit: 5950 });
   assert.deepEqual(advance.command.entry.lines.map((line) => line.accountNumber), ['1593', '1400']);
   assert.equal(advance.command.entry.lines.some((line) => line.accountNumber === '8400' || line.taxCaseKey), false);
+  const incomingAdvance = buildSettlementJournalCommand({ kind: 'advance_settlement', source, accounts, facts: { documentType: 'incoming_invoice', finalInvoice: { grossAmount: 119, taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] }, advances: [{ id: 'advance-1', kind: 'advance', grossAmount: 59.5 }] } });
+  assert.deepEqual(incomingAdvance.command.entry.lines.map((line) => line.accountNumber), ['1600', '1518']);
 });
 
 test('settlement VAT metadata is conserved on economic lines only', () => {
@@ -46,8 +48,9 @@ test('settlement VAT metadata is conserved on economic lines only', () => {
 
 test('settlement totals cannot silently produce an empty or unaccounted journal', () => {
   assert.throws(() => buildSettlementJournalCommand({ kind: 'skonto', source, accounts, facts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 0 } }), /positive journal amount/);
-  assert.throws(() => buildSettlementJournalCommand({ kind: 'bad_debt', source, accounts: { ...accounts, badDebtExpense: undefined }, facts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], writeOffGrossAmount: 119, facts: { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: 'invoice-1', originalDocumentNumber: 'RE-1', originalTaxEffectiveDate: '2026-03-01', adjustmentDate: '2026-03-15', evidenceReference: 'case-1' } } }), /explicit bad-debt expense account/);
-  assert.throws(() => buildSettlementJournalCommand({ kind: 'advance_settlement', source, accounts: { ...accounts, advanceClearing: undefined }, facts: { finalInvoice: { grossAmount: 119, taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] }, advances: [{ id: 'advance-1', kind: 'advance', grossAmount: 119 }] } }), /explicit advance clearing account/);
+  assert.throws(() => buildSettlementJournalCommand({ kind: 'bad_debt', source, accounts: { ...accounts, badDebtExpenseAccount: undefined }, facts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], writeOffGrossAmount: 119, facts: { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: 'invoice-1', originalDocumentNumber: 'RE-1', originalTaxEffectiveDate: '2026-03-01', adjustmentDate: '2026-03-15', evidenceReference: 'case-1' } } }), /explicit bad-debt expense account/);
+  assert.throws(() => buildSettlementJournalCommand({ kind: 'advance_settlement', source, accounts: { ...accounts, advanceClearingReceivable: undefined }, facts: { finalInvoice: { grossAmount: 119, taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] }, advances: [{ id: 'advance-1', kind: 'advance', grossAmount: 119 }] } }), /advanceClearingReceivable/);
+  assert.throws(() => buildSettlementJournalCommand({ kind: 'advance_settlement', source, accounts: { ...accounts, advanceClearingPayable: undefined }, facts: { documentType: 'incoming_invoice', finalInvoice: { grossAmount: 119, taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] }, advances: [{ id: 'advance-1', kind: 'advance', grossAmount: 119 }] } }), /advanceClearingPayable/);
   const fullySettled = buildSettlementJournalCommand({ kind: 'advance_settlement', source, accounts, facts: { finalInvoice: { grossAmount: 119, taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }] }, advances: [{ id: 'advance-1', kind: 'advance', grossAmount: 119 }] } });
   assert.deepEqual(total(fullySettled.command.entry.lines), { debit: 11900, credit: 11900 });
 });

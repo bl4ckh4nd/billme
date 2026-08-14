@@ -114,9 +114,9 @@ const domainTemplate = (kind: AccountingCommandKind, sourceId: string, date: str
     case 'skonto':
       return { taxBreakdown, skontoAmount: 11.9 };
     case 'bad_debt':
-      return { taxBreakdown, writeOffGrossAmount: 119, facts: { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: 'invoice-id', originalDocumentNumber: 'RE-0001', originalTaxEffectiveDate: date, adjustmentDate: date, evidenceReference: 'evidence-reference' } };
+      return { taxBreakdown, writeOffGrossAmount: 119, badDebtExpenseAccount: '2400', facts: { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: 'invoice-id', originalDocumentNumber: 'RE-0001', originalTaxEffectiveDate: date, adjustmentDate: date, evidenceReference: 'evidence-reference' } };
     case 'advance_settlement':
-      return { finalInvoice: { grossAmount: 119, taxBreakdown }, advances: [{ id: 'advance-id', kind: 'advance', grossAmount: 59.5 }] };
+      return { finalInvoice: { grossAmount: 119, taxBreakdown }, advances: [{ id: 'advance-id', kind: 'advance', grossAmount: 59.5 }], advanceClearingReceivable: '1593', advanceClearingPayable: '1518' };
     case 'fiscal_close':
       return { sourceId, sourceRevision: '1', fiscalYear, period, closingDate: date, currency: 'EUR', revenueAccounts: ['8400'], expenseAccounts: ['4900'], retainedEarningsAccount: '9000', balances: [{ accountNumber: '8400', openingBalance: 0, debitTurnover: 0, creditTurnover: 119, closingBalance: -119 }, { accountNumber: '4900', openingBalance: 0, debitTurnover: 100, creditTurnover: 0, closingBalance: 100 }] };
     case 'carry_forward':
@@ -160,8 +160,8 @@ const has = (facts: AccountingDomainFacts, key: string): boolean => Object.proto
 const requiredFactKeys: Partial<Record<AccountingCommandKind, readonly string[]>> = {
   correction: ['id', 'idempotencyKey', 'correctionDate', 'original', 'deltas'],
   skonto: ['taxBreakdown'],
-  bad_debt: ['taxBreakdown', 'writeOffGrossAmount', 'facts'],
-  advance_settlement: ['finalInvoice'],
+  bad_debt: ['taxBreakdown', 'writeOffGrossAmount', 'badDebtExpenseAccount', 'facts'],
+  advance_settlement: ['finalInvoice', 'advanceClearingReceivable', 'advanceClearingPayable'],
   fiscal_close: ['closingDate', 'revenueAccounts', 'expenseAccounts', 'retainedEarningsAccount', 'balances'],
   carry_forward: ['effectiveDate', 'balanceSheetAccounts', 'openingBalanceAccount', 'balances'],
   provision: ['effectiveDate', 'previousAmount', 'targetAmount', 'expenseAccount', 'provisionAccount'],

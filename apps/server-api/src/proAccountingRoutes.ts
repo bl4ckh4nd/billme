@@ -317,11 +317,23 @@ export const closingCommandBodySchema = z.object({
   softLockOverride: z.boolean().optional(),
   overrideReason: z.string().optional(),
 }).passthrough().superRefine((body, ctx) => {
-  if ((body.command ?? body.commandType ?? 'source_fact') !== 'source_fact') return;
-  const source = standaloneAccountingSourceFactSchema.safeParse(body.input);
-  if (source.success) return;
-  for (const issue of source.error.issues) {
-    ctx.addIssue({ ...issue, path: ['input', ...issue.path] });
+  if ((body.command ?? body.commandType ?? 'source_fact') === 'source_fact') {
+    const source = standaloneAccountingSourceFactSchema.safeParse(body.input);
+    if (!source.success) {
+      for (const issue of source.error.issues) {
+        ctx.addIssue({ ...issue, path: ['input', ...issue.path] });
+      }
+    }
+  }
+  if (body.commandType === 'bad_debt' || body.commandType === 'advance_settlement') {
+    const facts = body.input;
+    const required = body.commandType === 'bad_debt' ? ['badDebtExpenseAccount'] : ['advanceClearingReceivable', 'advanceClearingPayable'];
+    for (const key of required) {
+      const value = facts?.[key];
+      if (typeof value !== 'string' || !value.trim()) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['input', key], message: `${key} is required for ${body.commandType}.` });
+      }
+    }
   }
 });
 export const taxExportKindSchema = z.enum(['ustva', 'zm', 'oss']);

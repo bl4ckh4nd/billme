@@ -17,10 +17,12 @@ export interface SettlementJournalAccounts {
   accountsPayable: string;
   revenue: string;
   expense: string;
-  /** Explicit expense account for outgoing bad-debt write-offs. */
-  badDebtExpense?: string;
-  /** Explicit balance-sheet account used when an advance is applied. */
-  advanceClearing?: string;
+  /** Explicit expense account supplied by the settlement domain facts. */
+  badDebtExpenseAccount?: string;
+  /** Explicit clearing account for an outgoing invoice advance. */
+  advanceClearingReceivable?: string;
+  /** Explicit clearing account for an incoming invoice advance. */
+  advanceClearingPayable?: string;
   outputVat: string;
   inputVat: string;
 }
@@ -84,11 +86,15 @@ const settlementLines = (
   const evidenceType = kind === 'bad_debt' ? 'ustg17_bad_debt' : kind;
   const evidenceReference = evidenceReferenceFor(kind, facts, source);
   const lines: JournalLine[] = [];
-  if (kind === 'bad_debt' && !text(accounts.badDebtExpense)) {
+  if (kind === 'bad_debt' && !text(accounts.badDebtExpenseAccount)) {
     throw new CorrectionSettlementError('INVALID_FACTS', 'bad_debt requires an explicit bad-debt expense account');
   }
-  if (kind === 'advance_settlement' && !text(accounts.advanceClearing)) {
-    throw new CorrectionSettlementError('INVALID_FACTS', 'advance_settlement requires an explicit advance clearing account');
+  const advanceClearing = incoming ? accounts.advanceClearingPayable : accounts.advanceClearingReceivable;
+  if (kind === 'advance_settlement' && !text(advanceClearing)) {
+    throw new CorrectionSettlementError(
+      'INVALID_FACTS',
+      `advance_settlement requires an explicit ${incoming ? 'advanceClearingPayable' : 'advanceClearingReceivable'} account`,
+    );
   }
   for (const [index, allocation] of byRate.entries()) {
     const net = euros(allocation.netAmount);
@@ -112,9 +118,9 @@ const settlementLines = (
       // final invoice.
       if (incoming) {
         lines.push({ id: `${kind}:payable:${index + 1}`, accountNumber: accounts.accountsPayable, debitAmount: gross, creditAmount: 0, evidenceType: 'opos', evidenceReference, memo: `${kind} payable` });
-        lines.push({ id: `${kind}:clearing:${index + 1}`, accountNumber: accounts.advanceClearing!, debitAmount: 0, creditAmount: gross, evidenceType: 'opos', evidenceReference, memo: `${kind} advance clearing` });
+        lines.push({ id: `${kind}:clearing:${index + 1}`, accountNumber: advanceClearing!, debitAmount: 0, creditAmount: gross, evidenceType: 'opos', evidenceReference, memo: `${kind} advance clearing` });
       } else {
-        lines.push({ id: `${kind}:clearing:${index + 1}`, accountNumber: accounts.advanceClearing!, debitAmount: gross, creditAmount: 0, evidenceType: 'opos', evidenceReference, memo: `${kind} advance clearing` });
+        lines.push({ id: `${kind}:clearing:${index + 1}`, accountNumber: advanceClearing!, debitAmount: gross, creditAmount: 0, evidenceType: 'opos', evidenceReference, memo: `${kind} advance clearing` });
         lines.push({ id: `${kind}:receivable:${index + 1}`, accountNumber: accounts.accountsReceivable, debitAmount: 0, creditAmount: gross, evidenceType: 'opos', evidenceReference, memo: `${kind} receivable` });
       }
     } else if (incoming) {
@@ -123,7 +129,7 @@ const settlementLines = (
       if (tax > 0) lines.push({ id: `${kind}:tax:${index + 1}`, accountNumber: accounts.inputVat, debitAmount: 0, creditAmount: tax, memo: `${kind} VAT ${taxCaseKey}` });
       lines.push({ id: `${kind}:payable:${index + 1}`, accountNumber: accounts.accountsPayable, debitAmount: gross, creditAmount: 0, evidenceType: 'opos', evidenceReference, memo: `${kind} payable` });
     } else {
-      lines.push({ id: `${kind}:base:${index + 1}`, accountNumber: kind === 'bad_debt' ? accounts.badDebtExpense! : accounts.revenue, debitAmount: net, creditAmount: 0, ...base });
+      lines.push({ id: `${kind}:base:${index + 1}`, accountNumber: kind === 'bad_debt' ? accounts.badDebtExpenseAccount! : accounts.revenue, debitAmount: net, creditAmount: 0, ...base });
       // VAT control lines intentionally carry no economic tax metadata.
       if (tax > 0) lines.push({ id: `${kind}:tax:${index + 1}`, accountNumber: accounts.outputVat, debitAmount: tax, creditAmount: 0, memo: `${kind} VAT ${taxCaseKey}` });
       lines.push({ id: `${kind}:receivable:${index + 1}`, accountNumber: accounts.accountsReceivable, debitAmount: 0, creditAmount: gross, evidenceType: 'opos', evidenceReference, memo: `${kind} receivable` });

@@ -168,6 +168,41 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     db.close();
   });
 
+  it('loads only posted corrections with their own posted journal', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const original = {
+      documentId: 'invoice-1',
+      documentNumber: 'RE-1',
+      revision: 'invoice-r1',
+      snapshotHash: createHash('sha256').update(JSON.stringify({ sourceVersion: 'invoice-r1', vatBreakdown: [{ grossAmount: 119, netAmount: 100, rate: 19, taxAmount: 19 }] })).digest('hex'),
+      taxEffectiveDate: '2026-03-15',
+      taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }],
+    };
+    const first = postAccountingCommand(db, {
+      kind: 'correction', source: source('correction-first'), domainFacts: {
+        id: 'correction-first', idempotencyKey: 'correction-first-key', correctionDate: '2026-03-15', original, deltas: [{ rate: 19, grossAmount: 11.90 }],
+      },
+    }, scope, { reason: 'first correction' });
+    expect(first.status).toBe('posted');
+    const ghostFacts = { id: 'ghost-correction', idempotencyKey: 'ghost-correction-key', correctionDate: '2026-03-15', original, deltas: [{ rate: 19, grossAmount: 100 }] };
+    const insertGhost = db.prepare(`INSERT INTO accounting_source_runs
+      (id, tenant_id, source_type, source_id, source_revision, idempotency_key, fact_json, result_json, status,
+       journal_entry_id, effective_date, posting_date, period, fiscal_year, currency, booking_text, created_at)
+      VALUES (?, 'default', 'standalone_source', ?, 'invoice-r1', ?, ?, '{}', ?, ?, '2026-03-15', '2026-03-15', '2026-03', 2026, 'EUR', 'ghost', datetime('now'))`);
+    const ghostFact = JSON.stringify({ sourceType: 'standalone_source', sourceId: 'ghost-correction', sourceRevision: 'invoice-r1', provenance: { domainFacts: ghostFacts } });
+    insertGhost.run('ghost-rejected', 'ghost-rejected', 'ghost-rejected-key', ghostFact, 'rejected', null);
+    insertGhost.run('ghost-noop', 'ghost-noop', 'ghost-noop-key', JSON.stringify({ sourceType: 'standalone_source', sourceId: 'ghost-noop', sourceRevision: 'invoice-r1', provenance: { domainFacts: ghostFacts } }), 'noop', null);
+    insertGhost.run('ghost-unowned', 'ghost-unowned', 'ghost-unowned-key', ghostFact, 'posted', 'invoice-journal-1');
+    const second = postAccountingCommand(db, {
+      kind: 'correction', source: source('correction-second'), domainFacts: {
+        id: 'correction-second', idempotencyKey: 'correction-second-key', correctionDate: '2026-03-15', original, deltas: [{ rate: 19, grossAmount: 100 }],
+      },
+    }, scope, { reason: 'second correction' });
+    expect(second.status).toBe('posted');
+    db.close();
+  });
+
   it('posts every derived schedule command atomically and ignores submitted lines', () => {
     const db = createDb();
     const scope = createProTenantScope('default');

@@ -173,14 +173,19 @@ test('Pro web client maps correction and settlement workflows to their domain co
     const source = { sourceId: 'source-1', sourceRevision: '1', effectiveDate: '2025-12-31' };
     await client.postAccountingCommand({ kind: 'correction', source, domainFacts: { id: 'correction-1', original: {}, deltas: [] }, reason: 'Korrektur geprüft' });
     await client.postAccountingCommand({ kind: 'skonto', source, domainFacts: { taxBreakdown: [], skontoAmount: 1 }, reason: 'Skonto geprüft' });
-    await client.postAccountingCommand({ kind: 'bad_debt', source, domainFacts: { taxBreakdown: [], writeOffGrossAmount: 1, facts: {} }, reason: 'Ausfall geprüft' });
-    await client.postAccountingCommand({ kind: 'advance_settlement', source, domainFacts: { finalInvoice: { taxBreakdown: [] } }, reason: 'Vorauszahlung geprüft' });
+    await client.postAccountingCommand({ kind: 'bad_debt', source, domainFacts: { taxBreakdown: [], writeOffGrossAmount: 1, badDebtExpenseAccount: '2400', facts: {} }, reason: 'Ausfall geprüft' });
+    await client.postAccountingCommand({ kind: 'advance_settlement', source, domainFacts: { finalInvoice: { taxBreakdown: [] }, advanceClearingReceivable: '1593', advanceClearingPayable: '1518' }, reason: 'Vorauszahlung geprüft' });
     assert.match(calls[0]?.input ?? '', /\/api\/v1\/pro\/accounting\/corrections$/);
     assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), { id: 'correction-1', idempotencyKey: 'source:source-1', correctionDate: '2025-12-31', original: {}, deltas: [], reason: 'Korrektur geprüft' });
     for (const [index, kind] of ['skonto', 'bad_debt', 'advance_settlement'].entries()) {
       assert.match(calls[index + 1]?.input ?? '', /\/api\/v1\/pro\/accounting\/closing$/);
       assert.equal(JSON.parse(String(calls[index + 1]?.init?.body)).commandType, kind);
     }
+    assert.equal(JSON.parse(String(calls[2]?.init?.body)).input.badDebtExpenseAccount, '2400');
+    assert.deepEqual(JSON.parse(String(calls[3]?.init?.body)).input, {
+      finalInvoice: { taxBreakdown: [] }, advanceClearingReceivable: '1593', advanceClearingPayable: '1518', sourceId: 'source-1', sourceRevision: '1',
+      effectiveDate: '2025-12-31', postingDate: '2025-12-31', currency: 'EUR', period: '2025-12', fiscalYear: 2025,
+    });
   } finally {
     globalThis.fetch = previousFetch;
   }

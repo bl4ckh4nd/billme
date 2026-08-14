@@ -7,13 +7,11 @@ import {
   buildInventoryClosingValuation,
   buildProvisionCommand,
   buildJournalCommand,
+  buildSettlementJournalCommand,
   planAccrualSchedule,
   planLoanSchedule,
   validatePayrollBatch,
   validateShareholderFlow,
-  calculateBadDebtWriteOff,
-  calculateInvoiceSettlement,
-  calculateSkontoVatApportionment,
   createLinkedCorrection,
   validateUstg17AdjustmentFacts,
 } from '@billme/accounting-engine';
@@ -24,6 +22,7 @@ import type {
   ImmutableOriginalDocument,
   InvoiceSettlementInput,
   JournalCommand,
+  JournalLine,
   LinkedCorrectionInput,
   SkontoVatApportionmentInput,
   Ustg17AdjustmentFactsInput,
@@ -252,7 +251,7 @@ const postJournal = (
   chart: 'SKR03' | 'SKR04',
 ): { id: string; entry: JournalCommand['entry'] } => {
   const entryId = command.commandId;
-  const sourceKey = keyFor(fact);
+  const sourceKey = command.entry.sourceKey ?? keyFor(fact);
   const entryNumber = Number((db.prepare('SELECT COALESCE(MAX(entry_number), 0) AS n FROM journal_entries WHERE tenant_id = ?').get(tenantId) as { n: number }).n) + 1;
   const createdAt = now();
   db.prepare(`INSERT INTO journal_entries
@@ -266,10 +265,13 @@ const postJournal = (
     (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount, tax_code, tax_case_key,
      tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id, evidence_type,
      evidence_reference, datev_sachverhalt_ll, cost_center, memo)
-    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)`);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   for (const [index, line] of command.entry.lines.entries()) {
     insertLine.run(
-      line.id, tenantId, entryId, index + 1, line.accountNumber, amount(line.debitAmount), amount(line.creditAmount), line.memo ?? null,
+      line.id, tenantId, entryId, index + 1, line.accountNumber, amount(line.debitAmount), amount(line.creditAmount), line.taxCode ?? null,
+      line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null,
+      line.countryCode ?? null, line.counterpartyVatId ?? null, line.evidenceType ?? null, line.evidenceReference ?? null,
+      (line as JournalLine & { datevSachverhaltLl?: string }).datevSachverhaltLl ?? null, line.costCenter ?? null, line.memo ?? null,
     );
   }
   const debits = command.entry.lines.filter((line) => cents(line.debitAmount) > 0);
@@ -292,6 +294,12 @@ const postJournal = (
       debitRemaining -= paired;
       creditRemaining -= paired;
     }
+  }
+  const insertEvidence = db.prepare(`INSERT INTO vat_evidence
+    (id, tenant_id, draft_id, entry_id, line_id, tax_case_key, evidence_type, evidence_reference, country_code, counterparty_vat_id, captured_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  for (const line of command.entry.lines.filter((candidate) => cents(candidate.taxAmount ?? 0) > 0 || Boolean(candidate.taxCaseKey && (candidate.evidenceType || candidate.evidenceReference || candidate.countryCode || candidate.counterpartyVatId)))) {
+    insertEvidence.run(crypto.randomUUID(), tenantId, sourceKey, entryId, line.id, line.taxCaseKey ?? 'standard_vat', line.evidenceType ?? null, line.evidenceReference ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, createdAt);
   }
   return {
     id: entryId,
@@ -343,6 +351,7 @@ const postAccountingSourceInTransaction = (
   fact: AccountingSourceFact,
   scope: TenantScope,
   options: PostAccountingSourceOptions = {},
+  commandOverride?: JournalCommand,
 ): AccountingSourcePostResult => {
   const reason = options.reason?.trim();
   if (!reason) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED: a reason is required for source posting');
@@ -352,7 +361,8 @@ const postAccountingSourceInTransaction = (
   const existing = existingResult(db, tenantId, fact, options);
   if (existing) return existing;
 
-  const domain = buildJournalCommand(fact);
+  const validated = buildJournalCommand(fact);
+  const domain = commandOverride && validated.status === 'ready' ? { ...validated, value: commandOverride } : validated;
   if (domain.status === 'ready') ensureAccountingPeriod(db, tenantId, fact);
   const persistenceErrors = validatePersistence(db, tenantId, fact, chart, options);
   const errors = [...domain.errors, ...persistenceErrors];
@@ -403,7 +413,30 @@ export const getAccountingSourceRun = (db: Database.Database, id: string, scope:
 type DomainBuild = { status: string; errors?: ClosingDomainError[]; value?: any };
 type GeneratedCommands = { result: unknown; commands: JournalCommand[]; status: 'ready' | 'noop' | 'rejected'; errors: ClosingDomainError[] };
 
-const generatedCommands = (kind: AccountingCommandKind, facts: Record<string, unknown>): GeneratedCommands | undefined => {
+const generatedCommands = (kind: AccountingCommandKind, facts: Record<string, unknown>, source?: AccountingSourceFact, accounts?: { accountsReceivable: string; accountsPayable: string; revenue: string; expense: string; outputVat: string; inputVat: string }): GeneratedCommands | undefined => {
+  if (source && accounts && (kind === 'skonto' || kind === 'bad_debt' || kind === 'advance_settlement')) {
+    try {
+      const built = buildSettlementJournalCommand({
+        kind,
+        facts,
+        source: {
+          sourceId: source.sourceId,
+          sourceRevision: source.sourceRevision,
+          effectiveDate: source.effectiveDate,
+          postingDate: source.postingDate,
+          period: source.period,
+          fiscalYear: source.fiscalYear,
+          currency: source.currency,
+          reference: source.reference,
+        },
+        accounts,
+      });
+      return { result: built.result, commands: [built.command], status: 'ready', errors: [] };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Settlement facts are invalid';
+      return { result: cause, commands: [], status: 'rejected', errors: [error('INVALID_AMOUNT', message)] };
+    }
+  }
   let built: DomainBuild;
   switch (kind) {
     case 'fiscal_close': built = buildFiscalClose(facts as any); break;
@@ -562,14 +595,15 @@ export const postAccountingCommand = (
     };
     return postAccountingSource(db, correctionSource, scope, { ...options, provenance: { commandKind: input.kind, domainFacts: { ...facts, original }, ...((options.provenance as Record<string, unknown> | undefined) ?? {}) } });
   }
-  if (input.kind === 'skonto' && facts) calculateSkontoVatApportionment(facts as unknown as SkontoVatApportionmentInput);
-  if (input.kind === 'bad_debt' && facts) calculateBadDebtWriteOff(facts as unknown as BadDebtWriteOffInput);
   if (input.kind === 'ustg17' && facts) validateUstg17AdjustmentFacts(facts as unknown as Ustg17AdjustmentFactsInput);
-  if (input.kind === 'advance_settlement' && facts) calculateInvoiceSettlement(facts as unknown as InvoiceSettlementInput);
-  const generated = facts ? generatedCommands(input.kind, facts) : undefined;
+  const tenantId = getTenantId(scope);
+  const generated = facts
+    ? generatedCommands(input.kind, facts, input.source, (input.kind === 'skonto' || input.kind === 'bad_debt' || input.kind === 'advance_settlement')
+      ? (() => { const mapping = correctionMappings(db, tenantId, activeChart(db, tenantId, options.chart)); return { accountsReceivable: mapping.accounts_receivable, accountsPayable: mapping.accounts_payable, revenue: mapping.revenue, expense: mapping.expense, outputVat: mapping.output_vat, inputVat: mapping.input_vat }; })()
+      : undefined)
+    : undefined;
   const provenance = { commandKind: input.kind, domainFacts: input.domainFacts, ...((options.provenance as Record<string, unknown> | undefined) ?? {}) };
   if (!generated) return postAccountingSource(db, input.source, scope, { ...options, provenance });
-  const tenantId = getTenantId(scope);
   const generatedOptions = { ...options, provenance };
   if (generated.status === 'rejected') {
     const existing = existingResult(db, tenantId, input.source, generatedOptions);
@@ -585,7 +619,7 @@ export const postAccountingCommand = (
   }
   let result: AccountingSourcePostResult | undefined;
   result = db.transaction(() => {
-    for (const command of generated.commands) result = postAccountingSourceInTransaction(db, factFromCommand(command), scope, generatedOptions);
+    for (const command of generated.commands) result = postAccountingSourceInTransaction(db, factFromCommand(command), scope, generatedOptions, command);
     return result!;
   })();
   return result!;

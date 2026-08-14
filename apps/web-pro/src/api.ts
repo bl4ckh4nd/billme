@@ -566,7 +566,7 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       const settlementKinds = new Set(['skonto', 'bad_debt', 'advance_settlement']);
       const commandInput = input.kind === 'standalone'
         ? { ...source, reference: source.reference ?? input.kind }
-        : { ...(facts ?? {}), sourceId, sourceRevision };
+        : { ...(facts ?? {}), sourceId, sourceRevision, ...(settlementKinds.has(input.kind) ? { effectiveDate: source.effectiveDate, postingDate: source.postingDate ?? source.effectiveDate, currency: source.currency ?? 'EUR', period: source.period ?? String(source.effectiveDate ?? '').slice(0, 7), fiscalYear: source.fiscalYear ?? Number(String(source.effectiveDate ?? '').slice(0, 4)) } : {}) };
       const body = {
         ...(commandKinds.has(input.kind) ? { command: input.kind } : {}),
         ...(settlementKinds.has(input.kind) ? { commandType: input.kind } : {}),

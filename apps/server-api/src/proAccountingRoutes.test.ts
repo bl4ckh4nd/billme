@@ -120,6 +120,8 @@ test('new accounting mutation boundaries require reason and idempotency', () => 
   assert.throws(() => taxExportPreparationBodySchema.parse({ kind: 'ustva', period: '2025-01', reason: 'prepare' }));
   assert.throws(() => correctionSettlementBodySchema.parse({ id: 'c1', idempotencyKey: 'k1', correctionDate: '2025-01-31', original: { documentId: 'i1', documentNumber: 'R-1', revision: 'v1', snapshotHash: 'hash', taxEffectiveDate: '2025-01-01', taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19 }] }, deltas: [{ rate: 19, grossAmount: 10 }] }));
   assert.equal(closingCommandBodySchema.parse({ command: 'fiscal_close', sourceId: 'close-1', sourceRevision: 'v1', idempotencyKey: 'close-key', reason: 'Jahresabschluss' }).idempotencyKey, 'close-key');
+  assert.equal(closingCommandBodySchema.parse({ commandType: 'skonto', sourceId: 'settlement-1', sourceRevision: 'v1', idempotencyKey: 'settlement-key', reason: 'Skonto geprüft' }).commandType, 'skonto');
+  assert.throws(() => closingCommandBodySchema.parse({ commandType: 'unsupported', sourceId: 'settlement-1', sourceRevision: 'v1', idempotencyKey: 'settlement-key', reason: 'Ungültig' }));
   assert.equal(taxExportPreparationBodySchema.parse({ kind: 'ustva', period: '2025-01', idempotencyKey: 'tax-key', reason: 'UStVA vorbereiten' }).kind, 'ustva');
 });
 

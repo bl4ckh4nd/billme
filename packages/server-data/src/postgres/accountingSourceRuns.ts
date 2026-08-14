@@ -19,6 +19,7 @@ import {
   buildFxValuation,
   buildInventoryClosingValuation,
   buildJournalCommand,
+  buildSettlementJournalCommand,
   buildProvisionCommand,
   createLinkedCorrection,
   planAccrualSchedule,
@@ -134,6 +135,7 @@ const required = (value: unknown, code: string): string => {
   if (typeof value !== 'string' || !value.trim()) throw new Error(code);
   return value.trim();
 };
+const textValue = (value: unknown): string | undefined => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
 const mapRun = (row: any): AccountingSourceRunRecord => ({
   id: row.id,
@@ -262,7 +264,10 @@ const insertCommand = async (
   const createdAt = now();
   await q(db, `INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'posted',$10,$11,$12)`, [entry.id, tenant(scope), entryNumber, entry.postingDate, entry.documentDate ?? entry.postingDate, entry.bookingText, entry.reference ?? null, entry.period, entry.fiscalYear, entry.sourceType ?? 'standalone_source', entry.sourceKey ?? entry.id, createdAt]);
   for (const [index, line] of entry.lines.entries()) {
-    await q(db, `INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount,tax_case_key,tax_rate,net_amount,tax_amount,gross_amount,country_code,counterparty_vat_id,evidence_type,evidence_reference,datev_sachverhalt_ll,memo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, [`${entry.id}:line:${index + 1}`, tenant(scope), entry.id, index + 1, line.accountNumber, round(line.debitAmount), round(line.creditAmount), line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, line.evidenceType ?? null, line.evidenceReference ?? null, line.datevSachverhaltLl ?? null, line.memo ?? null]);
+    await q(db, `INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount,tax_case_key,tax_rate,net_amount,tax_amount,gross_amount,country_code,counterparty_vat_id,evidence_type,evidence_reference,datev_sachverhalt_ll,memo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, [line.id || `${entry.id}:line:${index + 1}`, tenant(scope), entry.id, index + 1, line.accountNumber, round(line.debitAmount), round(line.creditAmount), line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, line.evidenceType ?? null, line.evidenceReference ?? null, line.datevSachverhaltLl ?? null, line.memo ?? null]);
+  }
+  for (const line of entry.lines.filter((candidate: any) => Number(candidate.taxAmount ?? 0) > 0 || Boolean(candidate.taxCaseKey && (candidate.evidenceType || candidate.evidenceReference || candidate.countryCode || candidate.counterpartyVatId)))) {
+    await q(db, `INSERT INTO vat_evidence (id,tenant_id,draft_id,entry_id,line_id,tax_case_key,evidence_type,evidence_reference,country_code,counterparty_vat_id,captured_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [randomUUID(), tenant(scope), entry.sourceKey ?? entry.id, entry.id, line.id, line.taxCaseKey ?? 'standard_vat', line.evidenceType ?? null, line.evidenceReference ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, createdAt]);
   }
   return entry.id;
 };
@@ -405,6 +410,8 @@ const buildClosingResult = (command: string, input: Record<string, any>): any =>
   }
 };
 
+const settlementDate = (input: Record<string, any>): string => required(input.postingDate ?? input.effectiveDate ?? input.adjustmentDate ?? input.facts?.adjustmentDate ?? input.finalInvoice?.taxEffectiveDate, 'SETTLEMENT_DATE_REQUIRED');
+
 export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryable): AccountingSourceRunRepository => ({
   async listAccountingSourceRuns(scope, args = {}) {
     const values: unknown[] = [tenant(scope)];
@@ -465,7 +472,35 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
     const sourceRevision = required(input.sourceRevision ?? sourceInput.sourceRevision, 'MISSING_SOURCE_REVISION');
     sourceInput.sourceId ??= sourceId;
     sourceInput.sourceRevision ??= sourceRevision;
-    const built = buildClosingResult(commandName, sourceInput);
+    const built = commandName === 'skonto' || commandName === 'bad_debt' || commandName === 'advance_settlement'
+      ? await (async () => {
+        const date = settlementDate(sourceInput);
+        const mappings = await chartAndMappings(db, scope);
+        const settlement = buildSettlementJournalCommand({
+          kind: commandName,
+          facts: sourceInput,
+          source: {
+            sourceId,
+            sourceRevision,
+            effectiveDate: String(sourceInput.effectiveDate ?? date),
+            postingDate: date,
+            period: String(sourceInput.period ?? periodOf(date)),
+            fiscalYear: Number(sourceInput.fiscalYear ?? date.slice(0, 4)),
+            currency: String(sourceInput.currency ?? 'EUR'),
+            reference: textValue(sourceInput.reference),
+          },
+          accounts: {
+            accountsReceivable: mappings.mappings.accounts_receivable,
+            accountsPayable: mappings.mappings.accounts_payable,
+            revenue: mappings.mappings.revenue,
+            expense: mappings.mappings.expense,
+            outputVat: mappings.mappings.output_vat,
+            inputVat: mappings.mappings.input_vat,
+          },
+        });
+        return { status: 'ready', value: { command: settlement.command, result: settlement.result } };
+      })()
+      : buildClosingResult(commandName, sourceInput);
     if (built.status === 'rejected' || built.status === 'invalid') throw new Error(`CLOSING_COMMAND_REJECTED:${built.errors?.[0]?.code ?? 'INVALID'}`);
     const value = built.value ?? built;
     // Source facts and single-command validators return the JournalCommand

@@ -12,6 +12,7 @@ import type {
   AccountingAccountMapping,
   IncomingInvoiceEntity,
 } from '@billme/accounting-shared';
+import { CorrectionSettlementError } from '@billme/accounting-shared';
 import { createPostgresProAccountingRepository, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
 import {
   accountingAccountMappingSchema,
@@ -307,7 +308,7 @@ export const correctionSettlementBodySchema = z.object({
 });
 export const closingCommandBodySchema = z.object({
   command: z.enum(['source_fact', 'fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'shareholder_flow']).optional(),
-  commandType: z.string().optional(),
+  commandType: z.enum(['skonto', 'bad_debt', 'advance_settlement']).optional(),
   sourceId: z.string().min(1).optional(),
   sourceRevision: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1),
@@ -427,6 +428,10 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
       try {
         return await repositoryFor(app).runClosingCommand(session.scope, { ...body, mutation: mutationFor(session, body.reason) });
       } catch (error) {
+        if (error instanceof CorrectionSettlementError) {
+          if (error.code === 'OVER_CREDIT' || error.code === 'IDEMPOTENCY_CONFLICT') throw new ApiError(409, `${error.code}:${error.message}`);
+          throw new ApiError(400, `${error.code}:${error.message}`);
+        }
         if (error instanceof Error && /SOURCE_RUN_CONFLICT|POSTING_DATE_IN_CLOSED_PERIOD|SOFT_LOCK|UNKNOWN_ACCOUNT|FISCAL_YEAR_PERIOD_MISMATCH|AGGREGATE/.test(error.message)) throw new ApiError(409, error.message);
         if (error instanceof Error && /INVALID|REJECTED|REQUIRED|MISSING/.test(error.message)) throw new ApiError(400, error.message);
         throw error;

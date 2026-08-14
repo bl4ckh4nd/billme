@@ -126,6 +126,36 @@ test('source-fact validation rolls back invalid accounts and rejects incomplete 
   }
 });
 
+test('settlement commands derive balanced journal lines, evidence, and replay identity', { skip: !databaseUrl }, async () => {
+  const pool = createPostgresPool(databaseUrl!);
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const tenantId = `source-settlement-${suffix}`;
+  const now = new Date().toISOString();
+  const sourceId = `settlement-${suffix}`;
+  const facts = { effectiveDate: '2025-01-31', postingDate: '2025-01-31', period: '2025-01', fiscalYear: 2025, currency: 'EUR', taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9 };
+  try {
+    await runDrizzleMigrations(pool);
+    await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, tenantId, 'Settlement source', now]);
+    await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
+    await pool.query(`INSERT INTO ledger_accounts (id,chart,account_number,name,source,created_at,updated_at) VALUES ($1,'SKR03','1400','Receivable','test',$2,$2),($3,'SKR03','8400','Revenue','test',$2,$2),($4,'SKR03','1776','Output VAT','test',$2,$2) ON CONFLICT (chart,account_number) DO NOTHING`, [`settlement-1400-${suffix}`, now, `settlement-8400-${suffix}`, `settlement-1776-${suffix}`]);
+    const repository = createPostgresProAccountingRepository(pool);
+    const scope = createSingleTenantScope(tenantId, 'pro');
+    const input = { commandType: 'skonto', sourceId, sourceRevision: 'v1', idempotencyKey: `${sourceId}:v1`, reason: 'Settlement source', input: { ...facts, sourceId, sourceRevision: 'v1' } };
+    const first = await repository.runClosingCommand(scope, input);
+    const replay = await repository.runClosingCommand(scope, input);
+    assert.equal(first.replayed, false);
+    assert.equal(replay.replayed, true);
+    const lines = (await pool.query(`SELECT debit_amount,credit_amount,tax_case_key,evidence_type FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2`, [tenantId, first.run.journalEntryId])).rows;
+    assert.equal(lines.reduce((sum, row) => sum + Math.round(Number(row.debit_amount) * 100), 0), lines.reduce((sum, row) => sum + Math.round(Number(row.credit_amount) * 100), 0));
+    assert.equal(lines.some((row) => row.tax_case_key === 'DE_STD_19' && row.evidence_type === 'skonto'), true);
+    await assert.rejects(() => repository.runClosingCommand(scope, { ...input, sourceId: `${sourceId}-invalid`, idempotencyKey: `${sourceId}-invalid:v1`, input: { ...facts, sourceId: `${sourceId}-invalid`, sourceRevision: 'v1', skontoAmount: 120 } }), /INVALID_AMOUNT|exceeds/);
+    assert.equal((await pool.query(`SELECT COUNT(*)::int AS count FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].count, 1);
+  } finally {
+    await pool.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]).catch(() => undefined);
+    await pool.end();
+  }
+});
+
 test('corrections require a posted original with its document-owned journal', { skip: !databaseUrl }, async () => {
   const pool = createPostgresPool(databaseUrl!);
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;

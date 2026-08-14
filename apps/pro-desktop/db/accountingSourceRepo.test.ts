@@ -173,4 +173,19 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM journal_entries').get()).toEqual({ count: 1 });
     db.close();
   });
+
+  it('derives balanced settlement journals and rejects invalid totals without posting', () => {
+    const db = createDb();
+    const scope = createProTenantScope('default');
+    const facts = { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9 };
+    const posted = postAccountingCommand(db, { kind: 'skonto', source: source('skonto'), domainFacts: facts }, scope, { reason: 'settlement test' });
+    expect(posted.status).toBe('posted');
+    const lines = db.prepare('SELECT debit_amount AS debit, credit_amount AS credit, tax_case_key, evidence_type FROM journal_lines WHERE entry_id = ?').all(posted.sourceRun!.journalEntryId) as Array<{ debit: number; credit: number; tax_case_key: string | null; evidence_type: string | null }>;
+    expect(lines.reduce((sum, line) => sum + Math.round(line.debit * 100), 0)).toBe(lines.reduce((sum, line) => sum + Math.round(line.credit * 100), 0));
+    expect(lines.some((line) => line.tax_case_key === 'DE_STD_19' && line.evidence_type === 'skonto')).toBe(true);
+    const invalid = postAccountingCommand(db, { kind: 'skonto', source: source('skonto-invalid'), domainFacts: { ...facts, skontoAmount: 120 } }, scope, { reason: 'invalid settlement' });
+    expect(invalid.status).toBe('rejected');
+    expect(db.prepare("SELECT COUNT(*) AS count FROM journal_entries WHERE source_key LIKE 'standalone_source:source-1:skonto-invalid'").get()).toEqual({ count: 0 });
+    db.close();
+  });
 });

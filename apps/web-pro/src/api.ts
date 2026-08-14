@@ -543,10 +543,40 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     listAccountingSourceRuns() {
       return requestJson({ parser: parseArray(accountingSourceRunSchema) }, '/api/v1/pro/accounting/source-runs');
     },
-    postAccountingCommand(input: { kind: string; source: unknown; domainFacts?: Record<string, unknown>; reason: string }) {
+    async postAccountingCommand(input: { kind: string; source: unknown; domainFacts?: Record<string, unknown>; reason: string }) {
       const source = input.source as Record<string, unknown>;
-      const command = input.kind === 'standalone' ? 'source_fact' : input.kind;
-      return requestJson({ method: 'POST', body: { command, input: { ...source, reference: source.reference ?? input.kind, ...(input.domainFacts ?? {}) }, sourceId: source.sourceId, sourceRevision: source.sourceRevision, idempotencyKey: `source:${source.sourceId ?? Date.now()}`, reason: input.reason }, parser: (payload) => payload as { run: z.infer<typeof accountingSourceRunSchema>; result: unknown; replayed: boolean } }, '/api/v1/pro/accounting/closing');
+      const facts = input.domainFacts;
+      if (input.kind !== 'standalone' && (!isRecord(facts) || Object.keys(facts).length === 0)) {
+        throw new Error('Domain-Fakten sind für diesen Workflow erforderlich.');
+      }
+      const sourceId = String(source.sourceId ?? '');
+      const sourceRevision = String(source.sourceRevision ?? '1');
+      const idempotencyKey = `source:${sourceId || Date.now()}`;
+      if (input.kind === 'correction') {
+        const correction = {
+          ...(facts ?? {}),
+          id: facts?.id ?? sourceId,
+          idempotencyKey: facts?.idempotencyKey ?? idempotencyKey,
+          correctionDate: facts?.correctionDate ?? source.effectiveDate,
+          reason: input.reason,
+        };
+        return requestJson({ method: 'POST', body: correction, parser: (payload) => payload as { run: z.infer<typeof accountingSourceRunSchema>; result: unknown; replayed: boolean } }, '/api/v1/pro/accounting/corrections');
+      }
+      const commandKinds = new Set(['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'shareholder_flow']);
+      const settlementKinds = new Set(['skonto', 'bad_debt', 'advance_settlement']);
+      const commandInput = input.kind === 'standalone'
+        ? { ...source, reference: source.reference ?? input.kind }
+        : { ...(facts ?? {}), sourceId, sourceRevision };
+      const body = {
+        ...(commandKinds.has(input.kind) ? { command: input.kind } : {}),
+        ...(settlementKinds.has(input.kind) ? { commandType: input.kind } : {}),
+        input: commandInput,
+        sourceId,
+        sourceRevision,
+        idempotencyKey,
+        reason: input.reason,
+      };
+      return requestJson({ method: 'POST', body, parser: (payload) => payload as { run: z.infer<typeof accountingSourceRunSchema>; result: unknown; replayed: boolean } }, '/api/v1/pro/accounting/closing');
     },
     prepareTaxExport(input: { kind: 'ustva' | 'zm' | 'oss'; period: string; year?: number; reason: string; idempotencyKey?: string }) {
       return requestJson({ method: 'POST', body: { ...input, idempotencyKey: input.idempotencyKey ?? `tax:${input.kind}:${input.period}` }, parser: (payload) => payload as { artifact: unknown; run?: unknown; replayed?: boolean } }, '/api/v1/pro/accounting/tax-exports/prepare');

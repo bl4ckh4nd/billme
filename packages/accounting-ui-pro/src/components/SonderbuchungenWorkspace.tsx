@@ -6,14 +6,17 @@ import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
 import type {
   AccountingCommandInput,
   AccountingCommandKind,
-  AccountingSourceFact,
+  AccountingDomainFacts,
+  DomainAccountingSourceFact,
   AccountingSourceRun,
   TaxPreparationKind,
 } from '../sourceRuns';
 
 void React;
 
-const workflows: Array<{ value: AccountingCommandKind; label: string }> = [
+type WorkflowOption = { value: AccountingCommandKind; label: string };
+
+const workflows: WorkflowOption[] = [
   { value: 'correction', label: 'Korrektur / Gutschrift' },
   { value: 'skonto', label: 'Skonto' },
   { value: 'bad_debt', label: 'Forderungsausfall' },
@@ -39,23 +42,56 @@ type FormState = {
   kind: AccountingCommandKind;
   sourceId: string;
   date: string;
-  amount: string;
-  debitAccount: string;
-  creditAccount: string;
-  bookingText: string;
+  domainFacts: string;
   reason: string;
 };
 
-const initialForm = (): FormState => ({
-  kind: 'correction',
-  sourceId: `sonderbuchung-${Date.now()}`,
-  date: new Date().toISOString().slice(0, 10),
-  amount: '',
-  debitAccount: '',
-  creditAccount: '',
-  bookingText: '',
-  reason: '',
-});
+const periodOf = (date: string): string => date.slice(0, 7);
+const yearOf = (date: string): number => Number(date.slice(0, 4));
+
+const domainTemplate = (kind: AccountingCommandKind, sourceId: string, date: string): AccountingDomainFacts => {
+  const period = periodOf(date);
+  const fiscalYear = yearOf(date);
+  const taxBreakdown = [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }];
+  switch (kind) {
+    case 'correction':
+      return { id: `${sourceId}-correction`, idempotencyKey: `${sourceId}:correction:1`, correctionDate: date, taxEffectiveDate: date, documentType: 'outgoing_invoice', original: { documentId: 'invoice-id', documentNumber: 'RE-0001', revision: 'revision-1', snapshotHash: 'snapshot-sha256', taxEffectiveDate: date, taxBreakdown }, deltas: [{ rate: 19, grossAmount: 11.9 }] };
+    case 'skonto':
+      return { taxBreakdown, skontoAmount: 11.9 };
+    case 'bad_debt':
+      return { taxBreakdown, writeOffGrossAmount: 119, facts: { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: 'invoice-id', originalDocumentNumber: 'RE-0001', originalTaxEffectiveDate: date, adjustmentDate: date, evidenceReference: 'evidence-reference' } };
+    case 'advance_settlement':
+      return { finalInvoice: { grossAmount: 119, taxBreakdown }, advances: [{ id: 'advance-id', kind: 'advance', grossAmount: 59.5 }] };
+    case 'fiscal_close':
+      return { sourceId, sourceRevision: '1', fiscalYear, period, closingDate: date, currency: 'EUR', revenueAccounts: ['8400'], expenseAccounts: ['4900'], retainedEarningsAccount: '9000', balances: [{ accountNumber: '8400', openingBalance: 0, debitTurnover: 0, creditTurnover: 119, closingBalance: -119 }, { accountNumber: '4900', openingBalance: 0, debitTurnover: 100, creditTurnover: 0, closingBalance: 100 }] };
+    case 'carry_forward':
+      return { sourceId, sourceRevision: '1', effectiveDate: date, period, fiscalYear, currency: 'EUR', balanceSheetAccounts: ['1200'], openingBalanceAccount: '9000', balances: [{ accountNumber: '1200', openingBalance: 0, debitTurnover: 100, creditTurnover: 0, closingBalance: 100 }] };
+    case 'provision':
+      return { sourceId, sourceRevision: '1', effectiveDate: date, period, fiscalYear, currency: 'EUR', previousAmount: 0, targetAmount: 100, expenseAccount: '6700', provisionAccount: '3070', bookingText: 'Rückstellung' };
+    case 'accrual':
+      return { sourceId, sourceRevision: '1', startDate: date, endDate: `${fiscalYear}-12-01`, period, fiscalYear, currency: 'EUR', totalAmount: 100, expenseAccount: '4900', deferralAccount: '2900' };
+    case 'inventory_closing':
+      return { sourceId, sourceRevision: '1', effectiveDate: date, period, fiscalYear, currency: 'EUR', items: [{ id: 'sku-1', quantity: 2, unitCost: 10, unitMarketValue: 8, inventoryAccount: '1140', expenseAccount: '5880' }] };
+    case 'fx_valuation':
+      return { sourceId, sourceRevision: '1', effectiveDate: date, period, fiscalYear, foreignCurrency: 'USD', functionalCurrency: 'EUR', foreignAmount: 100, closingRate: 0.95, carryingAmount: 90, position: 'asset', positionAccount: '1200', gainAccount: '4840', lossAccount: '6880' };
+    case 'loan_schedule':
+      return { sourceId, sourceRevision: '1', startDate: date, period, fiscalYear, currency: 'EUR', principal: 1000, annualInterestRate: 5, termMonths: 12, liabilityAccount: '1700', interestAccount: '2100', cashAccount: '1200' };
+    case 'payroll_batch':
+      return { batchId: sourceId, sourceRevision: '1', effectiveDate: date, period, fiscalYear, currency: 'EUR', lines: [{ employeeId: 'employee-1', gross: 1000, employeeTaxes: 200, otherDeductions: 50, net: 750, employerContributions: 200 }] };
+    case 'shareholder_flow':
+      return { flowId: sourceId, shareholderId: 'shareholder-1', companyId: 'company-1', amount: 100, flowType: 'capital_contribution', approved: true, purpose: 'Einlage' };
+    default:
+      return {};
+  }
+};
+
+const formatFacts = (kind: AccountingCommandKind, sourceId: string, date: string): string => JSON.stringify(domainTemplate(kind, sourceId, date), null, 2);
+
+const initialForm = (): FormState => {
+  const sourceId = `sonderbuchung-${Date.now()}`;
+  const date = new Date().toISOString().slice(0, 10);
+  return { kind: 'correction', sourceId, date, domainFacts: formatFacts('correction', sourceId, date), reason: '' };
+};
 
 const validDate = (value: string): boolean => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -63,39 +99,70 @@ const validDate = (value: string): boolean => {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const has = (facts: AccountingDomainFacts, key: string): boolean => Object.prototype.hasOwnProperty.call(facts, key) && facts[key] !== undefined && facts[key] !== null;
+const requiredFactKeys: Partial<Record<AccountingCommandKind, readonly string[]>> = {
+  correction: ['id', 'idempotencyKey', 'correctionDate', 'original', 'deltas'],
+  skonto: ['taxBreakdown'],
+  bad_debt: ['taxBreakdown', 'writeOffGrossAmount', 'facts'],
+  advance_settlement: ['finalInvoice'],
+  fiscal_close: ['closingDate', 'revenueAccounts', 'expenseAccounts', 'retainedEarningsAccount', 'balances'],
+  carry_forward: ['effectiveDate', 'balanceSheetAccounts', 'openingBalanceAccount', 'balances'],
+  provision: ['effectiveDate', 'previousAmount', 'targetAmount', 'expenseAccount', 'provisionAccount'],
+  accrual: ['startDate', 'endDate', 'totalAmount', 'expenseAccount', 'deferralAccount'],
+  inventory_closing: ['effectiveDate', 'items'],
+  fx_valuation: ['effectiveDate', 'foreignCurrency', 'functionalCurrency', 'foreignAmount', 'closingRate', 'carryingAmount', 'position', 'positionAccount', 'gainAccount', 'lossAccount'],
+  loan_schedule: ['startDate', 'principal', 'annualInterestRate', 'termMonths', 'liabilityAccount', 'interestAccount', 'cashAccount'],
+  payroll_batch: ['batchId', 'effectiveDate', 'lines'],
+  shareholder_flow: ['flowId', 'shareholderId', 'companyId', 'amount', 'flowType'],
+};
+const arrayFactKeys: Partial<Record<AccountingCommandKind, readonly string[]>> = {
+  correction: ['deltas'],
+  skonto: ['taxBreakdown'],
+  bad_debt: ['taxBreakdown'],
+  fiscal_close: ['revenueAccounts', 'expenseAccounts', 'balances'],
+  carry_forward: ['balanceSheetAccounts', 'balances'],
+  inventory_closing: ['items'],
+  payroll_batch: ['lines'],
+};
+
+const parseDomainFacts = (form: FormState): { facts?: AccountingDomainFacts; errors: string[] } => {
+  let parsed: unknown;
+  try { parsed = JSON.parse(form.domainFacts); } catch { return { errors: ['Domain-Fakten müssen gültiges JSON sein.'] }; }
+  if (!isRecord(parsed)) return { errors: ['Domain-Fakten müssen ein JSON-Objekt sein.'] };
+  const missing = (requiredFactKeys[form.kind] ?? []).filter((key) => !has(parsed, key));
+  if (missing.length) return { errors: [`Domain-Fakten fehlen: ${missing.join(', ')}.`] };
+  const invalidArrays = (arrayFactKeys[form.kind] ?? []).filter((key) => !Array.isArray(parsed[key]));
+  if (invalidArrays.length) return { errors: [`Domain-Fakten müssen Arrays enthalten: ${invalidArrays.join(', ')}.`] };
+  if (form.kind === 'correction' && (!isRecord(parsed.original) || !Array.isArray(parsed.deltas))) return { errors: ['Korrektur benötigt original als Objekt und deltas als Array.'] };
+  if (form.kind === 'bad_debt' && !isRecord(parsed.facts)) return { errors: ['Forderungsausfall benötigt facts als Objekt.'] };
+  if (form.kind === 'advance_settlement' && (!isRecord(parsed.finalInvoice) || !Array.isArray(parsed.finalInvoice.taxBreakdown))) return { errors: ['Vorauszahlung benötigt finalInvoice.taxBreakdown als Array.'] };
+  return { facts: parsed, errors: [] };
+};
+
 const validateForm = (form: FormState): string[] => {
   const errors: string[] = [];
-  const amount = Number(form.amount);
-  if (!Number.isFinite(amount) || amount <= 0) errors.push('Betrag muss größer als 0,00 € sein.');
   if (!validDate(form.date)) errors.push('Datum muss ein gültiges ISO-Datum sein.');
   if (!form.sourceId.trim()) errors.push('Quellbeleg ist erforderlich.');
-  if (!form.debitAccount.trim() || !form.creditAccount.trim()) errors.push('Soll- und Habenkonto sind erforderlich.');
-  if (form.debitAccount.trim() === form.creditAccount.trim()) errors.push('Soll- und Habenkonto müssen verschieden sein.');
-  if (!form.bookingText.trim()) errors.push('Buchungstext ist erforderlich.');
   if (!form.reason.trim()) errors.push('Audit-Grund ist erforderlich.');
+  errors.push(...parseDomainFacts(form).errors);
   return errors;
 };
 
-const toSource = (form: FormState): AccountingSourceFact => {
-  const amount = Number(form.amount);
-  return {
-    sourceType: 'standalone_source',
-    sourceId: form.sourceId.trim(),
-    sourceRevision: '1',
-    effectiveDate: form.date,
-    postingDate: form.date,
-    period: form.date.slice(0, 7),
-    fiscalYear: Number(form.date.slice(0, 4)),
-    currency: 'EUR',
-    bookingText: form.bookingText.trim(),
-    reference: form.kind,
-    lines: [
-      { accountNumber: form.debitAccount.trim(), debitAmount: amount, creditAmount: 0 },
-      { accountNumber: form.creditAccount.trim(), debitAmount: 0, creditAmount: amount },
-    ],
-  };
-};
-
+const toSource = (form: FormState): DomainAccountingSourceFact => ({
+  sourceType: ['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch'].includes(form.kind) ? form.kind as DomainAccountingSourceFact['sourceType'] : 'standalone_source',
+  sourceId: form.sourceId.trim(),
+  sourceRevision: '1',
+  effectiveDate: form.date,
+  postingDate: form.date,
+  period: periodOf(form.date),
+  fiscalYear: yearOf(form.date),
+  currency: 'EUR',
+  bookingText: workflows.find((workflow) => workflow.value === form.kind)?.label ?? form.kind,
+  reference: form.kind,
+  // Domain builders own journal lines. Never turn the generic form into a journal.
+  lines: [],
+});
 type Props = {
   dataAdapter?: ProAccountingDataAdapter;
   role?: UserRole;
@@ -117,7 +184,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   const [exportBusy, setExportBusy] = useState(false);
   const canMutate = permissionContextForRole(role).canMutate;
 
-  const preview = useMemo(() => (form.amount || form.date || form.reason ? validateForm(form) : []), [form]);
+  const preview = useMemo(() => (form.domainFacts || form.date || form.reason ? validateForm(form) : []), [form]);
 
   const refetchHistory = async () => {
     if (!dataAdapter?.listAccountingSourceRuns) return;
@@ -130,6 +197,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   }, [dataAdapter]);
 
   const update = (key: keyof FormState, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const selectWorkflow = (kind: AccountingCommandKind) => setForm((current) => ({ ...current, kind, domainFacts: formatFacts(kind, current.sourceId, current.date) }));
 
   const submit = async () => {
     if (busyRef.current || !dataAdapter?.postAccountingCommand || !canMutate) return;
@@ -137,14 +205,15 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
     setErrors(validation);
     setNotice(null);
     if (validation.length) return;
+    const parsed = parseDomainFacts(form);
+    if (!parsed.facts) return;
     busyRef.current = true;
     setBusy(true);
     try {
       const input: AccountingCommandInput = {
-        // Keep the selected workflow visible to the command handler. The
-        // source fact is only the balanced posting payload, not the command.
         kind: form.kind,
         source: toSource(form),
+        domainFacts: parsed.facts,
         reason: form.reason.trim(),
       };
       const result = await dataAdapter.postAccountingCommand(input);
@@ -152,7 +221,6 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
         setErrors(result.errors.map((error) => error.message));
         return;
       }
-      // Keep local history untouched until the authoritative read succeeds.
       await refetchHistory();
       setNotice(result.status === 'duplicate' ? 'Doppelte Quelle erkannt; bestehender Lauf bleibt maßgeblich.' : 'Sonderbuchung gespeichert und refetched.');
       setForm(initialForm());
@@ -211,16 +279,16 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
     <div className="h-full overflow-y-auto p-4 space-y-4" data-testid="sonderbuchungen-workspace">
       <header>
         <h1 className="text-lg font-black text-foreground">Sonderbuchungen &amp; Abschluss</h1>
-        <p className="text-sm text-muted">Ein gemeinsamer, prüfbarer Source-Run für Korrekturen und Abschlussvorgänge.</p>
+        <p className="text-sm text-muted">Domain-Fakten werden geprüft; die Buchungszeilen erzeugt ausschließlich der gewählte Workflow.</p>
       </header>
 
       {!dataAdapter?.postAccountingCommand ? <p className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-muted" role="status">Source-Run-Adapter nicht verfügbar.</p> : null}
       {!canMutate ? <p className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-muted" role="status">Diese Rolle darf Sonderbuchungen nur lesen.</p> : null}
       <section className="rounded-xl border border-border bg-surface p-4 space-y-3" aria-labelledby="special-entry-form-heading">
-        <h2 id="special-entry-form-heading" className="text-sm font-bold">Vorschau und Buchung</h2>
+        <h2 id="special-entry-form-heading" className="text-sm font-bold">Domain-Fakten und Buchung</h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <label className="flex flex-col gap-1 text-xs font-semibold">Workflow
-            <select aria-label="Workflow" value={form.kind} onChange={(event) => update('kind', event.target.value)} disabled={!canMutate || busy} className="rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal">
+            <select aria-label="Workflow" value={form.kind} onChange={(event) => selectWorkflow(event.target.value as AccountingCommandKind)} disabled={!canMutate || busy} className="rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal">
               {workflows.map((workflow) => <option key={workflow.value} value={workflow.value}>{workflow.label}</option>)}
             </select>
           </label>
@@ -230,17 +298,9 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
           <label className="flex flex-col gap-1 text-xs font-semibold">Buchungsdatum
             <input aria-label="Buchungsdatum" type="date" value={form.date} onChange={(event) => update('date', event.target.value)} disabled={!canMutate || busy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
           </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold">Betrag (EUR)
-            <input aria-label="Betrag" type="number" min="0" step="0.01" value={form.amount} onChange={(event) => update('amount', event.target.value)} disabled={!canMutate || busy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold">Sollkonto
-            <input aria-label="Sollkonto" inputMode="numeric" value={form.debitAccount} onChange={(event) => update('debitAccount', event.target.value)} disabled={!canMutate || busy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold">Habenkonto
-            <input aria-label="Habenkonto" inputMode="numeric" value={form.creditAccount} onChange={(event) => update('creditAccount', event.target.value)} disabled={!canMutate || busy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold sm:col-span-2">Buchungstext
-            <input aria-label="Buchungstext" value={form.bookingText} onChange={(event) => update('bookingText', event.target.value)} disabled={!canMutate || busy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />
+          <label className="flex flex-col gap-1 text-xs font-semibold sm:col-span-2 lg:col-span-3">Domain-Fakten (JSON)
+            <textarea aria-label="Domain-Fakten (JSON)" value={form.domainFacts} onChange={(event) => update('domainFacts', event.target.value)} disabled={!canMutate || busy} rows={12} spellCheck={false} className="rounded-lg border border-border bg-surface-muted px-2 py-2 font-mono text-xs font-normal" />
+            <span className="font-normal text-muted">Vorlage anpassen. Keine generischen Soll-/Habenzeilen; jeder Workflow validiert seine eigenen Fakten.</span>
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold sm:col-span-2 lg:col-span-1">Audit-Grund (Pflicht)
             <input aria-label="Audit-Grund" value={form.reason} onChange={(event) => update('reason', event.target.value)} disabled={!canMutate || busy} className="rounded-lg border border-border px-2 py-2 text-sm font-normal" />

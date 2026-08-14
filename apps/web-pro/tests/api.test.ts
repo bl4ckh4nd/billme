@@ -132,11 +132,56 @@ test('Pro web client preserves EÜR facts and sends typed closing commands', asy
     await client.postAccountingCommand({
       kind: 'fiscal_close',
       source: { sourceId: 'close-1', sourceRevision: '1', bookingText: 'Abschluss' },
+      domainFacts: { closingDate: '2025-12-31', sourceId: 'close-1', sourceRevision: '1' },
       reason: 'Abschluss geprüft',
     });
     const body = JSON.parse(String(calls[1]?.init?.body));
     assert.equal(body.command, 'fiscal_close');
-    assert.equal(body.input.reference, 'fiscal_close');
+    assert.equal(body.input.closingDate, '2025-12-31');
+    assert.equal(body.input.sourceId, 'close-1');
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('Pro web client maps correction and settlement workflows to their domain commands', async () => {
+  const previousFetch = globalThis.fetch;
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input, init) => {
+    calls.push({ input: String(input), init });
+    return new Response(JSON.stringify({ run: { id: `run-${calls.length}`, sourceType: 'standalone_source', sourceId: 'source-1', sourceRevision: '1', status: 'posted', createdAt: '2025-12-31T00:00:00.000Z' }, result: {}, replayed: false }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    const source = { sourceId: 'source-1', sourceRevision: '1', effectiveDate: '2025-12-31' };
+    await client.postAccountingCommand({ kind: 'correction', source, domainFacts: { id: 'correction-1', original: {}, deltas: [] }, reason: 'Korrektur geprüft' });
+    await client.postAccountingCommand({ kind: 'skonto', source, domainFacts: { taxBreakdown: [], skontoAmount: 1 }, reason: 'Skonto geprüft' });
+    await client.postAccountingCommand({ kind: 'bad_debt', source, domainFacts: { taxBreakdown: [], writeOffGrossAmount: 1, facts: {} }, reason: 'Ausfall geprüft' });
+    await client.postAccountingCommand({ kind: 'advance_settlement', source, domainFacts: { finalInvoice: { taxBreakdown: [] } }, reason: 'Vorauszahlung geprüft' });
+    assert.match(calls[0]?.input ?? '', /\/api\/v1\/pro\/accounting\/corrections$/);
+    assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), { id: 'correction-1', idempotencyKey: 'source:source-1', correctionDate: '2025-12-31', original: {}, deltas: [], reason: 'Korrektur geprüft' });
+    for (const [index, kind] of ['skonto', 'bad_debt', 'advance_settlement'].entries()) {
+      assert.match(calls[index + 1]?.input ?? '', /\/api\/v1\/pro\/accounting\/closing$/);
+      assert.equal(JSON.parse(String(calls[index + 1]?.init?.body)).commandType, kind);
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('Pro web client rejects missing or malformed domain facts before fetch', async () => {
+  const previousFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
+    const source = { sourceId: 'close-1', sourceRevision: '1' };
+    await assert.rejects(() => client.postAccountingCommand({ kind: 'fiscal_close', source, reason: 'Fehlerprüfung' }), /Domain-Fakten/);
+    await assert.rejects(() => client.postAccountingCommand({ kind: 'fiscal_close', source, domainFacts: [] as unknown as Record<string, unknown>, reason: 'Fehlerprüfung' }), /Domain-Fakten/);
+    assert.equal(calls, 0);
   } finally {
     globalThis.fetch = previousFetch;
   }

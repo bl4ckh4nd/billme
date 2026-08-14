@@ -35,6 +35,9 @@ export type AccountingSourceFact = {
   lines: SourceFactLine[];
 };
 
+/** Command payload for this workspace: domain builders, not the UI, own lines. */
+export type DomainAccountingSourceFact = Omit<AccountingSourceFact, 'lines'> & { lines: [] };
+
 export type AccountingSourceRun = {
   id: string;
   sourceType: string;
@@ -55,10 +58,13 @@ export type AccountingSourcePostResult = {
 
 export type AccountingCommandInput = {
   kind: AccountingCommandKind;
-  source: AccountingSourceFact;
+  source: DomainAccountingSourceFact;
   domainFacts?: Record<string, unknown>;
   reason: string;
 };
+
+/** Facts for a domain workflow, kept opaque at the transport seam. */
+export type AccountingDomainFacts = Record<string, unknown>;
 
 export type TaxPreparationKind = 'ustva' | 'zm' | 'oss';
 

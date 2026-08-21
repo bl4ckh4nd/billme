@@ -214,7 +214,7 @@ const parseWith = <T>(parser: Parser<T>, input: unknown): T => {
 const parseArray = <T>(itemParser: Parser<T>) => {
   return (input: unknown): T[] => {
     if (!Array.isArray(input)) {
-      throw new Error('Expected array response');
+      throw new Error('Die Serverantwort enthält keine Liste.');
     }
     return input.map((item) => parseWith(itemParser, item));
   };
@@ -222,7 +222,7 @@ const parseArray = <T>(itemParser: Parser<T>) => {
 
 const authSessionInfoParser = (input: unknown) => {
   if (!isRecord(input)) {
-    throw new Error('Expected auth session info');
+      throw new Error('Die Serverantwort enthält keine Sitzungsdaten.');
   }
   return {
     user: authUserSchema.parse(input.user),
@@ -274,7 +274,7 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       const message =
         isRecord(payload) && typeof payload.message === 'string'
           ? payload.message
-          : `Request failed with status ${response.status}`;
+          : `Anfrage fehlgeschlagen (HTTP ${response.status}).`;
       throw new Error(message);
     }
 
@@ -304,7 +304,7 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       const message =
         isRecord(payload) && typeof payload.message === 'string'
           ? payload.message
-          : `Download failed with status ${response.status}`;
+          : `Download fehlgeschlagen (HTTP ${response.status}).`;
       throw new Error(message);
     }
 
@@ -321,7 +321,7 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
     const response = await fetch(buildUrl(baseUrl, path, query), { method: 'GET', headers });
     if (!response.ok) {
       const payload = await response.json().catch(() => null);
-      const message = isRecord(payload) && typeof payload.message === 'string' ? payload.message : `Download failed with status ${response.status}`;
+      const message = isRecord(payload) && typeof payload.message === 'string' ? payload.message : `Download fehlgeschlagen (HTTP ${response.status}).`;
       throw new Error(message);
     }
     return { blob: await response.blob(), headers: response.headers };
@@ -730,7 +730,7 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       return requestJson({ method: 'POST', body: { invoiceId, reason }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/outgoing-invoices/preview');
     },
     postOutgoingInvoice(invoiceId: string, reason: string, reservationId: string, options: Record<string, unknown> = {}) {
-      if (!reservationId.trim()) throw new Error('reservationId is required');
+      if (!reservationId.trim()) throw new Error('Reservierungs-ID fehlt.');
       return requestJson({ method: 'POST', body: { invoiceId, reason, reservationId, ...options }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/outgoing-invoices/post');
     },
     previewIncomingInvoice(invoiceId: string, reason = 'Vorschau') {
@@ -740,11 +740,11 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
       return requestJson({ method: 'POST', body: { invoiceId, reason, ...options }, parser: accountingPostingPreviewSchema }, '/api/v1/pro/accounting/incoming-invoices/post');
     },
     allocateOpenItemPayment(payment: ProOpenItemPaymentInput, reason: string) {
-      if (typeof payment.allocationEventId !== 'string' || !payment.allocationEventId.trim()) throw new Error('allocationEventId is required');
+      if (typeof payment.allocationEventId !== 'string' || !payment.allocationEventId.trim()) throw new Error('Zuordnungs-ID fehlt.');
       return requestJson({ method: 'POST', body: { payment, reason }, parser: (input) => input }, '/api/v1/pro/accounting/open-items/payments');
     },
     allocateRemainingOpenItemPayment(paymentId: string, allocations: unknown, reason: string, allocationEventId: string) {
-      if (!allocationEventId.trim()) throw new Error('allocationEventId is required');
+      if (!allocationEventId.trim()) throw new Error('Zuordnungs-ID fehlt.');
       return requestJson({ method: 'POST', body: { paymentId, allocations, reason, allocationEventId }, parser: (input) => input }, `/api/v1/pro/accounting/open-items/payments/${encodeURIComponent(paymentId)}/remaining`);
     },
     reverseDocumentAccounting(input: unknown, reason: string) {
@@ -781,7 +781,7 @@ export const createProWebClient = ({ baseUrl, getToken }: ProWebClientConfig) =>
         {
           parser: (input) => {
             if (!isRecord(input) || !isRecord(input.byChart)) {
-              throw new Error('Expected ledger stats response');
+              throw new Error('Die Serverantwort enthält keine Kontenbuchdaten.');
             }
             return {
               total: typeof input.total === 'number' ? input.total : 0,

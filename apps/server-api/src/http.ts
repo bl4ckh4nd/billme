@@ -62,7 +62,7 @@ export const registerErrorHandler = (app: FastifyInstance) => {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
       return reply.code(400).send({
-        message: error.issues[0]?.message ?? 'Invalid request payload',
+        message: error.issues[0]?.message ?? 'Ungültige Anfrage.',
         issues: error.issues,
       });
     }
@@ -90,7 +90,7 @@ export const registerErrorHandler = (app: FastifyInstance) => {
 
     request.log.error(error);
     return reply.code(500).send({
-      message: error instanceof Error ? error.message : 'Internal server error',
+      message: error instanceof Error ? error.message : 'Interner Serverfehler.',
     });
   });
 };

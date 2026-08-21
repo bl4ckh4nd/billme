@@ -20,8 +20,8 @@ export const runLiteSmokeScenario = async (page) => {
 
   await expect(page.getByText('Billme Lite Web')).toBeVisible();
   await expect(page.getByText('billme-server-api (fastify)')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Create owner account|Open lite workspace/ })).toBeVisible();
-  await expect(page.getByText(/Bootstrap lite owner|Login/)).toBeVisible();
+  await expect(page.getByRole('button', { name: /Konto anlegen|Lite-Arbeitsbereich öffnen/ })).toBeVisible();
+  await expect(page.getByText(/Lite-Konto einrichten|Anmelden/)).toBeVisible();
 };
 
 export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
@@ -30,19 +30,19 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
 
   await page.goto(state.urls.web, { waitUntil: 'networkidle' });
 
-  const bootstrapButton = page.getByRole('button', { name: 'Create owner account' });
-  const loginButton = page.getByRole('button', { name: 'Open lite workspace' });
+  const bootstrapButton = page.getByRole('button', { name: 'Konto anlegen' });
+  const loginButton = page.getByRole('button', { name: 'Lite-Arbeitsbereich öffnen' });
 
   if (await bootstrapButton.isVisible().catch(() => false)) {
-    await expect(page.getByRole('heading', { name: 'Bootstrap lite owner' })).toBeVisible();
-    await page.getByPlaceholder('Full name').fill(identity.fullName);
-    await page.getByPlaceholder('Email').fill(identity.email);
-    await page.getByPlaceholder('Password').fill(litePassword);
+    await expect(page.getByRole('heading', { name: 'Lite-Konto einrichten' })).toBeVisible();
+    await page.getByPlaceholder('Vollständiger Name').fill(identity.fullName);
+    await page.getByPlaceholder('E-Mail').fill(identity.email);
+    await page.getByPlaceholder('Passwort').fill(litePassword);
     await bootstrapButton.click();
   } else {
-    await expect(page.getByRole('heading', { name: 'Login' })).toBeVisible();
-    await page.getByPlaceholder('Email').fill(identity.email);
-    await page.getByPlaceholder('Password').fill(litePassword);
+    await expect(page.getByRole('heading', { name: 'Anmelden' })).toBeVisible();
+    await page.getByPlaceholder('E-Mail').fill(identity.email);
+    await page.getByPlaceholder('Passwort').fill(litePassword);
     await loginButton.click();
   }
 
@@ -59,12 +59,12 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
   });
 
   await page.getByRole('button', { name: 'Abmelden' }).click();
-  await expect(page.getByRole('heading', { name: 'Login' })).toBeVisible();
-  await expect(page.getByText('You have been signed out.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Anmelden' })).toBeVisible();
+  await expect(page.getByText('Du wurdest abgemeldet.')).toBeVisible();
 
-  await page.getByPlaceholder('Email').fill(identity.email);
-  await page.getByPlaceholder('Password').fill(litePassword);
-  await page.getByRole('button', { name: 'Open lite workspace' }).click();
+  await page.getByPlaceholder('E-Mail').fill(identity.email);
+  await page.getByPlaceholder('Passwort').fill(litePassword);
+  await page.getByRole('button', { name: 'Lite-Arbeitsbereich öffnen' }).click();
 
   await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
   await page.reload({ waitUntil: 'networkidle' });
@@ -78,8 +78,8 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
   await page.goto(state.urls.web, { waitUntil: 'networkidle' });
   await page.goto(liteAppUrl(state, '/documents'), { waitUntil: 'networkidle' });
 
-  await expect(page.getByRole('heading', { name: 'Login' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Open lite workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Anmelden' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Lite-Arbeitsbereich öffnen' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Abmelden' })).toHaveCount(0);
 
   const clearedSession = await page.evaluate((key) => window.localStorage.getItem(key), liteSessionStorageKey);
@@ -116,7 +116,7 @@ export const runLiteRegressionScenario = async (page, scenarioKey = 'regressions
   await page.getByRole('button', { name: 'Export' }).click();
 
   await expect(page.getByText(/PDF Fehler:/)).toBeVisible();
-  await expect(page.getByText(/Billme Lite web shell yet/)).toBeVisible();
+  await expect(page.getByText(/Billme Lite im Browser noch nicht verfügbar/)).toBeVisible();
   await expect(page.getByText(seed.invoices[0].number)).toBeVisible();
 };
 

@@ -48,7 +48,7 @@ const CLIENT_MUTATION_REASON = 'Updated in Billme Lite web shell';
 const CLIENT_DELETE_REASON = 'Deleted in Billme Lite web shell';
 const RECURRING_MUTATION_REASON = 'Updated recurring profile in Billme Lite web shell';
 const RECURRING_DELETE_REASON = 'Deleted recurring profile in Billme Lite web shell';
-const UNSUPPORTED_MESSAGE = 'Not available in Billme Lite web shell yet.';
+const UNSUPPORTED_MESSAGE = 'Diese Funktion ist in Billme Lite im Browser noch nicht verfügbar.';
 
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.replace(/\/+$/, '');
 const toIsoDate = (value: Date): string => value.toISOString().split('T')[0] ?? value.toISOString();
@@ -70,7 +70,7 @@ const parseResponseError = (status: number, payload: unknown): Error => {
   if (payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string') {
     return new Error(payload.message);
   }
-  return new Error(`Request failed with status ${status}`);
+  return new Error(`Anfrage fehlgeschlagen (HTTP ${status}).`);
 };
 
 const toDesktopClient = (client: ServerClientPayload): DesktopClient => ({
@@ -393,7 +393,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
         const parsed = args as IpcArgs<'documents:createFromClient'>;
         const client = await requestNullableClient(parsed.clientId);
         if (!client) {
-          throw new Error('Client not found');
+          throw new Error('Kunde nicht gefunden.');
         }
         const settings = await requestSettings();
         return buildDraftFromClient(parsed.kind, client, settings, () => reserveDocumentNumber(parsed.kind));
@@ -402,7 +402,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
         const parsed = args as IpcArgs<'documents:convertOfferToInvoice'>;
         const offer = await requestNullableOffer(parsed.offerId);
         if (!offer) {
-          throw new Error('Offer not found');
+          throw new Error('Angebot nicht gefunden.');
         }
         const settings = await requestSettings();
         const today = toIsoDate(new Date());
@@ -478,7 +478,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'audit:exportCsv':
         return unsupported();
       case 'pdf:export':
-        return unsupported('PDF export is not available in the Billme Lite web shell yet.');
+        return unsupported('Der PDF-Export ist in Billme Lite im Browser noch nicht verfügbar.');
       case 'window:minimize':
         return parseResult(key, { ok: true as const });
       case 'window:toggleMaximize': {
@@ -577,9 +577,9 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'secrets:get':
         return parseResult(key, null);
       case 'secrets:set':
-        return unsupported('Secure secret storage is not available in the Billme Lite web shell.');
+        return unsupported('Die sichere Ablage von Zugangsdaten ist in Billme Lite im Browser nicht verfügbar.');
       case 'secrets:delete':
-        return unsupported('Secure secret storage is not available in the Billme Lite web shell.');
+        return unsupported('Die sichere Ablage von Zugangsdaten ist in Billme Lite im Browser nicht verfügbar.');
       case 'secrets:has':
         return parseResult(key, false);
       case 'db:backup':
@@ -589,7 +589,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'email:testConfig':
         return parseResult(key, {
           success: false,
-          error: 'Email sending is not available in the Billme Lite web shell yet.',
+          error: 'Der E-Mail-Versand ist in Billme Lite im Browser noch nicht verfügbar.',
         });
       case 'transactions:list':
         return parseResult(key, []);
@@ -600,7 +600,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'dunning:manualRun':
         return parseResult(key, {
           success: false,
-          error: 'Manual dunning runs are not available in the Billme Lite web shell yet.',
+          error: 'Mahnläufe können in Billme Lite im Browser noch nicht manuell gestartet werden.',
         });
       case 'dunning:getInvoiceStatus':
         return parseResult(key, {
@@ -612,7 +612,7 @@ export const createLiteWebBillmeApi = ({ baseUrl, token, onAuthFailure, onReques
       case 'recurring:manualRun':
         return parseResult(key, {
           success: false,
-          error: 'Manual recurring runs are not available in the Billme Lite web shell yet.',
+          error: 'Wiederkehrende Rechnungen können in Billme Lite im Browser noch nicht manuell gestartet werden.',
         });
       case 'updater:getStatus':
         return parseResult(key, { status: 'idle' });

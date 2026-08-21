@@ -50,18 +50,18 @@ const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') 
   const slug = scenarioKey.replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
 
   await page.getByLabel('Firmenname').fill(`Billme Pro ${slug}`);
-  await page.getByLabel('Inhaber oder Geschaeftsfuehrung').fill('Billme Pro Owner');
+  await page.getByLabel('Inhaber oder Geschäftsführung').fill('Billme Pro Owner');
   await page.getByLabel('Strasse und Hausnummer').fill('Teststrasse 1');
   await page.getByLabel('PLZ').fill('10115');
   await page.getByLabel('Stadt').fill('Berlin');
-  await page.getByLabel('E-Mail fuer Angebote und Rechnungen').fill(`pro+${slug}@billme-e2e.local`);
+  await page.getByLabel('E-Mail für Angebote und Rechnungen').fill(`pro+${slug}@billme-e2e.local`);
   await page.getByRole('button', { name: 'Weiter zu Abrechnung' }).click();
 
   await page.getByLabel('Steuernummer').fill('12/345/67890');
   await page.getByLabel('Zahlungsziel in Tagen').fill('14');
   await page.getByLabel('Rechnungs-Praefix').fill('RE-%Y-');
   await page.getByLabel('Angebots-Praefix').fill('ANG-%Y-');
-  await page.getByRole('button', { name: 'Weiter zu Feinschliff' }).click();
+  await page.getByRole('button', { name: 'Weiter zu Weitere Angaben' }).click();
 
   await page.getByLabel('Bankname').fill('Berliner Testbank');
   await page.getByLabel('IBAN').fill('DE12100500001234567890');
@@ -74,7 +74,7 @@ export const runProSmokeScenario = async (page) => {
 
   await page.goto(state.urls.webPro, { waitUntil: 'networkidle' });
 
-  await expect(page.getByText('Billme Pro · Browser Shell')).toBeVisible();
+  await expect(page.getByText('Billme Pro im Browser')).toBeVisible();
   await expect(page.getByRole('button', { name: /Pro-Owner anlegen|In Pro anmelden/ })).toBeVisible();
   await expect(page.getByText('billme-server-api')).toBeVisible();
   await expect(page.getByText(/Noch kein Owner vorhanden|Bereits \d+ Nutzer im Pro-Scope\./)).toBeVisible();
@@ -84,7 +84,7 @@ export const runProAuthRestoreScenario = async (page) => {
   const state = await readServerHarnessState();
   await openProShell(page, state, { route: 'accounting' });
 
-  await expect(page.getByText('Billme Pro · Browser Shell')).toBeVisible();
+  await expect(page.getByText('Billme Pro im Browser')).toBeVisible();
   await page.getByLabel('Vollständiger Name').fill(proOwner.fullName);
   await page.getByLabel('E-Mail').fill(proOwner.email);
   await page.getByLabel('Passwort').fill(proOwner.password);
@@ -109,7 +109,7 @@ export const runProAuthRestoreScenario = async (page) => {
   await expect(page).toHaveURL(/#\/accounting$/);
   await expect(page.getByText(`Sitzung: ${proOwner.fullName}`)).toBeVisible();
 
-  await page.getByRole('button', { name: 'Logout' }).click();
+  await page.getByRole('button', { name: 'Abmelden' }).click();
   await expect(page.getByRole('button', { name: 'In Pro anmelden' })).toBeVisible();
   await expect(page.getByText(/Bereits \d+ Nutzer im Pro-Scope\./)).toBeVisible();
 

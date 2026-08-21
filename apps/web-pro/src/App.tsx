@@ -145,6 +145,30 @@ const formatDate = (value: string | null | undefined) => {
   return new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium' }).format(parsed);
 };
 
+const taxRoleLabels = {
+  output_tax: 'Umsatzsteuer',
+  input_tax: 'Vorsteuer',
+  datev_bu: 'DATEV-BU',
+} as const;
+
+const suggestionFieldLabels = {
+  counterparty: 'Gegenpartei',
+  purpose: 'Verwendungszweck',
+  any: 'Beliebiges Feld',
+} as const;
+
+const suggestionOperatorLabels = {
+  contains: 'enthält',
+  equals: 'ist gleich',
+  startsWith: 'beginnt mit',
+} as const;
+
+const suggestionFlowLabels = {
+  income: 'Einnahme',
+  expense: 'Ausgabe',
+  any: 'Beliebig',
+} as const;
+
 const getApiUrlFromStorage = () => {
   if (typeof window === 'undefined') {
     return DEFAULT_API_URL;
@@ -946,7 +970,7 @@ export default function App() {
       drafts = structuredClone(nextSeed.drafts ?? []);
     };
     const readOnly = (operation: string): never => {
-      throw new Error(`${operation} is unavailable in the legacy snapshot fallback. Reload canonical accounting data.`);
+      throw new Error(`${operation} ist bei alten Workflow-Snapshots nicht verfügbar. Lade die kanonischen Buchhaltungsdaten neu.`);
     };
     const reportFilter = (filters: ReportFilterState) => ({ ...reportDateRange(filters), chart: filters.chart });
     return {
@@ -970,7 +994,7 @@ export default function App() {
         return client.getAccountingJournalEntryById(id);
       },
       async saveDraft(draft: WorkspaceBookingDraft, actorName = 'Web Pro') {
-        if (!canonical) return readOnly('Draft mutation');
+        if (!canonical) return readOnly('Entwurf speichern');
         const saved = await client.saveAccountingDraft(
           mapWorkspaceDraftToEntity(draft, data.sessionInfo.tenantId),
           requireMutationReason(actorName, 'Speichern des Entwurfs'),
@@ -980,7 +1004,7 @@ export default function App() {
         return mapWorkflowDraftToWorkspace(saved);
       },
       async dispatchBookingAction(transactionId: string, action: string, options?: { actorName?: string; rejectReason?: string }) {
-        if (!canonical) return readOnly('Workflow mutation');
+        if (!canonical) return readOnly('Workflow-Aktion');
         const saved = await client.dispatchAccountingDraftAction(
           transactionId,
           action,
@@ -995,25 +1019,25 @@ export default function App() {
         return [];
       },
       reset() {
-        return readOnly('Workspace reset');
+        return readOnly('Arbeitsbereich zurücksetzen');
       },
       async updateExceptionCase(_transactionId: string, _patch: Partial<NonNullable<WorkspaceTransaction['exceptionCase']>>, _actorName: string) {
-        return readOnly('Exception mutation');
+        return readOnly('Ausnahme bearbeiten');
       },
       async assignExceptionOwner(_transactionId: string, _owner: string, _actorName: string) {
-        return readOnly('Exception mutation');
+        return readOnly('Ausnahme bearbeiten');
       },
       async snoozeException(_transactionId: string, _snoozedUntil: string, _actorName: string, _note?: string) {
-        return readOnly('Exception mutation');
+        return readOnly('Ausnahme bearbeiten');
       },
       async resolveException(_transactionId: string, _resolutionNote: string, _actorName: string) {
-        return readOnly('Exception mutation');
+        return readOnly('Ausnahme bearbeiten');
       },
       async reopenException(_transactionId: string, _actorName: string) {
-        return readOnly('Exception mutation');
+        return readOnly('Ausnahme bearbeiten');
       },
       async setTransactionReceiptStatus(_transactionId: string, _hasReceipt: boolean, _actorName: string) {
-        return readOnly('Receipt mutation');
+        return readOnly('Belegstatus ändern');
       },
       listAssets() {
         return client.listAssets();
@@ -1509,7 +1533,7 @@ export default function App() {
 
   const handleCreateSampleWorkflow = async () => {
     if (!data || data.accountingTransactions.length === 0) {
-      setNotice(createNotice('neutral', 'Legacy-Workflow-Snapshots sind im Web nur lesbar.'));
+      setNotice(createNotice('neutral', 'Alte Workflow-Snapshots können im Browser nur angezeigt werden.'));
       return;
     }
     await runAction(async () => {
@@ -1524,27 +1548,27 @@ export default function App() {
     return (
       <main className="auth-shell">
         <section className="auth-hero">
-          <p className="hero-kicker">Billme Pro · Browser Shell</p>
-          <h1>Server-Modus für Pro-Buchhaltung, ohne Electron-Annahmen.</h1>
+          <p className="hero-kicker">Billme Pro im Browser</p>
+          <h1>Pro-Buchhaltung im Serverbetrieb.</h1>
           <p className="hero-copy">
-            Dieses Web-Shell spricht direkt mit der neuen Fastify-API, speichert Sitzungen im Browser und nutzt die
-            geteilten Pro-Domänen für Workflow-, Katalog- und Accounting-Oberflächen.
+            Diese Web-App verbindet sich mit der Fastify-API. Sitzungen bleiben im Browser, die Buchhaltungsdaten
+            liegen auf dem Server.
           </p>
           <div className="hero-metrics">
             <StatCard
               label="Produkte"
               value={authMeta.capabilities?.products.join(' / ') ?? '…'}
-              hint="Pro ist als eigener Auth-Scope aktiv."
+              hint="Der Pro-Bereich ist aktiviert."
             />
             <StatCard
               label="Rollen"
               value={String(authMeta.capabilities?.auth.roles.length ?? 0)}
-              hint="Mehrbenutzerbetrieb ab Tag eins."
+              hint="Mehrere Nutzer können sich anmelden."
             />
             <StatCard
               label="Bootstrap"
               value={authMeta.bootstrapStatus?.bootstrapped ? 'aktiv' : 'offen'}
-              hint="Owner-Setup pro Deployment."
+              hint="Ein Owner richtet die Instanz einmalig ein."
             />
           </div>
         </section>
@@ -1561,7 +1585,7 @@ export default function App() {
             }
           >
             <div className="form-grid two-col compact-grid">
-              <Input label="Server API URL" fullWidth value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} />
+              <Input label="Server-API-URL" fullWidth value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} />
               <div className="meta-chip-row">
                 <span className="meta-chip">{authMeta.health?.service ?? 'Kein Healthcheck'}</span>
                 <span className="meta-chip">{authMeta.health?.backend ?? '—'}</span>
@@ -1584,7 +1608,7 @@ export default function App() {
               <span className="helper-copy">
                 {authMeta.bootstrapStatus?.bootstrapped
                   ? `Bereits ${authMeta.bootstrapStatus.userCount} Nutzer im Pro-Scope.`
-                  : 'Noch kein Owner vorhanden – der erste Login bootstrapped die Pro-Instanz.'}
+                  : 'Noch kein Owner vorhanden. Der erste Login richtet die Pro-Instanz ein.'}
               </span>
             </div>
           </SectionCard>
@@ -1602,8 +1626,8 @@ export default function App() {
     <main className="app-shell">
       <div className="topbar">
         <div>
-          <p className="hero-kicker">Billme Pro Web</p>
-          <h1>Pro-Shell mit HTTP-Transport und Buchhaltungsoberflächen</h1>
+          <p className="hero-kicker">Billme Pro im Browser</p>
+          <h1>Pro-Buchhaltung und Dokumente im Browser</h1>
           <p className="topbar-copy">
             Sitzung: {session.user.fullName} · Scope {data?.sessionInfo.tenantId ?? '—'} · API {apiUrl}
           </p>
@@ -1613,7 +1637,7 @@ export default function App() {
             {loading ? 'Lädt…' : 'Neu laden'}
           </Button>
           <Button variant="ghost" onClick={handleLogout}>
-            Logout
+            Abmelden
           </Button>
         </div>
       </div>
@@ -1621,7 +1645,7 @@ export default function App() {
       <NoticeBanner notice={notice} />
       {loadError ? <NoticeBanner notice={createNotice('danger', loadError)} /> : null}
 
-      <nav className="route-nav" aria-label="Web-Pro Navigation">
+      <nav className="route-nav" aria-label="Pro-Navigation">
         {ROUTES.map((item) => (
           <button
             key={item.id}
@@ -1640,12 +1664,12 @@ export default function App() {
         <>
           {route === 'overview' ? (
             <div className="page-grid">
-              <SectionCard eyebrow="Snapshot" title="Mandant, API und Pro-Abdeckung">
+              <SectionCard eyebrow="Übersicht" title="Mandant, API und Pro-Funktionen">
                 <div className="stats-grid">
                   <StatCard label="Kunden" value={String(activeClients)} hint="aktive Kundensätze" />
                   <StatCard label="Dokumente offen" value={String(openInvoices + openOffers)} hint="Rechnungen + Angebote" />
                   <StatCard label="Ledger" value={String(data.ledgerStats.total)} hint="geladene Kontenrahmen" />
-                  <StatCard label="Workflow" value={String(data.workflowEntries.length)} hint="persistierte Snapshots" />
+                  <StatCard label="Workflow" value={String(data.workflowEntries.length)} hint="gespeicherte Einträge" />
                 </div>
               </SectionCard>
 
@@ -1653,18 +1677,18 @@ export default function App() {
                 <div className="info-list">
                   <div><span>Service</span><strong>{data.health.service}</strong></div>
                   <div><span>Backend</span><strong>{data.capabilities.backend}</strong></div>
-                  <div><span>Deployment</span><strong>{data.capabilities.deploymentMode}</strong></div>
+                  <div><span>Bereitstellung</span><strong>{data.capabilities.deploymentMode}</strong></div>
                   <div><span>Rolle</span><strong>{data.sessionInfo.role}</strong></div>
                   <div><span>Produkte</span><strong>{data.capabilities.products.join(', ')}</strong></div>
                   <div><span>Rollenmodell</span><strong>{data.capabilities.auth.roles.join(', ')}</strong></div>
                 </div>
               </SectionCard>
 
-              <SectionCard eyebrow="Arbeitslast" title="Was diese Shell heute abdeckt">
+              <SectionCard eyebrow="Funktionen" title="Im Browser verfügbar">
                 <ul className="bullet-list">
                   <li>HTTP-Auth gegen den Pro-Scope mit Browser-Session anstelle von Electron IPC.</li>
                   <li>Lesen und Pflegen von Artikeln, Bankkonten, Templates, Settings und Accounting-Regeln.</li>
-                  <li>Persistenz von Pro-Workflow-Snapshots über die neue <code>/api/v1/pro/workflow</code>-API.</li>
+                  <li>Workflow-Einträge über die <code>/api/v1/pro/workflow</code>-API speichern.</li>
                   <li>Export von JSON/CSV-Dokumenten direkt aus der API ohne lokale Dateisystemannahmen.</li>
                 </ul>
               </SectionCard>
@@ -1785,7 +1809,7 @@ export default function App() {
                 {data.clients.length === 0 ? (
                   <EmptyState
                     title="Keine Kunden vorhanden"
-                    body="Die Pro-Shell zeigt hier denselben Kundenbestand wie Desktop/Server-API – ohne lokale SQLite-Abhängigkeit."
+                    body="Die Liste stammt aus Desktop und Server-API. Der Browser greift nicht auf SQLite zu."
                   />
                 ) : (
                   <DataTable>
@@ -1875,12 +1899,12 @@ export default function App() {
                     <span>Kontoart</span>
                     <select value={accountDraft.type} onChange={(event) => setAccountDraft((current) => ({ ...current, type: event.target.value as typeof current.type }))}>
                       <option value="bank">Bank</option>
-                      <option value="checking">Checking</option>
-                      <option value="savings">Savings</option>
+                      <option value="checking">Girokonto</option>
+                      <option value="savings">Sparkonto</option>
                       <option value="paypal">PayPal</option>
-                      <option value="cash">Cash</option>
-                      <option value="credit">Credit</option>
-                      <option value="other">Other</option>
+                      <option value="cash">Bargeld</option>
+                      <option value="credit">Kreditkarte</option>
+                      <option value="other">Sonstiges</option>
                     </select>
                   </label>
                   <Input label="Farbe" fullWidth value={accountDraft.color} onChange={(event) => setAccountDraft((current) => ({ ...current, color: event.target.value }))} />
@@ -1968,16 +1992,16 @@ export default function App() {
 
           {route === 'recurring' ? (
             <div className="page-grid">
-              <SectionCard eyebrow="Recurring" title="Profile und Automatisierungsfenster">
+              <SectionCard eyebrow="Wiederkehrende Rechnungen" title="Profile und Automatisierungsfenster">
                 <div className="stats-grid">
                   <StatCard label="Profile" value={String(data.recurringProfiles.length)} hint="registrierte Serienläufe" />
                   <StatCard
-                    label="Dunning"
+                    label="Mahnwesen"
                     value={data.settings?.automation.dunningEnabled ? 'aktiv' : 'inaktiv'}
                     hint={`Laufzeit ${data.settings?.automation.dunningRunTime ?? '—'}`}
                   />
                   <StatCard
-                    label="Recurring"
+                    label="Wiederkehrende Rechnungen"
                     value={data.settings?.automation.recurringEnabled ? 'aktiv' : 'inaktiv'}
                     hint={`Laufzeit ${data.settings?.automation.recurringRunTime ?? '—'}`}
                   />
@@ -1985,7 +2009,7 @@ export default function App() {
                 {data.recurringProfiles.length === 0 ? (
                   <EmptyState
                     title="Noch keine Wiederholungen"
-                    body="Die Shell zeigt Serverprofile an, greift aber nicht mehr auf lokale Scheduler im Electron-Mainprozess zu."
+                    body="Die Ansicht zeigt Serverprofile. Lokale Scheduler des Electron-Hauptprozesses laufen hier nicht."
                   />
                 ) : (
                   <DataTable>
@@ -2121,7 +2145,7 @@ export default function App() {
                     }
                   />
                   <Input
-                    label="Portal Base URL"
+                    label="Portal-Basis-URL"
                     fullWidth
                     value={settingsDraft.portal.baseUrl}
                     onChange={(event) =>
@@ -2142,32 +2166,32 @@ export default function App() {
           {route === 'accounting' ? (
             <div className="page-grid accounting-grid">
               <SectionCard
-                eyebrow="Accounting"
+                eyebrow="Buchhaltung"
                 title="Ledger, Regeln und Workflow-Snapshots"
                 actions={
                   <Button variant="secondary" onClick={() => void handleCreateSampleWorkflow()} disabled={data.accountingTransactions.length === 0}>
-                    {data.accountingTransactions.length > 0 ? 'Beispiel-Workflow anlegen' : 'Legacy-Snapshots nur lesen'}
+                    {data.accountingTransactions.length > 0 ? 'Beispiel-Workflow anlegen' : 'Alte Snapshots nur lesen'}
                   </Button>
                 }
               >
                 <div className="stats-grid">
-                  <StatCard label="SKR03" value={String(data.ledgerStats.byChart.SKR03)} hint="Konten im Chart" />
-                  <StatCard label="SKR04" value={String(data.ledgerStats.byChart.SKR04)} hint="Konten im Chart" />
-                  <StatCard label="Steuerfälle" value={String(data.taxCases.length)} hint="aktive Compliance-Definitionen" />
+                  <StatCard label="SKR03" value={String(data.ledgerStats.byChart.SKR03)} hint="Konten im Kontenrahmen" />
+                  <StatCard label="SKR04" value={String(data.ledgerStats.byChart.SKR04)} hint="Konten im Kontenrahmen" />
+                  <StatCard label="Steuerfälle" value={String(data.taxCases.length)} hint="aktive Steuerfälle" />
                   <StatCard label="Regeln" value={String(data.suggestionRules.length)} hint="Kontovorschläge" />
                 </div>
                 <p className="helper-copy">
                   {data.accountingTransactions.length > 0
-                    ? 'Die Pro-Workspace-UI liest kanonische Accounting-Daten aus Postgres; Entwürfe, Aktionen und Reports werden über die Accounting-API persistiert.'
-                    : 'Legacy-Workflow-Snapshots sind eine read-only Fallback-Ansicht. Mutationen bleiben deaktiviert, bis kanonische Accounting-Daten verfügbar sind.'}
+                    ? 'Die Pro-Oberfläche liest die Buchhaltungsdaten aus Postgres. Entwürfe, Aktionen und Auswertungen werden über die Accounting-API gespeichert.'
+                    : 'Alte Workflow-Snapshots können nur angezeigt werden. Änderungen sind erst möglich, wenn kanonische Accounting-Daten verfügbar sind.'}
                 </p>
               </SectionCard>
 
-              <SectionCard eyebrow="Steuer-Mapping" title="Tax Cases auf Konten abbilden">
+              <SectionCard eyebrow="Steuer-Mapping" title="Steuerfälle Konten zuordnen">
                 {!canMutateAccountingRules ? <p className="helper-copy" role="status">Ihre Rolle darf Steuer-Mappings nur lesen.</p> : null}
                 <div className="form-grid three-col compact-grid">
                   <label className="select-field">
-                    <span>Chart</span>
+                    <span>Kontenrahmen</span>
                     <select disabled={!canMutateAccountingRules} value={taxMappingDraft.chart} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
                       <option value="SKR03">SKR03</option>
                       <option value="SKR04">SKR04</option>
@@ -2186,13 +2210,13 @@ export default function App() {
                   <label className="select-field">
                     <span>Rolle</span>
                     <select disabled={!canMutateAccountingRules} value={taxMappingDraft.role} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, role: event.target.value as typeof current.role }))}>
-                      <option value="output_tax">Output tax</option>
-                      <option value="input_tax">Input tax</option>
-                      <option value="datev_bu">DATEV BU</option>
+                      <option value="output_tax">Umsatzsteuer</option>
+                      <option value="input_tax">Vorsteuer</option>
+                      <option value="datev_bu">DATEV-BU</option>
                     </select>
                   </label>
-                  <Input disabled={!canMutateAccountingRules} label="Account" fullWidth value={taxMappingDraft.accountNumber} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, accountNumber: event.target.value }))} />
-                  <Input disabled={!canMutateAccountingRules} label="DATEV BU Key" fullWidth value={taxMappingDraft.datevBuKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, datevBuKey: event.target.value }))} />
+                  <Input disabled={!canMutateAccountingRules} label="Konto" fullWidth value={taxMappingDraft.accountNumber} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, accountNumber: event.target.value }))} />
+                  <Input disabled={!canMutateAccountingRules} label="DATEV-BU-Schlüssel" fullWidth value={taxMappingDraft.datevBuKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, datevBuKey: event.target.value }))} />
                 </div>
                 <div className="action-row">
                   <Button disabled={!canMutateAccountingRules} onClick={() => void handleSaveTaxMapping()}>Mapping speichern</Button>
@@ -2202,7 +2226,7 @@ export default function App() {
                     <thead>
                       <tr>
                         <th>Steuerfall</th>
-                        <th>Chart</th>
+                        <th>Kontenrahmen</th>
                         <th>Rolle</th>
                         <th>Konto</th>
                       </tr>
@@ -2212,7 +2236,7 @@ export default function App() {
                         <tr key={mapping.id}>
                           <td>{mapping.taxCaseKey}</td>
                           <td>{mapping.chart}</td>
-                          <td>{mapping.role}</td>
+                          <td>{taxRoleLabels[mapping.role as keyof typeof taxRoleLabels] ?? mapping.role}</td>
                           <td>{mapping.accountNumber}</td>
                         </tr>
                       ))}
@@ -2221,11 +2245,11 @@ export default function App() {
                 </DataTable>
               </SectionCard>
 
-              <SectionCard eyebrow="Kontovorschläge" title="Rule-based Assignment im Browser pflegen">
+              <SectionCard eyebrow="Kontovorschläge" title="Regelbasierte Kontovorschläge im Browser pflegen">
                 {!canMutateAccountingRules ? <p className="helper-copy" role="status">Ihre Rolle darf Vorschlagsregeln nur lesen.</p> : null}
                 <div className="form-grid three-col compact-grid">
                   <label className="select-field">
-                    <span>Chart</span>
+                    <span>Kontenrahmen</span>
                     <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.chart} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
                       <option value="SKR03">SKR03</option>
                       <option value="SKR04">SKR04</option>
@@ -2235,17 +2259,17 @@ export default function App() {
                   <label className="select-field">
                     <span>Feld</span>
                     <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.field} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, field: event.target.value as typeof current.field }))}>
-                      <option value="counterparty">Counterparty</option>
-                      <option value="purpose">Purpose</option>
-                      <option value="any">Any</option>
+                      <option value="counterparty">Gegenpartei</option>
+                      <option value="purpose">Verwendungszweck</option>
+                      <option value="any">Beliebiges Feld</option>
                     </select>
                   </label>
                   <label className="select-field">
-                    <span>Operator</span>
+                    <span>Vergleich</span>
                     <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.operator} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, operator: event.target.value as typeof current.operator }))}>
-                      <option value="contains">contains</option>
-                      <option value="equals">equals</option>
-                      <option value="startsWith">startsWith</option>
+                      <option value="contains">enthält</option>
+                      <option value="equals">ist gleich</option>
+                      <option value="startsWith">beginnt mit</option>
                     </select>
                   </label>
                   <Input disabled={!canMutateAccountingRules} label="Suchwert" fullWidth value={suggestionRuleDraft.value} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, value: event.target.value }))} />
@@ -2257,11 +2281,11 @@ export default function App() {
                     onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, targetAccountNumber: event.target.value }))}
                   />
                   <label className="select-field">
-                    <span>Flow</span>
+                    <span>Art</span>
                     <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.flowType} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, flowType: event.target.value as typeof current.flowType }))}>
-                      <option value="income">income</option>
-                      <option value="expense">expense</option>
-                      <option value="any">any</option>
+                      <option value="income">Einnahme</option>
+                      <option value="expense">Ausgabe</option>
+                      <option value="any">Beliebig</option>
                     </select>
                   </label>
                 </div>
@@ -2273,9 +2297,9 @@ export default function App() {
                     <thead>
                       <tr>
                         <th>Priorität</th>
-                        <th>Match</th>
+                        <th>Treffer</th>
                         <th>Zielkonto</th>
-                        <th>Flow</th>
+                        <th>Art</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -2283,9 +2307,9 @@ export default function App() {
                       {data.suggestionRules.map((rule) => (
                         <tr key={rule.id}>
                           <td>{rule.priority}</td>
-                          <td>{`${rule.field} ${rule.operator} ${rule.value}`}</td>
+                          <td>{`${suggestionFieldLabels[rule.field as keyof typeof suggestionFieldLabels] ?? rule.field} ${suggestionOperatorLabels[rule.operator as keyof typeof suggestionOperatorLabels] ?? rule.operator} ${rule.value}`}</td>
                           <td>{rule.targetAccountNumber}</td>
-                          <td>{rule.flowType}</td>
+                          <td>{suggestionFlowLabels[rule.flowType as keyof typeof suggestionFlowLabels] ?? rule.flowType}</td>
                           <td>
                             <button type="button" className="text-button" disabled={!canMutateAccountingRules} onClick={() => void handleDeleteSuggestionRule(rule.id)}>
                               Löschen
@@ -2298,7 +2322,7 @@ export default function App() {
                 </DataTable>
               </SectionCard>
 
-              <SectionCard eyebrow="Workspace" title="Geteilte Pro-Accounting-Oberfläche im Browser">
+              <SectionCard eyebrow="Arbeitsbereich" title="Pro-Buchhaltung im Browser">
                 {accountingSeed && accountingDataAdapter ? (
                   <div className="workspace-frame">
                     <ProAccountingWorkspace
@@ -2309,7 +2333,7 @@ export default function App() {
                     />
                   </div>
                 ) : (
-                  <EmptyState title="Workspace nicht verfügbar" body="Die Accounting-Daten konnten nicht für die Workspace-Oberfläche bereitgestellt werden." />
+                  <EmptyState title="Arbeitsbereich nicht verfügbar" body="Die Buchhaltungsdaten konnten nicht für den Arbeitsbereich bereitgestellt werden." />
                 )}
               </SectionCard>
             </div>
@@ -2317,7 +2341,7 @@ export default function App() {
         </>
       ) : (
         <SectionCard eyebrow="Ladezustand" title="Pro-Daten werden geladen">
-          <p className="helper-copy">Die Shell verbindet sich mit der Pro-API und hydriert Katalog-, Billing- und Accounting-Surfaces.</p>
+          <p className="helper-copy">Die Pro-API liefert Kataloge, Rechnungen und Buchhaltungsdaten.</p>
         </SectionCard>
       )}
       {showOnboarding ? (
@@ -2326,7 +2350,7 @@ export default function App() {
           onSubmit={handleCompleteOnboarding}
           saving={onboardingSaving}
           productName="Billme Pro"
-          submitLabel="Workspace freischalten"
+          submitLabel="Arbeitsbereich einrichten"
         />
       ) : null}
     </main>

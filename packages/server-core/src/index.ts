@@ -56,7 +56,7 @@ const parseJsonResponse = async <T>(response: Response, schema: z.ZodType<T>): P
     const message =
       payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string'
         ? payload.message
-        : `Request failed with status ${response.status}`;
+        : `Anfrage fehlgeschlagen (HTTP ${response.status}).`;
     throw new Error(message);
   }
   return schema.parse(payload);

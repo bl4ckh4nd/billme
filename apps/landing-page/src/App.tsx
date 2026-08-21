@@ -19,16 +19,16 @@ type ReleaseInfo = {
 
 const benefits = [
   {
-    title: 'Lokal statt Cloud-Zwang',
-    text: 'Deine Daten bleiben auf deinem System. Schnell, direkt und ohne unnötige Abhängigkeiten.',
+    title: 'Lokal arbeiten',
+    text: 'Deine Daten bleiben auf deinem System. Für die tägliche Arbeit brauchst du keine Cloud.',
   },
   {
-    title: 'Rechnungen, Angebote, Workflows',
-    text: 'Von Angebot bis Zahlung: ein klarer Ablauf mit Fokus auf produktive tägliche Nutzung.',
+    title: 'Vom Angebot bis zur Zahlung',
+    text: 'Erstelle Angebote und Rechnungen, ordne Zahlungen zu und verfolge offene Beträge.',
   },
   {
-    title: 'Für Deutschland gedacht',
-    text: 'Funktionen für deutsche Abläufe inklusive optionalem ZUGFeRD EN16931 Export.',
+    title: 'Für deutsche Abläufe',
+    text: 'Billme unterstützt deutsche Rechnungsabläufe, einschließlich eines optionalen ZUGFeRD-Exports nach EN 16931.',
   },
 ];
 
@@ -170,11 +170,11 @@ export default function App() {
                 Lokale Desktop-App für Deutschland
               </p>
               <h1 className="max-w-xl text-4xl font-black leading-tight tracking-tight text-foreground sm:text-5xl lg:text-6xl">
-                Rechnungen schreiben, Angebote versenden, Zahlungen im Blick.
+                Rechnungen schreiben. Ohne deine Daten in die Cloud zu schicken.
               </h1>
               <p className="mt-6 max-w-xl text-lg leading-relaxed text-gray-700">
-                Billme ist für Selbstständige und kleine Teams gebaut, die lieber arbeiten als
-                sich durch komplexe Buchhaltungssoftware zu kämpfen.
+                Billme bringt Angebote, Rechnungen und Zahlungen in eine lokale Desktop-App. Für
+                Selbstständige und kleine Teams, denen eine Tabellenablage nicht mehr reicht.
               </p>
 
               <div className="mt-8 flex flex-wrap items-center gap-4">
@@ -212,7 +212,7 @@ export default function App() {
 
             <Card className="lp-enter lp-enter-delay-1 lp-float overflow-hidden border-dark-border bg-dark-base p-0 text-white shadow-2xl shadow-black/20">
               <div className="border-b border-dark-border p-4">
-                <p className="text-xs font-bold uppercase tracking-[0.12em] text-accent">Produktvorschau</p>
+                <p className="text-xs font-bold uppercase tracking-[0.12em] text-accent">App-Vorschau</p>
               </div>
               <img
                 src="/billme-screenshot.png"
@@ -242,13 +242,13 @@ export default function App() {
         <section id="features" className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
           <div className="grid gap-10 lg:grid-cols-[0.9fr_1.1fr]">
             <div className="lp-enter">
-              <p className="text-sm font-bold uppercase tracking-[0.14em] text-gray-600">Feature-Fokus</p>
+              <p className="text-sm font-bold uppercase tracking-[0.14em] text-gray-600">Was Billme abdeckt</p>
               <h2 className="mt-3 text-3xl font-black tracking-tight sm:text-4xl">
-                Für produktive Abläufe statt Tool-Chaos
+                Die wichtigsten Schritte an einem Ort
               </h2>
               <p className="mt-4 text-base leading-relaxed text-gray-700">
-                Billme bündelt die Schritte, die in kleinen Betrieben jeden Tag zählen: Angebot,
-                Rechnung, Zahlung und Nachverfolgung.
+                Du wandelst Angebote in Rechnungen um, ordnest Zahlungen zu und siehst, welche
+                Beträge noch offen sind.
               </p>
             </div>
 
@@ -268,13 +268,13 @@ export default function App() {
         <section id="gobd" className="bg-dark-base py-16 text-white">
           <div className="mx-auto grid max-w-6xl gap-8 px-4 sm:px-6 lg:grid-cols-2 lg:px-8">
             <div className="lp-enter">
-              <p className="text-sm font-bold uppercase tracking-[0.14em] text-accent">GoBD-orientiert</p>
+              <p className="text-sm font-bold uppercase tracking-[0.14em] text-accent">Dokumentation</p>
               <h2 className="mt-3 text-3xl font-black tracking-tight sm:text-4xl">
-                So unterstützt Billme dich bei sauberer Dokumentation
+                Änderungen an Dokumenten nachvollziehen
               </h2>
               <p className="mt-4 text-base leading-relaxed text-gray-300">
-                Du siehst nachvollziehbar, was geändert wurde. Das hilft dir, Unterlagen ordentlich
-                zu führen und bei Rückfragen vorbereitet zu sein.
+                Billme protokolliert Änderungen an wichtigen Daten mit Zeitstempel. So kannst du
+                den Bearbeitungsverlauf deiner Unterlagen prüfen.
               </p>
             </div>
             <div className="lp-enter lp-enter-delay-1 rounded-3xl border border-dark-border bg-dark-1 p-6">
@@ -318,14 +318,13 @@ export default function App() {
               className="absolute -top-20 -right-12 h-44 w-44 rounded-full bg-accent/40 blur-2xl"
             />
             <p className="relative text-sm font-bold uppercase tracking-[0.14em] text-accent">
-              Startklar in Minuten
+              Billme einrichten
             </p>
             <h2 className="relative mt-3 max-w-2xl text-3xl font-black tracking-tight sm:text-4xl">
-              Lass deine Rechnungsprozesse wieder einfach werden.
+              Erstelle dein erstes Angebot lokal.
             </h2>
             <p className="relative mt-4 max-w-2xl text-base leading-relaxed text-gray-300">
-              Installiere Billme lokal, richte Vorlagen ein und starte mit klaren Workflows vom
-              ersten Angebot bis zur finalen Zahlung.
+              Installiere Billme, richte eine Vorlage ein und erstelle dein erstes Angebot.
             </p>
             <div className="relative mt-8">
               <a

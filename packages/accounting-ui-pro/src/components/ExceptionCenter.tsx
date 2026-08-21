@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, FileSearch, RefreshCw } from 'lucide-react';
-import { getStatusPresentation } from '../domain/selectors';
+import { getFlagLabel, getStatusPresentation } from '../domain/selectors';
 import {
   assignExceptionOwner,
   dispatchBookingAction,
@@ -32,6 +32,12 @@ const filterLabels: Record<ExceptionFilter, string> = {
   duplicates: 'Dubletten',
   period_locked: 'Periode gesperrt',
 };
+
+const exceptionStateLabels = {
+  open: 'Offen',
+  snoozed: 'Pausiert',
+  resolved: 'Erledigt',
+} as const;
 
 function matchesFilter(tx: Transaction, filter: ExceptionFilter) {
   switch (filter) {
@@ -82,7 +88,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
     selectedTx != null && (selectedTx.issueCounts.errors > 0 || selectedTx.issueCounts.warnings > 0 || selectedTx.flags.length > 0);
   const exceptionMarkers = selectedTx
     ? [
-        ...selectedTx.flags,
+        ...selectedTx.flags.map(getFlagLabel),
         selectedTx.issueCounts.errors > 0 ? `${selectedTx.issueCounts.errors} Fehler` : null,
         selectedTx.issueCounts.warnings > 0 ? `${selectedTx.issueCounts.warnings} Warnungen` : null,
       ].filter((marker): marker is string => Boolean(marker))
@@ -97,7 +103,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
               <AlertTriangle size={15} />
             </div>
             <div className="min-w-0">
-              <h1 className="text-sm font-black tracking-tight text-foreground leading-tight">Exception Center</h1>
+              <h1 className="text-sm font-black tracking-tight text-foreground leading-tight">Ausnahmen</h1>
               <p className="text-xs text-muted font-medium leading-tight">Fehler, Warnungen und blockierte Buchungen.</p>
             </div>
           </div>
@@ -144,7 +150,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                 )}
                 {tx.flags.map((flag) => (
                   <span key={flag} className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-border-subtle text-foreground">
-                    {flag}
+                    {getFlagLabel(flag)}
                   </span>
                 ))}
                 {tx.exceptionCase?.state && (
@@ -155,7 +161,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         ? 'bg-info-bg text-info'
                         : 'bg-border-subtle text-foreground'
                   }`}>
-                    {tx.exceptionCase.state}
+                    {exceptionStateLabels[tx.exceptionCase.state]}
                   </span>
                 )}
               </div>
@@ -171,14 +177,14 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
 
       <div className="min-w-0 flex-1 overflow-auto p-6">
         {!selectedTx || !selectedDraft ? (
-          <div className="text-muted">Keine Exception ausgewählt.</div>
+          <div className="text-muted">Keine Ausnahme ausgewählt.</div>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <div className="space-y-4">
               <div className="border border-border rounded-2xl bg-surface p-5">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-xs uppercase tracking-wider text-muted font-bold">Case</div>
+                    <div className="text-xs uppercase tracking-wider text-muted font-bold">Vorgang</div>
                     <div className="font-bold text-lg text-foreground mt-1">{selectedTx.payee}</div>
                     <div className="text-sm text-muted">{selectedTx.description}</div>
                   </div>
@@ -197,7 +203,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                   <div className="text-sm text-success">Keine aktiven Validierungsprobleme.</div>
                 ) : selectedDraft.validationIssues.length === 0 ? (
                   <div className="text-sm text-warning" role="status">
-                    Aktive Exception-Marker: {exceptionMarkers.join(', ')}
+                    Aktive Hinweise: {exceptionMarkers.join(', ')}
                   </div>
                 ) : (
                   <ul className="space-y-2">
@@ -265,14 +271,14 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
               </div>
 
               <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="text-sm font-bold text-foreground mb-3">Exception Resolution Flow</div>
+                <div className="text-sm font-bold text-foreground mb-3">Ausnahme bearbeiten</div>
                 {!canMutateExceptions && <div className="mb-3 text-sm text-muted" role="status">Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.</div>}
                 {mutationError && <div className="mb-3 text-sm text-error" role="alert" aria-live="assertive">{mutationError}</div>}
                 <fieldset disabled={!canMutateExceptions} className="space-y-3">
                 <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
-                      Owner zuweisen
+                      Verantwortliche Person
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -280,7 +286,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         value={ownerDraft}
                         onChange={(e) => setOwnerDraft(e.target.value)}
                         className="flex-1 border border-border rounded-xl px-3 py-2 text-sm"
-                        placeholder="Owner"
+                        placeholder="Name"
                       />
                       <button
                         onClick={() => void (async () => {
@@ -301,7 +307,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
 
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
-                      Snooze bis
+                      Pausiert bis
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -394,11 +400,11 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                     <span className="font-bold text-foreground">{selectedDraft.approval.status}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted">Exception Status</span>
+                    <span className="text-muted">Ausnahmestatus</span>
                     <span className="font-bold text-foreground">{exceptionState === 'snoozed' ? 'Pausiert' : exceptionState === 'resolved' ? 'Erledigt' : 'Offen'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted">Owner</span>
+                    <span className="text-muted">Verantwortliche Person</span>
                     <span className="font-bold text-foreground">{selectedTx.exceptionCase?.owner ?? '—'}</span>
                   </div>
                   {selectedTx.exceptionCase?.snoozedUntil && (

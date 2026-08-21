@@ -102,7 +102,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
             [
               { view: 'inbox', label: 'Inbox' },
               { view: 'reconciliation', label: 'Abgleich' },
-              { view: 'exceptions', label: 'Exceptions' },
+              { view: 'exceptions', label: 'Ausnahmen' },
               ...(assetsAvailable ? [{ view: 'assets' as const, label: 'Anlagen' }] : []),
               { view: 'reports', label: 'Auswertungen' },
               { view: 'opos', label: 'OPOS' },

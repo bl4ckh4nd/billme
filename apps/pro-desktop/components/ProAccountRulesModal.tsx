@@ -135,7 +135,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
         <div className="flex items-center justify-between border-b border-gray-200 p-6">
           <div>
             <h3 className="text-lg font-bold text-gray-900">Kontierungsvorschlag-Regeln</h3>
-            <p className="text-xs text-gray-500">Regeln fuer {chartFramework}</p>
+            <p className="text-xs text-gray-500">Regeln für {chartFramework}</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 transition-colors">
             <X size={20} />
@@ -191,7 +191,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                     onChange={(e) => setTargetAccountNumber(e.target.value)}
                     className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
                   >
-                    <option value="">Bitte waehlen...</option>
+                    <option value="">Bitte wählen ...</option>
                     {accounts.map((acc) => (
                       <option key={acc.id} value={acc.accountNumber}>
                         {acc.accountNumber} - {acc.name}
@@ -200,7 +200,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Flow</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Art</label>
                   <select
                     value={flowType}
                     onChange={(e) => setFlowType(e.target.value as RuleFlow)}
@@ -212,7 +212,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Prioritaet</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Priorität</label>
                   <input
                     type="number"
                     min={0}
@@ -245,7 +245,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
             <div className="text-center py-8 text-gray-500">
               <Settings2 size={40} className="mx-auto mb-3 opacity-40" />
               <p className="text-sm font-medium">Keine Regeln vorhanden</p>
-              <p className="text-xs mt-1">Erstellen Sie Regeln fuer automatische Konto-Vorschlaege.</p>
+              <p className="text-xs mt-1">Erstellen Sie Regeln für automatische Kontovorschläge.</p>
             </div>
           ) : (
             <div className="space-y-2">

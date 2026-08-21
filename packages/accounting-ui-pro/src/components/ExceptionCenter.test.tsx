@@ -46,6 +46,6 @@ describe('ExceptionCenter', () => {
     );
 
     expect(screen.queryByText('Keine aktiven Validierungsprobleme.')).toBeNull();
-    expect(screen.getByText(/Aktive Exception-Marker: missing_receipt/)).toBeTruthy();
+    expect(screen.getByText(/Aktive Hinweise: Ohne Beleg/)).toBeTruthy();
   });
 });

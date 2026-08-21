@@ -20,8 +20,8 @@ test('keeps exception mutations unavailable for the read-only Pro adapter', asyn
 
   await page.goto(appUrl(baseUrl, '/accounting'));
   await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
-  await page.getByRole('button', { name: 'Exceptions' }).click();
-  await expect(page.getByRole('heading', { name: 'Exception Center' })).toBeVisible();
+  await page.getByRole('button', { name: 'Ausnahmen' }).click();
+  await expect(page.getByRole('heading', { name: 'Ausnahmen' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Ohne Beleg' }).click();
   await expect(page.getByText('Keine Einträge für den Filter.')).toHaveCount(0);

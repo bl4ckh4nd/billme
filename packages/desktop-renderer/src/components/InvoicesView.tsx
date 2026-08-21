@@ -274,7 +274,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         await queryClient.invalidateQueries({ queryKey: ['offers'] });
         setTimeout(() => setShowShareToast(false), 3000);
       } catch (e) {
-        setToastMessage(`Portal Fehler: ${String(e)}`);
+        setToastMessage(`Portalfehler: ${String(e)}`);
         setTimeout(() => setShowShareToast(false), 5000);
       }
     })();
@@ -290,7 +290,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const handleOpenOfferLink = () => {
     const url = getOfferPublicUrl();
     if (!url) {
-      setToastMessage('Portal-URL fehlt – bitte in Einstellungen → Portal hinterlegen.');
+      setToastMessage('Portal-URL fehlt. Hinterlege sie in Einstellungen unter Portal.');
       setShowShareToast(true);
       setTimeout(() => setShowShareToast(false), 4000);
       return;
@@ -299,7 +299,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       try {
         await ipc.shell.openExternal({ url });
       } catch (e) {
-        setToastMessage(`Link Fehler: ${String(e)}`);
+        setToastMessage(`Link konnte nicht geöffnet werden: ${String(e)}`);
         setShowShareToast(true);
         setTimeout(() => setShowShareToast(false), 5000);
       }
@@ -310,14 +310,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!selectedDocument) return;
     void (async () => {
       try {
-        setToastMessage('Portal Status wird synchronisiert...');
+        setToastMessage('Portalstatus wird synchronisiert ...');
         setShowShareToast(true);
         const res = await ipc.portal.syncOfferStatus({ offerId: selectedDocument.id });
         await queryClient.invalidateQueries({ queryKey: ['offers'] });
         setToastMessage(res.updated ? 'Status aktualisiert' : 'Keine Änderung');
         setTimeout(() => setShowShareToast(false), 2500);
       } catch (e) {
-        setToastMessage(`Sync Fehler: ${String(e)}`);
+        setToastMessage(`Synchronisierung fehlgeschlagen: ${String(e)}`);
         setTimeout(() => setShowShareToast(false), 5000);
       }
     })();
@@ -365,7 +365,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       setEmailData({
           to: selectedDocument.clientEmail,
           subject: `${documentType === 'invoice' ? 'Rechnung' : 'Angebot'} ${selectedDocument.number}`,
-          message: `Sehr geehrte Damen und Herren,\n\nanbei erhalten Sie ${documentType === 'invoice' ? 'Ihre Rechnung' : 'Ihr Angebot'} ${selectedDocument.number}.\n\nMit freundlichen Grüßen,\n${signature}`
+          message: `Guten Tag,\n\nanbei erhalten Sie ${documentType === 'invoice' ? 'Ihre Rechnung' : 'Ihr Angebot'} ${selectedDocument.number}.\n\nMit freundlichen Grüßen,\n${signature}`
       });
       setIsEmailModalOpen(true);
   };
@@ -417,7 +417,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             });
           }
 
-          setToastMessage('E-Mail erfolgreich versendet!');
+          setToastMessage('E-Mail wurde versendet.');
           setTimeout(() => setShowShareToast(false), 3000);
         } catch (e) {
           setToastMessage(`Fehler: ${String(e)}`);
@@ -612,7 +612,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                         disabled={validSelectedForDunning.length === 0 || isDunningProcessing}
                         size="md"
                       >
-                          {isDunningProcessing ? 'Sende...' : `${validSelectedForDunning.length} Mahnungen versenden`}
+                          {isDunningProcessing ? 'Wird gesendet ...' : `${validSelectedForDunning.length} Mahnungen versenden`}
                       </Button>
                   </div>
               </div>
@@ -1026,7 +1026,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                   if (!selectedDocument.shareToken) return;
                                   const baseUrl = settings.portal.baseUrl?.trim();
                                   if (!baseUrl) {
-                                    setToastMessage('Portal-URL fehlt – bitte in Einstellungen → Portal hinterlegen.');
+                                    setToastMessage('Portal-URL fehlt. Hinterlege sie in Einstellungen unter Portal.');
                                     setShowShareToast(true);
                                     setTimeout(() => setShowShareToast(false), 4000);
                                     return;

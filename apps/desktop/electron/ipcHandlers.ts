@@ -393,7 +393,7 @@ export const registerIpcHandlers = (
 
     if (kind === 'offer') {
       const offer = getOffer(db, id);
-      if (!offer) throw new Error('Offer not found');
+      if (!offer) throw new Error('Angebot nicht gefunden.');
       const res = await exportPdf({
         kind: 'offer',
         id,
@@ -404,7 +404,7 @@ export const registerIpcHandlers = (
     }
 
     const invoice = getInvoice(db, id);
-    if (!invoice) throw new Error('Invoice not found');
+    if (!invoice) throw new Error('Rechnung nicht gefunden.');
     const res = await exportPdf({
       kind: 'invoice',
       id,
@@ -470,7 +470,7 @@ export const registerIpcHandlers = (
     ];
 
     if (!allowedRoots.some((root) => resolved === root || resolved.startsWith(root + path.sep))) {
-      throw new Error('Refusing to open path outside app userData folders');
+      throw new Error('Dieser Pfad liegt außerhalb der App-Datenordner.');
     }
 
     const result = await shell.openPath(resolved);
@@ -493,10 +493,10 @@ export const registerIpcHandlers = (
     try {
       parsed = new URL(url);
     } catch {
-      throw new Error('Invalid URL');
+      throw new Error('Ungültige URL.');
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error('Only http(s) URLs are allowed');
+      throw new Error('Es sind nur http(s)-Adressen erlaubt.');
     }
     await shell.openExternal(parsed.toString(), { activate: true });
     return { ok: true };
@@ -640,11 +640,11 @@ export const registerIpcHandlers = (
     const db = requireDb();
 
     const offer = getOffer(db, offerId);
-    if (!offer) throw new Error('Offer not found');
+    if (!offer) throw new Error('Angebot nicht gefunden.');
 
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
 
     const res = await publishOfferToPortal(db, {
       offerId,
@@ -682,7 +682,7 @@ export const registerIpcHandlers = (
 
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
 
     const result = await syncPublishedOfferDecisionFromPortal(db, {
       offerId,
@@ -698,11 +698,11 @@ export const registerIpcHandlers = (
     const db = requireDb();
 
     const invoice = getInvoice(db, invoiceId);
-    if (!invoice) throw new Error('Invoice not found');
+    if (!invoice) throw new Error('Rechnung nicht gefunden.');
 
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
 
     const apiKey = await secrets.get('portal.apiKey');
     const token = crypto.randomBytes(24).toString('base64url');
@@ -730,7 +730,7 @@ export const registerIpcHandlers = (
     const db = requireDb();
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
     const apiKey = await secrets.get('portal.apiKey');
     return portalClient.createCustomerAccessLink({ baseUrl, apiKey, customerRef, customerLabel, expiresInDays });
   });
@@ -739,7 +739,7 @@ export const registerIpcHandlers = (
     const db = requireDb();
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
     const apiKey = await secrets.get('portal.apiKey');
     return portalClient.rotateCustomerAccessLink({ baseUrl, apiKey, customerRef, customerLabel, expiresInDays });
   });
@@ -827,14 +827,14 @@ export const registerIpcHandlers = (
     if (!settings || !settings.email) {
       return {
         success: false,
-        error: 'Email settings not configured',
+        error: 'E-Mail-Einstellungen fehlen.',
       };
     }
 
     if (settings.email.provider === 'none') {
       return {
         success: false,
-        error: 'No email provider configured. Please configure SMTP or Resend in Settings.',
+        error: 'Kein E-Mail-Anbieter eingerichtet. Konfiguriere SMTP oder Resend unter Einstellungen.',
       };
     }
 
@@ -843,7 +843,7 @@ export const registerIpcHandlers = (
     if (!document) {
       return {
         success: false,
-        error: `${documentType === 'invoice' ? 'Invoice' : 'Offer'} not found`,
+        error: `${documentType === 'invoice' ? 'Rechnung' : 'Angebot'} nicht gefunden.`,
       };
     }
 
@@ -855,7 +855,7 @@ export const registerIpcHandlers = (
     } catch (e) {
       return {
         success: false,
-        error: `Failed to generate PDF: ${String(e)}`,
+        error: `PDF konnte nicht erstellt werden: ${String(e)}`,
       };
     }
 

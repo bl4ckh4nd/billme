@@ -90,10 +90,10 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                 <AlertTriangle size={32} className="text-error" />
               </div>
               <h1 className="text-3xl font-bold text-gray-900 mb-2">
-                Fehler aufgetreten
+                Diese Ansicht konnte nicht geladen werden
               </h1>
               <p className="text-gray-600">
-                Die Anwendung ist auf einen Fehler gestoßen.
+                Billme hat beim Laden der Ansicht einen Fehler festgestellt.
               </p>
             </div>
 
@@ -126,8 +126,8 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
               {this.state.errorCount > 2 && (
                 <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                   <p className="text-xs text-yellow-800 font-medium">
-                    ⚠️ Mehrere Fehler erkannt ({this.state.errorCount}).
-                    Ein Neustart wird empfohlen.
+                    Mehrere Fehler erkannt ({this.state.errorCount}).
+                    Bitte starte die Anwendung neu.
                   </p>
                 </div>
               )}
@@ -166,9 +166,8 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
             {/* Support Info */}
             <div className="mt-8 p-4 bg-info-bg border border-info/30 rounded-lg">
               <p className="text-xs text-info">
-                <strong>Tipp:</strong> Wenn dieser Fehler weiterhin auftritt,
-                versuchen Sie den Browser-Cache zu leeren oder wenden Sie sich
-                an den Support.
+                <strong>Nächster Schritt:</strong> Starte die Anwendung neu. Wenn der Fehler wieder auftritt,
+                sende die Fehlerdetails an den Support.
               </p>
             </div>
           </div>

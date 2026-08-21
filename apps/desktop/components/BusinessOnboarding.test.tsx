@@ -18,8 +18,8 @@ describe('BusinessOnboarding reporting profile', () => {
     fireEvent.change(screen.getByLabelText('Steuernummer'), { target: { value: '12/345/67890' } });
     fireEvent.change(screen.getByLabelText('Rechtsform'), { target: { value: 'gmbh' } });
     expect(screen.getByLabelText('Gewinnermittlung')).toHaveValue('double_entry');
-    fireEvent.click(screen.getByRole('button', { name: /Weiter zu Feinschliff/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Einrichtung abschliessen/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Weiter zu Weitere Angaben/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Einrichtung abschließen/i }));
 
     expect(onSubmit).toHaveBeenCalledOnce();
     expect(onSubmit.mock.calls[0]?.[0].businessReportingProfile).toMatchObject({

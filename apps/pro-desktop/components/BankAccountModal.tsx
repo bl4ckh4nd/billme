@@ -67,7 +67,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
       setFormData({ name: '', iban: '', balance: '0', defaultSkrAccountNumber: '' });
     } catch (error) {
       console.error('Failed to create account:', error);
-      setError('Fehler beim Erstellen des Kontos');
+      setError('Konto konnte nicht erstellt werden. Prüfe die Eingaben und versuche es erneut.');
     } finally {
       setIsSaving(false);
     }

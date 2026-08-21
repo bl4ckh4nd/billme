@@ -66,7 +66,7 @@ export const MOCK_SETTINGS: AppSettings = {
         daysAfterDueDate: 7,
         fee: 0,
         subject: 'Zahlungserinnerung zur Rechnung %N',
-        text: 'Sicherlich haben Sie in der Hektik des Alltags übersehen, unsere Rechnung %N vom %D zu begleichen. Wir bitten Sie, den fälligen Betrag innerhalb der nächsten 7 Tage zu überweisen.'
+        text: 'Die Rechnung %N vom %D ist noch offen. Bitte überweisen Sie den fälligen Betrag innerhalb von 7 Tagen.'
       },
       {
         id: 2,

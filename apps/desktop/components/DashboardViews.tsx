@@ -523,7 +523,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
           </div>
 
           <div className="flex-1 flex flex-col justify-end gap-4">
-              <h4 className="font-bold text-sm text-gray-900">Top Einnahmequellen</h4>
+              <h4 className="font-bold text-sm text-gray-900">Wichtigste Einnahmequellen</h4>
               
               <div className="space-y-3">
                   {topCategories.length === 0 ? (
@@ -567,8 +567,8 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
               <div className="mt-5 p-4 rounded-2xl border border-gray-100 bg-gray-50">
                 <div className="flex items-center justify-between mb-2">
                   <div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Pipeline (Angebote)</p>
-                    <p className="text-sm font-bold text-gray-900">Potenzial (Netto)</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Offene Angebote</p>
+                    <p className="text-sm font-bold text-gray-900">Nettowert</p>
                   </div>
                   <div className="text-lg font-mono font-bold text-gray-900">{formatCurrency(offerPipeline.potentialNet)}</div>
                 </div>
@@ -613,7 +613,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
                     onClick={() =>
                       onNavigate(`documents?kind=invoice&id=${encodeURIComponent(item.invoiceId)}`)
                     }
-                    title={`${item.invoiceNumber} — ${item.client}`}
+                    title={`${item.invoiceNumber}, ${item.client}`}
                   >
                       <div className="min-w-0">
                           <p className="text-xs font-bold opacity-60 mb-0.5">{formatDate(item.date)}</p>
@@ -1428,7 +1428,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
             <div className="flex items-center justify-between mb-8">
                 <div>
                     <h3 className="font-bold text-2xl text-gray-900 dark:text-gray-100 mb-1">Vorlagen</h3>
-                    <p className="text-sm text-gray-500">Gestalten Sie Ihre Geschäftsdokumente.</p>
+                    <p className="text-sm text-gray-500">Lege das Layout deiner Geschäftsdokumente fest.</p>
                 </div>
                 <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-full flex items-center">
                     <button 

@@ -200,7 +200,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
 
   // Simplified menu items for top nav (text only typically looks cleaner in top bars)
   const menuItems = [
-    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'dashboard', label: 'Übersicht' },
     { id: 'clients', label: 'Kunden' },
     { id: 'projects', label: 'Projekte' },
     { id: 'documents', label: 'Dokumente' },

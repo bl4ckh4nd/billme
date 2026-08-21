@@ -102,14 +102,14 @@ const STEPS: StepDefinition[] = [
     id: 'billing',
     label: 'Abrechnung',
     title: 'Lege deine Abrechnungslogik fest',
-    description: 'Steuer, Zahlungsziel und Nummernkreise sorgen dafuer, dass deine Dokumente direkt einsatzbereit sind.',
+    description: 'Hier legst du Steuer, Zahlungsziel und Nummernkreise für deine Dokumente fest.',
     eyebrow: 'Schritt 2',
   },
   {
     id: 'details',
-    label: 'Feinschliff',
-    title: 'Ergaenze Zahlungs- und Kontaktdaten',
-    description: 'Diese Felder sind optional, machen deine Unterlagen aber sofort professioneller.',
+    label: 'Weitere Angaben',
+    title: 'Ergänze Zahlungs- und Kontaktdaten',
+    description: 'Diese Felder sind optional. Sie ergänzen die Angaben auf deinen Dokumenten.',
     eyebrow: 'Schritt 3',
   },
 ];
@@ -253,7 +253,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
   onSubmit,
   saving = false,
   productName = 'Billme',
-  submitLabel = 'Einrichtung abschliessen',
+  submitLabel = 'Einrichtung abschließen',
 }) => {
   const [draft, setDraft] = React.useState(() => withReportingProfile(initialData));
   const [stepIndex, setStepIndex] = React.useState(() => getInitialStepIndex(initialData));
@@ -377,10 +377,10 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                 Ersteinrichtung
               </p>
               <h1 className="mt-3 max-w-[12rem] text-[2rem] font-semibold leading-tight">
-                {productName} startklar machen
+                {productName} einrichten
               </h1>
               <p className="mt-4 max-w-[15rem] text-sm leading-6 text-white/72">
-                In wenigen Schritten ist dein Workspace bereit fuer gebrandete Angebote und Rechnungen.
+                Trage die Daten ein, die auf deinen Angeboten und Rechnungen erscheinen sollen.
               </p>
             </div>
 
@@ -393,7 +393,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                 <span className="pb-1 text-sm text-white/60">eingetragen</span>
               </div>
               <p className="mt-3 text-sm leading-6 text-white/68">
-                Sobald Firmenkopf, Steuerdaten und Dokumentdefaults stehen, kannst du direkt loslegen.
+                Sobald Firmenkopf, Steuerdaten und Dokumentvorgaben ausgefüllt sind, kannst du Dokumente erstellen.
               </p>
             </div>
 
@@ -437,12 +437,12 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
 
             <div className="mt-auto hidden rounded-[1.5rem] border border-white/10 bg-black/20 p-4 lg:block">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/50">
-                Danach bist du bereit fuer
+                Danach kannst du
               </p>
               <ul className="mt-4 space-y-2 text-sm text-white/72">
-                <li>- gebrandete Angebote</li>
-                <li>- saubere Rechnungsnummern</li>
-                <li>- klare Zahlungsziele</li>
+                <li>Angebote mit deinen Firmendaten erstellen</li>
+                <li>Rechnungsnummern vergeben</li>
+                <li>Zahlungsziele verwenden</li>
               </ul>
             </div>
           </div>
@@ -479,7 +479,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     error={errors['company.name']}
                   />
                   <Input
-                    label="Inhaber oder Geschaeftsfuehrung"
+                    label="Inhaber oder Geschäftsführung"
                     fullWidth
                     value={draft.company.owner}
                     onChange={(event) => updateCompany('owner', event.target.value)}
@@ -514,7 +514,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   />
                   <div className="md:col-span-2">
                     <Input
-                      label="E-Mail fuer Angebote und Rechnungen"
+                      label="E-Mail für Angebote und Rechnungen"
                       fullWidth
                       type="email"
                       value={draft.company.email}
@@ -528,7 +528,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                 <div className="rounded-[1.5rem] border border-border bg-surface p-5">
                   <p className="text-sm font-semibold text-foreground">Warum wir das jetzt abfragen</p>
                   <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-                    Diese Angaben bilden deinen Firmenkopf. Ohne sie sehen Dokumente schnell unfertig aus oder muessen spaeter nachbearbeitet werden.
+                    Diese Angaben bilden den Firmenkopf deiner Dokumente. Ohne sie fehlen wichtige Absenderdaten.
                   </p>
                 </div>
               </div>
@@ -577,7 +577,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     <div className="max-w-xl">
                       <p className="text-sm font-semibold text-foreground">Steuerprofil</p>
                       <p className="mt-2 text-sm leading-6 text-muted">
-                        Waehle direkt die passende Steuerlogik, damit deine ersten Dokumente korrekt vorbereitet sind.
+                        Wähle die Steuerlogik für deine Dokumente.
                       </p>
                     </div>
                     <label className="inline-flex min-h-11 items-center gap-3 rounded-full border border-border bg-surface-muted px-4 py-2 text-sm font-medium text-foreground">
@@ -610,7 +610,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   <div>
                     <p className="text-sm font-semibold text-foreground">Berichtsprofil</p>
                     <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-                      Diese Auswahl steuert, welche deutschen Berichte und Kontenlogik angeboten werden. Österreich und Schweiz sind derzeit nicht unterstützt.
+                      Diese Auswahl legt fest, welche deutschen Berichte und Kontenlogik angeboten werden. Österreich und die Schweiz werden derzeit nicht unterstützt.
                     </p>
                   </div>
 
@@ -775,7 +775,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                 </section>
 
                 <section className="rounded-[1.7rem] border border-border bg-surface p-5">
-                  <p className="text-sm font-semibold text-foreground">Was nach dem Setup steht</p>
+                  <p className="text-sm font-semibold text-foreground">Zusammenfassung</p>
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
                     <div className="rounded-[1.2rem] bg-surface-muted px-4 py-3">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Firmenkopf</p>
@@ -813,8 +813,8 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-muted">
                 {stepIndex === STEPS.length - 1
-                  ? 'Du kannst spaeter weitere Einstellungen im Bereich Einstellungen ergaenzen.'
-                  : 'Pflichtfelder helfen dir, direkt professionelle Dokumente zu erstellen.'}
+                  ? 'Weitere Einstellungen findest du später im Bereich Einstellungen.'
+                  : 'Die Pflichtfelder werden für deine Dokumente benötigt.'}
               </p>
               <div className="flex flex-col gap-3 sm:flex-row">
                 {stepIndex > 0 && (
@@ -822,7 +822,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     variant="secondary"
                     onClick={() => setStepIndex((current) => Math.max(current - 1, 0))}
                   >
-                    Zurueck
+                    Zurück
                   </Button>
                 )}
                 {stepIndex < STEPS.length - 1 ? (
@@ -831,7 +831,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   </Button>
                 ) : (
                   <Button onClick={() => void handleSubmit()} disabled={saving}>
-                    {saving ? 'Speichere Einrichtung...' : submitLabel}
+                    {saving ? 'Einrichtung wird gespeichert ...' : submitLabel}
                   </Button>
                 )}
               </div>

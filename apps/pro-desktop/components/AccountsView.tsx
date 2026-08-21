@@ -121,7 +121,7 @@ export function AccountsView(): ReactElement {
       }
     } catch (error) {
       console.error('CSV import failed:', error);
-      setCsvImportError('Import fehlgeschlagen. Bitte versuchen Sie es später erneut.');
+      setCsvImportError('CSV-Import fehlgeschlagen. Prüfe Datei und Spaltenzuordnung.');
     }
   };
 

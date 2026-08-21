@@ -48,7 +48,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
   const runtime = React.useMemo(() => getBillmeRuntimeConfig(), []);
   const visibleMenuItems = React.useMemo(() => {
     const allItems = [
-      { id: 'dashboard', label: 'Dashboard' },
+      { id: 'dashboard', label: 'Übersicht' },
       { id: 'clients', label: 'Kunden' },
       { id: 'projects', label: 'Projekte' },
       { id: 'documents', label: 'Dokumente' },

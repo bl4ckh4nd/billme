@@ -92,7 +92,7 @@ export const INITIAL_INVOICE_TEMPLATE: InvoiceElement[] = [
     x: 20 * MM_TO_PX,
     y: 115 * MM_TO_PX,
     zIndex: 10,
-    content: 'Sehr geehrte Damen und Herren,\n\nvielen Dank für Ihren Auftrag. Wir berechnen Ihnen für unsere Leistungen wie folgt:',
+    content: 'Guten Tag,\n\nvielen Dank für Ihren Auftrag. Hier finden Sie die Rechnung für unsere Leistungen:',
     style: { ...DEFAULT_TEXT_STYLE, fontSize: 11, width: 700, height: 50 },
     label: 'intro_text',
   },
@@ -197,7 +197,7 @@ export const INITIAL_OFFER_TEMPLATE: InvoiceElement[] = [
     }
     // Modify Intro
     if (el.label === 'intro_text') {
-      return { ...el, content: 'Sehr geehrte Damen und Herren,\n\ngerne unterbreiten wir Ihnen freibleibend folgendes Angebot:' };
+      return { ...el, content: 'Guten Tag,\n\nhier ist unser freibleibendes Angebot für die angefragten Leistungen:' };
     }
     // Modify Meta Info (Replace Service Period with Valid Until)
     if (el.label === 'invoice_meta') {
@@ -205,7 +205,7 @@ export const INITIAL_OFFER_TEMPLATE: InvoiceElement[] = [
     }
     // Modify Terms
     if (el.label === 'payment_terms') {
-      return { ...el, content: 'Wir freuen uns auf Ihre Auftragserteilung.\nBei Rückfragen stehen wir Ihnen gerne zur Verfügung.' };
+      return { ...el, content: 'Wenn Sie das Angebot annehmen möchten oder Fragen haben, melden Sie sich bitte.' };
     }
     return el;
   }),

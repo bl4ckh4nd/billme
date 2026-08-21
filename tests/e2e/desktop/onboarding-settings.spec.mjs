@@ -36,15 +36,15 @@ test('completes the onboarding flow from an empty company profile', async () => 
 
   await page.goto(appUrl(baseUrl, '/'));
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Billme startklar machen' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Billme einrichten' })).toBeVisible();
 
   await page.getByLabel('Firmenname').fill('Browser Test GmbH');
   await page.getByRole('button', { name: 'Weiter zu Abrechnung' }).click();
-  await page.getByRole('button', { name: 'Weiter zu Feinschliff' }).click();
+  await page.getByRole('button', { name: 'Weiter zu Weitere Angaben' }).click();
   await page.getByRole('button', { name: 'Zu Angeboten und Rechnungen' }).click();
 
   await expect(page.getByRole('button', { name: 'Dokumente' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Billme startklar machen' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Billme einrichten' })).toHaveCount(0);
 });
 
 test('saves company settings and shows the saved toast', async () => {

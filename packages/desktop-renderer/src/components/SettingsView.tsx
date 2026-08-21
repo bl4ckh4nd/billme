@@ -308,7 +308,7 @@ export const SettingsView: React.FC = () => {
 
       setEmailTestStatus({
         success: result.success,
-        message: result.success ? 'Verbindung erfolgreich!' : (result.error || 'Test fehlgeschlagen'),
+        message: result.success ? 'Verbindung erfolgreich.' : (result.error || 'Verbindungstest fehlgeschlagen.'),
       });
     } catch (error) {
       setEmailTestStatus({
@@ -916,7 +916,7 @@ export const SettingsView: React.FC = () => {
                   placeholder={smtpPasswordConfigured ? '•••••••• (gespeichert)' : '••••••••'}
                     className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none transition-shadow"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Wird sicher im System-Keychain gespeichert</p>
+                  <p className="text-xs text-gray-500 mt-1">Wird sicher im Schlüsselbund des Systems gespeichert.</p>
                 </div>
                 <div>
                   <button
@@ -929,7 +929,7 @@ export const SettingsView: React.FC = () => {
                     }
                     className="px-4 py-2 bg-info text-white rounded-lg hover:bg-info/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
-                    {emailTesting ? 'Teste Verbindung...' : 'Verbindung testen'}
+                    {emailTesting ? 'Verbindung wird geprüft ...' : 'Verbindung testen'}
                   </button>
                   {emailTestStatus && (
                     <div className={`mt-3 p-3 rounded-lg ${emailTestStatus.success ? 'bg-success-bg text-success' : 'bg-error-bg text-error'}`}>
@@ -965,7 +965,7 @@ export const SettingsView: React.FC = () => {
                     placeholder={resendApiKeyConfigured ? 're_*** (gespeichert)' : 're_***'}
                     className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none transition-shadow"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Wird sicher im System-Keychain gespeichert</p>
+                  <p className="text-xs text-gray-500 mt-1">Wird sicher im Schlüsselbund des Systems gespeichert.</p>
                 </div>
                 <div>
                   <button
@@ -973,7 +973,7 @@ export const SettingsView: React.FC = () => {
                     disabled={emailTesting || (!resendApiKey && !resendApiKeyConfigured)}
                     className="px-4 py-2 bg-info text-white rounded-lg hover:bg-info/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
-                    {emailTesting ? 'Teste API-Key...' : 'API-Key testen'}
+                    {emailTesting ? 'API-Schlüssel wird geprüft ...' : 'API-Schlüssel testen'}
                   </button>
                   {emailTestStatus && (
                     <div className={`mt-3 p-3 rounded-lg ${emailTestStatus.success ? 'bg-success-bg text-success' : 'bg-error-bg text-error'}`}>
@@ -1109,7 +1109,7 @@ export const SettingsView: React.FC = () => {
                   className="w-full px-4 py-3 bg-orange-600 text-white rounded-xl hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-bold flex items-center justify-center gap-2"
                 >
                   <Megaphone size={16} />
-                  {dunningRunning ? 'Läuft...' : 'Jetzt manuell ausführen'}
+                  {dunningRunning ? 'Läuft ...' : 'Jetzt manuell ausführen'}
                 </button>
               </div>
             )}
@@ -1489,7 +1489,7 @@ export const SettingsView: React.FC = () => {
             </div>
 
             <div className="bg-white border border-gray-100 rounded-3xl p-6">
-              <h4 className="font-bold text-sm mb-2">Umsatzsteuer-Basis (Dashboard)</h4>
+              <h4 className="font-bold text-sm mb-2">Umsatzsteuer-Basis (Übersicht)</h4>
               <p className="text-xs text-gray-500 mb-4">
                 Soll: basiert auf gestellten Rechnungen (Status ≠ Entwurf) nach Rechnungsdatum. Ist: basiert auf erfassten Zahlungen nach Zahlungsdatum.
               </p>
@@ -1538,13 +1538,13 @@ export const SettingsView: React.FC = () => {
         return (
           <div className="max-w-2xl space-y-8 animate-enter">
             <div>
-              <h3 className="text-xl font-bold mb-1">Offer Portal</h3>
+              <h3 className="text-xl font-bold mb-1">Angebotsportal</h3>
               <p className="text-gray-500 text-sm">Angebotslinks veröffentlichen und Status synchronisieren.</p>
             </div>
 
             <div className="bg-white border-2 border-gray-100 rounded-3xl p-6 space-y-6">
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Portal Base URL</label>
+                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Portal-Basis-URL</label>
                 <input
                   type="text"
                   value={settings.portal.baseUrl}
@@ -1552,11 +1552,11 @@ export const SettingsView: React.FC = () => {
                   placeholder="https://offers.example.com"
                   className="w-full bg-gray-50 border-gray-200 rounded-xl p-4 font-bold text-gray-900 focus:ring-2 focus:ring-accent outline-none transition-shadow"
                 />
-                <p className="text-xs text-gray-400 mt-2">Tipp: Setup-Seite im Portal: <span className="font-mono">/admin/setup</span></p>
+                <p className="text-xs text-gray-400 mt-2">Tipp: Einrichtungsseite im Portal: <span className="font-mono">/admin/setup</span></p>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Publish API Key (optional)</label>
+                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Publish-API-Schlüssel (optional)</label>
                 <input
                   type="password"
                   value={portalApiKey}
@@ -1566,8 +1566,8 @@ export const SettingsView: React.FC = () => {
                   }}
                   placeholder={
                     portalApiKeyConfigured
-                      ? '(gespeichert im OS Keychain, zum Ersetzen eingeben)'
-                      : '(im OS Keychain gespeichert)'
+                      ? '(im System-Schlüsselbund gespeichert, zum Ersetzen eingeben)'
+                      : '(im System-Schlüsselbund gespeichert)'
                   }
                   className="w-full bg-gray-50 border-gray-200 rounded-xl p-4 font-bold text-gray-900 focus:ring-2 focus:ring-accent outline-none transition-shadow"
                 />
@@ -1577,9 +1577,9 @@ export const SettingsView: React.FC = () => {
                 <button
                   onClick={async () => {
                     try {
-                      setPortalTestStatus('Prüfe Verbindung...');
+                      setPortalTestStatus('Verbindung wird geprüft ...');
                       const baseUrl = settings.portal.baseUrl.trim();
-                      if (!baseUrl) throw new Error('Base URL fehlt');
+                      if (!baseUrl) throw new Error('Portal-Basis-URL fehlt.');
                       const res = await ipc.portal.health({ baseUrl });
                       setPortalTestStatus(res.ok ? `OK (${res.ts})` : 'Fehler');
                     } catch (e) {

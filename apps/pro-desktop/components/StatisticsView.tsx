@@ -308,7 +308,7 @@ export const StatisticsView: React.FC = () => {
 
           {/* Top Customers List */}
           <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm flex flex-col">
-              <h3 className="font-bold text-xl mb-6">Top Kunden</h3>
+              <h3 className="font-bold text-xl mb-6">Kunden mit dem höchsten Umsatz</h3>
               <div className="flex-1 overflow-y-auto pr-2 space-y-4">
                   {topClients.map((client, idx) => (
                       <div key={idx} className="flex items-center gap-4 group">

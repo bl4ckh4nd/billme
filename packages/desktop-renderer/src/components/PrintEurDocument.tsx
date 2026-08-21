@@ -165,7 +165,7 @@ const PrintEurInner: React.FC<Props> = ({ taxYear, from, to }) => {
 
         {/* Footer */}
         <div style={styles.footer}>
-          Erstellt am {new Date().toLocaleDateString('de-DE')} — Billme
+          Erstellt am {new Date().toLocaleDateString('de-DE')} · Billme
         </div>
       </div>
     </>

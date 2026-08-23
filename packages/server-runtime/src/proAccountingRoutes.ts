@@ -7,6 +7,7 @@ import type {
   ProDraftActionRequest,
   TenantScope,
 } from '@billme/server-core';
+import { filterEurListItems } from '@billme/server-core';
 import type {
   AccountingBackfillConfirmation,
   AccountingAccountMapping,
@@ -124,12 +125,25 @@ export const eurReportQuerySchema = z.object({
   taxYear: z.coerce.number().int().refine((year) => year === 2025 || year === 2026, 'Unsupported EÜR year').optional(),
   from: z.string().optional(),
   to: z.string().optional(),
+  onlyUnclassified: z.union([z.boolean(), z.enum(['true', 'false']).transform((value) => value === 'true')]).optional(),
+  sourceType: z.enum(['transaction', 'invoice']).optional(),
+  flowType: z.enum(['income', 'expense']).optional(),
+  status: z.enum(['all', 'unclassified', 'classified', 'excluded']).optional(),
+  search: z.string().optional(),
+  accountId: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(1000).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
 }).superRefine((value, ctx) => {
   const year = value.taxYear ?? 2025;
   if (value.taxYear === undefined && (value.from?.startsWith('2026-') || value.to?.startsWith('2026-'))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['taxYear'], message: 'taxYear is required for 2026' });
   if (value.from !== undefined && value.from !== `${year}-01-01`) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['from'], message: `EÜR requires ${year}-01-01.` });
   if (value.to !== undefined && value.to !== `${year}-12-31`) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['to'], message: `EÜR requires ${year}-12-31.` });
-}).transform((value) => ({ ...(value.taxYear === undefined ? {} : { taxYear: value.taxYear }), from: value.from ?? `${value.taxYear ?? 2025}-01-01`, to: value.to ?? `${value.taxYear ?? 2025}-12-31` }));
+}).transform((value) => ({
+  ...value,
+  ...(value.taxYear === undefined ? {} : { taxYear: value.taxYear }),
+  from: value.from ?? `${value.taxYear ?? 2025}-01-01`,
+  to: value.to ?? `${value.taxYear ?? 2025}-12-31`,
+}));
 export const eurClassificationBodySchema = z.object({
   sourceType: z.enum(['transaction', 'invoice']),
   sourceId: z.string().min(1),
@@ -164,6 +178,14 @@ export const datevExportQuerySchema = z.object({
 });
 const datevExportQuery = datevExportQuerySchema;
 const asOfDate = z.object({ asOfDate: z.string().optional(), chart: z.enum(['SKR03', 'SKR04']).optional(), profile: z.string().trim().min(1).optional() });
+const eurCsvCell = (value: string): string => /[;"\n\r]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+const eurCsvAmount = (value: number): string => (Math.round((value + Number.EPSILON) * 100) / 100).toFixed(2).replace('.', ',');
+const buildEurCsv = (report: Awaited<ReturnType<typeof getServerEurReport>>): string => {
+  const rows = report.rows
+    .filter((row) => row.exportable)
+    .map((row) => [row.kennziffer ?? '', eurCsvCell(row.label), eurCsvAmount(row.total)].join(';'));
+  return `\uFEFF${['Kennziffer;Bezeichnung;Betrag', ...rows].join('\n')}`;
+};
 export const csvEscape = (value: unknown): string => {
   const text = String(value ?? '');
   return /[;",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -507,9 +529,10 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
       try {
-        return query.taxYear === 2026
+        const items = query.taxYear === 2026
           ? await listServerEurCashItems(requirePool(app), session.scope, query)
           : await repositoryFor(app).listEurCashItems(session.scope, query);
+        return filterEurListItems(items, query);
       } catch (error) {
         if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(503, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
         if (error instanceof Error && error.message === 'EUR_RANGE_2025_REQUIRED') throw new ApiError(400, 'EÜR verwendet ausschließlich den Kalenderzeitraum 2025.');
@@ -772,6 +795,32 @@ export const registerProAccountingRoutes = (app: FastifyInstance) => {
           throw new ApiError(503, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
         }
         if (error instanceof Error && error.message === 'EUR_RANGE_2025_REQUIRED') {
+          throw new ApiError(400, 'EÜR unterstützt ausschließlich vollständige Kalenderjahre.');
+        }
+        throw error;
+      }
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/reports/eur/export.csv`,
+    query: eurReportQuerySchema,
+    async handler({ request, reply, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      try {
+        const report = await getServerEurReport(requirePool(app), session.scope, query);
+        reply.header('content-type', 'text/csv; charset=utf-8');
+        reply.header('content-disposition', 'attachment; filename="eur.csv"');
+        return reply.send(Buffer.from(buildEurCsv(report), 'utf8'));
+      } catch (error) {
+        if (error instanceof Error && error.message === 'EUR_SERVER_REPORT_UNAVAILABLE') {
+          throw new ApiError(503, 'EÜR ist im Server-Modus erst verfügbar, wenn der Katalog und die Kontenklassifikation importiert sind.');
+        }
+        if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') {
+          throw new ApiError(503, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
+        }
+        if (error instanceof Error && /^EUR_RANGE_/.test(error.message)) {
           throw new ApiError(400, 'EÜR unterstützt ausschließlich vollständige Kalenderjahre.');
         }
         throw error;

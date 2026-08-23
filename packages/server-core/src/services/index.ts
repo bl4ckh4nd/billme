@@ -7,3 +7,4 @@ export * from './email-outbox.js';
 export * from './taxMode.js';
 export * from './vatValidation.js';
 export * from './taxFiling.js';
+export * from './eurItemFilters.js';

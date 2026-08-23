@@ -3,6 +3,7 @@
 ## Unreleased
 
 - pnpm-10-CI-Installationen erlauben den nativen Build von `better-sqlite3`, Electron und `keytar` jetzt auch über die Root-Paketkonfiguration; dadurch stehen die benötigten Runtime-Artefakte für Import- und Electron-Tests zuverlässig bereit.
+- Lite und Pro können CSV-Finanztransaktionen jetzt über die gemeinsame Server-/PGlite-Naht mandantensicher importieren, deduplizieren, prüfen, zurückrollen und mit Rechnungen verknüpfen; jede Mutation bleibt atomar und auditiert.
 - Die gemeinsame `ServerDatabase`-Naht unterstützt jetzt PostgreSQL und direktes persistentes PGlite mit serialisierten Abfragen, reentranten Transaktionen, kanonischen Drizzle-Migrationen und einem gemeinsamen Lifecycle für Embedded- und Hosted-Runtime.
 - Das eigenständige `billme-pglite-migrate`-CLI migriert Lite- und Pro-SQLite-Datenbanken mit konsistentem Backup, Importlauf-/Count-Prüfung und atomarer Aktivierung in ein neues PGlite-Verzeichnis; vorhandene Ziele werden unverändert abgelehnt. Server-eigene HTTP-Routen fallen bei aktiver Embedded-PGlite-Verbindung nicht mehr still auf SQLite-IPC zurück.
 - Der SQLite-Importer kann jetzt dieselbe `ServerDatabase`-Naht auch mit einem persistenten PGlite-Ziel verwenden; Migration, Transaktions-Rollback, Counts, Audit-Verifikation und Importlaufstatus bleiben dabei erhalten, während PostgreSQL-Advisory-Locks im single-process Ziel entfallen.

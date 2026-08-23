@@ -75,6 +75,7 @@ import { registerProAccountingRoutes } from './proAccountingRoutes.js';
 import { registerTaxFilingRoutes } from './taxFilingRoutes.js';
 import { registerLiteEurRoutes } from './liteEurRoutes.js';
 import { registerAuditRoutes } from './auditRoutes.js';
+import { registerTransactionRoutes } from './transactionRoutes.js';
 
 type Pool = ReturnType<typeof createPostgresPool>;
 type AppSettings = z.infer<typeof appSettingsSchema>;
@@ -350,6 +351,8 @@ const requireBillingDatabase = (app: FastifyInstance): Pool | ServerDatabase => 
   if (app.serverPool) return app.serverPool;
   throw new ApiError(503, 'DATABASE_URL is required for server billing routes');
 };
+
+export const requireDatabase = requireBillingDatabase;
 
 const createNumberingPortsForDb = (db: ServerDatabaseSession, scope: TenantScope) => ({
   tx: {
@@ -1450,8 +1453,11 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerTaxFilingRoutes(app);
     registerAuditRoutes(app, 'lite');
     registerAuditRoutes(app, 'pro');
+    registerTransactionRoutes(app, 'lite');
+    registerTransactionRoutes(app, 'pro');
   } else {
     registerBillingRoutes(app, product, `/api/v1/${product}`);
+    registerTransactionRoutes(app, product);
     if (product === 'pro') {
       registerProRoutes(app);
       registerProAccountingRoutes(app);

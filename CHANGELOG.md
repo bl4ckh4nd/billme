@@ -3,6 +3,7 @@
 ## Unreleased
 
 - pnpm-10-CI-Installationen erlauben den nativen Build von `better-sqlite3`, Electron und `keytar` jetzt auch über die Root-Paketkonfiguration; dadurch stehen die benötigten Runtime-Artefakte für Import- und Electron-Tests zuverlässig bereit.
+- Portal-, E-Mail-, Dunning- und Recurring-Aktionen sowie Tax-Audit-Exporte und verbleibende Pro-Buchhaltungsmutationen laufen im HTTP-Adapter jetzt tenant-sicher über Server/PGlite; native PDF-/Audit-Paket-Speicherung bleibt contract-validiert beim Electron-Fallback.
 - Der Pro-HTTP-Client liegt jetzt als gemeinsamer, DOM-unabhängiger Service vor; Hosted-Bearer bleiben kompatibel, während Embedded-Aufrufe den privaten Local-Token-Handshake nutzen und fehlende lokale Verbindungen eindeutig melden.
 - Der Pro-HTTP-Adapter routet jetzt Buchhaltungskatalog, Kontierungen, Journal-/Saldoabfragen, Reports, Anlagen, DATEV-Belege und Accounting-Source-Runs über die authentifizierte Server-/PGlite-Naht; Antworten und Schreibgründe bleiben am Pro-Contract validiert.
 - EÜR-Berichte, Klassifikationen, Regel- und Anlagen-Fakten sowie Projekte und Finanzimport-Läufe werden im Pro-HTTP-Adapter jetzt tenant-sicher über Server/PGlite gelesen und mutiert; Import-Rollbacks und Transaktionsverknüpfungen bleiben auditiert und contract-validiert.

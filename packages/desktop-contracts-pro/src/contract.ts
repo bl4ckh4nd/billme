@@ -88,6 +88,7 @@ import {
   proAccountingSourcePostResultSchema,
   proGetAccountingSourceRunArgsSchema,
   proAccountingSourceRunSchema,
+  taxAuditExportArtifactSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -1406,6 +1407,11 @@ export const ipcRoutes = {
   'tax:auditExportPackage': {
     channel: 'tax:auditExportPackage',
     args: taxAuditExportPackageArgsSchema,
+    result: taxAuditExportPackageResultSchema,
+  },
+  'tax:saveAuditExportPackage': {
+    channel: 'tax:saveAuditExportPackage',
+    args: taxAuditExportArtifactSchema,
     result: taxAuditExportPackageResultSchema,
   },
 

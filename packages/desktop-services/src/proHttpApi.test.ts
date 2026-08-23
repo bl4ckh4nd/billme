@@ -179,21 +179,18 @@ test('Pro HTTP adapter falls back only for native routes while embedded is unava
   assert.deepEqual(calls.map(({ key }) => key), ['window:minimize', 'settings:get']);
 });
 
-test('Pro HTTP adapter rejects unsupported server-owned routes when HTTP is available', async () => {
+test('Pro HTTP adapter routes migrated server-owned mutations instead of falling back', async () => {
   let invoke: ((key: IpcRouteKey, args: unknown) => Promise<unknown>) | undefined;
   const api = createProHttpBillmeApi({
     baseUrl: 'https://hosted.example.test',
     embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
     fallback: async () => ({ path: 'legacy.sqlite' }),
-    fetch: async () => response(null),
+    fetch: async () => response({ ok: true, issues: [] }),
     onInvoke: (candidate) => { invoke = candidate as typeof invoke; },
   });
   void api;
   assert.ok(invoke);
-  await assert.rejects(
-    invoke?.('pro:validateTaxCompliance', { draftId: 'draft-1' }),
-    /Pro-HTTP-Laufzeit unterstützt die IPC-Route pro:validateTaxCompliance nicht/,
-  );
+  assert.deepEqual(await invoke?.('pro:validateTaxCompliance', { draftId: 'draft-1' }), { ok: true, issues: [] });
 });
 
 test('Pro HTTP adapter routes the accounting catalog, ledger and report reads', async () => {
@@ -655,4 +652,233 @@ test('Pro project and transaction identifiers stay URL encoded', async () => {
     'http://127.0.0.1:43123/api/v1/pro/projects/project%2Fone',
     'http://127.0.0.1:43123/api/v1/pro/transactions/transaction%2Fone/unlink',
   ]);
+});
+
+test('Pro HTTP adapter routes portal, email, dunning, recurring, and tax-audit server work', async () => {
+  const requests: Array<{ url: string; method?: string; body?: unknown }> = [];
+  const artifact = {
+    schemaVersion: 1 as const, createdAt: '2026-08-22T12:00:00.000Z', from: '2026-01-01', to: '2026-01-31', includeDocuments: true,
+    files: [{ name: 'audit.csv', content: 'sequence\n1\n', sha256: 'a'.repeat(64), sizeBytes: 12, rowCount: 1 }],
+  };
+  const savedAuditPackage = {
+    bundleDir: '/app-data/exports/tax-audit-1', manifestPath: '/app-data/exports/tax-audit-1/manifest.json',
+    createdAt: artifact.createdAt, fileCount: 1,
+    files: [{ name: 'audit.csv', path: '/app-data/exports/tax-audit-1/audit.csv', sha256: 'a'.repeat(64), sizeBytes: 12, rowCount: 1 }],
+  };
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fallback: async (key) => {
+      assert.equal(key, 'tax:saveAuditExportPackage');
+      return savedAuditPackage as never;
+    },
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (url.includes('/portal/health?')) return response({ ok: true, ts: '2026-08-22T12:00:00.000Z' });
+      if (url.endsWith('/portal/publish-offer') || url.endsWith('/portal/publish-invoice')) return response({ ok: true, token: 'portal-token-123456', publicUrl: 'https://portal.example.test/p/1' });
+      if (url.endsWith('/portal/sync-offer-status')) return response({ ok: true, decision: null, updated: false });
+      if (url.endsWith('/portal/customer-access-link') || url.endsWith('/portal/customer-access-link/rotate')) return response({ ok: true, token: 'customer-token-123456', publicUrl: 'https://portal.example.test/c/1', expiresAt: '2026-12-31T00:00:00.000Z' });
+      if (url.endsWith('/email/send') || url.endsWith('/email/test-config')) return response({ success: true, messageId: 'mail-1' });
+      if (url.endsWith('/dunning/manual-run')) return response({ success: true, result: { processedInvoices: 1, emailsSent: 1, feesApplied: 0, errors: [] } });
+      if (url.includes('/dunning/invoices/')) return response({ currentLevel: 1, daysOverdue: 2, totalFeesApplied: 0, history: [] });
+      if (url.endsWith('/recurring/manual-run')) return response({ success: true, result: { generated: 1, deactivated: 0, errors: [] } });
+      if (url.endsWith('/tax/audit-export-package')) return response(artifact);
+      return response({ ok: true });
+    },
+  });
+
+  assert.deepEqual(await api.portal.health({ baseUrl: 'http://127.0.0.1:43123' }), { ok: true, ts: '2026-08-22T12:00:00.000Z' });
+  await api.portal.publishOffer({ offerId: 'offer-1' });
+  await api.portal.publishInvoice({ invoiceId: 'invoice-1' });
+  await api.portal.syncOfferStatus({ offerId: 'offer-1' });
+  await api.portal.createCustomerAccessLink({ customerRef: 'customer-1' });
+  await api.portal.rotateCustomerAccessLink({ customerRef: 'customer-1' });
+  await api.email.send({ documentType: 'invoice', documentId: 'invoice-1', recipientEmail: 'customer@example.test', recipientName: 'Customer', subject: 'Invoice', bodyText: 'Hello' });
+  await api.email.testConfig({ provider: 'smtp', smtpHost: 'smtp.example.test', smtpPort: 587, smtpPassword: 'must-not-cross-boundary' });
+  await api.dunning.manualRun();
+  await api.dunning.getInvoiceStatus({ invoiceId: 'invoice-1' });
+  await api.recurring.manualRun();
+  assert.deepEqual(await api.tax.auditExportPackage({ from: '2026-01-01', to: '2026-01-31', includeDocuments: true }), savedAuditPackage);
+
+  assert.deepEqual(requests.map(({ url, method }) => ({ url, method })), [
+    { url: 'http://127.0.0.1:43123/api/v1/pro/portal/health?baseUrl=http%3A%2F%2F127.0.0.1%3A43123', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/portal/publish-offer', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/portal/publish-invoice', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/portal/sync-offer-status', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/portal/customer-access-link', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/portal/customer-access-link/rotate', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/email/send', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/email/test-config', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/dunning/manual-run', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/dunning/invoices/invoice-1/status', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/recurring/manual-run', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/tax/audit-export-package', method: 'POST' },
+  ]);
+  assert.deepEqual(requests[7]?.body, { provider: 'smtp', smtpHost: 'smtp.example.test', smtpPort: 587 });
+  assert.deepEqual(requests[1]?.body, { offerId: 'offer-1' });
+  assert.deepEqual(requests[2]?.body, { invoiceId: 'invoice-1' });
+  assert.deepEqual(requests[3]?.body, { offerId: 'offer-1' });
+  assert.deepEqual(requests[4]?.body, { customerRef: 'customer-1' });
+  assert.deepEqual(requests[5]?.body, { customerRef: 'customer-1' });
+  assert.deepEqual(requests[6]?.body, { documentType: 'invoice', documentId: 'invoice-1', recipientEmail: 'customer@example.test', recipientName: 'Customer', subject: 'Invoice', bodyText: 'Hello' });
+  assert.equal((requests[7]?.body as Record<string, unknown>)?.smtpPassword, undefined);
+  assert.deepEqual(requests[8]?.body, undefined);
+  assert.deepEqual(requests[9]?.body, undefined);
+  assert.deepEqual(requests[10]?.body, undefined);
+});
+
+test('Pro HTTP adapter keeps audit and accounting mutations server-owned with contract reasons', async () => {
+  const requests: Array<{ url: string; method?: string; body?: unknown }> = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (input, init) => {
+      requests.push({ url: String(input), method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (String(input).endsWith('/audit/verify')) return response({ ok: true, errors: [], count: 0, headHash: null });
+      if (String(input).endsWith('/audit/export.csv')) return { ok: true, status: 200, text: async () => 'sequence;action\n' } as Response;
+      if (String(input).endsWith('/pro/accounting/ledger/stats')) return response({ total: 2, byChart: { SKR03: 2, SKR04: 0 } });
+      if (String(input).endsWith('/pro/accounting/backfill/preview')) return response({ runId: 'run-1', status: 'preview', candidates: [], readyCount: 0, unresolvedCount: 0, confirmationHash: 'hash-1' });
+      return response({ ok: true, issues: [], reversalEntryId: 'reversal-1' });
+    },
+  });
+
+  assert.deepEqual(await api.audit.verify(), { ok: true, errors: [], count: 0, headHash: null });
+  assert.equal(await api.audit.exportCsv(), 'sequence;action\n');
+  assert.deepEqual(await api.pro.importSkr({ preferredSource: 'auto' }), {
+    source: 'none', sourceDetails: ['server://pglite-migrations'], inserted: 0, updated: 0,
+    total: 2, skipped: 0,
+    warnings: ['Der Kontenrahmen wird im Embedded-/PGlite-Modus durch Migrationen verwaltet; es wurde kein Import ausgeführt.'],
+    stats: { total: 2, byChart: { SKR03: 2, SKR04: 0 } },
+  });
+  await api.pro.reverseDocumentAccounting({ documentType: 'outgoing_invoice', documentId: 'invoice-1', reason: 'Storno' });
+  await api.pro.previewAccountingBackfill();
+  assert.deepEqual(requests.slice(0, 3).map(({ url, method }) => ({ url, method })), [
+    { url: 'http://127.0.0.1:43123/api/v1/pro/audit/verify', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/audit/export.csv', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/ledger/stats', method: 'GET' },
+  ]);
+  assert.deepEqual(requests[3]?.body, { documentType: 'outgoing_invoice', documentId: 'invoice-1', reason: 'Storno' });
+});
+
+test('Pro HTTP adapter preserves payment allocation retries and draft lookup boundaries', async () => {
+  const requests: Array<{ url: string; method?: string; body?: unknown }> = [];
+  const payment = {
+    id: 'payment-1', tenantId: 'tenant-1', partyType: 'debtor' as const, partyId: 'client-1', paymentDate: '2026-01-15', amount: 119,
+    bankAccountNumber: '1200', method: 'bank_transfer', sourceType: 'bank_transaction' as const, sourceId: 'bank-tx-1',
+    allocatedAmount: 119, residualAmount: 0, status: 'allocated' as const, journalEntryId: 'journal-1', createdAt: '2026-01-15T00:00:00.000Z',
+  };
+  const input = {
+    sourceType: 'bank_transaction' as const, sourceId: 'bank-tx-1', partyType: 'debtor' as const, partyId: 'client-1', paymentDate: '2026-01-15', amount: 119,
+    bankAccountNumber: '1200', method: 'bank_transfer', allocations: [{ openItemId: 'open-item-1', amount: 119 }], reason: 'Zahlung zugeordnet', allocationEventId: 'allocation-event-1',
+  };
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (inputUrl, init) => {
+      const url = String(inputUrl);
+      requests.push({ url, method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (url.endsWith('/drafts/transaction-1')) return response(null);
+      return response(payment);
+    },
+  });
+
+  assert.deepEqual(await api.pro.allocateOpenItemPayment({ payment: input }), payment);
+  assert.deepEqual(await api.pro.allocateRemainingPayment({
+    paymentId: 'payment-1', allocations: [{ openItemId: 'open-item-2', amount: 119 }], reason: 'Restzahlung zugeordnet', allocationEventId: 'allocation-event-2',
+  }), payment);
+  assert.equal(await api.pro.getDraftByTransactionId({ transactionId: 'transaction-1' }), null);
+  assert.deepEqual(requests.map(({ url, method }) => ({ url, method })), [
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/open-items/payments', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/open-items/payments/payment-1/remaining', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/drafts/transaction-1', method: 'GET' },
+  ]);
+  assert.deepEqual(requests[0]?.body, { payment: {
+    sourceType: input.sourceType, sourceId: input.sourceId, partyType: input.partyType, partyId: input.partyId,
+    paymentDate: input.paymentDate, amount: input.amount, bankAccountNumber: input.bankAccountNumber, method: input.method,
+    allocations: input.allocations, allocationEventId: input.allocationEventId,
+  }, reason: input.reason });
+  assert.deepEqual(requests[1]?.body, {
+    paymentId: 'payment-1', allocations: [{ openItemId: 'open-item-2', amount: 119 }], reason: 'Restzahlung zugeordnet', allocationEventId: 'allocation-event-2',
+  });
+});
+
+test('Pro automation routes use the exact IPC fallback only while the embedded server is absent', async () => {
+  const calls: string[] = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => null,
+    fallback: async (key) => {
+      calls.push(key);
+      if (key === 'portal:health') return { ok: true, ts: 'now' } as never;
+      if (key === 'dunning:manualRun') return { success: true } as never;
+      if (key === 'recurring:manualRun') return { success: true } as never;
+      return { success: true } as never;
+    },
+    fetch: async () => { throw new Error('HTTP must not be used'); },
+  });
+
+  await api.portal.health({ baseUrl: 'http://127.0.0.1:43123' });
+  await api.email.send({ documentType: 'invoice', documentId: 'invoice-1', recipientEmail: 'customer@example.test', recipientName: 'Customer', subject: 'Invoice', bodyText: 'Hello' });
+  await api.dunning.manualRun();
+  await api.recurring.manualRun();
+  assert.deepEqual(calls, ['portal:health', 'email:send', 'dunning:manualRun', 'recurring:manualRun']);
+});
+
+test('Pro automation and accounting boundaries reject invalid input before fetch', async () => {
+  let fetchCalls = 0;
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async () => { fetchCalls += 1; return response({}); },
+  });
+
+  await assert.rejects(api.portal.publishOffer({ offerId: '' }), /at least 1 character/);
+  await assert.rejects(api.email.send({ documentType: 'invoice', documentId: 'invoice-1', recipientEmail: 'not-an-email', recipientName: 'Customer', subject: 'Invoice', bodyText: 'Hello' }), /email/);
+  await assert.rejects(api.dunning.getInvoiceStatus({ invoiceId: '' }), /at least 1 character/);
+  await assert.rejects(api.pro.allocateRemainingPayment({ paymentId: 'payment-1', allocations: [], reason: '', allocationEventId: '' }), /at least 1 character/);
+  assert.equal(fetchCalls, 0);
+});
+
+test('Pro accounting commands preserve domain facts and normalize the source-run response', async () => {
+  const source = {
+    sourceType: 'standalone_source' as const, sourceId: 'command-1', sourceRevision: '1', effectiveDate: '2026-01-15', postingDate: '2026-01-15', period: '2026-01', fiscalYear: 2026,
+    currency: 'EUR', bookingText: 'Abschluss', lines: [{ accountNumber: '1200', debitAmount: 100, creditAmount: 0 }, { accountNumber: '8400', debitAmount: 0, creditAmount: 100 }],
+  };
+  const requests: Array<{ url: string; body?: unknown }> = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (input, init) => {
+      requests.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return response({
+        run: { id: 'run-1', tenantId: 'tenant-1', sourceType: 'standalone_source', sourceId: 'command-1', sourceRevision: '1', idempotencyKey: 'source:command-1', status: 'posted', createdAt: '2026-01-15T00:00:00.000Z', source },
+        result: {}, replayed: false,
+      });
+    },
+  });
+
+  const result = await api.pro.postAccountingCommand({ source, kind: 'standalone', reason: 'Abschluss buchen' });
+  assert.equal(result.status, 'posted');
+  assert.equal(result.sourceRun?.sourceId, 'command-1');
+  assert.deepEqual(requests[0], {
+    url: 'http://127.0.0.1:43123/api/v1/pro/accounting/closing',
+    body: { input: { ...source, reference: 'standalone' }, sourceId: 'command-1', sourceRevision: '1', idempotencyKey: 'source:command-1', reason: 'Abschluss buchen' },
+  });
+});
+
+test('Pro HTTP adapter falls back only for native tax PDF and audit-package persistence', async () => {
+  const calls: string[] = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => null,
+    fallback: async (key) => { calls.push(key); return { path: '/exports/audit' } as never; },
+    fetch: async () => { throw new Error('HTTP must not be used'); },
+  });
+
+  await api.eur.exportPdf({ taxYear: 2025 });
+  await api.tax.saveAuditExportPackage({
+    schemaVersion: 1, createdAt: '2026-08-22T12:00:00.000Z', from: null, to: null, includeDocuments: false, files: [],
+  });
+  assert.deepEqual(calls, ['eur:exportPdf', 'tax:saveAuditExportPackage']);
 });

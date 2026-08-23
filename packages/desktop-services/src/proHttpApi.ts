@@ -6,7 +6,8 @@ import {
 } from '@billme/server-core';
 import {
   accountSchema, accountSuggestionRuleSchema, accountingAccountMappingSchema,
-  accountingPolicySchema, accountingPostingPreviewSchema, appSettingsSchema,
+  accountingPolicySchema, accountingPostingPreviewSchema, accountingBackfillPreviewSchema,
+  accountingBackfillResultSchema, appSettingsSchema, bookingDraftEntitySchema,
   articleSchema, assetDepreciationScheduleEntrySchema, assetSchema, assetUpsertSchema,
   datevExportResultSchema, incomingInvoiceSchema, journalEntryEntitySchema,
   ledgerAccountSchema, ledgerBalanceRowSchema, openItemSchema,
@@ -18,7 +19,7 @@ import {
   proUpsertTaxCaseAccountMappingArgsSchema, proWorkflowEntrySchema,
   reportSnapshotRecordSchema, taxCaseAccountMappingSchema, taxCaseDefinitionSchema,
   vendorSchema, setActiveTemplatePayloadSchema,
-  setSettingsPayloadSchema, templateKindSchema, templateSchema, upsertAccountPayloadSchema,
+  setSettingsPayloadSchema, taxAuditExportArtifactSchema, templateKindSchema, templateSchema, upsertAccountPayloadSchema,
   upsertArticlePayloadSchema, upsertTemplatePayloadSchema,
 } from '@billme/desktop-contracts-pro/schemas';
 import { createBillmeApi, type BillmeApi, type IpcInvoke } from '@billme/desktop-contracts-pro/api';
@@ -32,6 +33,19 @@ import { isNativeElectronRoute, isServerOwnedRoute } from './serverRouteClassifi
 type Parser<T> = { parse: (input: unknown) => T } | ((input: unknown) => T);
 type QueryValue = string | number | boolean | readonly (string | number | boolean)[] | null | undefined;
 type RequestOptions<T> = { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown; query?: Record<string, QueryValue>; parser?: Parser<T> };
+type ProOpenItemPaymentInput = {
+  paymentId?: string;
+  sourceType: 'bank_transaction' | 'invoice_payment' | 'manual';
+  sourceId: string;
+  partyType: 'debtor' | 'creditor';
+  partyId?: string;
+  paymentDate: string;
+  amount: number;
+  bankAccountNumber: string;
+  method?: string;
+  allocations: Array<{ openItemId: string; amount: number }>;
+  allocationEventId: string;
+};
 const PRO_PRODUCT_QUERY = { product: 'pro' as const };
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 const parseWith = <T>(parser: Parser<T>, input: unknown): T => typeof parser === 'function' ? parser(input) : parser.parse(input);
@@ -39,6 +53,15 @@ const parseArray = <T>(parser: Parser<T>): Parser<T[]> => (input) => {
   if (!Array.isArray(input)) throw new Error('Die Serverantwort enthält keine Liste.');
   return input.map((item) => parseWith(parser, item));
 };
+const serverTransactionMatchesSchema = z.object({
+  transaction: transactionSchema,
+  suggestions: z.array(z.object({
+    invoice: invoiceSchema,
+    confidence: z.enum(['high', 'medium', 'low']),
+    matchReasons: z.array(z.string()),
+    amountDiff: z.number(),
+  })),
+});
 const parseSourceRun = (input: unknown, fallbackFact?: unknown): z.infer<typeof proAccountingSourceRunSchema> => {
   if (isRecord(input) && input.fact === undefined && input.source !== undefined) {
     const source = isRecord(input.source) && isRecord(input.source.input) ? input.source.input : input.source;
@@ -155,6 +178,61 @@ export const createProWebClient = ({
     if (!response.ok) throw new Error(`Download fehlgeschlagen (HTTP ${response.status}).`);
     return payload;
   };
+  type AccountingCommandRequest = {
+    kind: string;
+    source: unknown;
+    domainFacts?: unknown;
+    chart?: 'SKR03' | 'SKR04';
+    softLockOverride?: boolean;
+    overrideReason?: string;
+    reason: string;
+    provenance?: unknown;
+  };
+  const postAccountingCommand = async (input: AccountingCommandRequest) => {
+    const source = isRecord(input.source) ? input.source : {};
+    const facts = isRecord(input.domainFacts) ? input.domainFacts : undefined;
+    if (input.kind !== 'standalone' && (!facts || Object.keys(facts).length === 0)) {
+      throw new Error('Domain-Fakten sind für diesen Workflow erforderlich.');
+    }
+    const sourceId = String(source.sourceId ?? '');
+    const sourceRevision = String(source.sourceRevision ?? '1');
+    const idempotencyKey = `source:${sourceId || Date.now()}`;
+    if (input.kind === 'correction') {
+      const correction = {
+        ...(facts ?? {}),
+        id: facts?.id ?? sourceId,
+        idempotencyKey: facts?.idempotencyKey ?? idempotencyKey,
+        correctionDate: facts?.correctionDate ?? source.effectiveDate,
+        reason: input.reason,
+      };
+      return requestJson({ method: 'POST', body: correction, parser: (payload) => payload }, '/api/v1/pro/accounting/corrections');
+    }
+    const commandKinds = new Set(['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'shareholder_flow']);
+    const settlementKinds = new Set(['skonto', 'bad_debt', 'advance_settlement']);
+    const commandInput = input.kind === 'standalone'
+      ? { ...source, reference: source.reference ?? input.kind }
+      : { ...(facts ?? {}), sourceId, sourceRevision, ...(settlementKinds.has(input.kind) ? {
+        effectiveDate: source.effectiveDate,
+        postingDate: source.postingDate ?? source.effectiveDate,
+        currency: source.currency ?? 'EUR',
+        period: source.period ?? String(source.effectiveDate ?? '').slice(0, 7),
+        fiscalYear: source.fiscalYear ?? Number(String(source.effectiveDate ?? '').slice(0, 4)),
+      } : {}) };
+    const body = {
+      ...(commandKinds.has(input.kind) ? { command: input.kind } : {}),
+      ...(settlementKinds.has(input.kind) ? { commandType: input.kind } : {}),
+      input: commandInput,
+      sourceId,
+      sourceRevision,
+      idempotencyKey,
+      reason: input.reason,
+      ...(input.chart ? { chart: input.chart } : {}),
+      ...(input.softLockOverride === undefined ? {} : { softLockOverride: input.softLockOverride }),
+      ...(input.overrideReason ? { overrideReason: input.overrideReason } : {}),
+      ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
+    };
+    return requestJson({ method: 'POST', body, parser: (payload) => payload }, '/api/v1/pro/accounting/closing');
+  };
   const billingScope = createBillingScope('pro');
   const toServerInvoicePayload = (invoice: IpcResult<'invoices:upsert'>) => {
     const { tenantId: _tenantId, ...payload } = toDomainInvoice(billingScope, invoice);
@@ -204,6 +282,11 @@ export const createProWebClient = ({
     getSessionInfo: () => requestJson({ parser: authSessionInfoParser, query: PRO_PRODUCT_QUERY }, '/api/v1/auth/me'),
 
     getTaxFilingStatus: () => requestJson({ parser: taxFilingRoutes['taxFiling:getStatus'].result }, '/api/v1/pro/tax-filing/status'),
+    exportTaxAuditPackage: (input: unknown) => requestJson({
+      method: 'POST',
+      body: ipcRoutes['tax:auditExportPackage'].args.parse(input),
+      parser: taxAuditExportArtifactSchema,
+    }, '/api/v1/pro/tax/audit-export-package'),
     listTaxFilingRecords: () => requestJson({ parser: taxFilingRoutes['taxFiling:listRecords'].result }, '/api/v1/pro/tax-filing/records'),
     installTaxFilingCertificate: (input: unknown) => requestJson({ method: 'POST', body: taxFilingRoutes['taxFiling:installCertificate'].args.parse(input), parser: taxFilingRoutes['taxFiling:installCertificate'].result }, '/api/v1/pro/tax-filing/certificates'),
     removeTaxFilingCertificate: (id: string) => requestJson({ method: 'DELETE', parser: taxFilingRoutes['taxFiling:removeCertificate'].result }, `/api/v1/pro/tax-filing/certificates/${encodeURIComponent(id)}`),
@@ -232,6 +315,35 @@ export const createProWebClient = ({
       return requestJson({ method: 'POST', body: { reason, profile: parsed.profile }, parser: recurringProfileSchema }, '/api/v1/pro/recurring');
     },
     deleteRecurringProfile: (id: string, reason = 'Wiederkehrendes Profil gelöscht') => requestJson({ method: 'DELETE', body: { reason }, parser: (input) => input }, `/api/v1/pro/recurring/${encodeURIComponent(id)}`),
+    portalHealth: (baseUrl: string) => requestJson({ query: { baseUrl }, parser: ipcRoutes['portal:health'].result }, '/api/v1/pro/portal/health'),
+    publishOfferToPortal: (input: unknown) => requestJson({
+      method: 'POST', body: ipcRoutes['portal:publishOffer'].args.parse(input), parser: ipcRoutes['portal:publishOffer'].result,
+    }, '/api/v1/pro/portal/publish-offer'),
+    publishInvoiceToPortal: (input: unknown) => requestJson({
+      method: 'POST', body: ipcRoutes['portal:publishInvoice'].args.parse(input), parser: ipcRoutes['portal:publishInvoice'].result,
+    }, '/api/v1/pro/portal/publish-invoice'),
+    syncOfferPortalStatus: (offerId: string) => requestJson({
+      method: 'POST', body: ipcRoutes['portal:syncOfferStatus'].args.parse({ offerId }), parser: ipcRoutes['portal:syncOfferStatus'].result,
+    }, '/api/v1/pro/portal/sync-offer-status'),
+    createCustomerAccessLink: (input: unknown) => requestJson({
+      method: 'POST', body: ipcRoutes['portal:createCustomerAccessLink'].args.parse(input), parser: ipcRoutes['portal:createCustomerAccessLink'].result,
+    }, '/api/v1/pro/portal/customer-access-link'),
+    rotateCustomerAccessLink: (input: unknown) => requestJson({
+      method: 'POST', body: ipcRoutes['portal:rotateCustomerAccessLink'].args.parse(input), parser: ipcRoutes['portal:rotateCustomerAccessLink'].result,
+    }, '/api/v1/pro/portal/customer-access-link/rotate'),
+    sendEmail: (input: unknown) => requestJson({
+      method: 'POST', body: ipcRoutes['email:send'].args.parse(input), parser: ipcRoutes['email:send'].result,
+    }, '/api/v1/pro/email/send'),
+    testEmailConfig: (input: unknown) => {
+      const parsed = ipcRoutes['email:testConfig'].args.parse(input);
+      const { smtpPassword: _smtpPassword, resendApiKey: _resendApiKey, ...serverConfig } = parsed;
+      return requestJson({ method: 'POST', body: serverConfig, parser: ipcRoutes['email:testConfig'].result }, '/api/v1/pro/email/test-config');
+    },
+    runDunningManually: () => requestJson({ method: 'POST', parser: ipcRoutes['dunning:manualRun'].result }, '/api/v1/pro/dunning/manual-run'),
+    getDunningInvoiceStatus: (invoiceId: string) => requestJson({
+      parser: ipcRoutes['dunning:getInvoiceStatus'].result,
+    }, `/api/v1/pro/dunning/invoices/${encodeURIComponent(invoiceId)}/status`),
+    runRecurringManually: () => requestJson({ method: 'POST', parser: ipcRoutes['recurring:manualRun'].result }, '/api/v1/pro/recurring/manual-run'),
     getSettings,
     saveSettings: (settings: unknown) => requestJson({ method: 'PUT', body: setSettingsPayloadSchema.parse({ settings }), parser: (input) => input }, '/api/v1/pro/settings'),
     reserveNumber,
@@ -348,6 +460,34 @@ export const createProWebClient = ({
     postIncomingInvoice: (invoiceId: string, reason: string, options: Record<string, unknown> = {}) => requestJson({
       method: 'POST', body: { invoiceId, reason, ...options }, parser: accountingPostingPreviewSchema,
     }, '/api/v1/pro/accounting/incoming-invoices/post'),
+    allocateOpenItemPayment: (payment: ProOpenItemPaymentInput, reason: string) => {
+      if (!payment.allocationEventId.trim()) throw new Error('Zuordnungs-ID fehlt.');
+      return requestJson({ method: 'POST', body: { payment, reason }, parser: (input) => input }, '/api/v1/pro/accounting/open-items/payments');
+    },
+    allocateRemainingOpenItemPayment: (paymentId: string, allocations: unknown, reason: string, allocationEventId: string) => {
+      if (!allocationEventId.trim()) throw new Error('Zuordnungs-ID fehlt.');
+      return requestJson({ method: 'POST', body: { paymentId, allocations, reason, allocationEventId }, parser: (input) => input }, `/api/v1/pro/accounting/open-items/payments/${encodeURIComponent(paymentId)}/remaining`);
+    },
+    reverseDocumentAccounting: (input: unknown, reason: string) => requestJson({
+      method: 'POST', body: { ...(isRecord(input) ? input : {}), reason }, parser: (payload) => payload,
+    }, '/api/v1/pro/accounting/documents/reverse'),
+    previewAccountingBackfill: () => requestJson({ parser: accountingBackfillPreviewSchema }, '/api/v1/pro/accounting/backfill/preview'),
+    confirmAccountingBackfill: (input: unknown) => requestJson({ method: 'POST', body: input, parser: accountingBackfillResultSchema }, '/api/v1/pro/accounting/backfill/confirm'),
+    importSkr: async (input: unknown = {}) => {
+      ipcRoutes['pro:importSkr'].args.parse(input);
+      const stats = await requestJson({ parser: ipcRoutes['pro:getLedgerStats'].result }, '/api/v1/pro/accounting/ledger/stats');
+      return ipcRoutes['pro:importSkr'].result.parse({
+        source: 'none', sourceDetails: ['server://pglite-migrations'], inserted: 0, updated: 0,
+        total: stats.total, skipped: 0,
+        warnings: ['Der Kontenrahmen wird im Embedded-/PGlite-Modus durch Migrationen verwaltet; es wurde kein Import ausgeführt.'], stats,
+      });
+    },
+    validateTaxCompliance: (input: unknown, reason = 'Steuerliche Compliance geprüft') => {
+      const parsed = ipcRoutes['pro:validateTaxCompliance'].args.parse(input);
+      return requestJson({
+        method: 'POST', body: { ...parsed, reason }, parser: ipcRoutes['pro:validateTaxCompliance'].result,
+      }, '/api/v1/pro/accounting/validate');
+    },
     getAccountingHealth: () => requestJson({ parser: (input) => input }, '/api/v1/pro/accounting/health'),
     getVatSummary: (query?: unknown) => requestJson({
       parser: (input) => input,
@@ -374,6 +514,7 @@ export const createProWebClient = ({
       body: { input: input.source, sourceId: input.source.sourceId, sourceRevision: input.source.sourceRevision, idempotencyKey: `source:${input.source.sourceId}`, reason: input.reason, chart: input.chart, provenance: input.provenance },
       parser: (payload) => parseSourcePostResult(payload, input.source),
     }, '/api/v1/pro/accounting/closing'),
+    postAccountingCommand: (input: IpcArgs<'pro:postAccountingCommand'>) => postAccountingCommand(input),
     listAssets: () => requestJson({ parser: parseArray(assetSchema) }, '/api/v1/pro/accounting/assets'),
     upsertAsset: (asset: unknown, reason: string) => requestJson({
       method: 'POST', body: { asset: assetUpsertSchema.parse(asset), reason }, parser: assetSchema,
@@ -435,6 +576,8 @@ export const createProWebClient = ({
       parser: eurReportServerParser, query: query as Record<string, QueryValue>,
     }, '/api/v1/pro/accounting/reports/eur'),
     exportEurCsv: (query: IpcArgs<'eur:exportCsv'>) => requestText('/api/v1/pro/accounting/reports/eur/export.csv', query as Record<string, QueryValue>),
+    verifyAudit: () => requestJson({ parser: ipcRoutes['audit:verify'].result }, '/api/v1/pro/audit/verify'),
+    exportAuditCsv: () => requestText('/api/v1/pro/audit/export.csv'),
     listEurRules: (taxYear: number) => requestJson({
       parser: parseArray(eurRuleSchema), query: { taxYear },
     }, '/api/v1/pro/accounting/reports/eur/rules'),
@@ -477,6 +620,12 @@ export const createProWebClient = ({
     listTransactions: (filters?: IpcArgs<'transactions:list'>) => requestJson({
       parser: parseArray(transactionSchema), query: filters,
     }, '/api/v1/pro/transactions'),
+    findTransactionMatches: (transactionId: string) => requestJson({
+      parser: (input) => {
+        const result = serverTransactionMatchesSchema.parse(input);
+        return { transaction: result.transaction, suggestions: result.suggestions.map((suggestion) => ({ ...suggestion, invoice: toLegacyInvoice(suggestion.invoice) })) };
+      },
+    }, `/api/v1/pro/transactions/${encodeURIComponent(transactionId)}/matches`),
     linkTransaction: (transactionId: string, invoiceId: string, reason = 'Zahlung automatisch mit Rechnung verknüpft') => requestJson({
       method: 'POST', body: { invoiceId, reason }, parser: (input) => {
         const result = z.object({ success: z.literal(true), invoice: invoiceSchema.optional() }).parse(input);
@@ -486,6 +635,22 @@ export const createProWebClient = ({
     unlinkTransaction: (transactionId: string, reason = 'Zahlungsverknüpfung aufgehoben') => requestJson({
       method: 'POST', body: { reason }, parser: z.object({ success: z.boolean() }),
     }, `/api/v1/pro/transactions/${encodeURIComponent(transactionId)}/unlink`),
+    listAccountingTransactions: () => requestJson({ parser: parseArray(transactionSchema) }, '/api/v1/pro/accounting/transactions'),
+    getAccountingDraftByTransactionId: (transactionId: string) => requestJson({
+      parser: (input) => input === null ? null : bookingDraftEntitySchema.parse(input),
+    }, `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}`),
+    saveAccountingDraft: (draft: unknown, reason: string) => requestJson({
+      method: 'POST', body: { reason, draft: bookingDraftEntitySchema.parse(draft) }, parser: bookingDraftEntitySchema,
+    }, '/api/v1/pro/accounting/drafts'),
+    dispatchAccountingDraftAction: (transactionId: string, action: string, reason: string, rejectReason?: string) => requestJson({
+      method: 'POST', body: { reason, action, rejectReason }, parser: bookingDraftEntitySchema,
+    }, `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}/action`),
+    postAccountingDraft: (draftId: string, options: Record<string, unknown> & { reason: string }) => requestJson({
+      method: 'POST', body: options, parser: (input) => input,
+    }, `/api/v1/pro/accounting/drafts/${encodeURIComponent(draftId)}/post`),
+    reverseAccountingJournalEntry: (entryId: string, options: Record<string, unknown> & { reason: string }) => requestJson({
+      method: 'POST', body: options, parser: (input) => input,
+    }, `/api/v1/pro/accounting/journal/${encodeURIComponent(entryId)}/reverse`),
     financeImportPreview: (input: unknown) => {
       const parsed = ipcRoutes['finance:importPreview'].args.parse(input);
       return requestJson({ method: 'POST', body: parsed, parser: ipcRoutes['finance:importPreview'].result }, '/api/v1/pro/finance/import/preview');
@@ -951,6 +1116,128 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, ...clientConfig }: 
       case 'finance:rollbackImportBatch': {
         const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:rollbackImportBatch'>;
         return ipcRoutes[key].result.parse(await client.financeRollbackImportBatch(parsed)) as IpcResult<K>;
+      }
+      case 'audit:verify': {
+        ipcRoutes[key].args.parse(args);
+        return ipcRoutes[key].result.parse(await client.verifyAudit()) as IpcResult<K>;
+      }
+      case 'audit:exportCsv': {
+        ipcRoutes[key].args.parse(args);
+        return ipcRoutes[key].result.parse(await client.exportAuditCsv()) as IpcResult<K>;
+      }
+      case 'tax:auditExportPackage': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'tax:auditExportPackage'>;
+        const artifact = await client.exportTaxAuditPackage(parsed);
+        if (!fallback) throw new Error('Kein nativer Speicher für das Steuer-Audit-Paket verfügbar.');
+        const saved = await fallback('tax:saveAuditExportPackage', artifact);
+        return ipcRoutes[key].result.parse(saved) as IpcResult<K>;
+      }
+      case 'portal:health': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:health'>;
+        return ipcRoutes[key].result.parse(await client.portalHealth(parsed.baseUrl)) as IpcResult<K>;
+      }
+      case 'portal:publishOffer': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:publishOffer'>;
+        return ipcRoutes[key].result.parse(await client.publishOfferToPortal(parsed)) as IpcResult<K>;
+      }
+      case 'portal:publishInvoice': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:publishInvoice'>;
+        return ipcRoutes[key].result.parse(await client.publishInvoiceToPortal(parsed)) as IpcResult<K>;
+      }
+      case 'portal:syncOfferStatus': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:syncOfferStatus'>;
+        return ipcRoutes[key].result.parse(await client.syncOfferPortalStatus(parsed.offerId)) as IpcResult<K>;
+      }
+      case 'portal:createCustomerAccessLink': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:createCustomerAccessLink'>;
+        return ipcRoutes[key].result.parse(await client.createCustomerAccessLink(parsed)) as IpcResult<K>;
+      }
+      case 'portal:rotateCustomerAccessLink': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:rotateCustomerAccessLink'>;
+        return ipcRoutes[key].result.parse(await client.rotateCustomerAccessLink(parsed)) as IpcResult<K>;
+      }
+      case 'email:send': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'email:send'>;
+        return ipcRoutes[key].result.parse(await client.sendEmail(parsed)) as IpcResult<K>;
+      }
+      case 'email:testConfig': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'email:testConfig'>;
+        return ipcRoutes[key].result.parse(await client.testEmailConfig(parsed)) as IpcResult<K>;
+      }
+      case 'dunning:manualRun': {
+        ipcRoutes[key].args.parse(args);
+        return ipcRoutes[key].result.parse(await client.runDunningManually()) as IpcResult<K>;
+      }
+      case 'dunning:getInvoiceStatus': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'dunning:getInvoiceStatus'>;
+        return ipcRoutes[key].result.parse(await client.getDunningInvoiceStatus(parsed.invoiceId)) as IpcResult<K>;
+      }
+      case 'recurring:manualRun': {
+        ipcRoutes[key].args.parse(args);
+        return ipcRoutes[key].result.parse(await client.runRecurringManually()) as IpcResult<K>;
+      }
+      case 'pro:importSkr': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:importSkr'>;
+        return ipcRoutes[key].result.parse(await client.importSkr(parsed)) as IpcResult<K>;
+      }
+      case 'pro:listBankTransactions': {
+        ipcRoutes[key].args.parse(args);
+        return ipcRoutes[key].result.parse(await client.listAccountingTransactions()) as IpcResult<K>;
+      }
+      case 'transactions:findMatches': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'transactions:findMatches'>;
+        return ipcRoutes[key].result.parse(await client.findTransactionMatches(parsed.transactionId)) as IpcResult<K>;
+      }
+      case 'pro:getDraftByTransactionId': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:getDraftByTransactionId'>;
+        return ipcRoutes[key].result.parse(await client.getAccountingDraftByTransactionId(parsed.transactionId)) as IpcResult<K>;
+      }
+      case 'pro:saveDraft': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:saveDraft'>;
+        return ipcRoutes[key].result.parse(await client.saveAccountingDraft(parsed.draft, 'Buchungsentwurf gespeichert')) as IpcResult<K>;
+      }
+      case 'pro:dispatchDraftAction': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:dispatchDraftAction'>;
+        return ipcRoutes[key].result.parse(await client.dispatchAccountingDraftAction(parsed.transactionId, parsed.action, 'Buchungsworkflow-Aktion ausgeführt', parsed.rejectReason)) as IpcResult<K>;
+      }
+      case 'pro:postDraft': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:postDraft'>;
+        const { draftId, ...options } = parsed;
+        return ipcRoutes[key].result.parse(await client.postAccountingDraft(draftId, { ...options, reason: 'Buchungsentwurf gebucht' })) as IpcResult<K>;
+      }
+      case 'pro:reverseJournalEntry': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:reverseJournalEntry'>;
+        const { entryId, ...options } = parsed;
+        return ipcRoutes[key].result.parse(await client.reverseAccountingJournalEntry(entryId, options)) as IpcResult<K>;
+      }
+      case 'pro:validateTaxCompliance': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:validateTaxCompliance'>;
+        return ipcRoutes[key].result.parse(await client.validateTaxCompliance(parsed)) as IpcResult<K>;
+      }
+      case 'pro:allocateOpenItemPayment': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:allocateOpenItemPayment'>;
+        const { reason, ...payment } = parsed.payment;
+        return ipcRoutes[key].result.parse(await client.allocateOpenItemPayment(payment, reason)) as IpcResult<K>;
+      }
+      case 'pro:allocateRemainingPayment': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:allocateRemainingPayment'>;
+        return ipcRoutes[key].result.parse(await client.allocateRemainingOpenItemPayment(parsed.paymentId, parsed.allocations, parsed.reason, parsed.allocationEventId)) as IpcResult<K>;
+      }
+      case 'pro:reverseDocumentAccounting': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:reverseDocumentAccounting'>;
+        return ipcRoutes[key].result.parse(await client.reverseDocumentAccounting(parsed, parsed.reason)) as IpcResult<K>;
+      }
+      case 'pro:previewAccountingBackfill': {
+        ipcRoutes[key].args.parse(args);
+        return ipcRoutes[key].result.parse(await client.previewAccountingBackfill()) as IpcResult<K>;
+      }
+      case 'pro:confirmAccountingBackfill': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:confirmAccountingBackfill'>;
+        return ipcRoutes[key].result.parse(await client.confirmAccountingBackfill(parsed)) as IpcResult<K>;
+      }
+      case 'pro:postAccountingCommand': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:postAccountingCommand'>;
+        return ipcRoutes[key].result.parse(parseSourcePostResult(await client.postAccountingCommand(parsed), parsed.source)) as IpcResult<K>;
       }
       default:
         if (fallback && isNativeElectronRoute(key)) return fallback(key, args);

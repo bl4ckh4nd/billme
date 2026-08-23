@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test src/liteHttpApi.test.ts"
+    "test": "node --import tsx --test src/liteHttpApi.test.ts src/proHttpApi.test.ts"
   },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",
@@ -65,6 +65,10 @@
     "./liteHttpApi": {
       "types": "./src/liteHttpApi.ts",
       "default": "./src/liteHttpApi.ts"
+    },
+    "./proHttpApi": {
+      "types": "./src/proHttpApi.ts",
+      "default": "./src/proHttpApi.ts"
     },
     "./einvoice/embedZugferdInPdf": {
       "types": "./src/einvoice/embedZugferdInPdf.ts",

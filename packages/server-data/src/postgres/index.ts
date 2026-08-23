@@ -3,6 +3,7 @@ export * from './e2eSeeding.js';
 export * from './auth.js';
 export * from './billing.js';
 export * from './connection.js';
+export * from './database.js';
 export * from './importDesktop.js';
 export * from './migrations.js';
 export * from './proAccounting.js';

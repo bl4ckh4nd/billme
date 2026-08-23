@@ -15,6 +15,7 @@
     "@billme/accounting-shared": "workspace:*",
     "@billme/desktop-services": "workspace:*",
     "@billme/server-core": "workspace:*",
+    "@electric-sql/pglite": "0.5.5",
     "pg": "^8.16.3",
     "zod": "^3.25.76",
     "drizzle-orm": "^0.44.4"
@@ -43,6 +44,10 @@
     "./postgres": {
       "types": "./src/postgres/index.ts",
       "default": "./src/postgres/index.ts"
+    },
+    "./pglite": {
+      "types": "./src/pglite/index.ts",
+      "default": "./src/pglite/index.ts"
     }
   },
   "types": "./src/index.ts"

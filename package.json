@@ -3,6 +3,13 @@
   "private": true,
   "license": "FSL-1.1-ALv2",
   "packageManager": "pnpm@10.0.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "keytar"
+    ]
+  },
   "scripts": {
     "dev": "pnpm -C apps/desktop dev",
     "dev:pro": "pnpm -C apps/pro-desktop dev",

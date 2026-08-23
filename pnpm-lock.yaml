@@ -195,7 +195,7 @@ importers:
         version: 0.31.9
       drizzle-orm:
         specifier: ^0.44.4
-        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
+        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@electric-sql/pglite@0.5.5)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
       electron:
         specifier: ^37.10.3
         version: 37.10.3
@@ -265,7 +265,7 @@ importers:
         version: 12.6.2
       drizzle-orm:
         specifier: ^0.44.4
-        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
+        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@electric-sql/pglite@0.5.5)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
       hono:
         specifier: ^4.9.0
         version: 4.11.9
@@ -426,7 +426,7 @@ importers:
         version: 0.31.9
       drizzle-orm:
         specifier: ^0.44.4
-        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
+        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@electric-sql/pglite@0.5.5)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
       electron:
         specifier: ^37.10.3
         version: 37.10.3
@@ -761,7 +761,7 @@ importers:
         version: 12.6.2
       drizzle-orm:
         specifier: ^0.44.4
-        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
+        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@electric-sql/pglite@0.5.5)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -1048,15 +1048,21 @@ importers:
       '@billme/accounting-shared':
         specifier: workspace:*
         version: link:../accounting-shared
+      '@billme/desktop-services':
+        specifier: workspace:*
+        version: link:../desktop-services
       '@billme/server-core':
         specifier: workspace:*
         version: link:../server-core
+      '@electric-sql/pglite':
+        specifier: 0.5.5
+        version: 0.5.5
       better-sqlite3:
         specifier: ^12.4.1
         version: 12.6.2
       drizzle-orm:
         specifier: ^0.44.4
-        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
+        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@electric-sql/pglite@0.5.5)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
       pg:
         specifier: ^8.16.3
         version: 8.20.0
@@ -1355,6 +1361,9 @@ packages:
 
   '@egjs/list-differ@1.0.1':
     resolution: {integrity: sha512-OTFTDQcWS+1ZREOdCWuk5hCBgYO4OsD30lXcOCyVOAjXMhgL5rBRDnt/otb6Nz8CzU0L/igdcaQBDLWc4t9gvg==}
+
+  '@electric-sql/pglite@0.5.5':
+    resolution: {integrity: sha512-QeZ+oB7QaU4EJj2awrB8hwFZ5TXxLRBQ9Gfq0dQauYDdWsRtuWRCERgtri35vRfL07KQHlVlc/4Qxvn7a5AXeA==}
 
   '@electron/asar@3.4.1':
     resolution: {integrity: sha512-i4/rNPRS84t0vSRa2HorerGRXWyF4vThfHesw0dmcWHp+cspK743UanA0suA5Q5y8kzY2y6YKrvbIUn69BCAiA==}
@@ -5267,6 +5276,8 @@ snapshots:
 
   '@egjs/list-differ@1.0.1': {}
 
+  '@electric-sql/pglite@0.5.5': {}
+
   '@electron/asar@3.4.1':
     dependencies:
       commander: 5.1.0
@@ -6963,9 +6974,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  drizzle-orm@0.44.7(@cloudflare/workers-types@4.20260207.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0):
+  drizzle-orm@0.44.7(@cloudflare/workers-types@4.20260207.0)(@electric-sql/pglite@0.5.5)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0):
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260207.0
+      '@electric-sql/pglite': 0.5.5
       '@types/better-sqlite3': 7.6.13
       '@types/pg': 8.20.0
       better-sqlite3: 12.6.2

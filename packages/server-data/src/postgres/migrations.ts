@@ -1,19 +1,39 @@
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Pool } from "pg";
+import { PGlite } from "@electric-sql/pglite";
 import { desc } from "drizzle-orm";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { createDrizzle, schema } from "./drizzle.js";
+import { createDrizzle, createPgliteDrizzle, schema } from "./drizzle.js";
 
 export interface AppliedMigrationsResult {
   applied: string[];
   skipped: string[];
 }
 
-const drizzleMigrationsDir = new URL("../../drizzle", import.meta.url).pathname;
-const drizzleJournalPath = fileURLToPath(
-  new URL("../../drizzle/meta/_journal.json", import.meta.url),
-);
+const isCanonicalMigrationDirectory = (candidate: string): boolean =>
+  existsSync(join(candidate, "0000_server_data.sql")) &&
+  existsSync(join(candidate, "meta", "_journal.json"));
+
+const resolveCanonicalMigrationDirectory = (): string => {
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const candidates = [
+    fileURLToPath(new URL("../../drizzle", import.meta.url)),
+    ...(resourcesPath ? [join(resourcesPath, "drizzle")] : []),
+    resolve(process.cwd(), "packages/server-data/drizzle"),
+  ];
+  const directory = candidates.find(isCanonicalMigrationDirectory);
+  if (!directory) {
+    throw new Error("Canonical server-data Drizzle migrations are not packaged");
+  }
+  return directory;
+};
+
+const drizzleMigrationsDir = resolveCanonicalMigrationDirectory();
+const drizzleJournalPath = join(drizzleMigrationsDir, "meta", "_journal.json");
 const migrationLockId = 4_825_167_391;
 
 const readCanonicalMigrationState = async (): Promise<number> => {
@@ -27,8 +47,56 @@ const readCanonicalMigrationState = async (): Promise<number> => {
   return latest;
 };
 
+type MigrationTarget = Pool | PGlite;
+
+const isPglite = (target: MigrationTarget): target is PGlite =>
+  target instanceof PGlite;
+
+const runPgliteMigrations = async (client: PGlite): Promise<void> => {
+  const migrations = readMigrationFiles({ migrationsFolder: drizzleMigrationsDir });
+
+  // PGlite's prepared-query protocol intentionally rejects a string that
+  // contains multiple SQL commands. Canonical Drizzle files contain those
+  // commands by design, so use PGlite's simple-query `exec` for each migration
+  // statement while retaining Drizzle's journal and SHA-256 bookkeeping.
+  await client.exec(`
+    CREATE SCHEMA IF NOT EXISTS drizzle;
+    CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+      id SERIAL PRIMARY KEY,
+      hash text NOT NULL,
+      created_at bigint
+    );
+  `);
+
+  const applied = await client.query<{ created_at: number | string }>(
+    'SELECT created_at FROM drizzle.__drizzle_migrations ORDER BY created_at DESC LIMIT 1',
+  );
+  const lastApplied = applied.rows[0];
+
+  await client.transaction(async (transaction) => {
+    for (const migration of migrations) {
+      if (lastApplied && Number(lastApplied.created_at) >= migration.folderMillis) continue;
+
+      for (const statement of migration.sql) {
+        await transaction.exec(statement);
+      }
+      await transaction.query(
+        'INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES ($1, $2)',
+        [migration.hash, migration.folderMillis],
+      );
+    }
+  });
+};
+
 /** Apply canonical Drizzle Kit migrations for a newly provisioned database. */
-export const runDrizzleMigrations = async (pool: Pool): Promise<void> => {
+export const runDrizzleMigrations = async (target: MigrationTarget): Promise<void> => {
+  if (isPglite(target)) {
+    await target.waitReady;
+    await runPgliteMigrations(target);
+    return;
+  }
+
+  const pool = target;
   const client = await pool.connect();
   try {
     // Drizzle's migrator is transactional, but concurrent first boots can
@@ -49,10 +117,11 @@ export const runDrizzleMigrations = async (pool: Pool): Promise<void> => {
 };
 
 /** Fail closed when an API/worker process starts before the one-shot migrator. */
-export const assertDrizzleSchemaCurrent = async (pool: Pool): Promise<void> => {
+export const assertDrizzleSchemaCurrent = async (target: MigrationTarget): Promise<void> => {
   try {
     const canonicalLatest = await readCanonicalMigrationState();
-    const result = await createDrizzle(pool).select({ createdAt: schema.drizzleMigrations.createdAt })
+    const database = isPglite(target) ? createPgliteDrizzle(target) : createDrizzle(target);
+    const result = await database.select({ createdAt: schema.drizzleMigrations.createdAt })
       .from(schema.drizzleMigrations).orderBy(desc(schema.drizzleMigrations.createdAt)).limit(1);
     const latest = Number(result[0]?.createdAt ?? 0);
     if (latest < canonicalLatest) {

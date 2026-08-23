@@ -2,9 +2,9 @@ packages:
   - "apps/*"
   - "packages/*"
 
-# pnpm 10 reads build-script allowlists from the workspace config (not the
-# root package.json). Electron's postinstall downloads the executable used by
-# Playwright's Electron launcher.
+# pnpm 10's authoritative build-script allowlist lives in the root
+# package.json. Keep this workspace-level mirror for older tooling and for
+# documenting the native artifacts required by Electron and the test runner.
 onlyBuiltDependencies:
   - electron
   - better-sqlite3

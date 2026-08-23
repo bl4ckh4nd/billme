@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@billme/desktop-contracts": "workspace:*",
+    "@billme/desktop-services": "workspace:*",
     "@billme/desktop-data": "workspace:*",
     "@billme/desktop-renderer": "workspace:*",
     "@billme/server-core": "workspace:*",

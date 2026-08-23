@@ -522,6 +522,9 @@ importers:
       '@billme/desktop-contracts':
         specifier: workspace:*
         version: link:../../packages/desktop-contracts
+      '@billme/desktop-services':
+        specifier: workspace:*
+        version: link:../../packages/desktop-services
       '@billme/desktop-data':
         specifier: workspace:*
         version: link:../../packages/desktop-data

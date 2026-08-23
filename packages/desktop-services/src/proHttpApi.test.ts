@@ -339,3 +339,320 @@ test('Pro HTTP adapter projects balance report account rows', async () => {
     unmappedAccounts: [], blocking: false,
   });
 });
+
+test('Pro HTTP adapter routes EÜR reports, facts, rules and project persistence', async () => {
+  const requests: Array<{ url: string; method?: string; body?: unknown }> = [];
+  const rule = {
+    id: 'eur-rule-1', taxYear: 2025, priority: 1, field: 'purpose' as const,
+    operator: 'contains' as const, value: 'hosting', targetEurLineId: 'line-1', active: true,
+    createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
+  };
+  const classification = {
+    id: 'classification-1', sourceType: 'transaction' as const, sourceId: 'tx-1', taxYear: 2025,
+    excluded: false, vatMode: 'none' as const, updatedAt: '2025-01-01T00:00:00.000Z',
+  };
+  const cashFact = {
+    id: 'cash-fact-1', tenantId: 'tenant-1', sourceType: 'transaction' as const, sourceId: 'tx-1',
+    taxYear: 2025, kind: 'income' as const, amountNet: 100, reason: 'Cash-Fakt', actorId: 'user-1',
+    provenance: { catalogId: 'catalog', catalogVersion: '1', catalogSourceHash: 'a'.repeat(64) },
+    createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
+  };
+  const annexFact = {
+    id: 'annex-fact-1', tenantId: 'tenant-1', taxYear: 2025, annex: 'ust', lineId: 'line-1', amount: 10,
+    reason: 'Anlage-Fakt', actorId: 'user-1',
+    provenance: { catalogId: 'catalog', catalogVersion: '1', catalogSourceHash: 'a'.repeat(64) },
+    createdAt: '2025-01-01T00:00:00.000Z',
+  };
+  const project = {
+    id: 'project-1', clientId: 'client-1', name: 'Website', status: 'active' as const,
+    budget: 1000, startDate: '2025-01-01', description: 'Launch',
+  };
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (url.includes('/reports/eur?')) return response({
+        taxYear: 2025, from: '2025-01-01', to: '2025-12-31',
+        rows: [{ id: 'line-1', label: 'Umsatz', kind: 'income', exportable: true, total: 100, sortOrder: 1 }],
+        summary: { incomeTotal: 100, expenseTotal: 0, surplus: 100 }, unclassifiedCount: 0, warnings: [],
+        catalog: { id: 'catalog', version: '1', sourceHash: 'a'.repeat(64), delivery: 'elster-ready', elsterReady: true },
+      });
+      if (url.includes('/reports/eur/export.csv')) return { ok: true, status: 200, text: async () => 'Kennziffer;Betrag\n' } as Response;
+      if (url.includes('/reports/eur/rules')) return response(init?.method === 'POST' ? rule : init?.method === 'DELETE' ? { ok: true } : [rule]);
+      if (url.includes('/classifications')) return response(classification);
+      if (url.includes('/facts/cash')) return response(init?.method === 'POST' ? cashFact : []);
+      if (url.includes('/facts/annex')) return response(init?.method === 'POST' ? annexFact : []);
+      if (url.includes('/projects/') && url.endsWith('/archive')) return response(project);
+      if (url.endsWith('/projects') || url.includes('/projects?')) return response(init?.method === 'POST' ? project : [project]);
+      if (url.includes('/projects/')) return response(project);
+      return response([]);
+    },
+  });
+
+  const report = await api.eur.getReport({ taxYear: 2025 });
+  assert.equal(report.rows[0]?.lineId, 'line-1');
+  assert.deepEqual(await api.eur.listItems({ taxYear: 2025 }), []);
+  assert.deepEqual(await api.eur.listCashFacts({ taxYear: 2025 }), []);
+  assert.deepEqual(await api.eur.listAnnexFacts({ taxYear: 2025, annex: 'ust' }), []);
+  assert.deepEqual(await api.eur.listRules({ taxYear: 2025 }), [rule]);
+  assert.deepEqual(await api.eur.upsertRule({
+    taxYear: 2025, priority: 1, field: 'purpose', operator: 'contains', value: 'hosting', targetEurLineId: 'line-1', active: true,
+  }), rule);
+  assert.deepEqual(await api.eur.deleteRule({ id: 'eur-rule-1' }), { ok: true });
+  assert.deepEqual(await api.eur.upsertClassification({
+    sourceType: 'transaction', sourceId: 'tx-1', taxYear: 2025, reason: 'Klassifiziert',
+  }), classification);
+  assert.deepEqual(await api.eur.saveCashFact({
+    sourceType: 'transaction', sourceId: 'tx-1', taxYear: 2025, kind: 'income', amountNet: 100, reason: 'Cash-Fakt',
+  }), cashFact);
+  assert.deepEqual(await api.eur.saveAnnexFact({
+    taxYear: 2025, annex: 'ust', lineId: 'line-1', amount: 10, reason: 'Anlage-Fakt',
+  }), annexFact);
+  assert.equal(await api.eur.exportCsv({ taxYear: 2025 }), 'Kennziffer;Betrag\n');
+  assert.deepEqual(await api.projects.list({ clientId: 'client-1' }), [project]);
+  assert.deepEqual(await api.projects.get({ id: 'project-1' }), project);
+  assert.deepEqual(await api.projects.upsert({ project, reason: 'Projekt gespeichert' }), project);
+  assert.deepEqual(await api.projects.archive({ id: 'project-1', reason: 'Projekt archiviert' }), project);
+
+  assert.deepEqual(requests.map(({ url, method }) => ({ url, method })), [
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur?taxYear=2025', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/items?taxYear=2025', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/facts/cash?taxYear=2025', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/facts/annex?taxYear=2025&annex=ust', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/rules?taxYear=2025', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/rules', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/rules/eur-rule-1', method: 'DELETE' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/classifications', method: 'PUT' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/facts/cash', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/facts/annex', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/export.csv?taxYear=2025', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/projects?clientId=client-1', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/projects/project-1', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/projects', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/projects/project-1/archive', method: 'POST' },
+  ]);
+  assert.deepEqual(requests[5]?.body, {
+    taxYear: 2025, priority: 1, field: 'purpose', operator: 'contains', value: 'hosting', targetEurLineId: 'line-1', active: true,
+    reason: 'EÜR-Regel gespeichert',
+  });
+  assert.deepEqual(requests[6]?.body, { reason: 'EÜR-Regel gelöscht' });
+  assert.deepEqual(requests[7]?.body, {
+    sourceType: 'transaction', sourceId: 'tx-1', taxYear: 2025, reason: 'Klassifiziert',
+  });
+  assert.deepEqual(requests[8]?.body, {
+    sourceType: 'transaction', sourceId: 'tx-1', taxYear: 2025, kind: 'income', amountNet: 100, reason: 'Cash-Fakt',
+  });
+  assert.deepEqual(requests[9]?.body, { taxYear: 2025, annex: 'ust', lineId: 'line-1', amount: 10, reason: 'Anlage-Fakt' });
+  assert.deepEqual(requests[13]?.body, { reason: 'Projekt gespeichert', project });
+  assert.deepEqual(requests[14]?.body, { reason: 'Projekt archiviert' });
+});
+
+test('Pro HTTP adapter routes finance import lifecycle and transaction linking', async () => {
+  const requests: Array<{ url: string; method?: string; body?: unknown }> = [];
+  const batch = {
+    id: 'batch-1', accountId: 'account-1', profile: 'generic', fileName: 'bank.csv',
+    fileSha256: 'b'.repeat(64), mappingJson: {}, importedCount: 1, skippedCount: 0,
+    errorCount: 0, createdAt: '2025-01-01T00:00:00.000Z',
+  };
+  const details = {
+    batch, transactions: [{ id: 'tx-1', date: '2025-01-01', amount: 100, type: 'income' as const,
+      counterparty: 'Acme', purpose: 'Invoice', status: 'booked' as const }],
+    canRollback: true, linkedInvoiceCount: 0,
+  };
+  const preview = {
+    path: '/tmp/bank.csv', fileName: 'bank.csv', fileSha256: 'c'.repeat(64), delimiter: ';',
+    headers: ['date', 'amount'], profile: 'generic' as const,
+    suggestedMapping: { dateColumn: 'date', amountColumn: 'amount' }, rows: [],
+    stats: { totalRows: 0, previewRows: 0, validRows: 0, errorRows: 0 },
+  };
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (url.endsWith('/finance/import/preview')) return response(preview);
+      if (url.endsWith('/finance/import/commit')) return response({ batchId: 'batch-1', imported: 1, skipped: 0, errors: [], fileSha256: 'c'.repeat(64) });
+      if (url.endsWith('/finance/import-batches/batch-1')) return response(details);
+      if (url.includes('/finance/import-batches?')) return response([batch]);
+      if (url.endsWith('/rollback')) return response({ success: true, deletedCount: 1 });
+      if (url.includes('/transactions?')) return response([]);
+      if (url.endsWith('/link')) return response({ success: true });
+      return response({ success: true });
+    },
+  });
+
+  assert.deepEqual(await api.finance.importPreview({ path: '/tmp/bank.csv' }), preview);
+  assert.deepEqual(await api.finance.importCommit({
+    path: '/tmp/bank.csv', accountId: 'account-1', mapping: { dateColumn: 'date', amountColumn: 'amount' },
+  }), { batchId: 'batch-1', imported: 1, skipped: 0, errors: [], fileSha256: 'c'.repeat(64) });
+  assert.deepEqual(await api.finance.listImportBatches({ accountId: 'account-1', limit: 10 }), [batch]);
+  assert.deepEqual(await api.finance.getImportBatchDetails({ batchId: 'batch-1' }), details);
+  assert.deepEqual(await api.finance.rollbackImportBatch({ batchId: 'batch-1', reason: 'Import zurücksetzen' }), { success: true, deletedCount: 1 });
+  assert.deepEqual(await api.transactions.list({ type: 'income', unlinkedOnly: true }), []);
+  assert.deepEqual(await api.transactions.link({ transactionId: 'tx-1', invoiceId: 'invoice-1' }), { success: true });
+  assert.deepEqual(await api.transactions.unlink({ transactionId: 'tx-1' }), { success: true });
+
+  assert.deepEqual(requests.map(({ url, method }) => ({ url, method })), [
+    { url: 'http://127.0.0.1:43123/api/v1/pro/finance/import/preview', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/finance/import/commit', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/finance/import-batches?accountId=account-1&limit=10', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/finance/import-batches/batch-1', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/finance/import-batches/batch-1/rollback', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/transactions?type=income&unlinkedOnly=true', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/transactions/tx-1/link', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/transactions/tx-1/unlink', method: 'POST' },
+  ]);
+  assert.deepEqual(requests[0]?.body, { path: '/tmp/bank.csv' });
+  assert.deepEqual(requests[1]?.body, {
+    path: '/tmp/bank.csv', accountId: 'account-1', mapping: { dateColumn: 'date', amountColumn: 'amount' },
+  });
+  assert.deepEqual(requests[4]?.body, { reason: 'Import zurücksetzen' });
+  assert.deepEqual(requests[6]?.body, { invoiceId: 'invoice-1', reason: 'Zahlung automatisch mit Rechnung verknüpft' });
+  assert.deepEqual(requests[7]?.body, { reason: 'Zahlungsverknüpfung aufgehoben' });
+});
+
+test('Pro HTTP adapter validates EÜR, project and import boundaries before fetch', async () => {
+  let fetchCalls = 0;
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async () => {
+      fetchCalls += 1;
+      return response([]);
+    },
+  });
+
+  await assert.rejects(api.eur.getReport({ taxYear: 2024 }), /2024|too_small|>= 2025/);
+  await assert.rejects(api.eur.listItems({ taxYear: 2025, limit: 0 }), /positive|greater than 0/);
+  await assert.rejects(api.projects.get({ id: '' }), /at least 1 character/);
+  await assert.rejects(api.finance.importCommit({ path: '/tmp/bank.csv', accountId: 'account-1', mapping: {} as never }), /dateColumn|amountColumn/);
+  assert.equal(fetchCalls, 0);
+});
+
+test('Pro HTTP adapter keeps tenant mutation reasons and import filters in the request', async () => {
+  const requests: Array<{ url: string; method?: string; body?: unknown }> = [];
+  const classification = {
+    id: 'classification-2', sourceType: 'invoice' as const, sourceId: 'invoice-1', taxYear: 2025,
+    excluded: true, vatMode: 'default' as const, note: 'Privat', updatedAt: '2025-01-01T00:00:00.000Z',
+  };
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (url.includes('/classifications')) return response(classification);
+      if (url.includes('/rollback')) return response({ success: true, deletedCount: 0 });
+      return response([]);
+    },
+  });
+
+  await api.eur.listItems({
+    taxYear: 2025, onlyUnclassified: true, sourceType: 'invoice', flowType: 'expense',
+    status: 'unclassified', search: 'Acme', accountId: 'account-1', limit: 25, offset: 5,
+  });
+  await api.eur.upsertClassification({
+    sourceType: 'invoice', sourceId: 'invoice-1', taxYear: 2025, excluded: true,
+    vatMode: 'default', note: 'Privat', reason: 'Quelle ausgeschlossen',
+  });
+  await api.finance.rollbackImportBatch({ batchId: 'batch-2', reason: 'Doppelter Import' });
+
+  assert.deepEqual(requests, [
+    {
+      url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/items?taxYear=2025&onlyUnclassified=true&sourceType=invoice&flowType=expense&status=unclassified&search=Acme&accountId=account-1&limit=25&offset=5',
+      method: 'GET', body: undefined,
+    },
+    {
+      url: 'http://127.0.0.1:43123/api/v1/pro/accounting/reports/eur/classifications',
+      method: 'PUT',
+      body: { sourceType: 'invoice', sourceId: 'invoice-1', taxYear: 2025, excluded: true, vatMode: 'default', note: 'Privat', reason: 'Quelle ausgeschlossen' },
+    },
+    {
+      url: 'http://127.0.0.1:43123/api/v1/pro/finance/import-batches/batch-2/rollback',
+      method: 'POST', body: { reason: 'Doppelter Import' },
+    },
+  ]);
+});
+
+test('Pro migration routes use the embedded local token without a hosted bearer', async () => {
+  const authHeaders: Array<{ local: string | null; bearer: string | null }> = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    getToken: () => 'must-not-be-used',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'migration-token' }),
+    fetch: async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      authHeaders.push({ local: headers.get('x-billme-local-token'), bearer: headers.get('authorization') });
+      return response([]);
+    },
+  });
+
+  await api.eur.listItems({ taxYear: 2025 });
+  await api.projects.list({ includeArchived: true });
+  await api.finance.listImportBatches({ accountId: 'account-1' });
+  await api.transactions.list({ linkedOnly: true });
+
+  assert.deepEqual(authHeaders, [
+    { local: 'migration-token', bearer: null },
+    { local: 'migration-token', bearer: null },
+    { local: 'migration-token', bearer: null },
+    { local: 'migration-token', bearer: null },
+  ]);
+});
+
+test('Pro migration routes fail closed to the injected fallback when embedded is unavailable', async () => {
+  const calls: string[] = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => null,
+    fallback: async (key) => {
+      calls.push(key);
+      return [] as never;
+    },
+    fetch: async () => { throw new Error('HTTP must not be used'); },
+  });
+
+  await api.eur.listItems({ taxYear: 2025 });
+  await api.projects.list({});
+  await api.finance.listImportBatches({});
+  await api.transactions.list({});
+  assert.deepEqual(calls, ['eur:listItems', 'projects:list', 'finance:listImportBatches', 'transactions:list']);
+});
+
+test('Pro finance rollback propagates the server conflict without falling back', async () => {
+  let fetchCalls = 0;
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fallback: async () => { throw new Error('fallback must not run'); },
+    fetch: async () => {
+      fetchCalls += 1;
+      return response({ message: 'IMPORT_BATCH_LINKED' }, 409);
+    },
+  });
+
+  await assert.rejects(
+    api.finance.rollbackImportBatch({ batchId: 'batch-1', reason: 'Rollback' }),
+    /IMPORT_BATCH_LINKED/,
+  );
+  assert.equal(fetchCalls, 1);
+});
+
+test('Pro project and transaction identifiers stay URL encoded', async () => {
+  const urls: string[] = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (input) => { const url = String(input); urls.push(url); return response(url.includes('/unlink') ? { success: true } : null); },
+  });
+
+  await api.projects.get({ id: 'project/one' });
+  await api.transactions.unlink({ transactionId: 'transaction/one' });
+  assert.deepEqual(urls, [
+    'http://127.0.0.1:43123/api/v1/pro/projects/project%2Fone',
+    'http://127.0.0.1:43123/api/v1/pro/transactions/transaction%2Fone/unlink',
+  ]);
+});

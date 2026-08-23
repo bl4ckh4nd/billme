@@ -10,6 +10,8 @@ import {
   articleSchema, assetDepreciationScheduleEntrySchema, assetSchema, assetUpsertSchema,
   datevExportResultSchema, incomingInvoiceSchema, journalEntryEntitySchema,
   ledgerAccountSchema, ledgerBalanceRowSchema, openItemSchema,
+  eurAnnexFactSchema, eurCashFactSchema, eurClassificationSchema,
+  eurRuleSchema, projectSchema, transactionSchema,
   proAccountingSourcePostResultSchema, proAccountingSourceRunSchema,
   proListAccountSuggestionRulesArgsSchema, proListTaxCaseAccountMappingsArgsSchema,
   proListTaxCasesArgsSchema, proUpsertAccountSuggestionRuleArgsSchema,
@@ -68,6 +70,13 @@ const reportSnapshotParser: Parser<z.infer<typeof reportSnapshotRecordSchema>> =
     args: input.args ?? json(input.argsJson, {}), payload: input.payload ?? json(input.payloadJson, null),
     createdAt: input.createdAt, sourceHash: input.sourceHash,
   });
+};
+const eurReportServerParser: Parser<unknown> = (input) => {
+  if (!isRecord(input)) throw new Error('Die Serverantwort enthält keinen EÜR-Bericht.');
+  const rows = Array.isArray(input.rows) ? input.rows.map((row) => isRecord(row)
+    ? { ...row, lineId: row.lineId ?? row.id }
+    : row) : input.rows;
+  return { ...input, rows };
 };
 const authSessionInfoParser = (input: unknown) => {
   if (!isRecord(input)) throw new Error('Die Serverantwort enthält keine Sitzungsdaten.');
@@ -137,6 +146,14 @@ export const createProWebClient = ({
     const response = await requestFetch(buildUrl(target.baseUrl, path, query), { method: 'GET', headers: new Headers(target.headers) });
     if (!response.ok) throw new Error(`Download fehlgeschlagen (HTTP ${response.status}).`);
     return { blob: await response.blob(), headers: response.headers };
+  };
+  const requestText = async (path: string, query?: Record<string, QueryValue>): Promise<string> => {
+    if (!requestFetch) throw new Error('Keine Fetch-Implementierung verfügbar.');
+    const target = await resolveRequestTarget();
+    const response = await requestFetch(buildUrl(target.baseUrl, path, query), { method: 'GET', headers: new Headers(target.headers) });
+    const payload = await response.text();
+    if (!response.ok) throw new Error(`Download fehlgeschlagen (HTTP ${response.status}).`);
+    return payload;
   };
   const billingScope = createBillingScope('pro');
   const toServerInvoicePayload = (invoice: IpcResult<'invoices:upsert'>) => {
@@ -414,6 +431,81 @@ export const createProWebClient = ({
     saveReportMappingOverride: (input: unknown) => requestJson({
       method: 'PUT', body: input, parser: (payload) => payload,
     }, '/api/v1/pro/accounting/mappings/overrides'),
+    getEurReport: (query: IpcArgs<'eur:getReport'>) => requestJson({
+      parser: eurReportServerParser, query: query as Record<string, QueryValue>,
+    }, '/api/v1/pro/accounting/reports/eur'),
+    exportEurCsv: (query: IpcArgs<'eur:exportCsv'>) => requestText('/api/v1/pro/accounting/reports/eur/export.csv', query as Record<string, QueryValue>),
+    listEurRules: (taxYear: number) => requestJson({
+      parser: parseArray(eurRuleSchema), query: { taxYear },
+    }, '/api/v1/pro/accounting/reports/eur/rules'),
+    saveEurRule: (input: IpcArgs<'eur:upsertRule'>) => requestJson({
+      method: 'POST', body: { ...input, reason: 'EÜR-Regel gespeichert' }, parser: eurRuleSchema,
+    }, '/api/v1/pro/accounting/reports/eur/rules'),
+    deleteEurRule: (id: string) => requestJson({
+      method: 'DELETE', body: { reason: 'EÜR-Regel gelöscht' }, parser: z.object({ ok: z.literal(true) }),
+    }, `/api/v1/pro/accounting/reports/eur/rules/${encodeURIComponent(id)}`),
+    listEurCashItems: (query: IpcArgs<'eur:listItems'>) => requestJson({
+      parser: (input) => input, query: query as Record<string, QueryValue>,
+    }, '/api/v1/pro/accounting/reports/eur/items'),
+    upsertEurClassification: (input: IpcArgs<'eur:upsertClassification'>) => requestJson({
+      method: 'PUT', body: input, parser: eurClassificationSchema,
+    }, '/api/v1/pro/accounting/reports/eur/classifications'),
+    saveEurCashFact: (input: IpcArgs<'eur:saveCashFact'>) => requestJson({
+      method: 'POST', body: input, parser: eurCashFactSchema,
+    }, '/api/v1/pro/accounting/reports/eur/facts/cash'),
+    listEurCashFacts: (taxYear: number) => requestJson({
+      parser: parseArray(eurCashFactSchema), query: { taxYear },
+    }, '/api/v1/pro/accounting/reports/eur/facts/cash'),
+    saveEurAnnexFact: (input: IpcArgs<'eur:saveAnnexFact'>) => requestJson({
+      method: 'POST', body: input, parser: eurAnnexFactSchema,
+    }, '/api/v1/pro/accounting/reports/eur/facts/annex'),
+    listEurAnnexFacts: (taxYear: number, annex?: string) => requestJson({
+      parser: parseArray(eurAnnexFactSchema), query: { taxYear, annex },
+    }, '/api/v1/pro/accounting/reports/eur/facts/annex'),
+    listProjects: (options?: IpcArgs<'projects:list'>) => requestJson({
+      parser: parseArray(projectSchema), query: options,
+    }, '/api/v1/pro/projects'),
+    getProject: (id: string) => requestJson({
+      parser: (input) => input === null ? null : projectSchema.parse(input),
+    }, `/api/v1/pro/projects/${encodeURIComponent(id)}`),
+    saveProject: (project: unknown, reason: string) => requestJson({
+      method: 'POST', body: { reason, project: projectSchema.parse(project) }, parser: projectSchema,
+    }, '/api/v1/pro/projects'),
+    archiveProject: (id: string, reason: string) => requestJson({
+      method: 'POST', body: { reason }, parser: projectSchema,
+    }, `/api/v1/pro/projects/${encodeURIComponent(id)}/archive`),
+    listTransactions: (filters?: IpcArgs<'transactions:list'>) => requestJson({
+      parser: parseArray(transactionSchema), query: filters,
+    }, '/api/v1/pro/transactions'),
+    linkTransaction: (transactionId: string, invoiceId: string, reason = 'Zahlung automatisch mit Rechnung verknüpft') => requestJson({
+      method: 'POST', body: { invoiceId, reason }, parser: (input) => {
+        const result = z.object({ success: z.literal(true), invoice: invoiceSchema.optional() }).parse(input);
+        return { success: result.success, ...(result.invoice ? { invoice: toLegacyInvoice(result.invoice) } : {}) };
+      },
+    }, `/api/v1/pro/transactions/${encodeURIComponent(transactionId)}/link`),
+    unlinkTransaction: (transactionId: string, reason = 'Zahlungsverknüpfung aufgehoben') => requestJson({
+      method: 'POST', body: { reason }, parser: z.object({ success: z.boolean() }),
+    }, `/api/v1/pro/transactions/${encodeURIComponent(transactionId)}/unlink`),
+    financeImportPreview: (input: unknown) => {
+      const parsed = ipcRoutes['finance:importPreview'].args.parse(input);
+      return requestJson({ method: 'POST', body: parsed, parser: ipcRoutes['finance:importPreview'].result }, '/api/v1/pro/finance/import/preview');
+    },
+    financeImportCommit: (input: unknown) => {
+      const parsed = ipcRoutes['finance:importCommit'].args.parse(input);
+      return requestJson({ method: 'POST', body: parsed, parser: ipcRoutes['finance:importCommit'].result }, '/api/v1/pro/finance/import/commit');
+    },
+    financeListImportBatches: (input: unknown) => {
+      const parsed = ipcRoutes['finance:listImportBatches'].args.parse(input);
+      return requestJson({ query: parsed, parser: ipcRoutes['finance:listImportBatches'].result }, '/api/v1/pro/finance/import-batches');
+    },
+    financeGetImportBatchDetails: (input: unknown) => {
+      const parsed = ipcRoutes['finance:getImportBatchDetails'].args.parse(input);
+      return requestJson({ parser: ipcRoutes['finance:getImportBatchDetails'].result }, `/api/v1/pro/finance/import-batches/${encodeURIComponent(parsed.batchId)}`);
+    },
+    financeRollbackImportBatch: (input: unknown) => {
+      const parsed = ipcRoutes['finance:rollbackImportBatch'].args.parse(input);
+      return requestJson({ method: 'POST', body: { reason: parsed.reason }, parser: ipcRoutes['finance:rollbackImportBatch'].result }, `/api/v1/pro/finance/import-batches/${encodeURIComponent(parsed.batchId)}/rollback`);
+    },
     setActiveTemplate: (input: unknown) => requestJson({ method: 'PUT', body: setActiveTemplatePayloadSchema.parse(input), parser: (input) => input }, '/api/v1/pro/templates/active'),
   };
   return client;
@@ -767,6 +859,98 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, ...clientConfig }: 
       case 'pro:listDatevExports': {
         const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:listDatevExports'>;
         return ipcRoutes[key].result.parse(await client.listDatevExports(parsed.limit)) as IpcResult<K>;
+      }
+      case 'eur:getReport': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:getReport'>;
+        return ipcRoutes[key].result.parse(await client.getEurReport(parsed)) as IpcResult<K>;
+      }
+      case 'eur:exportCsv': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:exportCsv'>;
+        return ipcRoutes[key].result.parse(await client.exportEurCsv(parsed)) as IpcResult<K>;
+      }
+      case 'eur:listRules': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:listRules'>;
+        return ipcRoutes[key].result.parse(await client.listEurRules(parsed.taxYear)) as IpcResult<K>;
+      }
+      case 'eur:upsertRule': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:upsertRule'>;
+        return ipcRoutes[key].result.parse(await client.saveEurRule(parsed)) as IpcResult<K>;
+      }
+      case 'eur:deleteRule': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:deleteRule'>;
+        return ipcRoutes[key].result.parse(await client.deleteEurRule(parsed.id)) as IpcResult<K>;
+      }
+      case 'eur:listItems': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:listItems'>;
+        return ipcRoutes[key].result.parse(await client.listEurCashItems(parsed)) as IpcResult<K>;
+      }
+      case 'eur:upsertClassification': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:upsertClassification'>;
+        return ipcRoutes[key].result.parse(await client.upsertEurClassification(parsed)) as IpcResult<K>;
+      }
+      case 'eur:saveCashFact': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:saveCashFact'>;
+        return ipcRoutes[key].result.parse(await client.saveEurCashFact(parsed)) as IpcResult<K>;
+      }
+      case 'eur:listCashFacts': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:listCashFacts'>;
+        return ipcRoutes[key].result.parse(await client.listEurCashFacts(parsed.taxYear)) as IpcResult<K>;
+      }
+      case 'eur:saveAnnexFact': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:saveAnnexFact'>;
+        return ipcRoutes[key].result.parse(await client.saveEurAnnexFact(parsed)) as IpcResult<K>;
+      }
+      case 'eur:listAnnexFacts': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:listAnnexFacts'>;
+        return ipcRoutes[key].result.parse(await client.listEurAnnexFacts(parsed.taxYear, parsed.annex)) as IpcResult<K>;
+      }
+      case 'projects:list': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'projects:list'>;
+        return ipcRoutes[key].result.parse(await client.listProjects(parsed)) as IpcResult<K>;
+      }
+      case 'projects:get': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'projects:get'>;
+        return ipcRoutes[key].result.parse(await client.getProject(parsed.id)) as IpcResult<K>;
+      }
+      case 'projects:upsert': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'projects:upsert'>;
+        return ipcRoutes[key].result.parse(await client.saveProject(parsed.project, parsed.reason)) as IpcResult<K>;
+      }
+      case 'projects:archive': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'projects:archive'>;
+        return ipcRoutes[key].result.parse(await client.archiveProject(parsed.id, parsed.reason)) as IpcResult<K>;
+      }
+      case 'transactions:list': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'transactions:list'>;
+        return ipcRoutes[key].result.parse(await client.listTransactions(parsed)) as IpcResult<K>;
+      }
+      case 'transactions:link': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'transactions:link'>;
+        return ipcRoutes[key].result.parse(await client.linkTransaction(parsed.transactionId, parsed.invoiceId)) as IpcResult<K>;
+      }
+      case 'transactions:unlink': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'transactions:unlink'>;
+        return ipcRoutes[key].result.parse(await client.unlinkTransaction(parsed.transactionId)) as IpcResult<K>;
+      }
+      case 'finance:importPreview': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:importPreview'>;
+        return ipcRoutes[key].result.parse(await client.financeImportPreview(parsed)) as IpcResult<K>;
+      }
+      case 'finance:importCommit': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:importCommit'>;
+        return ipcRoutes[key].result.parse(await client.financeImportCommit(parsed)) as IpcResult<K>;
+      }
+      case 'finance:listImportBatches': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:listImportBatches'>;
+        return ipcRoutes[key].result.parse(await client.financeListImportBatches(parsed)) as IpcResult<K>;
+      }
+      case 'finance:getImportBatchDetails': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:getImportBatchDetails'>;
+        return ipcRoutes[key].result.parse(await client.financeGetImportBatchDetails(parsed)) as IpcResult<K>;
+      }
+      case 'finance:rollbackImportBatch': {
+        const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:rollbackImportBatch'>;
+        return ipcRoutes[key].result.parse(await client.financeRollbackImportBatch(parsed)) as IpcResult<K>;
       }
       default:
         if (fallback && isNativeElectronRoute(key)) return fallback(key, args);

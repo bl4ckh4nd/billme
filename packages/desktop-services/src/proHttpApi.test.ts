@@ -191,7 +191,151 @@ test('Pro HTTP adapter rejects unsupported server-owned routes when HTTP is avai
   void api;
   assert.ok(invoke);
   await assert.rejects(
-    invoke?.('pro:getLedgerStats', undefined),
-    /Pro-HTTP-Laufzeit unterstützt die IPC-Route pro:getLedgerStats nicht/,
+    invoke?.('pro:validateTaxCompliance', { draftId: 'draft-1' }),
+    /Pro-HTTP-Laufzeit unterstützt die IPC-Route pro:validateTaxCompliance nicht/,
   );
+});
+
+test('Pro HTTP adapter routes the accounting catalog, ledger and report reads', async () => {
+  const requests: string[] = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (input) => {
+      requests.push(String(input));
+      return response([]);
+    },
+  });
+
+  await api.pro.listLedgerAccounts({ chart: 'SKR04', limit: 2 });
+  await api.pro.listTaxCases({ activeOnly: true });
+  await api.pro.listTaxCaseAccountMappings({ chart: 'SKR03' });
+  await api.pro.listAccountSuggestionRules({ activeOnly: true });
+  await api.pro.listWorkflowEntries();
+  await api.pro.listJournalEntries({ from: '2025-01-01', limit: 1 });
+  await api.pro.getLedgerBalances({ asOfDate: '2025-12-31' });
+  await api.pro.listAccountingSourceRuns();
+  await api.pro.listReportSnapshots({ reportType: 'guv' });
+  await api.pro.listReportMappingPositions({ statement: 'bwa01', asOfDate: '2025-12-31' });
+  await api.pro.listAssets();
+  await api.pro.listDatevExports({ limit: 5 });
+  await api.pro.listAccountingAccountMappings({ chart: 'SKR04' });
+
+  assert.deepEqual(requests, [
+    'http://127.0.0.1:43123/api/v1/pro/accounting/ledger/accounts?chart=SKR04&limit=2',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/tax-cases?activeOnly=true',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/tax-case-account-mappings?chart=SKR03',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/account-suggestion-rules?activeOnly=true',
+    'http://127.0.0.1:43123/api/v1/pro/workflow',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/journal?from=2025-01-01&limit=1',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/balances?asOfDate=2025-12-31',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/source-runs',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/reports/snapshots?reportType=guv',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/mappings/positions?reportType=bwa01&asOfDate=2025-12-31',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/assets',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/datev/exports',
+    'http://127.0.0.1:43123/api/v1/pro/accounting/mappings?chart=SKR04',
+  ]);
+});
+
+test('Pro HTTP adapter keeps accounting mutation payloads contract-shaped', async () => {
+  const requests: Array<{ url: string; method?: string; body?: unknown }> = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (input, init) => {
+      requests.push({ url: String(input), method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return response({ ok: true });
+    },
+  });
+
+  await api.pro.upsertWorkflowEntry({
+    transactionId: 'tx-1', transactionJson: '{"id":"tx-1"}', draftJson: '{"id":"draft-1"}',
+  });
+  assert.deepEqual(requests, [{
+    url: 'http://127.0.0.1:43123/api/v1/pro/workflow',
+    method: 'POST',
+    body: { transactionId: 'tx-1', transactionJson: '{"id":"tx-1"}', draftJson: '{"id":"draft-1"}' },
+  }]);
+});
+
+test('Pro web client validates tax and suggestion-rule accounting mutations', async () => {
+  const requests: Array<{ url: string; body?: unknown }> = [];
+  const mapping = {
+    id: 'mapping-1', chart: 'SKR03' as const, taxCaseKey: 'DE_STD_19' as const,
+    role: 'output_tax' as const, accountNumber: '1776', updatedAt: '2025-01-01T00:00:00.000Z',
+  };
+  const rule = {
+    id: 'rule-1', tenantId: 'tenant-1', chart: 'SKR03' as const, priority: 10,
+    field: 'purpose' as const, operator: 'contains' as const, value: 'hosting',
+    targetAccountNumber: '4920', flowType: 'expense' as const, active: true,
+    createdAt: '2025-01-01T00:00:00.000Z', updatedAt: '2025-01-01T00:00:00.000Z',
+  };
+  let responseIndex = 0;
+  const client = createProWebClient({
+    baseUrl: 'https://hosted.example.test',
+    getToken: () => 'hosted-token',
+    fetch: async (input, init) => {
+      requests.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return response(responseIndex++ === 0 ? mapping : rule);
+    },
+  });
+
+  assert.deepEqual(await client.saveTaxCaseMapping({
+    chart: 'SKR03', taxCaseKey: 'DE_STD_19', role: 'output_tax', accountNumber: '1776', reason: 'Mapping',
+  }), mapping);
+  assert.deepEqual(await client.saveAccountSuggestionRule({
+    chart: 'SKR03', priority: 10, field: 'purpose', operator: 'contains', value: 'hosting',
+    targetAccountNumber: '4920', flowType: 'expense', active: true, reason: 'Rule',
+  }), rule);
+  assert.deepEqual(requests, [
+    {
+      url: 'https://hosted.example.test/api/v1/pro/accounting/tax-case-account-mappings',
+      body: { chart: 'SKR03', taxCaseKey: 'DE_STD_19', role: 'output_tax', accountNumber: '1776', reason: 'Mapping' },
+    },
+    {
+      url: 'https://hosted.example.test/api/v1/pro/accounting/account-suggestion-rules',
+      body: { chart: 'SKR03', priority: 10, field: 'purpose', operator: 'contains', value: 'hosting', targetAccountNumber: '4920', flowType: 'expense', active: true, reason: 'Rule' },
+    },
+  ]);
+});
+
+test('Pro HTTP adapter projects hosted report rows to the legacy Pro contract', async () => {
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async () => response({
+      from: '2025-01-01', to: '2025-12-31', chart: 'SKR03', netResult: 100,
+      rows: [{ position: '1', label: 'Umsatz', amount: 100, accountNumbers: ['8400'] }],
+      mappingHealth: { unmappedAccounts: [], blocking: false },
+    }),
+  });
+
+  assert.deepEqual(await api.pro.getGuvReport({ from: '2025-01-01', to: '2025-12-31' }), {
+    from: '2025-01-01', to: '2025-12-31', chart: 'SKR03', netResult: 100,
+    rows: [{ positionKey: '1', positionLabel: 'Umsatz', amount: 100, accountRefs: ['8400'] }],
+    unmappedAccounts: [], blocking: false,
+  });
+});
+
+test('Pro HTTP adapter projects balance report account rows', async () => {
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async () => response({
+      asOfDate: '2025-12-31',
+      assets: [{ accountNumbers: ['1200'], amount: 200 }],
+      liabilities: [{ accountNumbers: ['1800'], amount: 200 }],
+      totals: { assets: 200, liabilities: 200, delta: 0 },
+      mappingHealth: { unmappedAccounts: [], blocking: false },
+    }),
+  });
+
+  assert.deepEqual(await api.pro.getBilanzReport({ asOfDate: '2025-12-31' }), {
+    asOfDate: '2025-12-31',
+    assets: [{ accountNumber: '1200', amount: 200 }],
+    liabilities: [{ accountNumber: '1800', amount: 200 }],
+    totals: { assets: 200, liabilities: 200, delta: 0 },
+    unmappedAccounts: [], blocking: false,
+  });
 });

@@ -48,6 +48,10 @@
     "./pglite": {
       "types": "./src/pglite/index.ts",
       "default": "./src/pglite/index.ts"
+    },
+    "./postgres/importDesktop": {
+      "types": "./src/postgres/importDesktop.ts",
+      "default": "./src/postgres/importDesktop.ts"
     }
   },
   "types": "./src/index.ts"

@@ -236,7 +236,32 @@ billme documents  export-json | export-csv
 billme pro        articles | accounts | templates
 ```
 
-### Migrating from desktop
+### Migrating legacy desktop data to PGlite
+
+New desktop installations use PGlite as their only local database. To migrate an existing Lite or Pro
+SQLite database, close the desktop app and run the standalone migration command once. The source is
+kept unchanged; the command creates a consistent backup and refuses to overwrite an existing target.
+
+Lite:
+
+```bash
+pnpm pglite:migrate --product lite \
+  --source /path/to/billme.sqlite \
+  --target /path/to/billme-pglite
+```
+
+Pro:
+
+```bash
+pnpm pglite:migrate --product pro \
+  --source /path/to/billme-pro-v2.sqlite \
+  --target /path/to/billme-pro-pglite
+```
+
+The command prints a JSON receipt containing the import-run ID, row counts, source and backup checksums,
+and the activated manifest. Use `--help` for explicit tenant or backup paths.
+
+### Migrating from desktop to server mode
 
 ```bash
 DATABASE_URL=... SQLITE_PATH=/path/to/billme.sqlite SERVER_PRODUCT=lite \

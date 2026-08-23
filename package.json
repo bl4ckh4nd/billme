@@ -33,6 +33,7 @@
     "preview:landing": "pnpm -C apps/landing-page preview",
     "db:generate": "pnpm -C apps/desktop db:generate",
     "db:studio": "pnpm -C apps/desktop db:studio",
+    "pglite:migrate": "node packages/pglite-migration-cli/bin/billme-pglite-migrate.mjs",
     "check:raw-sql": "node scripts/raw-sql-guard.mjs",
     "dist": "pnpm -C apps/desktop dist",
     "docker:server-mode": "pnpm docker:server-mode:up",

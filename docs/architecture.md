@@ -8,7 +8,7 @@ surface owns its bootstrap and persistence adapters.
 
 | Surface | Responsibility |
 |---|---|
-| `apps/desktop` | Billme Lite: Electron main/preload, React renderer, and local SQLite wiring |
+| `apps/desktop` | Billme Lite: Electron main/preload, React renderer, and embedded PGlite wiring |
 | `apps/pro-desktop` | Billme Pro: separate Electron application with Pro IPC, schema, and accounting integration |
 | `apps/web` | Authenticated Lite server-mode shell that mounts the Lite desktop renderer over an HTTP adapter |
 | `apps/web-pro` | Standalone Pro server-mode UI; embeds `ProAccountingWorkspace` instead of mounting the desktop renderer |
@@ -26,7 +26,7 @@ The split is selected at build time. It is not a license-key upgrade or a runtim
 |---|---|---|
 | Application | `apps/desktop` | `apps/pro-desktop` |
 | IPC package | `@billme/desktop-contracts` (82 routes) | `@billme/desktop-contracts-pro` (110 routes) |
-| SQLite file | `billme.sqlite` | `billme-pro-v2.sqlite` |
+| Local database | `billme-pglite/` | `billme-pro-v2.sqlite` |
 | Electron `appId` | `com.billme.desktop` | `com.billme.pro` |
 
 The route counts come from the `ipcRoutes` objects in
@@ -40,7 +40,7 @@ superset of the Lite UI.
 
 ## Desktop persistence and IPC
 
-Both Electron applications use SQLite through `better-sqlite3`. `@billme/desktop-data` owns the shared
+The Lite Electron application uses embedded PGlite through the local server runtime. `@billme/desktop-data` owns the shared
 connection lifecycle, repositories, transaction matching, and EÜR classification/report logic.
 `apps/*/db/connection.ts` supplies the product bootstrap and migration functions; compatibility changes
 must remain in `apps/*/db/migrate.ts`.

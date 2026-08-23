@@ -1667,7 +1667,7 @@ export const SettingsView: React.FC = () => {
                   <input
                     value={backupPath}
                     onChange={(e) => setBackupPath(e.target.value)}
-                    placeholder="Pfad zur .sqlite Sicherung..."
+                    placeholder="Pfad zur .pglite.tar-Sicherung..."
                     className="flex-1 bg-white border border-gray-200 rounded-xl p-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
                   />
                   <button

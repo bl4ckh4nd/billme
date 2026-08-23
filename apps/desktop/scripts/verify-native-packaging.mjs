@@ -64,18 +64,31 @@ if (!resourceDir) {
 }
 
 const unpackedDir = path.join(resourceDir, 'app.asar.unpacked');
-const betterSqlite3Dir = path.join(unpackedDir, 'node_modules', 'better-sqlite3');
 
 if (!fs.existsSync(unpackedDir)) {
   console.error(`[verify-native-packaging] Missing app.asar.unpacked at ${unpackedDir}`);
   process.exit(1);
 }
 
-if (!fs.existsSync(betterSqlite3Dir)) {
-  console.error(
-    `[verify-native-packaging] Missing better-sqlite3 in packaged app at ${betterSqlite3Dir}`,
-  );
+const betterSqlite3Dir = path.join(unpackedDir, 'node_modules', 'better-sqlite3');
+if (fs.existsSync(betterSqlite3Dir)) {
+  console.error(`[verify-native-packaging] Forbidden better-sqlite3 runtime asset found at ${betterSqlite3Dir}`);
   process.exit(1);
+}
+
+const keytarDir = path.join(unpackedDir, 'node_modules', 'keytar');
+const pgliteDistDir = path.join(unpackedDir, 'node_modules', '@electric-sql', 'pglite', 'dist');
+const migrationsDir = path.join(resourceDir, 'drizzle');
+
+for (const [label, directory] of [
+  ['keytar', keytarDir],
+  ['PGlite dist', pgliteDistDir],
+  ['server migrations', migrationsDir],
+]) {
+  if (!fs.existsSync(directory)) {
+    console.error(`[verify-native-packaging] Missing ${label} at ${directory}`);
+    process.exit(1);
+  }
 }
 
 function findNativeBinaries(dir) {
@@ -98,17 +111,15 @@ function findNativeBinaries(dir) {
   return binaries;
 }
 
-const nativeBinaries = findNativeBinaries(betterSqlite3Dir);
+const nativeBinaries = findNativeBinaries(keytarDir);
 if (nativeBinaries.length === 0) {
-  console.error(
-    `[verify-native-packaging] No .node binary found under ${betterSqlite3Dir}`,
-  );
+  console.error(`[verify-native-packaging] No .node binary found under ${keytarDir}`);
   process.exit(1);
 }
 
 console.log(`[verify-native-packaging] OK for ${platform}`);
 console.log(`[verify-native-packaging] resources: ${resourceDir}`);
-console.log(`[verify-native-packaging] native binaries found:`);
+console.log(`[verify-native-packaging] keytar native binaries found:`);
 for (const binary of nativeBinaries) {
   console.log(`  - ${binary}`);
 }

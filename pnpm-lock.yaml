@@ -457,15 +457,6 @@ importers:
 
   apps/server-api:
     dependencies:
-      '@billme/accounting-engine':
-        specifier: workspace:*
-        version: link:../../packages/accounting-engine
-      '@billme/accounting-shared':
-        specifier: workspace:*
-        version: link:../../packages/accounting-shared
-      '@billme/desktop-contracts-pro':
-        specifier: workspace:*
-        version: link:../../packages/desktop-contracts-pro
       '@billme/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
@@ -475,18 +466,6 @@ importers:
       '@billme/server-runtime':
         specifier: workspace:*
         version: link:../../packages/server-runtime
-      '@fastify/cors':
-        specifier: ^11.1.0
-        version: 11.2.0
-      '@orpc/openapi':
-        specifier: 1.14.15
-        version: 1.14.15(fastify@5.8.5)(ws@8.19.0)
-      '@orpc/server':
-        specifier: 1.14.15
-        version: 1.14.15(fastify@5.8.5)(ws@8.19.0)
-      '@orpc/zod':
-        specifier: 1.14.15
-        version: 1.14.15(@orpc/contract@1.14.15)(@orpc/server@1.14.15(fastify@5.8.5)(ws@8.19.0))(fastify@5.8.5)(ws@8.19.0)(zod@3.25.76)
       fastify:
         specifier: ^5.6.1
         version: 5.8.5

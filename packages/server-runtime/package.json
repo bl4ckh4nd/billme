@@ -39,11 +39,19 @@
       "types": "./src/auth.ts",
       "default": "./src/auth.ts"
     },
+    "./auth-store": {
+      "types": "./src/authStore.ts",
+      "default": "./src/authStore.ts"
+    },
     "./http": {
       "types": "./src/http.ts",
       "default": "./src/http.ts"
     },
     "./lite-eur": {
+      "types": "./src/liteEurRoutes.ts",
+      "default": "./src/liteEurRoutes.ts"
+    },
+    "./lite-eur-routes": {
       "types": "./src/liteEurRoutes.ts",
       "default": "./src/liteEurRoutes.ts"
     },
@@ -55,7 +63,15 @@
       "types": "./src/proAccountingRoutes.ts",
       "default": "./src/proAccountingRoutes.ts"
     },
+    "./pro-accounting-routes": {
+      "types": "./src/proAccountingRoutes.ts",
+      "default": "./src/proAccountingRoutes.ts"
+    },
     "./tax-filing": {
+      "types": "./src/taxFilingRoutes.ts",
+      "default": "./src/taxFilingRoutes.ts"
+    },
+    "./tax-filing-routes": {
       "types": "./src/taxFilingRoutes.ts",
       "default": "./src/taxFilingRoutes.ts"
     }

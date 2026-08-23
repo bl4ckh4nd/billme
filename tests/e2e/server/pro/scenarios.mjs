@@ -32,6 +32,12 @@ const sectionByTitle = (page, title) =>
     has: page.getByRole('heading', { name: title }),
   });
 
+const selectByVisibleLabel = (section, label) =>
+  section.locator('label.select-field > span').filter({ hasText: new RegExp(`^${label}$`) }).locator('..').locator('select');
+
+const inputByVisibleLabel = (section, label) =>
+  section.locator('label').filter({ hasText: new RegExp(`^${label}$`) }).locator('..').locator('input');
+
 const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') => {
   const heading = page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' });
   const workspaceHeading = page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' });
@@ -65,7 +71,7 @@ const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') 
 
   await page.getByLabel('Bankname').fill('Berliner Testbank');
   await page.getByLabel('IBAN').fill('DE12100500001234567890');
-  await page.getByRole('button', { name: 'Workspace freischalten' }).click();
+  await page.getByRole('button', { name: 'Arbeitsbereich einrichten' }).click();
   await expect(heading).toHaveCount(0);
 };
 
@@ -223,20 +229,19 @@ export const runProAccountingScenario = async (page) => {
     session,
   });
 
-  const mappingSection = sectionByTitle(page, 'Tax Cases auf Konten abbilden');
-  const rulesSection = sectionByTitle(page, 'Rule-based Assignment im Browser pflegen');
+  const mappingSection = sectionByTitle(page, 'Steuerfälle Konten zuordnen');
+  const rulesSection = sectionByTitle(page, 'Regelbasierte Kontovorschläge im Browser pflegen');
   const accountingSection = sectionByTitle(page, 'Ledger, Regeln und Workflow-Snapshots');
-  const workspaceSection = sectionByTitle(page, 'Geteilte Pro-Accounting-Oberfläche im Browser');
 
   await expect(accountingSection).toBeVisible();
-  await expect(workspaceSection.locator('.workspace-frame')).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Buchhaltungsbereiche' })).toBeVisible();
   await expect(mappingSection.getByRole('cell', { name: 'DE_STD_19' }).first()).toBeVisible();
   await expect(rulesSection.getByText('Hosting').first()).toBeVisible();
 
-  await mappingSection.getByLabel('Steuerfall').selectOption('DE_KU19');
-  await mappingSection.getByLabel('Rolle').selectOption('input_tax');
-  await mappingSection.getByLabel('Account').fill('1576');
-  await mappingSection.getByLabel('DATEV BU Key').fill('93');
+  await selectByVisibleLabel(mappingSection, 'Steuerfall').selectOption('DE_STD_19');
+  await selectByVisibleLabel(mappingSection, 'Rolle').selectOption('input_tax');
+  await inputByVisibleLabel(mappingSection, 'Konto').fill('1576');
+  await inputByVisibleLabel(mappingSection, 'DATEV-BU-Schlüssel').fill('93');
   await mappingSection.getByRole('button', { name: 'Mapping speichern' }).click();
   await expect(page.getByText('Steuer-Mapping gespeichert.')).toBeVisible();
 
@@ -249,19 +254,19 @@ export const runProAccountingScenario = async (page) => {
   expect(
     mappings.some(
       (mapping) =>
-        mapping.taxCaseKey === 'DE_KU19' &&
+        mapping.taxCaseKey === 'DE_STD_19' &&
         mapping.role === 'input_tax' &&
         mapping.accountNumber === '1576',
     ),
   ).toBe(true);
 
   const ruleNeedle = `Playwright Rule ${Date.now()}`;
-  await rulesSection.getByLabel('Priorität').fill('42');
-  await rulesSection.getByLabel('Feld').selectOption('purpose');
-  await rulesSection.getByLabel('Operator').selectOption('contains');
-  await rulesSection.getByLabel('Suchwert').fill(ruleNeedle);
-  await rulesSection.getByLabel('Zielkonto').fill('8400');
-  await rulesSection.getByLabel('Flow').selectOption('income');
+  await inputByVisibleLabel(rulesSection, 'Priorität').fill('42');
+  await selectByVisibleLabel(rulesSection, 'Feld').selectOption('purpose');
+  await selectByVisibleLabel(rulesSection, 'Vergleich').selectOption('contains');
+  await inputByVisibleLabel(rulesSection, 'Suchwert').fill(ruleNeedle);
+  await inputByVisibleLabel(rulesSection, 'Zielkonto').fill('8400');
+  await selectByVisibleLabel(rulesSection, 'Art').selectOption('income');
   await rulesSection.getByRole('button', { name: 'Regel speichern' }).click();
   await expect(page.getByText('Vorschlagsregel gespeichert.')).toBeVisible();
 
@@ -400,6 +405,7 @@ export const runProAccountingScenario = async (page) => {
     { statementType: 'hgb-guv', accountNumber: '8400', positionKey: 'revenue', positionLabel: '1. Umsatzerlöse' },
     { statementType: 'hgb-guv', accountNumber: '3125', positionKey: 'material.services', positionLabel: 'b) Aufwendungen für bezogene Leistungen' },
     { statementType: 'hgb-bilanz', accountNumber: '1200', positionKey: 'assets.current', positionLabel: 'B. Umlaufvermögen', balanceSide: 'asset' },
+    { statementType: 'hgb-bilanz', accountNumber: '1576', positionKey: 'assets.current', positionLabel: 'B. Umlaufvermögen', balanceSide: 'asset' },
     { statementType: 'hgb-bilanz', accountNumber: '1776', positionKey: 'liabilities', positionLabel: 'C. Verbindlichkeiten', balanceSide: 'liability' },
   ];
   for (const mapping of reportMappingFixtures) {
@@ -828,7 +834,7 @@ export const runProAccountingScenario = async (page) => {
 
   const outgoingJournalBeforeReverse = await requestJson(state, session, '/api/v1/pro/accounting/journal');
   const outgoingJournalEntry = outgoingJournalBeforeReverse.find(
-    (entry) => entry.sourceKey === `outgoing_invoice:${outgoingInvoiceId}`,
+    (entry) => entry.sourceKey === `outgoing-invoice:${outgoingInvoiceId}`,
   );
   expect(outgoingJournalEntry).toMatchObject({ status: 'posted', sourceType: 'outgoing_invoice' });
   const outgoingJournalId = outgoingJournalEntry?.id;

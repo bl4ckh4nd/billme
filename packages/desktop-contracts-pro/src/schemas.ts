@@ -1,5 +1,22 @@
 import { z } from 'zod';
 
+export const taxAuditExportArtifactFileSchema = z.object({
+  name: z.string().min(1),
+  content: z.string(),
+  sha256: z.string().length(64),
+  sizeBytes: z.number().int().nonnegative(),
+  rowCount: z.number().int().nonnegative().optional(),
+});
+
+export const taxAuditExportArtifactSchema = z.object({
+  schemaVersion: z.literal(1),
+  createdAt: z.string().datetime(),
+  from: z.string().nullable(),
+  to: z.string().nullable(),
+  includeDocuments: z.boolean(),
+  files: z.array(taxAuditExportArtifactFileSchema),
+});
+
 const isAllowedPortalBaseUrl = (value: string): boolean => {
   const trimmed = value.trim();
   if (!trimmed) return true;

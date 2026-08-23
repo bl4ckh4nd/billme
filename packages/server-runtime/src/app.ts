@@ -24,9 +24,11 @@ import {
   type TenantScope,
 } from '@billme/server-core';
 import {
+  buildPostgresTaxAuditExportArtifact,
   createPostgresBillingDependencies,
   createPostgresBillingUnitOfWork,
   createPostgresPool,
+  createPostgresProjectRepository,
   createPostgresProAccountingCatalogRepository,
   createPostgresProWorkflowRepository,
   getServerActiveTemplates,
@@ -54,6 +56,7 @@ import {
   articleSchema,
   ledgerAccountSchema,
   listTemplatesParamsSchema,
+  projectSchema,
   proListAccountSuggestionRulesArgsSchema,
   proListTaxCaseAccountMappingsArgsSchema,
   proListTaxCasesArgsSchema,
@@ -63,6 +66,7 @@ import {
   setSettingsPayloadSchema,
   templateKindSchema,
   templateSchema,
+  taxAuditExportArtifactSchema,
   upsertAccountPayloadSchema,
   upsertArticlePayloadSchema,
   upsertTemplatePayloadSchema,
@@ -130,6 +134,16 @@ const numberFinalizeBodySchema = z.object({
   reservationId: z.string().min(1),
   documentId: z.string().min(1),
 });
+const taxAuditExportPackageArgsSchema = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
+  includeDocuments: z.boolean().optional(),
+});
+const projectListQuerySchema = z.object({
+  clientId: z.string().trim().min(1).optional(),
+  includeArchived: z.coerce.boolean().optional(),
+});
+const projectWriteSchema = projectSchema.extend({ clientId: z.string().trim().min(1) });
 const authSessionInfoSchema = z.object({
   user: authUserSchema,
   tenantId: z.string().min(1),
@@ -972,6 +986,71 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
   });
 };
 
+const registerProjectRoutes = (app: FastifyInstance, product: 'lite' | 'pro'): void => {
+  const prefix = `/api/v1/${product}`;
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/projects`,
+    query: projectListQuerySchema,
+    response: z.array(projectSchema),
+    async handler({ request, query }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      return createPostgresProjectRepository(requireDatabase(app)).list(session.scope, query);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/projects/:id`,
+    params: entityIdParamsSchema,
+    response: projectSchema.nullable(),
+    async handler({ request, params }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      return createPostgresProjectRepository(requireDatabase(app)).get(session.scope, params.id);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/projects`,
+    body: z.object({ reason: z.string().trim().min(1), project: projectWriteSchema }),
+    response: projectSchema,
+    async handler({ request, body }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      return createPostgresProjectRepository(requireDatabase(app)).upsert(session.scope, body.project, body.reason);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/projects/:id/archive`,
+    params: entityIdParamsSchema,
+    body: deletePayloadSchema,
+    response: projectSchema,
+    async handler({ request, params, body }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      return createPostgresProjectRepository(requireDatabase(app)).archive(session.scope, params.id, body.reason);
+    },
+  });
+};
+
+const registerTaxAuditExportRoute = (app: FastifyInstance): void => {
+  typedRoute(app, {
+    method: 'POST',
+    url: '/api/v1/pro/tax/audit-export-package',
+    body: taxAuditExportPackageArgsSchema,
+    response: taxAuditExportArtifactSchema,
+    async handler({ request, body }) {
+      const session = await requireSession(app, 'pro', request.headers.authorization);
+      if (!['owner', 'admin', 'accountant', 'auditor'].includes(session.role)) {
+        throw new ApiError(403, 'Tax audit export requires an authorized accounting role');
+      }
+      return buildPostgresTaxAuditExportArtifact(requirePool(app), session.scope.tenantId, body);
+    },
+  });
+};
+
 const registerProRoutes = (app: FastifyInstance) => {
   const prefix = '/api/v1/pro';
 
@@ -1458,14 +1537,19 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerTransactionRoutes(app, 'pro');
     registerEurRuleRoutes(app, 'lite');
     registerEurRuleRoutes(app, 'pro');
+    registerProjectRoutes(app, 'lite');
+    registerProjectRoutes(app, 'pro');
+    registerTaxAuditExportRoute(app);
   } else {
     registerBillingRoutes(app, product, `/api/v1/${product}`);
     registerTransactionRoutes(app, product);
     registerEurRuleRoutes(app, product);
+    registerProjectRoutes(app, product);
     if (product === 'pro') {
       registerProRoutes(app);
       registerProAccountingRoutes(app);
       registerAuditRoutes(app, 'pro');
+      registerTaxAuditExportRoute(app);
     } else {
       registerAuditRoutes(app, 'lite');
     }

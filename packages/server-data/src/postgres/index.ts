@@ -19,3 +19,4 @@ export * from './taxSubmission.js';
 export * from './accountingSourceRuns.js';
 export * from './transactionImport.js';
 export * from './eurRules.js';
+export * from './projects.js';

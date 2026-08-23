@@ -51,6 +51,10 @@
       "types": "./src/orpc.ts",
       "default": "./src/orpc.ts"
     },
+    "./pro-accounting": {
+      "types": "./src/proAccountingRoutes.ts",
+      "default": "./src/proAccountingRoutes.ts"
+    },
     "./tax-filing": {
       "types": "./src/taxFilingRoutes.ts",
       "default": "./src/taxFilingRoutes.ts"

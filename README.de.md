@@ -21,8 +21,8 @@ Probiere Billme ohne Installation aus: **[demo.getbillme.com](https://demo.getbi
 
 ## Was ist Billme
 
-Billme speichert Geschäftsdaten auf dem eigenen Rechner. Die Lite-Desktop-App schreibt in eine lokale
-eingebettete PGlite-Datenbank — kein Konto, keine Cloud und kein Abonnementserver, der Rechnungen abschalten kann.
+Billme speichert Geschäftsdaten auf dem eigenen Rechner. Die Desktop-Apps schreiben in lokale
+eingebettete PGlite-Datenbanken — kein Konto, keine Cloud und kein Abonnementserver, der Rechnungen abschalten kann.
 Sind mehrere Benutzer oder Browserzugriff erforderlich, lässt sich dasselbe Produkt als selbst
 gehosteter Servermodus-Stack mit Docker betreiben.
 
@@ -42,7 +42,7 @@ Build-Zeit.
 |---|---|---|
 | Desktop-App | `apps/desktop` (`com.billme.desktop`) | `apps/pro-desktop` (`com.billme.pro`) |
 | Browser-Shell (Servermodus) | `apps/web` — Port 4175 | `apps/web-pro` — Port 4176 |
-| Lokale Datenbank | `billme-pglite/` | `billme-pro-v2.sqlite` |
+| Lokale Datenbank | `billme-pglite/` | `billme-pro-pglite/` |
 | Schwerpunkt | Rechnungen, Angebote, Anlage EÜR | Doppelte Buchhaltung, SKR, DATEV |
 | Buchhaltungsansichten | — | Belegeingang, Buchungseditor, Abstimmung, Auswertungen |
 
@@ -54,7 +54,7 @@ für doppelte Buchhaltung.
 
 | Modus | Beschreibung | Speicherort der Daten |
 |---|---|---|
-| **Desktop** | Electron-App, ein Unternehmen pro Installation | Lokales eingebettetes PGlite für Lite |
+| **Desktop** | Electron-App, ein Unternehmen pro Installation | Lokales eingebettetes PGlite |
 | **Servermodus** | Docker-Stack: Postgres + API + Worker + zwei Browser-Shells, mehrere Benutzer mit Rollen | Postgres |
 | **Demo** | Die echte Desktop-Oberfläche im Browser mit Mock-Daten | Nirgends — im Arbeitsspeicher, pro Sitzung |
 | **Angebotsportal** | Öffentlicher Hono-Dienst für kundenorientierte Angebots-/Rechnungslinks | Eigener Snapshot-Speicher |
@@ -346,7 +346,7 @@ dem Klonen sind sie daher nicht vorhanden.
 | Pfad | Beschreibung |
 |---|---|
 | `apps/desktop` | Lite Electron + React Desktop-App; verantwortet Electron main/preload, eingebetteten PGlite-Start und Lite-Produktverdrahtung |
-| `apps/pro-desktop` | Pro Electron + React Desktop-App; ergänzt Buchhaltungsoberfläche, Engine, Pro-Verträge und Pro-Schema |
+| `apps/pro-desktop` | Pro Electron + React Desktop-App; verantwortet den eingebetteten PGlite-Start sowie Buchhaltungsoberfläche, Engine, Pro-Verträge und Schema |
 | `apps/web` | Lite-Browser-Shell für den Servermodus — bindet den Lite-Desktop-Renderer über einen HTTP-Adapter ein |
 | `apps/web-pro` | Pro-Browser-Shell für den Servermodus — eigenständige Oberfläche mit eingebettetem Buchhaltungsarbeitsbereich |
 | `apps/server-api` | Fastify-API des Servermodus mit Postgres |

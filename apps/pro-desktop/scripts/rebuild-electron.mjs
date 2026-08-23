@@ -20,7 +20,7 @@ try {
     buildPath: root,
     electronVersion,
     force: true,
-    onlyModules: ['better-sqlite3', 'keytar'],
+    onlyModules: ['keytar'],
   });
 } catch (err) {
   // This commonly happens on Windows when Electron/Node is currently running and locking the .node file.

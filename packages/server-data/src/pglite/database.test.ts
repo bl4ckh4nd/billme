@@ -30,7 +30,7 @@ test('PGlite applies the canonical migrations and reports a current schema', asy
     const result = await database.query<{ count: string }>(
       'SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations',
     );
-    assert.equal(Number(result.rows[0]?.count), 23);
+    assert.equal(Number(result.rows[0]?.count), 24);
   } finally {
     await closeDatabase(database, dataDir);
   }

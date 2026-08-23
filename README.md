@@ -21,8 +21,8 @@ Try it without installing anything: **[demo.getbillme.com](https://demo.getbillm
 
 ## What is Billme
 
-Billme keeps your business data on your own machine. The Lite desktop app writes to a local embedded
-PGlite database — no account, no cloud, no subscription server that can turn your invoices off. If you need multiple
+Billme keeps your business data on your own machine. The desktop apps write to local embedded PGlite
+databases — no account, no cloud, no subscription server that can turn your invoices off. If you need multiple
 users or browser access, you can run the same product as a self-hosted server-mode stack with Docker.
 
 It is built specifically for the German market: ZUGFeRD/EN 16931 e-invoicing, Anlage EÜR with the
@@ -40,7 +40,7 @@ neither is a license-key upgrade of the other — the split happens at build tim
 |---|---|---|
 | Desktop app | `apps/desktop` (`com.billme.desktop`) | `apps/pro-desktop` (`com.billme.pro`) |
 | Browser shell (server mode) | `apps/web` — port 4175 | `apps/web-pro` — port 4176 |
-| Local database | `billme-pglite/` | `billme-pro-v2.sqlite` |
+| Local database | `billme-pglite/` | `billme-pro-pglite/` |
 | Focus | Invoicing, offers, Anlage EÜR | Double-entry bookkeeping, SKR, DATEV |
 | Accounting screens | — | Inbox, booking editor, reconciliation, reports |
 
@@ -52,7 +52,7 @@ keep double-entry books.
 
 | Mode | What it is | Data lives in |
 |---|---|---|
-| **Desktop** | Electron app, single business per install | Local embedded PGlite for Lite |
+| **Desktop** | Electron app, single business per install | Local embedded PGlite |
 | **Server mode** | Docker stack: Postgres + API + worker + two browser shells, multi-user with roles | Postgres |
 | **Demo** | The real desktop UI running in a browser against mock data | Nothing — in-memory, per session |
 | **Offer portal** | Public Hono service for customer-facing offer/invoice links | Its own snapshot store |
@@ -326,7 +326,7 @@ These are described in internal design docs but are not on `main`; do not expect
 | Path | What it is |
 |---|---|
 | `apps/desktop` | Lite Electron + React desktop app; owns Electron main/preload, embedded PGlite startup, Lite product wiring |
-| `apps/pro-desktop` | Pro Electron + React desktop app; adds the accounting UI, engine, Pro contracts and Pro schema |
+| `apps/pro-desktop` | Pro Electron + React desktop app; owns embedded PGlite startup plus the accounting UI, engine, Pro contracts and schema |
 | `apps/web` | Lite browser shell for server mode — remounts the Lite desktop renderer over an HTTP adapter |
 | `apps/web-pro` | Pro browser shell for server mode — standalone UI embedding the accounting workspace |
 | `apps/server-api` | Fastify server-mode API backed by Postgres |

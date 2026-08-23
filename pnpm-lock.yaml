@@ -175,12 +175,12 @@ importers:
       '@testing-library/user-event':
         specifier: ^14.6.1
         version: 14.6.1(@testing-library/dom@10.4.1)
-      '@types/node':
-        specifier: ^22.19.7
-        version: 22.19.10
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
+      '@types/node':
+        specifier: ^22.19.7
+        version: 22.19.10
       '@types/nodemailer':
         specifier: ^6.4.16
         version: 6.4.22
@@ -300,6 +300,9 @@ importers:
 
   apps/pro-desktop:
     dependencies:
+      '@electric-sql/pglite':
+        specifier: 0.5.5
+        version: 0.5.5
       '@billme/accounting-engine':
         specifier: workspace:*
         version: link:../../packages/accounting-engine
@@ -339,12 +342,18 @@ importers:
       '@billme/desktop-utils':
         specifier: workspace:*
         version: link:../../packages/desktop-utils
+      '@billme/embedded-server-runtime':
+        specifier: workspace:*
+        version: link:../../packages/embedded-server-runtime
       '@billme/finance-intelligence':
         specifier: workspace:*
         version: link:../../packages/finance-intelligence
       '@billme/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
+      '@billme/server-data':
+        specifier: workspace:*
+        version: link:../../packages/server-data
       '@billme/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -354,9 +363,6 @@ importers:
       '@tanstack/react-router':
         specifier: ^1.153.1
         version: 1.159.4(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      better-sqlite3:
-        specifier: ^12.4.1
-        version: 12.6.2
       electron-updater:
         specifier: ^6.8.3
         version: 6.8.3
@@ -433,6 +439,9 @@ importers:
       '@vitest/ui':
         specifier: ^4.0.18
         version: 4.0.18(vitest@4.0.18)
+      better-sqlite3:
+        specifier: ^12.4.1
+        version: 12.6.2
       drizzle-kit:
         specifier: ^0.31.4
         version: 0.31.9

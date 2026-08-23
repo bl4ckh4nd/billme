@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, lte } from "drizzle-orm";
 import type { TenantScope } from "@billme/server-core";
 import type { PostgresQueryable } from "./connection.js";
-import { createDrizzle, schema } from "./drizzle.js";
+import { createDrizzle, schema, tryCreateDrizzle } from "./drizzle.js";
 
-const dbFor = (db: PostgresQueryable) => createDrizzle(db as never);
+const dbFor = (db: PostgresQueryable) => tryCreateDrizzle(db) ?? createDrizzle(db as never);
 const now = (): string => new Date().toISOString();
 
 export interface TaxSubmissionRecord {

@@ -26,7 +26,7 @@ The split is selected at build time. It is not a license-key upgrade or a runtim
 |---|---|---|
 | Application | `apps/desktop` | `apps/pro-desktop` |
 | IPC package | `@billme/desktop-contracts` (82 routes) | `@billme/desktop-contracts-pro` (110 routes) |
-| Local database | `billme-pglite/` | `billme-pro-v2.sqlite` |
+| Local database | `billme-pglite/` | `billme-pro-pglite/` |
 | Electron `appId` | `com.billme.desktop` | `com.billme.pro` |
 
 The route counts come from the `ipcRoutes` objects in
@@ -40,7 +40,7 @@ superset of the Lite UI.
 
 ## Desktop persistence and IPC
 
-The Lite Electron application uses embedded PGlite through the local server runtime. `@billme/desktop-data` owns the shared
+Both Electron applications use embedded PGlite through the local server runtime. `@billme/desktop-data` owns the shared
 connection lifecycle, repositories, transaction matching, and EÜR classification/report logic.
 `apps/*/db/connection.ts` supplies the product bootstrap and migration functions; compatibility changes
 must remain in `apps/*/db/migrate.ts`.

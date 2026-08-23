@@ -374,6 +374,17 @@ export const saveServerArticle = async (
   return record;
 };
 
+export const deleteServerArticle = async (
+  db: PostgresQueryable,
+  tenantId: string,
+  id: string,
+): Promise<void> => {
+  await drizzleDb(db).delete(schema.articles).where(and(
+    eq(schema.articles.tenantId, tenantId),
+    eq(schema.articles.id, id),
+  ));
+};
+
 export const listServerBankAccounts = async (
   db: PostgresQueryable,
   tenantId: string,
@@ -403,6 +414,17 @@ export const saveServerBankAccount = async (
   return record;
 };
 
+export const deleteServerBankAccount = async (
+  db: PostgresQueryable,
+  tenantId: string,
+  id: string,
+): Promise<void> => {
+  await drizzleDb(db).delete(schema.accounts).where(and(
+    eq(schema.accounts.tenantId, tenantId),
+    eq(schema.accounts.id, id),
+  ));
+};
+
 export const listServerTemplates = async (
   db: PostgresQueryable,
   tenantId: string,
@@ -428,6 +450,28 @@ export const saveServerTemplate = async (
     elementsJson: record.elementsJson, createdAt: record.createdAt, updatedAt: record.updatedAt }, schema.templates.id,
     { tenantId: record.tenantId, kind: record.kind, name: record.name, elementsJson: record.elementsJson, updatedAt: record.updatedAt });
   return record;
+};
+
+export const deleteServerTemplate = async (
+  db: PostgresQueryable,
+  tenantId: string,
+  id: string,
+): Promise<void> => {
+  const active = (await drizzleDb(db).select().from(schema.activeTemplates)
+    .where(eq(schema.activeTemplates.tenantId, tenantId)).limit(1))[0];
+  if (active) {
+    const set: { invoiceTemplateId?: string | null; offerTemplateId?: string | null } = {};
+    if (active.invoiceTemplateId === id) set.invoiceTemplateId = null;
+    if (active.offerTemplateId === id) set.offerTemplateId = null;
+    if (Object.keys(set).length > 0) {
+      await drizzleDb(db).update(schema.activeTemplates).set(set)
+        .where(eq(schema.activeTemplates.tenantId, tenantId));
+    }
+  }
+  await drizzleDb(db).delete(schema.templates).where(and(
+    eq(schema.templates.tenantId, tenantId),
+    eq(schema.templates.id, id),
+  ));
 };
 
 export const getServerActiveTemplates = async (

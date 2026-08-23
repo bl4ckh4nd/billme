@@ -15,7 +15,12 @@ export default defineConfig(({ mode }) => {
           entry: path.resolve(__dirname, 'electron/main.ts'),
         },
         rollupOptions: {
-          external: ['better-sqlite3', 'keytar', 'electron-updater'],
+          external: [
+            'keytar',
+            'electron-updater',
+            // Keep PGlite external so electron-builder can unpack its WASM/data assets.
+            '@electric-sql/pglite',
+          ],
           output: {
             entryFileNames: 'index.js',
           },

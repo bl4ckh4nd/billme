@@ -3,6 +3,7 @@
 ## Unreleased
 
 - pnpm-10-CI-Installationen erlauben den nativen Build von `better-sqlite3`, Electron und `keytar` jetzt auch über die Root-Paketkonfiguration; dadurch stehen die benötigten Runtime-Artefakte für Import- und Electron-Tests zuverlässig bereit.
+- Die Pro-Electron-App startet jetzt ebenfalls einen geschützten lokalen PGlite-Server über dieselben Server-Routen wie der Hosted-Modus; vorhandene Pro-SQLite-Daten werden fail-closed zur einmaligen CLI-Migration verwiesen und native Backups/Restore bleiben atomar.
 - Die Lite-Electron-App startet jetzt einen geschützten lokalen PGlite-Server über dieselben Server-Routen wie der Hosted-Modus; vorhandene SQLite-Daten werden fail-closed zur einmaligen CLI-Migration verwiesen und native Backups/Restore bleiben atomar.
 - Die Pro-Web-Shell verwendet jetzt den gemeinsamen, DOM-freien Pro-HTTP-Adapter; Hosted-Bearer, contract-validierte Antworten und native IPC-Fallbacks bleiben erhalten.
 - Die Lite-Web-Shell verwendet jetzt den gemeinsamen, DOM-freien HTTP-Adapter; Hosted-Bearer, contract-validierte Serverantworten und Browser-Fallbacks bleiben dabei erhalten.

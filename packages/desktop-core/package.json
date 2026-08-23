@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "scripts": {
+    "test": "vitest --run"
+  },
   "dependencies": {
     "electron-updater": "^6.8.3",
     "keytar": "^7.9.0",
@@ -92,6 +95,10 @@
     "./electron/preload": {
       "types": "./src/electron/preload.ts",
       "default": "./src/electron/preload.ts"
+    },
+    "./electron/embeddedConnection": {
+      "types": "./src/electron/embeddedConnection.ts",
+      "default": "./src/electron/embeddedConnection.ts"
     },
     "./electron/portalPolling": {
       "types": "./src/electron/portalPolling.ts",

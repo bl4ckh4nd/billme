@@ -910,6 +910,9 @@ importers:
       '@billme/desktop-core':
         specifier: workspace:*
         version: link:../desktop-core
+      '@billme/desktop-data':
+        specifier: workspace:*
+        version: link:../desktop-data
       '@billme/desktop-utils':
         specifier: workspace:*
         version: link:../desktop-utils
@@ -925,6 +928,19 @@ importers:
       papaparse:
         specifier: ^5.5.3
         version: 5.5.3
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^24.9.1
+        version: 24.12.2
+      tsx:
+        specifier: ^4.20.5
+        version: 4.21.0
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
 
   packages/desktop-state:
     dependencies:

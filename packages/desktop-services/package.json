@@ -3,16 +3,27 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test src/liteHttpApi.test.ts"
+  },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",
     "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
+    "@billme/desktop-data": "workspace:*",
     "@billme/finance-intelligence": "workspace:*",
     "@billme/desktop-core": "workspace:*",
     "@billme/desktop-utils": "workspace:*",
     "@billme/server-core": "workspace:*",
     "iconv-lite": "^0.6.3",
-    "papaparse": "^5.5.3"
+    "papaparse": "^5.5.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.1",
+    "tsx": "^4.20.5",
+    "typescript": "~5.8.3"
   },
   "exports": {
     ".": {
@@ -50,6 +61,10 @@
     "./mockEngine": {
       "types": "./src/mockEngine.ts",
       "default": "./src/mockEngine.ts"
+    },
+    "./liteHttpApi": {
+      "types": "./src/liteHttpApi.ts",
+      "default": "./src/liteHttpApi.ts"
     },
     "./einvoice/embedZugferdInPdf": {
       "types": "./src/einvoice/embedZugferdInPdf.ts",

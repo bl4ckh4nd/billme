@@ -337,7 +337,7 @@ test('Pro web client rethrows canonical accounting mutation failures', async () 
 
 test('Pro web client refuses outgoing posting without a finalized reservation id', async () => {
   const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
-  assert.throws(() => client.postOutgoingInvoice('invoice-1', 'test', ''), /reservationId is required/);
+  assert.throws(() => client.postOutgoingInvoice('invoice-1', 'test', ''), /Reservierungs-ID fehlt/);
 });
 
 test('Pro web client sends one allocation event id for a payment action', async () => {
@@ -377,7 +377,7 @@ test('Pro web client rejects a payment action without an allocation event id', a
   const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
   assert.throws(
     () => client.allocateOpenItemPayment({ sourceType: 'manual', sourceId: 'source-1', partyType: 'debtor', paymentDate: '2026-08-12', amount: 10, bankAccountNumber: '1200', allocations: [] } as never, 'Zahlung zuordnen'),
-    /allocationEventId is required/,
+    /Zuordnungs-ID fehlt/,
   );
 });
 
@@ -390,7 +390,7 @@ test('Pro web client requires and preserves a remaining allocation event id acro
   }) as typeof fetch;
   try {
     const client = createProWebClient({ baseUrl: 'https://api.example.test', getToken: () => 'token' });
-    assert.throws(() => client.allocateRemainingOpenItemPayment('payment-1', [], 'Restzahlung', ''), /allocationEventId is required/);
+    assert.throws(() => client.allocateRemainingOpenItemPayment('payment-1', [], 'Restzahlung', ''), /Zuordnungs-ID fehlt/);
     await client.allocateRemainingOpenItemPayment('payment-1', [], 'Restzahlung', 'allocation-event-1');
     await client.allocateRemainingOpenItemPayment('payment-1', [], 'Restzahlung', 'allocation-event-1');
     assert.deepEqual(

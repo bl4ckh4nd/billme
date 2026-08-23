@@ -577,6 +577,9 @@ importers:
       '@billme/desktop-contracts-pro':
         specifier: workspace:*
         version: link:../../packages/desktop-contracts-pro
+      '@billme/desktop-services':
+        specifier: workspace:*
+        version: link:../../packages/desktop-services
       '@billme/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core

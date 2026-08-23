@@ -7,6 +7,7 @@ import { billingLineItemSchema, createSingleTenantScope, type Client, type Invoi
 import { DEFAULT_TAX_MODE } from '@billme/server-core/services';
 import { EUR_SOURCE_VERSION_2025, getCatalogForYear, type EurLineDef } from '@billme/desktop-services/eurCatalog';
 import { sha256Hex, stableStringify, verifyAuditChainRows, verifyPostgresAuditChain } from './audit.js';
+import type { ServerDatabase, ServerDatabaseSession } from '../database.js';
 import {
   countTenantCoreRows,
   createPostgresBillingDependencies,
@@ -16,7 +17,7 @@ import {
   saveServerSettings,
 } from './billing.js';
 import { withPostgresTransaction, type PostgresTransactionClient } from './connection.js';
-import { createDrizzle, schema } from './drizzle.js';
+import { schema, tryCreateDrizzle } from './drizzle.js';
 import { runPostgresMigrations } from './migrations.js';
 import { CANONICAL_LEDGER_ACCOUNTS, CANONICAL_TAX_CASES } from './canonicalCatalog.js';
 import { importRawTenantRows, restoreIncomingInvoiceAccountingRows } from './oposImport.js';
@@ -126,8 +127,28 @@ type SqliteTemplateRow = { id: string; kind: string; name: string; elements_json
 type SqliteActiveTemplateRow = { id: number; invoice_template_id: string | null; offer_template_id: string | null };
 type LoadedInvoice = { invoice: Invoice; accountingStatus: string; accountingSnapshotJson: string | null; accountingJournalEntryId: string | null; accountingPostedAt: string | null };
 
+type ImportQueryable = PostgresTransactionClient | ServerDatabaseSession;
+type ImportTarget = Pool | ServerDatabase;
+
+const isServerDatabase = (target: ImportTarget): target is ServerDatabase => 'engine' in target;
+const requireImportTarget = (options: DesktopSqliteImportOptions): ImportTarget => {
+  const target = options.database ?? options.pool;
+  if (!target) throw new Error('SQLite import requires either a PostgreSQL pool or a ServerDatabase target');
+  return target;
+};
+const requireImportDrizzle = (target: ImportTarget | ImportQueryable) => {
+  const database = tryCreateDrizzle(target as unknown as { query: (...args: any[]) => any });
+  if (!database) throw new Error('SQLite import requires a supported server database target');
+  return database;
+};
+const isPgliteTarget = (target: unknown): boolean => {
+  const candidate = target as { engine?: unknown; exec?: unknown; release?: unknown };
+  return candidate.engine === 'pglite' || (typeof candidate.exec === 'function' && typeof candidate.release !== 'function');
+};
+
 export interface DesktopSqliteImportOptions {
-  pool: Pool;
+  pool?: Pool;
+  database?: ServerDatabase;
   sqlitePath: string;
   product: ServerProduct;
   tenant: Pick<Tenant, 'id' | 'slug' | 'displayName'>;
@@ -273,8 +294,11 @@ const pgTextArrayParam = (values: string[]) => sql.param(values, {
   mapToDriverValue: (items: string[]) => `{${items.map((item) => `"${item.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`).join(',')}}`,
 });
 
-const lockDesktopImportTenant = async (client: PostgresTransactionClient, tenantId: string): Promise<void> => {
-  await createDrizzle(client).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billme:desktop-import:${tenantId}`}, 0))`);
+const lockDesktopImportTenant = async (client: ImportQueryable, tenantId: string): Promise<void> => {
+  // PGlite is a single-process target; its FIFO/transaction already provides
+  // the serialization that PostgreSQL advisory locks provide across workers.
+  if (isPgliteTarget(client)) return;
+  await requireImportDrizzle(client).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billme:desktop-import:${tenantId}`}, 0))`);
 };
 
 // Repository upserts are intentionally tenant-scoped at read time, but most
@@ -295,7 +319,7 @@ const tenantScopedIdentityTables = [
 ] as const;
 
 export const assertNoCrossTenantIdentityCollisions = async (
-  client: PostgresTransactionClient,
+  client: ImportQueryable,
   sqliteDb: SqliteDatabaseType,
   tenantId: string,
 ): Promise<void> => {
@@ -306,8 +330,10 @@ export const assertNoCrossTenantIdentityCollisions = async (
     // Serialize imports for this table while checking and upserting its ids.
     // One lock per table keeps PostgreSQL shared-memory usage bounded even for
     // large desktop databases, while the fixed table order avoids deadlocks.
-    await createDrizzle(client).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billme:desktop-import:${table}`}, 0))`);
-    const existing = await createDrizzle(client).execute(sql`SELECT id, tenant_id FROM ${sql.raw(table)} WHERE id = ANY(${pgTextArrayParam(ids)}::text[])`);
+    if (!isPgliteTarget(client)) {
+      await requireImportDrizzle(client).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billme:desktop-import:${table}`}, 0))`);
+    }
+    const existing = await requireImportDrizzle(client).execute(sql`SELECT id, tenant_id FROM ${sql.raw(table)} WHERE id = ANY(${pgTextArrayParam(ids)}::text[])`);
     const collision = (existing.rows as Array<{ id: string; tenant_id: string }>).find((row) => row.tenant_id !== tenantId);
     if (collision) throw new Error(`IMPORT_ID_TENANT_COLLISION:${table}:${String(collision.id)}`);
   }
@@ -416,7 +442,7 @@ export class DesktopImportCrossTenantReferenceError extends Error {
 }
 
 export const assertNoCrossTenantTenantReferences = async (
-  client: PostgresTransactionClient,
+  client: ImportQueryable,
   tenantId: string,
 ): Promise<void> => {
   for (const check of desktopImportTenantReferenceChecks) {
@@ -425,7 +451,7 @@ export const assertNoCrossTenantTenantReferences = async (
     const childReferenceColumn = quoteImportIdentifier(check.childReferenceColumn);
     const parentTable = quoteImportIdentifier(check.parentTable);
     const parentIdColumn = quoteImportIdentifier(check.parentIdColumn ?? 'id');
-    const result = await createDrizzle(client).execute(
+    const result = await requireImportDrizzle(client).execute(
       sql.raw(`SELECT c.${childIdColumn}::text AS child_id, c.${childReferenceColumn}::text AS parent_id, p.tenant_id::text AS parent_tenant_id
        FROM ${childTable} c
        JOIN ${parentTable} p ON p.${parentIdColumn} = c.${childReferenceColumn}
@@ -449,7 +475,7 @@ export const assertNoCrossTenantTenantReferences = async (
 
   for (const table of desktopImportArticleJsonTables) {
     const childTable = quoteImportIdentifier(table);
-    const result = await createDrizzle(client).execute(
+    const result = await requireImportDrizzle(client).execute(
       sql.raw(`SELECT c.id::text AS child_id, item->>'articleId' AS parent_id, a.tenant_id::text AS parent_tenant_id
        FROM ${childTable} c
        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.items_json, '[]')::jsonb) AS item
@@ -472,7 +498,7 @@ export const assertNoCrossTenantTenantReferences = async (
     }
   }
 
-  const missingCashSource = await createDrizzle(client).execute(sql`
+  const missingCashSource = await requireImportDrizzle(client).execute(sql`
     SELECT c.id::text AS child_id, c.source_type, c.source_id::text AS parent_id
     FROM eur_cash_facts c
     LEFT JOIN invoices i ON i.id = c.source_id AND c.source_type = 'invoice'
@@ -823,10 +849,10 @@ export const validateCanonicalEurLines = (rows: ServerEurLineRecord[]): void => 
 };
 
 const validateCanonicalGlobalCatalog = async (
-  client: PostgresTransactionClient,
+  client: ImportQueryable,
   sqliteDb: SqliteDatabaseType,
 ): Promise<void> => {
-  const drizzle = createDrizzle(client);
+  const drizzle = requireImportDrizzle(client);
 
   const canonicalLedgerByKey = new Map(CANONICAL_LEDGER_ACCOUNTS.map((row) => [`${row.chart}:${row.accountNumber}`, row]));
   const persistedLedger = (await drizzle.execute(sql`SELECT chart, account_number, name FROM ledger_accounts`)).rows as Array<{ chart: string; account_number: string; name: string }>;
@@ -940,11 +966,13 @@ const emptyCounts = (): DesktopSqliteImportCounts => ({
   accountingSourceRuns: 0,
 });
 
-export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImportOptions): Promise<DesktopSqliteImportResult> => {
+export const importDesktopSqliteToServerDatabase = async (options: DesktopSqliteImportOptions): Promise<DesktopSqliteImportResult> => {
+  const target = requireImportTarget(options);
   const Database = await loadSqliteModule();
   const sqliteDb = new Database(options.sqlitePath, { readonly: true, fileMustExist: true });
   try {
-    await runPostgresMigrations(options.pool);
+    if (isServerDatabase(target)) await target.migrate();
+    else await runPostgresMigrations(target);
     const allTables = listTables(sqliteDb);
     const unsupportedTables = detectUnsupportedSqliteTables(allTables, (table) => countTable(sqliteDb, table));
     if (unsupportedTables.length > 0 && options.failOnUnsupportedData !== false) {
@@ -961,8 +989,8 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
     const importRunId = randomUUID();
     const sourceSha256 = await sha256File(options.sqlitePath);
     const importRunStartedAt = new Date().toISOString();
-    const drizzle = createDrizzle(options.pool);
-    const dependencies = createPostgresBillingDependencies(options.pool);
+    const drizzle = requireImportDrizzle(target);
+    const dependencies = createPostgresBillingDependencies(target as unknown as Parameters<typeof createPostgresBillingDependencies>[0]);
     const existingTenant = await dependencies.tenantRepo.getById(tenantId);
     if (existingTenant) {
       if (existingTenant.slug !== options.tenant.slug || existingTenant.displayName !== options.tenant.displayName || existingTenant.product !== options.product || existingTenant.deploymentMode !== 'single-tenant') {
@@ -975,58 +1003,67 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
       sourceProduct: options.product, sourceSha256, status: 'started',
       detailsJson: JSON.stringify({ unsupportedTables }), startedAt: importRunStartedAt, completedAt: null });
     try {
-      await withPostgresTransaction(options.pool, async (client) => {
+      const runTransaction = (work: (client: ImportQueryable) => Promise<void>): Promise<void> =>
+        isServerDatabase(target)
+          ? target.transaction({}, async (session) => work(session))
+          : withPostgresTransaction(target, async (client) => work(client));
+      await runTransaction(async (client) => {
         await lockDesktopImportTenant(client, tenantId);
         const transactionDependencies = createPostgresBillingDependencies(client);
+        const rawClient = client as Parameters<typeof importRawTenantRows>[0];
+        // Legacy repository contracts predate ServerDatabaseSession. Their
+        // runtime surface is query-only, so keep this explicit adapter cast
+        // local to the importer while the shared contracts converge.
+        const repositoryClient = client as unknown as PostgresTransactionClient;
         if ((await countTenantCoreRows(client, tenantId)) > 0) throw new Error(`Target tenant ${tenantId} already contains server billing data`);
-        const auditCount = await createDrizzle(client).select({ count: count() }).from(schema.auditLog)
+        const auditCount = await requireImportDrizzle(client).select({ count: count() }).from(schema.auditLog)
           .where(eq(schema.auditLog.tenantId, tenantId));
         if (Number(auditCount[0]?.count ?? 0) > 0) throw new Error(`Target tenant ${tenantId} already contains audit log rows`);
         await assertNoCrossTenantIdentityCollisions(client, sqliteDb, tenantId);
         await validateCanonicalGlobalCatalog(client, sqliteDb);
         const settingsJson = loadSettingsJson(sqliteDb);
-        if (settingsJson) await saveServerSettings(client, { tenantId, settingsJson, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-        for (const reservation of loadNumberReservations(sqliteDb, tenantId)) { await saveServerNumberReservation(client, reservation); counts.numberReservations += 1; }
-        for (const article of loadArticles(sqliteDb, tenantId)) { await saveServerArticle(client, article); counts.articles += 1; }
-        for (const account of loadAccounts(sqliteDb, tenantId)) { await saveServerBankAccount(client, account); counts.accounts += 1; }
-        for (const template of loadTemplates(sqliteDb, tenantId)) { await saveServerTemplate(client, template); counts.templates += 1; }
+        if (settingsJson) await saveServerSettings(repositoryClient, { tenantId, settingsJson, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        for (const reservation of loadNumberReservations(sqliteDb, tenantId)) { await saveServerNumberReservation(repositoryClient, reservation); counts.numberReservations += 1; }
+        for (const article of loadArticles(sqliteDb, tenantId)) { await saveServerArticle(repositoryClient, article); counts.articles += 1; }
+        for (const account of loadAccounts(sqliteDb, tenantId)) { await saveServerBankAccount(repositoryClient, account); counts.accounts += 1; }
+        for (const template of loadTemplates(sqliteDb, tenantId)) { await saveServerTemplate(repositoryClient, template); counts.templates += 1; }
         const activeTemplates = loadActiveTemplates(sqliteDb, tenantId);
-        if (activeTemplates) { await saveServerActiveTemplates(client, activeTemplates); counts.activeTemplates += 1; }
+        if (activeTemplates) { await saveServerActiveTemplates(repositoryClient, activeTemplates); counts.activeTemplates += 1; }
         for (const clientRecord of loadClients(sqliteDb, tenantId)) { await transactionDependencies.clientRepo.save(scope, clientRecord); counts.clients += 1; }
-        counts.invoices += await importOutgoingInvoices(client, loadInvoices(sqliteDb, tenantId), tenantId);
+        counts.invoices += await importOutgoingInvoices(rawClient, loadInvoices(sqliteDb, tenantId), tenantId);
         for (const offer of loadOffers(sqliteDb, tenantId)) { await transactionDependencies.offerRepo.save(scope, offer); counts.offers += 1; }
         for (const profile of loadRecurringProfiles(sqliteDb, tenantId)) { await transactionDependencies.recurringProfileRepo.save(scope, profile); counts.recurringProfiles += 1; }
-        for (const mapping of loadTaxCaseAccountMappings(sqliteDb)) { await saveServerTaxCaseAccountMappingForTenant(client, mapping, tenantId); counts.taxCaseAccountMappings += 1; }
-        if (tableExists(sqliteDb, 'accounting_policies')) counts.accountingPolicies += await importRawTenantRows(client, 'accounting_policies', sqliteDb.prepare('SELECT * FROM accounting_policies').all() as Array<Record<string, unknown>>, tenantId, ['tenant_id', 'active_chart', 'vat_method', 'period_policy', 'updated_at']);
-        if (tableExists(sqliteDb, 'accounting_account_mappings')) counts.accountingAccountMappings += await importRawTenantRows(client, 'accounting_account_mappings', sqliteDb.prepare('SELECT * FROM accounting_account_mappings').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'chart', 'role', 'account_number', 'updated_at']);
-        if (tableExists(sqliteDb, 'vendors')) counts.vendors += await importRawTenantRows(client, 'vendors', sqliteDb.prepare('SELECT * FROM vendors').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'vendor_number', 'name', 'email', 'address', 'vat_id', 'iban', 'default_expense_account', 'created_at', 'updated_at']);
+        for (const mapping of loadTaxCaseAccountMappings(sqliteDb)) { await saveServerTaxCaseAccountMappingForTenant(repositoryClient, mapping, tenantId); counts.taxCaseAccountMappings += 1; }
+        if (tableExists(sqliteDb, 'accounting_policies')) counts.accountingPolicies += await importRawTenantRows(rawClient, 'accounting_policies', sqliteDb.prepare('SELECT * FROM accounting_policies').all() as Array<Record<string, unknown>>, tenantId, ['tenant_id', 'active_chart', 'vat_method', 'period_policy', 'updated_at']);
+        if (tableExists(sqliteDb, 'accounting_account_mappings')) counts.accountingAccountMappings += await importRawTenantRows(rawClient, 'accounting_account_mappings', sqliteDb.prepare('SELECT * FROM accounting_account_mappings').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'chart', 'role', 'account_number', 'updated_at']);
+        if (tableExists(sqliteDb, 'vendors')) counts.vendors += await importRawTenantRows(rawClient, 'vendors', sqliteDb.prepare('SELECT * FROM vendors').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'vendor_number', 'name', 'email', 'address', 'vat_id', 'iban', 'default_expense_account', 'created_at', 'updated_at']);
         const incomingInvoiceRows = tableExists(sqliteDb, 'incoming_invoices') ? sqliteDb.prepare('SELECT * FROM incoming_invoices').all() as Array<Record<string, unknown>> : [];
-        const incomingImport = incomingInvoiceRows.length ? await importIncomingInvoices(client, incomingInvoiceRows, tenantId) : { count: 0, insertedIds: [] };
+        const incomingImport = incomingInvoiceRows.length ? await importIncomingInvoices(rawClient, incomingInvoiceRows, tenantId) : { count: 0, insertedIds: [] };
         counts.incomingInvoices += incomingImport.count;
-        if (tableExists(sqliteDb, 'incoming_invoice_lines')) counts.incomingInvoiceLines += await importRawTenantRows(client, 'incoming_invoice_lines', sqliteDb.prepare('SELECT * FROM incoming_invoice_lines').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'incoming_invoice_id', 'position', 'description', 'quantity', 'unit_price', 'net_amount', 'tax_rate', 'tax_amount', 'gross_amount', 'account_number', 'asset_account_number']);
-        if (incomingImport.insertedIds.length) await restoreIncomingInvoiceAccountingRows(client, incomingInvoiceRows.filter((row) => incomingImport.insertedIds.includes(String(row.id))), tenantId);
-        if (tableExists(sqliteDb, 'accounting_backfill_runs')) counts.accountingBackfillRuns += await importRawTenantRows(client, 'accounting_backfill_runs', sqliteDb.prepare('SELECT * FROM accounting_backfill_runs').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'status', 'candidates_json', 'confirmation_hash', 'result_json', 'confirmed_at', 'completed_at', 'created_at', 'config_json']);
+        if (tableExists(sqliteDb, 'incoming_invoice_lines')) counts.incomingInvoiceLines += await importRawTenantRows(rawClient, 'incoming_invoice_lines', sqliteDb.prepare('SELECT * FROM incoming_invoice_lines').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'incoming_invoice_id', 'position', 'description', 'quantity', 'unit_price', 'net_amount', 'tax_rate', 'tax_amount', 'gross_amount', 'account_number', 'asset_account_number']);
+        if (incomingImport.insertedIds.length) await restoreIncomingInvoiceAccountingRows(rawClient, incomingInvoiceRows.filter((row) => incomingImport.insertedIds.includes(String(row.id))), tenantId);
+        if (tableExists(sqliteDb, 'accounting_backfill_runs')) counts.accountingBackfillRuns += await importRawTenantRows(rawClient, 'accounting_backfill_runs', sqliteDb.prepare('SELECT * FROM accounting_backfill_runs').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'status', 'candidates_json', 'confirmation_hash', 'result_json', 'confirmed_at', 'completed_at', 'created_at', 'config_json']);
         const eurLines = loadEurLines(sqliteDb);
         validateCanonicalEurLines(eurLines);
         counts.eurLines += eurLines.length;
-        for (const eurRule of loadEurRules(sqliteDb, tenantId)) { await saveServerEurRule(client, eurRule); counts.eurRules += 1; }
-        for (const keyword of loadAccountKeywords(sqliteDb, tenantId)) { await saveServerAccountKeyword(client, keyword); counts.accountKeywords += 1; }
-        for (const rule of loadAccountSuggestionRules(sqliteDb, tenantId)) { await saveServerAccountSuggestionRule(client, rule); counts.accountSuggestionRules += 1; }
-        for (const workflowEntry of loadProWorkflowEntries(sqliteDb, tenantId)) { await saveServerProWorkflowEntry(client, workflowEntry); counts.proWorkflowEntries += 1; }
-        for (const row of loadBankTransactions(sqliteDb, tenantId)) { await saveServerBankTransaction(client, row); counts.bankTransactions += 1; }
-        for (const row of loadBookingDrafts(sqliteDb, tenantId)) { await saveServerBookingDraft(client, row); counts.bookingDrafts += 1; }
-        for (const row of loadBookingDraftLines(sqliteDb, tenantId)) { await saveServerBookingDraftLine(client, row); counts.bookingDraftLines += 1; }
-        for (const row of loadDraftValidationIssues(sqliteDb, tenantId)) { await saveServerDraftValidationIssue(client, row); counts.draftValidationIssues += 1; }
-        for (const row of loadAccountingPeriods(sqliteDb, tenantId)) { await saveServerAccountingPeriod(client, row); counts.accountingPeriods += 1; }
-        for (const row of loadJournalEntries(sqliteDb, tenantId)) { await saveServerJournalEntry(client, row); counts.journalEntries += 1; }
-        for (const row of loadJournalLines(sqliteDb, tenantId)) { await saveServerJournalLine(client, row); counts.journalLines += 1; }
+        for (const eurRule of loadEurRules(sqliteDb, tenantId)) { await saveServerEurRule(repositoryClient, eurRule); counts.eurRules += 1; }
+        for (const keyword of loadAccountKeywords(sqliteDb, tenantId)) { await saveServerAccountKeyword(repositoryClient, keyword); counts.accountKeywords += 1; }
+        for (const rule of loadAccountSuggestionRules(sqliteDb, tenantId)) { await saveServerAccountSuggestionRule(repositoryClient, rule); counts.accountSuggestionRules += 1; }
+        for (const workflowEntry of loadProWorkflowEntries(sqliteDb, tenantId)) { await saveServerProWorkflowEntry(repositoryClient, workflowEntry); counts.proWorkflowEntries += 1; }
+        for (const row of loadBankTransactions(sqliteDb, tenantId)) { await saveServerBankTransaction(repositoryClient, row); counts.bankTransactions += 1; }
+        for (const row of loadBookingDrafts(sqliteDb, tenantId)) { await saveServerBookingDraft(repositoryClient, row); counts.bookingDrafts += 1; }
+        for (const row of loadBookingDraftLines(sqliteDb, tenantId)) { await saveServerBookingDraftLine(repositoryClient, row); counts.bookingDraftLines += 1; }
+        for (const row of loadDraftValidationIssues(sqliteDb, tenantId)) { await saveServerDraftValidationIssue(repositoryClient, row); counts.draftValidationIssues += 1; }
+        for (const row of loadAccountingPeriods(sqliteDb, tenantId)) { await saveServerAccountingPeriod(repositoryClient, row); counts.accountingPeriods += 1; }
+        for (const row of loadJournalEntries(sqliteDb, tenantId)) { await saveServerJournalEntry(repositoryClient, row); counts.journalEntries += 1; }
+        for (const row of loadJournalLines(sqliteDb, tenantId)) { await saveServerJournalLine(repositoryClient, row); counts.journalLines += 1; }
         const accountingSourceRuns = loadAccountingSourceRuns(sqliteDb, tenantId, sourceAuditRows);
-        if (accountingSourceRuns.length) counts.accountingSourceRuns += await importRawTenantRows(client, 'accounting_source_runs', accountingSourceRuns, tenantId, ['id', 'tenant_id', 'source_type', 'source_id', 'source_revision', 'idempotency_key', 'status', 'source_json', 'result_json', 'journal_entry_id', 'source_hash', 'created_by', 'reason', 'created_at']);
-        if (tableExists(sqliteDb, 'open_items')) counts.openItems += await importRawTenantRows(client, 'open_items', sqliteDb.prepare('SELECT * FROM open_items').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'party_type', 'party_id', 'source_type', 'source_id', 'document_number', 'document_date', 'due_date', 'original_amount', 'allocated_amount', 'residual_amount', 'status', 'journal_entry_id', 'created_at', 'updated_at']);
-        if (tableExists(sqliteDb, 'open_item_payments')) counts.openItemPayments += await importRawTenantRows(client, 'open_item_payments', sqliteDb.prepare('SELECT * FROM open_item_payments').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'party_type', 'party_id', 'payment_date', 'amount', 'bank_account_number', 'method', 'source_type', 'source_id', 'allocated_amount', 'residual_amount', 'status', 'journal_entry_id', 'created_at']);
-        if (tableExists(sqliteDb, 'open_item_allocations')) counts.openItemAllocations += await importRawTenantRows(client, 'open_item_allocations', sqliteDb.prepare('SELECT * FROM open_item_allocations').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'payment_id', 'open_item_id', 'amount', 'created_at', 'event_key']);
+        if (accountingSourceRuns.length) counts.accountingSourceRuns += await importRawTenantRows(rawClient, 'accounting_source_runs', accountingSourceRuns, tenantId, ['id', 'tenant_id', 'source_type', 'source_id', 'source_revision', 'idempotency_key', 'status', 'source_json', 'result_json', 'journal_entry_id', 'source_hash', 'created_by', 'reason', 'created_at']);
+        if (tableExists(sqliteDb, 'open_items')) counts.openItems += await importRawTenantRows(rawClient, 'open_items', sqliteDb.prepare('SELECT * FROM open_items').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'party_type', 'party_id', 'source_type', 'source_id', 'document_number', 'document_date', 'due_date', 'original_amount', 'allocated_amount', 'residual_amount', 'status', 'journal_entry_id', 'created_at', 'updated_at']);
+        if (tableExists(sqliteDb, 'open_item_payments')) counts.openItemPayments += await importRawTenantRows(rawClient, 'open_item_payments', sqliteDb.prepare('SELECT * FROM open_item_payments').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'party_type', 'party_id', 'payment_date', 'amount', 'bank_account_number', 'method', 'source_type', 'source_id', 'allocated_amount', 'residual_amount', 'status', 'journal_entry_id', 'created_at']);
+        if (tableExists(sqliteDb, 'open_item_allocations')) counts.openItemAllocations += await importRawTenantRows(rawClient, 'open_item_allocations', sqliteDb.prepare('SELECT * FROM open_item_allocations').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'payment_id', 'open_item_id', 'amount', 'created_at', 'event_key']);
         for (const row of loadAssets(sqliteDb)) {
-          await createDrizzle(client).insert(schema.assets).values({ id: row.id, tenantId, assetNumber: row.asset_number, name: row.name,
+          await requireImportDrizzle(client).insert(schema.assets).values({ id: row.id, tenantId, assetNumber: row.asset_number, name: row.name,
             assetClass: row.asset_class, status: row.status, activationDate: row.activation_date, acquisitionCost: row.acquisition_cost,
             usefulLifeYears: row.useful_life_years, depreciationMethod: row.depreciation_method, costCenter: row.cost_center,
             location: row.location, receiptLinked: Boolean(row.receipt_linked), supplier: row.supplier, invoiceRef: row.invoice_ref,
@@ -1040,38 +1077,38 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
           counts.assets += 1;
         }
         for (const row of loadAssetSchedule(sqliteDb)) {
-          await createDrizzle(client).insert(schema.assetDepreciationSchedule).values({ id: row.id, tenantId, assetId: row.asset_id,
+          await requireImportDrizzle(client).insert(schema.assetDepreciationSchedule).values({ id: row.id, tenantId, assetId: row.asset_id,
             year: row.year, amount: row.amount, months: row.months, status: row.status, journalEntryId: row.journal_entry_id,
             sourceType: row.source_type ?? null, sourceKey: row.source_key ?? null, postedAt: row.posted_at } as any);
           counts.assetDepreciationSchedule += 1;
         }
         for (const row of loadAssetMovements(sqliteDb)) {
-          await createDrizzle(client).insert(schema.assetMovements).values({ id: row.id, tenantId, assetId: row.asset_id, type: row.type,
+          await requireImportDrizzle(client).insert(schema.assetMovements).values({ id: row.id, tenantId, assetId: row.asset_id, type: row.type,
             movementDate: row.movement_date, amount: row.amount, proceeds: row.proceeds, gainLoss: row.gain_loss,
             journalEntryId: row.journal_entry_id ?? null, sourceType: row.source_type ?? null, sourceKey: row.source_key ?? null,
             reason: row.reason, createdAt: row.created_at } as any);
           counts.assetMovements += 1;
         }
-        for (const row of loadAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerReportAccountMapping(client, row); counts.accountMappingsHgb += 1; }
-        for (const row of loadLegacyAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerAccountMappingHgb(client, row); counts.accountMappingsHgb += 1; }
-        for (const row of loadReportSnapshots(sqliteDb, tenantId)) { await saveServerReportSnapshot(client, row); counts.reportSnapshots += 1; }
+        for (const row of loadAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerReportAccountMapping(repositoryClient, row); counts.accountMappingsHgb += 1; }
+        for (const row of loadLegacyAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerAccountMappingHgb(repositoryClient, row); counts.accountMappingsHgb += 1; }
+        for (const row of loadReportSnapshots(sqliteDb, tenantId)) { await saveServerReportSnapshot(repositoryClient, row); counts.reportSnapshots += 1; }
         const eurReportSnapshots = loadEurReportSnapshots(sqliteDb, tenantId, sourceAuditRows);
-        if (eurReportSnapshots.length) counts.eurReportSnapshots += await importRawTenantRows(client, 'eur_report_snapshots', eurReportSnapshots, tenantId, ['id', 'tenant_id', 'tax_year', 'from_date', 'to_date', 'payload_json', 'source_hash', 'catalog_id', 'catalog_version', 'catalog_source_hash', 'reason', 'actor_id', 'created_at']);
-        for (const row of loadDatevExports(sqliteDb, tenantId)) { await saveServerDatevExport(client, row); counts.datevExports += 1; }
-        for (const row of loadVatEvidence(sqliteDb, tenantId)) { await saveServerVatEvidence(client, row); counts.vatEvidence += 1; }
-        for (const row of loadJournalPostingPairs(sqliteDb, tenantId)) { await saveServerJournalPostingPair(client, row); counts.journalPostingPairs += 1; }
-        for (const row of loadImportBatches(sqliteDb, tenantId)) { await saveServerImportBatch(client, row); counts.importBatches += 1; }
-        for (const row of loadTransactions(sqliteDb, tenantId)) { await saveServerImportedTransaction(client, row); counts.transactions += 1; }
+        if (eurReportSnapshots.length) counts.eurReportSnapshots += await importRawTenantRows(rawClient, 'eur_report_snapshots', eurReportSnapshots, tenantId, ['id', 'tenant_id', 'tax_year', 'from_date', 'to_date', 'payload_json', 'source_hash', 'catalog_id', 'catalog_version', 'catalog_source_hash', 'reason', 'actor_id', 'created_at']);
+        for (const row of loadDatevExports(sqliteDb, tenantId)) { await saveServerDatevExport(repositoryClient, row); counts.datevExports += 1; }
+        for (const row of loadVatEvidence(sqliteDb, tenantId)) { await saveServerVatEvidence(repositoryClient, row); counts.vatEvidence += 1; }
+        for (const row of loadJournalPostingPairs(sqliteDb, tenantId)) { await saveServerJournalPostingPair(repositoryClient, row); counts.journalPostingPairs += 1; }
+        for (const row of loadImportBatches(sqliteDb, tenantId)) { await saveServerImportBatch(repositoryClient, row); counts.importBatches += 1; }
+        for (const row of loadTransactions(sqliteDb, tenantId)) { await saveServerImportedTransaction(repositoryClient, row); counts.transactions += 1; }
         const eurCashFacts = loadEurCashFacts(sqliteDb);
-        if (eurCashFacts.length) counts.eurCashFacts += await importRawTenantRows(client, 'eur_cash_facts', eurCashFacts, tenantId, ['id', 'tenant_id', 'source_type', 'source_id', 'tax_year', 'kind', 'amount_net', 'flow_type', 'eur_line_id', 'splits_json', 'reason', 'actor_id', 'actor_name', 'idempotency_key', 'provenance_json', 'created_at', 'updated_at']);
+        if (eurCashFacts.length) counts.eurCashFacts += await importRawTenantRows(rawClient, 'eur_cash_facts', eurCashFacts, tenantId, ['id', 'tenant_id', 'source_type', 'source_id', 'tax_year', 'kind', 'amount_net', 'flow_type', 'eur_line_id', 'splits_json', 'reason', 'actor_id', 'actor_name', 'idempotency_key', 'provenance_json', 'created_at', 'updated_at']);
         const eurAnnexFacts = loadEurAnnexFacts(sqliteDb);
-        if (eurAnnexFacts.length) counts.eurAnnexFacts += await importRawTenantRows(client, 'eur_annex_facts', eurAnnexFacts, tenantId, ['id', 'tenant_id', 'tax_year', 'annex', 'line_id', 'amount', 'source_id', 'fact_date', 'reason', 'actor_id', 'actor_name', 'idempotency_key', 'provenance_json', 'created_at']);
-        for (const row of loadEurClassifications(sqliteDb, tenantId)) { await saveServerEurClassification(client, row); counts.eurClassifications += 1; }
-        for (const row of loadEmailLog(sqliteDb)) { await insertEmailLogRow(client, tenantId, { id: row.id, documentType: row.document_type, documentId: row.document_id, documentNumber: row.document_number, recipientEmail: row.recipient_email, recipientName: row.recipient_name, subject: row.subject, bodyText: row.body_text, provider: row.provider, status: row.status, errorMessage: row.error_message, sentAt: row.sent_at, createdAt: row.created_at }); counts.emailLog += 1; }
-        for (const row of loadDunningHistory(sqliteDb)) { await createDrizzle(client).insert(schema.dunningHistory).values({ id: row.id, tenantId, invoiceId: row.invoice_id, invoiceNumber: row.invoice_number, dunningLevel: row.dunning_level, daysOverdue: row.days_overdue, feeApplied: row.fee_applied, emailSent: Boolean(row.email_sent), emailLogId: row.email_log_id, processedAt: row.processed_at, createdAt: row.created_at } as any); counts.dunningHistory += 1; }
-        for (const row of sourceAuditRows) { await insertAuditRow(client, tenantId, { sequence: row.sequence, ts: row.ts, entityType: row.entity_type, entityId: row.entity_id, action: row.action, reason: row.reason, beforeJson: row.before_json, afterJson: row.after_json, prevHash: row.prev_hash, hash: row.hash, actor: row.actor }); counts.auditLog += 1; }
+        if (eurAnnexFacts.length) counts.eurAnnexFacts += await importRawTenantRows(rawClient, 'eur_annex_facts', eurAnnexFacts, tenantId, ['id', 'tenant_id', 'tax_year', 'annex', 'line_id', 'amount', 'source_id', 'fact_date', 'reason', 'actor_id', 'actor_name', 'idempotency_key', 'provenance_json', 'created_at']);
+        for (const row of loadEurClassifications(sqliteDb, tenantId)) { await saveServerEurClassification(repositoryClient, row); counts.eurClassifications += 1; }
+        for (const row of loadEmailLog(sqliteDb)) { await insertEmailLogRow(repositoryClient, tenantId, { id: row.id, documentType: row.document_type, documentId: row.document_id, documentNumber: row.document_number, recipientEmail: row.recipient_email, recipientName: row.recipient_name, subject: row.subject, bodyText: row.body_text, provider: row.provider, status: row.status, errorMessage: row.error_message, sentAt: row.sent_at, createdAt: row.created_at }); counts.emailLog += 1; }
+        for (const row of loadDunningHistory(sqliteDb)) { await requireImportDrizzle(client).insert(schema.dunningHistory).values({ id: row.id, tenantId, invoiceId: row.invoice_id, invoiceNumber: row.invoice_number, dunningLevel: row.dunning_level, daysOverdue: row.days_overdue, feeApplied: row.fee_applied, emailSent: Boolean(row.email_sent), emailLogId: row.email_log_id, processedAt: row.processed_at, createdAt: row.created_at } as any); counts.dunningHistory += 1; }
+        for (const row of sourceAuditRows) { await insertAuditRow(repositoryClient, tenantId, { sequence: row.sequence, ts: row.ts, entityType: row.entity_type, entityId: row.entity_id, action: row.action, reason: row.reason, beforeJson: row.before_json, afterJson: row.after_json, prevHash: row.prev_hash, hash: row.hash, actor: row.actor }); counts.auditLog += 1; }
         const importedAuditHead = maxAuditHead(sourceAuditRows);
-        await createDrizzle(client).insert(schema.auditHeads).values({
+        await requireImportDrizzle(client).insert(schema.auditHeads).values({
           tenantId,
           sequence: importedAuditHead?.sequence ?? 0,
           hash: importedAuditHead?.hash ?? null,
@@ -1086,7 +1123,7 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
         if (!importedVerification.ok) throw new Error(`Imported audit log verification failed: ${importedVerification.errors.map((entry) => `#${entry.sequence} ${entry.message}`).join(', ')}`);
         await assertNoCrossTenantTenantReferences(client, tenantId);
       });
-      await createDrizzle(options.pool).update(schema.sqliteImportRuns).set({ status: 'completed', detailsJson: JSON.stringify({ counts, unsupportedTables }), completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
+      await drizzle.update(schema.sqliteImportRuns).set({ status: 'completed', detailsJson: JSON.stringify({ counts, unsupportedTables }), completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
     } catch (error) {
       const detailsJson = JSON.stringify({ counts, unsupportedTables, error: error instanceof Error ? error.message : String(error) });
       await drizzle.update(schema.sqliteImportRuns).set({ status: 'failed', detailsJson, completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
@@ -1097,3 +1134,7 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
     sqliteDb.close();
   }
 };
+
+/** Backwards-compatible PostgreSQL entry point used by the server CLI. */
+export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImportOptions & { pool: Pool }): Promise<DesktopSqliteImportResult> =>
+  importDesktopSqliteToServerDatabase(options);

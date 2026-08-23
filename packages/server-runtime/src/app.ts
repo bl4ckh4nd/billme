@@ -81,6 +81,7 @@ import { registerLiteEurRoutes } from './liteEurRoutes.js';
 import { registerAuditRoutes } from './auditRoutes.js';
 import { registerTransactionRoutes } from './transactionRoutes.js';
 import { registerEurRuleRoutes } from './eurRuleRoutes.js';
+import { registerAutomationRoutes } from './automationRoutes.js';
 
 type Pool = ReturnType<typeof createPostgresPool>;
 type AppSettings = z.infer<typeof appSettingsSchema>;
@@ -1540,6 +1541,8 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerProjectRoutes(app, 'lite');
     registerProjectRoutes(app, 'pro');
     registerTaxAuditExportRoute(app);
+    registerAutomationRoutes(app, 'lite', '/api/v1/lite', { requireSession, requireDatabase });
+    registerAutomationRoutes(app, 'pro', '/api/v1/pro', { requireSession, requireDatabase });
   } else {
     registerBillingRoutes(app, product, `/api/v1/${product}`);
     registerTransactionRoutes(app, product);
@@ -1553,6 +1556,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     } else {
       registerAuditRoutes(app, 'lite');
     }
+    registerAutomationRoutes(app, product, `/api/v1/${product}`, { requireSession, requireDatabase });
   }
 
   if (runtime === 'server') typedRoute(app, {

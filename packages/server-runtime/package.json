@@ -11,7 +11,9 @@
   "dependencies": {
     "@billme/accounting-engine": "workspace:*",
     "@billme/accounting-shared": "workspace:*",
+    "@billme/desktop-core": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
+    "@billme/desktop-services": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/server-data": "workspace:*",
     "@fastify/cors": "^11.1.0",

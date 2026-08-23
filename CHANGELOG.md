@@ -3,6 +3,7 @@
 ## Unreleased
 
 - pnpm-10-CI-Installationen erlauben den nativen Build von `better-sqlite3`, Electron und `keytar` jetzt auch über die Root-Paketkonfiguration; dadurch stehen die benötigten Runtime-Artefakte für Import- und Electron-Tests zuverlässig bereit.
+- Server-Automation verarbeitet Portal-Publikation/-Status, Kundenlinks, E-Mail-Outbox, Dunning und wiederkehrende Rechnungen jetzt tenant-sicher, idempotent und auditiert; Portal-Bearer-Tokens werden vor externer Publikation persistiert und der Portal-Publikationsstand bleibt in PostgreSQL/PGlite migrationsverwaltet.
 - Projekte werden jetzt für Lite und Pro tenant-sicher über die Server-/PGlite-Naht gelesen, gespeichert und archiviert; Pro kann zusätzlich einen rollenbeschränkten, tenant-scoped Tax-Audit-Export mit optionalen Dokumenten erzeugen.
 - EÜR-Cash-Items unterstützen jetzt autoritative Suche, Quelle, Fluss, Konto, Status und Pagination; EÜR-Regeln bleiben tenant-sicher, rollenbeschränkt, auditiert und für Lite/Pro über dieselbe Server-/PGlite-Naht verfügbar.
 - Lite und Pro können CSV-Finanztransaktionen jetzt über die gemeinsame Server-/PGlite-Naht mandantensicher importieren, deduplizieren, prüfen, zurückrollen und mit Rechnungen verknüpfen; jede Mutation bleibt atomar und auditiert.

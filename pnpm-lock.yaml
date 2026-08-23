@@ -1129,6 +1129,12 @@ importers:
       '@billme/desktop-contracts-pro':
         specifier: workspace:*
         version: link:../desktop-contracts-pro
+      '@billme/desktop-core':
+        specifier: workspace:*
+        version: link:../desktop-core
+      '@billme/desktop-services':
+        specifier: workspace:*
+        version: link:../desktop-services
       '@billme/server-core':
         specifier: workspace:*
         version: link:../server-core

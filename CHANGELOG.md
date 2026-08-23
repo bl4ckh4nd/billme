@@ -9,6 +9,7 @@
 - Die Hosted-Fastify-Kernkomposition ist als eigenständiges `@billme/server-runtime`-Paket bezogen und kann unabhängig vom `server-api`-Entrypoint eingebunden werden.
 - Die vollständigen Hosted-Pro-Accounting-Routen sind jetzt Teil derselben Runtime-Komposition und behalten ihre Authentifizierungs- und Rollenprüfungen beim Paketwechsel bei.
 - Hosted-Lite- und -Pro-Instanzen können ihre tenantbezogene Audit-Kette jetzt prüfen und als CSV exportieren; beide Endpunkte bleiben hinter der jeweiligen Produktauthentifizierung.
+- Die lokale Runtime startet Lite und Pro jetzt mit einem per-Start-Token geschützten HTTP-Server auf persistentem PGlite; Migrationen, Tenant-Scope und atomare Restore-Prüfung bleiben vor dem Listener-Start abgeschlossen.
 - Die Pro-Server-Fixtures und E2E-Prüfungen decken jetzt das vollständige Vorsteuer-/Journal-Referenzkonto sowie die aktuelle Onboarding- und Accounting-Oberfläche ab.
 - Öffentliche Produkttexte und Metadaten beschreiben lokale Dokument- und Zahlungsabläufe klarer.
 - Lite-Desktop-Onboarding, Navigation, Dokumentvorlagen sowie Import-, Portal-, E-Mail- und Fehlermeldungen geben konkretere nächste Schritte.

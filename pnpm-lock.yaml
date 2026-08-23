@@ -973,6 +973,25 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@24.12.2)(@vitest/ui@4.0.18)(happy-dom@20.5.3)(jiti@2.6.1)(jsdom@28.0.0)(lightningcss@1.30.2)(tsx@4.21.0)
 
+  packages/embedded-server-runtime:
+    dependencies:
+      '@billme/server-data':
+        specifier: workspace:*
+        version: link:../server-data
+      '@billme/server-runtime':
+        specifier: workspace:*
+        version: link:../server-runtime
+    devDependencies:
+      '@types/node':
+        specifier: ^24.9.1
+        version: 24.12.2
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@24.12.2)(@vitest/ui@4.0.18)(happy-dom@20.5.3)(jiti@2.6.1)(jsdom@28.0.0)(lightningcss@1.30.2)(tsx@4.21.0)
+
   packages/finance-intelligence: {}
 
   packages/pglite-migration-cli:

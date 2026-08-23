@@ -45,7 +45,7 @@ import type {
   PostgresQueryable as PostgresPoolQueryable,
   PostgresTransactionClient,
 } from "./connection.js";
-import type { ServerDatabaseSession } from "../database.js";
+import type { ServerDatabase, ServerDatabaseSession } from "../database.js";
 import {
   and,
   asc,
@@ -1643,12 +1643,23 @@ export const createPostgresBillingDependencies = (
 });
 
 export const createPostgresBillingUnitOfWork = (
-  pool: Pool,
+  pool: Pool | ServerDatabase,
 ): BillingUnitOfWork => ({
   async withTransaction<TResult>(
     scope: TenantScope,
     work: (context: BillingUnitOfWorkContext) => Promise<TResult> | TResult,
   ) {
+    if ('engine' in pool) {
+      return pool.transaction({}, async (session) => {
+        const repositories = createPostgresBillingDependencies(session);
+        return work({
+          scope,
+          clock: systemClock,
+          repositories,
+        });
+      });
+    }
+
     return withPostgresTransaction(pool, async (client) => {
       const repositories = createPostgresBillingDependencies(client);
       return work({

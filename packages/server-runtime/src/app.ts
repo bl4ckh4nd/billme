@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { z } from 'zod';
@@ -19,6 +19,7 @@ import {
   serverProductSchema,
   supportedServerProducts,
   supportedServerRoles,
+  type ServerRole,
   type AuditEntryDraft,
   type TenantScope,
 } from '@billme/server-core';
@@ -43,6 +44,8 @@ import {
   saveServerSettings,
   saveServerTemplate,
   withPostgresTransaction,
+  type ServerDatabase,
+  type ServerDatabaseSession,
   type PostgresQueryable,
 } from '@billme/server-data';
 import {
@@ -75,6 +78,35 @@ import { registerAuditRoutes } from './auditRoutes.js';
 
 type Pool = ReturnType<typeof createPostgresPool>;
 type AppSettings = z.infer<typeof appSettingsSchema>;
+type RuntimeProfile = 'server' | 'embedded';
+
+export interface EmbeddedLocalAuthOptions {
+  readonly accessToken: string;
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly email: string;
+  readonly fullName: string;
+  readonly role?: ServerRole;
+}
+
+export interface BuildServerApiOptions {
+  readonly database?: ServerDatabase;
+  readonly runtime?: RuntimeProfile;
+  readonly product?: 'lite' | 'pro';
+  readonly logger?: boolean;
+  readonly sessionSecret?: string;
+  readonly localAuth?: EmbeddedLocalAuthOptions;
+}
+
+const runtimeCapabilitiesResponseSchema = capabilitiesResponseSchema.extend({
+  runtime: z.enum(['server', 'embedded']),
+  database: capabilitiesResponseSchema.shape.database.extend({
+    local: z.enum(['sqlite', 'pglite']),
+  }),
+  auth: capabilitiesResponseSchema.shape.auth.extend({
+    multiUser: z.boolean(),
+  }),
+});
 
 const okSchema = z.object({ ok: z.literal(true) });
 const entityIdParamsSchema = z.object({ id: z.string().min(1) });
@@ -163,7 +195,7 @@ const buildAuditEntry = (
 });
 
 const historyFromAudit = async (
-  db: Pool,
+  db: Pool | ServerDatabase,
   scope: TenantScope,
   entityType: 'invoice' | 'offer',
   entityId: string,
@@ -180,14 +212,14 @@ const historyFromAudit = async (
   }));
 };
 
-const withInvoiceHistory = async (db: Pool, scope: TenantScope, invoice: z.infer<typeof invoiceSchema>) => {
+const withInvoiceHistory = async (db: Pool | ServerDatabase, scope: TenantScope, invoice: z.infer<typeof invoiceSchema>) => {
   return {
     ...invoice,
     history: await historyFromAudit(db, scope, 'invoice', invoice.id),
   };
 };
 
-const withOfferHistory = async (db: Pool, scope: TenantScope, offer: z.infer<typeof offerSchema>) => {
+const withOfferHistory = async (db: Pool | ServerDatabase, scope: TenantScope, offer: z.infer<typeof offerSchema>) => {
   return {
     ...offer,
     history: await historyFromAudit(db, scope, 'offer', offer.id),
@@ -251,11 +283,32 @@ const mapAccountRecord = (record: Awaited<ReturnType<typeof listServerBankAccoun
     color: record.color,
   });
 
+const safeSecretEqual = (provided: string, expected: string): boolean => {
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+  return providedBuffer.length === expectedBuffer.length && timingSafeEqual(providedBuffer, expectedBuffer);
+};
+
 export const requireSession = async (
   app: FastifyInstance,
   product: 'lite' | 'pro',
   authHeader: string | undefined,
 ): Promise<AuthSession> => {
+  if (app.runtimeProfile === 'embedded') {
+    const provided = app.tokenService.readBearerToken(authHeader);
+    const expected = app.localAccessTokenSecret;
+    if (!provided || !expected || !safeSecretEqual(provided, expected)) {
+      throw new ApiError(401, 'Missing or invalid local access token');
+    }
+    if (!app.localSession) {
+      throw new ApiError(503, 'Embedded local session is not configured');
+    }
+    if (app.localSession.scope.product !== product) {
+      throw new ApiError(403, `Token is not authorized for ${product}`);
+    }
+    return app.localSession;
+  }
+
   const token = app.tokenService.readBearerToken(authHeader);
   if (!token) {
     throw new ApiError(401, 'Missing bearer token');
@@ -280,12 +333,25 @@ export const requireMutationSession = async (app: FastifyInstance, authHeader: s
 
 export const requirePool = (app: FastifyInstance): Pool => {
   if (!app.serverPool) {
+    if (app.runtimeProfile === 'embedded' && app.serverDatabase) {
+      // Pro route repositories use the Drizzle query surface. In embedded mode
+      // give them the underlying PGlite client so Drizzle selects its PGlite
+      // dialect instead of treating the lifecycle adapter as a pg Pool.
+      const embeddedClient = (app.serverDatabase as ServerDatabase & { readonly client?: unknown }).client;
+      return (embeddedClient ?? app.serverDatabase) as Pool;
+    }
     throw new ApiError(503, 'DATABASE_URL is required for server billing routes');
   }
   return app.serverPool;
 };
 
-const createNumberingPortsForDb = (db: PostgresQueryable, scope: TenantScope) => ({
+const requireBillingDatabase = (app: FastifyInstance): Pool | ServerDatabase => {
+  if (app.runtimeProfile === 'embedded' && app.serverDatabase) return app.serverDatabase;
+  if (app.serverPool) return app.serverPool;
+  throw new ApiError(503, 'DATABASE_URL is required for server billing routes');
+};
+
+const createNumberingPortsForDb = (db: ServerDatabaseSession, scope: TenantScope) => ({
   tx: {
     async inTransaction<TResult>(work: () => Promise<TResult> | TResult): Promise<TResult> {
       return await work();
@@ -295,7 +361,7 @@ const createNumberingPortsForDb = (db: PostgresQueryable, scope: TenantScope) =>
     return parseStoredSettings(await getServerSettings(db, scope.tenantId));
   },
   async saveSettings(settings: AppSettings) {
-    await saveServerSettings(db, {
+    await saveServerSettings(db as PostgresQueryable, {
       tenantId: scope.tenantId,
       settingsJson: JSON.stringify(appSettingsSchema.parse(settings)),
       createdAt: new Date().toISOString(),
@@ -310,7 +376,7 @@ const createNumberingPortsForDb = (db: PostgresQueryable, scope: TenantScope) =>
     status: 'reserved' | 'released' | 'finalized';
     documentId: string | null;
   }) {
-    await saveServerNumberReservation(db, {
+    await saveServerNumberReservation(db as PostgresQueryable, {
       ...reservation,
       tenantId: scope.tenantId,
       createdAt: new Date().toISOString(),
@@ -318,7 +384,7 @@ const createNumberingPortsForDb = (db: PostgresQueryable, scope: TenantScope) =>
     });
   },
   async getReservationById(reservationId: string) {
-    const reservations = await listServerNumberReservations(db, scope.tenantId);
+    const reservations = await listServerNumberReservations(db as PostgresQueryable, scope.tenantId);
     const reservation = reservations.find((entry) => entry.id === reservationId);
     return reservation
       ? {
@@ -339,7 +405,7 @@ const createNumberingPortsForDb = (db: PostgresQueryable, scope: TenantScope) =>
     status: 'reserved' | 'released' | 'finalized';
     documentId: string | null;
   }) {
-    await saveServerNumberReservation(db, {
+    await saveServerNumberReservation(db as PostgresQueryable, {
       ...reservation,
       tenantId: scope.tenantId,
       createdAt: new Date().toISOString(),
@@ -376,30 +442,40 @@ const createNumberingPortsForDb = (db: PostgresQueryable, scope: TenantScope) =>
   },
 });
 
-const reserveNumberForScope = async (pool: Pool, scope: TenantScope, kind: 'invoice' | 'offer' | 'customer') => {
-  return withPostgresTransaction(pool, async (client) => reserveDocumentNumber(createNumberingPortsForDb(client, scope), kind));
+const reserveNumberForScope = async (database: Pool | ServerDatabase, scope: TenantScope, kind: 'invoice' | 'offer' | 'customer') => {
+  if ('engine' in database) {
+    return database.transaction({}, async (session) => reserveDocumentNumber(createNumberingPortsForDb(session, scope), kind));
+  }
+  return withPostgresTransaction(database, async (client) => reserveDocumentNumber(createNumberingPortsForDb(client, scope), kind));
 };
 
-const releaseNumberForScope = async (pool: Pool, scope: TenantScope, reservationId: string) => {
-  return withPostgresTransaction(pool, async (client) =>
+const releaseNumberForScope = async (database: Pool | ServerDatabase, scope: TenantScope, reservationId: string) => {
+  if ('engine' in database) {
+    return database.transaction({}, async (session) => releaseDocumentNumber(createNumberingPortsForDb(session, scope), reservationId));
+  }
+  return withPostgresTransaction(database, async (client) =>
     releaseDocumentNumber(createNumberingPortsForDb(client, scope), reservationId),
   );
 };
 
-const finalizeNumberForScope = async (pool: Pool, scope: TenantScope, reservationId: string, documentId: string) => {
-  return withPostgresTransaction(pool, async (client) =>
+const finalizeNumberForScope = async (database: Pool | ServerDatabase, scope: TenantScope, reservationId: string, documentId: string) => {
+  if ('engine' in database) {
+    return database.transaction({}, async (session) => finalizeDocumentNumber(createNumberingPortsForDb(session, scope), reservationId, documentId));
+  }
+  return withPostgresTransaction(database, async (client) =>
     finalizeDocumentNumber(createNumberingPortsForDb(client, scope), reservationId, documentId),
   );
 };
 
 const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefix: string) => {
+  const requireBillingPool = (_app: FastifyInstance): Pool | ServerDatabase => requireBillingDatabase(_app);
   typedRoute(app, {
     method: 'GET',
     url: `${prefix}/clients`,
     response: z.array(clientSchema),
     async handler({ request }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const dependencies = createPostgresBillingDependencies(requirePool(app));
+      const dependencies = createPostgresBillingDependencies(requireBillingPool(app));
       return dependencies.clientRepo.list(session.scope);
     },
   });
@@ -411,7 +487,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: clientSchema.nullable(),
     async handler({ request, params }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const dependencies = createPostgresBillingDependencies(requirePool(app));
+      const dependencies = createPostgresBillingDependencies(requireBillingPool(app));
       return dependencies.clientRepo.getById(session.scope, params.id);
     },
   });
@@ -426,7 +502,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: clientSchema,
     async handler({ request, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingPool(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
         const nextClient = clientSchema.parse({
@@ -461,7 +537,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: okSchema,
     async handler({ request, params, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingPool(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
         const existing = await repositories.clientRepo.getById(session.scope, params.id);
@@ -484,7 +560,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: z.array(invoiceSchema),
     async handler({ request }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingDatabase(app);
       const dependencies = createPostgresBillingDependencies(pool);
       const invoices = await dependencies.invoiceRepo.list(session.scope);
       return Promise.all(invoices.map((invoice) => withInvoiceHistory(pool, session.scope, invoice)));
@@ -498,7 +574,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: invoiceSchema.nullable(),
     async handler({ request, params }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingDatabase(app);
       const dependencies = createPostgresBillingDependencies(pool);
       const invoice = await dependencies.invoiceRepo.getById(session.scope, params.id);
       return invoice ? withInvoiceHistory(pool, session.scope, invoice) : null;
@@ -515,7 +591,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: invoiceSchema,
     async handler({ request, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingDatabase(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       const saved = await unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
         const nextInvoice = invoiceSchema.parse({
@@ -551,7 +627,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: okSchema,
     async handler({ request, params, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingDatabase(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
         const existing = await repositories.invoiceRepo.getById(session.scope, params.id);
@@ -574,7 +650,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: z.array(offerSchema),
     async handler({ request }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingDatabase(app);
       const dependencies = createPostgresBillingDependencies(pool);
       const offers = await dependencies.offerRepo.list(session.scope);
       return Promise.all(offers.map((offer) => withOfferHistory(pool, session.scope, offer)));
@@ -588,7 +664,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: offerSchema.nullable(),
     async handler({ request, params }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingDatabase(app);
       const dependencies = createPostgresBillingDependencies(pool);
       const offer = await dependencies.offerRepo.getById(session.scope, params.id);
       return offer ? withOfferHistory(pool, session.scope, offer) : null;
@@ -605,7 +681,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: offerSchema,
     async handler({ request, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingDatabase(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       const saved = await unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
         const nextOffer = offerSchema.parse({
@@ -641,7 +717,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: okSchema,
     async handler({ request, params, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingDatabase(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
         const existing = await repositories.offerRepo.getById(session.scope, params.id);
@@ -691,7 +767,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: recurringProfileSchema,
     async handler({ request, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingDatabase(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
         const nextProfile = recurringProfileSchema.parse({
@@ -726,7 +802,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: okSchema,
     async handler({ request, params, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requirePool(app);
+      const pool = requireBillingDatabase(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
         const existing = await repositories.recurringProfileRepo.getById(session.scope, params.id);
@@ -789,7 +865,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     }),
     async handler({ request, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      return reserveNumberForScope(requirePool(app), session.scope, body.kind);
+      return reserveNumberForScope(requireBillingDatabase(app), session.scope, body.kind);
     },
   });
 
@@ -800,7 +876,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: okSchema,
     async handler({ request, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      return releaseNumberForScope(requirePool(app), session.scope, body.reservationId);
+      return releaseNumberForScope(requireBillingDatabase(app), session.scope, body.reservationId);
     },
   });
 
@@ -811,7 +887,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: okSchema,
     async handler({ request, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      return finalizeNumberForScope(requirePool(app), session.scope, body.reservationId, body.documentId);
+      return finalizeNumberForScope(requireBillingDatabase(app), session.scope, body.reservationId, body.documentId);
     },
   });
 
@@ -1234,38 +1310,85 @@ declare module 'fastify' {
     authStore: AuthStore;
     tokenService: SessionTokenService;
     serverPool?: Pool;
+    serverDatabase?: ServerDatabase;
+    runtimeProfile: RuntimeProfile;
+    runtimeProduct?: 'lite' | 'pro';
+    localAccessTokenSecret?: string;
+    localSession?: AuthSession;
   }
 }
 
-export const buildServerApi = async (): Promise<FastifyInstance> => {
+export const buildServerApi = async (options: BuildServerApiOptions = {}): Promise<FastifyInstance> => {
+  const runtime = options.runtime ?? 'server';
+  const product = options.product ?? 'lite';
   const app = Fastify({
-    logger: true,
+    logger: options.logger ?? true,
   });
+
+  app.decorate('runtimeProfile', runtime);
+  app.decorate('runtimeProduct', runtime === 'embedded' ? product : undefined);
 
   registerErrorHandler(app);
 
   await app.register(cors, {
     origin: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['authorization', 'content-type'],
+    allowedHeaders: ['authorization', 'content-type', 'x-billme-local-token'],
   });
 
-  const secretVerdict = checkSessionSecret(process.env);
+  const secretEnv = {
+    ...process.env,
+    ...(options.sessionSecret ? { SESSION_SECRET: options.sessionSecret } : {}),
+  };
+  const secretVerdict = checkSessionSecret(secretEnv);
   if (!secretVerdict.ok) throw new Error(secretVerdict.error);
   if (secretVerdict.warning) app.log.warn(secretVerdict.warning);
 
-  const databaseUrl = readDatabaseUrl(process.env);
-  const pool = databaseUrl ? createPostgresPool(databaseUrl) : undefined;
-  if (pool) {
-    await assertDrizzleSchemaCurrent(pool);
-    app.decorate('serverPool', pool);
-    app.addHook('onClose', async () => {
-      await pool.end();
+  if (runtime === 'embedded') {
+    if (!options.database) throw new Error('Embedded server runtime requires an injected ServerDatabase');
+    if (!options.localAuth) throw new Error('Embedded server runtime requires local auth material');
+    if (!options.sessionSecret) throw new Error('Embedded server runtime requires an explicit session secret');
+
+    await options.database.migrate();
+    await options.database.assertCurrent();
+    app.decorate('serverDatabase', options.database);
+    app.decorate('localAccessTokenSecret', options.localAuth.accessToken);
+    app.decorate('localSession', {
+      user: {
+        id: options.localAuth.userId,
+        email: options.localAuth.email,
+        fullName: options.localAuth.fullName,
+        role: options.localAuth.role ?? 'owner',
+      },
+      scope: createSingleTenantScope(options.localAuth.tenantId, product),
+      role: options.localAuth.role ?? 'owner',
     });
+    app.addHook('onRequest', async (request) => {
+      if (!request.url.startsWith('/api/')) return;
+      const localToken = request.headers['x-billme-local-token'];
+      if (typeof localToken !== 'string' || !safeSecretEqual(localToken, options.localAuth!.accessToken)) {
+        throw new ApiError(401, 'Missing or invalid local access token');
+      }
+      request.headers.authorization = `Bearer ${localToken}`;
+    });
+    app.addHook('onClose', async () => {
+      await options.database?.close();
+    });
+  } else {
+    const databaseUrl = readDatabaseUrl(process.env);
+    const pool = databaseUrl ? createPostgresPool(databaseUrl) : undefined;
+    if (pool) {
+      await assertDrizzleSchemaCurrent(pool);
+      app.decorate('serverPool', pool);
+      app.addHook('onClose', async () => {
+        await pool.end();
+      });
+    }
   }
 
-  app.decorate('tokenService', new SessionTokenService(process.env.SESSION_SECRET));
-  app.decorate('authStore', createAuthStore({ pool, env: process.env }));
+  app.decorate('tokenService', new SessionTokenService(options.sessionSecret ?? process.env.SESSION_SECRET));
+  const authPool = runtime === 'server' && app.serverPool ? app.serverPool : undefined;
+  app.decorate('authStore', createAuthStore({ pool: authPool, env: process.env }));
 
   typedRoute(app, {
     method: 'GET',
@@ -1285,26 +1408,27 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
   typedRoute(app, {
     method: 'GET',
     url: '/api/v1/meta/capabilities',
-    response: capabilitiesResponseSchema,
+    response: runtimeCapabilitiesResponseSchema,
     async handler() {
       return {
         backend: 'fastify' as const,
         deploymentMode: 'single-tenant' as const,
         desktopServerMode: true as const,
+        runtime,
         database: {
           production: 'postgres' as const,
-          local: 'sqlite' as const,
+          local: runtime === 'embedded' ? 'pglite' as const : 'sqlite' as const,
         },
         auth: {
-          multiUser: true as const,
-          roles: [...supportedServerRoles],
+          multiUser: runtime === 'server' as const,
+          roles: runtime === 'server' ? [...supportedServerRoles] : ['owner' as const],
         },
-        products: [...supportedServerProducts],
+        products: runtime === 'embedded' ? [product] : [...supportedServerProducts],
       };
     },
   });
 
-  typedRoute(app, {
+  if (runtime === 'server') typedRoute(app, {
     method: 'GET',
     url: '/api/v1/auth/bootstrap/status',
     query: productAuthStatusQuerySchema,
@@ -1317,18 +1441,27 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
     },
   });
 
-  // Product auth and VAT validation are contract-first oRPC routes. Generic
-  // query-based auth below remains a compatibility surface.
-  registerBillingRoutes(app, 'lite', '/api/v1/lite');
-  registerBillingRoutes(app, 'pro', '/api/v1/pro');
-  registerProRoutes(app);
-  registerProAccountingRoutes(app);
-  registerLiteEurRoutes(app);
-  registerTaxFilingRoutes(app);
-  registerAuditRoutes(app, 'lite');
-  registerAuditRoutes(app, 'pro');
+  if (runtime === 'server') {
+    registerBillingRoutes(app, 'lite', '/api/v1/lite');
+    registerBillingRoutes(app, 'pro', '/api/v1/pro');
+    registerProRoutes(app);
+    registerProAccountingRoutes(app);
+    registerLiteEurRoutes(app);
+    registerTaxFilingRoutes(app);
+    registerAuditRoutes(app, 'lite');
+    registerAuditRoutes(app, 'pro');
+  } else {
+    registerBillingRoutes(app, product, `/api/v1/${product}`);
+    if (product === 'pro') {
+      registerProRoutes(app);
+      registerProAccountingRoutes(app);
+      registerAuditRoutes(app, 'pro');
+    } else {
+      registerAuditRoutes(app, 'lite');
+    }
+  }
 
-  typedRoute(app, {
+  if (runtime === 'server') typedRoute(app, {
     method: 'POST',
     url: '/api/v1/auth/bootstrap',
     query: productAuthStatusQuerySchema,
@@ -1350,7 +1483,7 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
     },
   });
 
-  typedRoute(app, {
+  if (runtime === 'server') typedRoute(app, {
     method: 'POST',
     url: '/api/v1/auth/login',
     query: productAuthStatusQuerySchema,
@@ -1372,7 +1505,7 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
     },
   });
 
-  typedRoute(app, {
+  if (runtime === 'server') typedRoute(app, {
     method: 'GET',
     url: '/api/v1/auth/me',
     query: productAuthStatusQuerySchema,
@@ -1383,7 +1516,7 @@ export const buildServerApi = async (): Promise<FastifyInstance> => {
     },
   });
 
-  await registerServerApiOrpc(app);
+  if (runtime === 'server') await registerServerApiOrpc(app);
 
   return app;
 };

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEV_SESSION_SECRET, checkSessionSecret } from './auth.js';
+import { DEV_SESSION_SECRET, checkSessionSecret } from '@billme/server-runtime/auth';
 
 const STRONG = 'a'.repeat(32);
 

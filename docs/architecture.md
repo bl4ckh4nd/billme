@@ -89,7 +89,7 @@ and embeds `ProAccountingWorkspace`; it does not call `mountDesktopRendererApp`.
 
 ## Server mode
 
-`apps/server-api/src/app.ts` creates the Fastify API. When `DATABASE_URL` is available it creates the
+`@billme/server-runtime` creates the Fastify API. When `DATABASE_URL` is available it creates the
 Postgres pool and verifies the Drizzle journal through `assertDrizzleSchemaCurrent` before registering the pool. Schema changes are applied by the one-shot `packages/server-data/src/cli/migrate.ts` command. Lite and Pro auth and
 billing routes live under `/api/v1/lite` and `/api/v1/pro`. `requireSession` rejects a token whose
 product does not match the route with `403`.
@@ -100,9 +100,9 @@ adapter while leaving the generic query-auth compatibility routes, `/health`, an
 exceptions on direct Fastify handlers. The deterministic generated document is available at
 `GET /api/v1/openapi.json`; shared clients use the oRPC OpenAPI link for supported JSON procedures.
 
-Authentication uses bearer tokens implemented in `apps/server-api/src/auth.ts`: a base64url payload
+Authentication uses bearer tokens implemented in `@billme/server-runtime/auth`: a base64url payload
 plus an HMAC-SHA256 signature, not a standard JWT. Passwords are derived with scrypt in
-`apps/server-api/src/authStore.ts` and `packages/server-data/src/postgres/auth.ts`.
+`@billme/server-runtime/auth` and `packages/server-data/src/postgres/auth.ts`.
 
 Writes and deletes for clients, invoices, offers, and recurring profiles require a non-empty `reason`
 and append an audit entry in the same Postgres transaction. This is not yet a universal server-route

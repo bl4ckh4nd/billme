@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { taxFilingCreateRequestSchema, taxFilingMutationRequestSchema } from '@billme/server-core';
-import { buildServerApi } from './app.js';
+import { buildServerApi } from '@billme/server-runtime';
 
 test('tax filing request schemas require reasons, idempotency, and a complete snapshot', () => {
   assert.throws(() => taxFilingCreateRequestSchema.parse({ kind: 'euer', payload: {}, idempotencyKey: 'x' }));

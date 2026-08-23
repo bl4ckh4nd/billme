@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { Pool } from "pg";
 import { asc, desc, eq } from "drizzle-orm";
-import { createDrizzle, schema } from "./drizzle.js";
+import { createDrizzle, schema, tryCreateDrizzle } from "./drizzle.js";
 import type {
   AuditEntry,
   AuditEntryDraft,
@@ -9,8 +9,14 @@ import type {
   TenantScope,
 } from "@billme/server-core";
 import type { AuditActor } from "@billme/server-core/ports";
-import type { PostgresTransactionClient } from "./connection.js";
+import type { PostgresQueryable as PostgresPoolQueryable } from "./connection.js";
+import type { ServerDatabaseSession } from "../database.js";
 import { withSerializablePostgresTransaction } from "./connection.js";
+
+type PostgresQueryable = PostgresPoolQueryable | ServerDatabaseSession;
+
+const createAuditDrizzle = (target: PostgresQueryable) =>
+  tryCreateDrizzle(target) ?? createDrizzle(target as Parameters<typeof createDrizzle>[0]);
 
 type AuditRow = {
   sequence: string | number;
@@ -170,11 +176,11 @@ const rowToAuditEntry = (
 });
 
 export const appendWithClient = async (
-  client: PostgresTransactionClient,
+  client: PostgresQueryable,
   scope: TenantScope,
   entry: AuditEntryDraft,
 ): Promise<AuditEntry> => {
-  const db = createDrizzle(client);
+  const db = createAuditDrizzle(client);
   const tenantId = entry.subject.tenantId ?? scope.tenantId;
   await db
     .insert(schema.auditHeads)
@@ -242,12 +248,12 @@ export const appendWithClient = async (
   };
 };
 
-const isPool = (target: Pool | PostgresTransactionClient): target is Pool => {
-  return !("release" in target);
+const isPool = (target: PostgresQueryable): target is Pool => {
+  return "connect" in target && !("release" in target);
 };
 
 export const createPostgresAuditLogPort = (
-  target: Pool | PostgresTransactionClient,
+  target: PostgresQueryable,
 ) => ({
   async append(
     scope: TenantScope,
@@ -265,7 +271,7 @@ export const createPostgresAuditLogPort = (
     scope: TenantScope,
     subject: AuditSubject,
   ): Promise<AuditEntry[]> {
-    const db = createDrizzle(target as Pool);
+    const db = createAuditDrizzle(target);
     const rows = await db
       .select()
       .from(schema.auditLog)
@@ -300,10 +306,10 @@ export const createPostgresAuditLogPort = (
 });
 
 export const verifyPostgresAuditChain = async (
-  target: Pool | PostgresTransactionClient,
+  target: PostgresQueryable,
   tenantId?: string,
 ): Promise<AuditChainVerificationResult> => {
-  const db = createDrizzle(target as Pool);
+  const db = createAuditDrizzle(target);
   const rows = await db
     .select()
     .from(schema.auditLog)

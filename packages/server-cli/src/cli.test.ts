@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildServerApi } from '../../../apps/server-api/src/app.js';
+import { buildServerApi } from '@billme/server-runtime';
 import { runCli } from './cli.js';
 
 const makeIo = (env: NodeJS.ProcessEnv, stdinText = '', stdinIsTTY = true) => {

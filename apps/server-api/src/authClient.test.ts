@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServerApiClient } from '@billme/server-core';
-import { buildServerApi } from './app.js';
+import { buildServerApi } from '@billme/server-runtime';
 
 const withHttpServer = async (
   run: (baseUrl: string) => Promise<void>,

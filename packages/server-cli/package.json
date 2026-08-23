@@ -15,6 +15,7 @@
     "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/server-core": "workspace:*",
+    "@billme/server-runtime": "workspace:*",
     "tsx": "^4.20.5",
     "zod": "^3.25.76"
   },

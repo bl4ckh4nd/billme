@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildServerApi } from './app.js';
+import { buildServerApi } from '@billme/server-runtime';
 
 const withServerApi = async (
   run: (app: Awaited<ReturnType<typeof buildServerApi>>) => Promise<void>,

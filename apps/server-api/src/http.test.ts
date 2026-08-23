@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import Fastify from 'fastify';
-import { registerErrorHandler } from './http.js';
+import { registerErrorHandler } from '@billme/server-runtime/http';
 
 test('accounting domain errors map to stable HTTP status codes', async () => {
   const app = Fastify();

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildServerApi } from './app.js';
+import { buildServerApi } from '@billme/server-runtime';
 import {
   csvEscape,
   datevExportQuerySchema,

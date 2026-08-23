@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildServerApi } from './app.js';
-import { liteEurClassificationBodySchema, liteEurReportQuerySchema } from './liteEurRoutes.js';
+import { buildServerApi } from '@billme/server-runtime';
+import { liteEurClassificationBodySchema, liteEurReportQuerySchema } from '@billme/server-runtime/lite-eur';
 
 test('Lite EÜR route schemas are calendar-year and reason guarded', () => {
   assert.deepEqual(liteEurReportQuerySchema.parse({}), { from: '2025-01-01', to: '2025-12-31' });

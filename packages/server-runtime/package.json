@@ -1,0 +1,60 @@
+{
+  "name": "@billme/server-runtime",
+  "private": true,
+  "version": "0.0.0",
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "scripts": {
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@billme/accounting-engine": "workspace:*",
+    "@billme/accounting-shared": "workspace:*",
+    "@billme/desktop-contracts-pro": "workspace:*",
+    "@billme/server-core": "workspace:*",
+    "@billme/server-data": "workspace:*",
+    "@fastify/cors": "^11.1.0",
+    "@orpc/openapi": "1.14.15",
+    "@orpc/server": "1.14.15",
+    "@orpc/zod": "1.14.15",
+    "fastify": "^5.6.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.7",
+    "tsx": "^4.20.5",
+    "typescript": "~5.8.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./app": {
+      "types": "./src/app.ts",
+      "default": "./src/app.ts"
+    },
+    "./auth": {
+      "types": "./src/auth.ts",
+      "default": "./src/auth.ts"
+    },
+    "./http": {
+      "types": "./src/http.ts",
+      "default": "./src/http.ts"
+    },
+    "./lite-eur": {
+      "types": "./src/liteEurRoutes.ts",
+      "default": "./src/liteEurRoutes.ts"
+    },
+    "./orpc": {
+      "types": "./src/orpc.ts",
+      "default": "./src/orpc.ts"
+    },
+    "./tax-filing": {
+      "types": "./src/taxFilingRoutes.ts",
+      "default": "./src/taxFilingRoutes.ts"
+    }
+  },
+  "types": "./src/index.ts"
+}

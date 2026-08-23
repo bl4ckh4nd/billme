@@ -33,8 +33,8 @@ import {
   vendorSchema,
 } from '@billme/desktop-contracts-pro/schemas';
 import { z } from 'zod';
-import { ApiError, typedRoute } from './http.js';
-import { requirePool, requireSession } from './app.js';
+import { ApiError, typedRoute } from '@billme/server-runtime/http';
+import { requirePool, requireSession } from '@billme/server-runtime/app';
 
 const repositoryFor = (app: FastifyInstance): ReturnType<typeof createPostgresProAccountingRepository> => {
   const pool = requirePool(app);

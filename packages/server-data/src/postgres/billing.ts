@@ -42,9 +42,10 @@ import {
   userAccountSchema,
 } from "@billme/server-core";
 import type {
-  PostgresQueryable,
+  PostgresQueryable as PostgresPoolQueryable,
   PostgresTransactionClient,
 } from "./connection.js";
+import type { ServerDatabaseSession } from "../database.js";
 import {
   and,
   asc,
@@ -62,6 +63,8 @@ import {
 import { schema, tryCreateDrizzle } from "./drizzle.js";
 import { withPostgresTransaction } from "./connection.js";
 import { createPostgresAuditLogPort } from "./audit.js";
+
+type PostgresQueryable = PostgresPoolQueryable | ServerDatabaseSession;
 
 export interface ServerSettingsRecord {
   tenantId: string;
@@ -1625,7 +1628,7 @@ export const createPostgresMaintenanceRepository = (
 });
 
 export const createPostgresBillingDependencies = (
-  db: Pool | PostgresTransactionClient,
+  db: PostgresQueryable,
 ): BillingRepositories => ({
   tenantRepo: createPostgresTenantRepository(db),
   userRepo: createPostgresUserRepository(db),

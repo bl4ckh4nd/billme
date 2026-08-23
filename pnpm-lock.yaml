@@ -472,6 +472,9 @@ importers:
       '@billme/server-data':
         specifier: workspace:*
         version: link:../../packages/server-data
+      '@billme/server-runtime':
+        specifier: workspace:*
+        version: link:../../packages/server-runtime
       '@fastify/cors':
         specifier: ^11.1.0
         version: 11.2.0
@@ -1029,6 +1032,9 @@ importers:
       '@billme/server-core':
         specifier: workspace:*
         version: link:../server-core
+      '@billme/server-runtime':
+        specifier: workspace:*
+        version: link:../server-runtime
       tsx:
         specifier: ^4.20.5
         version: 4.21.0
@@ -1107,6 +1113,52 @@ importers:
       drizzle-kit:
         specifier: ^0.31.4
         version: 0.31.9
+      tsx:
+        specifier: ^4.20.5
+        version: 4.21.0
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
+
+  packages/server-runtime:
+    dependencies:
+      '@billme/accounting-engine':
+        specifier: workspace:*
+        version: link:../accounting-engine
+      '@billme/accounting-shared':
+        specifier: workspace:*
+        version: link:../accounting-shared
+      '@billme/desktop-contracts-pro':
+        specifier: workspace:*
+        version: link:../desktop-contracts-pro
+      '@billme/server-core':
+        specifier: workspace:*
+        version: link:../server-core
+      '@billme/server-data':
+        specifier: workspace:*
+        version: link:../server-data
+      '@fastify/cors':
+        specifier: ^11.1.0
+        version: 11.2.0
+      '@orpc/openapi':
+        specifier: 1.14.15
+        version: 1.14.15(fastify@5.8.5)(ws@8.19.0)
+      '@orpc/server':
+        specifier: 1.14.15
+        version: 1.14.15(fastify@5.8.5)(ws@8.19.0)
+      '@orpc/zod':
+        specifier: 1.14.15
+        version: 1.14.15(@orpc/contract@1.14.15)(@orpc/server@1.14.15(fastify@5.8.5)(ws@8.19.0))(fastify@5.8.5)(ws@8.19.0)(zod@3.25.76)
+      fastify:
+        specifier: ^5.6.1
+        version: 5.8.5
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.7
+        version: 22.19.10
       tsx:
         specifier: ^4.20.5
         version: 4.21.0

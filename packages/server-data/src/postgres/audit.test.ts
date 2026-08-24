@@ -80,6 +80,41 @@ test("verifyAuditChainRows accepts a valid chain", () => {
   assert.equal(result.headHash, secondHash);
 });
 
+test("verifyAuditChainRows accepts legacy undefined audit properties", () => {
+  const before = { id: "tx-1", linkedInvoiceId: undefined };
+  const payload = {
+    sequence: 1,
+    ts: "2026-01-01T00:00:00.000Z",
+    entityType: "transaction",
+    entityId: "tx-1",
+    action: "created",
+    reason: null,
+    before,
+    after: null,
+    prevHash: null,
+    actor: "local",
+  };
+  const hash = sha256Hex(`:${stableStringify(payload)}`);
+
+  const result = verifyAuditChainRows([
+    {
+      sequence: 1,
+      ts: payload.ts,
+      entity_type: payload.entityType,
+      entity_id: payload.entityId,
+      action: payload.action,
+      reason: null,
+      before_json: stableStringify(before),
+      after_json: null,
+      prev_hash: null,
+      hash,
+      actor: "local",
+    },
+  ]);
+
+  assert.equal(result.ok, true);
+});
+
 test("verifyAuditChainRows reports hash mismatches", () => {
   const result = verifyAuditChainRows([
     {

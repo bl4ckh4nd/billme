@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Die Live-Server-E2E prüft jetzt gegen PostgreSQL die Audit-Verifikation/CSV, Finanzimport mit Rollback und Rechnungsverknüpfungen, Projekte, EÜR-Fakten/Filter, Tax-Audit-Export sowie Portal-, E-Mail-, Dunning- und Recurring-Routen für Lite und Pro.
 - Die Migration-CLI wird jetzt durch echte Lite-/Pro-Subprozess-E2E gegen frisch erzeugte SQLite-Dateien, native PGlite und authentifizierte Embedded-HTTP-Routen abgesichert; Abbruch, Backup und Manifest bleiben dabei beobachtbar.
 - pnpm-10-CI-Installationen erlauben den nativen Build von `better-sqlite3`, Electron und `keytar` jetzt auch über die Root-Paketkonfiguration; dadurch stehen die benötigten Runtime-Artefakte für Import- und Electron-Tests zuverlässig bereit.
 - Die Pro-Electron-App startet jetzt ebenfalls einen geschützten lokalen PGlite-Server über dieselben Server-Routen wie der Hosted-Modus; vorhandene Pro-SQLite-Daten werden fail-closed zur einmaligen CLI-Migration verwiesen und native Backups/Restore bleiben atomar.

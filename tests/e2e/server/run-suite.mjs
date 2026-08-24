@@ -22,6 +22,7 @@ import {
 } from './pro/scenarios.mjs';
 import { runProNonHappyAccountingScenario } from './pro/nonhappy.mjs';
 import { runProSourceRunScenario } from './pro/source-runs.mjs';
+import { runLiveLiteRouteMatrixScenario, runLiveRouteMatrixScenario } from './pro/live-route-matrix.mjs';
 
 const level = process.argv[2] === 'full' ? 'full' : 'smoke';
 const scope = process.argv[3] ?? 'all';
@@ -38,6 +39,7 @@ const buildScenarioList = () => {
   const includeStack = scope === 'all' || scope === 'stack' || scope === 'lite' || scope === 'pro';
   const includeLite = scope === 'all' || scope === 'lite';
   const includePro = scope === 'all' || scope === 'pro';
+  const includeLiveRouteMatrix = level === 'full' && (scope === 'all' || scope === 'pro' || scope === 'live-route-matrix');
 
   if (includeStack) {
     scenarios.push({ name: 'stack-smoke', kind: 'plain', run: runStackSmokeScenario });
@@ -68,6 +70,11 @@ const buildScenarioList = () => {
 
   if (includeNonHappy && level === 'full') {
     scenarios.push({ name: 'pro-accounting-nonhappy', kind: 'plain', run: runProNonHappyAccountingScenario });
+  }
+
+  if (includeLiveRouteMatrix) {
+    scenarios.push({ name: 'live-route-matrix', kind: 'plain', run: runLiveRouteMatrixScenario });
+    scenarios.push({ name: 'live-lite-route-matrix', kind: 'plain', run: runLiveLiteRouteMatrixScenario });
   }
 
   return scenarios;

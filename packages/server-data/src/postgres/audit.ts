@@ -72,6 +72,39 @@ export const sha256Hex = (input: string): string => {
   return crypto.createHash("sha256").update(input).digest("hex");
 };
 
+const stableAuditPayload = (input: {
+  sequence: number;
+  ts: string;
+  entityType: string;
+  entityId: string;
+  action: string;
+  reason: string | null;
+  beforeJson: string | null;
+  afterJson: string | null;
+  prevHash: string | null;
+  actor: string;
+}): string => {
+  // before_json/after_json already contain the canonical stable JSON emitted
+  // at append time. Embedding those fragments preserves legacy rows that
+  // contain an undefined property while avoiding parse/re-stringify drift.
+  const fields: Record<string, string> = {
+    action: stableStringify(input.action),
+    actor: stableStringify(input.actor),
+    after: input.afterJson ?? "null",
+    before: input.beforeJson ?? "null",
+    entityId: stableStringify(input.entityId),
+    entityType: stableStringify(input.entityType),
+    prevHash: stableStringify(input.prevHash),
+    reason: stableStringify(input.reason),
+    sequence: stableStringify(input.sequence),
+    ts: stableStringify(input.ts),
+  };
+  return `{${Object.keys(fields)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${fields[key]}`)
+    .join(",")}}`;
+};
+
 export const encodeAuditActor = (actor: AuditActor): string => {
   if (actor.type === "system" && actor.displayName === "local" && !actor.id) {
     return "local";
@@ -121,21 +154,19 @@ export const verifyAuditChainRows = (
       });
     }
 
-    const payload = {
-      sequence: row.sequence,
-      ts: row.ts,
-      entityType: row.entity_type,
-      entityId: row.entity_id,
-      action: row.action,
-      reason: row.reason ?? null,
-      before: parseJson(row.before_json, null),
-      after: parseJson(row.after_json, null),
-      prevHash: row.prev_hash ?? null,
-      actor: row.actor,
-    };
-
     const computedHash = sha256Hex(
-      `${row.prev_hash ?? ""}:${stableStringify(payload)}`,
+      `${row.prev_hash ?? ""}:${stableAuditPayload({
+        sequence: row.sequence,
+        ts: row.ts,
+        entityType: row.entity_type,
+        entityId: row.entity_id,
+        action: row.action,
+        reason: row.reason ?? null,
+        beforeJson: row.before_json,
+        afterJson: row.after_json,
+        prevHash: row.prev_hash ?? null,
+        actor: row.actor,
+      })}`,
     );
     if (computedHash !== row.hash) {
       errors.push({ sequence: row.sequence, message: "hash mismatch" });
@@ -204,19 +235,20 @@ export const appendWithClient = async (
     entry.change?.after === undefined
       ? null
       : stableStringify(entry.change.after);
-  const payload = {
-    sequence,
-    ts: entry.occurredAt,
-    entityType: entry.subject.entityType,
-    entityId: entry.subject.entityId,
-    action: entry.action,
-    reason: entry.reason ?? null,
-    before: entry.change?.before ?? null,
-    after: entry.change?.after ?? null,
-    prevHash,
-    actor,
-  };
-  const hash = sha256Hex(`${prevHash ?? ""}:${stableStringify(payload)}`);
+  const hash = sha256Hex(
+    `${prevHash ?? ""}:${stableAuditPayload({
+      sequence,
+      ts: entry.occurredAt,
+      entityType: entry.subject.entityType,
+      entityId: entry.subject.entityId,
+      action: entry.action,
+      reason: entry.reason ?? null,
+      beforeJson,
+      afterJson,
+      prevHash,
+      actor,
+    })}`,
+  );
   await db.insert(schema.auditLog).values({
     tenantId,
     sequence,

@@ -169,7 +169,18 @@ export const saveServerEurClassificationFact = async (db: PostgresQueryable, sco
   await db.query(`INSERT INTO eur_classifications (id,tenant_id,source_type,source_id,tax_year,eur_line_id,excluded,vat_mode,vat_rate,note,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (tenant_id,source_type,source_id,tax_year) DO UPDATE SET eur_line_id=EXCLUDED.eur_line_id,excluded=EXCLUDED.excluded,vat_mode=EXCLUDED.vat_mode,vat_rate=EXCLUDED.vat_rate,note=EXCLUDED.note,updated_at=EXCLUDED.updated_at`, [id, scope.tenantId, sourceType, sourceId, input.taxYear, record.eur_line_id, record.excluded, record.vat_mode, record.vat_rate, record.note, now]);
   const saved = (await q(db, 'SELECT * FROM eur_classifications WHERE tenant_id=$1 AND id=$2', [scope.tenantId, id]))[0] ?? record;
   await createPostgresAuditLogPort(db as any).append(scope, { occurredAt: now, action: existing ? 'update' : 'create', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_classification', entityId: `${sourceType}:${sourceId}:${input.taxYear}`, tenantId: scope.tenantId }, change: { before: existing ?? null, after: saved } });
-  return saved;
+  return {
+    id: String(saved.id),
+    sourceType: String(saved.source_type),
+    sourceId: String(saved.source_id),
+    taxYear: Number(saved.tax_year),
+    eurLineId: saved.eur_line_id ? String(saved.eur_line_id) : undefined,
+    excluded: Boolean(saved.excluded),
+    vatMode: saved.vat_mode === 'default' ? 'default' : 'none',
+    vatRate: saved.vat_rate == null ? undefined : Number(saved.vat_rate),
+    note: saved.note == null ? undefined : String(saved.note),
+    updatedAt: String(saved.updated_at),
+  };
 };
 
 const saveServerEurCashFactInTransaction = async (db: PostgresTransactionClient, scope: TenantScope, input: SaveServerEurCashFactInput): Promise<ServerEurCashFact> => {

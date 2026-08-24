@@ -10,7 +10,7 @@
     "build": "pnpm run build:client && tsc --noEmit",
     "deploy:cf": "pnpm run build:client && wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/**/*.test.ts"
+    "test": "node ../../scripts/run-node-tests.mjs src"
   },
   "dependencies": {
     "@billme/desktop-contracts": "workspace:*",

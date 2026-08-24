@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Der Renderer-Test für die EU-Reverse-Charge-Empfehlung erfasst jetzt die sichtbaren DATEV-/Bestimmungsland-Pflichtfelder, bevor der fail-closed Speichervorgang geprüft wird.
-- Server API and worker CI tests now use a shared built-in recursive runner that passes explicit test files to Node and fails when discovery finds none, making test counts deterministic across Linux shells and Node versions.
+- Server API, demo, and worker CI tests now use a shared built-in recursive runner that passes explicit test files to Node and fails when discovery finds none, making test counts deterministic across Linux shells and Node versions.
 - Die Lite-Server-E2E nutzt für die Rechnungsempfänger-Auswahl den aktuellen öffentlichen Combobox-Vertrag und sendet kanonische Rechnungs-/Angebotszeilen mit `kind: item`.
 - CI test fixtures now initialize the Pro report-snapshot dependency used by EÜR runtime-fact triggers, and the Server API test command uses Node's recursive test discovery without a shell-dependent glob.
 - Pro-Regressionsgates verwenden aktuelle ErrorBoundary-, Journal-, Settlement-, Chart-Lock- und Reverse-Charge-Fixtures; Korrekturfehler werden am Desktop-Command-Gateway typisiert als abgelehntes Ergebnis persistiert.

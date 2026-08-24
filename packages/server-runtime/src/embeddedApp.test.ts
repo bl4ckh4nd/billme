@@ -93,6 +93,42 @@ test('embedded Lite server runs health, capabilities, billing, settings, and num
     const clients = await app.inject({ method: 'GET', url: '/api/v1/lite/clients', headers });
     assert.equal(clients.statusCode, 200);
     assert.deepEqual(clients.json(), []);
+    const articles = await app.inject({ method: 'GET', url: '/api/v1/lite/articles', headers });
+    assert.equal(articles.statusCode, 200, articles.body);
+    assert.deepEqual(articles.json(), []);
+    const createdArticle = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/articles',
+      headers,
+      payload: {
+        article: {
+          id: 'embedded-article-1', sku: 'ART-001', title: 'Embedded service', description: 'Service',
+          price: 100, unit: 'Stunde', category: 'Dienstleistung', taxRate: 19,
+        },
+      },
+    });
+    assert.equal(createdArticle.statusCode, 200, createdArticle.body);
+    assert.equal(createdArticle.json().id, 'embedded-article-1');
+    const accounts = await app.inject({ method: 'GET', url: '/api/v1/lite/accounts', headers });
+    assert.equal(accounts.statusCode, 200, accounts.body);
+    assert.deepEqual(accounts.json(), []);
+    const createdAccount = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/accounts',
+      headers,
+      payload: {
+        account: {
+          id: 'embedded-account-1', name: 'Main account', iban: 'DE12345678901234567890', balance: 0,
+          transactions: [{
+            id: 'embedded-transaction-1', date: '2026-02-02', amount: 10, type: 'income',
+            counterparty: 'Embedded GmbH', purpose: 'Test', status: 'booked',
+          }],
+          type: 'bank', color: 'blue',
+        },
+      },
+    });
+    assert.equal(createdAccount.statusCode, 200, createdAccount.body);
+    assert.equal(createdAccount.json().id, 'embedded-account-1');
     const createdClient = await app.inject({
       method: 'POST',
       url: '/api/v1/lite/clients',

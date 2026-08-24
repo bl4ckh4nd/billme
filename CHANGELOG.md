@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Die eingebettete Lite-PGlite-Runtime registriert jetzt den gemeinsamen Katalog unter `/api/v1/lite`; Artikel, Konten und Vorlagen bleiben damit über den öffentlichen HTTP-Adapter erreichbar.
 - Ubuntu Validate now installs the `libsecret-1-0` runtime required to load the already-built keytar native module during Pro tests.
 - Der Renderer-Test für die EU-Reverse-Charge-Empfehlung erfasst jetzt die sichtbaren DATEV-/Bestimmungsland-Pflichtfelder, bevor der fail-closed Speichervorgang geprüft wird.
 - Server API, demo, and worker CI tests now use a shared built-in recursive runner that passes explicit test files to Node and fails when discovery finds none, making test counts deterministic across Linux shells and Node versions.

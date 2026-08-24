@@ -67,7 +67,6 @@ import {
   templateKindSchema,
   templateSchema,
   taxAuditExportArtifactSchema,
-  upsertAccountPayloadSchema,
   upsertArticlePayloadSchema,
   upsertTemplatePayloadSchema,
 } from '@billme/desktop-contracts-pro/schemas';
@@ -158,6 +157,13 @@ const templateRecordSchema = z.object({
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
   elements: templateSchema.shape.elements,
+});
+// Lite's account contract has no chart-account field; the server keeps the
+// shared persistence invariant with its standard revenue account.
+const productAccountPayloadSchema = z.object({
+  account: accountSchema.extend({
+    defaultSkrAccountNumber: z.string().min(1).default('1200'),
+  }),
 });
 
 const clientWriteSchema = clientSchema.omit({
@@ -1052,15 +1058,19 @@ const registerTaxAuditExportRoute = (app: FastifyInstance): void => {
   });
 };
 
-const registerProRoutes = (app: FastifyInstance) => {
-  const prefix = '/api/v1/pro';
+const registerProductRoutes = (
+  app: FastifyInstance,
+  options: { readonly product?: 'lite' | 'pro'; readonly catalogOnly?: boolean } = {},
+) => {
+  const product = options.product ?? 'pro';
+  const prefix = `/api/v1/${product}`;
 
   typedRoute(app, {
     method: 'GET',
     url: `${prefix}/articles`,
     response: z.array(articleSchema),
     async handler({ request }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireSession(app, product, request.headers.authorization);
       return (await listServerArticles(requirePool(app), session.scope.tenantId)).map(mapArticleRecord);
     },
   });
@@ -1071,7 +1081,7 @@ const registerProRoutes = (app: FastifyInstance) => {
     body: upsertArticlePayloadSchema,
     response: articleSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireSession(app, product, request.headers.authorization);
       const saved = await saveServerArticle(requirePool(app), {
         id: body.article.id,
         tenantId: session.scope.tenantId,
@@ -1092,7 +1102,7 @@ const registerProRoutes = (app: FastifyInstance) => {
     url: `${prefix}/accounts`,
     response: z.array(accountSchema),
     async handler({ request }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireSession(app, product, request.headers.authorization);
       return (await listServerBankAccounts(requirePool(app), session.scope.tenantId)).map(mapAccountRecord);
     },
   });
@@ -1100,10 +1110,10 @@ const registerProRoutes = (app: FastifyInstance) => {
   typedRoute(app, {
     method: 'POST',
     url: `${prefix}/accounts`,
-    body: upsertAccountPayloadSchema,
+    body: productAccountPayloadSchema,
     response: accountSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireSession(app, product, request.headers.authorization);
       const saved = await saveServerBankAccount(requirePool(app), {
         id: body.account.id,
         tenantId: session.scope.tenantId,
@@ -1124,7 +1134,7 @@ const registerProRoutes = (app: FastifyInstance) => {
     query: listTemplatesParamsSchema,
     response: z.array(templateRecordSchema),
     async handler({ request, query }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireSession(app, product, request.headers.authorization);
       const templates = await listServerTemplates(requirePool(app), session.scope.tenantId);
       return templates
         .filter((record) => !query.kind || record.kind === query.kind)
@@ -1138,7 +1148,7 @@ const registerProRoutes = (app: FastifyInstance) => {
     body: upsertTemplatePayloadSchema,
     response: templateRecordSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireSession(app, product, request.headers.authorization);
       const saved = await saveServerTemplate(requirePool(app), {
         id: body.template.id,
         tenantId: session.scope.tenantId,
@@ -1189,6 +1199,8 @@ const registerProRoutes = (app: FastifyInstance) => {
       return { ok: true as const };
     },
   });
+
+  if (options.catalogOnly) return;
 
   typedRoute(app, {
     method: 'GET',
@@ -1528,7 +1540,8 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
   if (runtime === 'server') {
     registerBillingRoutes(app, 'lite', '/api/v1/lite');
     registerBillingRoutes(app, 'pro', '/api/v1/pro');
-    registerProRoutes(app);
+    registerProductRoutes(app, { product: 'lite', catalogOnly: true });
+    registerProductRoutes(app);
     registerProAccountingRoutes(app);
     registerLiteEurRoutes(app);
     registerTaxFilingRoutes(app);
@@ -1549,11 +1562,12 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerEurRuleRoutes(app, product);
     registerProjectRoutes(app, product);
     if (product === 'pro') {
-      registerProRoutes(app);
+      registerProductRoutes(app);
       registerProAccountingRoutes(app);
       registerAuditRoutes(app, 'pro');
       registerTaxAuditExportRoute(app);
     } else {
+      registerProductRoutes(app, { product, catalogOnly: true });
       registerAuditRoutes(app, 'lite');
     }
     registerAutomationRoutes(app, product, `/api/v1/${product}`, { requireSession, requireDatabase });

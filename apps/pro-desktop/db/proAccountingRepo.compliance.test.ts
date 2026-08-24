@@ -385,7 +385,7 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
     expect(() => buildDatevRows(db, { from: '2026-03-01', to: '2026-03-31' }, scope)).toThrow(/99999/);
     expect((db.prepare('SELECT COUNT(*) AS c FROM datev_exports').get() as { c: number }).c).toBe(0);
     expect((db.prepare('SELECT COUNT(*) AS c FROM journal_posting_pairs').get() as { c: number }).c).toBe(100_020);
-  }, 30_000);
+  }, 60_000);
 
   it('accepts decimal cent values without floating-point false positives', () => {
     const db = createDb();

@@ -8,7 +8,7 @@
     "dev": "tsx watch src/worker.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node --import tsx dist/worker.js",
-    "test": "node --import tsx --test src/**/*.test.ts",
+    "test": "node ../../scripts/run-node-tests.mjs src",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

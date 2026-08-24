@@ -1049,6 +1049,9 @@ importers:
         specifier: ^12.4.1
         version: 12.6.2
     devDependencies:
+      '@billme/embedded-server-runtime':
+        specifier: workspace:*
+        version: link:../embedded-server-runtime
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13

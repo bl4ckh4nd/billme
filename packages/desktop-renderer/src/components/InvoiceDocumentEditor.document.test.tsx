@@ -211,6 +211,18 @@ describe('document-first invoice editor', () => {
     }), onSave);
 
     await user.click(screen.getByRole('button', { name: 'EU-Leistung Reverse Charge' }));
+    const destinationRate = screen.getByRole('spinbutton', { name: 'EU-Steuersatz im Bestimmungsland' });
+    await user.clear(destinationRate);
+    await user.type(destinationRate, '19');
+    const evidenceType = screen.getByRole('textbox', { name: 'DATEV Nachweistyp' });
+    await user.clear(evidenceType);
+    await user.type(evidenceType, 'Rechnung');
+    const evidenceReference = screen.getByRole('textbox', { name: 'DATEV Nachweisreferenz' });
+    await user.clear(evidenceReference);
+    await user.type(evidenceReference, 'RE-2026-001');
+    const datevSachverhalt = screen.getByRole('textbox', { name: 'DATEV Sachverhalt L+L' });
+    await user.clear(datevSachverhalt);
+    await user.type(datevSachverhalt, '13');
     await user.click(screen.getByRole('button', { name: 'Speichern' }));
 
     expect(onSave).toHaveBeenCalledOnce();

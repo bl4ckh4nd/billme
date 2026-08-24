@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Ubuntu Validate now runs the desktop and Pro Playwright smoke tests under Xvfb, preventing Electron startup waits on the headless CI runner.
 - Der Pro-DATEV-Overflow-Grenztest hat für seinen absichtlich 5.001 Buchungen großen Fixture-Aufbau ein eigenes 60-Sekunden-Limit; die übrigen Tests behalten unveränderte Timeouts.
 - Der gepackte Electron-Restore wartet jetzt begrenzt auf das tatsächliche Prozessende oder das Playwright-Close-Event und meldet PID, Exit-Code und verbliebene Profilprozesse bei einem Timeout; langsame CI-Shutdowns werden damit diagnostizierbar, echte Nicht-Exits bleiben ein Fehler.
 - Die eingebettete Lite-PGlite-Runtime registriert jetzt den gemeinsamen Katalog unter `/api/v1/lite`; Artikel, Konten und Vorlagen bleiben damit über den öffentlichen HTTP-Adapter erreichbar.

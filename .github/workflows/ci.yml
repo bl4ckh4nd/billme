@@ -52,6 +52,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Linux keytar runtime
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libsecret-1-0
+
       - name: Shared desktop data tests
         run: pnpm -C packages/desktop-data test
 

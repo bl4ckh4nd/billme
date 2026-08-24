@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Die Lite-Server-E2E nutzt für die Rechnungsempfänger-Auswahl den aktuellen öffentlichen Combobox-Vertrag und sendet kanonische Rechnungs-/Angebotszeilen mit `kind: item`.
+- CI test fixtures now initialize the Pro report-snapshot dependency used by EÜR runtime-fact triggers, and the Server API test command uses Node's recursive test discovery without a shell-dependent glob.
 - Pro-Regressionsgates verwenden aktuelle ErrorBoundary-, Journal-, Settlement-, Chart-Lock- und Reverse-Charge-Fixtures; Korrekturfehler werden am Desktop-Command-Gateway typisiert als abgelehntes Ergebnis persistiert.
 - Lite und Pro werden jetzt in frischen PGlite-Profilen per öffentlicher IPC-Schicht auf Persistenz, `.pglite.tar`-Backup/Restore und kontrollierten Neustart geprüft; der Linux-unpacked-Build startet zusätzlich unter Xvfb und blockiert SQLite-Runtime-Artefakte.
 - Die Live-Server-E2E prüft jetzt gegen PostgreSQL die Audit-Verifikation/CSV, Finanzimport mit Rollback und Rechnungsverknüpfungen, Projekte, EÜR-Fakten/Filter, Tax-Audit-Export sowie Portal-, E-Mail-, Dunning- und Recurring-Routen für Lite und Pro.

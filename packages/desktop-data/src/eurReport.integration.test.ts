@@ -188,6 +188,7 @@ const buildFakeDb = () => {
     CREATE TABLE invoice_payments (id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL, date TEXT NOT NULL, amount REAL NOT NULL, method TEXT NOT NULL);
     CREATE TABLE transactions (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, date TEXT NOT NULL, amount REAL NOT NULL, type TEXT NOT NULL, counterparty TEXT NOT NULL, purpose TEXT NOT NULL, linked_invoice_id TEXT, status TEXT NOT NULL, dedup_hash TEXT, import_batch_id TEXT, deleted_at TEXT);
     CREATE TABLE eur_classifications (id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL, tax_year INTEGER NOT NULL, eur_line_id TEXT, excluded INTEGER NOT NULL, vat_mode TEXT NOT NULL, note TEXT, updated_at TEXT NOT NULL);
+    CREATE TABLE report_snapshots (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default', report_type TEXT NOT NULL, args_json TEXT NOT NULL, payload_json TEXT NOT NULL, source_hash TEXT, created_at TEXT NOT NULL);
   `);
   db.prepare('INSERT INTO invoices (id, client, number) VALUES (?, ?, ?)').run('inv-1', invoiceRows[0]!.client, invoiceRows[0]!.number);
   db.prepare('INSERT INTO invoice_payments (id, invoice_id, date, amount, method) VALUES (?, ?, ?, ?, ?)').run('p-1', 'inv-1', invoiceRows[0]!.date, invoiceRows[0]!.amount, 'wire');
@@ -369,6 +370,7 @@ describe('eurReport integration (service boundary)', () => {
       CREATE TABLE transactions (
         id TEXT PRIMARY KEY, counterparty TEXT NOT NULL, purpose TEXT NOT NULL
       );
+      CREATE TABLE report_snapshots (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default', report_type TEXT NOT NULL, args_json TEXT NOT NULL, payload_json TEXT NOT NULL, source_hash TEXT, created_at TEXT NOT NULL);
       CREATE TABLE eur_classifications (
         id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL,
         tax_year INTEGER NOT NULL, eur_line_id TEXT, excluded INTEGER NOT NULL,
@@ -434,6 +436,7 @@ describe('eurReport integration (service boundary)', () => {
       );
       CREATE TABLE transactions (id TEXT PRIMARY KEY, counterparty TEXT NOT NULL, purpose TEXT NOT NULL);
       CREATE TABLE invoices (id TEXT PRIMARY KEY, client TEXT NOT NULL, number TEXT NOT NULL);
+      CREATE TABLE report_snapshots (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'default', report_type TEXT NOT NULL, args_json TEXT NOT NULL, payload_json TEXT NOT NULL, source_hash TEXT, created_at TEXT NOT NULL);
       CREATE TABLE eur_classifications (
         id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL,
         tax_year INTEGER NOT NULL, eur_line_id TEXT, excluded INTEGER NOT NULL,

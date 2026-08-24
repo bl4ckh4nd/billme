@@ -128,7 +128,7 @@ describe('App', () => {
 
     render(<App />);
 
-    expect(screen.getByText('Fehler aufgetreten')).toBeInTheDocument();
+    expect(screen.getByText('Diese Ansicht konnte nicht geladen werden')).toBeInTheDocument();
     expect(screen.getByText('router exploded')).toBeInTheDocument();
     consoleErrorSpy.mockRestore();
   });

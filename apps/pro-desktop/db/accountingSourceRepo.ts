@@ -820,9 +820,24 @@ export const postAccountingCommand = (
   if (input.kind === 'correction' && facts) {
     const tenantId = getTenantId(scope);
     const documentType = facts.documentType === 'incoming_invoice' ? 'incoming_invoice' : 'outgoing_invoice';
+    const generatedOptions = {
+      ...options,
+      provenance: { commandKind: input.kind, domainFacts: { ...facts }, ...((options.provenance as Record<string, unknown> | undefined) ?? {}) },
+    };
+    const existingInput = existingResult(db, tenantId, input.source, generatedOptions);
+    if (existingInput) return existingInput;
     const original = resolveCorrectionOriginal(db, tenantId, facts.original as ImmutableOriginalDocument, documentType);
     const existing = loadPriorCorrections(db, tenantId, original.documentId);
-    const linked = createLinkedCorrection({ ...facts, original, existing } as unknown as LinkedCorrectionInput);
+    generatedOptions.provenance = { commandKind: input.kind, domainFacts: { ...facts, original }, ...((options.provenance as Record<string, unknown> | undefined) ?? {}) };
+    let linked: ReturnType<typeof createLinkedCorrection>;
+    try {
+      linked = createLinkedCorrection({ ...facts, original, existing } as unknown as LinkedCorrectionInput);
+    } catch (cause) {
+      const issue = settlementIssue(cause);
+      const result = { status: 'rejected', errors: [issue] };
+      const sourceRun = persistRejected(db, tenantId, input.source, result, generatedOptions);
+      return { status: 'rejected', sourceRun, errors: [issue], idempotencyKey: keyFor(input.source, tenantId) };
+    }
     const chart = activeChart(db, tenantId, options.chart);
     const correctionSource: AccountingSourceFact = {
       ...input.source,
@@ -835,7 +850,7 @@ export const postAccountingCommand = (
       fiscalYear: Number(linked.document.correctionDate.slice(0, 4)),
       lines: correctionLines(db, tenantId, chart, linked.document, documentType),
     };
-    return postAccountingSource(db, correctionSource, scope, { ...options, provenance: { commandKind: input.kind, domainFacts: { ...facts, original }, ...((options.provenance as Record<string, unknown> | undefined) ?? {}) } });
+    return postAccountingSource(db, correctionSource, scope, generatedOptions);
   }
   if (input.kind === 'ustg17' && facts) validateUstg17AdjustmentFacts(facts as unknown as Ustg17AdjustmentFactsInput);
   const tenantId = getTenantId(scope);

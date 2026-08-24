@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Pro-Regressionsgates verwenden aktuelle ErrorBoundary-, Journal-, Settlement-, Chart-Lock- und Reverse-Charge-Fixtures; Korrekturfehler werden am Desktop-Command-Gateway typisiert als abgelehntes Ergebnis persistiert.
 - Lite und Pro werden jetzt in frischen PGlite-Profilen per öffentlicher IPC-Schicht auf Persistenz, `.pglite.tar`-Backup/Restore und kontrollierten Neustart geprüft; der Linux-unpacked-Build startet zusätzlich unter Xvfb und blockiert SQLite-Runtime-Artefakte.
 - Die Live-Server-E2E prüft jetzt gegen PostgreSQL die Audit-Verifikation/CSV, Finanzimport mit Rollback und Rechnungsverknüpfungen, Projekte, EÜR-Fakten/Filter, Tax-Audit-Export sowie Portal-, E-Mail-, Dunning- und Recurring-Routen für Lite und Pro.
 - Die Migration-CLI wird jetzt durch echte Lite-/Pro-Subprozess-E2E gegen frisch erzeugte SQLite-Dateien, native PGlite und authentifizierte Embedded-HTTP-Routen abgesichert; Abbruch, Backup und Manifest bleiben dabei beobachtbar.

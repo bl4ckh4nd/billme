@@ -9,7 +9,7 @@ import type { AccountingSourceFact } from '@billme/accounting-shared';
 import { reverseJournalEntry } from './proAccountingRepo';
 import { createProTenantScope } from '../tenantScope';
 
-const createDb = (): Database.Database => {
+const createDb = (legacySourceKey?: string): Database.Database => {
   const db = new Database(':memory:');
   db.exec(bootstrapSql);
   runMigrations(db);
@@ -36,6 +36,13 @@ const createDb = (): Database.Database => {
     INSERT INTO open_items (id, tenant_id, party_type, party_id, source_type, source_id, document_number, document_date, due_date, original_amount, allocated_amount, residual_amount, status, journal_entry_id, created_at, updated_at)
     VALUES ('invoice-open-item-1', 'default', 'debtor', 'client-1', 'outgoing_invoice', 'invoice-1', 'RE-1', '2026-03-15', '2026-03-31', 119, 0, 119, 'open', 'invoice-journal-1', datetime('now'), datetime('now'));
   `);
+  if (legacySourceKey) {
+    const trigger = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'journal_entries_protect_core_fields'").get() as { sql: string } | undefined;
+    if (!trigger?.sql) throw new Error('journal_entries_protect_core_fields trigger missing');
+    db.exec('DROP TRIGGER journal_entries_protect_core_fields');
+    db.prepare('UPDATE journal_entries SET source_key = ? WHERE id = ?').run(legacySourceKey, 'invoice-journal-1');
+    db.exec(trigger.sql);
+  }
   return db;
 };
 
@@ -111,7 +118,7 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
     expect(delimiterCandidate.status).toBe('posted');
     expect(otherTenant.status).toBe('posted');
     expect(new Set([first.sourceRun?.journalEntryId, delimiterCandidate.sourceRun?.journalEntryId, otherTenant.sourceRun?.journalEntryId]).size).toBe(3);
-    expect(new Set((db.prepare('SELECT id FROM journal_lines ORDER BY id').all() as Array<{ id: string }>).map((row) => row.id)).size).toBe(6);
+    expect(new Set((db.prepare('SELECT id FROM journal_lines ORDER BY id').all() as Array<{ id: string }>).map((row) => row.id)).size).toBe(8);
     expect(first.command?.entry.sourceKey).not.toBe(otherTenant.command?.entry.sourceKey);
     db.close();
   });
@@ -325,9 +332,8 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
   });
 
   it('accepts legacy underscore document source keys for settlement reads', () => {
-    const db = createDb();
+    const db = createDb('outgoing_invoice:invoice-1');
     const scope = createProTenantScope('default');
-    db.prepare("UPDATE journal_entries SET source_key = 'outgoing_invoice:invoice-1' WHERE id = 'invoice-journal-1'").run();
     const result = postAccountingCommand(db, {
       kind: 'skonto', source: source('skonto-legacy-key'),
       domainFacts: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9, originalDocumentId: 'invoice-1' },
@@ -392,12 +398,25 @@ describe.skipIf(!canRunNativeSqlite)('accounting source repository', () => {
         original_amount, allocated_amount, residual_amount, status, journal_entry_id, created_at, updated_at)
       VALUES ('invoice-open-item-2', 'default', 'debtor', 'client-1', 'outgoing_invoice', 'invoice-2', 'RE-2', '2026-03-15',
         '2026-03-31', 119, 0, 119, 'open', 'invoice-journal-2', datetime('now'), datetime('now'));
+      INSERT INTO invoices (id, number, client, client_email, date, due_date, amount, status, accounting_status,
+        accounting_snapshot_json, accounting_journal_entry_id, accounting_posted_at, created_at, updated_at)
+      VALUES ('invoice-3', 'RE-3', 'Original customer', 'customer@example.test', '2026-03-15', '2026-03-31', 119,
+        'open', 'posted', '{"sourceVersion":"invoice-r3","vatBreakdown":[{"grossAmount":119,"netAmount":100,"rate":19,"taxAmount":19}]}',
+        'invoice-journal-3', datetime('now'), datetime('now'), datetime('now'));
+      INSERT INTO journal_entries (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference,
+        period, fiscal_year, status, source_type, source_key, created_at)
+      VALUES ('invoice-journal-3', 'default', 3, '2026-03-15', '2026-03-15', 'Original invoice', 'RE-3',
+        '2026-03', 2026, 'posted', 'outgoing_invoice', 'outgoing-invoice:invoice-3', datetime('now'));
+      INSERT INTO open_items (id, tenant_id, party_type, party_id, source_type, source_id, document_number, document_date, due_date,
+        original_amount, allocated_amount, residual_amount, status, journal_entry_id, created_at, updated_at)
+      VALUES ('invoice-open-item-3', 'default', 'debtor', 'client-1', 'outgoing_invoice', 'invoice-3', 'RE-3', '2026-03-15',
+        '2026-03-31', 119, 0, 119, 'open', 'invoice-journal-3', datetime('now'), datetime('now'));
     `);
     const overCredit = post('typed-over-credit', 'advance_settlement', {
       finalInvoiceId: 'invoice-1',
       finalInvoice: { id: 'invoice-1', grossAmount: 119, taxBreakdown: settlementTax },
       advances: [{ id: 'invoice-2', kind: 'advance', grossAmount: 60 }],
-      partialInvoices: [{ id: 'invoice-1', kind: 'partial', grossAmount: 60 }],
+      partialInvoices: [{ id: 'invoice-3', kind: 'partial', grossAmount: 60 }],
       advanceClearingReceivable: '1200',
       advanceClearingPayable: '1600',
     });

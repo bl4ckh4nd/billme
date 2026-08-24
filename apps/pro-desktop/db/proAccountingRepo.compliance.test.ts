@@ -563,6 +563,7 @@ describe.skipIf(!canRunNativeSqlite)('proAccountingRepo compliance controls', ()
           grossAmount: 119,
           countryCode: 'FR',
           counterpartyVatId: 'FR12345678901',
+          destinationVatRate: 19,
           evidenceType: 'Invoice',
           evidenceReference: '13',
         },

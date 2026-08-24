@@ -59,12 +59,43 @@ const killProfileProcesses = (executable, userDataDir) => {
   }
 };
 
-const waitForClose = async (app) => {
-  const closed = await Promise.race([
-    app.waitForEvent('close').then(() => true),
-    new Promise((resolveWait) => setTimeout(() => resolveWait(false), 5000)),
+const waitForClose = async (app, executable, userDataDir) => {
+  const startedAt = Date.now();
+  let child;
+  try {
+    child = app.process();
+  } catch {
+    child = undefined;
+  }
+  const processExit = child
+    ? new Promise((resolveExit) => {
+      const resolveOnce = (code, signal) => resolveExit({ kind: 'process-exit', code, signal });
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolveOnce(child.exitCode, child.signalCode);
+        return;
+      }
+      child.once('exit', resolveOnce);
+    })
+    : new Promise(() => {});
+  const outcome = await Promise.race([
+    app.waitForEvent('close').then(() => ({ kind: 'playwright-close' })),
+    processExit,
+    new Promise((resolveWait) => setTimeout(() => resolveWait({ kind: 'timeout' }), 15_000)),
   ]);
-  assert.equal(closed, true, 'packaged restore triggered a controlled Electron exit');
+  if (outcome.kind === 'timeout') {
+    const remaining = profileProcessIds(executable, userDataDir);
+    throw new Error([
+      `packaged restore did not exit within 15000ms (pid=${child?.pid ?? 'unknown'}`,
+      ` exitCode=${child?.exitCode ?? 'null'} signal=${child?.signalCode ?? 'null'}`,
+      ` remainingProfilePids=${remaining.join(',') || 'none'})`,
+    ].join(''));
+  }
+  if (outcome.kind === 'process-exit') {
+    assert.equal(outcome.code, 0, `packaged restore exited with code ${outcome.code ?? 'unknown'}`);
+  } else if (child?.exitCode !== null && child?.exitCode !== undefined) {
+    assert.equal(child.exitCode, 0, `packaged restore exited with code ${child.exitCode}`);
+  }
+  console.log(`[packaged-smoke] restore shutdown observed via ${outcome.kind} after ${Date.now() - startedAt}ms`);
 };
 
 const closePackagedApp = async (app, executable, userDataDir) => {
@@ -150,7 +181,7 @@ const launchPackaged = async ({ name, directory, executable }) => {
 
     const restoreOnly = { ...client, id: `${client.id}-restore-only`, company: `${client.company} Restore` };
     await invoke(restartedPage, 'clients', 'upsert', { client: restoreOnly });
-    const restoreStarted = waitForClose(app);
+    const restoreStarted = waitForClose(app, executable, userDataDir);
     const restored = await invoke(restartedPage, 'db', 'restore', { path: backup.path });
     assert.equal(restored.ok, true);
     await restoreStarted;

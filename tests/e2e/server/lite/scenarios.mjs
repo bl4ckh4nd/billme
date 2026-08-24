@@ -253,7 +253,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
     const persisted = {
       ...draft,
       amount: price,
-      items: [{ description, quantity: 1, price, total: price }],
+      items: [{ kind: 'item', description, quantity: 1, price, total: price }],
     };
     delete persisted.numberReservationId;
     const saved = await api.invoices.upsert({ invoice: persisted, reason: 'create' });
@@ -278,7 +278,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
     const persisted = {
       ...draft,
       amount: price,
-      items: [{ description, quantity: 1, price, total: price }],
+      items: [{ kind: 'item', description, quantity: 1, price, total: price }],
     };
     delete persisted.numberReservationId;
     const saved = await api.offers.upsert({ offer: persisted, reason: 'create' });

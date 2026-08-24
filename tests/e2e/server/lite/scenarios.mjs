@@ -242,7 +242,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
   await expect(page.getByText(companyName)).toBeVisible();
   await page.getByRole('button', { name: 'Neue Rechnung' }).click();
   await expect(page.getByRole('heading', { name: 'Rechnung erstellen' })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Empfängername' })).toHaveValue(companyName);
+  await expect(page.getByRole('combobox', { name: 'Kunde auswählen' })).toHaveValue(companyName);
   const createdInvoice = await page.evaluate(async ({ clientId, description, price }) => {
     const api = globalThis.billmeApi;
     if (!api) {

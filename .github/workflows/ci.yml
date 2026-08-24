@@ -82,6 +82,9 @@ jobs:
       - name: Pro desktop build
         run: pnpm -C apps/pro-desktop build
 
+      - name: Packaged Electron smoke (Lite + Pro)
+        run: xvfb-run -a pnpm test:e2e:electron:packaged
+
       - name: Offer portal build
         run: pnpm -C apps/offer-portal build
 

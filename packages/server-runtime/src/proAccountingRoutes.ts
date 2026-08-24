@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createProAccountingAssetService, createProAccountingService } from '@billme/accounting-engine';
 import { buildDatevBuchungsstapelCsv } from '@billme/accounting-engine/datev-export';
 import type {
@@ -14,7 +14,7 @@ import type {
   IncomingInvoiceEntity,
 } from '@billme/accounting-shared';
 import { CorrectionSettlementError } from '@billme/accounting-shared';
-import { createPostgresProAccountingRepository, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
+import { createPostgresBillingDependencies, createPostgresProAccountingRepository, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
 import {
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
@@ -368,6 +368,27 @@ export const taxExportPreparationBodySchema = z.object({
   entries: z.array(z.object({ postingDate: z.string(), status: z.enum(['posted', 'reversed']), lines: z.array(z.record(z.unknown())) })).optional(),
 });
 const sourceRunQuery = z.object({ sourceType: z.string().min(1).optional(), limit: z.coerce.number().int().positive().max(500).optional() });
+const accountingPeriodParams = z.object({ period: z.string().regex(/^\d{4}-\d{2}$/) });
+const accountingPeriodBody = z.object({ status: z.enum(['open', 'soft_locked', 'closed']), reason: reasonSchema });
+const accountingPeriodResult = z.object({
+  period: z.string(),
+  fiscalYear: z.number().int(),
+  status: z.enum(['open', 'soft_locked', 'closed']),
+  startsAt: z.string(),
+  endsAt: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+const mapAccountingPeriod = (row: Record<string, unknown>) => accountingPeriodResult.parse({
+  period: String(row.period),
+  fiscalYear: Number(row.fiscal_year),
+  status: row.status,
+  startsAt: String(row.starts_at),
+  endsAt: String(row.ends_at),
+  createdAt: String(row.created_at),
+  updatedAt: String(row.updated_at),
+});
 
 const requireProSession = async (app: FastifyInstance, authHeader: string | undefined) =>
   requireSession(app, 'pro', authHeader);
@@ -414,6 +435,51 @@ const CLIENT_CONTROLLED_WORKFLOW_STATUSES = new Set([
 
 export const registerProAccountingRoutes = (app: FastifyInstance) => {
   const prefix = '/api/v1/pro/accounting';
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/periods/:period`,
+    params: accountingPeriodParams,
+    body: accountingPeriodBody,
+    response: accountingPeriodResult,
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      const database = requirePool(app) as unknown as { query: (text: string, values?: readonly unknown[]) => Promise<{ rows: Record<string, unknown>[] }> };
+      const existing = (await database.query(
+        'SELECT * FROM accounting_periods WHERE tenant_id=$1 AND period=$2 LIMIT 1',
+        [session.scope.tenantId, params.period],
+      )).rows[0];
+      const [year, month] = params.period.split('-').map(Number);
+      const startsAt = `${params.period}-01`;
+      const endsAt = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+      const stamp = new Date().toISOString();
+      if (existing) {
+        await database.query(
+          'UPDATE accounting_periods SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND period=$4',
+          [body.status, stamp, session.scope.tenantId, params.period],
+        );
+      } else {
+        await database.query(
+          'INSERT INTO accounting_periods (id,tenant_id,period,fiscal_year,status,starts_at,ends_at,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)',
+          [randomUUID(), session.scope.tenantId, params.period, year, body.status, startsAt, endsAt, stamp],
+        );
+      }
+      const saved = (await database.query(
+        'SELECT * FROM accounting_periods WHERE tenant_id=$1 AND period=$2 LIMIT 1',
+        [session.scope.tenantId, params.period],
+      )).rows[0];
+      const mapped = mapAccountingPeriod(saved ?? {});
+      await createPostgresBillingDependencies(database as never).auditLog.append(session.scope, {
+        occurredAt: stamp,
+        action: 'accounting_period.status_changed',
+        reason: body.reason,
+        actor: { type: 'user', id: session.user.id, displayName: session.user.fullName },
+        subject: { entityType: 'accounting_period', entityId: `${session.scope.tenantId}:${params.period}`, tenantId: session.scope.tenantId },
+        change: { before: existing ?? null, after: saved ?? mapped },
+      });
+      return mapped;
+    },
+  });
 
   typedRoute(app, {
     method: 'GET',

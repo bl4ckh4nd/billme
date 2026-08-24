@@ -2,13 +2,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 
-const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const electronBinary = path.join(path.dirname(require.resolve('electron')), 'dist', 'electron');
+const electronBinary = path.join(path.dirname(path.join(repoRoot, 'node_modules/electron/index.js')), 'dist', 'electron');
 const APP_PATHS = {
   desktop: {
     cwd: path.join(repoRoot, 'apps', 'desktop'),
@@ -417,8 +415,10 @@ export async function launchDesktopApp(options = {}) {
   const app = options.app ?? 'desktop';
   const { cwd, rendererRoot } = appConfig(app);
   const rendererServer = await startStaticServer(rendererRoot);
-  const userDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), `billme-${app}-e2e-`));
+  const userDataDir = options.userDataDir ?? await fs.promises.mkdtemp(path.join(os.tmpdir(), `billme-${app}-e2e-`));
+  const cleanupUserData = options.cleanupUserData !== false && options.userDataDir === undefined;
   const cacheDir = path.join(userDataDir, 'cache');
+  const connectionFile = path.join(userDataDir, '.e2e-embedded-connection.json');
   await fs.promises.mkdir(cacheDir, { recursive: true });
   const launchedApp = await electron.launch({
     executablePath: electronBinary,
@@ -430,6 +430,8 @@ export async function launchDesktopApp(options = {}) {
       BILLME_E2E: '1',
       BILLME_E2E_USER_DATA_DIR: userDataDir,
       BILLME_E2E_CACHE_DIR: cacheDir,
+      BILLME_E2E_CONNECTION_FILE: connectionFile,
+      BILLME_SERVER_DATA_MIGRATIONS_DIR: path.join(repoRoot, 'packages', 'server-data', 'drizzle'),
       VITE_DEV_SERVER_URL: rendererServer.baseUrl,
     },
   });
@@ -438,6 +440,26 @@ export async function launchDesktopApp(options = {}) {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForFunction(() => Boolean(window.billmeApi));
 
+  const closeElectronApp = async () => {
+    let child;
+    try {
+      child = launchedApp.process();
+    } catch {
+      child = undefined;
+    }
+    await Promise.race([
+      launchedApp.close().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 1500)),
+    ]);
+    if (child?.pid) {
+      try {
+        process.kill(child.pid, 'SIGKILL');
+      } catch (error) {
+        if (error?.code !== 'ESRCH') throw error;
+      }
+    }
+  };
+
   return {
     app: launchedApp,
     page,
@@ -445,12 +467,43 @@ export async function launchDesktopApp(options = {}) {
     userDataDir,
     targetApp: app,
     close: async () => {
-      await launchedApp.close();
-      await rendererServer.close();
-      await fs.promises.rm(userDataDir, { recursive: true, force: true });
+      try {
+        await closeElectronApp();
+      } finally {
+        await rendererServer.close();
+        if (cleanupUserData) await fs.promises.rm(userDataDir, { recursive: true, force: true });
+      }
     },
   };
 }
+
+export const readEmbeddedConnection = async (desktop) => {
+  const connectionFile = path.join(desktop.userDataDir, '.e2e-embedded-connection.json');
+  return JSON.parse(await fs.promises.readFile(connectionFile, 'utf8'));
+};
+
+export const requestEmbeddedJson = async (desktop, route, options = {}) => {
+  const connection = await readEmbeddedConnection(desktop);
+  const response = await fetch(`${connection.baseUrl}${route}`, {
+    ...options,
+    headers: {
+      authorization: `Bearer ${connection.token}`,
+      'content-type': 'application/json',
+      ...(options.headers ?? {}),
+    },
+  });
+  const body = await response.text();
+  let payload;
+  try {
+    payload = body ? JSON.parse(body) : undefined;
+  } catch {
+    payload = body;
+  }
+  if (!response.ok) {
+    throw new Error(`Embedded HTTP ${response.status} ${route}: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}`);
+  }
+  return payload;
+};
 
 export async function invokeDesktopIpc(page, route, args) {
   const [group, method] = route.split(':');
@@ -559,27 +612,8 @@ export async function importPendingProTransaction(page, label, options = {}) {
 }
 
 export async function setProAccountingPeriodStatus(desktop, period, status = 'soft_locked') {
-  return desktop.app.evaluate(({ app }, args) => {
-    const pathModule = process.getBuiltinModule('node:path');
-    const { createRequire } = process.getBuiltinModule('node:module');
-    const Database = createRequire(pathModule.join(app.getAppPath(), 'package.json'))('better-sqlite3');
-    const dbPath = pathModule.join(app.getPath('userData'), 'billme-pro-v2.sqlite');
-    const db = new Database(dbPath);
-    try {
-      const periodRow = db.prepare('SELECT period, status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get('default', args.period);
-      if (!periodRow) {
-        const [year, month] = args.period.split('-').map(Number);
-        const startsAt = `${args.period}-01`;
-        const endsAt = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
-        const now = new Date().toISOString();
-        db.prepare(`INSERT OR IGNORE INTO accounting_periods
-          (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at)
-          VALUES (?, 'default', ?, ?, 'open', ?, ?, ?, ?)`).run(`e2e-period-${args.period}`, args.period, year, startsAt, endsAt, now, now);
-      }
-      db.prepare('UPDATE accounting_periods SET status = ?, updated_at = ? WHERE tenant_id = ? AND period = ?').run(args.status, new Date().toISOString(), 'default', args.period);
-      return db.prepare('SELECT period, status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get('default', args.period);
-    } finally {
-      db.close();
-    }
-  }, { period, status });
+  return requestEmbeddedJson(desktop, `/api/v1/pro/accounting/periods/${encodeURIComponent(period)}`, {
+    method: 'POST',
+    body: JSON.stringify({ status, reason: `E2E accounting period ${status}` }),
+  });
 }

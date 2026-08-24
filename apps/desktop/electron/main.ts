@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { registerNativeIpcHandlers } from './nativeIpcHandlers';
@@ -164,6 +165,11 @@ app.whenReady().then(async () => {
     profile: PRODUCT_PROFILE,
     isDev,
   });
+  const connectionFile = process.env.BILLME_E2E_CONNECTION_FILE;
+  if (connectionFile) {
+    await mkdir(path.dirname(connectionFile), { recursive: true });
+    await writeFile(connectionFile, JSON.stringify(localBackend.embeddedConnection()), { mode: 0o600 });
+  }
 
   await createWindow();
 

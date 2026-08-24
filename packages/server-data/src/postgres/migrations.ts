@@ -20,7 +20,9 @@ const isCanonicalMigrationDirectory = (candidate: string): boolean =>
 
 const resolveCanonicalMigrationDirectory = (): string => {
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const configuredPath = process.env.BILLME_SERVER_DATA_MIGRATIONS_DIR;
   const candidates = [
+    ...(configuredPath ? [resolve(configuredPath)] : []),
     fileURLToPath(new URL("../../drizzle", import.meta.url)),
     ...(resourcesPath ? [join(resourcesPath, "drizzle")] : []),
     resolve(process.cwd(), "packages/server-data/drizzle"),

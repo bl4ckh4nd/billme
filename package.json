@@ -46,6 +46,7 @@
     "test:e2e:smoke": "playwright test",
     "test:e2e:full": "E2E_FULL=1 playwright test",
     "test:e2e:pro": "E2E_FULL=1 playwright test --project=pro-full",
+    "test:e2e:electron:packaged": "node tests/e2e/electron/packaged-smoke.mjs",
     "test:e2e:server:install": "playwright install chromium",
     "test:e2e:server": "node tests/e2e/server/run-suite.mjs smoke",
     "test:e2e:server:headed": "SERVER_E2E_HEADED=1 node tests/e2e/server/run-suite.mjs smoke",

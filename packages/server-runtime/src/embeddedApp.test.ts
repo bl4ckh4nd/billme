@@ -179,6 +179,11 @@ test('embedded Pro server exposes accounting routes on direct PGlite without exp
   try {
     await app.ready();
     const headers = { 'x-billme-local-token': 'embedded-pro-local-access-token' };
+    await database.query(
+      `INSERT INTO tenants (id, slug, display_name, product, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $5)`,
+      ['embedded-pro-tenant', 'embedded-pro', 'Embedded Pro', 'pro', new Date().toISOString()],
+    );
 
     const capabilities = await app.inject({
       method: 'GET',
@@ -198,6 +203,40 @@ test('embedded Pro server exposes accounting routes on direct PGlite without exp
     assert.ok(stats.total > 0);
     assert.ok(stats.byChart.SKR03 > 0);
     assert.ok(stats.byChart.SKR04 > 0);
+
+    const period = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pro/accounting/periods/2026-08',
+      headers,
+      payload: { status: 'soft_locked', reason: 'Packaged PGlite E2E period check' },
+    });
+    assert.equal(period.statusCode, 200, period.body);
+    assert.deepEqual(period.json(), {
+      period: '2026-08',
+      fiscalYear: 2026,
+      status: 'soft_locked',
+      startsAt: '2026-08-01',
+      endsAt: '2026-08-31',
+      createdAt: period.json().createdAt,
+      updatedAt: period.json().updatedAt,
+    });
+
+    const reopenedPeriod = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pro/accounting/periods/2026-08',
+      headers,
+      payload: { status: 'open', reason: 'Packaged PGlite E2E reopen check' },
+    });
+    assert.equal(reopenedPeriod.statusCode, 200, reopenedPeriod.body);
+    assert.equal(reopenedPeriod.json().status, 'open');
+
+    const invalidPeriod = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pro/accounting/periods/not-a-period',
+      headers,
+      payload: { status: 'open', reason: 'Invalid period must fail closed' },
+    });
+    assert.equal(invalidPeriod.statusCode, 400);
 
     const liteOnlyRoute = await app.inject({
       method: 'GET',

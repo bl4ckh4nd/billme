@@ -15,7 +15,8 @@ import {
   createPostgresMaintenanceRepository,
   createPostgresOfferRepository,
   createPostgresPool,
-  createPostgresRecurringProfileRepository,
+  createPostgresServerDatabase,
+  createServerRecurringDependencies,
   createPostgresTaxFilingRepository,
   claimTaxSubmissionJob,
   completeTaxSubmissionJob,
@@ -25,22 +26,17 @@ import {
   createDefaultTenantScope,
   getServerSettings,
   insertEmailLogRow,
-  listServerNumberReservations,
   assertDrizzleSchemaCurrent,
-  saveServerNumberReservation,
   saveServerSettings,
   withPostgresTransaction,
   type PostgresTransactionClient,
 } from '@billme/server-data';
 import {
-  ensureDefaultProjectForClient,
-  finalizeDocumentNumber,
   listOffersPendingPortalSync,
   processDunningRun,
   runMaintenanceSweep,
-  processRecurringRun,
-  releaseDocumentNumber,
-  reserveDocumentNumber,
+  runRecurringInvoiceRun,
+  toRecurringRunFailure,
   shouldRunScheduledDunning,
   shouldRunScheduledRecurring,
   syncPublishedOfferDecisionFromPortal,
@@ -48,13 +44,9 @@ import {
   type AuditActor,
   type AuditEntry,
   type AuditEntryDraft,
-  type ClientProject,
-  type DefaultProjectPorts,
-  type DocumentNumberingPorts,
   type EmailOutboxEntry,
   type Offer,
   type OfferDomainDependencies,
-  type RecurringDomainDependencies,
   type Tenant,
   type TenantScope,
 } from '@billme/server-core';
@@ -88,10 +80,6 @@ const workerActor: AuditActor = {
   type: 'service',
   id: 'billme-server-worker',
   displayName: 'billme-server-worker',
-};
-
-const isActiveDefaultProject = (project: ClientProject) => {
-  return project.name === 'Allgemein' && !project.archivedAt && project.status === 'active';
 };
 
 const stripOfferHistory = (offer: Offer): Offer => {
@@ -155,6 +143,7 @@ export class ServerWorkerRuntime {
   private readonly logger: WorkerLogger;
   private readonly queryContext = new AsyncLocalStorage<PostgresTransactionClient>();
   private readonly pool: ReturnType<typeof createPostgresPool>;
+  private readonly database: ReturnType<typeof createPostgresServerDatabase>;
   private readonly workerId = `billme-server-worker:${process.pid}`;
 
   constructor(
@@ -163,6 +152,7 @@ export class ServerWorkerRuntime {
   ) {
     this.logger = logger.child({ component: 'runtime' });
     this.pool = createPostgresPool(this.env.databaseUrl);
+    this.database = createPostgresServerDatabase(this.pool);
   }
 
   async init(): Promise<void> {
@@ -170,7 +160,7 @@ export class ServerWorkerRuntime {
   }
 
   async close(): Promise<void> {
-    await this.pool.end();
+    await this.database.close();
   }
 
   async runRecurringJob(): Promise<WorkerTaskResult> {
@@ -197,14 +187,48 @@ export class ServerWorkerRuntime {
       };
     }
 
-    const result = await processRecurringRun(resolved.scope, this.createRecurringDependencies(resolved.scope));
-    await this.saveSettings(resolved.scope, {
-      ...settingsSnapshot.settings,
-      automation: {
-        ...settingsSnapshot.settings.automation,
-        lastRecurringRun: new Date().toISOString(),
-      },
-    }, settingsSnapshot.createdAt);
+    const runAt = new Date().toISOString();
+    let result: Awaited<ReturnType<typeof runRecurringInvoiceRun>>;
+    try {
+      result = await runRecurringInvoiceRun(
+        resolved.scope,
+        createServerRecurringDependencies(this.database, resolved.scope, { actor: workerActor }),
+        {
+          auditLog: createPostgresAuditLogPort(this.database),
+          actor: workerActor,
+          reason: 'scheduled',
+          action: 'recurring.scheduled_run',
+          afterProcess: async () => {
+            await saveServerSettings(this.database, {
+              tenantId: resolved.scope.tenantId,
+              settingsJson: JSON.stringify({
+                ...settingsSnapshot.settings,
+                automation: {
+                  ...settingsSnapshot.settings.automation,
+                  lastRecurringRun: runAt,
+                },
+              }),
+              createdAt: settingsSnapshot.createdAt,
+              updatedAt: runAt,
+            });
+          },
+        },
+      );
+    } catch (error) {
+      const failure = toRecurringRunFailure(error);
+      if (failure) {
+        return {
+          status: 'blocked',
+          message: failure.error,
+          details: {
+            generated: failure.result.generated,
+            deactivated: failure.result.deactivated,
+            errors: failure.result.errors.length,
+          },
+        };
+      }
+      throw error;
+    }
 
     return {
       status: 'completed',
@@ -711,170 +735,6 @@ export class ServerWorkerRuntime {
     });
   }
 
-  private createRecurringDependencies(scope: TenantScope): RecurringDomainDependencies {
-    const createNumberingPorts = (): DocumentNumberingPorts<WorkerSettings> => ({
-      tx: {
-        inTransaction: (work) => this.inTransaction(work),
-      },
-      getSettings: async () => (await this.readSettings(scope))?.settings ?? null,
-      saveSettings: async (settings) => {
-        const current = await this.readSettings(scope);
-        await this.saveSettings(scope, settings, current?.createdAt);
-      },
-      createReservation: async (reservation) => {
-        const now = new Date().toISOString();
-        await saveServerNumberReservation(this.currentQueryable(), {
-          tenantId: scope.tenantId,
-          ...reservation,
-          createdAt: now,
-          updatedAt: now,
-        });
-      },
-      getReservationById: async (reservationId) => {
-        const reservation = (await listServerNumberReservations(this.currentQueryable(), scope.tenantId))
-          .find((entry) => entry.id === reservationId);
-
-        if (!reservation) {
-          return null;
-        }
-
-        return {
-          id: reservation.id,
-          kind: reservation.kind,
-          number: reservation.number,
-          counterValue: reservation.counterValue,
-          status: reservation.status,
-          documentId: reservation.documentId,
-        };
-      },
-      updateReservation: async (reservation) => {
-        const existing = (await listServerNumberReservations(this.currentQueryable(), scope.tenantId))
-          .find((entry) => entry.id === reservation.id);
-        const now = new Date().toISOString();
-
-        await saveServerNumberReservation(this.currentQueryable(), {
-          tenantId: scope.tenantId,
-          ...reservation,
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        });
-      },
-      isNumberTaken: async (kind, number) => {
-        if (kind === 'customer') {
-          const clients = await createPostgresClientRepository(this.currentQueryable()).list(scope);
-          return clients.some((client) => client.customerNumber === number);
-        }
-        const documents = kind === 'invoice'
-          ? await createPostgresInvoiceRepository(this.currentQueryable()).list(scope)
-          : await createPostgresOfferRepository(this.currentQueryable()).list(scope);
-        if (documents.some((document) => document.number === number)) {
-          return true;
-        }
-        const reservations = await listServerNumberReservations(this.currentQueryable(), scope.tenantId);
-        return reservations.some((reservation) =>
-          reservation.kind === kind &&
-          reservation.number === number &&
-          reservation.status !== 'released'
-        );
-      },
-      generateReservationId: async () => randomUUID(),
-    });
-
-    const createProjectPorts = (): DefaultProjectPorts<ClientProject> => ({
-      tx: {
-        inTransaction: (work) => this.inTransaction(work),
-      },
-      getActiveDefaultProjectForClient: async (clientId) => {
-        const client = await createPostgresClientRepository(this.currentQueryable()).getById(scope, clientId);
-        return client?.projects.find(isActiveDefaultProject) ?? null;
-      },
-      listProjectCodesByPrefix: async (prefix) => {
-        const clients = await createPostgresClientRepository(this.currentQueryable()).list(scope);
-        return clients.flatMap((client) =>
-          client.projects
-            .filter((project) => typeof project.code !== 'string' || project.code.startsWith(prefix))
-            .map((project) => project.code),
-        );
-      },
-      saveProject: async (project) => {
-        const clientRepository = createPostgresClientRepository(this.currentQueryable());
-        const client = await clientRepository.getById(scope, project.clientId);
-        if (!client) {
-          throw new Error(`Client ${project.clientId} not found`);
-        }
-
-        const nextProject = {
-          ...project,
-          createdAt: project.createdAt ?? new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        await clientRepository.save(scope, {
-          ...client,
-          projects: [
-            ...client.projects.filter((entry) => entry.id !== nextProject.id),
-            nextProject,
-          ],
-          updatedAt: nextProject.updatedAt,
-        });
-
-        return nextProject;
-      },
-    });
-
-    return {
-      tx: {
-        inTransaction: (work) => this.inTransaction(work),
-      },
-      recurringProfileStore: {
-        list: (innerScope) => createPostgresRecurringProfileRepository(this.currentQueryable()).list(innerScope),
-        getById: (innerScope, id) => createPostgresRecurringProfileRepository(this.currentQueryable()).getById(innerScope, id),
-        save: (innerScope, profile) => createPostgresRecurringProfileRepository(this.currentQueryable()).save(innerScope, profile),
-        remove: (innerScope, id) => createPostgresRecurringProfileRepository(this.currentQueryable()).remove(innerScope, id),
-      },
-      clientPort: {
-        getById: (innerScope, id) => createPostgresClientRepository(this.currentQueryable()).getById(innerScope, id),
-      },
-      invoicePort: {
-        save: (innerScope, params) => createPostgresInvoiceRepository(this.currentQueryable()).save(innerScope, params.invoice),
-      },
-      numberingPort: {
-        getSettings: async () => (await this.readSettings(scope))?.settings ?? null,
-        reserve: async (kind, now) => reserveDocumentNumber(createNumberingPorts(), kind, now),
-        release: async (reservationId) => releaseDocumentNumber(createNumberingPorts(), reservationId),
-        finalize: async (reservationId, documentId) => finalizeDocumentNumber(createNumberingPorts(), reservationId, documentId),
-      },
-      projectPort: {
-        ensureDefaultProject: async (clientId) => {
-          const result = await ensureDefaultProjectForClient(createProjectPorts(), {
-            clientId,
-            createProjectId: () => randomUUID(),
-          });
-
-          if (result.created) {
-            await createPostgresAuditLogPort(this.currentQueryable()).append(scope, {
-              occurredAt: new Date().toISOString(),
-              action: 'project.create',
-              reason: 'auto:default',
-              actor: workerActor,
-              subject: {
-                entityType: 'project',
-                entityId: result.project.id,
-                tenantId: scope.tenantId,
-              },
-              change: {
-                before: null,
-                after: result.project,
-              },
-            });
-          }
-
-          return result.project;
-        },
-      },
-      createInvoiceId: () => randomUUID(),
-    };
-  }
 }
 
 const send = (

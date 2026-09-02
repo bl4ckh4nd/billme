@@ -70,6 +70,7 @@ interface DocumentsViewProps {
   onCreateInvoice: (type: 'invoice' | 'offer') => void;
   initialDocumentType?: 'invoice' | 'offer';
   initialSelectedId?: string;
+  initialStatus?: InvoiceStatus;
 }
 
 export const DocumentsView: React.FC<DocumentsViewProps> = ({
@@ -79,6 +80,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   onCreateInvoice,
   initialDocumentType,
   initialSelectedId,
+  initialStatus,
 }) => {
   const queryClient = useQueryClient();
   const [documentType, setDocumentType] = useState<'invoice' | 'offer'>('invoice');
@@ -167,11 +169,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     : undefined;
 
   React.useEffect(() => {
-    if (!initialSelectedId) return;
+    setFilter(initialStatus ?? 'all');
     setDocumentType(initialDocumentType ?? 'invoice');
+    if (!initialSelectedId) return;
     setSelectedId(initialSelectedId);
     setViewMode('detail');
-  }, [initialDocumentType, initialSelectedId]);
+  }, [initialDocumentType, initialSelectedId, initialStatus]);
 
   const filteredDocuments = currentData.filter(doc => {
     const matchesFilter = filter === 'all' || doc.status === filter;

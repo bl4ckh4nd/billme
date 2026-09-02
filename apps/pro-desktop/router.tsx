@@ -36,6 +36,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { ProAccountingPage } from './components/ProAccountingPage';
 import { FinanceHubView } from './components/FinanceHubView';
 import { EurView } from './components/EurView';
+import { TaxFilingCenter } from './components/TaxFilingCenter';
 import { shouldShowBusinessOnboarding } from '@billme/ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { MOCK_SETTINGS } from './data/mockData';
@@ -56,6 +57,7 @@ const RootLayout: React.FC = () => {
       || pathname.startsWith('/eur')
     )
       return 'finance';
+    if (pathname.startsWith('/tax-filing')) return 'tax-filing';
     if (pathname.startsWith('/templates') || pathname.startsWith('/recurring')) return 'documents';
     if (pathname.startsWith('/documents')) return 'documents';
     if (pathname.startsWith('/clients')) return 'clients';
@@ -67,12 +69,12 @@ const RootLayout: React.FC = () => {
 
   const isEditorActive = pathname.includes('/edit') || pathname.includes('/editor');
 
-  const handleNavigate = (page: string) => {
+  const handleNavigate = (page: string, search?: Record<string, string>) => {
     const to =
       page === 'dashboard'
         ? '/'
         : `/${page}`;
-    navigate({ to });
+    navigate({ to, search });
   };
 
   useKeyboardShortcuts({
@@ -110,9 +112,9 @@ const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   return (
     <DashboardHome
-      onNavigate={(page) => {
+      onNavigate={(page, search) => {
         const to = page === 'dashboard' ? '/' : `/${page}`;
-        navigate({ to });
+        navigate({ to, search });
       }}
     />
   );
@@ -126,6 +128,25 @@ const ProjectsPage: React.FC = () => <ProjectsView />;
 const ArticlesPage: React.FC = () => <ArticlesView />;
 const SettingsPage: React.FC = () => <SettingsView />;
 const RecurringPage: React.FC = () => <RecurringView />;
+const TaxFilingPage: React.FC = () => <TaxFilingCenter />;
+
+const NotFoundPage: React.FC = () => {
+  const navigate = useNavigate();
+  return (
+    <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+      <h2 className="text-xl font-bold text-gray-900 mb-2">Seite nicht gefunden</h2>
+      <p className="text-sm text-gray-500 mb-6">
+        Die angeforderte Seite konnte nicht gefunden werden.
+      </p>
+      <button
+        onClick={() => navigate({ to: '/' })}
+        className="px-6 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
+      >
+        Zurück zur Übersicht
+      </button>
+    </div>
+  );
+};
 
 const TemplatesPage: React.FC = () => {
   const navigate = useNavigate();
@@ -153,14 +174,10 @@ const DocumentsPage: React.FC = () => {
   const setEditingInvoice = useUiStore((s) => s.setEditingInvoice);
   const { data: settingsFromDb } = useSettingsQuery();
   const settings = settingsFromDb ?? MOCK_SETTINGS;
-  const locationSearch = window.location.search;
-  const deepLink = React.useMemo(() => {
-    const params = new URLSearchParams(locationSearch);
-    const id = params.get('id');
-    if (!id) return null;
-    const kind = params.get('kind') === 'offer' ? 'offer' : 'invoice';
-    return { kind, id } as const;
-  }, [locationSearch]);
+  const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
+  const initialDocumentType = locationSearch.kind === 'offer' ? 'offer' : 'invoice';
+  const initialSelectedId = typeof locationSearch.id === 'string' ? locationSearch.id : undefined;
+  const initialStatus = locationSearch.status === 'overdue' ? 'overdue' as const : undefined;
 
   const handleCreateDocument = (type: 'invoice' | 'offer') => {
     void (async () => {
@@ -203,8 +220,9 @@ const DocumentsPage: React.FC = () => {
         navigate({ to: '/documents/edit' });
       }}
       onCreateInvoice={handleCreateDocument}
-      initialDocumentType={deepLink?.kind}
-      initialSelectedId={deepLink?.id}
+      initialDocumentType={initialDocumentType}
+      initialSelectedId={initialSelectedId}
+      initialStatus={initialStatus}
     />
   );
 };
@@ -486,6 +504,12 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+const taxFilingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/tax-filing',
+  component: TaxFilingPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   accountsRoute,
@@ -502,11 +526,13 @@ const routeTree = rootRoute.addChildren([
   projectDetailRoute,
   articlesRoute,
   settingsRoute,
+  taxFilingRoute,
 ]);
 
 export const router = createRouter({
   routeTree,
   history: createHashHistory(),
+  defaultNotFoundComponent: NotFoundPage,
 });
 
 declare module '@tanstack/react-router' {

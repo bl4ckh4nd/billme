@@ -42,9 +42,11 @@ import {
   userAccountSchema,
 } from "@billme/server-core";
 import type {
-  PostgresQueryable,
+  PostgresQueryable as PostgresPoolQueryable,
   PostgresTransactionClient,
 } from "./connection.js";
+import type { ServerDatabaseSession } from "../database.js";
+import type { ServerDatabase } from "../database.js";
 import {
   and,
   asc,
@@ -62,6 +64,8 @@ import {
 import { schema, tryCreateDrizzle } from "./drizzle.js";
 import { withPostgresTransaction } from "./connection.js";
 import { createPostgresAuditLogPort } from "./audit.js";
+
+type PostgresQueryable = PostgresPoolQueryable | ServerDatabaseSession;
 
 export interface ServerSettingsRecord {
   tenantId: string;
@@ -1625,7 +1629,7 @@ export const createPostgresMaintenanceRepository = (
 });
 
 export const createPostgresBillingDependencies = (
-  db: Pool | PostgresTransactionClient,
+  db: PostgresQueryable,
 ): BillingRepositories => ({
   tenantRepo: createPostgresTenantRepository(db),
   userRepo: createPostgresUserRepository(db),
@@ -1640,12 +1644,23 @@ export const createPostgresBillingDependencies = (
 });
 
 export const createPostgresBillingUnitOfWork = (
-  pool: Pool,
+  pool: Pool | ServerDatabase,
 ): BillingUnitOfWork => ({
   async withTransaction<TResult>(
     scope: TenantScope,
     work: (context: BillingUnitOfWorkContext) => Promise<TResult> | TResult,
   ) {
+    if ('engine' in pool) {
+      return pool.transaction({}, async (session) => {
+        const repositories = createPostgresBillingDependencies(session);
+        return work({
+          scope,
+          clock: systemClock,
+          repositories,
+        });
+      });
+    }
+
     return withPostgresTransaction(pool, async (client) => {
       const repositories = createPostgresBillingDependencies(client);
       return work({
@@ -1670,6 +1685,7 @@ export const tenantCoreRowCountTables = [
   "clients",
   "invoices",
   "offers",
+  "portal_publications",
   "recurring_profiles",
   "articles",
   "accounts",
@@ -1733,6 +1749,7 @@ export const countTenantCoreRows = async (
     clients: schema.clients,
     invoices: schema.invoices,
     offers: schema.offers,
+    portal_publications: schema.portalPublications,
     recurring_profiles: schema.recurringProfiles,
     articles: schema.articles,
     accounts: schema.accounts,

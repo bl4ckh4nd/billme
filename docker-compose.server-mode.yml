@@ -42,6 +42,10 @@ services:
       PORT: 3100
       SESSION_SECRET: ${BILLME_SESSION_SECRET:?set BILLME_SESSION_SECRET in .env.server-mode (openssl rand -hex 32)}
       DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:-billme}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_VLM_MODEL: ${OPENROUTER_VLM_MODEL:-google/gemini-3.7-flash}
+      OPENROUTER_VLM_MODELS: ${OPENROUTER_VLM_MODELS:-google/gemini-3.7-flash}
+      OPENROUTER_VLM_TIMEOUT_MS: ${OPENROUTER_VLM_TIMEOUT_MS:-45000}
     depends_on:
       postgres:
         condition: service_healthy

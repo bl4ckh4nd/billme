@@ -17,6 +17,7 @@ const fakeSourceDatabase = (): Database.Database => ({
 
 const fakeTargetDatabase = (details: unknown = { counts: { clients: 1 } }): ServerDatabase => ({
   engine: 'pglite',
+  drizzle: () => undefined,
   query: async <Row = Record<string, unknown>>() => ({ rows: [{ status: 'completed', details_json: JSON.stringify(details) }] as Row[] }),
   transaction: async () => undefined as never,
   migrate: async () => undefined,

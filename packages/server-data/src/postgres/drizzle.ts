@@ -15,8 +15,13 @@ type PgliteDrizzleTarget = PGlite | {
   exec: (...args: any[]) => any;
 };
 
+type AdapterDrizzleTarget = {
+  query: (...args: any[]) => any;
+  drizzle?: () => unknown;
+};
+
 const isPgliteDrizzleTarget = (
-  client: Pool | PoolClient | PgliteDrizzleTarget,
+  client: Pool | PoolClient | PgliteDrizzleTarget | AdapterDrizzleTarget,
 ): client is PgliteDrizzleTarget =>
   typeof (client as { exec?: unknown }).exec === 'function' &&
   typeof (client as { release?: unknown }).release !== 'function';
@@ -26,10 +31,16 @@ export const createPgliteDrizzle = (client: PGlite): ServerPgliteDrizzleDb =>
 
 /** Create the matching Drizzle dialect for PostgreSQL or a PGlite session. */
 export const createDrizzle = (
-  client: Pool | PoolClient | PgliteDrizzleTarget,
-): ServerDrizzleDb => isPgliteDrizzleTarget(client)
-  ? createPgliteDrizzle(client as PGlite) as unknown as ServerDrizzleDb
-  : drizzle(client, { schema });
+  client: Pool | PoolClient | PgliteDrizzleTarget | AdapterDrizzleTarget,
+): ServerDrizzleDb => {
+  const adapterDrizzle = (client as AdapterDrizzleTarget).drizzle;
+  if (typeof adapterDrizzle === 'function') {
+    return adapterDrizzle.call(client) as ServerDrizzleDb;
+  }
+  return isPgliteDrizzleTarget(client)
+    ? createPgliteDrizzle(client as PGlite) as unknown as ServerDrizzleDb
+    : drizzle(client as Pool | PoolClient, { schema });
+};
 
 export { schema };
 
@@ -41,7 +52,11 @@ export const tryCreateDrizzle = (client: {
     release?: unknown;
     engine?: unknown;
     client?: PGlite;
+    drizzle?: () => unknown;
   };
+  if (typeof candidate.drizzle === 'function') {
+    return candidate.drizzle() as ServerDrizzleDb;
+  }
   if (candidate.engine === 'pglite' && candidate.client) {
     return createPgliteDrizzle(candidate.client) as unknown as ServerDrizzleDb;
   }

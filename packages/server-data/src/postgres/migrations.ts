@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Pool } from "pg";
 import { PGlite } from "@electric-sql/pglite";
@@ -18,16 +18,32 @@ const isCanonicalMigrationDirectory = (candidate: string): boolean =>
   existsSync(join(candidate, "0000_server_data.sql")) &&
   existsSync(join(candidate, "meta", "_journal.json"));
 
-const resolveCanonicalMigrationDirectory = (): string => {
+const ancestorDirectories = (startPath: string): string[] => {
+  const directories: string[] = [];
+  let current = resolve(startPath);
+  while (true) {
+    directories.push(current);
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return directories;
+};
+
+export const resolveCanonicalMigrationDirectory = (): string => {
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  const moduleRelativeMigrationDirectory = fileURLToPath(new URL("../../drizzle", import.meta.url));
   const candidates = [
-    fileURLToPath(new URL("../../drizzle", import.meta.url)),
+    moduleRelativeMigrationDirectory,
     ...(resourcesPath ? [join(resourcesPath, "drizzle")] : []),
     resolve(process.cwd(), "packages/server-data/drizzle"),
+    ...ancestorDirectories(moduleDirectory).map((directory) => join(directory, "packages/server-data/drizzle")),
+    ...ancestorDirectories(process.cwd()).map((directory) => join(directory, "packages/server-data/drizzle")),
   ];
   const directory = candidates.find(isCanonicalMigrationDirectory);
   if (!directory) {
-    throw new Error("Canonical server-data Drizzle migrations are not packaged");
+    throw new Error(`Canonical server-data Drizzle migrations are not packaged. Checked paths: ${candidates.join(", ")}`);
   }
   return directory;
 };

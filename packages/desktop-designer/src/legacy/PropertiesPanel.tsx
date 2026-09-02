@@ -19,7 +19,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ element, onUpd
         <div className="w-16 h-16 bg-gray-50 rounded-2xl flex items-center justify-center mb-4">
             <Type size={32} className="opacity-20 text-black" />
         </div>
-        <p className="text-center font-medium">Select an element to edit</p>
+        <p className="text-center font-medium">Element auswählen, um es zu bearbeiten</p>
       </div>
     );
   }

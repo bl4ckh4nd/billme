@@ -1,4 +1,5 @@
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
+import type { ServerDatabaseSession } from '../database.js';
 
 export const readDatabaseUrl = (env: NodeJS.ProcessEnv = process.env): string | null => {
   const value = env.DATABASE_URL?.trim();
@@ -13,7 +14,8 @@ export const createPostgresPool = (config: string | PoolConfig): Pool => {
   return new Pool(config);
 };
 
-export type PostgresQueryable = Pick<Pool, 'query'> | Pick<PoolClient, 'query'>;
+/** Query targets accepted by every persistence adapter, including embedded PGlite. */
+export type PostgresQueryable = Pick<ServerDatabaseSession, 'query'>;
 export type PostgresTransactionClient = PoolClient;
 
 /** Query-only adapters and PoolClients must not be mistaken for a Pool. */

@@ -21,6 +21,13 @@ export interface ServerDatabaseSession {
     values?: readonly unknown[],
     driverOptions?: unknown,
   ): Promise<ServerQueryResult<Row>>;
+
+  /**
+   * Dialect factory owned by the adapter. Transaction sessions use
+   * this to keep Drizzle on the same connection instead of re-discovering a
+   * driver from its shape.
+   */
+  readonly drizzle: () => unknown;
 }
 
 export interface ServerTransactionOptions {
@@ -37,6 +44,9 @@ export interface ServerTransactionOptions {
  */
 export interface ServerDatabase extends ServerDatabaseSession {
   readonly engine: ServerDatabaseEngine;
+
+  /** Select the matching Drizzle dialect for this persistence adapter. */
+  readonly drizzle: () => unknown;
 
   transaction<T>(
     options: ServerTransactionOptions,

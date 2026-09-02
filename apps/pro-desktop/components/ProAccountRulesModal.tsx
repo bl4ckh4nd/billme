@@ -291,7 +291,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
 
         <div className="border-t border-gray-200 p-6 flex justify-end">
           <Button size="sm" variant="secondary" onClick={onClose}>
-            Schliessen
+            Schließen
           </Button>
         </div>
       </div>

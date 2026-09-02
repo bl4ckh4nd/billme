@@ -14,6 +14,7 @@ type HeaderSearchResult = {
   subtitle: string;
   badge: 'Rechnung' | 'Angebot' | 'Kunde' | 'Projekt' | 'Artikel';
   to: string;
+  search?: Record<string, string>;
   score: number;
 };
 
@@ -139,7 +140,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
           title: inv.number,
           subtitle: inv.client || 'Ohne Kunde',
           badge: 'Rechnung',
-          to: `/documents?kind=invoice&id=${encodeURIComponent(inv.id)}`,
+          to: '/documents',
+          search: { kind: 'invoice', id: inv.id },
           score,
         });
       }
@@ -152,7 +154,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
           title: offer.number,
           subtitle: offer.client || 'Ohne Kunde',
           badge: 'Angebot',
-          to: `/documents?kind=offer&id=${encodeURIComponent(offer.id)}`,
+          to: '/documents',
+          search: { kind: 'offer', id: offer.id },
           score,
         });
       }
@@ -165,7 +168,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
           title: client.company,
           subtitle: client.customerNumber || client.contactPerson || client.email || '',
           badge: 'Kunde',
-          to: `/clients?id=${encodeURIComponent(client.id)}`,
+          to: '/clients',
+          search: { id: client.id },
           score,
         });
       }
@@ -191,7 +195,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
           title: article.title,
           subtitle: article.sku || article.category || 'Artikel',
           badge: 'Artikel',
-          to: `/articles?query=${encodeURIComponent(article.sku || article.title)}`,
+          to: '/articles',
+          search: { query: article.sku || article.title },
           score,
         });
       }
@@ -215,7 +220,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
     setSearchOpen(false);
     setSearchTerm('');
     setSearchHighlightIndex(-1);
-    navigate({ to: result.to });
+    navigate({ to: result.to, search: result.search });
   };
 
 

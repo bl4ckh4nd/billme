@@ -5,7 +5,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
 } from 'lucide-react';
-import { getQueueCounts, getStatusPresentation, InboxQueueKey, txMatchesQueue } from '../domain/selectors';
+import { bookingActionLabels, getQueueCounts, getStatusPresentation, InboxQueueKey, txMatchesQueue } from '../domain/selectors';
 import { normalizeTaxCaseKey, TAX_CASE_OPTIONS, toLegacyTaxCode } from '../domain/taxCases';
 import { getAllowedActions } from '../domain/workflow';
 import { mockAccounts } from '../mocks/accounts';
@@ -14,15 +14,17 @@ import {
   dispatchBookingAction,
   getBookingDraftByTransactionId,
   saveDraft,
+  type ProAccountingDataAdapter,
 } from '../services/mockBookingStore';
 import AccountCombobox from './AccountCombobox';
 import { getConfiguredBankAccountNumber } from './ReconciliationWorkbench';
-import { Account, BookingAction, BookingDraft, Transaction, UserRole } from '../types';
+import { Account, BookingAction, BookingDraft, LinkedInvoiceSummary, OpenRouterVlmConfig, Transaction, TransactionDocumentAnalysis, UserRole } from '../types';
 import InboxQueueTabs from './InboxQueueTabs';
 import IssueBadges from './IssueBadges';
 
 interface InboxViewProps {
   role: UserRole;
+  dataAdapter?: ProAccountingDataAdapter;
   accounts?: Account[];
   bankAccountNumber?: string;
   bankAccountNumberByTransactionId?: Record<string, string>;
@@ -37,20 +39,12 @@ function formatCurrency(amount: number, currency: string) {
 }
 
 function nextActionLabel(action: BookingAction | undefined) {
-  switch (action) {
-    case 'approve':
-      return 'Freigeben';
-    case 'post':
-      return 'Buchen';
-    case 'submit_for_review':
-      return 'Einreichen';
-    default:
-      return 'Buchen';
-  }
+  return action ? bookingActionLabels[action] : bookingActionLabels.post;
 }
 
 export default function InboxView({
   role,
+  dataAdapter,
   accounts,
   bankAccountNumber: configuredBankAccountNumber,
   bankAccountNumberByTransactionId,
@@ -68,6 +62,13 @@ export default function InboxView({
   const [bookingTextEdits, setBookingTextEdits] = useState<Record<string, string>>({});
   const [notesEdits, setNotesEdits] = useState<Record<string, string>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [linkedInvoice, setLinkedInvoice] = useState<LinkedInvoiceSummary | null>(null);
+  const [vlmConfig, setVlmConfig] = useState<OpenRouterVlmConfig | null>(null);
+  const [vlmModel, setVlmModel] = useState('');
+  const [vlmDocument, setVlmDocument] = useState<{ mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; fileName?: string } | null>(null);
+  const [vlmAnalysis, setVlmAnalysis] = useState<TransactionDocumentAnalysis | null>(null);
+  const [vlmBusy, setVlmBusy] = useState(false);
+  const [vlmError, setVlmError] = useState<string | null>(null);
 
   const permissionCtx = permissionContextForRole(role);
   const canMutate = permissionCtx.canMutate;
@@ -101,6 +102,34 @@ export default function InboxView({
     if (!forcedPreviewTransactionId) return;
     setPreviewId(forcedPreviewTransactionId);
   }, [forcedPreviewTransactionId]);
+
+  useEffect(() => {
+    setLinkedInvoice(null);
+    setVlmAnalysis(null);
+    setVlmDocument(null);
+    setVlmError(null);
+    let cancelled = false;
+    const selectedTransaction = previewTx;
+    if (!selectedTransaction || !dataAdapter?.getLinkedInvoice) return () => { cancelled = true; };
+    void Promise.resolve(dataAdapter.getLinkedInvoice(selectedTransaction.id)).then((invoice) => {
+      if (!cancelled) setLinkedInvoice(invoice);
+    }).catch((error: unknown) => {
+      if (!cancelled) setVlmError(error instanceof Error ? error.message : 'Verknüpfte Rechnung konnte nicht geladen werden.');
+    });
+    return () => { cancelled = true; };
+  }, [dataAdapter, previewTx?.id]);
+
+  useEffect(() => {
+    if (!dataAdapter?.getOpenRouterVlmConfig) return;
+    let cancelled = false;
+    void dataAdapter.getOpenRouterVlmConfig().then((config) => {
+      if (!cancelled) {
+        setVlmConfig(config);
+        setVlmModel(config.model);
+      }
+    }).catch(() => { if (!cancelled) setVlmConfig(null); });
+    return () => { cancelled = true; };
+  }, [dataAdapter]);
 
   const toggleRowSelection = (txId: string) => {
     setSelectedIds((prev) => (prev.includes(txId) ? prev.filter((id) => id !== txId) : [...prev, txId]));
@@ -297,6 +326,99 @@ export default function InboxView({
     await saveInboxDraft({ ...draft, bookingText: edited });
   };
 
+  const readVlmDocument = async (file: File) => {
+    const mimeType = file.type as 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp';
+    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
+      setVlmError('Bitte wählen Sie eine PDF-, JPEG-, PNG- oder WebP-Datei.');
+      return;
+    }
+    if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
+      setVlmError('Das Dokument darf höchstens 10 MiB groß sein.');
+      return;
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    }
+    setVlmDocument({ mimeType, data: btoa(binary), fileName: file.name });
+    setVlmAnalysis(null);
+    setVlmError(null);
+  };
+
+  const analyzePreviewDocument = async () => {
+    if (!previewTx || !vlmDocument || !dataAdapter?.analyzeTransactionDocument) return;
+    setVlmBusy(true);
+    setVlmError(null);
+    try {
+      const result = await dataAdapter.analyzeTransactionDocument({
+        model: vlmModel || undefined,
+        transaction: {
+          id: previewTx.id,
+          date: previewTx.date,
+          amount: previewTx.amount,
+          currency: previewTx.currency,
+          type: previewTx.amount >= 0 ? 'income' : 'expense',
+          counterparty: previewTx.payee,
+          purpose: previewTx.description,
+          linkedInvoiceId: linkedInvoice?.id,
+          suggestedAccountNumber: previewDraft?.lines.find((line) => line.accountId)?.accountId,
+        },
+        document: vlmDocument,
+      });
+      setVlmAnalysis(result);
+    } catch (error) {
+      setVlmError(error instanceof Error ? error.message : 'Dokument konnte nicht analysiert werden.');
+    } finally {
+      setVlmBusy(false);
+    }
+  };
+
+  const applyVlmToDraft = async () => {
+    if (!previewTx || !previewDraft || !vlmAnalysis || !previewAccountEditable || !canMutate) return;
+    const extraction = vlmAnalysis.extraction;
+    const nextLines = [...previewDraft.lines];
+    const bankAccountNumber = getConfiguredBankAccountNumber(
+      previewDraft,
+      accounts ?? [],
+      bankAccountNumberForTransaction(previewDraft.transactionId),
+      accounts === undefined,
+    );
+    const targetIndex = bankAccountNumber
+      ? nextLines.findIndex((line) => line.accountId !== bankAccountNumber)
+      : -1;
+    const lineIndex = targetIndex >= 0
+      ? targetIndex
+      : bankAccountNumber
+        ? nextLines.findIndex((line) => line.accountId === '')
+        : -1;
+    const account = extraction.suggestedAccountNumber
+      ? accountOptions.find((candidate) => candidate.number === extraction.suggestedAccountNumber)
+      : undefined;
+    const taxCase = extraction.suggestedTaxCase && TAX_CASE_OPTIONS.some((option) => option.key === extraction.suggestedTaxCase)
+      ? normalizeTaxCaseKey(extraction.suggestedTaxCase)
+      : undefined;
+    if (lineIndex >= 0) {
+      const current = nextLines[lineIndex];
+      nextLines[lineIndex] = {
+        ...current,
+        ...(account ? { accountId: account.number, accountName: account.name } : {}),
+        ...(taxCase ? { taxCaseKey: taxCase, taxCode: toLegacyTaxCode(taxCase) ?? current.taxCode } : {}),
+        evidenceType: 'openrouter_vlm',
+        evidenceReference: `model=${vlmAnalysis.metadata.model};documentSha256=${vlmAnalysis.metadata.documentSha256}`,
+      };
+    }
+    const bookingText = previewDraft.bookingText.trim() ? undefined : extraction.paymentReference ?? extraction.invoiceNumber;
+    const externalReference = previewDraft.externalReference?.trim() ? undefined : extraction.invoiceNumber;
+    await saveInboxDraft({
+      ...previewDraft,
+      ...(bookingText ? { bookingText } : {}),
+      ...(externalReference ? { externalReference } : {}),
+      lines: nextLines,
+    });
+    setBatchMessage('VLM-Vorschlag in den Entwurf übernommen; Validierung bleibt maßgeblich.');
+  };
+
   // Derive primary action for previewTx
   const previewAllowedActions = useMemo(() => {
     if (!previewDraft) return [];
@@ -374,7 +496,7 @@ export default function InboxView({
                   disabled={!canMutate}
                   className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
-                  Zur Prüfung
+                  {bookingActionLabels.submit_for_review}
                 </button>
                 <button
                   onClick={() => runBatchAction('approve')}
@@ -573,6 +695,72 @@ export default function InboxView({
                   )}
                 </div>
               </div>
+
+              {/* LINKED EVIDENCE + CURRENT JOURNAL */}
+              <div className="space-y-3">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted mb-2">Verknüpfte Rechnung</div>
+                  {linkedInvoice ? (
+                    <div className="rounded-xl border border-border bg-surface-muted p-3 text-sm">
+                      <div className="flex items-center justify-between gap-2 font-bold text-foreground">
+                        <span>{linkedInvoice.number}</span>
+                        <span>{formatCurrency(linkedInvoice.amount, previewTx.currency)}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-muted">{linkedInvoice.client} · {new Date(linkedInvoice.date).toLocaleDateString('de-DE')} · {linkedInvoice.status}</div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-border p-3 text-xs text-muted">Keine Rechnung verknüpft.</div>
+                  )}
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted mb-2">Aktuelle Buchungszeilen</div>
+                  <div className="rounded-xl border border-border divide-y divide-border-subtle">
+                    {previewDraft.lines.map((line) => (
+                      <div key={line.id} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                        <span className="min-w-0 truncate text-foreground">{line.accountId} · {line.accountName}</span>
+                        <span className="shrink-0 font-semibold text-foreground">{line.type} {formatCurrency(Number(line.amount), previewTx.currency)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* VLM DOCUMENT EVIDENCE */}
+              {dataAdapter?.analyzeTransactionDocument ? (
+                <div className="space-y-3 rounded-2xl border border-border bg-surface-muted/50 p-3">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-muted">Beleg mit VLM prüfen</div>
+                    <p className="mt-1 text-xs text-muted">OpenRouter erstellt nur einen Vorschlag. Buchen und Validieren bleiben deterministisch.</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex h-9 cursor-pointer items-center rounded-full border border-border bg-surface px-3 text-xs font-bold text-foreground hover:bg-surface-muted">
+                      Beleg auswählen
+                      <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readVlmDocument(file); }} />
+                    </label>
+                    {vlmDocument ? <span className="max-w-full truncate text-xs text-muted">{vlmDocument.fileName}</span> : null}
+                  </div>
+                  {vlmConfig?.configured ? (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-bold text-muted" htmlFor="pro-vlm-model">Modell</label>
+                      <select id="pro-vlm-model" value={vlmModel} onChange={(event) => setVlmModel(event.target.value)} className="h-9 w-full rounded-xl border border-border bg-surface px-2 text-xs text-foreground">
+                        {vlmConfig.models.map((model) => <option key={model} value={model}>{model}</option>)}
+                      </select>
+                    </div>
+                  ) : <p className="text-xs text-muted">OpenRouter ist auf dieser Verbindung nicht konfiguriert.</p>}
+                  <button type="button" onClick={() => void analyzePreviewDocument()} disabled={!vlmConfig?.configured || !vlmDocument || vlmBusy} className="h-9 rounded-full bg-dark-base px-3 text-xs font-bold text-background transition-colors hover:bg-dark-2 disabled:cursor-not-allowed disabled:opacity-40" aria-busy={vlmBusy}>
+                    {vlmBusy ? 'Prüfung läuft…' : 'Analysieren'}
+                  </button>
+                  {vlmError ? <p className="text-xs text-error" role="alert">{vlmError}</p> : null}
+                  {vlmAnalysis ? (
+                    <div className="space-y-2 rounded-xl border border-border bg-surface p-3 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2 font-bold text-foreground"><span>{vlmAnalysis.extraction.documentType} · {vlmAnalysis.extraction.invoiceNumber ?? 'ohne Nummer'}</span><span>{vlmAnalysis.metadata.model}</span></div>
+                      <div className="grid grid-cols-2 gap-1 text-muted"><span>Betrag: {vlmAnalysis.deterministicChecks.amountMatches ? '✓ passend' : '⚠ prüfen'}</span><span>Währung: {vlmAnalysis.deterministicChecks.currencyMatches ? '✓ passend' : '⚠ prüfen'}</span><span>Provider: {vlmAnalysis.metadata.provider ?? '—'}</span><span>Evidence: {vlmAnalysis.extraction.evidence.length}</span></div>
+                      {vlmAnalysis.extraction.warnings.length > 0 ? <p className="text-warning">{vlmAnalysis.extraction.warnings.join(' ')}</p> : null}
+                      {previewAccountEditable && canMutate ? <button type="button" onClick={() => void applyVlmToDraft()} className="h-8 rounded-full border border-border px-3 text-xs font-bold text-foreground hover:bg-surface-muted">Auf Entwurf anwenden</button> : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               {/* SCHNELLBUCHUNG */}
               <div>

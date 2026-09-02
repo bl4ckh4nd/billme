@@ -234,7 +234,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
       shippingAddressJson: shippingAddress ?? previous.shippingAddressJson,
       taxMeta: {
         ...previous.taxMeta,
-        buyerCountryCode: normalizeCountry(billingAddress?.country),
+        buyerCountryCode: normalizeCountry(billingAddress?.country) || undefined,
         buyerType: client.taxProfile?.type ?? previous.taxMeta?.buyerType ?? 'business',
         buyerVatId: client.taxProfile?.vatId ?? previous.taxMeta?.buyerVatId,
         vatIdValidation: client.taxProfile?.vatIdValidation,

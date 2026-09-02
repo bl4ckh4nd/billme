@@ -5,8 +5,12 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DocumentEditor } from '@billme/desktop-designer/document-editor';
 import { INITIAL_INVOICE_TEMPLATE } from '@billme/desktop-core/constants';
-import { MOCK_SETTINGS } from '@billme/desktop-services/mockData';
-import type { DocumentDraft } from '@billme/desktop-designer/document-editor';
+import { DEFAULT_SETTINGS, MOCK_SETTINGS } from '@billme/desktop-services/mockData';
+import { appSettingsSchema as liteAppSettingsSchema } from '@billme/desktop-contracts/schemas';
+import { appSettingsSchema as proAppSettingsSchema } from '@billme/desktop-contracts-pro/schemas';
+import { invoiceSchema } from '@billme/server-core';
+import { shouldShowBusinessOnboarding } from '@billme/ui';
+import type { DocumentDraft, ClientLike } from '@billme/desktop-designer/document-editor';
 
 const documentFixture = (overrides: Partial<DocumentDraft> = {}): DocumentDraft => ({
   id: 'invoice-1',
@@ -22,6 +26,7 @@ const documentFixture = (overrides: Partial<DocumentDraft> = {}): DocumentDraft 
 
 type EditorOptions = {
   settings?: typeof MOCK_SETTINGS;
+  clients?: ClientLike[];
   onValidateVatId?: (args: { countryCode: string; vatNumber: string }) => Promise<{ status: 'valid' | 'invalid' | 'unavailable'; normalizedVatId: string; checkedAt: string }>;
 };
 
@@ -30,7 +35,7 @@ const editor = (document = documentFixture(), onSave = vi.fn(), templateType: 'i
     document={document}
     templateType={templateType}
     mode="edit"
-    clients={[{
+    clients={options.clients ?? [{
       id: 'client-1',
       company: 'Nord GmbH',
       customerNumber: 'KD-001',
@@ -61,6 +66,50 @@ const renderEditor = (document = documentFixture(), onSave = vi.fn(), templateTy
 );
 
 describe('document-first invoice editor', () => {
+  it('keeps the neutral default valid for both settings contracts and opens onboarding', () => {
+    expect(liteAppSettingsSchema.parse(DEFAULT_SETTINGS).company.name).toBe('');
+    expect(proAppSettingsSchema.parse(DEFAULT_SETTINGS).company.name).toBe('');
+    expect(shouldShowBusinessOnboarding(DEFAULT_SETTINGS)).toBe(true);
+  });
+
+  it('clears a stale buyer country when selecting a customer without an address', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const clients: ClientLike[] = [
+      {
+        id: 'client-1',
+        company: 'Nord GmbH',
+        customerNumber: 'KD-001',
+        emails: [{ email: 'billing@nord.example' }],
+        addresses: [{ company: 'Nord GmbH', street: 'Hafenstraße 4', zip: '20095', city: 'Hamburg', country: 'DE', isDefaultBilling: true, isDefaultShipping: true }],
+      },
+      { id: 'client-no-country', company: 'Ohne Land GmbH', customerNumber: 'KD-002', email: 'billing@ohne-land.example' },
+    ];
+    renderEditor(documentFixture({
+      client: 'Nord GmbH',
+      clientId: 'client-1',
+      clientEmail: 'billing@nord.example',
+      clientAddress: 'Hafenstraße 4\n20095 Hamburg\nDE',
+      billingAddressJson: { company: 'Nord GmbH', street: 'Hafenstraße 4', zip: '20095', city: 'Hamburg', country: 'DE' },
+      taxMeta: { buyerCountryCode: 'DE' },
+      status: 'draft',
+      dunningLevel: 0,
+      payments: [],
+    }), onSave, 'invoice', { clients });
+
+    const customer = screen.getByRole('combobox', { name: 'Kunde auswählen' });
+    await user.click(customer);
+    await user.clear(customer);
+    await user.type(customer, 'Ohne Land');
+    await user.click(await screen.findByRole('option', { name: /Ohne Land GmbH/ }));
+    await user.click(screen.getByRole('button', { name: 'Speichern' }));
+
+    expect(onSave).toHaveBeenCalledOnce();
+    const saved = onSave.mock.calls[0]![0];
+    const parsed = invoiceSchema.parse({ ...saved, kind: 'invoice', tenantId: 'tenant-1' });
+    expect(parsed.taxMeta?.buyerCountryCode).toBeUndefined();
+  });
+
   it('searches customer email/address fields and keeps the selected address as a snapshot', async () => {
     const user = userEvent.setup();
     renderEditor();
@@ -211,6 +260,10 @@ describe('document-first invoice editor', () => {
     }), onSave);
 
     await user.click(screen.getByRole('button', { name: 'EU-Leistung Reverse Charge' }));
+    await user.type(screen.getByRole('spinbutton', { name: 'EU-Steuersatz im Bestimmungsland' }), '20');
+    await user.type(screen.getByRole('textbox', { name: 'DATEV Nachweistyp' }), 'USt-IdNr.-Prüfung');
+    await user.type(screen.getByRole('textbox', { name: 'DATEV Nachweisreferenz' }), 'ATU12345678');
+    await user.type(screen.getByRole('textbox', { name: 'DATEV Sachverhalt L+L' }), '13');
     await user.click(screen.getByRole('button', { name: 'Speichern' }));
 
     expect(onSave).toHaveBeenCalledOnce();

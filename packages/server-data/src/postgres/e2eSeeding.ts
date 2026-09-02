@@ -528,6 +528,15 @@ export const buildServerModeProTenantSeed = (options: ServerModeSeedOptions): Se
         createdAt: now,
         updatedAt: now,
       },
+      {
+        id: seedId(namespace, 'ledger', '1576'),
+        chart: 'SKR03',
+        accountNumber: '1576',
+        name: 'Vorsteuer 19% USt',
+        source: 'server-mode-e2e',
+        createdAt: now,
+        updatedAt: now,
+      },
     ],
     taxCases: [
       {

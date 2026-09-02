@@ -8,7 +8,7 @@
 [![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue.svg)](LICENSE)
 
 Lokale Rechnungsstellung und Buchhaltung für deutsche Kleinunternehmen — als Electron-Desktop-App mit
-SQLite, optional im selbst gehosteten Servermodus mit Postgres und mit einem öffentlichen Portal zum
+eingebettetem PGlite, optional im selbst gehosteten Servermodus mit Postgres und mit einem öffentlichen Portal zum
 Teilen von Angeboten und Rechnungen mit Kunden. Mit Liebe in Deutschland entwickelt.
 
 Probiere Billme ohne Installation aus: **[demo.getbillme.com](https://demo.getbillme.com/)**
@@ -22,7 +22,7 @@ Probiere Billme ohne Installation aus: **[demo.getbillme.com](https://demo.getbi
 ## Was ist Billme
 
 Billme speichert Geschäftsdaten auf dem eigenen Rechner. Die Desktop-App schreibt in eine lokale
-SQLite-Datei — kein Konto, keine Cloud und kein Abonnementserver, der Rechnungen abschalten kann.
+eingebettete PGlite-Datenbank — kein Konto, keine Cloud und kein Abonnementserver, der Rechnungen abschalten kann.
 Sind mehrere Benutzer oder Browserzugriff erforderlich, lässt sich dasselbe Produkt als selbst
 gehosteter Servermodus-Stack mit Docker betreiben.
 
@@ -42,7 +42,7 @@ Build-Zeit.
 |---|---|---|
 | Desktop-App | `apps/desktop` (`com.billme.desktop`) | `apps/pro-desktop` (`com.billme.pro`) |
 | Browser-Shell (Servermodus) | `apps/web` — Port 4175 | `apps/web-pro` — Port 4176 |
-| Lokale Datenbank | `billme.sqlite` | `billme-pro-v2.sqlite` |
+| Lokale Datenbank | `billme-pglite/` | `billme-pro-pglite/` |
 | Schwerpunkt | Rechnungen, Angebote, Anlage EÜR | Doppelte Buchhaltung, SKR, DATEV |
 | Buchhaltungsansichten | — | Belegeingang, Buchungseditor, Abstimmung, Auswertungen |
 
@@ -54,7 +54,7 @@ für doppelte Buchhaltung.
 
 | Modus | Beschreibung | Speicherort der Daten |
 |---|---|---|
-| **Desktop** | Electron-App, ein Unternehmen pro Installation | Lokales SQLite |
+| **Desktop** | Electron-App, ein Unternehmen pro Installation | Eingebettetes PGlite |
 | **Servermodus** | Docker-Stack: Postgres + API + Worker + zwei Browser-Shells, mehrere Benutzer mit Rollen | Postgres |
 | **Demo** | Die echte Desktop-Oberfläche im Browser mit Mock-Daten | Nirgends — im Arbeitsspeicher, pro Sitzung |
 | **Angebotsportal** | Öffentlicher Hono-Dienst für kundenorientierte Angebots-/Rechnungslinks | Eigener Snapshot-Speicher |
@@ -201,6 +201,7 @@ Wichtige Variablen in `.env.server-mode` — die vollständige Liste steht in `.
 | `BILLME_POSTGRES_PASSWORD` | `change-me` | Datenbankpasswort |
 | `BILLME_SESSION_SECRET` | — | HMAC-Schlüssel für Sitzungstoken |
 | `BILLME_PUBLIC_API_URL` | `http://localhost:3100` | API-URL, die von den Browsern aufgerufen wird |
+| `OPENROUTER_API_KEY` / `OPENROUTER_VLM_MODEL(S)` | — / `google/gemini-3.7-flash` | Optionales Pro-VLM für Beleg-Evidence; der API-Key bleibt serverseitig, Modell-IDs sind freigeschaltet |
 | `WORKER_*_INTERVAL_MS` | siehe unten | Jobintervalle |
 | `SMTP_PASSWORD` / `RESEND_API_KEY` | — | Zugangsdaten für ausgehende E-Mails |
 
@@ -213,6 +214,11 @@ Drei wichtige Hinweise vor dem Deployment:
 3. **Postgres wird standardmäßig auf dem Host veröffentlicht.** Entferne die Portfreigabe bei jedem
    internetseitig erreichbaren Betrieb. Der Stack verwendet unverschlüsseltes HTTP und enthält weder
    Reverse Proxy noch TLS-Terminierung — schalte selbst einen davor.
+
+Die Pro-Buchungs-Inbox kann PDF/JPEG/PNG/WebP-Belege über OpenRouter prüfen, wenn
+`OPENROUTER_API_KEY` gesetzt ist. `OPENROUTER_VLM_MODEL` wählt das Standardmodell,
+`OPENROUTER_VLM_MODELS` ist eine kommaseparierte Allowlist. Die Analyse erzeugt nur prüfbare
+Evidence und bucht niemals automatisch.
 
 ### Worker-Jobs
 
@@ -345,8 +351,8 @@ dem Klonen sind sie daher nicht vorhanden.
 
 | Pfad | Beschreibung |
 |---|---|
-| `apps/desktop` | Lite Electron + React Desktop-App; verantwortet Electron main/preload, SQLite-Verbindung und Lite-Produktverdrahtung |
-| `apps/pro-desktop` | Pro Electron + React Desktop-App; ergänzt Buchhaltungsoberfläche, Engine, Pro-Verträge und Pro-Schema |
+| `apps/desktop` | Lite Electron + React Desktop-App; verantwortet Electron main/preload, eingebetteten PGlite-Start und Lite-Produktverdrahtung |
+| `apps/pro-desktop` | Pro Electron + React Desktop-App; ergänzt Buchhaltungsoberfläche, Engine, Pro-Verträge und eingebetteten PGlite-Start |
 | `apps/web` | Lite-Browser-Shell für den Servermodus — bindet den Lite-Desktop-Renderer über einen HTTP-Adapter ein |
 | `apps/web-pro` | Pro-Browser-Shell für den Servermodus — eigenständige Oberfläche mit eingebettetem Buchhaltungsarbeitsbereich |
 | `apps/server-api` | Fastify-API des Servermodus mit Postgres |
@@ -362,7 +368,7 @@ dem Klonen sind sie daher nicht vorhanden.
 | `@billme/ui` | Grundlegende Designsystem-Komponenten und Quelle der Design-Token (`packages/ui/styles.css`) |
 | `@billme/desktop-contracts` / `-pro` | Typisierte IPC-Verträge und Zod-Schemas für die Lite- und Pro-Grenzen zwischen Renderer und Main-Prozess |
 | `@billme/desktop-core` | Gemeinsame Desktop-Laufzeithelfer — IPC-Fehlerbehandlung, Protokollierung/Wiederholungen, E-Mail-Dienst, Benachrichtigungsstatus |
-| `@billme/desktop-data` | Gemeinsame SQLite-/Drizzle-Repositories, Validierungsschemas, Sicherung, Audit, EÜR- und Mahnwesen-Schnittstellen |
+| `@billme/desktop-data` | Legacy-SQLite-Kompatibilitäts-Repositories und Tests sowie gemeinsame Validierungs-, Sicherungs-, Audit-, EÜR- und Mahnwesen-Schnittstellen |
 | `@billme/desktop-designer` | Gemeinsamer visueller Dokumentdesigner — Zeichenfläche, Elementleiste, Inspektor, Ebenen sowie Zoom-/Schwenk-/Verlaufs-Hooks |
 | `@billme/desktop-renderer` | Bindet die Desktop-React-App in beliebige Hosts ein und ermöglicht dadurch Demo und Web-Shells die Wiederverwendung der Electron-Oberfläche |
 | `@billme/desktop-services` | Portal-Client, CSV-Import, EÜR-Katalog und Vorschlagshelfer |
@@ -373,6 +379,7 @@ dem Klonen sind sie daher nicht vorhanden.
 | `@billme/finance-intelligence` | Lokaler Naive-Bayes-Klassifikator und deutsche Schlüsselwortheuristiken für Kontenvorschläge |
 | `@billme/server-core` | Produkt-/Laufzeitschemas, typisierter API-Client, Domänentypen, Steuer-/E-Rechnungslogik, gemeinsame Dienste |
 | `@billme/server-data` | Postgres-Schema, Migrationen, Repositories, Seed-Daten und SQLite-Importwerkzeuge |
+| `@billme/pglite-migration-cli` | Eigenständiges `billme-pglite-migrate`-Programm für die einmalige Lite-/Pro-Migration von SQLite nach PGlite |
 | `@billme/server-cli` | Typisierter HTTP-Client für den Servermodus sowie das Programm `billme` |
 
 ---

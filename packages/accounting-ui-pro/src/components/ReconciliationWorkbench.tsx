@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowRightLeft, CheckCircle2, GitBranch, Play, Wand2 } from 'lucide-react';
-import { getStatusPresentation } from '../domain/selectors';
+import { bookingActionLabels, getStatusPresentation } from '../domain/selectors';
 import { normalizeTaxCaseKey, toLegacyTaxCode } from '../domain/taxCases';
 import { getAllowedActions } from '../domain/workflow';
 import { mockAccounts } from '../mocks/accounts';
@@ -86,17 +86,7 @@ function getPrimaryAction(actions: BookingAction[]): BookingAction | null {
 }
 
 function actionLabel(action: BookingAction): string {
-  const labels: Record<BookingAction, string> = {
-    save_draft: 'Entwurf speichern',
-    submit_for_review: 'Zur Prüfung einreichen',
-    approve: 'Freigeben',
-    reject: 'Zurückweisen',
-    post: 'Buchen',
-    reverse: 'Stornieren',
-    create_correction: 'Korrektur anlegen',
-    request_receipt: 'Beleg anfordern',
-  };
-  return labels[action];
+  return bookingActionLabels[action];
 }
 
 export default function ReconciliationWorkbench({

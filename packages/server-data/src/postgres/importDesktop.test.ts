@@ -55,6 +55,7 @@ const postgresMigrationUrls = [
   new URL('../../drizzle/0021_server_data_eur_facts.sql', import.meta.url),
   new URL('../../drizzle/0022_server_data_accounting_source_runs.sql', import.meta.url),
   new URL('../../drizzle/0023_server_data_import_source_run_rejected.sql', import.meta.url),
+  new URL('../../drizzle/0024_server_data_portal_publications.sql', import.meta.url),
 ];
 // The EÜR snapshot is transformed from the desktop report_snapshots row into
 // its immutable server table; the other three facts are imported directly.
@@ -336,14 +337,15 @@ test('tenant-scoped postgres tables stay covered by import overwrite guards', as
 
 test('Drizzle migration journal contains incremental migrations', async () => {
   const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ idx: number; tag: string }> };
-  assert.deepEqual(journal.entries.slice(-3), [
+  assert.deepEqual(journal.entries.slice(-4), [
     { idx: 21, version: '7', when: 1786538400009, tag: '0021_server_data_eur_facts', breakpoints: false },
     { idx: 22, version: '7', when: 1786538400010, tag: '0022_server_data_accounting_source_runs', breakpoints: false },
     { idx: 23, version: '7', when: 1786538400011, tag: '0023_server_data_import_source_run_rejected', breakpoints: false },
+    { idx: 24, version: '7', when: 1786538400012, tag: '0024_server_data_portal_publications', breakpoints: false },
   ]);
   assert.deepEqual(journal.entries.map((entry) => entry.tag), [
     '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
-    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog', '0018_server_data_canonical_catalog', '0019_server_data_audit_tenant_hash', '0021_server_data_eur_facts', '0022_server_data_accounting_source_runs', '0023_server_data_import_source_run_rejected',
+    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog', '0018_server_data_canonical_catalog', '0019_server_data_audit_tenant_hash', '0021_server_data_eur_facts', '0022_server_data_accounting_source_runs', '0023_server_data_import_source_run_rejected', '0024_server_data_portal_publications',
   ]);
 });
 

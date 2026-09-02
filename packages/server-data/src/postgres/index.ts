@@ -1,4 +1,5 @@
 export * from './audit.js';
+export * from './auditExport.js';
 export * from './e2eSeeding.js';
 export * from './auth.js';
 export * from './billing.js';
@@ -16,3 +17,8 @@ export * from './eurReport.js';
 export * from './eurFacts.js';
 export * from './taxSubmission.js';
 export * from './accountingSourceRuns.js';
+export * from './projects.js';
+export * from './portalPublications.js';
+export * from './transactionImport.js';
+export * from './eurRules.js';
+export * from './recurring.js';

@@ -1,48 +1,48 @@
 import React from 'react';
 import { Button, Card } from '@billme/ui';
+import { getRendererApi } from '../runtime-api';
 
 type RecordMetadata = { id: string; kind: 'euer' | 'e_bilanz' | 'unternehmensregister'; periodStart: string; periodEnd: string; sourceHash: string; status: 'frozen' | 'approved' | 'queued' };
-type FilingResult = { status: string; outputPath?: string; issues: Array<{ code: string; message: string }> };
-type FilingApi = {
-  status: () => Promise<{ provider: { available: boolean; provider: string | null; version?: string; errorCode?: string }; certificates: Array<{ id: string; fingerprint: string; expiresAt: string; subject?: string }> }>;
-  records: () => Promise<RecordMetadata[]>;
-  validate: (input: { record: RecordMetadata }) => Promise<FilingResult>;
-  export: (input: { record: RecordMetadata }) => Promise<FilingResult>;
-  submit: (input: { record: RecordMetadata }) => Promise<FilingResult>;
-};
-const api = (): FilingApi | undefined => (window as Window & { billmeApi?: { taxFiling?: FilingApi } }).billmeApi?.taxFiling;
 const kindLabel: Record<RecordMetadata['kind'], string> = { euer: 'EÜR 2025', e_bilanz: 'E-Bilanz (Taxonomie 6.9)', unternehmensregister: 'Unternehmensregister' };
+const unavailableMessage = 'Das Steuer-Filing-Center ist in dieser Umgebung nicht verfügbar.';
+const providerUnavailableMessage = 'In dieser Umgebung ist kein ELSTER-/Filing-Provider installiert. Validierung und Export sind nicht verfügbar.';
+const unavailableProviderLabel = (errorCode?: string): string =>
+  errorCode && errorCode !== 'PROVIDER_UNAVAILABLE'
+    ? `${providerUnavailableMessage} Fehlercode: ${errorCode}`
+    : providerUnavailableMessage;
+const errorDetail = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 export const TaxFilingCenter: React.FC = () => {
-  const [provider, setProvider] = React.useState<string>('PROVIDER_UNAVAILABLE');
-  const [certificates, setCertificates] = React.useState<FilingApi['status'] extends () => Promise<infer T> ? T extends { certificates: infer C } ? C : never : never>([]);
+  const ipc = getRendererApi('pro');
+  const [provider, setProvider] = React.useState<string>(providerUnavailableMessage);
+  const [certificates, setCertificates] = React.useState<Awaited<ReturnType<typeof ipc.taxFiling.getStatus>>['certificates']>([]);
   const [records, setRecords] = React.useState<RecordMetadata[]>([]);
   const [selectedId, setSelectedId] = React.useState('');
   const [message, setMessage] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
-    const filing = api();
-    if (!filing) { setMessage('Filing-Center ist nur im Desktop-Hauptprozess verfügbar.'); return; }
+    const filing = ipc.taxFiling;
+    if (!filing) { setMessage(unavailableMessage); return; }
     try {
-      const [status, availableRecords] = await Promise.all([filing.status(), filing.records()]);
-      setProvider(status.provider.available ? `${status.provider.provider} ${status.provider.version ?? ''}` : status.provider.errorCode ?? 'PROVIDER_UNAVAILABLE');
+      const [status, availableRecords] = await Promise.all([filing.getStatus(), filing.listRecords()]);
+      setProvider(status.provider.available ? `${status.provider.provider} ${status.provider.version ?? ''}` : unavailableProviderLabel(status.provider.errorCode));
       setCertificates(status.certificates);
       setRecords(availableRecords);
       setSelectedId((current) => current && availableRecords.some((record) => record.id === current) ? current : availableRecords[0]?.id ?? '');
-    } catch (error) { setMessage(String(error)); }
-  }, []);
+    } catch (error) { setMessage(`Steuer-Filing-Center nicht verfügbar: ${errorDetail(error)}`); }
+  }, [ipc]);
   React.useEffect(() => { void refresh(); }, [refresh]);
 
   const selected = records.find((record) => record.id === selectedId);
   const run = async (operation: 'validate' | 'export') => {
-    const filing = api();
+    const filing = ipc.taxFiling;
     if (!filing || !selected) return;
     setBusy(true); setMessage(null);
     try {
       const result = operation === 'validate' ? await filing.validate({ record: selected }) : await filing.export({ record: selected });
       setMessage(`${result.status}${result.outputPath ? `: ${result.outputPath}` : ''}${result.issues.length ? ` (${result.issues.map((issue) => issue.message).join('; ')})` : ''}`);
-    } catch (error) { setMessage(String(error)); }
+    } catch (error) { setMessage(`Aktion fehlgeschlagen: ${errorDetail(error)}`); }
     finally { setBusy(false); }
   };
 

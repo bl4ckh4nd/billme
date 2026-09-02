@@ -21,6 +21,8 @@ const closeDatabase = async (database: PgliteServerDatabase, dataDir: string): P
 test('PGlite applies the canonical migrations and reports a current schema', async () => {
   const { database, dataDir } = await openDatabase();
   try {
+    assert.equal(database.engine, 'pglite');
+    assert.ok(database.drizzle());
     await assert.rejects(database.assertCurrent(), /schema is not initialized/i);
     await database.migrate();
     await database.assertCurrent();
@@ -30,7 +32,7 @@ test('PGlite applies the canonical migrations and reports a current schema', asy
     const result = await database.query<{ count: string }>(
       'SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations',
     );
-    assert.equal(Number(result.rows[0]?.count), 23);
+    assert.equal(Number(result.rows[0]?.count), 24);
   } finally {
     await closeDatabase(database, dataDir);
   }

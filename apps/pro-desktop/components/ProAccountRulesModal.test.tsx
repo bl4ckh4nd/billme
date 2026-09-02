@@ -62,7 +62,7 @@ describe('ProAccountRulesModal', () => {
     renderModal();
 
     expect(await screen.findByText(/Keine Regeln vorhanden/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /Schliessen/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Schließen/i }));
   });
 
   it('creates a new pro account suggestion rule with trimmed values', async () => {

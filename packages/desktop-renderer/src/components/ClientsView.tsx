@@ -12,7 +12,7 @@ import type { Client, ClientAddress, ClientEmail } from '@billme/desktop-core/ty
 import { useClientsQuery, useDeleteClientMutation, useUpsertClientMutation } from '../hooks/useClients';
 import { useInvoicesQuery } from '../hooks/useInvoices';
 import { useCreateDocumentFromClientMutation } from '../hooks/useDocuments';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useUiStore } from '../ui-store';
 import { v4 as uuidv4 } from 'uuid';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
@@ -32,7 +32,7 @@ export const ClientsView: React.FC = () => {
     const [isEditorOpen, setIsEditorOpen] = useState(false);
     const [draft, setDraft] = useState<Client | null>(null);
     const [editorErrors, setEditorErrors] = useState<string[]>([]);
-    const locationSearch = window.location.search;
+    const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
 
     const selectedClient = clients.find(c => c.id === selectedClientId);
 
@@ -53,8 +53,7 @@ export const ClientsView: React.FC = () => {
     });
 
     React.useEffect(() => {
-        const params = new URLSearchParams(locationSearch);
-        const deepLinkClientId = params.get('id');
+        const deepLinkClientId = typeof locationSearch.id === 'string' ? locationSearch.id : undefined;
         if (!deepLinkClientId) return;
         if (!clients.some((client) => client.id === deepLinkClientId)) return;
         setSelectedClientId(deepLinkClientId);
@@ -450,8 +449,7 @@ export const ClientsView: React.FC = () => {
                                     key={inv.id}
                                     type="button"
                                     onClick={() => {
-                                        const to = `/documents?kind=invoice&id=${encodeURIComponent(inv.id)}`;
-                                        navigate({ to });
+                                        navigate({ to: '/documents', search: { kind: 'invoice', id: inv.id } });
                                     }}
                                     className="group w-full text-left flex items-center justify-between p-4 rounded-2xl border border-gray-100 hover:border-black hover:bg-gray-50 transition-all cursor-pointer animate-enter"
                                     style={{ animationDelay: `${200 + idx * 50}ms` }}
@@ -1072,6 +1070,16 @@ export const ClientsView: React.FC = () => {
                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto pb-4">
                      {isLoading ? (
                        <SkeletonLoader variant="card" count={6} />
+                     ) : filteredClients.length === 0 ? (
+                       <div className="col-span-full flex flex-col items-center justify-center h-64 text-gray-400">
+                           <Briefcase size={48} className="mb-4 opacity-20" />
+                           <p className="font-bold text-gray-500">
+                               {searchTerm.trim() ? 'Keine Treffer für die aktuelle Suche' : 'Noch keine Kunden vorhanden'}
+                           </p>
+                           {!searchTerm.trim() && (
+                               <p className="text-sm mt-1">Klicke auf das + oben rechts, um einen Kunden zu erstellen.</p>
+                           )}
+                       </div>
                      ) : filteredClients.map((client, idx) => (
                          <div
                             key={client.id}
@@ -1116,6 +1124,16 @@ export const ClientsView: React.FC = () => {
 
                      {isLoading ? (
                        <SkeletonLoader variant="list" count={5} />
+                     ) : filteredClients.length === 0 ? (
+                       <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                           <Briefcase size={48} className="mb-4 opacity-20" />
+                           <p className="font-bold text-gray-500">
+                               {searchTerm.trim() ? 'Keine Treffer für die aktuelle Suche' : 'Noch keine Kunden vorhanden'}
+                           </p>
+                           {!searchTerm.trim() && (
+                               <p className="text-sm mt-1">Klicke auf das + oben rechts, um einen Kunden zu erstellen.</p>
+                           )}
+                       </div>
                      ) : filteredClients.map((client, idx) => (
                          <div
                             key={client.id}

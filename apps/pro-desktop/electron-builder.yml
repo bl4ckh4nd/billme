@@ -20,16 +20,13 @@ files:
   - dist/**
   - package.json
 extraResources:
-  - from: ../../doppelteBuchhaltung
-    to: doppelteBuchhaltung
-    filter:
-      - skr-kontenrahmen.sqlite
+  - from: ../../packages/server-data/drizzle
+    to: drizzle
 
 asar: true
 asarUnpack:
-  - node_modules/**/*.node
-  - node_modules/better-sqlite3/**
   - node_modules/keytar/**
+  - node_modules/@electric-sql/pglite/dist/**
 
 win:
   icon: build/icons/icon.ico

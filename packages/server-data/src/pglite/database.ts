@@ -5,6 +5,7 @@ import {
   type QueryOptions,
 } from '@electric-sql/pglite';
 import { assertDrizzleSchemaCurrent, runDrizzleMigrations } from '../postgres/migrations.js';
+import { createPgliteDrizzle } from '../postgres/drizzle.js';
 import type {
   ServerDatabase,
   ServerDatabaseSession,
@@ -27,10 +28,7 @@ type DumpTarCompression = 'none' | 'gzip' | 'auto';
 
 const createSession = (target: PgliteTransaction): ServerDatabaseSession => {
   const session = {
-    // Mark transaction sessions so Drizzle selects its PGlite dialect instead
-    // of treating the lightweight query surface as a node-postgres client.
-    engine: 'pglite' as const,
-    client: target,
+    drizzle: () => createPgliteDrizzle(target as PGlite),
     query: async <Row = Record<string, unknown>>(
       text: string,
       values?: readonly unknown[],
@@ -84,6 +82,13 @@ export class PgliteServerDatabase implements ServerDatabase {
       values ? [...values] : undefined,
       driverOptions as QueryOptions | undefined,
     ));
+  }
+
+  drizzle(): unknown {
+    const activeTransaction = this.transactionContext.getStore();
+    return activeTransaction
+      ? createSession(activeTransaction).drizzle()
+      : createPgliteDrizzle(this.client);
   }
 
   transaction<T>(

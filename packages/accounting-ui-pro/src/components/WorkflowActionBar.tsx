@@ -1,15 +1,5 @@
 import { BookingAction, BookingDraft, UiPermissionContext } from '../types';
-
-const actionLabels: Record<BookingAction, string> = {
-  save_draft: 'Entwurf speichern',
-  submit_for_review: 'Zur Prüfung geben',
-  approve: 'Freigeben',
-  reject: 'Ablehnen',
-  post: 'Buchen',
-  reverse: 'Stornieren',
-  create_correction: 'Korrekturbuchung',
-  request_receipt: 'Beleg anfordern',
-};
+import { bookingActionLabels } from '../domain/selectors';
 
 interface WorkflowActionBarProps {
   draft: BookingDraft;
@@ -42,7 +32,7 @@ export default function WorkflowActionBar({
             disabled={isBusy}
             className="px-4 py-2 rounded-full border border-border bg-surface text-foreground text-sm font-bold hover:bg-surface-muted disabled:opacity-50"
           >
-            {actionLabels[action]}
+            {bookingActionLabels[action]}
           </button>
         ))}
       <button
@@ -51,7 +41,7 @@ export default function WorkflowActionBar({
         disabled={isBusy}
         className="px-5 py-2 rounded-full bg-dark-base text-background text-sm font-bold hover:bg-dark-2 disabled:opacity-50"
       >
-        {isBusy ? 'Speichert...' : actionLabels[primary]}
+        {isBusy ? 'Speichert...' : bookingActionLabels[primary]}
       </button>
     </div>
   );

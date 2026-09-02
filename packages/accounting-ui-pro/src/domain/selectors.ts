@@ -1,4 +1,4 @@
-import { BookingWorkflowStatus, Transaction, TransactionFlag } from '../types';
+import { BookingAction, BookingWorkflowStatus, Transaction, TransactionFlag } from '../types';
 
 export type InboxQueueKey =
   | 'all'
@@ -19,6 +19,17 @@ export const inboxQueueLabels: Record<InboxQueueKey, string> = {
   errors: 'Fehler',
   missing_receipt: 'Ohne Beleg',
   duplicates: 'Dubletten',
+};
+
+export const bookingActionLabels: Record<BookingAction, string> = {
+  save_draft: 'Entwurf speichern',
+  submit_for_review: 'Zur Prüfung geben',
+  approve: 'Freigeben',
+  reject: 'Ablehnen',
+  post: 'Buchen',
+  reverse: 'Stornieren',
+  create_correction: 'Korrekturbuchung',
+  request_receipt: 'Beleg anfordern',
 };
 
 export function txMatchesQueue(tx: Transaction, queue: InboxQueueKey): boolean {

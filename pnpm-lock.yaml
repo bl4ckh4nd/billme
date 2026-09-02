@@ -105,21 +105,27 @@ importers:
       '@billme/desktop-utils':
         specifier: workspace:*
         version: link:../../packages/desktop-utils
+      '@billme/embedded-server-runtime':
+        specifier: workspace:*
+        version: link:../../packages/embedded-server-runtime
       '@billme/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
+      '@billme/server-data':
+        specifier: workspace:*
+        version: link:../../packages/server-data
       '@billme/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@electric-sql/pglite':
+        specifier: 0.5.5
+        version: 0.5.5
       '@tanstack/react-query':
         specifier: ^5.90.19
         version: 5.90.20(react@19.2.4)
       '@tanstack/react-router':
         specifier: ^1.153.1
         version: 1.159.4(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      better-sqlite3:
-        specifier: ^12.4.1
-        version: 12.6.2
       electron-updater:
         specifier: ^6.8.3
         version: 6.8.3
@@ -169,6 +175,9 @@ importers:
       '@testing-library/user-event':
         specifier: ^14.6.1
         version: 14.6.1(@testing-library/dom@10.4.1)
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
       '@types/node':
         specifier: ^22.19.7
         version: 22.19.10
@@ -190,6 +199,9 @@ importers:
       '@vitest/ui':
         specifier: ^4.0.18
         version: 4.0.18(vitest@4.0.18)
+      better-sqlite3:
+        specifier: ^12.4.1
+        version: 12.6.2
       drizzle-kit:
         specifier: ^0.31.4
         version: 0.31.9
@@ -327,24 +339,30 @@ importers:
       '@billme/desktop-utils':
         specifier: workspace:*
         version: link:../../packages/desktop-utils
+      '@billme/embedded-server-runtime':
+        specifier: workspace:*
+        version: link:../../packages/embedded-server-runtime
       '@billme/finance-intelligence':
         specifier: workspace:*
         version: link:../../packages/finance-intelligence
       '@billme/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
+      '@billme/server-data':
+        specifier: workspace:*
+        version: link:../../packages/server-data
       '@billme/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@electric-sql/pglite':
+        specifier: 0.5.5
+        version: 0.5.5
       '@tanstack/react-query':
         specifier: ^5.90.19
         version: 5.90.20(react@19.2.4)
       '@tanstack/react-router':
         specifier: ^1.153.1
         version: 1.159.4(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      better-sqlite3:
-        specifier: ^12.4.1
-        version: 12.6.2
       electron-updater:
         specifier: ^6.8.3
         version: 6.8.3
@@ -421,6 +439,9 @@ importers:
       '@vitest/ui':
         specifier: ^4.0.18
         version: 4.0.18(vitest@4.0.18)
+      better-sqlite3:
+        specifier: ^12.4.1
+        version: 12.6.2
       drizzle-kit:
         specifier: ^0.31.4
         version: 0.31.9
@@ -457,33 +478,15 @@ importers:
 
   apps/server-api:
     dependencies:
-      '@billme/accounting-engine':
-        specifier: workspace:*
-        version: link:../../packages/accounting-engine
-      '@billme/accounting-shared':
-        specifier: workspace:*
-        version: link:../../packages/accounting-shared
-      '@billme/desktop-contracts-pro':
-        specifier: workspace:*
-        version: link:../../packages/desktop-contracts-pro
       '@billme/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
       '@billme/server-data':
         specifier: workspace:*
         version: link:../../packages/server-data
-      '@fastify/cors':
-        specifier: ^11.1.0
-        version: 11.2.0
-      '@orpc/openapi':
-        specifier: 1.14.15
-        version: 1.14.15(fastify@5.8.5)(ws@8.19.0)
-      '@orpc/server':
-        specifier: 1.14.15
-        version: 1.14.15(fastify@5.8.5)(ws@8.19.0)
-      '@orpc/zod':
-        specifier: 1.14.15
-        version: 1.14.15(@orpc/contract@1.14.15)(@orpc/server@1.14.15(fastify@5.8.5)(ws@8.19.0))(fastify@5.8.5)(ws@8.19.0)(zod@3.25.76)
+      '@billme/server-runtime':
+        specifier: workspace:*
+        version: link:../../packages/server-runtime
       fastify:
         specifier: ^5.6.1
         version: 5.8.5
@@ -546,6 +549,9 @@ importers:
       '@billme/desktop-renderer':
         specifier: workspace:*
         version: link:../../packages/desktop-renderer
+      '@billme/desktop-services':
+        specifier: workspace:*
+        version: link:../../packages/desktop-services
       '@billme/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
@@ -592,6 +598,9 @@ importers:
       '@billme/desktop-contracts-pro':
         specifier: workspace:*
         version: link:../../packages/desktop-contracts-pro
+      '@billme/desktop-services':
+        specifier: workspace:*
+        version: link:../../packages/desktop-services
       '@billme/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core
@@ -928,6 +937,9 @@ importers:
       '@billme/desktop-core':
         specifier: workspace:*
         version: link:../desktop-core
+      '@billme/desktop-data':
+        specifier: workspace:*
+        version: link:../desktop-data
       '@billme/desktop-utils':
         specifier: workspace:*
         version: link:../desktop-utils
@@ -943,6 +955,19 @@ importers:
       papaparse:
         specifier: ^5.5.3
         version: 5.5.3
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^24.9.1
+        version: 24.12.2
+      tsx:
+        specifier: ^4.20.5
+        version: 4.21.0
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
 
   packages/desktop-state:
     dependencies:
@@ -987,6 +1012,25 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.13)
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@24.12.2)(@vitest/ui@4.0.18)(happy-dom@20.5.3)(jiti@2.6.1)(jsdom@28.0.0)(lightningcss@1.30.2)(tsx@4.21.0)
+
+  packages/embedded-server-runtime:
+    dependencies:
+      '@billme/server-data':
+        specifier: workspace:*
+        version: link:../server-data
+      '@billme/server-runtime':
+        specifier: workspace:*
+        version: link:../server-runtime
+    devDependencies:
+      '@types/node':
+        specifier: ^24.9.1
+        version: 24.12.2
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
       vitest:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@24.12.2)(@vitest/ui@4.0.18)(happy-dom@20.5.3)(jiti@2.6.1)(jsdom@28.0.0)(lightningcss@1.30.2)(tsx@4.21.0)
@@ -1107,6 +1151,58 @@ importers:
       drizzle-kit:
         specifier: ^0.31.4
         version: 0.31.9
+      tsx:
+        specifier: ^4.20.5
+        version: 4.21.0
+      typescript:
+        specifier: ~5.8.3
+        version: 5.8.3
+
+  packages/server-runtime:
+    dependencies:
+      '@billme/accounting-engine':
+        specifier: workspace:*
+        version: link:../accounting-engine
+      '@billme/accounting-shared':
+        specifier: workspace:*
+        version: link:../accounting-shared
+      '@billme/desktop-core':
+        specifier: workspace:*
+        version: link:../desktop-core
+      '@billme/desktop-contracts-pro':
+        specifier: workspace:*
+        version: link:../desktop-contracts-pro
+      '@billme/desktop-services':
+        specifier: workspace:*
+        version: link:../desktop-services
+      '@billme/server-core':
+        specifier: workspace:*
+        version: link:../server-core
+      '@billme/server-data':
+        specifier: workspace:*
+        version: link:../server-data
+      '@fastify/cors':
+        specifier: ^11.1.0
+        version: 11.2.0
+      '@orpc/openapi':
+        specifier: 1.14.15
+        version: 1.14.15(fastify@5.8.5)(ws@8.19.0)
+      '@orpc/server':
+        specifier: 1.14.15
+        version: 1.14.15(fastify@5.8.5)(ws@8.19.0)
+      '@orpc/zod':
+        specifier: 1.14.15
+        version: 1.14.15(@orpc/contract@1.14.15)(@orpc/server@1.14.15(fastify@5.8.5)(ws@8.19.0))(fastify@5.8.5)(ws@8.19.0)(zod@3.25.76)
+      fastify:
+        specifier: ^5.6.1
+        version: 5.8.5
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.7
+        version: 22.19.10
       tsx:
         specifier: ^4.20.5
         version: 4.21.0

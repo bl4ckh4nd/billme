@@ -135,6 +135,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
           {currentView === 'inbox' ? (
             <InboxView
               role={role}
+              dataAdapter={dataAdapter}
               accounts={accounts}
               bankAccountNumber={seed?.bankAccountNumber}
               bankAccountNumberByTransactionId={seed?.bankAccountNumberByTransactionId}

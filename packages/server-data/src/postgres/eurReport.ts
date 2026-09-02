@@ -47,6 +47,8 @@ export interface ServerEurCashItem {
   amountGross: number;
   amountNet: number;
   flowType: 'income' | 'expense';
+  accountId?: string;
+  linkedViaInvoice?: boolean;
   counterparty: string;
   purpose: string;
   vatWarning?: string;
@@ -84,6 +86,8 @@ type CashSource = {
   date: string;
   amountGross: number;
   flowType: 'income' | 'expense';
+  accountId?: string;
+  linkedViaInvoice?: boolean;
   counterparty: string;
   purpose: string;
   invoiceType?: 'outgoing_invoice' | 'incoming_invoice';
@@ -134,6 +138,7 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
         date: inYear.map((payment) => String(payment.date)).sort()[0] ?? String(invoice.date),
         amountGross,
         flowType: 'income',
+        linkedViaInvoice: false,
         counterparty: String(invoice.client ?? ''),
         purpose: `Rechnung ${String(invoice.number ?? invoice.id)}`,
         invoiceType: 'outgoing_invoice',
@@ -142,7 +147,7 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
     }
 
     const banks = await q<Record<string, unknown>>(db, `
-      SELECT id,date,amount,type,counterparty,purpose,source_transaction_id
+      SELECT id,account_id,date,amount,type,counterparty,purpose,source_transaction_id
       FROM bank_transactions
       WHERE tenant_id=$1 AND status='booked' AND linked_invoice_id IS NULL
         AND date >= $2 AND date <= $3
@@ -157,6 +162,8 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
         date: String(bank.date),
         amountGross: Math.abs(Number(bank.amount) || 0),
         flowType: bank.type === 'expense' ? 'expense' : 'income',
+        accountId: bank.account_id ? String(bank.account_id) : undefined,
+        linkedViaInvoice: false,
         counterparty: String(bank.counterparty ?? ''),
         purpose: String(bank.purpose ?? ''),
         classificationSourceIds: sourceTransactionId ? [sourceTransactionId] : undefined,
@@ -168,7 +175,7 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
   const representedBanks = new Set<string>();
   const payments = await q<Record<string, unknown>>(db, `
     SELECT p.id,p.payment_date,p.amount,p.party_type,p.source_type,p.source_id,
-           b.id AS bank_id,b.source_transaction_id,b.counterparty,b.purpose
+           b.id AS bank_id,b.account_id,b.source_transaction_id,b.counterparty,b.purpose
     FROM open_item_payments p
     LEFT JOIN bank_transactions b ON b.tenant_id=p.tenant_id AND b.id=p.source_id AND p.source_type='bank_transaction'
     WHERE p.tenant_id=$1 AND p.payment_date >= $2 AND p.payment_date <= $3
@@ -190,6 +197,8 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
       const invoiceType = sourceType === 'outgoing_invoice' || sourceType === 'incoming_invoice' ? sourceType : undefined;
       result.push({
         sourceType: 'transaction', sourceId: `payment:${payment.id}:allocation:${allocation.id}`, date: String(payment.payment_date), amountGross: gross,
+        accountId: payment.account_id ? String(payment.account_id) : undefined,
+        linkedViaInvoice: Boolean(invoiceType),
         flowType: allocation.party_type === 'creditor' ? 'expense' : 'income', counterparty: String(payment.counterparty ?? ''), purpose: String(payment.purpose ?? 'OPOS Zahlung'), invoiceType, invoiceId: invoiceType ? String(allocation.source_id) : undefined,
         classificationSourceIds: [payment.bank_id, payment.source_transaction_id].filter((id): id is string => typeof id === 'string' && id.length > 0),
       });
@@ -197,16 +206,18 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
     const residual = Math.max(0, amountGross - allocated);
     if (!allocations.length || residual > 0.005) result.push({
       sourceType: 'transaction', sourceId: allocations.length ? `payment:${payment.id}:residual` : String(payment.bank_id ?? `payment:${payment.id}`), date: String(payment.payment_date), amountGross: allocations.length ? residual : amountGross,
+      accountId: payment.account_id ? String(payment.account_id) : undefined,
+      linkedViaInvoice: false,
       flowType: payment.party_type === 'creditor' ? 'expense' : 'income', counterparty: String(payment.counterparty ?? ''), purpose: String(payment.purpose ?? 'OPOS Zahlung'),
       classificationSourceIds: [payment.bank_id, payment.source_transaction_id].filter((id): id is string => typeof id === 'string' && id.length > 0),
     });
   }
-  const banks = await q<Record<string, unknown>>(db, `SELECT id,date,amount,type,counterparty,purpose,linked_invoice_id FROM bank_transactions WHERE tenant_id=$1 AND status='booked' AND date >= $2 AND date <= $3 ORDER BY date,id`, [t, from, to]);
+  const banks = await q<Record<string, unknown>>(db, `SELECT id,account_id,date,amount,type,counterparty,purpose,linked_invoice_id FROM bank_transactions WHERE tenant_id=$1 AND status='booked' AND date >= $2 AND date <= $3 ORDER BY date,id`, [t, from, to]);
   for (const bank of banks) {
     const id = String(bank.id);
     if (representedBanks.has(id)) continue;
     const invoiceId = typeof bank.linked_invoice_id === 'string' && bank.linked_invoice_id ? bank.linked_invoice_id : undefined;
-    result.push({ sourceType: 'transaction', sourceId: id, date: String(bank.date), amountGross: Math.abs(Number(bank.amount) || 0), flowType: bank.type === 'expense' ? 'expense' : 'income', counterparty: String(bank.counterparty ?? ''), purpose: String(bank.purpose ?? ''), invoiceType: invoiceId ? 'outgoing_invoice' : undefined, invoiceId });
+    result.push({ sourceType: 'transaction', sourceId: id, date: String(bank.date), amountGross: Math.abs(Number(bank.amount) || 0), flowType: bank.type === 'expense' ? 'expense' : 'income', accountId: bank.account_id ? String(bank.account_id) : undefined, linkedViaInvoice: Boolean(invoiceId), counterparty: String(bank.counterparty ?? ''), purpose: String(bank.purpose ?? ''), invoiceType: invoiceId ? 'outgoing_invoice' : undefined, invoiceId });
   }
   return result;
 };
@@ -256,7 +267,7 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
       ?? (source.classificationSourceIds ?? []).map((sourceId) => facts.get(`transaction:${sourceId}`)).find(Boolean)
       ?? (source.invoiceId ? facts.get(`invoice:${source.invoiceId}`) : undefined);
     const persistedClassification = classification ?? (fact ? { id: String(fact.id), source_type: source.sourceType, source_id: source.sourceId, eur_line_id: fact.eur_line_id ? String(fact.eur_line_id) : null, excluded: false, vat_mode: 'none', vat_rate: null, note: null, updated_at: '' } : undefined);
-    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, amountGross: source.amountGross, amountNet: fact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, counterparty: basis.counterparty ?? source.counterparty, purpose: basis.purpose ?? source.purpose, vatWarning: net.warning, kind: fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
+    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, amountGross: source.amountGross, amountNet: fact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, accountId: source.accountId, linkedViaInvoice: source.linkedViaInvoice, counterparty: basis.counterparty ?? source.counterparty, purpose: basis.purpose ?? source.purpose, vatWarning: net.warning, kind: fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
   }
   return items.sort((left, right) => left.date === right.date ? left.sourceId.localeCompare(right.sourceId) : left.date.localeCompare(right.date));
 };

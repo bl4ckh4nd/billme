@@ -143,7 +143,7 @@ const DashboardSettingsPopover: React.FC<{
 };
 
 interface ViewProps {
-  onNavigate: (page: string) => void;
+  onNavigate: (page: string, search?: Record<string, string>) => void;
 }
 
 export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
@@ -472,7 +472,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
                      )}
                 </div>
                 <button
-                    onClick={() => onNavigate('documents?kind=invoice')}
+                    onClick={() => onNavigate('documents', { kind: 'invoice', status: 'overdue' })}
                     className="bg-accent text-black px-6 py-3 rounded-xl font-bold text-sm hover:bg-accent-hover hover:scale-105 active:scale-95 transition-all shadow-lg shadow-accent/20"
                 >
                     Mahnung senden
@@ -543,7 +543,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
                         <button
                           type="button"
                           key={row.category}
-                          onClick={() => onNavigate(`articles?query=${encodeURIComponent(row.category)}`)}
+                          onClick={() => onNavigate('articles', { query: row.category })}
                           className="flex items-center justify-between p-3 border border-gray-100 rounded-2xl hover:bg-gray-50 transition-colors cursor-pointer"
                         >
                           <div className="flex items-center gap-3 min-w-0">
@@ -611,7 +611,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
                     key={`${item.invoiceId}:${item.date}:${item.amount}`}
                     className="flex items-center justify-between p-3 bg-white/40 backdrop-blur-sm rounded-2xl border border-white/20 hover:bg-white/60 transition-colors cursor-pointer hover:scale-[1.02]"
                     onClick={() =>
-                      onNavigate(`documents?kind=invoice&id=${encodeURIComponent(item.invoiceId)}`)
+                      onNavigate('documents', { kind: 'invoice', id: item.invoiceId })
                     }
                     title={`${item.invoiceNumber}, ${item.client}`}
                   >

@@ -108,6 +108,11 @@ const triggerCsvDownload = (content: string, fileName: string): void => {
 const itemKey = (item: { sourceType: SourceType; sourceId: string }): string =>
   `${item.sourceType}:${item.sourceId}`;
 
+const queryErrorDetail = (error: unknown): string =>
+  error instanceof Error && error.message.trim().length > 0
+    ? error.message
+    : 'Unbekannter Fehler beim Laden.';
+
 export const EurView: React.FC = () => {
   const isProProduct = getRendererProduct() === 'pro';
   const isWebShell = getRendererRuntime().shell === 'web';
@@ -141,12 +146,24 @@ export const EurView: React.FC = () => {
     setShowToast(true);
   };
 
-  const { data: report, isLoading: reportLoading } = useQuery({
+  const {
+    data: report,
+    isLoading: reportLoading,
+    isError: reportIsError,
+    error: reportQueryError,
+    refetch: refetchReport,
+  } = useQuery({
     queryKey: ['eur', 'report', taxYear],
     queryFn: () => ipc.eur.getReport({ taxYear }),
   });
 
-  const { data: items = [], isLoading: itemsLoading } = useQuery({
+  const {
+    data: items = [],
+    isLoading: itemsLoading,
+    isError: itemsIsError,
+    error: itemsQueryError,
+    refetch: refetchItems,
+  } = useQuery({
     queryKey: ['eur', 'items', taxYear],
     queryFn: () => ipc.eur.listItems({ taxYear }),
   });
@@ -585,7 +602,16 @@ export const EurView: React.FC = () => {
           </div>
 
           {/* Queue Items */}
-          {itemsLoading ? (
+          {itemsIsError ? (
+            <div className="flex flex-col items-center justify-center py-12 text-error">
+              <AlertCircle size={48} className="mb-4 opacity-70" />
+              <p className="text-lg font-medium">Einträge konnten nicht geladen werden.</p>
+              <p className="text-sm text-center mt-2">{queryErrorDetail(itemsQueryError)}</p>
+              <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={() => void refetchItems()}>
+                Erneut versuchen
+              </Button>
+            </div>
+          ) : itemsLoading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Spinner size="md" />
               <p className="text-sm text-gray-500 mt-3">Lade Einträge...</p>
@@ -595,7 +621,7 @@ export const EurView: React.FC = () => {
               <CheckCircle2 size={48} className="mb-4 opacity-50" />
               <p className="text-lg font-medium">Keine Einträge</p>
               <p className="text-sm text-center mt-2">
-                {queueStatus === 'unclassified'
+                {queueStatus === 'unclassified' && statusCounts.unclassified === 0
                   ? 'Alle Einträge sind bereits klassifiziert.'
                   : 'Keine Einträge für diesen Filter.'}
               </p>
@@ -842,10 +868,25 @@ export const EurView: React.FC = () => {
             <Layers size={18} className="text-gray-500" />
             Report
           </h3>
-          {reportLoading || !report ? (
+          {reportIsError ? (
+            <div className="flex flex-col items-center justify-center py-12 text-error">
+              <AlertCircle size={48} className="mb-4 opacity-70" />
+              <p className="text-lg font-medium">Report konnte nicht geladen werden.</p>
+              <p className="text-sm text-center mt-2">{queryErrorDetail(reportQueryError)}</p>
+              <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={() => void refetchReport()}>
+                Erneut versuchen
+              </Button>
+            </div>
+          ) : reportLoading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Spinner size="md" />
               <p className="text-sm text-gray-500 mt-3">Report wird geladen...</p>
+            </div>
+          ) : !report ? (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+              <XCircle size={48} className="mb-4 opacity-50" />
+              <p className="text-lg font-medium">Kein Report verfügbar</p>
+              <p className="text-sm text-center mt-2">Für diesen Zeitraum liegt noch kein Report vor.</p>
             </div>
           ) : (
             <>

@@ -3,7 +3,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import type { TaxFilingRecord, TaxFilingSnapshot } from '@billme/accounting-shared';
 import type { TaxFilingRepository, TenantScope } from '@billme/server-core';
 import { isPostgresPool, withPostgresTransaction, type PostgresQueryable } from './connection.js';
-import { createDrizzle, schema } from './drizzle.js';
+import { createDrizzle, schema, tryCreateDrizzle } from './drizzle.js';
 import {
   createTaxSubmission,
   enqueueTaxSubmissionJob,
@@ -110,7 +110,7 @@ const recordFromSubmission = (submission: TaxSubmissionRecord): TaxFilingRecord 
   };
 };
 
-const dbFor = (db: PostgresQueryable) => createDrizzle(db as never);
+const dbFor = (db: PostgresQueryable) => tryCreateDrizzle(db) ?? createDrizzle(db as never);
 
 /** Repository calls made with a Pool must make multi-table evidence writes
  * transactional; API callers pass a transaction client and stay in that

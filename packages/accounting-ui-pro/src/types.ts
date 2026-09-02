@@ -116,6 +116,7 @@ export type TransactionFlag =
 
 export interface Transaction {
   id: string;
+  linkedInvoiceId?: string;
   date: string;
   payee: string;
   description: string;
@@ -212,6 +213,50 @@ export interface BookingDraft {
     reviewedAt?: string;
     reason?: string;
   };
+}
+
+export interface LinkedInvoiceSummary {
+  id: string;
+  number: string;
+  client: string;
+  date: string;
+  dueDate: string;
+  amount: number;
+  status: string;
+}
+
+export interface OpenRouterVlmConfig {
+  configured: boolean;
+  model: string;
+  models: string[];
+  maxDocumentBytes: number;
+  timeoutMs: number;
+}
+
+export interface TransactionDocumentAnalysis {
+  extraction: {
+    documentType: 'invoice' | 'credit_note' | 'receipt' | 'bank_statement' | 'other' | 'unknown';
+    issuer: string | null;
+    recipient: string | null;
+    invoiceNumber: string | null;
+    invoiceDate: string | null;
+    servicePeriod: string | null;
+    dueDate: string | null;
+    currency: string | null;
+    netAmount: number | null;
+    taxAmount: number | null;
+    grossAmount: number | null;
+    vatBreakdown: Array<{ rate: number; netAmount: number; taxAmount: number }>;
+    iban: string | null;
+    paymentReference: string | null;
+    suggestedAccountNumber: string | null;
+    suggestedTaxCase: string | null;
+    matchAssessment: { amountMatches: boolean | null; dateMatches: boolean | null; partyMatches: boolean | null; referenceMatches: boolean | null; notes: string[] };
+    warnings: string[];
+    evidence: Array<{ field: string; value: string; page?: number; boundingBox?: { x: number; y: number; width: number; height: number }; quote?: string; confidence: number }>;
+  };
+  deterministicChecks: { amountMatches: boolean; currencyMatches: boolean; expectedAmount: number; extractedAmount: number | null; expectedCurrency: string; extractedCurrency: string | null };
+  metadata: { model: string; provider: string | null; requestId: string | null; request: { method: 'POST'; endpoint: string }; timing: { startedAt: string; completedAt: string; durationMs: number }; documentSha256: string };
 }
 
 export interface User {

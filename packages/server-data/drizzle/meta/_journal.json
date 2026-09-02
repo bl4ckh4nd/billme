@@ -162,6 +162,13 @@
       "when": 1786538400011,
       "tag": "0023_server_data_import_source_run_rejected",
       "breakpoints": false
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786538400012,
+      "tag": "0024_server_data_portal_publications",
+      "breakpoints": false
     }
   ]
 }

@@ -6,7 +6,7 @@ import { replaceMockAccounts } from '../mocks/accounts';
 import { mockBookingDrafts } from '../mocks/bookings';
 import { mockTransactions } from '../mocks/transactions';
 import { permissionContextForRole } from '../mocks/users';
-import { Account, AccountingActorRole, BookingAction, BookingDraft, Transaction, UserRole } from '../types';
+import { Account, AccountingActorRole, BookingAction, BookingDraft, LinkedInvoiceSummary, OpenRouterVlmConfig, Transaction, TransactionDocumentAnalysis, UserRole } from '../types';
 import type {
   BalanceSheetPreview,
   EurCashItem,
@@ -88,6 +88,9 @@ export interface ProAccountingDataAdapter {
   listBookingDrafts?: () => BookingDraft[];
   getTransactionById?: (id: string) => Transaction | undefined;
   getBookingDraftByTransactionId?: (transactionId: string) => BookingDraft | undefined;
+  getLinkedInvoice?: (transactionId: string) => MaybePromise<LinkedInvoiceSummary | null>;
+  getOpenRouterVlmConfig?: () => Promise<OpenRouterVlmConfig>;
+  analyzeTransactionDocument?: (input: { transaction: { id: string; date: string; amount: number; currency: string; type: 'income' | 'expense'; counterparty: string; purpose: string; linkedInvoiceId?: string; suggestedAccountNumber?: string; suggestionReason?: string }; document: { mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; fileName?: string }; model?: string }) => Promise<TransactionDocumentAnalysis>;
   getJournalEntryById?: (id: string) => MaybePromise<JournalEntryEntity | null>;
   saveDraft?: (draft: BookingDraft, actorName?: string) => MaybePromise<BookingDraft>;
   dispatchBookingAction?: (

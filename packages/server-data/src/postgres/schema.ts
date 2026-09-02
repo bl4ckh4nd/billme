@@ -159,6 +159,25 @@ export const offers = pgTable("offers", {
   updatedAt: text("updated_at"),
 });
 
+export const portalPublications = pgTable("portal_publications", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  documentType: text("document_type"),
+  documentId: text("document_id"),
+  token: text("token"),
+  tokenHash: text("token_hash"),
+  customerRef: text("customer_ref"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+  publishedAt: text("published_at"),
+  expiresAt: text("expires_at"),
+}, (table) => ({
+  tenantDocumentUnique: uniqueIndex("portal_publications_tenant_document_unique")
+    .on(table.tenantId, table.documentType, table.documentId),
+  tenantTokenHashUnique: uniqueIndex("portal_publications_tenant_token_hash_unique")
+    .on(table.tenantId, table.tokenHash),
+}));
+
 export const recurringProfiles = pgTable("recurring_profiles", {
   id: text("id"),
   tenantId: text("tenant_id"),

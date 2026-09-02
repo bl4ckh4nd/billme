@@ -15,6 +15,7 @@ import {
 import { ApiError } from './http.js';
 import { type AuthStore } from './authStore.js';
 import { SessionTokenService, type AuthSession } from './auth.js';
+import { authorizeRequest, AuthorizationError } from './runtimeContext.js';
 
 type OrpcContext = {
   request: FastifyRequest;
@@ -60,18 +61,22 @@ const runAuth = async <T>(action: () => Promise<T> | T): Promise<T> => {
 };
 
 const requireSession = (context: OrpcContext, product: ServerProduct): AuthSession => {
-  const token = context.tokenService.readBearerToken(context.request.headers.authorization);
-  if (!token) {
-    throw new ORPCError('UNAUTHORIZED', { message: 'Missing bearer token' });
+  try {
+    return authorizeRequest({
+      runtime: 'server',
+      product,
+      authHeader: context.request.headers.authorization,
+      tokenService: context.tokenService,
+    });
+  } catch (error) {
+    if (error instanceof AuthorizationError) {
+      throw new ORPCError(error.statusCode === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN', {
+        message: error.message,
+        status: error.statusCode,
+      });
+    }
+    throw error;
   }
-  const session = context.tokenService.verify(token);
-  if (!session) {
-    throw new ORPCError('UNAUTHORIZED', { message: 'Invalid or expired bearer token' });
-  }
-  if (session.scope.product !== product) {
-    throw new ORPCError('FORBIDDEN', { message: `Token is not authorized for ${product}` });
-  }
-  return session;
 };
 
 const createProductRouter = (product: 'lite' | 'pro') => {

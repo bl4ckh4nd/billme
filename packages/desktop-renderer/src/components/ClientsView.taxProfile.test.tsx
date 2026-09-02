@@ -31,7 +31,11 @@ vi.mock('../hooks/useClients', () => ({
 vi.mock('../hooks/useInvoices', () => ({ useInvoicesQuery: () => ({ data: [] }) }));
 vi.mock('../hooks/useDocuments', () => ({ useCreateDocumentFromClientMutation: () => ({ mutateAsync: vi.fn() }) }));
 vi.mock('../ui-store', () => ({ useUiStore: (selector: (state: { setEditingInvoice: () => void }) => unknown) => selector({ setEditingInvoice: vi.fn() }) }));
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => vi.fn(),
+  useRouterState: ({ select }: { select: (state: { location: { search: Record<string, string> } }) => unknown }) =>
+    select({ location: { search: {} } }),
+}));
 
 import { ClientsView } from './ClientsView';
 

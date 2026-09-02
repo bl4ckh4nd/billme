@@ -376,6 +376,13 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   const activeReportLoadState = reportLoadStates[activeTab];
   const activeReportLoading = !activeReportLoadState || activeReportLoadState.status === 'loading';
   const activeReportLoadError = activeReportLoadState?.status === 'error' ? activeReportLoadState.error : null;
+  const reportError = activeReportLoadError ?? reportsError;
+  const unavailableCatalogYear = reportError?.match(/PUBLIC_REPORT_CATALOG_UNAVAILABLE:(\d+)/)?.[1];
+  const reportErrorMessage = unavailableCatalogYear
+    ? unavailableCatalogYear === '0'
+      ? 'Für den Report konnte kein Berichtsstichtag ermittelt werden. Unterstützte Geschäftsjahre sind 2025 und 2026.'
+      : `Für das Geschäftsjahr ${unavailableCatalogYear} ist kein Berichtskatalog verfügbar. Unterstützte Geschäftsjahre sind 2025 und 2026.`
+    : reportError;
   const activeReportUnavailable = activeReportLoadState?.status === 'success' && !activeReport;
   const exportBlockedReason = activeReportLoading
     ? 'Export ist erst möglich, wenn der aktuelle Report geladen ist.'
@@ -803,7 +810,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
           </div>
         </div>
 
-        <div className="flex flex-col xl:flex-row gap-4">
+        <div className="flex min-w-0 flex-col xl:flex-row gap-4">
             <div className="flex-1 min-w-0 pr-1">
               {activeReportLoading ? (
                 <div className="rounded-2xl border border-border bg-surface p-8 text-sm text-muted">
@@ -811,7 +818,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
                 </div>
               ) : activeReportLoadError || reportsError ? (
                 <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-error-border bg-error-bg p-8 text-sm text-error" role="alert" aria-live="assertive">
-                  <span>{activeReportLoadError ?? reportsError}</span>
+                  <span>{reportErrorMessage}</span>
                   <Button
                     type="button"
                     size="sm"
@@ -844,7 +851,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
               )}
             </div>
 
-            <div className={`transition-all duration-200 ${drilldownSelection ? 'xl:w-96 w-full' : 'xl:w-0 w-full'}`}>
+            <div className={`min-w-0 overflow-hidden transition-all duration-200 ${drilldownSelection ? 'xl:w-96 w-full' : 'xl:w-72 w-full'}`}>
               {drilldownSelection ? (
                 <div className="space-y-3">
                   <ReportDrilldownPanel

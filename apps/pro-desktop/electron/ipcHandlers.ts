@@ -98,7 +98,7 @@ import { buildDatevBuchungsstapelCsv } from '../services/datevExport';
 import { buildTaxAuditExportPackage } from '../services/auditExportPackage';
 import { seedAccountKeywords } from '../services/accountKeywordSeed';
 import { resolveRuntimeProTenantScope } from '../tenantScope';
-import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import { calculateInvoiceTaxSnapshot, createOpenRouterVlmService, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { listEurAnnexFacts, listEurCashFacts, saveEurAnnexFact, saveEurCashFact } from '@billme/desktop-data/eurFacts';
 import {
   disposeAsset,
@@ -1180,6 +1180,10 @@ export const registerIpcHandlers = (
   register(ipcMain, 'pro:getLedgerStats', () => {
     return getProAccountingCatalogService().getLedgerStats();
   });
+
+  const openRouterVlm = createOpenRouterVlmService();
+  register(ipcMain, 'pro:getOpenRouterVlmConfig', () => openRouterVlm.getConfig());
+  register(ipcMain, 'pro:analyzeTransactionDocument', (input) => openRouterVlm.analyze(input));
 
   register(ipcMain, 'pro:listBankTransactions', () => {
     return getProAccountingService().listBankTransactions().then((rows) =>

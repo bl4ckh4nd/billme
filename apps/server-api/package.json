@@ -12,15 +12,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@billme/accounting-engine": "workspace:*",
-    "@billme/accounting-shared": "workspace:*",
-    "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/server-data": "workspace:*",
-    "@fastify/cors": "^11.1.0",
-    "@orpc/openapi": "1.14.15",
-    "@orpc/server": "1.14.15",
-    "@orpc/zod": "1.14.15",
+    "@billme/server-runtime": "workspace:*",
     "fastify": "^5.6.1",
     "zod": "^3.25.76"
   },

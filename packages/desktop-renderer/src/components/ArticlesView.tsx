@@ -8,6 +8,7 @@ import type { Article } from '@billme/desktop-core/types';
 import { v4 as uuidv4 } from 'uuid';
 import { useArticlesQuery, useDeleteArticleMutation, useUpsertArticleMutation } from '../hooks/useArticles';
 import { useSettingsQuery } from '../hooks/useSettings';
+import { useRouterState } from '@tanstack/react-router';
 
 const normalizeCategoryName = (value: string): string => value.trim();
 
@@ -57,7 +58,7 @@ export const ArticlesView: React.FC = () => {
   const upsertArticle = useUpsertArticleMutation();
   const deleteArticle = useDeleteArticleMutation();
   const [searchTerm, setSearchTerm] = useState('');
-  const locationSearch = window.location.search;
+  const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
   const [selectedCategory, setSelectedCategory] = useState<string>('Alle');
   const [isNetPrice, setIsNetPrice] = useState(true); // Toggle Net/Gross
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -103,8 +104,7 @@ export const ArticlesView: React.FC = () => {
   });
 
   React.useEffect(() => {
-    const params = new URLSearchParams(locationSearch);
-    const query = params.get('query')?.trim() ?? '';
+    const query = typeof locationSearch.query === 'string' ? locationSearch.query.trim() : '';
     setSearchTerm(query);
   }, [locationSearch]);
 
@@ -404,7 +404,17 @@ export const ArticlesView: React.FC = () => {
             {/* List Content */}
             {viewMode === 'grid' ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4 overflow-y-auto pr-2 pb-4 scrollbar-hide">
-                    {filteredArticles.map((article, idx) => (
+                    {filteredArticles.length === 0 ? (
+                        <div className="col-span-full flex flex-col items-center justify-center h-64 text-gray-400">
+                            <Package size={48} className="mb-4 opacity-20" />
+                            <p className="font-bold text-gray-500">
+                                {searchTerm.trim() || selectedCategory !== 'Alle' ? 'Keine Treffer für die aktuelle Suche oder Filterung' : 'Noch keine Artikel vorhanden'}
+                            </p>
+                            {!searchTerm.trim() && selectedCategory === 'Alle' && (
+                                <p className="text-sm mt-1">Klicke auf das + oben rechts, um einen Artikel zu erstellen.</p>
+                            )}
+                        </div>
+                    ) : filteredArticles.map((article, idx) => (
                         <div
                             key={article.id}
                             className="group bg-gray-50 rounded-[2rem] p-6 border border-gray-100 hover:border-border hover:bg-white hover:-translate-y-1 transition-all relative flex flex-col animate-scale-in"
@@ -475,7 +485,17 @@ export const ArticlesView: React.FC = () => {
                         <div className="col-span-2 text-right">Preis ({isNetPrice ? 'Netto' : 'Brutto'})</div>
                         <div className="col-span-2 text-right">Aktionen</div>
                     </div>
-                    {filteredArticles.map((article, idx) => (
+                    {filteredArticles.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                            <Package size={48} className="mb-4 opacity-20" />
+                            <p className="font-bold text-gray-500">
+                                {searchTerm.trim() || selectedCategory !== 'Alle' ? 'Keine Treffer für die aktuelle Suche oder Filterung' : 'Noch keine Artikel vorhanden'}
+                            </p>
+                            {!searchTerm.trim() && selectedCategory === 'Alle' && (
+                                <p className="text-sm mt-1">Klicke auf das + oben rechts, um einen Artikel zu erstellen.</p>
+                            )}
+                        </div>
+                    ) : filteredArticles.map((article, idx) => (
                         <div
                             key={article.id}
                             className={`group rounded-2xl p-4 border transition-all grid grid-cols-12 gap-4 items-center animate-enter ${

@@ -120,6 +120,30 @@ export const MOCK_SETTINGS: AppSettings = {
   }
 };
 
+/** Neutral settings persisted for a new local workspace before onboarding. */
+export const DEFAULT_SETTINGS: AppSettings = {
+  ...MOCK_SETTINGS,
+  company: {
+    name: '',
+    owner: '',
+    street: '',
+    zip: '',
+    city: '',
+    email: '',
+    phone: '',
+    website: '',
+  },
+  finance: {
+    bankName: '',
+    iban: '',
+    bic: '',
+    taxId: '',
+    vatId: '',
+    registerCourt: '',
+  },
+  onboardingCompleted: false,
+};
+
 export const MOCK_RECURRING_PROFILES: RecurringProfile[] = [
     {
         id: 'rec1',

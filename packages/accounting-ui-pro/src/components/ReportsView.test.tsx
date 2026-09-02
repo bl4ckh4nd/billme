@@ -119,6 +119,36 @@ describe('ReportsView drilldown ranges', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 
+  it.each([
+    {
+      error: 'PUBLIC_REPORT_CATALOG_UNAVAILABLE:2027',
+      expected: 'Für das Geschäftsjahr 2027 ist kein Berichtskatalog verfügbar. Unterstützte Geschäftsjahre sind 2025 und 2026.',
+    },
+    {
+      error: 'PUBLIC_REPORT_CATALOG_UNAVAILABLE:0',
+      expected: 'Für den Report konnte kein Berichtsstichtag ermittelt werden. Unterstützte Geschäftsjahre sind 2025 und 2026.',
+    },
+  ])('maps the unavailable report catalog error "$error" to German copy', async ({ error, expected }) => {
+    render(<ReportsView
+      dataAdapter={{ getBalanceSheetPreview: vi.fn().mockRejectedValue(new Error(error)) }}
+      availableTabs={['bilanz']}
+    />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain(expected);
+    expect(alert.textContent).not.toContain('PUBLIC_REPORT_CATALOG_UNAVAILABLE');
+  });
+
+  it('passes unrelated report errors through verbatim', async () => {
+    const error = 'Berichtsdienst ist nicht erreichbar.';
+    render(<ReportsView
+      dataAdapter={{ getBalanceSheetPreview: vi.fn().mockRejectedValue(new Error(error)) }}
+      availableTabs={['bilanz']}
+    />);
+
+    expect((await screen.findByRole('alert')).textContent).toContain(error);
+  });
+
   it('offers a retry when drilldown loading fails', async () => {
     const getReportDrilldownEntries = vi.fn()
       .mockRejectedValueOnce(new Error('Drilldown-Backend vorübergehend nicht erreichbar'))

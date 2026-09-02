@@ -132,10 +132,13 @@ test('report families require their own statement mapping while balance-only acc
   assert.deepEqual(calculateBwa01(revenueOnlyHgb).rows, []);
 
   const balanceOnly = request({
-    ledger: { entries: [{ postingDate: '2025-07-10', lines: [{ accountNumber: '1000', debit: 1000, credit: 0 }] }] },
-    mappings: [{ accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' }],
+    ledger: { entries: [{ postingDate: '2025-07-10', lines: [{ accountNumber: '1576', debit: 1000, credit: 0 }] }] },
+    mappings: [{ accountNumber: '1576', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' }],
   });
-  assert.equal(calculateBwa01(balanceOnly).mappingHealth.warnings.some((warning) => warning.includes('no bwa01')), false);
+  assert.deepEqual(calculateBwa01(balanceOnly).mappingHealth.unmappedAccounts, []);
+  assert.equal(calculateBwa01(balanceOnly).mappingHealth.blocking, false);
+  assert.deepEqual(calculateHgbGuv(balanceOnly).mappingHealth.unmappedAccounts, []);
+  assert.deepEqual(calculateHgbBilanz(balanceOnly).mappingHealth.unmappedAccounts, []);
 });
 
 test('catalog-driven reports emit complete ordered positions and formulas', () => {

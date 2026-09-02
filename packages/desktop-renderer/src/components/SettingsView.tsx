@@ -16,6 +16,7 @@ import { DunningResultModal } from '@billme/desktop-ui/components/DunningResultM
 import { DunningLevelPreviewModal } from '@billme/desktop-ui/components/DunningLevelPreviewModal';
 
 const normalizeCategoryName = (value: string): string => value.trim();
+const formatCount = (count: number, singular: string, plural: string): string => `${count} ${count === 1 ? singular : plural}`;
 
 const inferBusinessReportingProfile = (settings: AppSettings): BusinessReportingProfile => {
   if (settings.businessReportingProfile) return settings.businessReportingProfile;
@@ -42,6 +43,8 @@ export const SettingsView: React.FC = () => {
   const [reportingProfile, setReportingProfile] = useState<BusinessReportingProfile>(() => inferBusinessReportingProfile(loadedSettings ?? MOCK_SETTINGS));
   const [showSaveToast, setShowSaveToast] = useState(false);
   const [backupPath, setBackupPath] = useState('');
+  const [auditStatus, setAuditStatus] = useState<string | null>(null);
+  const [backupStatus, setBackupStatus] = useState<string | null>(null);
   const [portalApiKey, setPortalApiKey] = useState('');
   const [portalApiKeyConfigured, setPortalApiKeyConfigured] = useState(false);
   const [portalApiKeyTouched, setPortalApiKeyTouched] = useState(false);
@@ -1605,38 +1608,59 @@ export const SettingsView: React.FC = () => {
               <p className="text-gray-500 text-sm">Audit-Log, Backup und Wiederherstellung.</p>
             </div>
 
-            <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div>
-                <h4 className="text-lg font-bold text-gray-900">Audit</h4>
-                <p className="text-sm text-gray-500">Audit-Log prüfen und als CSV exportieren.</p>
+            <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                  <h4 className="text-lg font-bold text-gray-900">Audit</h4>
+                  <p className="text-sm text-gray-500">Audit-Log prüfen und als CSV exportieren.</p>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={async () => {
+                      setAuditStatus('Audit-Log wird geprüft ...');
+                      try {
+                        const result = await ipc.audit.verify();
+                        const errorCount = result.errors.length;
+                        setAuditStatus(
+                          result.ok && errorCount === 0
+                            ? `Audit-Log ist intakt: ${formatCount(result.count, 'Eintrag', 'Einträge')} geprüft, keine Fehler.`
+                            : `Audit-Log ist nicht intakt: ${formatCount(result.count, 'Eintrag', 'Einträge')} geprüft, ${formatCount(errorCount, 'Fehler', 'Fehler')} gefunden.`,
+                        );
+                      } catch (e) {
+                        setAuditStatus(`Audit-Log-Prüfung fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
+                      }
+                    }}
+                    className="px-5 py-3 rounded-xl font-bold bg-white border border-gray-200 hover:bg-gray-100 transition-colors"
+                  >
+                    Prüfen
+                  </button>
+                  <button
+                    onClick={async () => {
+                      setAuditStatus('Audit-Log wird exportiert ...');
+                      try {
+                        const csv = await ipc.audit.exportCsv();
+                        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                        setAuditStatus('Audit-Log als CSV exportiert.');
+                      } catch (e) {
+                        setAuditStatus(`CSV-Export fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
+                      }
+                    }}
+                    className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
+                  >
+                    CSV exportieren
+                  </button>
+                </div>
               </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={async () => {
-                    const result = await ipc.audit.verify();
-                    alert(JSON.stringify(result, null, 2));
-                  }}
-                  className="px-5 py-3 rounded-xl font-bold bg-white border border-gray-200 hover:bg-gray-100 transition-colors"
-                >
-                  Verify
-                </button>
-                <button
-                  onClick={async () => {
-                    const csv = await ipc.audit.exportCsv();
-                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    URL.revokeObjectURL(url);
-                  }}
-                  className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
-                >
-                  Export CSV
-                </button>
+              <div className="text-sm font-medium text-gray-500 w-full">
+                {auditStatus}
               </div>
             </div>
 
@@ -1651,11 +1675,12 @@ export const SettingsView: React.FC = () => {
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
                   onClick={async () => {
+                    setBackupStatus('Backup wird erstellt ...');
                     try {
                       const res = await ipc.db.backup();
-                      alert(`Backup erstellt:\n${res.path}`);
+                      setBackupStatus(`Backup erstellt. Pfad: ${res.path}`);
                     } catch (e) {
-                      alert(`Backup fehlgeschlagen: ${String(e)}`);
+                      setBackupStatus(`Backup fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
                     }
                   }}
                   className="px-5 py-3 rounded-xl font-bold bg-white border border-gray-200 hover:bg-gray-100 transition-colors"
@@ -1667,23 +1692,31 @@ export const SettingsView: React.FC = () => {
                   <input
                     value={backupPath}
                     onChange={(e) => setBackupPath(e.target.value)}
-                    placeholder="Pfad zur .sqlite Sicherung..."
+                    placeholder="Pfad zur .pglite.tar-Sicherung..."
                     className="flex-1 bg-white border border-gray-200 rounded-xl p-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
                   />
                   <button
                     onClick={async () => {
+                      setBackupStatus('Wiederherstellung wird durchgeführt ...');
                       try {
                         const res = await ipc.db.restore({ path: backupPath.trim() });
-                        alert(`Restore abgeschlossen:\n${JSON.stringify(res, null, 2)}`);
+                        const errorCount = res.verification.errors.length;
+                        const verificationStatus = res.verification.ok && errorCount === 0
+                          ? `Audit-Log geprüft: ${formatCount(res.verification.count, 'Eintrag', 'Einträge')}, keine Fehler.`
+                          : `Audit-Log geprüft: ${formatCount(res.verification.count, 'Eintrag', 'Einträge')}, ${formatCount(errorCount, 'Fehler', 'Fehler')} gefunden.`;
+                        setBackupStatus(`Wiederherstellung abgeschlossen: ${res.ok ? 'erfolgreich.' : 'mit Fehlern.'} ${verificationStatus}`);
                       } catch (e) {
-                        alert(`Restore fehlgeschlagen: ${String(e)}`);
+                        setBackupStatus(`Wiederherstellung fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
                       }
                     }}
                     className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
                   >
-                    Restore
+                    Wiederherstellen
                   </button>
                 </div>
+              </div>
+              <div className="text-sm font-medium text-gray-500 w-full">
+                {backupStatus}
               </div>
             </div>
           </div>

@@ -91,7 +91,7 @@ const mapNativeEurCashItem = (item: NativeEurListItem): EurCashItem => {
  */
 const runReportingReport = async (
   kind: Extract<ReportKind, 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz'>,
-  range: { from?: string; to?: string },
+  range: { from?: string; to?: string; asOfDate?: string },
 ): Promise<ReportResult<object>> => {
   return ipc.pro.getReportingReport({ kind, ...range }) as unknown as ReportResult<object>;
 };
@@ -142,6 +142,7 @@ const mapTransactions = (
 
     return {
       id: row.id,
+      linkedInvoiceId: row.linkedInvoiceId,
       date: row.date,
       payee: row.counterparty || 'Unbekannt',
       description: row.purpose || 'Importierte Transaktion',
@@ -444,6 +445,18 @@ export const ProAccountingPage: React.FC = () => {
         const draft = adapterDraftsRef.current.get(transactionId);
         return draft ? structuredClone(draft) : undefined;
       },
+      async getLinkedInvoice(transactionId) {
+        const transaction = adapterTransactionsRef.current.find((row) => row.id === transactionId);
+        if (!transaction?.linkedInvoiceId) return null;
+        const invoice = (await ipc.invoices.list()).find((row) => row.id === transaction.linkedInvoiceId);
+        return invoice ? { id: invoice.id, number: invoice.number, client: invoice.client, date: invoice.date, dueDate: invoice.dueDate, amount: invoice.amount, status: invoice.status } : null;
+      },
+      getOpenRouterVlmConfig() {
+        return ipc.pro.getOpenRouterVlmConfig();
+      },
+      analyzeTransactionDocument(input) {
+        return ipc.pro.analyzeTransactionDocument(input);
+      },
       async getJournalEntryById(id: string) {
         return ipc.pro.getJournalEntryById({ entryId: id });
       },
@@ -602,7 +615,7 @@ export const ProAccountingPage: React.FC = () => {
       },
       async getBalanceSheetPreview(filters) {
         activeReportFilters = filters;
-        const report = await runReportingReport('hgb-bilanz', { to: filters.asOfDate });
+        const report = await runReportingReport('hgb-bilanz', { asOfDate: filters.asOfDate });
         const accounts = await ipc.pro.listLedgerAccounts({ chart: filters.chart, limit: 10_000 });
         return mapHgbBilanzReport(report as ReportResult<HgbBilanzReport>, accounts, filters.chart);
       },

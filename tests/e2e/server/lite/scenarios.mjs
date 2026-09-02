@@ -242,7 +242,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
   await expect(page.getByText(companyName)).toBeVisible();
   await page.getByRole('button', { name: 'Neue Rechnung' }).click();
   await expect(page.getByRole('heading', { name: 'Rechnung erstellen' })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Empfängername' })).toHaveValue(companyName);
+  await expect(page.getByRole('combobox', { name: 'Kunde auswählen' })).toHaveValue(companyName);
   const createdInvoice = await page.evaluate(async ({ clientId, description, price }) => {
     const api = globalThis.billmeApi;
     if (!api) {
@@ -253,7 +253,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
     const persisted = {
       ...draft,
       amount: price,
-      items: [{ description, quantity: 1, price, total: price }],
+      items: [{ kind: 'item', description, quantity: 1, price, total: price }],
     };
     delete persisted.numberReservationId;
     const saved = await api.invoices.upsert({ invoice: persisted, reason: 'create' });
@@ -278,7 +278,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
     const persisted = {
       ...draft,
       amount: price,
-      items: [{ description, quantity: 1, price, total: price }],
+      items: [{ kind: 'item', description, quantity: 1, price, total: price }],
     };
     delete persisted.numberReservationId;
     const saved = await api.offers.upsert({ offer: persisted, reason: 'create' });

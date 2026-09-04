@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Gemeinsame UI-Primitives und das Firmen-Onboarding verwenden jetzt konsistente Design-Tokens, Radien, Fokus-/Touch-Zustände, Typografie und Icons, wodurch Lite und Pro visuell ruhiger und zugänglicher bedienbar sind.
 - Hosted- und Embedded-Server verwenden jetzt dieselbe `ServerDatabase`-Naht mit adapter-owned Drizzle-Dialekt und zentraler, produkt- sowie rollenbewusster Mutations-/Audit-Autorisierung; lokale Zugriffstokens und fehlerhafte Session-Tokens werden einheitlich und fail-closed mit korrektem HTTP-Status behandelt, manuelle sowie geplante Wiederholungsläufe teilen dieselbe transaktionale Dependency-Assembly-, Audit-/Rollback- und Ergebnisnaht, und Lite/Pro teilen ihre serialisierte Embedded-Lifecycle- sowie native Electron-IPC-Naht bei sichtbarer Pro-Steuerprüfungsexport-Erweiterung.
 - Pro transactions can now inspect PDF/image evidence through a server-side, model-selectable OpenRouter VLM; strict document validation, deterministic amount/currency checks, linked invoice and journal context, evidence metadata, and review-only draft application keep posting authoritative and auditable.
 - Frische Lite-/Pro-Installationen erhalten neutrale Settings für das Onboarding; landlose Kundenrechnungen bleiben speicherbar, Lite-EÜR-GETs übertragen ihren Zeitraum korrekt, und Desktop-Migrationen funktionieren unabhängig vom Arbeitsverzeichnis.

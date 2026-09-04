@@ -23,8 +23,8 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           id={inputId}
           ref={ref}
           className={cn(
-            'bg-surface-muted border border-border rounded-xl px-4 py-3 text-sm',
-            'outline-none transition-all',
+            'bg-surface-muted border border-border rounded-xl px-4 py-3 text-sm tabular-nums',
+            'outline-none transition-[border-color,box-shadow]',
             'focus:ring-2 focus:ring-accent focus:border-accent',
             error && 'border-error focus:ring-error',
             fullWidth && 'w-full',

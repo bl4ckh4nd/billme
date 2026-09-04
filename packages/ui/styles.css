@@ -79,5 +79,6 @@
     background: var(--color-background);
     color: var(--color-foreground);
     font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
 }

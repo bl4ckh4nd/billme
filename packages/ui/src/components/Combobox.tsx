@@ -112,7 +112,7 @@ function ComboboxInner<T extends ComboboxItem>(
           richRow
             ? 'flex cursor-pointer items-start gap-2 border-b border-border-subtle px-3 py-2 last:border-0'
             : 'px-3 py-2 cursor-pointer border-b border-border-subtle last:border-0',
-          index === activeIndex ? 'bg-canvas' : 'hover:bg-surface-muted',
+          index === activeIndex ? 'bg-surface-muted' : null,
         )}
         onMouseDown={(event) => {
           event.preventDefault();
@@ -151,12 +151,13 @@ function ComboboxInner<T extends ComboboxItem>(
             {leadingIcon}
           </span>
         ) : showSearchIcon ? (
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" size={14} />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" size={14} strokeWidth={1.5} />
         ) : null}
         {showChevron ? (
           <ChevronDown
             className={cn('pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-muted transition-transform', open ? 'rotate-180' : '')}
             size={14}
+            strokeWidth={1.5}
             aria-hidden="true"
           />
         ) : null}
@@ -222,7 +223,7 @@ function ComboboxInner<T extends ComboboxItem>(
       </div>
 
       {open && !disabled && footer ? (
-        <div className="absolute top-full left-0 right-0 z-20 mt-1 overflow-hidden rounded-xl border border-border bg-surface shadow-lg">
+        <div className="absolute top-full left-0 right-0 z-20 mt-1 overflow-hidden rounded-lg border border-border bg-surface shadow-lg">
           <div id={listboxId} role="listbox" className="max-h-56 overflow-auto">
             {optionRows}
           </div>
@@ -242,7 +243,7 @@ function ComboboxInner<T extends ComboboxItem>(
         <div
           id={listboxId}
           role="listbox"
-          className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded-xl shadow-lg z-20 max-h-56 overflow-auto"
+          className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-lg z-20 max-h-56 overflow-auto"
         >
           {optionRows}
         </div>

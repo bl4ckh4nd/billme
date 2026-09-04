@@ -362,11 +362,11 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-[#f4f4ef] px-4 py-4 sm:px-6 sm:py-6">
-      <div className="mx-auto grid min-h-full w-full max-w-6xl overflow-hidden rounded-[2rem] border border-black/5 bg-surface shadow-[0_28px_90px_rgba(15,23,42,0.14)] lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <div className="mx-auto grid min-h-full w-full max-w-6xl overflow-hidden rounded-xl border border-black/5 bg-surface shadow-[0_28px_90px_rgba(15,23,42,0.14)] lg:grid-cols-[18rem_minmax(0,1fr)]">
         <aside className="relative overflow-hidden bg-[#121212] px-6 py-7 text-white sm:px-8 lg:px-7">
           <div className="absolute inset-x-0 top-0 h-1 bg-white/10">
             <div
-              className="h-full bg-[var(--color-accent)] transition-all duration-300"
+              className="h-full bg-[var(--color-accent)] transition-[width] duration-300 ease-out"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -376,15 +376,15 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
               <p className="text-[0.72rem] font-semibold uppercase tracking-[0.24em] text-white/55">
                 Ersteinrichtung
               </p>
-              <h1 className="mt-3 max-w-[12rem] text-[2rem] font-semibold leading-tight">
+              <h1 className="mt-3 max-w-[12rem] text-balance text-[2rem] font-semibold leading-tight">
                 {productName} einrichten
               </h1>
-              <p className="mt-4 max-w-[15rem] text-sm leading-6 text-white/72">
+              <p className="mt-4 max-w-[15rem] text-pretty text-sm leading-6 text-white/72">
                 Trage die Daten ein, die auf deinen Angeboten und Rechnungen erscheinen sollen.
               </p>
             </div>
 
-            <div className="mt-8 rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
+            <div className="mt-8 rounded-lg border border-white/10 bg-white/5 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/50">
                 Pflichtfelder
               </p>
@@ -392,7 +392,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                 <strong className="text-3xl font-semibold">{essentialsCompleted}/9</strong>
                 <span className="pb-1 text-sm text-white/60">eingetragen</span>
               </div>
-              <p className="mt-3 text-sm leading-6 text-white/68">
+              <p className="mt-3 text-pretty text-sm leading-6 text-white/68">
                 Sobald Firmenkopf, Steuerdaten und Dokumentvorgaben ausgefüllt sind, kannst du Dokumente erstellen.
               </p>
             </div>
@@ -405,7 +405,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                 return (
                   <li
                     key={step.id}
-                    className={`rounded-[1.35rem] border px-4 py-3 transition-colors ${
+                    className={`rounded-lg border px-4 py-3 transition-colors ${
                       state === 'current'
                         ? 'border-white/20 bg-white/9'
                         : state === 'done'
@@ -427,7 +427,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                       </span>
                       <div>
                         <p className="text-sm font-semibold">{step.label}</p>
-                        <p className="mt-1 text-xs leading-5 text-white/58">{step.description}</p>
+                        <p className="mt-1 text-pretty text-xs leading-5 text-white/58">{step.description}</p>
                       </div>
                     </div>
                   </li>
@@ -435,7 +435,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
               })}
             </ol>
 
-            <div className="mt-auto hidden rounded-[1.5rem] border border-white/10 bg-black/20 p-4 lg:block">
+            <div className="mt-auto hidden rounded-lg border border-white/10 bg-black/20 p-4 lg:block">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/50">
                 Danach kannst du
               </p>
@@ -455,10 +455,10 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
             </p>
             <div className="mt-2 flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <h2 className="text-[1.9rem] font-semibold tracking-[-0.02em] text-foreground">
+                <h2 className="text-balance text-[1.9rem] font-semibold tracking-[-0.02em] text-foreground">
                   {currentStep.title}
                 </h2>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
+                <p className="mt-2 max-w-2xl text-pretty text-sm leading-6 text-muted">
                   {currentStep.description}
                 </p>
               </div>
@@ -525,9 +525,9 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   </div>
                 </section>
 
-                <div className="rounded-[1.5rem] border border-border bg-surface p-5">
+                <div className="rounded-lg border border-border bg-surface p-5">
                   <p className="text-sm font-semibold text-foreground">Warum wir das jetzt abfragen</p>
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
+                  <p className="mt-2 max-w-2xl text-pretty text-sm leading-6 text-muted">
                     Diese Angaben bilden den Firmenkopf deiner Dokumente. Ohne sie fehlen wichtige Absenderdaten.
                   </p>
                 </div>
@@ -572,11 +572,11 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   />
                 </section>
 
-                <section className="rounded-[1.7rem] border border-border bg-surface p-5">
+                <section className="rounded-lg border border-border bg-surface p-5">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="max-w-xl">
                       <p className="text-sm font-semibold text-foreground">Steuerprofil</p>
-                      <p className="mt-2 text-sm leading-6 text-muted">
+                      <p className="mt-2 text-pretty text-sm leading-6 text-muted">
                         Wähle die Steuerlogik für deine Dokumente.
                       </p>
                     </div>
@@ -606,10 +606,10 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   )}
                 </section>
 
-                <section className="rounded-[1.7rem] border border-border bg-surface p-5">
+                <section className="rounded-lg border border-border bg-surface p-5">
                   <div>
                     <p className="text-sm font-semibold text-foreground">Berichtsprofil</p>
-                    <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
+                    <p className="mt-2 max-w-2xl text-pretty text-sm leading-6 text-muted">
                       Diese Auswahl legt fest, welche deutschen Berichte und Kontenlogik angeboten werden. Österreich und die Schweiz werden derzeit nicht unterstützt.
                     </p>
                   </div>
@@ -670,7 +670,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                           <option value="micro">Kleinstgesellschaft (Micro)</option>
                           <option value="small">Kleine Gesellschaft (Small)</option>
                         </select>
-                        {errors['businessReportingProfile.hgbSizeClass'] && <span className="mt-2 block text-xs text-danger">{errors['businessReportingProfile.hgbSizeClass']}</span>}
+                        {errors['businessReportingProfile.hgbSizeClass'] && <span className="mt-2 block text-xs text-error">{errors['businessReportingProfile.hgbSizeClass']}</span>}
                       </label>
                     )}
 
@@ -687,7 +687,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                           <option value="SKR03">SKR03</option>
                           <option value="SKR04">SKR04</option>
                         </select>
-                        {errors['businessReportingProfile.chart'] && <span className="mt-2 block text-xs text-danger">{errors['businessReportingProfile.chart']}</span>}
+                        {errors['businessReportingProfile.chart'] && <span className="mt-2 block text-xs text-error">{errors['businessReportingProfile.chart']}</span>}
                       </label>
                     )}
 
@@ -774,16 +774,16 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   </div>
                 </section>
 
-                <section className="rounded-[1.7rem] border border-border bg-surface p-5">
+                <section className="rounded-lg border border-border bg-surface p-5">
                   <p className="text-sm font-semibold text-foreground">Zusammenfassung</p>
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    <div className="rounded-[1.2rem] bg-surface-muted px-4 py-3">
+                    <div className="rounded-md bg-surface-muted px-4 py-3">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Firmenkopf</p>
                       <p className="mt-2 text-sm font-medium text-foreground">
                         {trim(draft.company.name) || 'Noch offen'}
                       </p>
                     </div>
-                    <div className="rounded-[1.2rem] bg-surface-muted px-4 py-3">
+                    <div className="rounded-md bg-surface-muted px-4 py-3">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Steuer</p>
                       <p className="mt-2 text-sm font-medium text-foreground">
                         {draft.legal.smallBusinessRule
@@ -791,13 +791,13 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                           : `${draft.legal.defaultVatRate}% Standard-MwSt.`}
                       </p>
                     </div>
-                    <div className="rounded-[1.2rem] bg-surface-muted px-4 py-3">
+                    <div className="rounded-md bg-surface-muted px-4 py-3">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Zahlungsziel</p>
                       <p className="mt-2 text-sm font-medium text-foreground">
                         {draft.legal.paymentTermsDays} Tage
                       </p>
                     </div>
-                    <div className="rounded-[1.2rem] bg-surface-muted px-4 py-3">
+                    <div className="rounded-md bg-surface-muted px-4 py-3">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Nummernkreis</p>
                       <p className="mt-2 text-sm font-medium text-foreground">
                         {trim(draft.numbers.invoicePrefix) || 'RE-'} / {trim(draft.numbers.offerPrefix) || 'ANG-'}

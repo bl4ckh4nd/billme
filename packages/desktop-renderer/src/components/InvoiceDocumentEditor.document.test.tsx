@@ -1,7 +1,7 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DocumentEditor } from '@billme/desktop-designer/document-editor';
 import { INITIAL_INVOICE_TEMPLATE } from '@billme/desktop-core/constants';
@@ -115,13 +115,14 @@ describe('document-first invoice editor', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: 'Steuer-Modell' }), 'standard_vat');
 
     await user.click(recipient);
-    await user.click(screen.getByRole('button', { name: 'Empfänger ohne Kundenstamm eingeben' }));
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Empfänger ohne Kundenstamm eingeben' }));
 
     await waitFor(() => expect(onSelectedClientChange).toHaveBeenLastCalledWith(''));
     expect(recipient).toHaveFocus();
     expect(screen.getByText('Nur in diesem Beleg gespeichert')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Rechnungsadresse' })).toHaveValue('');
     expect(screen.getByRole('textbox', { name: 'E-Mail' })).toHaveValue('');
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
     expect(project).toHaveValue('');
     expect(project).toBeDisabled();
 

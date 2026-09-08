@@ -42,6 +42,9 @@ const createDb = () => {
 describe('OPOS accounting', () => {
   it('locks the active chart after the first posted journal', () => {
     const db = createDb();
+    db.prepare(`INSERT INTO journal_entries
+      (id, tenant_id, entry_number, posting_date, document_date, booking_text, period, fiscal_year, status, source_type, created_at)
+      VALUES ('chart-lock-journal', 'default', 1, '2026-03-01', '2026-03-01', 'Chart lock', '2026-03', 2026, 'posted', 'manual', datetime('now'))`).run();
     expect(() => setAccountingPolicyForPro(db, scope, { activeChart: 'SKR04', vatMethod: 'soll' }))
       .toThrow('ACCOUNTING_CHART_LOCKED');
     expect((db.prepare("SELECT active_chart FROM accounting_policies WHERE tenant_id = 'default'").get() as { active_chart: string }).active_chart)

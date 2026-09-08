@@ -819,23 +819,36 @@ export const postAccountingCommand = (
   const facts = input.domainFacts as Record<string, any> | undefined;
   if (input.kind === 'correction' && facts) {
     const tenantId = getTenantId(scope);
-    const documentType = facts.documentType === 'incoming_invoice' ? 'incoming_invoice' : 'outgoing_invoice';
-    const original = resolveCorrectionOriginal(db, tenantId, facts.original as ImmutableOriginalDocument, documentType);
-    const existing = loadPriorCorrections(db, tenantId, original.documentId);
-    const linked = createLinkedCorrection({ ...facts, original, existing } as unknown as LinkedCorrectionInput);
-    const chart = activeChart(db, tenantId, options.chart);
-    const correctionSource: AccountingSourceFact = {
-      ...input.source,
-      sourceType: 'standalone_source',
-      sourceId: linked.document.id,
-      sourceRevision: linked.document.originalRevision,
-      effectiveDate: linked.document.correctionDate,
-      postingDate: linked.document.correctionDate,
-      period: linked.document.correctionDate.slice(0, 7),
-      fiscalYear: Number(linked.document.correctionDate.slice(0, 4)),
-      lines: correctionLines(db, tenantId, chart, linked.document, documentType),
-    };
-    return postAccountingSource(db, correctionSource, scope, { ...options, provenance: { commandKind: input.kind, domainFacts: { ...facts, original }, ...((options.provenance as Record<string, unknown> | undefined) ?? {}) } });
+    const generatedOptions = { ...options, provenance: { commandKind: input.kind, domainFacts: facts, ...((options.provenance as Record<string, unknown> | undefined) ?? {}) } };
+    return db.transaction((): AccountingSourcePostResult => {
+      const replay = existingResult(db, tenantId, input.source, generatedOptions);
+      if (replay) return replay;
+      const documentType = facts.documentType === 'incoming_invoice' ? 'incoming_invoice' : 'outgoing_invoice';
+      const original = resolveCorrectionOriginal(db, tenantId, facts.original as ImmutableOriginalDocument, documentType);
+      const existing = loadPriorCorrections(db, tenantId, original.documentId);
+      let linked: ReturnType<typeof createLinkedCorrection>;
+      try {
+        linked = createLinkedCorrection({ ...facts, original, existing } as unknown as LinkedCorrectionInput);
+      } catch (cause) {
+        const issue = settlementIssue(cause);
+        const result = { status: 'rejected', errors: [issue] };
+        const sourceRun = persistRejected(db, tenantId, input.source, result, generatedOptions);
+        return { status: 'rejected', sourceRun, errors: [issue], idempotencyKey: keyFor(input.source, tenantId) };
+      }
+      const chart = activeChart(db, tenantId, options.chart);
+      const correctionSource: AccountingSourceFact = {
+        ...input.source,
+        sourceType: 'standalone_source',
+        sourceId: linked.document.id,
+        sourceRevision: linked.document.originalRevision,
+        effectiveDate: linked.document.correctionDate,
+        postingDate: linked.document.correctionDate,
+        period: linked.document.correctionDate.slice(0, 7),
+        fiscalYear: Number(linked.document.correctionDate.slice(0, 4)),
+        lines: correctionLines(db, tenantId, chart, linked.document, documentType),
+      };
+      return postAccountingSourceInTransaction(db, correctionSource, scope, { ...generatedOptions, provenance: { ...generatedOptions.provenance, domainFacts: { ...facts, original } } });
+    })();
   }
   if (input.kind === 'ustg17' && facts) validateUstg17AdjustmentFacts(facts as unknown as Ustg17AdjustmentFactsInput);
   const tenantId = getTenantId(scope);

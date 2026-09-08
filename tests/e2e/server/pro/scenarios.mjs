@@ -36,7 +36,7 @@ const selectByVisibleLabel = (section, label) =>
   section.locator('label.select-field > span').filter({ hasText: new RegExp(`^${label}$`) }).locator('..').locator('select');
 
 const inputByVisibleLabel = (section, label) =>
-  section.locator('label').filter({ hasText: new RegExp(`^${label}$`) }).locator('..').locator('input');
+  section.getByLabel(label, { exact: true });
 
 const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') => {
   const heading = page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' });

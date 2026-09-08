@@ -6,6 +6,7 @@ let desktop;
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
   await seedDesktopData(desktop.page, { app: 'pro' });
+  await desktop.page.reload();
 });
 
 test.afterEach(async () => {

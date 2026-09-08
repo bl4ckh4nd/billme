@@ -60,6 +60,6 @@ test('global search opens a deep link result', async () => {
   await expect(clientSearchResult).toBeVisible();
   await clientSearchResult.click();
   await expect(page).toHaveURL(/\/clients\?id=c1$/);
-  await expect(page.getByRole('heading', { name: 'Kunden' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Musterfirma GmbH' })).toBeVisible();
   await expect(page.getByText('Musterfirma GmbH')).toBeVisible();
 });

@@ -10,7 +10,7 @@
     "email": "opensource@billme.app"
   },
   "type": "module",
-  "packageManager": "pnpm@10.0.0",
+  "packageManager": "pnpm@10.1.0",
   "main": "dist/main/index.js",
   "scripts": {
     "postinstall": "node scripts/rebuild-electron.mjs",

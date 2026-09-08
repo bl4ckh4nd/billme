@@ -50,7 +50,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile && pnpm rebuild better-sqlite3
 
       - name: Shared desktop data tests
         run: pnpm -C packages/desktop-data test
@@ -109,7 +109,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile && pnpm rebuild better-sqlite3
 
       - name: Server core typecheck
         run: pnpm -C packages/server-core typecheck
@@ -169,7 +169,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile && pnpm rebuild better-sqlite3
 
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
@@ -218,7 +218,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile && pnpm rebuild better-sqlite3
 
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium

@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Pro-Korrekturüberbuchungen liefern wieder einen typisierten, auditierten Ablehnungsstatus; die zugehörigen Accounting- und Browser-Abnahmetests folgen den aktuellen Unveränderlichkeits-, Steuer- und Formularverträgen.
-- Die Linux-CI stellt die native Keychain-Laufzeit für Pro-Tests bereit und führt root-level Node-Testdateien mit einem Node-20-kompatiblen Muster aus, sodass die vollständigen Server-, Worker-, Demo- und Migrationsprüfungen nicht mehr vorzeitig abbrechen.
+- Die Linux-CI stellt die native Keychain-Laufzeit und das explizit vorbereitete Electron-Binary für Desktop-Abnahmetests bereit und führt root-level Node-Testdateien mit einem Node-20-kompatiblen Muster aus, sodass die vollständigen Server-, Worker-, Demo- und Migrationsprüfungen nicht mehr vorzeitig abbrechen.
 - Deaktivierte Auswahlfelder übernehmen extern zurückgesetzte Werte sofort; beim Wechsel auf einen freien Belegempfänger bleibt dadurch kein zuvor gewähltes Projekt sichtbar.
 - Die additive EÜR-Kompatibilitätsschicht initialisiert fehlende Berichtssnapshots jetzt vor ihren Unveränderlichkeits-Triggern, sodass alte oder minimale SQLite-Importquellen zuverlässig geöffnet werden können.
 - Workspace und CI verwenden pnpm 10.1 und bauen sowie prüfen das nur für SQLite-Import-, Kompatibilitäts- und Portaltests benötigte `better-sqlite3`-Binding explizit; der produktive Lite-/Pro-Desktop bleibt auf PGlite.

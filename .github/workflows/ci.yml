@@ -58,6 +58,9 @@ jobs:
       - name: Prepare legacy SQLite test binding
         run: pnpm ci:prepare-sqlite-tests
 
+      - name: Prepare Electron test binary
+        run: pnpm ci:prepare-electron
+
       - name: Shared desktop data tests
         run: pnpm -C packages/desktop-data test
 

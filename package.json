@@ -29,6 +29,7 @@
     "pglite:migrate": "node packages/pglite-migration-cli/bin/billme-pglite-migrate.mjs",
     "check:raw-sql": "node scripts/raw-sql-guard.mjs",
     "ci:prepare-sqlite-tests": "node scripts/prepare-better-sqlite3.mjs",
+    "ci:prepare-electron": "node scripts/prepare-electron.mjs",
     "dist": "pnpm -C apps/desktop dist",
     "docker:server-mode": "pnpm docker:server-mode:up",
     "docker:server-mode:down": "docker compose --env-file .env.server-mode -f docker-compose.server-mode.yml down",

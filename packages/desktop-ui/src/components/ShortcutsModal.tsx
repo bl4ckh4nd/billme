@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Keyboard } from 'lucide-react';
+import { Portal } from '@billme/ui';
 
 interface ShortcutsModalProps {
   onClose: () => void;
@@ -29,8 +30,9 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ onClose }) => {
   }, [onClose]);
 
   return (
+    <Portal>
     <div
-      className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-dark-base/20 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden">
@@ -72,5 +74,6 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ onClose }) => {
         </div>
       </div>
     </div>
+    </Portal>
   );
 };

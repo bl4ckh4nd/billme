@@ -125,9 +125,31 @@ test('accepts server-emitted shareholder flow source runs and rejects unknown so
     createdAt: '2026-08-14T00:00:00.000Z',
   };
 
-  assert.equal(proAccountingSourceRunSchema.parse(sourceRun).fact.sourceType, 'shareholder_flow');
+  assert.equal(proAccountingSourceRunSchema.parse(sourceRun).fact?.sourceType, 'shareholder_flow');
   assert.throws(() => proAccountingSourceRunSchema.parse({ ...sourceRun, sourceType: 'unknown_source' }));
   assert.throws(() => proAccountingSourceRunSchema.parse({ ...sourceRun, fact: { ...source, sourceType: 'unknown_source' } }));
+});
+
+test('accepts persisted command envelopes without inventing a source fact', () => {
+  const source = {
+    command: 'fiscal_close',
+    input: { closeDate: '2026-08-14', sourceId: 'close-1', sourceRevision: '1' },
+  };
+  const parsed = proAccountingSourceRunSchema.parse({
+    id: 'run-1',
+    tenantId: 'tenant-1',
+    sourceType: 'fiscal_close',
+    sourceId: 'close-1',
+    sourceRevision: '1',
+    idempotencyKey: 'close-1:1',
+    source,
+    result: { command: 'fiscal_close' },
+    status: 'posted',
+    createdAt: '2026-08-14T00:00:00.000Z',
+  });
+
+  assert.equal(parsed.fact, undefined);
+  assert.deepEqual(parsed.source, source);
 });
 
 test('requires balanced non-empty lines for standalone source posting', () => {

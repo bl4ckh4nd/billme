@@ -65,6 +65,73 @@ export interface IncomingInvoiceEntity {
   updatedAt: string;
 }
 
+export type IncomingInvoiceDocumentMimeType =
+  | 'application/pdf'
+  | 'image/jpeg'
+  | 'image/png'
+  | 'image/webp';
+
+export type IncomingInvoiceDocumentReviewStatus = 'pending' | 'accepted' | 'rejected';
+
+/** Maximum durable original size. The HTTP envelope is allowed additional base64/JSON overhead. */
+export const INCOMING_INVOICE_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
+/** Fastify JSON body limit for the base64 upload envelope (10 MiB raw plus overhead). */
+export const INCOMING_INVOICE_DOCUMENT_UPLOAD_BODY_LIMIT = 14_500_000;
+
+const hasAsciiPrefix = (content: Uint8Array, offset: number, value: string): boolean =>
+  value.split('').every((character, index) => content[offset + index] === character.charCodeAt(0));
+
+/** Validate the declared media type against the durable content before hashing/persisting it. */
+export const assertIncomingInvoiceDocumentContent = (
+  mimeType: IncomingInvoiceDocumentMimeType,
+  content: Uint8Array,
+): void => {
+  const matches = mimeType === 'application/pdf'
+    ? hasAsciiPrefix(content, 0, '%PDF-')
+    : mimeType === 'image/jpeg'
+      ? content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff
+      : mimeType === 'image/png'
+        ? hasAsciiPrefix(content, 0, '\x89PNG\r\n\x1a\n')
+        : hasAsciiPrefix(content, 0, 'RIFF') && hasAsciiPrefix(content, 8, 'WEBP');
+  if (!matches) throw new Error('INCOMING_INVOICE_DOCUMENT_CONTENT_MISMATCH');
+};
+
+/** Metadata for the immutable original attached to an incoming invoice. */
+export interface IncomingInvoiceDocumentEntity {
+  id: string;
+  tenantId: string;
+  incomingInvoiceId: string;
+  originalFilename: string;
+  mimeType: IncomingInvoiceDocumentMimeType;
+  byteLength: number;
+  sha256: string;
+  reviewStatus: IncomingInvoiceDocumentReviewStatus;
+  /** Resolved from the immutable invoice accounting projection when posted. */
+  journalEntryId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IncomingInvoiceDocumentUploadInput {
+  id?: string;
+  incomingInvoiceId: string;
+  originalFilename: string;
+  mimeType: IncomingInvoiceDocumentMimeType;
+  content: Uint8Array;
+  mutation?: AccountingMutationContext;
+}
+
+export interface IncomingInvoiceDocumentReviewInput {
+  documentId: string;
+  reviewStatus: Exclude<IncomingInvoiceDocumentReviewStatus, 'pending'>;
+  mutation?: AccountingMutationContext;
+}
+
+export interface IncomingInvoiceDocumentDownload {
+  document: IncomingInvoiceDocumentEntity;
+  content: Uint8Array;
+}
+
 export interface AccountingSnapshot {
   sourceType: AccountingDocumentSource;
   sourceId: string;

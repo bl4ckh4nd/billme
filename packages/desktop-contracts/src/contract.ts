@@ -80,6 +80,23 @@ const convertOfferToInvoiceSchema = z.object({
   offerId: z.string().min(1),
 });
 
+const documentChainCommonSchema = z.object({
+  id: z.string().min(1),
+  number: z.string().min(1),
+  date: z.string().min(1),
+  dueDate: z.string().min(1).optional(),
+  servicePeriod: z.string().min(1).optional(),
+  reason: z.string().min(1),
+});
+const documentChainCreateSchema = z.discriminatedUnion('operation', [
+  documentChainCommonSchema.extend({ operation: z.literal('order_confirmation'), offerId: z.string().min(1) }),
+  documentChainCommonSchema.extend({ operation: z.literal('delivery_note'), orderId: z.string().min(1), items: invoiceSchema.shape.items.optional() }),
+  documentChainCommonSchema.extend({ operation: z.literal('settlement_invoice'), orderId: z.string().min(1), kind: z.enum(['advance_invoice', 'partial_invoice', 'final_invoice']), amount: z.number().finite().positive(), items: invoiceSchema.shape.items.optional() }),
+  documentChainCommonSchema.extend({ operation: z.literal('correction'), invoiceId: z.string().min(1), kind: z.enum(['credit_note', 'cancellation_invoice']), amount: z.number().finite().positive().optional(), items: invoiceSchema.shape.items.optional() }),
+  documentChainCommonSchema.extend({ operation: z.literal('revision'), invoiceId: z.string().min(1) }),
+]);
+const documentChainListSchema = z.object({ rootDocumentId: z.string().min(1) });
+
 const sendEmailSchema = z.object({
   documentType: z.enum(['invoice', 'offer']),
   documentId: z.string().min(1),
@@ -592,6 +609,16 @@ export const ipcRoutes = {
     channel: 'documents:convertOfferToInvoice',
     args: convertOfferToInvoiceSchema,
     result: invoiceSchema,
+  },
+  'documents:chainCreate': {
+    channel: 'documents:chainCreate',
+    args: documentChainCreateSchema,
+    result: invoiceSchema,
+  },
+  'documents:chainList': {
+    channel: 'documents:chainList',
+    args: documentChainListSchema,
+    result: z.array(invoiceSchema),
   },
 
   'templates:list': {

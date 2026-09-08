@@ -69,6 +69,10 @@ import {
   accountingAccountMappingSchema,
   vendorSchema,
   incomingInvoiceSchema,
+  incomingInvoiceDocumentSchema,
+  incomingInvoiceDocumentUploadSchema,
+  incomingInvoiceDocumentDownloadSchema,
+  incomingInvoiceDocumentReviewSchema,
   openItemSchema,
   accountingPostingPreviewSchema,
   accountingBackfillPreviewSchema,
@@ -134,6 +138,23 @@ const numbersFinalizeArgsSchema = z.object({
 const convertOfferToInvoiceSchema = z.object({
   offerId: z.string().min(1),
 });
+
+const documentChainCommonSchema = z.object({
+  id: z.string().min(1),
+  number: z.string().min(1),
+  date: z.string().min(1),
+  dueDate: z.string().min(1).optional(),
+  servicePeriod: z.string().min(1).optional(),
+  reason: z.string().min(1),
+});
+const documentChainCreateSchema = z.discriminatedUnion('operation', [
+  documentChainCommonSchema.extend({ operation: z.literal('order_confirmation'), offerId: z.string().min(1) }),
+  documentChainCommonSchema.extend({ operation: z.literal('delivery_note'), orderId: z.string().min(1), items: invoiceSchema.shape.items.optional() }),
+  documentChainCommonSchema.extend({ operation: z.literal('settlement_invoice'), orderId: z.string().min(1), kind: z.enum(['advance_invoice', 'partial_invoice', 'final_invoice']), amount: z.number().finite().positive(), items: invoiceSchema.shape.items.optional() }),
+  documentChainCommonSchema.extend({ operation: z.literal('correction'), invoiceId: z.string().min(1), kind: z.enum(['credit_note', 'cancellation_invoice']), amount: z.number().finite().positive().optional(), items: invoiceSchema.shape.items.optional() }),
+  documentChainCommonSchema.extend({ operation: z.literal('revision'), invoiceId: z.string().min(1) }),
+]);
+const documentChainListSchema = z.object({ rootDocumentId: z.string().min(1) });
 
 const sendEmailSchema = z.object({
   documentType: z.enum(['invoice', 'offer']),
@@ -944,6 +965,16 @@ export const ipcRoutes = {
     args: convertOfferToInvoiceSchema,
     result: invoiceSchema,
   },
+  'documents:chainCreate': {
+    channel: 'documents:chainCreate',
+    args: documentChainCreateSchema,
+    result: invoiceSchema,
+  },
+  'documents:chainList': {
+    channel: 'documents:chainList',
+    args: documentChainListSchema,
+    result: z.array(invoiceSchema),
+  },
 
   'templates:list': {
     channel: 'templates:list',
@@ -1279,6 +1310,10 @@ export const ipcRoutes = {
   'pro:upsertVendor': { channel: 'pro:upsertVendor', args: proUpsertVendorArgsSchema, result: vendorSchema },
   'pro:listIncomingInvoices': { channel: 'pro:listIncomingInvoices', args: z.undefined(), result: z.array(incomingInvoiceSchema) },
   'pro:upsertIncomingInvoice': { channel: 'pro:upsertIncomingInvoice', args: proUpsertIncomingInvoiceArgsSchema, result: incomingInvoiceSchema },
+  'pro:listIncomingInvoiceDocuments': { channel: 'pro:listIncomingInvoiceDocuments', args: z.object({ invoiceId: z.string().min(1) }), result: z.array(incomingInvoiceDocumentSchema) },
+  'pro:uploadIncomingInvoiceDocument': { channel: 'pro:uploadIncomingInvoiceDocument', args: incomingInvoiceDocumentUploadSchema, result: incomingInvoiceDocumentSchema },
+  'pro:downloadIncomingInvoiceDocument': { channel: 'pro:downloadIncomingInvoiceDocument', args: z.object({ documentId: z.string().min(1) }), result: incomingInvoiceDocumentDownloadSchema },
+  'pro:reviewIncomingInvoiceDocument': { channel: 'pro:reviewIncomingInvoiceDocument', args: incomingInvoiceDocumentReviewSchema, result: incomingInvoiceDocumentSchema },
   'pro:previewOutgoingInvoiceAccounting': { channel: 'pro:previewOutgoingInvoiceAccounting', args: proInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
   'pro:postOutgoingInvoiceAccounting': { channel: 'pro:postOutgoingInvoiceAccounting', args: proOutgoingInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
   'pro:previewIncomingInvoiceAccounting': { channel: 'pro:previewIncomingInvoiceAccounting', args: proInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },

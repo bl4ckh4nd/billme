@@ -1,4 +1,4 @@
-import { Button } from '@billme/ui';
+import { Button, ValidationSummary, useActionFeedback } from '@billme/ui';
 import React, { useState } from 'react';
 import {
     Repeat, Calendar, Play, Pause, Plus, Trash2,
@@ -13,21 +13,46 @@ import {
   useRecurringProfilesQuery,
   useUpsertRecurringProfileMutation,
 } from '../hooks/useRecurring';
+import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useQueryClient } from '@tanstack/react-query';
-import { useToast } from '@billme/desktop-core/hooks/useToast';
-import { Toast } from '@billme/desktop-ui/components/Toast';
 import { ipc } from '../runtime-api';
+
+type RecurringValidationError = {
+    message: string;
+    targetId: string;
+};
+
+const isBillableItem = (item: InvoiceItem): boolean =>
+    item.kind === undefined || item.kind === 'item' || item.kind === 'time';
+
+const itemTotal = (item: InvoiceItem): number => {
+    const total = Number(item.total);
+    return Number.isFinite(total) ? total : 0;
+};
+
+const recurringTotal = (items: readonly InvoiceItem[]): number =>
+    items.filter(isBillableItem).reduce((sum, item) => sum + itemTotal(item), 0);
+
+const germanSaveError = 'Abo konnte nicht gespeichert werden. Bitte prüfe die Angaben und versuche es erneut.';
 
 export const RecurringView: React.FC = () => {
     const { data: profiles = [] } = useRecurringProfilesQuery();
     const { data: clients = [] } = useClientsQuery();
     const upsertProfile = useUpsertRecurringProfileMutation();
     const deleteProfile = useDeleteRecurringProfileMutation();
+    const { pendingIds, requestDelete } = useDeferredDelete({
+        scope: 'recurring',
+        commit: (id) => deleteProfile.mutateAsync(id),
+        label: (count) => count === 1 ? 'Abo gelöscht' : `${count} Abos gelöscht`,
+    });
     const queryClient = useQueryClient();
-    const { toast, toastState, closeToast } = useToast();
+    const { notify } = useActionFeedback('recurring');
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [editingProfile, setEditingProfile] = useState<RecurringProfile | null>(null);
     const [runningNowId, setRunningNowId] = useState<string | null>(null);
+    const [validationErrors, setValidationErrors] = useState<Record<string, RecurringValidationError>>({});
+    const [saveError, setSaveError] = useState<string | null>(null);
+    const editorId = React.useId();
 
     // Form State
     const [formData, setFormData] = useState<Partial<RecurringProfile>>({});
@@ -35,9 +60,31 @@ export const RecurringView: React.FC = () => {
     const formatCurrency = (amount: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
     const formatDate = (dateString: string) => new Date(dateString).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
+    const inputId = (field: string) => `${editorId}-${field}`;
+    const fieldErrorId = (field: string) => `${inputId(field)}-error`;
+    const itemFieldId = (index: number, field: 'description' | 'quantity' | 'price') => inputId(`item-${index}-${field}`);
+    const itemDescriptionId = (index: number) => itemFieldId(index, 'description');
+
+    const focusValidationError = (error: RecurringValidationError | undefined) => {
+        if (!error) return;
+        const target = document.getElementById(error.targetId);
+        if (target instanceof HTMLElement) {
+            target.focus();
+            target.scrollIntoView?.({ block: 'center' });
+        }
+    };
+
+    React.useEffect(() => {
+        if (!isEditModalOpen) return;
+        const firstError = validationErrors.items ?? Object.values(validationErrors)[0];
+        focusValidationError(firstError);
+    }, [isEditModalOpen, validationErrors]);
+
     const getClientName = (id: string) => clients.find(c => c.id === id)?.company || 'Unbekannt';
 
     const handleEdit = (profile?: RecurringProfile) => {
+        setValidationErrors({});
+        setSaveError(null);
         if (profile) {
             setEditingProfile(profile);
             setFormData(JSON.parse(JSON.stringify(profile))); // Deep copy
@@ -58,26 +105,89 @@ export const RecurringView: React.FC = () => {
     };
 
     const handleDelete = (id: string) => {
-        if (confirm('Abo wirklich löschen?')) {
-            deleteProfile.mutate(id);
+        requestDelete([id]);
+    };
+
+    const handleToggleActive = async (id: string) => {
+        const profile = profiles.find(p => p.id === id);
+        if (!profile) return;
+        const nextState = !profile.active ? 'aktiviert' : 'pausiert';
+        try {
+            await upsertProfile.mutateAsync({ ...profile, active: !profile.active });
+        } catch {
+            notify('error', `Abo konnte nicht ${nextState} werden.`);
         }
     };
 
-    const handleToggleActive = (id: string) => {
-        const profile = profiles.find(p => p.id === id);
-        if (!profile) return;
-        upsertProfile.mutate({ ...profile, active: !profile.active });
-    };
+    const handleSave = async () => {
+        const errors: Record<string, RecurringValidationError> = {};
+        const name = formData.name?.trim() ?? '';
+        const clientId = formData.clientId?.trim() ?? '';
+        const items = formData.items ?? [];
+        const billableItems = items
+            .map((item, index) => ({ item, index }))
+            .filter(({ item }) => isBillableItem(item));
+        const validBillableItems = billableItems.filter(({ item }) =>
+            item.description.trim().length > 0 &&
+            Number.isFinite(item.quantity) && item.quantity > 0 &&
+            itemTotal(item) > 0,
+        );
+        const total = recurringTotal(items);
 
-    const handleSave = () => {
-        if (!formData.name || !formData.clientId) return;
+        if (!name) {
+            errors.name = { message: 'Eine Bezeichnung ist erforderlich.', targetId: inputId('name') };
+        }
+        if (!clientId) {
+            errors.clientId = { message: 'Bitte wähle einen Kunden aus.', targetId: inputId('clientId') };
+        }
 
-        // Recalculate total just in case
-        const total = (formData.items || []).reduce((acc, item) => acc + item.total, 0);
-        const finalData = { ...formData, amount: total } as RecurringProfile;
+        if (validBillableItems.length === 0 || validBillableItems.length !== billableItems.length || total <= 0) {
+            const firstItem = billableItems[0];
+            const firstInvalidItem = billableItems.find(({ item }) =>
+                item.description.trim().length === 0 ||
+                !Number.isFinite(item.quantity) || item.quantity <= 0 ||
+                itemTotal(item) <= 0,
+            );
+            const targetItem = firstInvalidItem ?? firstItem;
+            let message = 'Mindestens eine abrechenbare Position mit Beschreibung, Menge und einem Gesamtbetrag größer als 0 ist erforderlich.';
+            if (billableItems.length > 0 && !billableItems.some(({ item }) => item.description.trim().length > 0)) {
+                message = 'Die abrechenbare Position benötigt eine Beschreibung.';
+            } else if (billableItems.length > 0 && !billableItems.some(({ item }) => Number.isFinite(item.quantity) && item.quantity > 0)) {
+                message = 'Die Menge der abrechenbaren Position muss größer als 0 sein.';
+            } else if (billableItems.length > 0 && !billableItems.some(({ item }) => itemTotal(item) > 0)) {
+                message = 'Die Gesamtsumme der abrechenbaren Positionen muss größer als 0 sein.';
+            }
+            const targetId = targetItem
+                ? !targetItem.item.description.trim()
+                    ? itemFieldId(targetItem.index, 'description')
+                    : !(Number.isFinite(targetItem.item.quantity) && targetItem.item.quantity > 0)
+                        ? itemFieldId(targetItem.index, 'quantity')
+                        : itemFieldId(targetItem.index, 'price')
+                : inputId('add-item');
+            errors.items = {
+                message,
+                targetId,
+            };
+        }
 
-        upsertProfile.mutate(finalData);
-        setIsEditModalOpen(false);
+        setValidationErrors(errors);
+        if (Object.keys(errors).length > 0) return;
+
+        const finalData = {
+            ...formData,
+            name,
+            clientId,
+            amount: total,
+        } as RecurringProfile;
+
+        setSaveError(null);
+        try {
+            await upsertProfile.mutateAsync(finalData);
+            setIsEditModalOpen(false);
+        } catch {
+            setSaveError(germanSaveError);
+            notify('error', germanSaveError);
+        }
     };
 
     // Item Management inside Modal
@@ -115,35 +225,19 @@ export const RecurringView: React.FC = () => {
             const result = await ipc.recurring.manualRun();
 
             if (result.success && result.result) {
-                toast({
-                    title: 'Abo-Rechnungen generiert',
-                    description: `${result.result.generated} Rechnung(en) erstellt. ${
-                        result.result.deactivated > 0
-                            ? `${result.result.deactivated} Profil(e) deaktiviert (Enddatum erreicht).`
-                            : ''
-                    }`,
-                    variant: result.result.errors.length > 0 ? 'warning' : 'default'
-                });
-
-                if (result.result.errors.length > 0) {
-                    console.error('Generation errors:', result.result.errors);
-                }
+                const skippedProfiles = result.result.errors.length;
+                notify(
+                    skippedProfiles > 0 ? 'info' : 'success',
+                    `${result.result.generated} erstellt, ${skippedProfiles} ${skippedProfiles === 1 ? 'Profil' : 'Profile'} übersprungen`,
+                );
 
                 // Refresh profile list
                 void queryClient.invalidateQueries({ queryKey: ['recurringProfiles'] });
             } else {
-                toast({
-                    title: 'Fehler',
-                    description: result.error || 'Unbekannter Fehler beim Generieren',
-                    variant: 'destructive'
-                });
+                notify('error', 'Abo-Lauf konnte nicht abgeschlossen werden.');
             }
-        } catch (error) {
-            toast({
-                title: 'Fehler',
-                description: error instanceof Error ? error.message : String(error),
-                variant: 'destructive'
-            });
+        } catch {
+            notify('error', 'Abo-Lauf konnte nicht abgeschlossen werden.');
         } finally {
             setRunningNowId(null);
         }
@@ -170,7 +264,7 @@ export const RecurringView: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 overflow-y-auto pb-4">
-                {profiles.map((profile, idx) => (
+                {profiles.filter((profile) => !pendingIds.has(profile.id)).map((profile, idx) => (
                     <div
                         key={profile.id}
                         className={`p-6 rounded-[2rem] border transition-all relative overflow-hidden group animate-scale-in ${profile.active ? 'bg-white border-gray-200 hover:border-black hover:shadow-xl' : 'bg-gray-50 border-gray-100 opacity-70'}`}
@@ -240,21 +334,13 @@ export const RecurringView: React.FC = () => {
                     </div>
                 ))}
 
-                {profiles.length === 0 && (
+                {profiles.every((profile) => pendingIds.has(profile.id)) && (
                      <div className="col-span-full text-center py-16 text-gray-400">
                         <Repeat size={48} className="mx-auto mb-4 opacity-20" />
                         <p>Keine wiederkehrenden Rechnungen eingerichtet.</p>
                     </div>
                 )}
             </div>
-
-            {/* Toast Notification */}
-            <Toast
-                message={toastState.message}
-                type={toastState.type}
-                isVisible={toastState.isVisible}
-                onClose={closeToast}
-            />
 
             {/* Edit Modal */}
             {isEditModalOpen && (
@@ -269,6 +355,16 @@ export const RecurringView: React.FC = () => {
                         </div>
 
                         <div className="flex-1 overflow-y-auto p-8 space-y-8">
+                            <ValidationSummary
+                                errors={Object.entries(validationErrors)
+                                    .filter(([field]) => field === 'name' || field === 'clientId')
+                                    .map(([field, error]) => ({ id: error.targetId, message: error.message }))}
+                                onJump={(id) => {
+                                    const target = document.getElementById(id);
+                                    if (target instanceof HTMLElement) target.focus();
+                                }}
+                            />
+
                             {/* General Settings */}
                             <section className="space-y-4">
                                 <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 flex items-center gap-2">
@@ -276,26 +372,38 @@ export const RecurringView: React.FC = () => {
                                 </h3>
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="col-span-2">
-                                        <label className="block text-xs font-bold text-gray-500 mb-1">Interne Bezeichnung</label>
+                                        <label htmlFor={inputId('name')} className="block text-xs font-bold text-gray-500 mb-1">Interne Bezeichnung</label>
                                         <input
+                                            id={inputId('name')}
                                             type="text"
                                             className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-bold focus:ring-2 focus:ring-accent outline-none"
                                             value={formData.name || ''}
                                             onChange={e => setFormData({ ...formData, name: e.target.value })}
                                             placeholder="z.B. Wartungsvertrag 2024"
+                                            required
+                                            aria-required="true"
+                                            aria-invalid={validationErrors.name ? 'true' : undefined}
+                                            aria-describedby={validationErrors.name ? fieldErrorId('name') : undefined}
                                         />
+                                        {validationErrors.name && <p id={fieldErrorId('name')} className="mt-1 text-xs font-medium text-error">{validationErrors.name.message}</p>}
                                     </div>
                                     <div>
-                                        <label className="block text-xs font-bold text-gray-500 mb-1">Kunde</label>
+                                        <label htmlFor={inputId('clientId')} className="block text-xs font-bold text-gray-500 mb-1">Kunde</label>
                                         <select
+                                            id={inputId('clientId')}
                                             className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-accent outline-none"
                                             value={formData.clientId}
                                             onChange={e => setFormData({ ...formData, clientId: e.target.value })}
+                                            required
+                                            aria-required="true"
+                                            aria-invalid={validationErrors.clientId ? 'true' : undefined}
+                                            aria-describedby={validationErrors.clientId ? fieldErrorId('clientId') : undefined}
                                         >
                                             {clients.map(c => (
                                                 <option key={c.id} value={c.id}>{c.company}</option>
                                             ))}
                                         </select>
+                                        {validationErrors.clientId && <p id={fieldErrorId('clientId')} className="mt-1 text-xs font-medium text-error">{validationErrors.clientId.message}</p>}
                                     </div>
                                     <div>
                                         <label className="block text-xs font-bold text-gray-500 mb-1">Intervall</label>
@@ -339,41 +447,63 @@ export const RecurringView: React.FC = () => {
                                     <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 flex items-center gap-2">
                                         <Calculator size={14} /> Rechnungspositionen
                                     </h3>
-                                    <button onClick={addItem} className="text-xs font-bold bg-black text-accent px-2 py-1 rounded hover:bg-gray-800 transition-colors">
+                                    <button id={inputId('add-item')} onClick={addItem} className="text-xs font-bold bg-black text-accent px-2 py-1 rounded hover:bg-gray-800 transition-colors">
                                         + Position
                                     </button>
                                 </div>
+
+                                {validationErrors.items && (
+                                    <div
+                                        id={fieldErrorId('items')}
+                                        className="rounded-lg border border-error-border bg-error-bg p-3 text-sm font-medium text-error"
+                                        role="alert"
+                                        aria-live="assertive"
+                                        aria-atomic="true"
+                                    >
+                                        {validationErrors.items.message}
+                                    </div>
+                                )}
 
                                 <div className="space-y-3">
                                     {formData.items?.map((item, idx) => (
                                         <div key={idx} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
                                             <div className="flex gap-2 mb-2">
                                                 <input
+                                                    id={itemDescriptionId(idx)}
                                                     type="text"
                                                     placeholder="Beschreibung"
+                                                    aria-label="Beschreibung"
                                                     className="flex-1 bg-white border border-gray-200 rounded p-2 text-sm font-bold outline-none focus:border-accent"
                                                     value={item.description}
                                                     onChange={e => handleItemChange(idx, 'description', e.target.value)}
+                                                    aria-invalid={validationErrors.items?.targetId === itemDescriptionId(idx) ? 'true' : undefined}
+                                                    aria-describedby={validationErrors.items?.targetId === itemDescriptionId(idx) ? fieldErrorId('items') : undefined}
                                                 />
-                                                <button onClick={() => removeItem(idx)} className="text-gray-400 hover:text-error p-1"><Trash2 size={16}/></button>
+                                                <button aria-label="Position entfernen" onClick={() => removeItem(idx)} className="text-gray-400 hover:text-error p-1"><Trash2 size={16}/></button>
                                             </div>
                                             <div className="grid grid-cols-3 gap-2">
                                                 <div>
-                                                    <label className="text-[10px] text-gray-400 font-bold uppercase">Menge</label>
+                                                    <label htmlFor={itemFieldId(idx, 'quantity')} className="text-[10px] text-gray-400 font-bold uppercase">Menge</label>
                                                     <input
+                                                        id={itemFieldId(idx, 'quantity')}
                                                         type="number"
                                                         className="w-full bg-white border border-gray-200 rounded p-2 text-sm outline-none"
                                                         value={item.quantity}
                                                         onChange={e => handleItemChange(idx, 'quantity', Number(e.target.value))}
+                                                        aria-invalid={validationErrors.items?.targetId === itemFieldId(idx, 'quantity') ? 'true' : undefined}
+                                                        aria-describedby={validationErrors.items?.targetId === itemFieldId(idx, 'quantity') ? fieldErrorId('items') : undefined}
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label className="text-[10px] text-gray-400 font-bold uppercase">Preis (€)</label>
+                                                    <label htmlFor={itemFieldId(idx, 'price')} className="text-[10px] text-gray-400 font-bold uppercase">Preis (€)</label>
                                                     <input
+                                                        id={itemFieldId(idx, 'price')}
                                                         type="number"
                                                         className="w-full bg-white border border-gray-200 rounded p-2 text-sm outline-none"
                                                         value={item.price}
                                                         onChange={e => handleItemChange(idx, 'price', Number(e.target.value))}
+                                                        aria-invalid={validationErrors.items?.targetId === itemFieldId(idx, 'price') ? 'true' : undefined}
+                                                        aria-describedby={validationErrors.items?.targetId === itemFieldId(idx, 'price') ? fieldErrorId('items') : undefined}
                                                     />
                                                 </div>
                                                 <div className="text-right">
@@ -387,21 +517,28 @@ export const RecurringView: React.FC = () => {
                                 <div className="flex justify-between items-center pt-4 border-t border-gray-100">
                                     <span className="font-bold">Gesamtsumme (Netto)</span>
                                     <span className="font-mono font-bold text-xl">
-                                        {formatCurrency((formData.items || []).reduce((acc, i) => acc + i.total, 0))}
+                                        {formatCurrency(recurringTotal(formData.items || []))}
                                     </span>
                                 </div>
                             </section>
                         </div>
 
-                        <div className="p-6 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+                        <div className="p-6 border-t border-gray-100 bg-gray-50">
+                            {saveError && (
+                                <div className="mb-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm font-medium text-error" role="alert" aria-live="assertive">
+                                    {saveError}
+                                </div>
+                            )}
+                            <div className="flex justify-end gap-3">
                             <button onClick={() => setIsEditModalOpen(false)} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-200 transition-colors">Abbrechen</button>
                             <button
                                 onClick={handleSave}
-                                disabled={!formData.name}
+                                disabled={Boolean(upsertProfile.isPending)}
                                 className="px-6 py-3 rounded-xl font-bold bg-accent text-black hover:bg-accent-hover shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                             >
-                                <Save size={18} /> Speichern
+                                <Save size={18} /> {upsertProfile.isPending ? 'Speichert...' : 'Speichern'}
                             </button>
+                            </div>
                         </div>
                     </div>
                 </div>

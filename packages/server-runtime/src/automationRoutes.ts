@@ -19,6 +19,7 @@ import {
 } from '@billme/server-core';
 import {
   createPostgresAuditLogPort,
+  applyServerOfferPortalDecision,
   createPostgresBillingDependencies,
   createPostgresBillingUnitOfWork,
   createPostgresDunningHistoryRepository,
@@ -35,7 +36,7 @@ import {
   type ServerDatabase,
   type ServerDatabaseSession,
 } from '@billme/server-data';
-import { runRecurringInvoiceRun, toRecurringRunFailure } from '@billme/server-core';
+import { runRecurringInvoiceRun } from '@billme/server-core';
 import type { AuthSession } from './auth.js';
 import { ApiError, typedRoute } from './http.js';
 import { requireAutomationMutationSession, toMutationActor } from './runtimeContext.js';
@@ -405,33 +406,9 @@ export const registerAutomationRoutes = (
       if (!token) throw new ApiError(409, 'Offer has not been published to the portal');
       const status = await portalClient.getOfferStatus(baseUrl, token);
       const decision = status.decision ?? null;
-      if (!decision || offer.share?.decision) return { ok: true as const, decision, updated: false };
-
-      const unitOfWork = createPostgresBillingUnitOfWork(db);
-      let updated = false;
-      await unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
-        const current = await repositories.offerRepo.getById(session.scope, body.offerId);
-        if (!current || current.share?.decision) return;
-        updated = true;
-        const after = await repositories.offerRepo.save(session.scope, {
-          ...current,
-          status: decision.decision,
-          share: {
-            ...(current.share ?? {}),
-            decision: decision.decision,
-            decisionTextVersion: decision.decisionTextVersion,
-            acceptedAt: decision.decidedAt,
-            acceptedBy: decision.acceptedName,
-            acceptedEmail: decision.acceptedEmail,
-          },
-        });
-        await repositories.auditLog.append(session.scope, {
-          occurredAt: nowIso(),
-          action: 'offer.portal_decision',
-          actor: actorFor(session),
-          subject: { entityType: 'offer', entityId: after.id, tenantId: session.scope.tenantId },
-          change: { before: current, after },
-        });
+      if (!decision) return { ok: true as const, decision, updated: false };
+      const { updated } = await applyServerOfferPortalDecision(db, session.scope, {
+        offerId: body.offerId, shareToken: token, decision, actor: actorFor(session),
       });
       return { ok: true as const, decision, updated };
     },
@@ -619,8 +596,6 @@ export const registerAutomationRoutes = (
         );
         return { success: true, result };
       } catch (error) {
-        const failure = toRecurringRunFailure(error);
-        if (failure) return { success: false, ...failure };
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     },

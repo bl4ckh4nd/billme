@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileBarChart2 } from 'lucide-react';
-import { Button } from '@billme/ui';
+import { Button, FeedbackProvider, useActionFeedback } from '@billme/ui';
+import {
+  isSupportedEurTaxYear,
+  LATEST_SUPPORTED_EUR_TAX_YEAR,
+  SUPPORTED_EUR_TAX_YEARS,
+  type SupportedEurTaxYear,
+} from '@billme/accounting-shared';
 import {
   BalanceSheetPreview,
   BalanceSheetPreviewLine,
@@ -44,6 +50,13 @@ import { defaultReportFilters, nativeEurRange, reportDateRange, reportFiscalYear
 import ReportStatusBadge, { MappingHealthBlock, reportIsMappingBlocked } from './reports/ReportStatusBadge';
 import ReportMappingSetup from './reports/ReportMappingSetup';
 import type { ReportMappingStatement } from '../domain/reportMapping';
+import {
+  downloadReportCsv,
+  normalizeReportSnapshot,
+  printReportPdf,
+  reportFileName,
+  reportToCsv,
+} from '../domain/reportExport';
 
 type EurClassificationDraft = {
   eurLineId?: string;
@@ -87,7 +100,7 @@ const hasEurFilingProvenance = (report: unknown): boolean => {
   const filing = (report as { filing?: unknown }).filing;
   if (!filing || typeof filing !== 'object') return false;
   const value = filing as { kind?: unknown; taxYear?: unknown; catalog?: unknown; lineProvenance?: unknown };
-  if (value.kind !== 'euer' || ![2025, 2026].includes(Number(value.taxYear)) || !Array.isArray(value.lineProvenance) || value.lineProvenance.length === 0) return false;
+  if (value.kind !== 'euer' || !isSupportedEurTaxYear(Number(value.taxYear)) || !Array.isArray(value.lineProvenance) || value.lineProvenance.length === 0) return false;
   const catalog = value.catalog;
   if (!catalog || typeof catalog !== 'object') return false;
   const sourceHash = (catalog as { sourceHash?: unknown }).sourceHash;
@@ -101,7 +114,15 @@ const hasEurFilingProvenance = (report: unknown): boolean => {
     });
 };
 
-export default function ReportsView({ dataAdapter, chartFramework, businessReportingProfile, profile = 'all', availableTabs, role = 'admin', onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
+export default function ReportsView(props: ReportsViewProps) {
+  return (
+    <FeedbackProvider>
+      <ReportsViewContent {...props} />
+    </FeedbackProvider>
+  );
+}
+
+function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProfile, profile = 'all', availableTabs, role = 'admin', onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
   const visibleTabs = useMemo(() => {
     if (availableTabs) return availableTabs;
     if (businessReportingProfile) return reportTabsForBusinessProfile(businessReportingProfile);
@@ -134,7 +155,8 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   const reportRequestId = useRef(0);
   const [reportLoadStates, setReportLoadStates] = useState<Partial<Record<ReportTabId, ReportLoadState>>>({});
   const [eurItems, setEurItems] = useState<EurCashItem[]>([]);
-  const [eurTaxYear, setEurTaxYear] = useState<2025 | 2026>(2025);
+  const [eurTaxYear, setEurTaxYear] = useState<SupportedEurTaxYear>(LATEST_SUPPORTED_EUR_TAX_YEAR);
+  const eurTaxYearUserSelected = useRef(false);
   const [eurItemsLoading, setEurItemsLoading] = useState(false);
   const [eurItemsError, setEurItemsError] = useState<string | null>(null);
   const [eurDrafts, setEurDrafts] = useState<Record<string, EurClassificationDraft>>({});
@@ -172,6 +194,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   const [freezing, setFreezing] = useState(false);
   const [freezeReason, setFreezeReason] = useState('');
   const canMutate = permissionContextForRole(role).canMutate;
+  const { notify: notifyExport } = useActionFeedback('reports-export');
 
   const profileSetupError = businessReportingProfile
     && businessReportingProfile.legalForm === 'gmbh'
@@ -373,6 +396,11 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
             : activeTab === 'management_guv'
               ? managementGuvReport
               : hgbGuvReport;
+  useEffect(() => {
+    if (eurTaxYearUserSelected.current || activeTab !== 'eur' || !activeReport || typeof activeReport !== 'object' || !('filing' in activeReport)) return;
+    const taxYear = (activeReport.filing as { taxYear?: unknown } | undefined)?.taxYear;
+    if (typeof taxYear === 'number' && isSupportedEurTaxYear(taxYear) && taxYear !== eurTaxYear) setEurTaxYear(taxYear);
+  }, [activeReport, activeTab, eurTaxYear]);
   const activeReportLoadState = reportLoadStates[activeTab];
   const activeReportLoading = !activeReportLoadState || activeReportLoadState.status === 'loading';
   const activeReportLoadError = activeReportLoadState?.status === 'error' ? activeReportLoadState.error : null;
@@ -380,18 +408,20 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   const unavailableCatalogYear = reportError?.match(/PUBLIC_REPORT_CATALOG_UNAVAILABLE:(\d+)/)?.[1];
   const reportErrorMessage = unavailableCatalogYear
     ? unavailableCatalogYear === '0'
-      ? 'Für den Report konnte kein Berichtsstichtag ermittelt werden. Unterstützte Geschäftsjahre sind 2025 und 2026.'
-      : `Für das Geschäftsjahr ${unavailableCatalogYear} ist kein Berichtskatalog verfügbar. Unterstützte Geschäftsjahre sind 2025 und 2026.`
+      ? `Für den Report konnte kein Berichtsstichtag ermittelt werden. Unterstützte Geschäftsjahre sind ${SUPPORTED_EUR_TAX_YEARS.join(' und ')}.`
+      : `Für das Geschäftsjahr ${unavailableCatalogYear} ist kein Berichtskatalog verfügbar. Unterstützte Geschäftsjahre sind ${SUPPORTED_EUR_TAX_YEARS.join(' und ')}.`
     : reportError;
   const activeReportUnavailable = activeReportLoadState?.status === 'success' && !activeReport;
+  const activeQuality = activeReport?.quality;
   const exportBlockedReason = activeReportLoading
     ? 'Export ist erst möglich, wenn der aktuelle Report geladen ist.'
     : activeReportLoadError
       ? 'Export nicht verfügbar: Der aktuelle Report konnte nicht geladen werden.'
       : activeReportUnavailable
         ? 'Export nicht verfügbar: Für den aktuellen Report liegen keine Daten vor.'
+        : activeQuality && reportIsMappingBlocked(activeQuality)
+          ? 'Export nicht verfügbar: Das Konten-Mapping des aktuellen Reports ist unvollständig.'
         : undefined;
-  const activeQuality = activeReport?.quality;
   useEffect(() => {
     if (activeTab !== 'bilanz' || !balanceSheetPreview || !reportIsMappingBlocked(balanceSheetPreview.quality)) return;
     setDrilldownSelection(null);
@@ -513,21 +543,45 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
   );
 
   const exportReport = async (format: 'pdf' | 'csv') => {
-    if (!dataAdapter || activeReportLoading || activeReportLoadError || activeReportUnavailable) return;
+    if (activeReportLoading || activeReportLoadError || activeReportUnavailable || !activeReport || (activeQuality && reportIsMappingBlocked(activeQuality))) return;
     setExporting(true);
-    setReportsError(null);
-    const request: ReportExportRequest = { report: activeTab, filters: filtersForTab(activeTab), format };
+    notifyExport('progress', `${format.toUpperCase()}-Export läuft…`);
+    const effectiveFilters = filtersForTab(activeTab);
+    const request: ReportExportRequest = { report: activeTab, filters: effectiveFilters, format };
     try {
       let result: ReportExportResult | void;
-      if (dataAdapter.exportReport) result = await dataAdapter.exportReport(request);
-      else if (format === 'pdf' && dataAdapter.exportReportPdf) result = await dataAdapter.exportReportPdf({ report: activeTab, filters: filtersForTab(activeTab) });
-      else if (format === 'csv' && dataAdapter.exportReportCsv) result = await dataAdapter.exportReportCsv({ report: activeTab, filters: filtersForTab(activeTab) });
-      else throw new Error('Report-Export ist für diesen Adapter nicht verfügbar.');
-      setReportsError(null);
-      setReportsNotice(result?.path ? `Export erstellt: ${result.path}` : `${format.toUpperCase()}-Export erstellt.`);
+      const adapter = dataAdapter;
+      const adapterExporter = adapter?.exportReport
+        ?? (format === 'pdf' ? adapter?.exportReportPdf : adapter?.exportReportCsv);
+      if (adapterExporter) {
+        result = adapter?.exportReport
+          ? await adapter.exportReport(request)
+          : format === 'pdf'
+            ? await adapter!.exportReportPdf!({ report: activeTab, filters: effectiveFilters })
+            : await adapter!.exportReportCsv!({ report: activeTab, filters: effectiveFilters });
+        if (format === 'csv' && result?.content !== undefined) {
+          downloadReportCsv(result.content, result.fileName ?? reportFileName(activeTab, format));
+        }
+        const successMessage = result?.path
+          ? `Export erstellt: ${result.path}`
+          : `${format.toUpperCase()}-Export erstellt.`;
+        setReportsNotice(null);
+        notifyExport('success', successMessage);
+      } else {
+        const normalized = normalizeReportSnapshot(activeTab, activeReport, effectiveFilters);
+        if (format === 'csv') {
+          downloadReportCsv(reportToCsv(normalized), reportFileName(activeTab, format));
+          notifyExport('success', 'CSV-Export erstellt.');
+        } else {
+          await printReportPdf(normalized);
+          setReportsNotice(null);
+          notifyExport('success', 'Druckdialog geöffnet.');
+        }
+      }
     } catch (error) {
       setReportsNotice(null);
-      setReportsError(error instanceof Error ? error.message : 'Report-Export fehlgeschlagen.');
+      const message = error instanceof Error ? error.message : 'Report-Export fehlgeschlagen.';
+      notifyExport('error', message);
     } finally {
       setExporting(false);
     }
@@ -648,7 +702,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
           filters={filtersForTab(activeTab)}
           onChange={setFilters}
           activeTab={activeTab}
-          onExport={dataAdapter ? exportReport : undefined}
+          onExport={exportReport}
           exporting={exporting}
           exportBlockedReason={exportBlockedReason}
           lockNativeEurPeriod={activeTab === 'eur'}
@@ -663,7 +717,7 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
                 className="rounded-lg border border-border bg-surface px-3 py-2 text-sm font-normal"
                 value={freezeReason}
                 onChange={(event) => setFreezeReason(event.target.value)}
-                placeholder="z. B. Abschlussprüfung EÜR 2025"
+                placeholder={`z. B. Abschlussprüfung EÜR ${eurTaxYear}`}
                 maxLength={500}
               />
             </label>
@@ -682,9 +736,14 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
               </div>
               <label className="flex flex-col gap-1 text-xs font-semibold" htmlFor="eur-tax-year">
                 Steuerjahr
-                <select id="eur-tax-year" value={eurTaxYear} onChange={(event) => setEurTaxYear(Number(event.target.value) as 2025 | 2026)} className="rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal">
-                  <option value="2025">2025</option>
-                  <option value="2026">2026</option>
+                <select id="eur-tax-year" value={eurTaxYear} onChange={(event) => {
+                  const year = Number(event.target.value);
+                  if (isSupportedEurTaxYear(year)) {
+                    eurTaxYearUserSelected.current = true;
+                    setEurTaxYear(year);
+                  }
+                }} className="rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal">
+                  {SUPPORTED_EUR_TAX_YEARS.map((year) => <option key={year} value={year}>{year}</option>)}
                 </select>
               </label>
               <Button type="button" size="sm" variant="secondary" onClick={() => setReportsRetryKey((current) => current + 1)} disabled={eurItemsLoading} aria-busy={eurItemsLoading}>
@@ -699,14 +758,14 @@ export default function ReportsView({ dataAdapter, chartFramework, businessRepor
                   className="rounded-lg border border-border bg-surface px-3 py-2 text-sm font-normal"
                   value={eurClassificationReason}
                   onChange={(event) => setEurClassificationReason(event.target.value)}
-                  placeholder="z. B. Belegprüfung EÜR 2025"
+                  placeholder={`z. B. Belegprüfung EÜR ${eurTaxYear}`}
                   maxLength={500}
                 />
               </label>
             ) : <p className="rounded-lg border border-border-subtle bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann EÜR-Quellen prüfen, aber nicht klassifizieren.</p>}
             {eurItemsError ? <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert">{eurItemsError}</div> : null}
             {eurFactsError ? <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert">{eurFactsError}</div> : null}
-            {!eurItemsLoading && !eurItemsError && eurItems.length === 0 ? <p className="text-sm text-muted">Keine Cash-Basis-Quellen im Kalenderjahr 2025.</p> : null}
+            {!eurItemsLoading && !eurItemsError && eurItems.length === 0 ? <p className="text-sm text-muted">Keine Cash-Basis-Quellen im Kalenderjahr {eurTaxYear}.</p> : null}
             {eurItems.length > 0 ? (
               <div className="space-y-2" role="list" aria-label="Unklassifizierte EÜR-Cash-Quellen">
                 {eurItems.map((item) => {

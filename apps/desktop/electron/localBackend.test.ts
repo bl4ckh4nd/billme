@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_SETTINGS } from '@billme/desktop-services/mockData';
 import { PRODUCT_PROFILE } from '../productProfile';
 import {
   createLocalBackend,
@@ -68,6 +69,15 @@ describe('createLocalBackend', () => {
       values.includes(PRODUCT_PROFILE.localUserId) &&
       values.includes(PRODUCT_PROFILE.localUserEmail)
     ))).toBe(true);
+    const settingsInsert = query.mock.calls.find(([text]) => (
+      typeof text === 'string' && text.includes('INSERT INTO server_settings')
+    ));
+    expect(settingsInsert?.[0]).toContain('ON CONFLICT (tenant_id) DO NOTHING');
+    expect(settingsInsert?.[1]).toEqual([
+      PRODUCT_PROFILE.localTenantId,
+      JSON.stringify(DEFAULT_SETTINGS),
+      expect.any(String),
+    ]);
     await expect(stat(join(options.userDataPath, PRODUCT_PROFILE.dbFileName)))
       .rejects.toMatchObject({ code: 'ENOENT' });
     expect(backend.embeddedConnection()).toEqual({

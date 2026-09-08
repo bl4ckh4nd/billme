@@ -169,6 +169,27 @@
       "when": 1786538400012,
       "tag": "0024_server_data_portal_publications",
       "breakpoints": false
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788528600000,
+      "tag": "0025_server_data_incoming_invoice_documents",
+      "breakpoints": false
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788528600001,
+      "tag": "0026_server_data_invoice_document_chain",
+      "breakpoints": false
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1788528600002,
+      "tag": "0027_server_data_account_skr_optional",
+      "breakpoints": false
     }
   ]
 }

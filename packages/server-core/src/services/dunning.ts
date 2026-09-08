@@ -232,7 +232,10 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
     throw new Error('No dunning levels are enabled');
   }
 
-  const overdueInvoices = (await dependencies.invoiceRepo.list(scope)).filter((invoice) => invoice.status === 'overdue');
+  const overdueInvoices = (await dependencies.invoiceRepo.list(scope)).filter((invoice) =>
+    invoice.status === 'overdue' &&
+    !['order_confirmation', 'delivery_note'].includes(invoice.documentKind ?? 'invoice'),
+  );
   if (overdueInvoices.length === 0) {
     return result;
   }

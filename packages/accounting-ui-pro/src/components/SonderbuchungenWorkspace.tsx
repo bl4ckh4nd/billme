@@ -181,6 +181,22 @@ const caughtDomainErrorMessage = (error: unknown): string => {
   return message;
 };
 
+const HISTORY_LOAD_FALLBACK = 'Bitte versuchen Sie es erneut.';
+const HISTORY_CONFLICT_MESSAGE = 'Konflikt beim Quelllauf. Bitte Quellbeleg und Revision prüfen oder den bestehenden Lauf in der Historie öffnen.';
+
+const historyErrorMessage = (error: unknown): string => {
+  const message = error instanceof Error ? error.message.trim() : String(error).trim();
+  if (message.includes('ACCOUNTING_SOURCE_RUN_CONFLICT')) return HISTORY_CONFLICT_MESSAGE;
+  // Keep the already user-facing message used by the adapter boundary. All
+  // other transport/schema details remain diagnostic data only.
+  if (message === 'Historie vorübergehend nicht verfügbar') return message;
+  return HISTORY_LOAD_FALLBACK;
+};
+
+const logHistoryError = (error: unknown): void => {
+  console.error('[SonderbuchungenWorkspace] Buchungshistorie konnte nicht geladen werden', error);
+};
+
 const has = (facts: AccountingDomainFacts, key: string): boolean => Object.prototype.hasOwnProperty.call(facts, key) && facts[key] !== undefined && facts[key] !== null;
 const requiredFactKeys: Partial<Record<AccountingCommandKind, readonly string[]>> = {
   correction: ['id', 'idempotencyKey', 'correctionDate', 'original', 'deltas'],
@@ -252,8 +268,7 @@ type Props = {
 
 export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }: Props) {
   const [form, setForm] = useState<FormState>(initialForm);
-  const [errors, setErrors] = useState<string[]>([]);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const [history, setHistory] = useState<AccountingSourceRun[]>([]);
   const [selectedJournalEntryId, setSelectedJournalEntryId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -291,7 +306,8 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
       setHistory(next);
     } catch (error) {
       if (!mounted.current || requestId !== historyRequestId.current) return;
-      setHistoryError(caughtDomainErrorMessage(error));
+      logHistoryError(error);
+      setHistoryError(historyErrorMessage(error));
     }
   };
 
@@ -319,8 +335,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   const submit = async () => {
     if (busyRef.current || !dataAdapter?.postAccountingCommand || !canMutate) return;
     const validation = validateForm(form);
-    setErrors(validation);
-    setNotice(null);
+    setFeedback(validation.length ? { kind: 'error', text: validation.join(' ') } : null);
     if (validation.length) return;
     const parsed = parseDomainFacts(form);
     if (!parsed.facts) return;
@@ -339,14 +354,14 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
       if (result.status === 'noop') resultErrors.push('Keine Buchung vorgenommen: Der Fachworkflow erzeugt keine Journalzeilen. Bitte Beträge, Zeitraum und Belegbezug prüfen.');
       if (result.status === 'posted' && !result.sourceRun?.journalEntryId) resultErrors.push('Buchung nicht bestätigt: Es wurde keine Journal-ID erzeugt. Bitte den Quelllauf prüfen und erneut versuchen.');
       if (result.errors.length || result.status === 'rejected' || result.status === 'noop' || (result.status === 'posted' && !result.sourceRun?.journalEntryId)) {
-        setErrors(resultErrors);
+        setFeedback({ kind: 'error', text: resultErrors.join(' ') });
         return;
       }
-      setNotice(result.status === 'duplicate' ? 'Diese Quelle wurde bereits gebucht. Der bestehende Lauf bleibt maßgeblich.' : 'Sonderbuchung wurde erfolgreich gebucht.');
+      setFeedback({ kind: 'success', text: result.status === 'duplicate' ? 'Diese Quelle wurde bereits gebucht. Der bestehende Lauf bleibt maßgeblich.' : 'Sonderbuchung wurde erfolgreich gebucht.' });
       setForm(initialForm());
       await refetchHistory();
     } catch (error) {
-      setErrors([caughtDomainErrorMessage(error) || 'Sonderbuchung konnte nicht gespeichert werden.']);
+      setFeedback({ kind: 'error', text: caughtDomainErrorMessage(error) || 'Sonderbuchung konnte nicht gespeichert werden.' });
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -383,6 +398,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   const exportTax = async () => {
     if (!preparedArtifact?.id || !dataAdapter?.exportTaxArtifact) return;
     setExportBusy(true);
+    setTaxError(null);
     try {
       const output = await dataAdapter.exportTaxArtifact(preparedArtifact.kind, preparedArtifact.id);
       const blob = output instanceof Blob ? output : new Blob([output as BlobPart], { type: 'application/json' });
@@ -393,6 +409,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (error) {
+      setPreparedArtifact(null);
       setTaxError(error instanceof Error ? error.message : 'Export konnte nicht erstellt werden.');
     } finally {
       setExportBusy(false);
@@ -454,8 +471,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border-subtle pt-3">
           <Button type="button" onClick={() => void submit()} disabled={busy || preview.length > 0 || !canMutate || !dataAdapter?.postAccountingCommand} aria-busy={busy}>{busy ? 'Buchung läuft…' : 'Prüfen & verbindlich buchen'}</Button>
         </div>
-        {notice ? <p className="text-sm text-success" role="status" aria-live="polite">{notice}</p> : null}
-        {errors.length > 0 && preview.length === 0 ? <p className="text-sm text-error" role="alert">{errors.join(' ')}</p> : null}
+        {feedback ? <p data-testid="sonderbuchungen-feedback" className={feedback.kind === 'error' ? 'text-sm text-error' : 'text-sm text-success'} role={feedback.kind === 'error' ? 'alert' : 'status'} aria-live={feedback.kind === 'error' ? 'assertive' : 'polite'}>{feedback.text}</p> : null}
       </section>
 
       <section className="rounded-xl border border-border bg-surface p-4 space-y-3" aria-labelledby="tax-preparation-heading">
@@ -479,8 +495,8 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
           </label>
           <Button type="button" variant="secondary" onClick={() => void prepareTax()} disabled={taxBusy || !dataAdapter?.prepareTaxExport} aria-busy={taxBusy}>{taxBusy ? 'Bereite vor…' : 'Vorbereitung erstellen'}</Button>
         </div>
-        {taxError ? <p className="text-sm text-error" role="alert">{taxError}</p> : null}
-        {preparedArtifact ? <div className="flex flex-wrap items-center gap-2"><p className={`text-sm ${preparedArtifact.rowCount === 0 ? 'text-muted' : 'text-success'}`} role="status">{preparedArtifact.rowCount === 0 ? `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind}: Keine meldepflichtigen Vorgänge (keine meldepflichtigen Zeilen).` : `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind} vorbereitet (${preparedArtifact.status}) – keine offizielle Übermittlung.`}</p>{preparedArtifact.id && dataAdapter?.exportTaxArtifact ? <Button type="button" size="sm" variant="secondary" onClick={() => void exportTax()} disabled={exportBusy} aria-busy={exportBusy}>{exportBusy ? 'Export läuft…' : 'Vorbereitungs-Export'}</Button> : null}</div> : null}
+        {taxError ? <p className="text-sm text-error" role="alert" aria-live="assertive">{taxError}</p> : null}
+        {preparedArtifact ? <div className="flex flex-wrap items-center gap-2"><p className={`text-sm ${preparedArtifact.rowCount === 0 ? 'text-muted' : 'text-success'}`} role="status" aria-live="polite">{preparedArtifact.rowCount === 0 ? `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind}: Keine meldepflichtigen Vorgänge (keine meldepflichtigen Zeilen).` : `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind} vorbereitet (${preparedArtifact.status}) – keine offizielle Übermittlung.`}</p>{preparedArtifact.id && dataAdapter?.exportTaxArtifact ? <Button type="button" size="sm" variant="secondary" onClick={() => void exportTax()} disabled={exportBusy} aria-busy={exportBusy}>{exportBusy ? 'Export läuft…' : 'Vorbereitungs-Export'}</Button> : null}</div> : null}
         <div className="grid gap-2 sm:grid-cols-2">
           <p className="rounded-lg border border-border-subtle bg-surface-muted p-3 text-sm text-muted"><strong>E-Bilanz:</strong> Vorbereitung möglich, offizieller Provider nicht verfügbar.</p>
           <p className="rounded-lg border border-border-subtle bg-surface-muted p-3 text-sm text-muted"><strong>Unternehmensregister:</strong> Vorbereitung möglich, offizieller Provider nicht verfügbar.</p>

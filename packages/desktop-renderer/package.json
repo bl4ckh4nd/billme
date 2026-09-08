@@ -17,6 +17,7 @@
     "./components/*": "./src/components/*.tsx"
   },
   "dependencies": {
+    "@billme/accounting-shared": "workspace:*",
     "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/desktop-core": "workspace:*",

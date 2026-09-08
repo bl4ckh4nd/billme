@@ -181,8 +181,35 @@ test('embedded Lite finance import commit persists valid rows once and replays t
 
     const batches = await database.query<{ count: string }>('SELECT count(*)::text AS count FROM import_batches WHERE tenant_id = $1', [tenantId]);
     const transactions = await database.query<{ count: string }>('SELECT count(*)::text AS count FROM transactions WHERE tenant_id = $1 AND deleted_at IS NULL', [tenantId]);
+    const projected = await database.query<{
+      source_transaction_id: string;
+      date: string;
+      amount: number | string;
+      account_id: string;
+      transaction_id: string;
+      transaction_date: string;
+      transaction_amount: number | string;
+      transaction_account_id: string;
+    }>(
+      `SELECT b.source_transaction_id, b.date, b.amount, b.account_id,
+              t.id AS transaction_id, t.date AS transaction_date,
+              t.amount AS transaction_amount, t.account_id AS transaction_account_id
+       FROM bank_transactions b
+       INNER JOIN transactions t
+         ON t.tenant_id = b.tenant_id AND t.id = b.source_transaction_id
+       WHERE b.tenant_id = $1
+       ORDER BY b.date ASC`,
+      [tenantId],
+    );
     assert.equal(Number(batches.rows[0]?.count), 1);
     assert.equal(Number(transactions.rows[0]?.count), 2);
+    assert.equal(projected.rows.length, 2);
+    for (const row of projected.rows) {
+      assert.equal(row.source_transaction_id, row.transaction_id);
+      assert.equal(row.date, row.transaction_date);
+      assert.equal(Number(row.amount), Number(row.transaction_amount));
+      assert.equal(row.account_id, row.transaction_account_id);
+    }
   } finally {
     await app.close();
     await rm(dataDir, { recursive: true, force: true });

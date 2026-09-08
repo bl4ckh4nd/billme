@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Client } from '@billme/desktop-core/types';
+import { FeedbackProvider } from '@billme/ui';
 
 const upsertClient = vi.fn(async (client: Client) => client);
 const client: Client = {
@@ -42,7 +43,11 @@ import { ClientsView } from './ClientsView';
 describe('ClientsView tax profile', () => {
   it('edits and persists business country and VAT ID fields through the client mutation', async () => {
     const user = userEvent.setup();
-    const { container } = render(<ClientsView />);
+    const { container } = render(
+      <FeedbackProvider>
+        <ClientsView />
+      </FeedbackProvider>,
+    );
 
     await user.click(screen.getByText('Alpen GmbH'));
     const editButton = [...container.querySelectorAll('button')].find((button) => button.className.includes('w-10') && button.className.includes('border-gray-200'));
@@ -61,5 +66,49 @@ describe('ClientsView tax profile', () => {
       id: client.id,
       taxProfile: { type: 'business', countryCode: 'AT', vatId: 'ATU12345678' },
     });
+  });
+
+  it('focuses the first keyed validation error and exposes the client fields to assistive technology', async () => {
+    const user = userEvent.setup();
+    const scrollIntoView = vi.fn();
+    const previousScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    try {
+      const { container } = render(
+        <FeedbackProvider>
+          <ClientsView />
+        </FeedbackProvider>,
+      );
+
+      await user.click(screen.getByText('Alpen GmbH'));
+      const editButton = [...container.querySelectorAll('button')].find((button) => button.className.includes('w-10') && button.className.includes('border-gray-200'));
+      expect(editButton).toBeTruthy();
+      await user.click(editButton!);
+
+      const company = screen.getByLabelText(/Firma/);
+      await user.clear(company);
+      await user.click(screen.getByRole('button', { name: 'Speichern' }));
+
+      expect(company).toHaveAttribute('required');
+      expect(company).toHaveAttribute('aria-required', 'true');
+      expect(company).toHaveAttribute('aria-invalid', 'true');
+      expect(company).toHaveAttribute('aria-describedby');
+      expect(company).toHaveFocus();
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+
+      const summary = screen.getByRole('alert');
+      expect(summary).toHaveAttribute('aria-live', 'assertive');
+      expect(summary).toHaveTextContent('Firma ist erforderlich.');
+      expect(screen.getByRole('button', { name: 'Speichern' })).toHaveAttribute('aria-describedby');
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        value: previousScrollIntoView,
+      });
+    }
   });
 });

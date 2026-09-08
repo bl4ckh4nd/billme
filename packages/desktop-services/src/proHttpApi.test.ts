@@ -716,6 +716,11 @@ test('Pro HTTP Billme API routes common billing mutations through the Pro contra
     ...invoice,
     clientNumber: undefined,
     projectId: undefined,
+    documentKind: 'invoice' as const,
+    sourceDocumentId: undefined,
+    rootDocumentId: undefined,
+    revisionOfId: undefined,
+    revisionNumber: 0,
     clientAddress: undefined,
     billingAddressJson: undefined,
     shippingAddressJson: undefined,
@@ -809,7 +814,7 @@ test('Pro HTTP Billme API uses exact IPC fallback for common billing routes when
   ]);
 });
 
-test('Pro HTTP Billme API composes document creation and offer conversion with reservation finalization', async () => {
+test('Pro HTTP Billme API keeps draft creation and delegates offer conversion in one request', async () => {
   const requests: Array<{ url: string; method: string; body?: unknown }> = [];
   const serverClient = {
     id: 'client-1',
@@ -868,7 +873,7 @@ test('Pro HTTP Billme API composes document creation and offer conversion with r
       if (url.endsWith('/offers/offer-1')) return response(serverOffer);
       if (url.endsWith('/settings')) return response(null);
       if (url.includes('/numbers/reserve')) return response({ reservationId: 'reservation-1', number: 'RE-1' });
-      if (url.endsWith('/invoices') && init?.method === 'POST') return response(serverInvoice);
+      if (url.endsWith('/documents/convert-offer') && init?.method === 'POST') return response(serverInvoice);
       return response({ ok: true });
     },
   });
@@ -881,16 +886,11 @@ test('Pro HTTP Billme API composes document creation and offer conversion with r
   const converted = await api.documents.convertOfferToInvoice({ offerId: 'offer-1' });
   assert.equal(converted.id, 'invoice-1');
   assert.equal(converted.number, 'RE-1');
-  assert.equal(requests.filter((request) => request.url.includes('/numbers/reserve')).length, 2);
-  assert.deepEqual(requests.slice(-3).map(({ url, method }) => ({ url, method })), [
-    { url: 'http://127.0.0.1:43123/api/v1/pro/numbers/reserve', method: 'POST' },
-    { url: 'http://127.0.0.1:43123/api/v1/pro/invoices', method: 'POST' },
-    { url: 'http://127.0.0.1:43123/api/v1/pro/numbers/finalize', method: 'POST' },
-  ]);
-  assert.deepEqual(requests.at(-3)?.body, { kind: 'invoice' });
-  assert.equal((requests.at(-2)?.body as { reason?: string }).reason, 'Converted from offer AN-1');
-  assert.equal((requests.at(-2)?.body as { invoice?: { number?: string } }).invoice?.number, 'RE-1');
-  assert.deepEqual(requests.at(-1)?.body, { reservationId: 'reservation-1', documentId: 'invoice-1' });
+  assert.equal(requests.filter((request) => request.url.includes('/numbers/reserve')).length, 1);
+  assert.equal(requests.at(-1)?.url, 'http://127.0.0.1:43123/api/v1/pro/documents/convert-offer');
+  assert.equal(requests.at(-1)?.method, 'POST');
+  assert.equal((requests.at(-1)?.body as { offerId: string }).offerId, 'offer-1');
+  assert.match((requests.at(-1)?.body as { invoiceId: string }).invoiceId, /^[a-f0-9-]{36}$/);
 });
 
 test('Pro HTTP Billme API validates tax compliance through the mutation route with draft identity and audit reason', async () => {
@@ -1312,6 +1312,41 @@ test('Pro HTTP Billme API routes incoming invoices through HTTP', async () => {
 
   assert.deepEqual(await api.pro.listIncomingInvoices(), [invoice]);
   assert.equal(requestUrl, 'http://127.0.0.1:43123/api/v1/pro/accounting/incoming-invoices');
+});
+
+test('Pro HTTP Billme API routes incoming invoice originals with typed metadata and content', async () => {
+  const requests: Array<{ url: string; method: string; body?: string }> = [];
+  const document = {
+    id: 'incoming-document-1', tenantId: 'tenant-1', incomingInvoiceId: 'incoming-1',
+    originalFilename: 'rechnung.pdf', mimeType: 'application/pdf' as const, byteLength: 3,
+    sha256: 'a'.repeat(64), reviewStatus: 'pending' as const,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const download = { document, data: 'cGRm' };
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? init.body : undefined });
+      if (url.endsWith('/documents') && (init?.method ?? 'GET') === 'GET') return response([document]);
+      if (url.endsWith('/download')) return response(download);
+      return response(document);
+    },
+  });
+
+  assert.deepEqual(await api.pro.listIncomingInvoiceDocuments({ invoiceId: 'incoming-1' }), [document]);
+  assert.deepEqual(await api.pro.uploadIncomingInvoiceDocument({ invoiceId: 'incoming-1', originalFilename: document.originalFilename, mimeType: document.mimeType, data: download.data, reason: 'Original geprüft' }), document);
+  assert.deepEqual(await api.pro.downloadIncomingInvoiceDocument({ documentId: document.id }), download);
+  assert.deepEqual(await api.pro.reviewIncomingInvoiceDocument({ documentId: document.id, reviewStatus: 'accepted', reason: 'Original geprüft' }), document);
+  assert.deepEqual(requests.map(({ url, method }) => ({ url, method })), [
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/incoming-invoices/incoming-1/documents', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/incoming-invoices/incoming-1/documents', method: 'POST' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/incoming-invoice-documents/incoming-document-1/download', method: 'GET' },
+    { url: 'http://127.0.0.1:43123/api/v1/pro/accounting/incoming-invoice-documents/incoming-document-1/review', method: 'POST' },
+  ]);
+  assert.deepEqual(JSON.parse(requests[1]?.body ?? '{}'), { originalFilename: document.originalFilename, mimeType: document.mimeType, data: download.data, reason: 'Original geprüft' });
+  assert.deepEqual(JSON.parse(requests[3]?.body ?? '{}'), { reviewStatus: 'accepted', reason: 'Original geprüft' });
 });
 
 test('Pro HTTP Billme API routes open items through HTTP', async () => {
@@ -1752,17 +1787,13 @@ test('Pro HTTP Billme API lists accounting source runs without losing revision o
     sourceId: 'source-1',
     sourceRevision: 'revision-7',
     idempotencyKey: 'source:source-1',
-    fact: {
-      sourceType: 'standalone_source' as const,
-      sourceId: 'source-1',
-      sourceRevision: 'revision-7',
-      effectiveDate: '2026-01-16',
-      postingDate: '2026-01-16',
-      period: '2026-01',
-      fiscalYear: 2026,
-      currency: 'EUR',
-      bookingText: 'Manuelle Buchung',
-      lines: [],
+    source: {
+      command: 'source_fact',
+      input: {
+        sourceId: 'source-1',
+        sourceRevision: 'revision-7',
+        effectiveDate: '2026-01-16',
+      },
     },
     result: {},
     status: 'posted' as const,
@@ -1778,7 +1809,11 @@ test('Pro HTTP Billme API lists accounting source runs without losing revision o
     },
   });
 
-  assert.deepEqual(await api.pro.listAccountingSourceRuns(), [run]);
+  const runs = await api.pro.listAccountingSourceRuns();
+  assert.deepEqual(runs, [run]);
+  const parsedRun = runs[0] as { fact?: unknown; source?: unknown } | undefined;
+  assert.equal(parsedRun?.fact, undefined);
+  assert.deepEqual(parsedRun?.source, run.source);
   assert.equal(requestUrl, 'http://127.0.0.1:43123/api/v1/pro/accounting/source-runs');
 });
 
@@ -1887,7 +1922,16 @@ test('Pro HTTP Billme API posts a domain accounting command and maps the server 
     sourceId: 'close-1',
     sourceRevision: 'revision-8',
     idempotencyKey: 'source:close-1',
-    source: { command: 'fiscal_close', input: source },
+    source: {
+      command: 'fiscal_close',
+      input: {
+        closeDate: '2026-12-31',
+        sourceId: 'close-1',
+        sourceRevision: 'revision-8',
+        period: '2026-12',
+        fiscalYear: 2026,
+      },
+    },
     result: { command: 'fiscal_close', journalEntryIds: ['entry-2'] },
     status: 'posted',
     journalEntryId: 'entry-2',
@@ -1918,6 +1962,8 @@ test('Pro HTTP Billme API posts a domain accounting command and maps the server 
   assert.equal(result.idempotencyKey, 'source:close-1');
   assert.equal(result.sourceRun?.sourceRevision, 'revision-8');
   assert.equal(result.sourceRun?.journalEntryId, 'entry-2');
+  assert.deepEqual(result.sourceRun?.fact, source);
+  assert.deepEqual(result.sourceRun?.source, serverRun.source);
   assert.deepEqual(result.command, 'fiscal_close');
   assert.equal(requestUrl, 'http://127.0.0.1:43123/api/v1/pro/accounting/closing');
   assert.equal(requestInit?.method, 'POST');
@@ -3146,6 +3192,9 @@ test('Pro HTTP Billme API disposes an asset with proceeds, tax and lock metadata
 
 test('Pro HTTP Billme API exports DATEV with required metadata and returns the persisted receipt', async () => {
   const requestUrls: string[] = [];
+  const datevBytes = Uint8Array.from([0x45, 0x58, 0x54, 0x46, 0x3b, 0x80, 0xe4]);
+  const datevHash = createHash('sha256').update(datevBytes).digest('hex');
+  const datevBlob = new Blob([datevBytes], { type: 'text/csv' });
   const receipt = {
     id: 'datev-export-1',
     filePath: 'datev-export/hash',
@@ -3153,8 +3202,9 @@ test('Pro HTTP Billme API exports DATEV with required metadata and returns the p
     fromDate: '2026-01-01',
     toDate: '2026-03-31',
     createdAt: '2026-03-31T23:00:00.000Z',
-    sha256: 'c'.repeat(64),
-    byteSize: 123,
+    sha256: datevHash,
+    byteSize: datevBytes.byteLength,
+    contentSha256: datevHash,
     encoding: 'utf8-bom' as const,
     headerVersion: 700,
     formatVersion: 13,
@@ -3172,10 +3222,10 @@ test('Pro HTTP Billme API exports DATEV with required metadata and returns the p
           status: 200,
           headers: new Headers({
             'x-billme-datev-export-id': receipt.id,
-            'x-billme-datev-content-sha256': receipt.sha256,
+            'x-billme-datev-content-sha256': datevHash,
             'x-billme-datev-record-count': String(receipt.recordCount),
           }),
-          blob: async () => new Blob(['EXTF;1'], { type: 'text/csv' }),
+          blob: async () => datevBlob,
         } as Response;
       }
       return response([receipt]);
@@ -3195,10 +3245,150 @@ test('Pro HTTP Billme API exports DATEV with required metadata and returns the p
   assert.equal(requestUrls[1], 'http://127.0.0.1:43123/api/v1/pro/accounting/datev/exports');
 });
 
+const datevExportRequest = {
+  from: '2026-03-01',
+  to: '2026-03-31',
+  consultantNumber: '1234',
+  clientNumber: '42',
+  fiscalYearStart: '2026-01-01',
+  accountLength: 4,
+  encoding: 'cp1252' as const,
+};
+
+const createDatevReceipt = (overrides: Record<string, unknown> = {}) => ({
+  id: 'datev-export-validated',
+  filePath: 'datev-export/hash',
+  recordCount: 2,
+  fromDate: datevExportRequest.from,
+  toDate: datevExportRequest.to,
+  createdAt: '2026-03-31T23:00:00.000Z',
+  ...overrides,
+});
+
+const createDatevReceiptTestApi = ({
+  datevBlob,
+  receiptHistory,
+  exportHeaders,
+}: {
+  datevBlob: Blob;
+  receiptHistory: unknown[];
+  exportHeaders: Record<string, string>;
+}) => {
+  const events: string[] = [];
+  const downloads: Array<{ blob: Blob; fileName: string }> = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    downloadBlob: (blob, fileName) => {
+      events.push('download');
+      downloads.push({ blob, fileName });
+    },
+    fetch: async (input) => {
+      const url = String(input);
+      if (url.includes('/datev/export.csv')) {
+        events.push('export');
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(exportHeaders),
+          blob: async () => datevBlob,
+        } as Response;
+      }
+      events.push('history');
+      return response(receiptHistory);
+    },
+  });
+  return { api, events, downloads };
+};
+
+test('Pro HTTP Billme API downloads the validated DATEV blob byte-for-byte after history reconciliation', async () => {
+  const datevBytes = Uint8Array.from([0x45, 0x58, 0x54, 0x46, 0x3b, 0x80, 0xe4]);
+  const datevHash = createHash('sha256').update(datevBytes).digest('hex');
+  const datevBlob = new Blob([datevBytes], { type: 'text/csv' });
+  const receipt = createDatevReceipt({ sha256: datevHash, contentSha256: datevHash, byteSize: datevBytes.byteLength });
+  const { api, events, downloads } = createDatevReceiptTestApi({
+    datevBlob,
+    receiptHistory: [receipt],
+    exportHeaders: {
+      'x-billme-datev-export-id': receipt.id,
+      'x-billme-datev-content-sha256': datevHash,
+      'x-billme-datev-record-count': String(receipt.recordCount),
+    },
+  });
+
+  assert.deepEqual(await api.pro.exportDatevBuchungsstapel(datevExportRequest), receipt);
+  assert.deepEqual(events, ['export', 'history', 'download']);
+  assert.equal(downloads.length, 1);
+  assert.equal(downloads[0]?.blob, datevBlob);
+  assert.equal(downloads[0]?.fileName, 'datev-buchungsstapel-2026-03-01-2026-03-31.csv');
+  assert.deepEqual(new Uint8Array(await downloads[0]!.blob.arrayBuffer()), datevBytes);
+});
+
+test('Pro HTTP Billme API never downloads a DATEV blob without a matching receipt', async () => {
+  const datevBytes = Uint8Array.from([0x45, 0x58, 0x54, 0x46, 0x3b, 0x80, 0xe4]);
+  const datevHash = createHash('sha256').update(datevBytes).digest('hex');
+  const datevBlob = new Blob([datevBytes], { type: 'text/csv' });
+  const validHeaders = {
+    'x-billme-datev-export-id': 'datev-export-validated',
+    'x-billme-datev-content-sha256': datevHash,
+    'x-billme-datev-record-count': '2',
+  };
+  const validReceipt = createDatevReceipt({ sha256: datevHash, contentSha256: datevHash, byteSize: datevBytes.byteLength });
+  const cases: Array<{
+    name: string;
+    exportHeaders: Record<string, string>;
+    receiptHistory: unknown[];
+    message: RegExp;
+  }> = [
+    {
+      name: 'missing export id',
+      exportHeaders: { ...validHeaders, 'x-billme-datev-export-id': '' },
+      receiptHistory: [validReceipt],
+      message: /ohne Serverbeleg-ID/,
+    },
+    {
+      name: 'missing history receipt',
+      exportHeaders: validHeaders,
+      receiptHistory: [],
+      message: /Serverhistorie/,
+    },
+    {
+      name: 'hash mismatch',
+      exportHeaders: validHeaders,
+      receiptHistory: [createDatevReceipt({ sha256: 'f'.repeat(64), contentSha256: datevHash, byteSize: datevBytes.byteLength })],
+      message: /abweichenden Datei-Hash/,
+    },
+    {
+      name: 'record count mismatch',
+      exportHeaders: validHeaders,
+      receiptHistory: [createDatevReceipt({ sha256: datevHash, contentSha256: datevHash, byteSize: datevBytes.byteLength, recordCount: 3 })],
+      message: /abweichende Datensatzanzahl/,
+    },
+    {
+      name: 'byte size mismatch',
+      exportHeaders: validHeaders,
+      receiptHistory: [createDatevReceipt({ sha256: datevHash, contentSha256: datevHash, byteSize: datevBytes.byteLength + 1 })],
+      message: /abweichende Dateigröße/,
+    },
+  ];
+
+  for (const datevCase of cases) {
+    const { api, events, downloads } = createDatevReceiptTestApi({
+      datevBlob,
+      receiptHistory: datevCase.receiptHistory,
+      exportHeaders: datevCase.exportHeaders,
+    });
+    await assert.rejects(() => api.pro.exportDatevBuchungsstapel(datevExportRequest), datevCase.message, datevCase.name);
+    assert.equal(downloads.length, 0, datevCase.name);
+    assert.deepEqual(events, datevCase.name === 'missing export id' ? ['export'] : ['export', 'history'], datevCase.name);
+  }
+});
+
 test('Pro HTTP Billme API lists DATEV export receipts and applies the contract limit', async () => {
   let requestUrl = '';
+  const contentSha256 = 'a'.repeat(64);
   const rows = [
-    { id: 'datev-1', filePath: 'datev-export/1', recordCount: 2, createdAt: '2026-03-31T23:00:00.000Z', encoding: 'cp1252' as const, chart: 'SKR03' as const },
+    { id: 'datev-1', filePath: 'datev-export/1', recordCount: 2, createdAt: '2026-03-31T23:00:00.000Z', encoding: 'cp1252' as const, chart: 'SKR03' as const, contentSha256 },
     { id: 'datev-2', filePath: 'datev-export/2', recordCount: 3, createdAt: '2026-03-30T23:00:00.000Z', encoding: 'utf8-bom' as const, chart: 'SKR04' as const },
   ];
   const api = createProHttpBillmeApi({
@@ -3210,7 +3400,7 @@ test('Pro HTTP Billme API lists DATEV export receipts and applies the contract l
     },
   });
 
-  assert.deepEqual(await api.pro.listDatevExports({ limit: 1 }), [rows[0]]);
+  assert.deepEqual(await api.pro.listDatevExports({ limit: 1 }), [{ ...rows[0], sha256: contentSha256 }]);
   assert.equal(requestUrl, 'http://127.0.0.1:43123/api/v1/pro/accounting/datev/exports');
 });
 

@@ -48,6 +48,10 @@ import type {
   AccountingPostingPreview,
   AccountingMutationContext,
   IncomingInvoiceEntity,
+  IncomingInvoiceDocumentEntity,
+  IncomingInvoiceDocumentDownload,
+  IncomingInvoiceDocumentReviewInput,
+  IncomingInvoiceDocumentUploadInput,
   OpenItemEntity,
   OpenItemPaymentEntity,
   OpenItemPaymentInput,
@@ -66,6 +70,10 @@ export interface ProAccountingOposRepository {
   upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
+  listIncomingInvoiceDocuments(scope: TenantScope, invoiceId: string): Promise<IncomingInvoiceDocumentEntity[]>;
+  uploadIncomingInvoiceDocument(scope: TenantScope, input: IncomingInvoiceDocumentUploadInput): Promise<IncomingInvoiceDocumentEntity>;
+  downloadIncomingInvoiceDocument(scope: TenantScope, documentId: string): Promise<IncomingInvoiceDocumentDownload>;
+  reviewIncomingInvoiceDocument(scope: TenantScope, input: IncomingInvoiceDocumentReviewInput): Promise<IncomingInvoiceDocumentEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
   postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
@@ -129,6 +137,10 @@ export interface ProAccountingService {
   upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
+  listIncomingInvoiceDocuments(scope: TenantScope, invoiceId: string): Promise<IncomingInvoiceDocumentEntity[]>;
+  uploadIncomingInvoiceDocument(scope: TenantScope, input: IncomingInvoiceDocumentUploadInput): Promise<IncomingInvoiceDocumentEntity>;
+  downloadIncomingInvoiceDocument(scope: TenantScope, documentId: string): Promise<IncomingInvoiceDocumentDownload>;
+  reviewIncomingInvoiceDocument(scope: TenantScope, input: IncomingInvoiceDocumentReviewInput): Promise<IncomingInvoiceDocumentEntity>;
   previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
   postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
@@ -184,6 +196,10 @@ export interface BoundProAccountingService {
   upsertVendor(input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
   listIncomingInvoices(): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
+  listIncomingInvoiceDocuments(invoiceId: string): Promise<IncomingInvoiceDocumentEntity[]>;
+  uploadIncomingInvoiceDocument(input: IncomingInvoiceDocumentUploadInput): Promise<IncomingInvoiceDocumentEntity>;
+  downloadIncomingInvoiceDocument(documentId: string): Promise<IncomingInvoiceDocumentDownload>;
+  reviewIncomingInvoiceDocument(input: IncomingInvoiceDocumentReviewInput): Promise<IncomingInvoiceDocumentEntity>;
   previewOutgoingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
   postOutgoingInvoice(invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
   previewIncomingInvoice(invoiceId: string): Promise<AccountingPostingPreview>;
@@ -319,6 +335,10 @@ export const createProAccountingService = (repository: ProAccountingRepositoryWi
   upsertVendor: (scope, input) => repository.upsertVendor(scope, input),
   listIncomingInvoices: (scope) => repository.listIncomingInvoices(scope),
   upsertIncomingInvoice: (scope, input) => repository.upsertIncomingInvoice(scope, input),
+  listIncomingInvoiceDocuments: (scope, invoiceId) => repository.listIncomingInvoiceDocuments(scope, invoiceId),
+  uploadIncomingInvoiceDocument: (scope, input) => repository.uploadIncomingInvoiceDocument(scope, input),
+  downloadIncomingInvoiceDocument: (scope, documentId) => repository.downloadIncomingInvoiceDocument(scope, documentId),
+  reviewIncomingInvoiceDocument: (scope, input) => repository.reviewIncomingInvoiceDocument(scope, input),
   previewOutgoingInvoice: (scope, invoiceId) => repository.previewOutgoingInvoice(scope, invoiceId),
   postOutgoingInvoice: (scope, invoiceId, options) => repository.postOutgoingInvoice(scope, invoiceId, options),
   previewIncomingInvoice: (scope, invoiceId) => repository.previewIncomingInvoice(scope, invoiceId),
@@ -374,6 +394,10 @@ export const bindProAccountingScope = (
   upsertVendor: (input) => service.upsertVendor(scope, input),
   listIncomingInvoices: () => service.listIncomingInvoices(scope),
   upsertIncomingInvoice: (input) => service.upsertIncomingInvoice(scope, input),
+  listIncomingInvoiceDocuments: (invoiceId) => service.listIncomingInvoiceDocuments(scope, invoiceId),
+  uploadIncomingInvoiceDocument: (input) => service.uploadIncomingInvoiceDocument(scope, input),
+  downloadIncomingInvoiceDocument: (documentId) => service.downloadIncomingInvoiceDocument(scope, documentId),
+  reviewIncomingInvoiceDocument: (input) => service.reviewIncomingInvoiceDocument(scope, input),
   previewOutgoingInvoice: (invoiceId) => service.previewOutgoingInvoice(scope, invoiceId),
   postOutgoingInvoice: (invoiceId, options) => service.postOutgoingInvoice(scope, invoiceId, options),
   previewIncomingInvoice: (invoiceId) => service.previewIncomingInvoice(scope, invoiceId),

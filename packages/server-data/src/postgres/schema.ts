@@ -108,6 +108,11 @@ export const invoices = pgTable("invoices", {
   clientNumber: text("client_number"),
   projectId: text("project_id"),
   number: text("number"),
+  documentKind: text("document_kind"),
+  sourceDocumentId: text("source_document_id"),
+  rootDocumentId: text("root_document_id"),
+  revisionOfId: text("revision_of_id"),
+  revisionNumber: integer("revision_number"),
   client: text("client"),
   clientEmail: text("client_email"),
   clientAddress: text("client_address"),
@@ -453,6 +458,13 @@ export const incomingInvoiceLines = pgTable("incoming_invoice_lines", {
   id: text("id"), tenantId: text("tenant_id"), incomingInvoiceId: text("incoming_invoice_id"), position: integer("position"),
   description: text("description"), quantity: numeric("quantity"), unitPrice: numeric("unit_price"), netAmount: numeric("net_amount"),
   taxRate: numeric("tax_rate"), taxAmount: numeric("tax_amount"), grossAmount: numeric("gross_amount"), accountNumber: text("account_number"), assetAccountNumber: text("asset_account_number"),
+});
+
+export const incomingInvoiceDocuments = pgTable("incoming_invoice_documents", {
+  id: text("id"), tenantId: text("tenant_id"), incomingInvoiceId: text("incoming_invoice_id"),
+  originalFilename: text("original_filename"), mimeType: text("mime_type"), byteLength: integer("byte_length"),
+  sha256: text("sha256"), contentBytes: bytea("content_bytes"), reviewStatus: text("review_status"),
+  createdAt: text("created_at"), updatedAt: text("updated_at"),
 });
 
 export const openItems = pgTable("open_items", {

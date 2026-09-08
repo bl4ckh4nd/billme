@@ -202,7 +202,7 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
         {error ? <div className="rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">{error}</div> : null}
         {success ? (
           <div className="rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success" role="status" aria-live="polite">
-            Export erstellt: {success.recordCount} Buchungen. Datei: <span className="break-all font-mono text-xs">{success.filePath}</span>
+            DATEV-Datei heruntergeladen · Serverbeleg <span className="break-all font-mono text-xs">{success.id}</span> · {success.recordCount} {success.recordCount === 1 ? 'Buchung' : 'Buchungen'}.
             {success.sha256 ? <span className="mt-1 block break-all font-mono text-xs">SHA-256: {success.sha256}</span> : null}
           </div>
         ) : null}

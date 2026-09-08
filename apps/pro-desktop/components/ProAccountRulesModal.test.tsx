@@ -27,6 +27,7 @@ vi.mock('../ipc/client', () => ({
 
 vi.mock('@billme/ui', () => ({
   Button: (props: any) => <button {...props}>{props.children}</button>,
+  Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 const renderModal = (props?: Partial<React.ComponentProps<typeof ProAccountRulesModal>>) => {

@@ -7,6 +7,7 @@ import {
 import type { Article } from '@billme/desktop-core/types';
 import { v4 as uuidv4 } from 'uuid';
 import { useArticlesQuery, useDeleteArticleMutation, useUpsertArticleMutation } from '../hooks/useArticles';
+import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { useRouterState } from '@tanstack/react-router';
 
@@ -57,6 +58,11 @@ export const ArticlesView: React.FC = () => {
   const { data: settings } = useSettingsQuery();
   const upsertArticle = useUpsertArticleMutation();
   const deleteArticle = useDeleteArticleMutation();
+  const { pendingIds, requestDelete } = useDeferredDelete({
+    scope: 'articles',
+    commit: (id) => deleteArticle.mutateAsync(id),
+    label: (count) => count === 1 ? 'Artikel gelöscht' : `${count} Artikel gelöscht`,
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
   const [selectedCategory, setSelectedCategory] = useState<string>('Alle');
@@ -83,7 +89,6 @@ export const ArticlesView: React.FC = () => {
   });
   const [formErrors, setFormErrors] = useState<Partial<Record<'title' | 'price' | 'unit' | 'category' | 'taxRate' | 'sku', string>>>({});
   const [isSaving, setIsSaving] = useState(false);
-  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   const configuredCategories = useMemo(
     () => buildConfiguredCategories(settings?.catalog?.categories),
@@ -95,7 +100,8 @@ export const ArticlesView: React.FC = () => {
     [configuredCategories],
   );
 
-  const filteredArticles = articles.filter(a => {
+  const visibleArticles = articles.filter((article) => !pendingIds.has(article.id));
+  const filteredArticles = visibleArticles.filter(a => {
       const matchesSearch = a.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                             a.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
                             (a.sku && a.sku.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -160,51 +166,29 @@ export const ArticlesView: React.FC = () => {
       }
   };
 
-  const handleDelete = async (id: string) => {
-      if (confirm('Artikel wirklich löschen?')) {
-          try {
-            await deleteArticle.mutateAsync(id);
-            if (selectedArticles.has(id)) {
-                const newSelected = new Set(selectedArticles);
-                newSelected.delete(id);
-                setSelectedArticles(newSelected);
-            }
-            setOperationTone('success');
-            setOperationMessage('Artikel gelöscht.');
-          } catch (error) {
-            setOperationTone('error');
-            setOperationMessage(`Löschen fehlgeschlagen: ${String(error)}`);
-          }
+  const handleDelete = (id: string) => {
+      requestDelete([id]);
+      setSelectedArticles((current) => {
+          if (!current.has(id)) return current;
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+      });
+      if (editingArticle?.id === id) {
+          setIsFormOpen(false);
+          setEditingArticle(null);
       }
   };
 
-  const handleBulkDelete = async () => {
-      if (selectedArticles.size === 0) return;
-      if (!confirm(`${selectedArticles.size} Artikel löschen?`)) return;
-      setIsBulkDeleting(true);
-      const ids = Array.from(selectedArticles);
-      let deleted = 0;
-      const failedIds: string[] = [];
-      for (const id of ids) {
-        try {
-          await deleteArticle.mutateAsync(id);
-          deleted++;
-        } catch {
-          failedIds.push(id);
-        }
-      }
-
-      setSelectedArticles(new Set(failedIds));
-      if (failedIds.length === 0) {
-        setOperationTone('success');
-        setOperationMessage(`${deleted} Artikel erfolgreich gelöscht.`);
-      } else {
-        setOperationTone('error');
-        setOperationMessage(
-          `${deleted} gelöscht, ${failedIds.length} fehlgeschlagen. Fehlgeschlagene Auswahl bleibt markiert.`,
-        );
-      }
-      setIsBulkDeleting(false);
+  const handleBulkDelete = () => {
+      const ids = Array.from(selectedArticles).filter((id) => !pendingIds.has(id));
+      if (ids.length === 0) return;
+      requestDelete(ids);
+      setSelectedArticles((current) => {
+          const next = new Set(current);
+          ids.forEach((id) => next.delete(id));
+          return next;
+      });
   };
 
   const handleToggleSelect = (id: string) => {
@@ -377,10 +361,9 @@ export const ArticlesView: React.FC = () => {
                         <div className="h-4 w-px bg-white/20"></div>
                         <button
                           onClick={() => void handleBulkDelete()}
-                          disabled={isBulkDeleting}
                           className="flex items-center gap-2 hover:text-error/70 transition-colors text-xs font-bold disabled:opacity-50"
                         >
-                            <Trash2 size={14} /> {isBulkDeleting ? 'Lösche...' : 'Löschen'}
+                            <Trash2 size={14} /> Löschen
                         </button>
                         <button onClick={() => setSelectedArticles(new Set())} className="ml-2 hover:text-gray-400 transition-colors">
                             <X size={16} />

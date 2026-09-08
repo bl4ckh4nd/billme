@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import {
   Search, Plus, FileText,
@@ -8,8 +7,14 @@ import {
   AlertTriangle, Mail, Gavel, CheckCircle, X,
   Download, Printer, Send, Paperclip, MoreHorizontal, Calendar, User, RefreshCw, Link, ExternalLink, Trash2, LayoutTemplate, Edit3, Euro, ArrowRight
 } from 'lucide-react';
-import { Badge, Button } from '@billme/ui';
-import type { Invoice, InvoiceStatus, AppSettings } from '@billme/desktop-core/types';
+import { Badge, Button, ConfirmDialog, Portal, useActionFeedback } from '@billme/ui';
+import {
+  getInvoiceDocumentLabel,
+  isBillingDocumentKind,
+  type Invoice,
+  type InvoiceStatus,
+  type AppSettings,
+} from '@billme/desktop-core/types';
 import { MOCK_SETTINGS } from '@billme/desktop-services/mockData';
 import { useDeleteInvoiceMutation, useInvoicesQuery, useUpsertInvoiceMutation } from '../hooks/useInvoices';
 import { useDeleteOfferMutation, useOffersQuery, useUpsertOfferMutation } from '../hooks/useOffers';
@@ -73,6 +78,25 @@ interface DocumentsViewProps {
   initialStatus?: InvoiceStatus;
 }
 
+type ChainAction =
+  | 'order_confirmation'
+  | 'delivery_note'
+  | 'advance_invoice'
+  | 'partial_invoice'
+  | 'final_invoice'
+  | 'credit_note'
+  | 'cancellation_invoice'
+  | 'revision';
+
+type AmountChainAction = Extract<ChainAction, 'advance_invoice' | 'partial_invoice' | 'final_invoice' | 'credit_note' | 'cancellation_invoice'>;
+
+const isAmountChainAction = (action: ChainAction): action is AmountChainAction =>
+  action === 'advance_invoice' ||
+  action === 'partial_invoice' ||
+  action === 'final_invoice' ||
+  action === 'credit_note' ||
+  action === 'cancellation_invoice';
+
 export const DocumentsView: React.FC<DocumentsViewProps> = ({
   onOpenTemplates,
   onOpenRecurring,
@@ -89,13 +113,18 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<InvoiceStatus | 'all'>('all');
   const [searchTerm, setSearchTerm] = useState('');
-  const [showShareToast, setShowShareToast] = useState(false);
-  const [toastMessage, setToastMessage] = useState('');
 
   // Dunning State
   const [isDunningModalOpen, setIsDunningModalOpen] = useState(false);
   const [selectedForDunning, setSelectedForDunning] = useState<string[]>([]);
   const [isDunningProcessing, setIsDunningProcessing] = useState(false);
+  const [reminderConfirmation, setReminderConfirmation] = useState<{
+    invoiceId: string;
+    invoiceNumber: string;
+    levelName: string;
+    fee: number;
+  } | null>(null);
+  const [isCreatingReminder, setIsCreatingReminder] = useState(false);
 
   // Email State
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
@@ -106,9 +135,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
   const [bulkDeleteReason, setBulkDeleteReason] = useState('');
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
-
-  // PDF path for "Öffnen" button in toast
-  const [pdfLastPath, setPdfLastPath] = useState<string | null>(null);
 
   // Detail toolbar overflow menu
   const [isToolbarOverflowOpen, setIsToolbarOverflowOpen] = useState(false);
@@ -135,6 +161,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [paymentDeleteReason, setPaymentDeleteReason] = useState('');
   const [paymentDeleteError, setPaymentDeleteError] = useState<string | null>(null);
 
+  // Document-chain amount actions use an in-app dialog because Electron has no
+  // native prompt support. The number is reserved only after confirmation.
+  const [chainAmountDialog, setChainAmountDialog] = useState<{ action: AmountChainAction } | null>(null);
+  const [chainAmountInput, setChainAmountInput] = useState('');
+  const [chainAmountError, setChainAmountError] = useState<string | null>(null);
+
   // Choose data source based on document type
   // In a real app, this would come from a context or prop
   const { data: invoices = [], isLoading: isLoadingInvoices } = useInvoicesQuery();
@@ -144,11 +176,23 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const upsertOffer = useUpsertOfferMutation();
   const deleteOffer = useDeleteOfferMutation();
   const { data: settingsFromDb } = useSettingsQuery();
+  const { notify } = useActionFeedback('documents');
   const settings = settingsFromDb ?? MOCK_SETTINGS;
   const currentData = documentType === 'invoice' ? invoices : offers;
   const isLoading = documentType === 'invoice' ? isLoadingInvoices : isLoadingOffers;
 
   const selectedDocument = currentData.find(i => i.id === selectedId);
+  const selectedChain = React.useMemo(() => {
+    if (documentType !== 'invoice' || !selectedDocument) return [];
+    const rootId = selectedDocument.rootDocumentId ?? selectedDocument.id;
+    return invoices
+      .filter((invoice) => (invoice.rootDocumentId ?? invoice.id) === rootId)
+      .sort((left, right) => {
+        if (left.id === selectedDocument.id) return -1;
+        if (right.id === selectedDocument.id) return 1;
+        return `${left.date}-${left.number}`.localeCompare(`${right.date}-${right.number}`);
+      });
+  }, [documentType, invoices, selectedDocument]);
   const selectedDocumentTax =
     selectedDocument
       ? (selectedDocument.taxSnapshot ??
@@ -228,9 +272,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   const handleSharePaymentLink = () => {
     if (!selectedDocument?.number) {
-      setToastMessage('Kein Dokument für Zahllink ausgewählt.');
-      setShowShareToast(true);
-      setTimeout(() => setShowShareToast(false), 3000);
+      notify('error', 'Kein Dokument für Zahllink ausgewählt.');
       return;
     }
 
@@ -239,12 +281,10 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     void (async () => {
       try {
         await navigator.clipboard.writeText(url);
-        setToastMessage('Zahllink kopiert!');
+        notify('success', 'Zahllink kopiert!');
       } catch (error) {
-        setToastMessage(`Kopieren fehlgeschlagen: ${String(error)}`);
+        notify('error', `Kopieren fehlgeschlagen: ${String(error)}`);
       }
-      setShowShareToast(true);
-      setTimeout(() => setShowShareToast(false), 3500);
     })();
   };
 
@@ -252,15 +292,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       if (!selectedDocument) return;
       void (async () => {
         try {
-          setToastMessage('PDF wird erstellt...');
-          setShowShareToast(true);
+          notify('progress', 'PDF wird erstellt...');
           const res = await ipc.pdf.export({ kind: documentType, id: selectedDocument.id });
-          setToastMessage(`PDF gespeichert`);
-          setPdfLastPath(res.path);
-          setTimeout(() => setShowShareToast(false), 5000);
+          notify('success', 'PDF gespeichert', {
+            action: { label: 'Öffnen', onClick: () => void ipc.shell.openPath({ path: res.path }) },
+          });
         } catch (e) {
-          setToastMessage(`PDF Fehler: ${String(e)}`);
-          setTimeout(() => setShowShareToast(false), 5000);
+          notify('error', `PDF Fehler: ${String(e)}`);
         }
       })();
   };
@@ -269,16 +307,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!selectedDocument) return;
     void (async () => {
       try {
-        setToastMessage('Angebot wird veröffentlicht...');
-        setShowShareToast(true);
+        notify('progress', 'Angebot wird veröffentlicht...');
         const res = await ipc.portal.publishOffer({ offerId: selectedDocument.id });
         await navigator.clipboard.writeText(res.publicUrl);
-        setToastMessage('Link kopiert!');
+        notify('success', 'Link kopiert!');
         await queryClient.invalidateQueries({ queryKey: ['offers'] });
-        setTimeout(() => setShowShareToast(false), 3000);
       } catch (e) {
-        setToastMessage(`Portalfehler: ${String(e)}`);
-        setTimeout(() => setShowShareToast(false), 5000);
+        notify('error', `Portalfehler: ${String(e)}`);
       }
     })();
   };
@@ -293,18 +328,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const handleOpenOfferLink = () => {
     const url = getOfferPublicUrl();
     if (!url) {
-      setToastMessage('Portal-URL fehlt. Hinterlege sie in Einstellungen unter Portal.');
-      setShowShareToast(true);
-      setTimeout(() => setShowShareToast(false), 4000);
+      notify('error', 'Portal-URL fehlt. Hinterlege sie in Einstellungen unter Portal.');
       return;
     }
     void (async () => {
       try {
         await ipc.shell.openExternal({ url });
       } catch (e) {
-        setToastMessage(`Link konnte nicht geöffnet werden: ${String(e)}`);
-        setShowShareToast(true);
-        setTimeout(() => setShowShareToast(false), 5000);
+        notify('error', `Link konnte nicht geöffnet werden: ${String(e)}`);
       }
     })();
   };
@@ -313,15 +344,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!selectedDocument) return;
     void (async () => {
       try {
-        setToastMessage('Portalstatus wird synchronisiert ...');
-        setShowShareToast(true);
+        notify('progress', 'Portalstatus wird synchronisiert ...');
         const res = await ipc.portal.syncOfferStatus({ offerId: selectedDocument.id });
         await queryClient.invalidateQueries({ queryKey: ['offers'] });
-        setToastMessage(res.updated ? 'Status aktualisiert' : 'Keine Änderung');
-        setTimeout(() => setShowShareToast(false), 2500);
+        notify('success', res.updated ? 'Status aktualisiert' : 'Keine Änderung');
       } catch (e) {
-        setToastMessage(`Synchronisierung fehlgeschlagen: ${String(e)}`);
-        setTimeout(() => setShowShareToast(false), 5000);
+        notify('error', `Synchronisierung fehlgeschlagen: ${String(e)}`);
       }
     })();
   };
@@ -330,13 +358,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!selectedDocument || documentType !== 'offer') return;
     void (async () => {
       try {
-        setToastMessage('Rechnung wird erstellt...');
-        setShowShareToast(true);
+        notify('progress', 'Rechnung wird erstellt...');
         const newInvoice = await ipc.documents.convertOfferToInvoice({ offerId: selectedDocument.id });
         await queryClient.invalidateQueries({ queryKey: ['invoices'] });
-        setToastMessage('Rechnung erfolgreich erstellt!');
+        notify('success', 'Rechnung erfolgreich erstellt!');
         setTimeout(() => {
-          setShowShareToast(false);
           // Switch to invoices view and open the new invoice
           switchDocumentType('invoice');
           setTimeout(() => {
@@ -345,10 +371,105 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           }, 100);
         }, 1500);
       } catch (e) {
-        setToastMessage(`Fehler: ${String(e)}`);
-        setTimeout(() => setShowShareToast(false), 5000);
+        notify('error', `Fehler: ${String(e)}`);
       }
     })();
+  };
+
+  const persistChainDocument = (action: ChainAction, amount?: number) => {
+    if (!selectedDocument) return;
+    void (async () => {
+      let reservationId: string | undefined;
+      try {
+        const today = new Date().toISOString().split('T')[0] ?? '';
+        const reasonByAction: Record<ChainAction, string> = {
+          order_confirmation: 'Auftragsbestätigung aus angenommenem Angebot erstellt',
+          delivery_note: 'Lieferschein aus Auftragsbestätigung erstellt',
+          advance_invoice: 'Abschlagsrechnung erstellt',
+          partial_invoice: 'Teilrechnung erstellt',
+          final_invoice: 'Schlussrechnung erstellt',
+          credit_note: 'Gutschrift erstellt',
+          cancellation_invoice: 'Stornorechnung erstellt',
+          revision: 'Revisionsdokument erstellt',
+        };
+        const reason = reasonByAction[action];
+        const reservation = await ipc.numbers.reserve({ kind: 'invoice' });
+        const reservedId = reservation.reservationId;
+        reservationId = reservedId;
+        const base = { id: uuidv4(), number: reservation.number, date: today, reason };
+        let created: Invoice;
+
+        if (action === 'order_confirmation') {
+          created = await ipc.documents.chainCreate({ operation: action, ...base, offerId: selectedDocument.id });
+        } else if (action === 'delivery_note') {
+          created = await ipc.documents.chainCreate({ operation: action, ...base, orderId: selectedDocument.id });
+        } else if (action === 'revision') {
+          created = await ipc.documents.chainCreate({ operation: action, ...base, invoiceId: selectedDocument.id });
+        } else if (action === 'credit_note' || action === 'cancellation_invoice') {
+          if (amount === undefined) throw new Error('Ein Korrekturbetrag ist erforderlich.');
+          created = await ipc.documents.chainCreate({ operation: 'correction', ...base, invoiceId: selectedDocument.id, kind: action, amount });
+        } else {
+          if (amount === undefined) throw new Error('Ein Rechnungsbetrag ist erforderlich.');
+          created = await ipc.documents.chainCreate({ operation: 'settlement_invoice', ...base, orderId: selectedDocument.id, kind: action, amount });
+        }
+
+        await ipc.numbers.finalize({ reservationId: reservedId, documentId: created.id });
+        reservationId = undefined;
+        const finalized = await ipc.invoices.upsert({
+          invoice: { ...created, status: 'open' },
+          reason: `${reason} (finalisiert)`,
+        });
+        queryClient.setQueryData<Invoice[]>(['invoices'], (current = []) => [
+          finalized,
+          ...current.filter((invoice) => invoice.id !== finalized.id),
+        ]);
+        await queryClient.invalidateQueries({ queryKey: ['invoices'] });
+        if (action === 'order_confirmation') {
+          setDocumentType('invoice');
+          setIsTypeDropdownOpen(false);
+          setSelectedIds(new Set());
+        }
+        setSelectedId(finalized.id);
+        setViewMode('detail');
+        notify('success', `${getInvoiceDocumentLabel(finalized.documentKind)} ${finalized.number} erstellt.`);
+      } catch (error) {
+        if (reservationId) await ipc.numbers.release({ reservationId }).catch(() => undefined);
+        notify('error', `Dokument konnte nicht erstellt werden: ${String(error)}`);
+      }
+    })();
+  };
+
+  const handleCreateChainDocument = (action: ChainAction) => {
+    if (!selectedDocument) return;
+    if (action === 'order_confirmation' && documentType !== 'offer') return;
+    if (action !== 'order_confirmation' && documentType !== 'invoice') return;
+    if (action === 'delivery_note' && selectedDocument.documentKind !== 'order_confirmation') return;
+    if (isAmountChainAction(action)) {
+      setChainAmountInput(selectedDocument.amount.toFixed(2));
+      setChainAmountError(null);
+      setChainAmountDialog({ action });
+      return;
+    }
+    persistChainDocument(action);
+  };
+
+  const cancelChainAmount = () => {
+    setChainAmountDialog(null);
+    setChainAmountInput('');
+    setChainAmountError(null);
+  };
+
+  const confirmChainAmount = () => {
+    if (!chainAmountDialog) return;
+    const normalized = chainAmountInput.trim().replace(/\s/g, '').replace(',', '.');
+    const amount = Number(normalized);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setChainAmountError('Bitte einen gültigen Betrag größer als 0 eingeben.');
+      return;
+    }
+    const { action } = chainAmountDialog;
+    cancelChainAmount();
+    persistChainDocument(action, amount);
   };
 
   const switchDocumentType = (type: 'invoice' | 'offer') => {
@@ -378,8 +499,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       void (async () => {
         try {
           setIsEmailModalOpen(false);
-          setToastMessage('E-Mail wird gesendet...');
-          setShowShareToast(true);
+          notify('progress', 'E-Mail wird gesendet...');
 
           const result = await ipc.email.send({
             documentType,
@@ -391,8 +511,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           });
 
           if (!result.success) {
-            setToastMessage(`Fehler: ${result.error}`);
-            setTimeout(() => setShowShareToast(false), 5000);
+            notify('error', `Fehler: ${result.error}`);
             return;
           }
 
@@ -420,11 +539,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             });
           }
 
-          setToastMessage('E-Mail wurde versendet.');
-          setTimeout(() => setShowShareToast(false), 3000);
+          notify('success', 'E-Mail wurde versendet.');
         } catch (e) {
-          setToastMessage(`Fehler: ${String(e)}`);
-          setTimeout(() => setShowShareToast(false), 5000);
+          notify('error', `Fehler: ${String(e)}`);
         }
       })();
   };
@@ -448,14 +565,10 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         },
         {
           onSuccess: () => {
-            setToastMessage('Rechnung als gestellt markiert');
-            setShowShareToast(true);
-            setTimeout(() => setShowShareToast(false), 3000);
+            notify('success', 'Rechnung als gestellt markiert');
           },
           onError: (error) => {
-            setToastMessage(`Finalisieren fehlgeschlagen: ${String(error)}`);
-            setShowShareToast(true);
-            setTimeout(() => setShowShareToast(false), 5000);
+            notify('error', `Finalisieren fehlgeschlagen: ${String(error)}`);
           },
         },
       );
@@ -520,30 +633,52 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         `${skipped} übersprungen`,
         `${failed} fehlgeschlagen`,
       ].join(' • ');
-      alert(firstError ? `${summary}\nErster Fehler: ${firstError}` : summary);
+      notify(firstError ? 'error' : 'success', firstError ? `${summary}\nErster Fehler: ${firstError}` : summary);
   };
 
   const handleCreateReminder = () => {
-      if (!selectedDocument) return;
+      if (!selectedDocument || documentType !== 'invoice') return;
       const currentLevel = selectedDocument.dunningLevel || 0;
       const nextLevel = Math.min(currentLevel + 1, 3);
       const levelConfig = settings.dunning.levels.find(l => l.id === nextLevel);
+      setReminderConfirmation({
+        invoiceId: selectedDocument.id,
+        invoiceNumber: selectedDocument.number,
+        levelName: levelConfig?.name ?? 'Mahnung',
+        fee: levelConfig?.fee ?? 0,
+      });
+  };
 
-      if (confirm(`${levelConfig?.name} erstellen für ${selectedDocument.number}?\nGebühr: ${formatCurrency(levelConfig?.fee || 0)}`)) {
-          if (documentType === 'invoice') {
-              const historyEntry = {
-                  date: new Date().toISOString().split('T')[0],
-                  action: `${levelConfig?.name} erstellt (+${formatCurrency(levelConfig?.fee || 0)})`
-              };
-              upsertInvoice.mutate({
-                invoice: {
-                  ...selectedDocument,
-                  dunningLevel: nextLevel,
-                  history: [...(selectedDocument.history ?? []), historyEntry],
-                },
-                reason: 'dunning_create',
-              });
-          }
+  const handleConfirmReminder = async () => {
+      if (!reminderConfirmation || isCreatingReminder) return;
+      const invoice = invoices.find((item) => item.id === reminderConfirmation.invoiceId);
+      if (!invoice) {
+        setReminderConfirmation(null);
+        notify('error', 'Die Rechnung für die Mahnung wurde nicht gefunden.');
+        return;
+      }
+
+      setIsCreatingReminder(true);
+      const nextLevel = Math.min((invoice.dunningLevel || 0) + 1, 3);
+      const historyEntry = {
+          date: new Date().toISOString().split('T')[0] ?? '',
+          action: `${reminderConfirmation.levelName} erstellt (+${formatCurrency(reminderConfirmation.fee)})`,
+      };
+      try {
+        await upsertInvoice.mutateAsync({
+          invoice: {
+            ...invoice,
+            dunningLevel: nextLevel,
+            history: [...(invoice.history ?? []), historyEntry],
+          },
+          reason: 'dunning_create',
+        });
+        setReminderConfirmation(null);
+        notify('success', `${reminderConfirmation.levelName} für ${invoice.number} erstellt.`);
+      } catch (error) {
+        notify('error', `Mahnung konnte nicht erstellt werden: ${String(error)}`);
+      } finally {
+        setIsCreatingReminder(false);
       }
   };
 
@@ -553,7 +688,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       if (!isDunningModalOpen) return null;
 
       return (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <Portal>
+      <div className="fixed inset-0 bg-dark-base/20 z-50 flex items-center justify-center backdrop-blur-sm p-4 animate-in fade-in duration-200">
               <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-scale-in">
                   <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                       <div>
@@ -620,6 +756,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   </div>
               </div>
           </div>
+          </Portal>
       );
   };
 
@@ -627,7 +764,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const renderEmailModal = () => {
     if (!isEmailModalOpen) return null;
     return (
-        <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center backdrop-blur-sm p-4 animate-in fade-in duration-200">
+        <Portal>
+        <div className="fixed inset-0 bg-dark-base/20 z-50 flex items-center justify-center backdrop-blur-sm p-4 animate-in fade-in duration-200">
              <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl flex flex-col animate-scale-in">
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-3xl">
                     <h3 className="text-lg font-black flex items-center gap-2"><Mail size={18}/> Per E-Mail senden</h3>
@@ -674,6 +812,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 </div>
              </div>
         </div>
+        </Portal>
     );
   };
 
@@ -681,7 +820,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!isPaymentModalOpen) return null;
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Portal>
+      <div className="fixed inset-0 z-40 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm p-4">
         <div className="w-full max-w-lg rounded-3xl bg-white shadow-xl overflow-hidden">
           <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
             <div>
@@ -831,6 +971,54 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </div>
         </div>
       </div>
+      </Portal>
+    );
+  };
+
+  const renderChainAmountDialog = () => {
+    if (!chainAmountDialog) return null;
+    const label = getInvoiceDocumentLabel(chainAmountDialog.action);
+    return (
+      <Portal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 p-4 backdrop-blur-sm">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="chain-amount-title"
+          className="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl"
+        >
+          <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5">
+            <div>
+              <h3 id="chain-amount-title" className="text-lg font-black text-gray-900">{label} erstellen</h3>
+              <p className="mt-1 text-sm text-gray-500">Der Betrag wird als eigener, verknüpfter Beleg gespeichert.</p>
+            </div>
+            <button type="button" onClick={cancelChainAmount} className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200" aria-label="Dialog schließen">
+              <X size={18} />
+            </button>
+          </div>
+          <form onSubmit={(event) => { event.preventDefault(); confirmChainAmount(); }}>
+            <div className="space-y-2 p-6">
+              <label htmlFor="chain-amount" className="block text-xs font-bold text-gray-500">Betrag (EUR)</label>
+              <input
+                id="chain-amount"
+                autoFocus
+                inputMode="decimal"
+                value={chainAmountInput}
+                onChange={(event) => { setChainAmountInput(event.target.value); setChainAmountError(null); }}
+                aria-invalid={Boolean(chainAmountError)}
+                aria-describedby={chainAmountError ? 'chain-amount-error' : undefined}
+                className="w-full rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm outline-none focus:ring-2 focus:ring-accent"
+              />
+              {chainAmountError && <p id="chain-amount-error" role="alert" className="text-sm font-medium text-error">{chainAmountError}</p>}
+            </div>
+            <div className="flex justify-end gap-3 border-t border-gray-100 bg-gray-50 p-6">
+              <button type="button" onClick={cancelChainAmount} className="rounded-xl px-6 py-3 font-bold text-gray-500 hover:bg-gray-200">Abbrechen</button>
+              <Button type="submit" size="md">{label} erstellen</Button>
+            </div>
+          </form>
+        </div>
+      </div>
+      </Portal>
     );
   };
 
@@ -838,7 +1026,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!isPaymentDeleteOpen) return null;
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Portal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 p-4 backdrop-blur-sm">
         <div className="w-full max-w-lg rounded-3xl bg-white shadow-xl p-6">
           <h3 className="text-lg font-black text-gray-900 mb-1">Zahlung löschen</h3>
           <p className="text-sm text-gray-500 mb-4">
@@ -911,6 +1100,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </div>
         </div>
       </div>
+      </Portal>
     );
   };
 
@@ -922,22 +1112,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               {renderEmailModal()}
               {renderPaymentModal()}
               {renderPaymentDeleteModal()}
-
-              {/* Toast Notification */}
-              {showShareToast && (
-                  <div className="absolute top-8 right-8 bg-black text-accent px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 z-50 animate-in fade-in slide-in-from-top-2">
-                      <Check size={16} />
-                      <span className="text-sm font-bold">{toastMessage}</span>
-                      {pdfLastPath && toastMessage === 'PDF gespeichert' && (
-                        <button
-                          onClick={() => void ipc.shell.openPath({ path: pdfLastPath })}
-                          className="ml-2 text-xs font-bold underline underline-offset-2 opacity-80 hover:opacity-100 transition-opacity"
-                        >
-                          Öffnen
-                        </button>
-                      )}
-                  </div>
-              )}
+              {renderChainAmountDialog()}
 
               {/* Navigation & Title */}
               <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-6 mb-8 border-b border-gray-100 pb-8">
@@ -957,8 +1132,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                            </div>
                            <div className="flex items-center gap-3">
                                 <Badge status={selectedDocument.status} />
-                                {documentType === 'offer' && (
+                                {documentType === 'offer' ? (
                                     <span className="bg-purple-100 text-purple-700 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">Angebot</span>
+                                ) : (
+                                    <span className="bg-gray-100 text-gray-700 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                                      {getInvoiceDocumentLabel(selectedDocument.documentKind)}
+                                    </span>
                                 )}
                            </div>
                       </div>
@@ -970,12 +1149,53 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       {documentType === 'offer' && selectedDocument.shareDecision === 'accepted' && (
                         <>
                           <Button
+                            onClick={() => handleCreateChainDocument('order_confirmation')}
+                            size="md"
+                            title="Auftragsbestätigung aus angenommenem Angebot erstellen"
+                          >
+                            <FileText size={16} />
+                            Auftragsbestätigung
+                          </Button>
+                          <Button
                             onClick={handleConvertOfferToInvoice}
                             size="md"
                             title="Angebot in Rechnung umwandeln"
                           >
                             <ArrowRight size={16} />
                             In Rechnung umwandeln
+                          </Button>
+                          <div className="w-px h-6 bg-gray-200 mx-1" />
+                        </>
+                      )}
+
+                      {documentType === 'invoice' && selectedDocument.documentKind === 'order_confirmation' && (
+                        <>
+                          <Button onClick={() => handleCreateChainDocument('delivery_note')} size="md" title="Lieferschein aus Auftragsbestätigung erstellen">
+                            <FileText size={16} /> Lieferschein
+                          </Button>
+                          <Button onClick={() => handleCreateChainDocument('advance_invoice')} size="md" title="Abschlagsrechnung erstellen">
+                            <Euro size={16} /> Abschlag
+                          </Button>
+                          <Button onClick={() => handleCreateChainDocument('partial_invoice')} size="md" title="Teilrechnung erstellen">
+                            <Euro size={16} /> Teilrechnung
+                          </Button>
+                          <Button onClick={() => handleCreateChainDocument('final_invoice')} size="md" title="Schlussrechnung erstellen">
+                            <CheckCircle size={16} /> Schlussrechnung
+                          </Button>
+                          <div className="w-px h-6 bg-gray-200 mx-1" />
+                        </>
+                      )}
+
+                      {documentType === 'invoice' && isBillingDocumentKind(selectedDocument.documentKind) && selectedDocument.status !== 'draft' && (
+                        <>
+                          <Button onClick={() => handleCreateChainDocument('credit_note')} size="md" title="Gutschrift aus dieser Rechnung erstellen">
+                            <ArrowLeft size={16} /> Gutschrift
+                          </Button>
+                          <Button onClick={() => handleCreateChainDocument('cancellation_invoice')} size="md" title="Stornorechnung aus dieser Rechnung erstellen">
+                            <RefreshCw size={16} /> Storno
+                          </Button>
+                          <Button onClick={() => handleCreateChainDocument('revision')} size="md" title="Neue Revision aus dieser Rechnung erstellen">
+                            <FileText size={16} /> Revision
                           </Button>
                           <div className="w-px h-6 bg-gray-200 mx-1" />
                         </>
@@ -1029,19 +1249,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                   if (!selectedDocument.shareToken) return;
                                   const baseUrl = settings.portal.baseUrl?.trim();
                                   if (!baseUrl) {
-                                    setToastMessage('Portal-URL fehlt. Hinterlege sie in Einstellungen unter Portal.');
-                                    setShowShareToast(true);
-                                    setTimeout(() => setShowShareToast(false), 4000);
+                                    notify('error', 'Portal-URL fehlt. Hinterlege sie in Einstellungen unter Portal.');
                                     return;
                                   }
                                   try {
                                     await navigator.clipboard.writeText(`${baseUrl.replace(/\/+$/, '')}/offers/${selectedDocument.shareToken}`);
-                                    setToastMessage('Link kopiert!');
+                                    notify('success', 'Link kopiert!');
                                   } catch (error) {
-                                    setToastMessage(`Kopieren fehlgeschlagen: ${String(error)}`);
+                                    notify('error', `Kopieren fehlgeschlagen: ${String(error)}`);
                                   }
-                                  setShowShareToast(true);
-                                  setTimeout(() => setShowShareToast(false), 2500);
                                 }}
                                 className="h-10 w-10 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-full flex items-center justify-center transition-colors"
                                 title="Link kopieren"
@@ -1084,15 +1300,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                 if (!selectedDocument) return;
                                 void (async () => {
                                   try {
-                                    setToastMessage('PDF wird erstellt...');
-                                    setShowShareToast(true);
+                                    notify('progress', 'PDF wird erstellt...');
                                     const res = await ipc.pdf.export({ kind: documentType, id: selectedDocument.id });
                                     await ipc.shell.openPath({ path: res.path });
-                                    setToastMessage('PDF geöffnet');
-                                    setTimeout(() => setShowShareToast(false), 2500);
+                                    notify('success', 'PDF geöffnet');
                                   } catch (e) {
-                                    setToastMessage(`PDF Fehler: ${String(e)}`);
-                                    setTimeout(() => setShowShareToast(false), 5000);
+                                    notify('error', `PDF Fehler: ${String(e)}`);
                                   }
                                 })();
                               }}
@@ -1202,6 +1415,64 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                   {/* Right Column: Sidebar */}
                   <div className="space-y-6">
+
+                      {/* Shared document-chain/revision relationship */}
+                      {selectedChain.length > 0 && (
+                        <div
+                          className="bg-gray-50 border border-gray-200 rounded-3xl p-6 shadow-sm"
+                          data-testid="document-chain-panel"
+                        >
+                          <div className="flex items-start justify-between gap-3 mb-4">
+                            <div>
+                              <h4 className="font-bold text-sm text-gray-900 flex items-center gap-2">
+                                <Link size={16} className="text-gray-400" /> Dokumentkette
+                              </h4>
+                              <p className="text-xs text-gray-500 mt-1">Auftrag, Abrechnung und Revisionen</p>
+                            </div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                              {selectedChain.length} Dokumente
+                            </span>
+                          </div>
+                          <div className="space-y-2">
+                            {selectedChain.map((document) => {
+                              const isCurrent = document.id === selectedDocument.id;
+                              const relationLabel = isCurrent
+                                ? 'Aktuell'
+                                : document.revisionOfId
+                                  ? `Revision ${document.revisionNumber ?? ''}`.trim()
+                                  : document.sourceDocumentId
+                                    ? 'Aus Vorgänger'
+                                    : 'Wurzel';
+                              return (
+                                <button
+                                  key={document.id}
+                                  type="button"
+                                  data-testid={`document-chain-item-${document.id}`}
+                                  onClick={() => setSelectedId(document.id)}
+                                  className={`w-full text-left rounded-2xl border px-3 py-2.5 transition-colors ${
+                                    isCurrent
+                                      ? 'border-black bg-white shadow-sm'
+                                      : 'border-gray-200 bg-white/60 hover:bg-white hover:border-gray-300'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-xs font-bold text-gray-900 truncate">
+                                      {getInvoiceDocumentLabel(document.documentKind)} · {document.number}
+                                    </span>
+                                    <span className="text-[10px] font-bold uppercase tracking-wide text-gray-400 shrink-0">
+                                      {relationLabel}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-2 mt-1 text-[10px] text-gray-500">
+                                    <span>{formatDate(document.date)}</span>
+                                    <span>{formatCurrency(document.amount)}</span>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Status Card */}
                       <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
@@ -1404,7 +1675,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     const count = selectedIds.size;
 
     return (
-      <div className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center backdrop-blur-sm p-4 animate-in fade-in duration-200">
+      <Portal>
+      <div className="fixed inset-0 bg-dark-base/20 z-50 flex items-center justify-center backdrop-blur-sm p-4 animate-in fade-in duration-200">
         <div className="bg-white rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col animate-scale-in">
           <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
             <div>
@@ -1458,8 +1730,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   setIsBulkDeleting(true);
                   try {
                     const ids = Array.from(selectedIds);
-                    setToastMessage(`Lösche ${ids.length} Einträge...`);
-                    setShowShareToast(true);
+                    notify('progress', `Lösche ${ids.length} Einträge...`);
 
                     for (const id of ids) {
                       if (documentType === 'invoice') await deleteInvoice.mutateAsync({ id, reason });
@@ -1470,11 +1741,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     setIsBulkDeleteOpen(false);
                     setBulkDeleteReason('');
 
-                    setToastMessage(`${ids.length} Einträge gelöscht`);
-                    setTimeout(() => setShowShareToast(false), 3000);
+                    notify('success', `${ids.length} Einträge gelöscht`);
                   } catch (e) {
-                    setToastMessage(`Löschen fehlgeschlagen: ${String(e)}`);
-                    setTimeout(() => setShowShareToast(false), 5000);
+                    notify('error', `Löschen fehlgeschlagen: ${String(e)}`);
                   } finally {
                     setIsBulkDeleting(false);
                   }
@@ -1488,6 +1757,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </div>
         </div>
       </div>
+      </Portal>
     );
   };
 
@@ -1497,23 +1767,20 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
     void (async () => {
       try {
-        setToastMessage(`PDFs werden erstellt (0/${ids.length})...`);
-        setShowShareToast(true);
+        notify('progress', `PDFs werden erstellt (0/${ids.length})...`);
 
         for (let i = 0; i < ids.length; i++) {
           const id = ids[i]!;
           await ipc.pdf.export({ kind: documentType, id });
-          setToastMessage(`PDFs werden erstellt (${i + 1}/${ids.length})...`);
+          notify('progress', `PDFs werden erstellt (${i + 1}/${ids.length})...`);
         }
 
-        setToastMessage(`PDFs erstellt: ${ids.length}`);
+        notify('success', `PDFs erstellt: ${ids.length}`);
         if (opts.openFolderAfter) {
           await ipc.shell.openExportsDir();
         }
-        setTimeout(() => setShowShareToast(false), 3000);
       } catch (e) {
-        setToastMessage(`PDF Fehler: ${String(e)}`);
-        setTimeout(() => setShowShareToast(false), 5000);
+        notify('error', `PDF Fehler: ${String(e)}`);
       }
     })();
   };
@@ -1525,21 +1792,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       {renderPaymentModal()}
       {renderPaymentDeleteModal()}
       {renderBulkDeleteModal()}
-
-      {/* Toast Notification for List View */}
-      {showShareToast && viewMode === 'list' && (
-          <div className="absolute top-8 right-8 bg-black text-accent px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 z-50 animate-in fade-in slide-in-from-top-2">
-              <Check size={16} />
-              <span className="text-sm font-bold">{toastMessage}</span>
-              {pdfLastPath && toastMessage === 'PDF gespeichert' && (
-                <button
-                  onClick={() => void ipc.shell.openPath({ path: pdfLastPath })}
-                  className="ml-2 text-xs font-bold underline underline-offset-2 opacity-80 hover:opacity-100 transition-opacity"
-                >
-                  Öffnen
-                </button>
-              )}
-          </div>
+      {renderChainAmountDialog()}
+      {reminderConfirmation && (
+        <ConfirmDialog
+          open
+          title="Mahnung erstellen"
+          description={`${reminderConfirmation.levelName} erstellen für ${reminderConfirmation.invoiceNumber}? Gebühr: ${formatCurrency(reminderConfirmation.fee)}`}
+          confirmLabel="Erstellen"
+          onConfirm={() => void handleConfirmReminder()}
+          onCancel={() => setReminderConfirmation(null)}
+          busy={isCreatingReminder}
+        />
       )}
 
        <div className="flex items-center justify-between mb-8">
@@ -1738,7 +2001,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               <span className="truncate">{doc.number}</span>
                               {getDunningBadge(doc.dunningLevel)}
                           </p>
-                          <p className="text-xs font-bold text-gray-400 truncate">{doc.client}</p>
+                          <p className="text-xs font-bold text-gray-400 truncate">
+                            {documentType === 'offer' ? 'Angebot' : getInvoiceDocumentLabel(doc.documentKind)} · {doc.client}
+                          </p>
                       </div>
                   </div>
 

@@ -162,7 +162,6 @@ app.whenReady().then(async () => {
   localBackend = await createLocalBackend({
     userDataPath,
     profile: PRODUCT_PROFILE,
-    isDev,
   });
 
   await createWindow();

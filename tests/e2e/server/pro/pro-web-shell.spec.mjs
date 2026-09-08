@@ -5,6 +5,7 @@ import {
   runProCatalogScenario,
   runProRouteGuardScenario,
 } from './scenarios.mjs';
+import { runProOutgoingDocumentChainScenario } from './outgoing-document-chain.mjs';
 
 test.describe('server-mode pro web shell', () => {
   test.describe.configure({ mode: 'serial' });
@@ -23,5 +24,10 @@ test.describe('server-mode pro web shell', () => {
 
   test('clears wrong-product sessions and preserves the protected route through re-login', async ({ page }) => {
     await runProRouteGuardScenario(page);
+  });
+
+  test('persists the accepted-offer outgoing chain and hosted Pro correction posting', async ({ page }) => {
+    test.slow();
+    await runProOutgoingDocumentChainScenario(page);
   });
 });

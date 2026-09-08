@@ -7,6 +7,7 @@ import { createSingleTenantScope } from '@billme/server-core';
 import type { PostgresQueryable, PostgresTransactionClient } from './connection.js';
 import { createPostgresPool } from './connection.js';
 import { runDrizzleMigrations } from './migrations.js';
+import { listServerBankAccounts, saveServerBankAccount } from './proAccounting.js';
 import { createPostgresProAccountingRepository, fiscalYearForPostingDate, insertJournalPostingPair, normalizeDatevBuKey } from './proAccountingRepository.js';
 import { importRawTenantRows } from './oposImport.js';
 
@@ -25,6 +26,70 @@ test('journal posting-pair insert binds every persisted column', async () => {
   assert.match(captured.text, /datev_bu_key/);
   assert.equal((captured.text.match(/\$\d+/g) ?? []).length, 9);
   assert.equal(captured.values.length, 9);
+});
+
+test('server bank-account upsert binds NULL for a missing SKR account in insert and conflict update', async () => {
+  let captured: { text: string; values: unknown[] } | undefined;
+  const db = {
+    query: async (
+      query: string | { text?: string; sql?: string; values?: unknown[]; params?: unknown[] },
+      values?: unknown[],
+    ) => {
+      captured = typeof query === 'string'
+        ? { text: query, values: values ?? [] }
+        : { text: query.text ?? query.sql ?? '', values: query.values ?? query.params ?? values ?? [] };
+      return { rows: [] } as never;
+    },
+  } as unknown as PostgresTransactionClient;
+
+  await saveServerBankAccount(db, {
+    id: 'lite-bank-account',
+    tenantId: 'lite-tenant',
+    name: 'Lite bank',
+    iban: 'DE00000000000000000000',
+    balance: 0,
+    type: 'bank',
+    color: '#000000',
+  });
+
+  assert.ok(captured);
+  const insert = captured.text.match(/insert\s+into\s+(?:"[^"]+"|[\w.]+)\s*\(([^)]*)\)\s*values\s*\(([^)]*)\)/i);
+  assert.ok(insert);
+  const columns = insert[1]!.split(',').map((column) => column.replace(/["\s]/g, ''));
+  const insertValues = insert[2]!.split(',').map((value) => value.trim());
+  assert.doesNotMatch(insert[2]!, /\bdefault\b/i);
+  assert.ok(insertValues.every((value) => /^\$\d+$/.test(value)));
+  const insertedDefault = insertValues[columns.indexOf('default_skr_account_number')];
+  assert.ok(insertedDefault);
+  const insertedDefaultParameter = insertedDefault.match(/\$(\d+)/)?.[1];
+  assert.ok(insertedDefaultParameter);
+  assert.equal(captured.values[Number(insertedDefaultParameter) - 1], null);
+
+  const updateSql = captured.text.slice(captured.text.toLowerCase().indexOf('do update set'));
+  assert.match(updateSql, /default_skr_account_number/);
+  const updatedDefaultParameter = updateSql.match(/default_skr_account_number[^=]*=\s*\$(\d+)/i)?.[1];
+  assert.ok(updatedDefaultParameter);
+  assert.equal(captured.values[Number(updatedDefaultParameter) - 1], null);
+});
+
+test('server bank-account read maps a database NULL SKR account to undefined', async () => {
+  const db = {
+    query: async () => ({
+      rows: [{
+        id: 'lite-bank-account',
+        tenant_id: 'lite-tenant',
+        name: 'Lite bank',
+        iban: 'DE00000000000000000000',
+        balance: '0',
+        default_skr_account_number: null,
+        type: 'bank',
+        color: '#000000',
+      }],
+    }),
+  } as unknown as PostgresQueryable;
+
+  const [account] = await listServerBankAccounts(db, 'lite-tenant');
+  assert.equal(account?.defaultSkrAccountNumber, undefined);
 });
 
 test('server DATEV export pads legacy numeric BU keys to canonical four digits', () => {

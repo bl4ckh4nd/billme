@@ -2,6 +2,11 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import ReportsView from './ReportsView';
+import {
+  normalizeReportSnapshot,
+  printReportPdf,
+  reportToCsv,
+} from '../domain/reportExport';
 
 describe('ReportsView drilldown ranges', () => {
   const liveSusaReport = {
@@ -448,5 +453,113 @@ describe('ReportsView drilldown ranges', () => {
     rejectFirst(new Error('stale report failure'));
     await waitFor(() => expect(screen.queryByText('stale report failure')).toBeNull());
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('ReportsView local exports', () => {
+  const filters = {
+    chart: 'SKR03' as const,
+    asOfDate: '2026-09-30',
+    periodFrom: '2026-01',
+    periodTo: '2026-09',
+    periodFromDate: '2026-01-01',
+    periodToDate: '2026-09-30',
+    compareMode: 'none' as const,
+    includeDrafts: false,
+  };
+
+  it('serializes the normalized visible report rows with filter metadata and safe quoting', () => {
+    const normalized = normalizeReportSnapshot('susa', {
+      rows: [{ accountNumber: '8400', accountName: 'Erlöse; Inland', openingBalance: 0, debitTurnover: 0, creditTurnover: 100, closingBalance: 100, normalBalance: 'credit' }, {
+        accountNumber: '1200', accountName: 'Bank\nGiro', openingBalance: 2, debitTurnover: 3, creditTurnover: 1, closingBalance: 4, normalBalance: 'debit', mappedTo: 'Aktiva "Bank"', hasWarnings: true,
+      }],
+      totals: { openingDebit: 2, openingCredit: 0, turnoverDebit: 3, turnoverCredit: 101, closingDebit: 4, closingCredit: 0 },
+      quality: { unmappedAccounts: 0, warnings: 0, generatedAt: '2026-09-30T12:00:00.000Z', source: 'live' },
+    }, filters);
+
+    const csv = reportToCsv(normalized);
+    expect(csv.startsWith('\uFEFF')).toBe(true);
+    expect(csv).toContain('Stichtag;2026-09-30');
+    expect(csv).toContain('Zeitraum von;2026-01-01');
+    expect(csv).toContain('8400;"Erlöse; Inland"');
+    expect(csv).toContain('"Bank\nGiro"');
+    expect(csv).toContain('Aktiva ""Bank""');
+    expect(reportToCsv({ ...normalized, rows: [['\t=2+2', ' +SUM(A1)', '-12,50', '@cmd']] })).toContain("\t'=2+2; '+SUM(A1);-12,50;'@cmd");
+  });
+
+  it('uses the local CSV fallback for the loaded active report', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:report');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    const getSusaReport = vi.fn(async () => ({
+      rows: [{ accountNumber: '8400', accountName: 'Erlöse', openingBalance: 0, debitTurnover: 0, creditTurnover: 100, closingBalance: 100, normalBalance: 'credit' as const }],
+      totals: { openingDebit: 0, openingCredit: 0, turnoverDebit: 0, turnoverCredit: 100, closingDebit: 0, closingCredit: 100 },
+      quality: { unmappedAccounts: 0, warnings: 0, generatedAt: '2026-09-30T12:00:00.000Z', source: 'live' as const },
+    }));
+    try {
+      render(<ReportsView dataAdapter={{ getSusaReport }} availableTabs={['susa']} />);
+      await screen.findByRole('button', { name: '8400' });
+      fireEvent.change(screen.getByLabelText('Stichtag'), { target: { value: '2026-09-30' } });
+      await waitFor(() => expect(getSusaReport).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'CSV' })).toHaveProperty('disabled', false));
+      fireEvent.click(screen.getByRole('button', { name: 'CSV' }));
+
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+      const blob = createObjectURL.mock.calls[0]?.[0] as Blob;
+      expect(await blob.text()).toContain('8400;Erlöse');
+      expect(await blob.text()).toContain('Stichtag;2026-09-30');
+      expect(click).toHaveBeenCalledTimes(1);
+      expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe('report-susa.csv');
+      expect(await screen.findByText('CSV-Export erstellt.')).toBeTruthy();
+    } finally {
+      createObjectURL.mockRestore();
+      revokeObjectURL.mockRestore();
+      click.mockRestore();
+    }
+  });
+
+  it('prints through an isolated iframe and removes it after Chromium afterprint', async () => {
+    const print = vi.fn();
+    const appendChild = vi.spyOn(document.body, 'appendChild');
+    appendChild.mockImplementation(((node: Node) => {
+      const result = Node.prototype.appendChild.call(document.body, node);
+      if (node instanceof HTMLIFrameElement && node.contentWindow) {
+        Object.defineProperty(node.contentWindow, 'print', { configurable: true, value: print });
+      }
+      return result;
+    }) as typeof document.body.appendChild);
+    const normalized = normalizeReportSnapshot('susa', {
+      rows: [{ accountNumber: '8400', accountName: 'Erlöse', openingBalance: 0, debitTurnover: 0, creditTurnover: 100, closingBalance: 100, normalBalance: 'credit' }],
+      totals: { openingDebit: 0, openingCredit: 0, turnoverDebit: 0, turnoverCredit: 100, closingDebit: 0, closingCredit: 100 },
+      quality: { unmappedAccounts: 0, warnings: 0, generatedAt: '2026-09-30T12:00:00.000Z', source: 'live' },
+    }, filters);
+    try {
+      const printing = printReportPdf(normalized);
+      await waitFor(() => expect(print).toHaveBeenCalledTimes(1));
+      const iframe = document.querySelector('iframe[aria-hidden="true"]') as HTMLIFrameElement | null;
+      expect(iframe).toBeTruthy();
+      expect(iframe?.contentDocument?.body.textContent).toContain('Erlöse');
+      iframe?.contentWindow?.dispatchEvent(new Event('afterprint'));
+      await printing;
+      expect(document.querySelector('iframe[aria-hidden="true"]')).toBeNull();
+    } finally {
+      appendChild.mockRestore();
+    }
+  });
+
+  it('keeps the report table visible when an export fails and reports the error separately', async () => {
+    const error = 'CSV-Exportdienst ist nicht erreichbar.';
+    const getSusaReport = vi.fn(async () => ({
+      rows: [{ accountNumber: '8400', accountName: 'Erlöse', openingBalance: 0, debitTurnover: 0, creditTurnover: 100, closingBalance: 100, normalBalance: 'credit' as const }],
+      totals: { openingDebit: 0, openingCredit: 0, turnoverDebit: 0, turnoverCredit: 100, closingDebit: 0, closingCredit: 100 },
+      quality: { unmappedAccounts: 0, warnings: 0, generatedAt: '2026-09-30T12:00:00.000Z', source: 'live' as const },
+    }));
+    const exportReport = vi.fn(async () => { throw new Error(error); });
+    render(<ReportsView dataAdapter={{ getSusaReport, exportReport }} availableTabs={['susa']} />);
+    expect(await screen.findByRole('button', { name: '8400' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'CSV' }));
+    expect((await screen.findByRole('alert')).textContent).toContain(error);
+    expect(screen.getByRole('button', { name: '8400' })).toBeTruthy();
+    expect(screen.getByText('Summen- und Saldenliste')).toBeTruthy();
   });
 });

@@ -1,6 +1,6 @@
 import React from 'react';
 import { X, Plus, Trash2, Settings2 } from 'lucide-react';
-import { Button } from '@billme/ui';
+import { Button, Portal } from '@billme/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../ipc/client';
 
@@ -130,7 +130,8 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <Portal>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm">
       <div className="w-[760px] max-h-[92vh] rounded-3xl bg-white shadow-2xl flex flex-col">
         <div className="flex items-center justify-between border-b border-gray-200 p-6">
           <div>
@@ -296,5 +297,6 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
         </div>
       </div>
     </div>
+    </Portal>
   );
 };

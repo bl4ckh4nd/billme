@@ -5,9 +5,16 @@ import { BusinessOnboarding, type BusinessOnboardingDraft } from '@billme/ui';
 
 const initialData: BusinessOnboardingDraft = {
   company: { name: 'Muster', owner: 'Max', street: 'Hauptstr. 1', zip: '10115', city: 'Berlin', email: 'max@example.test', phone: '', website: '' },
-  finance: { bankName: '', iban: '', bic: '', taxId: '', vatId: '', registerCourt: '' },
+  finance: { bankName: '', iban: '', bic: '', taxId: '12/345/67890', vatId: '', registerCourt: '' },
   legal: { smallBusinessRule: false, defaultVatRate: 19, paymentTermsDays: 14 },
   numbers: { invoicePrefix: 'RE-', offerPrefix: 'ANG-' },
+  businessReportingProfile: {
+    jurisdiction: 'DE',
+    legalForm: 'sole_proprietor',
+    profitDetermination: 'eur',
+    fiscalYearStart: '01-01',
+    vatMethod: 'soll',
+  },
 };
 
 describe('BusinessOnboarding reporting profile', () => {
@@ -15,9 +22,11 @@ describe('BusinessOnboarding reporting profile', () => {
     const onSubmit = vi.fn<(draft: BusinessOnboardingDraft) => Promise<void>>(async () => undefined);
     render(<BusinessOnboarding initialData={initialData} onSubmit={onSubmit} />);
 
-    fireEvent.change(screen.getByLabelText('Steuernummer'), { target: { value: '12/345/67890' } });
-    fireEvent.change(screen.getByLabelText('Rechtsform'), { target: { value: 'gmbh' } });
-    expect(screen.getByLabelText('Gewinnermittlung')).toHaveValue('double_entry');
+    fireEvent.click(screen.getByRole('button', { name: 'Zurück' }));
+    const legalForm = document.getElementById('onboarding-reporting-legal-form') as HTMLSelectElement;
+    const profitDetermination = document.getElementById('onboarding-reporting-profit-determination') as HTMLSelectElement;
+    fireEvent.change(legalForm, { target: { value: 'gmbh' } });
+    expect(profitDetermination).toHaveValue('double_entry');
     fireEvent.click(screen.getByRole('button', { name: /Weiter zu Weitere Angaben/i }));
     fireEvent.click(screen.getByRole('button', { name: /Einrichtung abschließen/i }));
 

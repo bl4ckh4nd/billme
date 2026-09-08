@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   calculateEurAnnexValues,
   calculateEurRows,
+  LATEST_SUPPORTED_EUR_TAX_YEAR,
+  SUPPORTED_EUR_TAX_YEARS,
   type EurAnnexValueLine,
 } from './eurReport.js';
 
@@ -10,6 +12,11 @@ const lines = [
   { id: 'income', label: 'Income', kind: 'income' as const, exportable: true, sortOrder: 1 },
   { id: 'expense', label: 'Expense', kind: 'expense' as const, exportable: true, sortOrder: 2 },
 ];
+
+test('exports the supported EÜR years and newest catalog year', () => {
+  assert.deepEqual(SUPPORTED_EUR_TAX_YEARS, [2025, 2026]);
+  assert.equal(LATEST_SUPPORTED_EUR_TAX_YEAR, 2026);
+});
 
 test('EÜR cash timing excludes items outside the requested calendar year', () => {
   const result = calculateEurRows(lines, [

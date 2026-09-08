@@ -10,7 +10,7 @@ import { appSettingsSchema as liteAppSettingsSchema } from '@billme/desktop-cont
 import { appSettingsSchema as proAppSettingsSchema } from '@billme/desktop-contracts-pro/schemas';
 import { invoiceSchema } from '@billme/server-core';
 import { shouldShowBusinessOnboarding } from '@billme/ui';
-import type { DocumentDraft, ClientLike } from '@billme/desktop-designer/document-editor';
+import type { DocumentDraft, ClientLike, ProjectLike } from '@billme/desktop-designer/document-editor';
 
 const documentFixture = (overrides: Partial<DocumentDraft> = {}): DocumentDraft => ({
   id: 'invoice-1',
@@ -27,7 +27,9 @@ const documentFixture = (overrides: Partial<DocumentDraft> = {}): DocumentDraft 
 type EditorOptions = {
   settings?: typeof MOCK_SETTINGS;
   clients?: ClientLike[];
+  projects?: ProjectLike[];
   onValidateVatId?: (args: { countryCode: string; vatNumber: string }) => Promise<{ status: 'valid' | 'invalid' | 'unavailable'; normalizedVatId: string; checkedAt: string }>;
+  onSelectedClientChange?: (clientId: string) => void;
 };
 
 const editor = (document = documentFixture(), onSave = vi.fn(), templateType: 'invoice' | 'offer' = 'invoice', options: EditorOptions = {}) => (
@@ -52,10 +54,11 @@ const editor = (document = documentFixture(), onSave = vi.fn(), templateType: 'i
       category: 'Beratung',
       taxRate: 7,
     }]}
-    projects={[]}
+    projects={options.projects ?? []}
     settings={options.settings ?? MOCK_SETTINGS}
     templateElements={INITIAL_INVOICE_TEMPLATE}
     onValidateVatId={options.onValidateVatId}
+    onSelectedClientChange={options.onSelectedClientChange}
     onSave={onSave}
     onCancel={() => {}}
   />
@@ -70,6 +73,107 @@ describe('document-first invoice editor', () => {
     expect(liteAppSettingsSchema.parse(DEFAULT_SETTINGS).company.name).toBe('');
     expect(proAppSettingsSchema.parse(DEFAULT_SETTINGS).company.name).toBe('');
     expect(shouldShowBusinessOnboarding(DEFAULT_SETTINGS)).toBe(true);
+  });
+
+  it('switches a selected customer to a manual recipient without carrying customer snapshots forward', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const onSelectedClientChange = vi.fn();
+    const clients: ClientLike[] = [{
+      id: 'client-1',
+      company: 'Alpen GmbH',
+      customerNumber: 'KD-001',
+      emails: [{ email: 'billing@alpen.example', isDefaultBilling: true }],
+      addresses: [{ company: 'Alpen GmbH', street: 'Ringstraße 1', zip: '1010', city: 'Wien', country: 'AT', isDefaultBilling: true, isDefaultShipping: true }],
+      taxProfile: { type: 'business', countryCode: 'AT', vatId: 'ATU12345678', vatIdValidation: 'valid', vatIdValidationAt: '2026-08-06T12:00:00.000Z' },
+    }];
+    const projects: ProjectLike[] = [{ id: 'project-1', code: 'PRJ-1', name: 'Alpen Baustelle' }];
+    renderEditor(documentFixture({
+      items: [{ description: 'Beratung', quantity: 1, price: 100, total: 100 }],
+      taxMode: 'standard_vat',
+      taxMeta: {
+        buyerCountryCode: 'CH',
+        buyerType: 'business',
+        buyerVatId: 'CHE-123.456.789 MWST',
+        vatIdValidation: 'valid',
+        vatIdValidationAt: '2026-08-06T12:00:00.000Z',
+        sellerCountryCode: 'DE',
+        sellerVatId: 'DE123456789',
+        datevEvidenceType: 'USt-IdNr.-Prüfung',
+        datevEvidenceReference: 'ATU12345678',
+        datevSachverhaltLl: '13',
+      },
+    }), onSave, 'invoice', { clients, projects, onSelectedClientChange });
+
+    const recipient = screen.getByRole('combobox', { name: 'Kunde auswählen' });
+    await user.click(recipient);
+    await user.click(await screen.findByRole('option', { name: /Alpen GmbH/ }));
+    await user.click(screen.getByRole('button', { name: 'Details bearbeiten' }));
+    const project = screen.getByRole('combobox', { name: 'Projekt auswählen' });
+    await user.click(project);
+    await user.click(await screen.findByRole('option', { name: /PRJ-1/ }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Steuer-Modell' }), 'standard_vat');
+
+    await user.click(recipient);
+    await user.click(screen.getByRole('button', { name: 'Empfänger ohne Kundenstamm eingeben' }));
+
+    expect(recipient).toHaveFocus();
+    expect(screen.getByText('Nur in diesem Beleg gespeichert')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Rechnungsadresse' })).toHaveValue('');
+    expect(screen.getByRole('textbox', { name: 'E-Mail' })).toHaveValue('');
+    expect(project).toHaveValue('');
+    expect(project).toBeDisabled();
+    expect(onSelectedClientChange).toHaveBeenLastCalledWith('');
+
+    await user.type(recipient, 'Manueller Empfänger');
+    const address = screen.getByRole('textbox', { name: 'Rechnungsadresse' });
+    await user.type(address, 'Neue Straße 5{Enter}1010 Wien{Enter}AT');
+    await user.click(screen.getByRole('button', { name: 'Speichern' }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/grenzüberschreitende Rechnung/i).length).toBeGreaterThan(0);
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Steuer-Modell' }), 'standard_vat');
+    await user.click(screen.getByRole('button', { name: 'Speichern' }));
+
+    expect(onSave).toHaveBeenCalledOnce();
+    const saved = onSave.mock.calls[0]![0];
+    expect(saved).toMatchObject({
+      client: 'Manueller Empfänger',
+      clientEmail: '',
+      clientAddress: 'Neue Straße 5\n1010 Wien\nAT',
+      taxMeta: {
+        sellerCountryCode: 'DE',
+        sellerVatId: 'DE123456789',
+        datevEvidenceType: 'USt-IdNr.-Prüfung',
+        datevEvidenceReference: 'ATU12345678',
+        datevSachverhaltLl: '13',
+      },
+    });
+    for (const key of ['clientId', 'clientNumber', 'projectId', 'shippingAddressJson'] as const) expect(saved[key]).toBeUndefined();
+    for (const key of ['buyerCountryCode', 'buyerType', 'buyerVatId', 'vatIdValidation', 'vatIdValidationAt'] as const) expect(saved.taxMeta?.[key]).toBeUndefined();
+    expect(saved.items).toEqual([{ description: 'Beratung', quantity: 1, price: 100, total: 100 }]);
+    expect(saved.taxMeta?.taxRuleConfirmed).toBe(true);
+    expect(saved.billingAddressJson).toMatchObject({ company: 'Manueller Empfänger', street: 'Neue Straße 5', zip: '1010', city: 'Wien', country: 'AT' });
+    expect(saved.billingAddressJson).not.toMatchObject({ company: 'Alpen GmbH', street: 'Ringstraße 1' });
+  });
+
+  it('lets an empty document start with a focused manual recipient', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    renderEditor(documentFixture(), onSave);
+
+    const recipient = screen.getByRole('combobox', { name: 'Kunde auswählen' });
+    expect(screen.getByText('Nur in diesem Beleg gespeichert')).toBeInTheDocument();
+    await user.click(recipient);
+    await user.click(screen.getByRole('button', { name: 'Empfänger ohne Kundenstamm eingeben' }));
+    expect(recipient).toHaveFocus();
+    await user.type(recipient, 'Direkter Empfänger');
+    await user.type(screen.getByRole('textbox', { name: 'Rechnungsadresse' }), 'Straße 2{Enter}50667 Köln{Enter}DE');
+    await user.click(screen.getByRole('button', { name: 'Speichern' }));
+
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onSave.mock.calls[0]![0]).toMatchObject({ client: 'Direkter Empfänger', clientAddress: 'Straße 2\n50667 Köln\nDE' });
+    expect(onSave.mock.calls[0]![0].clientId).toBeUndefined();
   });
 
   it('clears a stale buyer country when selecting a customer without an address', async () => {
@@ -135,6 +239,38 @@ describe('document-first invoice editor', () => {
     expect(screen.getByTestId('document-editor')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('Pflichtfelder');
     expect(screen.getByRole('combobox', { name: 'Kunde auswählen' })).toHaveFocus();
+  });
+
+  it('lists each validation error and jumps to the selected field', async () => {
+    const user = userEvent.setup();
+    renderEditor(documentFixture({ number: '', date: '', items: [{ description: '', quantity: 1, price: 10, total: 10 }] }));
+
+    await user.click(screen.getByRole('button', { name: 'Speichern' }));
+
+    expect(screen.getByRole('button', { name: /Nummer: Nummer ist erforderlich/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Datum: Datum ist erforderlich/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Kunde: Kunde ist erforderlich/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Position 1 Beschreibung/ })).toBeInTheDocument();
+    const client = screen.getByRole('combobox', { name: 'Kunde auswählen' });
+    expect(client).toHaveAttribute('aria-invalid', 'true');
+    expect(client).toHaveAttribute('aria-describedby', 'document-input-client-error');
+
+    await user.click(screen.getByRole('button', { name: /Datum: Datum ist erforderlich/ }));
+    expect(screen.getByLabelText('Datum')).toHaveFocus();
+  });
+
+  it('opens DATEV details and marks evidence fields required for small businesses', async () => {
+    const user = userEvent.setup();
+    const settings = { ...MOCK_SETTINGS, legal: { ...MOCK_SETTINGS.legal, smallBusinessRule: true } };
+    renderEditor(documentFixture({ client: 'Nord GmbH', items: [{ description: 'Leistung', quantity: 1, price: 10, total: 10 }] }), vi.fn(), 'invoice', { settings });
+
+    await user.click(screen.getByRole('button', { name: 'Speichern' }));
+
+    expect(screen.getByRole('button', { name: 'Details bearbeiten' })).toHaveAttribute('aria-expanded', 'true');
+    for (const label of ['DATEV Nachweistyp', 'DATEV Nachweisreferenz']) {
+      expect(screen.getByRole('textbox', { name: label })).toBeRequired();
+      expect(screen.getByRole('textbox', { name: label })).toHaveAttribute('aria-required', 'true');
+    }
   });
 
   it('persists later recipient and structured billing-address corrections consistently', async () => {
@@ -235,7 +371,7 @@ describe('document-first invoice editor', () => {
 
     await user.click(screen.getByRole('button', { name: 'Speichern' }));
     expect(onSave).not.toHaveBeenCalled();
-    expect(screen.getByText(/grenzüberschreitende Rechnung/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/grenzüberschreitende Rechnung/i).length).toBeGreaterThan(0);
 
     await user.selectOptions(screen.getByRole('combobox', { name: 'Steuer-Modell' }), 'standard_vat');
     await user.click(screen.getByRole('button', { name: 'Speichern' }));

@@ -10,3 +10,4 @@ export * from './vatValidation.js';
 export * from './taxFiling.js';
 export * from './eurItemFilters.js';
 export * from './openRouterVlm.js';
+export * from './document-chain.js';

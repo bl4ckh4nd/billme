@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isSupportedEurTaxYear, SUPPORTED_EUR_TAX_YEARS } from '@billme/accounting-shared';
 import { createBillmeApi, type BillmeApi, type IpcInvoke } from '@billme/desktop-contracts/api';
 import { ipcRoutes, type IpcArgs, type IpcResult, type IpcRouteKey } from '@billme/desktop-contracts/contract';
 import { taxFilingRoutes } from '@billme/desktop-contracts/taxFiling';
@@ -41,7 +42,6 @@ import { isNativeElectronRoute, isServerOwnedRoute } from './serverRouteClassifi
 
 type ServerClientPayload = z.output<typeof serverClientSchema>;
 type ServerInvoicePayload = z.output<typeof serverInvoiceSchema>;
-type ServerOfferPayload = z.output<typeof serverOfferSchema>;
 type ServerRecurringProfilePayload = z.output<typeof serverRecurringProfileSchema>;
 type DesktopAppSettings = z.output<typeof desktopAppSettingsSchema>;
 
@@ -91,7 +91,7 @@ const HTTP_ROUTE_KEYS = new Set<IpcRouteKey>([
   'recurring:list', 'recurring:upsert', 'recurring:delete',
   'settings:get', 'settings:set',
   'numbers:reserve', 'numbers:release', 'numbers:finalize',
-  'documents:createFromClient', 'documents:convertOfferToInvoice',
+  'documents:createFromClient', 'documents:convertOfferToInvoice', 'documents:chainCreate', 'documents:chainList',
   'eur:getReport', 'eur:listItems', 'eur:upsertClassification', 'eur:exportCsv',
   'audit:verify', 'audit:exportCsv', 'eur:listRules', 'eur:upsertRule', 'eur:deleteRule',
   'portal:health', 'portal:publishOffer', 'portal:publishInvoice', 'portal:syncOfferStatus',
@@ -192,10 +192,28 @@ const buildDraftFromClient = async (
   });
 };
 
+const eurTaxYearSchema = z.union([
+  z.literal(SUPPORTED_EUR_TAX_YEARS[0]),
+  z.literal(SUPPORTED_EUR_TAX_YEARS[1]),
+]);
+
+const serverEurClassificationSchema = z.object({
+  id: z.string(),
+  sourceType: z.enum(['transaction', 'invoice']),
+  sourceId: z.string(),
+  taxYear: eurTaxYearSchema,
+  eurLineId: z.string().optional(),
+  excluded: z.boolean(),
+  vatMode: z.enum(['none', 'default']),
+  vatRate: z.number().optional(),
+  note: z.string().optional(),
+  updatedAt: z.string(),
+});
+
 const serverEurReportSchema = z.object({
-  taxYear: z.literal(2025),
-  from: z.literal('2025-01-01'),
-  to: z.literal('2025-12-31'),
+  taxYear: eurTaxYearSchema,
+  from: z.string(),
+  to: z.string(),
   rows: z.array(z.object({
     id: z.string(),
     kennziffer: z.string().optional(),
@@ -221,12 +239,25 @@ const serverEurItemSchema = z.object({
   amountGross: z.number(),
   amountNet: z.number(),
   flowType: z.enum(['income', 'expense']),
+  accountId: z.string().optional(),
+  linkedViaInvoice: z.boolean().optional(),
   counterparty: z.string(),
   purpose: z.string(),
   vatWarning: z.string().optional(),
-  classification: z.object({
-    id: z.string(), sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string(), taxYear: z.literal(2025),
-    eurLineId: z.string().optional(), excluded: z.boolean(), vatMode: z.enum(['none', 'default']), vatRate: z.number().optional(), note: z.string().optional(), updatedAt: z.string(),
+  suggestedLineId: z.string().optional(),
+  suggestionReason: z.string().optional(),
+  suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword']).optional(),
+  classification: serverEurClassificationSchema.optional(),
+  line: z.object({
+    id: z.string(),
+    taxYear: z.number().int(),
+    kennziffer: z.string().optional(),
+    label: z.string(),
+    kind: z.enum(['income', 'expense', 'computed']),
+    exportable: z.boolean(),
+    sortOrder: z.number().int(),
+    computedFromIds: z.array(z.string()),
+    sourceVersion: z.string(),
   }).optional(),
 });
 
@@ -241,8 +272,21 @@ const serverTransactionMatchesSchema = z.object({
   })),
 });
 
-const mapEurReport = (input: unknown): IpcResult<'eur:getReport'> => {
+const eurReportQuery = (args: { taxYear: number; from?: string; to?: string }): { taxYear: number; from: string; to: string } => {
+  if (!isSupportedEurTaxYear(args.taxYear)) throw new RangeError(`EUR_CATALOG_UNAVAILABLE:${args.taxYear}`);
+  const from = args.from ?? `${args.taxYear}-01-01`;
+  const to = args.to ?? `${args.taxYear}-12-31`;
+  if (from !== `${args.taxYear}-01-01` || to !== `${args.taxYear}-12-31`) {
+    throw new RangeError(`EUR_RANGE_${args.taxYear}_REQUIRED`);
+  }
+  return { taxYear: args.taxYear, from, to };
+};
+
+const mapEurReport = (input: unknown, expected: { taxYear: number; from: string; to: string }): IpcResult<'eur:getReport'> => {
   const report = serverEurReportSchema.parse(input);
+  if (report.taxYear !== expected.taxYear || report.from !== expected.from || report.to !== expected.to) {
+    throw new Error(`EÜR-Antwort gehört nicht zum angeforderten Steuerjahr ${expected.taxYear}.`);
+  }
   return parseResult('eur:getReport', {
     ...report,
     rows: report.rows.map(({ id, ...row }) => ({ ...row, lineId: id })),
@@ -345,10 +389,6 @@ export const createLiteHttpBillmeApi = ({
 
   const requestNullableClient = async (id: string): Promise<ServerClientPayload | null> => {
     return requestJson('GET', `${PRODUCT_PREFIX}/clients/${encodeURIComponent(id)}`, serverClientSchema.nullable());
-  };
-
-  const requestNullableOffer = async (id: string): Promise<ServerOfferPayload | null> => {
-    return requestJson('GET', `${PRODUCT_PREFIX}/offers/${encodeURIComponent(id)}`, serverOfferSchema.nullable());
   };
 
   const requestSettings = async (): Promise<DesktopAppSettings | null> => {
@@ -584,67 +624,58 @@ export const createLiteHttpBillmeApi = ({
       }
       case 'documents:convertOfferToInvoice': {
         const parsed = args as IpcArgs<'documents:convertOfferToInvoice'>;
-        const offer = await requestNullableOffer(parsed.offerId);
-        if (!offer) throw new Error('Angebot nicht gefunden.');
-        const settings = await requestSettings();
-        const today = toIsoDate(new Date());
-        const reservation = await reserveDocumentNumber('invoice');
-        try {
-          const createdInvoice = await requestJson('POST', `${PRODUCT_PREFIX}/invoices`, serverInvoiceSchema, {
-            reason: `Converted from offer ${offer.number}`,
-            invoice: {
-              kind: 'invoice' as const,
-              id: crypto.randomUUID(),
-              clientId: offer.clientId,
-              clientNumber: offer.clientNumber,
-              projectId: offer.projectId,
-              number: reservation.number,
-              client: offer.client,
-              clientEmail: offer.clientEmail,
-              clientAddress: offer.clientAddress,
-              billingAddress: offer.billingAddress,
-              shippingAddress: offer.shippingAddress,
-              date: today,
-              dueDate: addDays(today, settings?.legal.paymentTermsDays ?? 0),
-              servicePeriod: offer.validUntil,
-              amount: offer.amount,
-              status: 'draft' as const,
-              dunningLevel: 0,
-              items: offer.items,
-              payments: [],
-              history: [{ date: today, action: `Erstellt aus Angebot ${offer.number}` }, ...(offer.history ?? [])],
-            },
-          });
-          await requestJson('POST', `${PRODUCT_PREFIX}/numbers/finalize`, z.object({ ok: z.literal(true) }), { reservationId: reservation.reservationId, documentId: createdInvoice.id });
-          return parseResult(key, toLegacyInvoice(createdInvoice));
-        } catch (error) {
-          await requestJson('POST', `${PRODUCT_PREFIX}/numbers/release`, z.object({ ok: z.literal(true) }), { reservationId: reservation.reservationId }).catch(() => undefined);
-          throw error;
-        }
+        const saved = await requestJson('POST', `${PRODUCT_PREFIX}/documents/convert-offer`, serverInvoiceSchema, {
+          offerId: parsed.offerId, invoiceId: crypto.randomUUID(),
+        });
+        return parseResult(key, toLegacyInvoice(saved));
+      }
+      case 'documents:chainCreate': {
+        const parsed = args as IpcArgs<'documents:chainCreate'>;
+        const endpoint = parsed.operation === 'order_confirmation'
+          ? 'order-confirmations'
+          : parsed.operation === 'delivery_note'
+            ? 'delivery-notes'
+            : parsed.operation === 'settlement_invoice'
+              ? 'settlement-invoices'
+              : parsed.operation === 'correction'
+                ? 'corrections'
+                : 'revisions';
+        const { operation: _operation, ...body } = parsed;
+        const saved = await requestJson('POST', `${PRODUCT_PREFIX}/document-chain/${endpoint}`, serverInvoiceSchema, body);
+        return parseResult(key, toLegacyInvoice(saved));
+      }
+      case 'documents:chainList': {
+        const parsed = args as IpcArgs<'documents:chainList'>;
+        const documents = await requestJson('GET', `${PRODUCT_PREFIX}/document-chain/${encodeURIComponent(parsed.rootDocumentId)}`, z.array(serverInvoiceSchema));
+        return parseResult(key, documents.map((document) => toLegacyInvoice(document)));
       }
       case 'eur:getReport': {
         const parsed = args as IpcArgs<'eur:getReport'>;
-        if (parsed.taxYear !== 2025) throw new Error('EÜR unterstützt ausschließlich das Steuerjahr 2025.');
-        return mapEurReport(await requestJson('GET', `${PRODUCT_PREFIX}/reports/eur`, serverEurReportSchema, undefined, { from: parsed.from ?? '2025-01-01', to: parsed.to ?? '2025-12-31' })) as IpcResult<K>;
+        const query = eurReportQuery(parsed);
+        return mapEurReport(await requestJson('GET', `${PRODUCT_PREFIX}/reports/eur`, serverEurReportSchema, undefined, query), query) as IpcResult<K>;
       }
       case 'eur:listItems': {
         const parsed = args as IpcArgs<'eur:listItems'>;
-        if (parsed.taxYear !== 2025) throw new Error('EÜR unterstützt ausschließlich das Steuerjahr 2025.');
-        const items = await requestJson('GET', `${PRODUCT_PREFIX}/reports/eur/items`, z.array(serverEurItemSchema), undefined, { from: parsed.from ?? '2025-01-01', to: parsed.to ?? '2025-12-31' });
+        const query = eurReportQuery(parsed);
+        const items = await requestJson('GET', `${PRODUCT_PREFIX}/reports/eur/items`, z.array(serverEurItemSchema), undefined, query);
+        if (items.some((item) => item.classification && item.classification.taxYear !== query.taxYear)) {
+          throw new Error(`EÜR-Klassifikation gehört nicht zum angeforderten Steuerjahr ${query.taxYear}.`);
+        }
         return parseResult(key, items);
       }
       case 'eur:upsertClassification': {
         const parsed = args as IpcArgs<'eur:upsertClassification'>;
-        if (parsed.taxYear !== 2025) throw new Error('EÜR unterstützt ausschließlich das Steuerjahr 2025.');
-        const saved = await requestJson('PUT', `${PRODUCT_PREFIX}/reports/eur/classifications`, z.object({
-          id: z.string(), sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string(), taxYear: z.literal(2025), eurLineId: z.string().optional(), excluded: z.boolean(), vatMode: z.enum(['none', 'default']), vatRate: z.number().optional(), note: z.string().optional(), updatedAt: z.string(),
-        }), parsed);
+        if (!isSupportedEurTaxYear(parsed.taxYear)) throw new RangeError(`EUR_CATALOG_UNAVAILABLE:${parsed.taxYear}`);
+        const saved = await requestJson('PUT', `${PRODUCT_PREFIX}/reports/eur/classifications`, serverEurClassificationSchema, parsed);
+        if (saved.taxYear !== parsed.taxYear) {
+          throw new Error(`EÜR-Klassifikation gehört nicht zum angeforderten Steuerjahr ${parsed.taxYear}.`);
+        }
         return parseResult(key, saved);
       }
       case 'eur:exportCsv': {
         const parsed = args as IpcArgs<'eur:exportCsv'>;
-        if (parsed.taxYear !== 2025) throw new Error('EÜR unterstützt ausschließlich das Steuerjahr 2025.');
-        const report = mapEurReport(await requestJson('GET', `${PRODUCT_PREFIX}/reports/eur`, serverEurReportSchema, undefined, { from: parsed.from ?? '2025-01-01', to: parsed.to ?? '2025-12-31' }));
+        const query = eurReportQuery(parsed);
+        const report = mapEurReport(await requestJson('GET', `${PRODUCT_PREFIX}/reports/eur`, serverEurReportSchema, undefined, query), query);
         return parseResult(key, mapEurCsv(report));
       }
       case 'audit:verify': {

@@ -57,11 +57,11 @@ export const stableStringify = (value: unknown): string => {
   }
 
   if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(",")}]`;
+    return `[${value.map((item) => item === undefined ? "null" : stableStringify(item)).join(",")}]`;
   }
 
   const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
+  const keys = Object.keys(obj).filter((key) => obj[key] !== undefined).sort();
   const body = keys
     .map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`)
     .join(",");
@@ -211,8 +211,8 @@ export const appendWithClient = async (
     entityId: entry.subject.entityId,
     action: entry.action,
     reason: entry.reason ?? null,
-    before: entry.change?.before ?? null,
-    after: entry.change?.after ?? null,
+    before: beforeJson === null ? null : JSON.parse(beforeJson),
+    after: afterJson === null ? null : JSON.parse(afterJson),
     prevHash,
     actor,
   };

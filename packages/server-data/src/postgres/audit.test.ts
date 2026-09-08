@@ -14,6 +14,7 @@ test("stableStringify keeps object keys deterministic", () => {
   const left = stableStringify({ b: 2, a: 1, nested: { z: true, y: false } });
   const right = stableStringify({ nested: { y: false, z: true }, a: 1, b: 2 });
   assert.equal(left, right);
+  assert.equal(stableStringify({ kept: true, omitted: undefined, values: [1, undefined] }), '{"kept":true,"values":[1,null]}');
 });
 
 test("verifyAuditChainRows accepts a valid chain", () => {

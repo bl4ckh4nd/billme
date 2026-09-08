@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
+    "@billme/desktop-core": "workspace:*",
     "@billme/server-core": "workspace:*"
   },
   "peerDependencies": {

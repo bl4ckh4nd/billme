@@ -74,6 +74,28 @@ describe('AssetManagementView productive mutations', () => {
     expect(upsertAsset).not.toHaveBeenCalled();
   });
 
+  it('replaces a successful mutation with the next validation error', async () => {
+    const listAssets = vi.fn(async () => [asset]);
+    const upsertAsset = vi.fn(async (input: Partial<AssetItem>) => ({ ...asset, ...input, id: asset.id }));
+    render(<AssetManagementView dataAdapter={{ listAssets, upsertAsset }} />);
+
+    await screen.findAllByText('Server');
+    fireEvent.click(screen.getByRole('button', { name: 'Bearbeiten' }));
+    fireEvent.change(screen.getByLabelText('Audit-Grund *'), { target: { value: 'Korrektur' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Anlage speichern' }).closest('form')!);
+    await waitFor(() => expect(screen.getByTestId('asset-mutation-feedback').textContent).toContain('Anlage gespeichert und aktiviert.'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bearbeiten' }));
+    fireEvent.change(screen.getByLabelText('Bezeichnung *'), { target: { value: '' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Anlage speichern' }).closest('form')!);
+
+    const feedback = await screen.findByTestId('asset-mutation-feedback');
+    expect(screen.getAllByTestId('asset-mutation-feedback')).toHaveLength(1);
+    expect(feedback.getAttribute('role')).toBe('alert');
+    expect(feedback.getAttribute('aria-live')).toBe('assertive');
+    expect(feedback.textContent).toContain('Bitte Pflichtfelder ausfüllen: Bezeichnung.');
+  });
+
   it('refreshes the list and schedule only after a successful AfA booking', async () => {
     const updatedAsset = { ...asset, residualValue: 800, nextDepreciation: '2027-12-31' };
     const listAssets = vi.fn()

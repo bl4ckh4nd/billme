@@ -9,11 +9,11 @@ const stableStringify = (value: unknown): string => {
   }
 
   if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(',')}]`;
+    return `[${value.map((item) => item === undefined ? 'null' : stableStringify(item)).join(',')}]`;
   }
 
   const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
+  const keys = Object.keys(obj).filter((key) => obj[key] !== undefined).sort();
   const body = keys
     .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
     .join(',');
@@ -46,6 +46,8 @@ export const appendAuditLog = (db: Database.Database, params: AuditWriteParams) 
   const nextSequence = prevSequence + 1;
   const prevHash = prev?.hash ?? null;
 
+  const beforeJson = params.before === undefined ? null : stableStringify(params.before);
+  const afterJson = params.after === undefined ? null : stableStringify(params.after);
   const payload = {
     sequence: nextSequence,
     ts,
@@ -53,8 +55,8 @@ export const appendAuditLog = (db: Database.Database, params: AuditWriteParams) 
     entityId: params.entityId,
     action: params.action,
     reason: params.reason ?? null,
-    before: params.before ?? null,
-    after: params.after ?? null,
+    before: beforeJson === null ? null : JSON.parse(beforeJson),
+    after: afterJson === null ? null : JSON.parse(afterJson),
     prevHash,
     actor,
   };
@@ -69,8 +71,8 @@ export const appendAuditLog = (db: Database.Database, params: AuditWriteParams) 
     entityId: params.entityId,
     action: params.action,
     reason: params.reason ?? null,
-    beforeJson: params.before === undefined ? null : stableStringify(params.before),
-    afterJson: params.after === undefined ? null : stableStringify(params.after),
+    beforeJson,
+    afterJson,
     prevHash,
     hash,
     actor,

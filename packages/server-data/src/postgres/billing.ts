@@ -146,6 +146,11 @@ type InvoiceRow = {
   client_number: string | null;
   project_id: string | null;
   number: string;
+  document_kind: string | null;
+  source_document_id: string | null;
+  root_document_id: string | null;
+  revision_of_id: string | null;
+  revision_number: number | null;
   client: string;
   client_email: string;
   client_address: string | null;
@@ -350,6 +355,11 @@ const rowToInvoice = (row: InvoiceRow): Invoice =>
     clientNumber: row.client_number ?? undefined,
     projectId: row.project_id ?? undefined,
     number: row.number,
+    documentKind: row.document_kind ?? 'invoice',
+    sourceDocumentId: row.source_document_id ?? undefined,
+    rootDocumentId: row.root_document_id ?? undefined,
+    revisionOfId: row.revision_of_id ?? undefined,
+    revisionNumber: row.revision_number ?? 0,
     client: row.client,
     clientEmail: row.client_email,
     clientAddress: row.client_address ?? undefined,
@@ -557,6 +567,11 @@ const toInvoiceRow = (r: any): InvoiceRow => ({
   client_number: r.clientNumber ?? null,
   project_id: r.projectId ?? null,
   number: r.number!,
+  document_kind: r.documentKind ?? null,
+  source_document_id: r.sourceDocumentId ?? null,
+  root_document_id: r.rootDocumentId ?? null,
+  revision_of_id: r.revisionOfId ?? null,
+  revision_number: r.revisionNumber ?? 0,
   client: r.client!,
   client_email: r.clientEmail!,
   client_address: r.clientAddress ?? null,
@@ -954,7 +969,7 @@ export const createPostgresInvoiceRepository = (
       updatedAt: invoice.updatedAt ?? nowIso(),
     };
     const drizzleDb = requireDrizzle(db);
-      await drizzleDb
+      const saved = await drizzleDb
         .insert(schema.invoices)
         .values({
           id: nextInvoice.id,
@@ -963,6 +978,11 @@ export const createPostgresInvoiceRepository = (
           clientNumber: nextInvoice.clientNumber ?? null,
           projectId: nextInvoice.projectId ?? null,
           number: nextInvoice.number,
+          documentKind: nextInvoice.documentKind ?? 'invoice',
+          sourceDocumentId: nextInvoice.sourceDocumentId ?? null,
+          rootDocumentId: nextInvoice.rootDocumentId ?? null,
+          revisionOfId: nextInvoice.revisionOfId ?? null,
+          revisionNumber: nextInvoice.revisionNumber ?? 0,
           client: nextInvoice.client,
           clientEmail: nextInvoice.clientEmail,
           clientAddress: nextInvoice.clientAddress ?? null,
@@ -991,12 +1011,18 @@ export const createPostgresInvoiceRepository = (
         })
         .onConflictDoUpdate({
           target: schema.invoices.id,
+          setWhere: eq(schema.invoices.tenantId, scope.tenantId),
           set: {
             tenantId: scope.tenantId,
             clientId: nextInvoice.clientId ?? null,
             clientNumber: nextInvoice.clientNumber ?? null,
             projectId: nextInvoice.projectId ?? null,
             number: nextInvoice.number,
+            documentKind: nextInvoice.documentKind ?? 'invoice',
+            sourceDocumentId: nextInvoice.sourceDocumentId ?? null,
+            rootDocumentId: nextInvoice.rootDocumentId ?? null,
+            revisionOfId: nextInvoice.revisionOfId ?? null,
+            revisionNumber: nextInvoice.revisionNumber ?? 0,
             client: nextInvoice.client,
             clientEmail: nextInvoice.clientEmail,
             clientAddress: nextInvoice.clientAddress ?? null,
@@ -1024,7 +1050,8 @@ export const createPostgresInvoiceRepository = (
               : null,
             updatedAt: nextInvoice.updatedAt ?? null,
           },
-        });
+        }).returning({ id: schema.invoices.id });
+      if (!saved.length) throw new Error('Invoice id already belongs to another tenant');
       return nextInvoice;
       },
   async remove(scope, id) {
@@ -1187,6 +1214,21 @@ export const createPostgresRecurringProfileRepository = (
           ),
         )
         .limit(1);
+      return rows[0] ? rowToRecurringProfile(toRecurringRow(rows[0])) : null;
+      },
+  async getByIdForUpdate(scope, id) {
+    const drizzleDb = requireDrizzle(db);
+      const rows = await drizzleDb
+        .select()
+        .from(schema.recurringProfiles)
+        .where(
+          and(
+            eq(schema.recurringProfiles.tenantId, scope.tenantId),
+            eq(schema.recurringProfiles.id, id),
+          ),
+        )
+        .limit(1)
+        .for('update');
       return rows[0] ? rowToRecurringProfile(toRecurringRow(rows[0])) : null;
       },
   async save(scope, profile) {
@@ -1732,6 +1774,7 @@ export const tenantCoreRowCountTables = [
   "vendors",
   "incoming_invoices",
   "incoming_invoice_lines",
+  "incoming_invoice_documents",
   "open_items",
   "open_item_payments",
   "open_item_allocations",
@@ -1796,6 +1839,7 @@ export const countTenantCoreRows = async (
     vendors: schema.vendors,
     incoming_invoices: schema.incomingInvoices,
     incoming_invoice_lines: schema.incomingInvoiceLines,
+    incoming_invoice_documents: schema.incomingInvoiceDocuments,
     open_items: schema.openItems,
     open_item_payments: schema.openItemPayments,
     open_item_allocations: schema.openItemAllocations,

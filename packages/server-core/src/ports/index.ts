@@ -212,6 +212,11 @@ export interface OfferPortalGateway {
 export interface RecurringProfileRepository {
   list(scope: TenantScope): MaybePromise<RecurringProfile[]>;
   getById(scope: TenantScope, id: string): MaybePromise<RecurringProfile | null>;
+  /**
+   * Read one profile while holding its database row lock when the adapter can
+   * provide one. Embedded adapters may omit this and use the fresh read path.
+   */
+  getByIdForUpdate?(scope: TenantScope, id: string): MaybePromise<RecurringProfile | null>;
   save(scope: TenantScope, profile: RecurringProfile): MaybePromise<RecurringProfile>;
   remove(scope: TenantScope, id: string): MaybePromise<void>;
 }
@@ -935,6 +940,8 @@ export interface SyncRecurringInvoicePort extends RecurringInvoicePort {
 export interface RecurringProfileStore {
   list(scope: TenantScope): MaybePromise<RecurringProfile[]>;
   getById(scope: TenantScope, id: string): MaybePromise<RecurringProfile | null>;
+  /** Optional row lock for one profile run; callers retain a fresh-read fallback. */
+  getByIdForUpdate?(scope: TenantScope, id: string): MaybePromise<RecurringProfile | null>;
   save(scope: TenantScope, profile: RecurringProfile): MaybePromise<RecurringProfile>;
   remove(scope: TenantScope, id: string): MaybePromise<void>;
 }

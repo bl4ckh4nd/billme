@@ -2,7 +2,7 @@ import { dialog, shell, type BrowserWindow, type IpcMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import type Database from 'better-sqlite3';
-import type { DocumentTemplateKind, Invoice } from '../types';
+import { getInvoiceDocumentLabel, isBillingDocumentKind, type DocumentTemplateKind, type Invoice } from '../types';
 import { logger } from '../utils/logger';
 import { closeDb, getDb, getDbPath, initDb } from '../db/connection';
 import { createInvoiceFromOffer, deleteInvoice, listInvoices, upsertInvoice } from '../db/invoicesRepo';
@@ -71,7 +71,18 @@ import { getInvoiceDunningStatus } from '../services/dunningService';
 import { buildEurCsv, getEurReport, listEurItems, upsertEurItemClassification } from '../services/eurReport';
 import { listAllEurRules, upsertEurRule, deleteEurRule } from '../db/eurRulesRepo';
 import { PRODUCT_PROFILE } from '../productProfile';
-import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import {
+  calculateInvoiceTaxSnapshot,
+  resolveInvoiceTaxMode,
+  createCancellationInvoice,
+  createCreditNote,
+  createDeliveryNoteFromOrder,
+  createInvoiceRevision,
+  createOrderConfirmationFromOffer,
+  createSettlementInvoice,
+  listDocumentChain,
+} from '@billme/server-core/services';
+import { createBillingScope, createSqliteBillingDependencies, toLegacyInvoice } from '@billme/desktop-data/billingDomainCompat';
 import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import { eq } from 'drizzle-orm';
 
@@ -348,6 +359,30 @@ export const registerIpcHandlers = (
     return createInvoiceFromOffer(db, offerId, newInvoiceId);
   });
 
+  register(ipcMain, 'documents:chainCreate', (args) => {
+    const db = requireDb();
+    const scope = createBillingScope(PRODUCT_PROFILE);
+    const dependencies = createSqliteBillingDependencies(db);
+    const params = { ...args, actor: { type: 'system' as const, displayName: 'local' } };
+    const created = args.operation === 'order_confirmation'
+      ? createOrderConfirmationFromOffer(scope, dependencies, params)
+      : args.operation === 'delivery_note'
+        ? createDeliveryNoteFromOrder(scope, dependencies, params as any)
+        : args.operation === 'settlement_invoice'
+          ? createSettlementInvoice(scope, dependencies, params as any)
+          : args.operation === 'correction'
+            ? (args.kind === 'credit_note'
+              ? createCreditNote(scope, dependencies, params as any)
+              : createCancellationInvoice(scope, dependencies, params as any))
+            : createInvoiceRevision(scope, dependencies, params as any);
+    return toLegacyInvoice(created);
+  });
+
+  register(ipcMain, 'documents:chainList', ({ rootDocumentId }) => {
+    const db = requireDb();
+    return listDocumentChain(createBillingScope(PRODUCT_PROFILE), createSqliteBillingDependencies(db), rootDocumentId).map(toLegacyInvoice);
+  });
+
   register(ipcMain, 'templates:list', ({ kind }) => {
     const db = requireDb();
     const normalized = kind === 'offer' ? 'offer' : kind === 'invoice' ? 'invoice' : undefined;
@@ -408,11 +443,11 @@ export const registerIpcHandlers = (
     const res = await exportPdf({
       kind: 'invoice',
       id,
-      suggestedName: `${invoice.number || 'invoice'}-${invoice.client || id}`,
+      suggestedName: `${getInvoiceDocumentLabel(invoice.documentKind)}-${invoice.number || 'invoice'}-${invoice.client || id}`,
       userDataPath,
     });
     const settings = requireSettings(db);
-    if (settings.eInvoice?.enabled) {
+    if (settings.eInvoice?.enabled && isBillingDocumentKind(invoice.documentKind)) {
       const normalized = normalizeInvoiceForEinvoice(invoice, settings);
       const xml = buildZugferdXml(normalized);
       const finalBytes = await embedZugferdInPdf({

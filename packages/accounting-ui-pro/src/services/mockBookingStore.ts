@@ -27,6 +27,7 @@ import type {
 } from '../domain/assetTypes';
 import type {
   AccountingPostingPreview,
+  IncomingInvoiceDocumentEntity,
   IncomingInvoiceEntity,
   OpenItemEntity,
   OpenItemPaymentEntity,
@@ -185,6 +186,10 @@ export interface ProAccountingDataAdapter {
   upsertVendor?: (vendor: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>, reason: string) => Promise<VendorEntity>;
   listIncomingInvoices?: () => Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice?: (invoice: IncomingInvoiceEntity, reason: string) => Promise<IncomingInvoiceEntity>;
+  listIncomingInvoiceDocuments?: (invoiceId: string) => Promise<IncomingInvoiceDocumentEntity[]>;
+  uploadIncomingInvoiceDocument?: (input: { invoiceId: string; originalFilename: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; reason: string }) => Promise<IncomingInvoiceDocumentEntity>;
+  downloadIncomingInvoiceDocument?: (documentId: string) => Promise<{ document: IncomingInvoiceDocumentEntity; data: string }>;
+  reviewIncomingInvoiceDocument?: (input: { documentId: string; reviewStatus: 'accepted' | 'rejected'; reason: string }) => Promise<IncomingInvoiceDocumentEntity>;
   previewIncomingInvoiceAccounting?: (invoiceId: string) => Promise<AccountingPostingPreview>;
   postIncomingInvoiceAccounting?: (invoiceId: string, options: { reason: string; softLockOverride?: boolean; overrideReason?: string }) => Promise<AccountingPostingPreview>;
 }

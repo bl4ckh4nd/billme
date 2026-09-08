@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test src/liteHttpApi.test.ts src/proHttpApi.test.ts"
+    "test": "node --import tsx --test src/mockData.test.ts src/liteHttpApi.test.ts src/proHttpApi.test.ts"
   },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",
@@ -21,6 +21,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@types/papaparse": "^5.5.2",
     "@types/node": "^24.9.1",
     "tsx": "^4.20.5",
     "typescript": "~5.8.3"

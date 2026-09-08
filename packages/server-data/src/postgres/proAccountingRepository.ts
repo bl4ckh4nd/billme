@@ -14,11 +14,13 @@ import {
 import type {
   AccountingAccountMapping, AccountingBackfillConfirmation, AccountingBackfillPreview, AccountingBackfillResult,
   AccountingDocumentSource, AccountingPostingPreview, AccountingSnapshot, IncomingInvoiceEntity,
+  IncomingInvoiceDocumentDownload, IncomingInvoiceDocumentEntity, IncomingInvoiceDocumentReviewInput,
+  IncomingInvoiceDocumentUploadInput,
   IncomingInvoiceLineEntity, OpenItemEntity, OpenItemPaymentEntity, OpenItemPaymentInput, VendorEntity,
   BookingDraftEntity, JournalEntryEntity, JournalLineEntity, LedgerBalance, ValidationIssue, AccountingMutationContext, DatevExportContent, DatevExportSourceSnapshot, DatevTaxEvidence, TaxCaseDefinition, TaxCaseKey,
   ReportKind, ReportingCalculationProfile, ReportingMapping, ReportResult, Bwa01Report, ManagementGuvReport, HgbGuvReport, HgbBilanzReport,
 } from '@billme/accounting-shared';
-import { datevDestinationCases, datevSachverhaltCases, normalizeDatevTaxEvidence, validateDatevTaxEvidence } from '@billme/accounting-shared';
+import { datevDestinationCases, datevSachverhaltCases, normalizeDatevTaxEvidence, validateDatevTaxEvidence, INCOMING_INVOICE_DOCUMENT_MAX_BYTES, assertIncomingInvoiceDocumentContent } from '@billme/accounting-shared';
 import type {
   TenantScope, ProAccountingAssetRepository, ProAccountingRepository, PostDraftOptions, ProDraftActionRequest, ReverseJournalEntryOptions,
   AssetDepreciationInput, AssetDepreciationResult, AssetDepreciationScheduleEntry, AssetDisposalInput, AssetDisposalResult,
@@ -350,6 +352,7 @@ const insertEntry = async (db: PostgresQueryable, scope: TenantScope, sourceType
 };
 
 const readInvoice = async (db: PostgresQueryable, scope: TenantScope, id: string): Promise<any | null> => (await q<any>(db, `SELECT * FROM invoices WHERE tenant_id=$1 AND id=$2`, [tenant(scope), id]))[0] ?? null;
+const isNonBillingInvoice = (row: any): boolean => ['order_confirmation', 'delivery_note'].includes(String(row.document_kind ?? 'invoice'));
 const invoiceLines = (row: any): Array<{ total: number; taxRate: number }> => {
   const raw = parse<any[]>(row.items_json, []); return raw.map((line) => ({ total: Number(line.total ?? line.amount ?? line.grossAmount ?? 0), taxRate: Number(line.taxRate ?? line.tax_rate ?? 0) })).filter((line) => Number.isFinite(line.total));
 };
@@ -451,6 +454,15 @@ const backfillOutgoingSourceVersion = (row: any, documentVersion: string, reserv
 const incomingBackfillSourceVersion = (row: any, documentVersion: string): string =>
   hash({ documentVersion, eligibility: { status: row.status, accountingStatus: row.accounting_status } });
 const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: any, type: 'outgoing_invoice'|'incoming_invoice'): Promise<AccountingPostingPreview> => {
+  if (type === 'outgoing_invoice' && isNonBillingInvoice(row)) {
+    return {
+      sourceType: type,
+      sourceId: row.id,
+      status: 'unresolved',
+      reason: 'NON_BILLING_DOCUMENT',
+      issues: [{ code: 'NON_BILLING_DOCUMENT', message: 'Auftragsbestätigungen und Lieferscheine werden nicht gebucht.', blocking: true }],
+    };
+  }
   const t = tenant(scope); const p = await policy(db, t); const m = await mappings(db, t, p.activeChart); const category = parse<any>(row.tax_snapshot_json ?? row.accounting_snapshot_json, null)?.einvoiceCategoryCode ?? parse<any>(row.tax_meta_json, null)?.einvoiceCategoryCode; const incomingLines = type === 'incoming_invoice' ? (row.__incomingLines ?? await q<any>(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, row.id])) : []; const tax = taxSnapshot(row, type === 'incoming_invoice', incomingLines); const id = row.id;
   if (!tax) return { sourceType: type, sourceId: id, status: 'unresolved', reason: 'AMBIGUOUS_TAX_SNAPSHOT', issues: [{ code: 'AMBIGUOUS_TAX_SNAPSHOT', message: 'Netto, Steuer und Brutto konnten nicht sicher ermittelt werden.', blocking: true }] };
   const evidenceByCase = new Map<string, DatevPostingEvidence>();
@@ -498,6 +510,32 @@ const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: an
 };
 const rowVendor = (row: any): VendorEntity => ({ id: row.id, tenantId: row.tenant_id, vendorNumber: row.vendor_number ?? undefined, name: row.name, email: row.email ?? undefined, address: row.address ?? undefined, vatId: row.vat_id ?? undefined, iban: row.iban ?? undefined, defaultExpenseAccount: row.default_expense_account ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at });
 const rowIncoming = (row: any, lines: any[]): IncomingInvoiceEntity => ({ id: row.id, tenantId: row.tenant_id, vendorId: row.vendor_id, number: row.number, invoiceDate: row.invoice_date, dueDate: row.due_date, servicePeriod: row.service_period ?? undefined, netAmount: Number(row.net_amount), taxAmount: Number(row.tax_amount), grossAmount: Number(row.gross_amount), status: row.status, taxRate: Number(row.tax_rate), taxCaseKey: row.tax_case_key ?? undefined, notes: row.notes ?? undefined, lines: lines.map((l) => ({ id: l.id, incomingInvoiceId: l.incoming_invoice_id, position: Number(l.position), description: l.description, quantity: Number(l.quantity), unitPrice: Number(l.unit_price), netAmount: Number(l.net_amount), taxRate: Number(l.tax_rate), taxAmount: Number(l.tax_amount), grossAmount: Number(l.gross_amount), accountNumber: l.account_number ?? undefined, assetAccountNumber: l.asset_account_number ?? undefined })), accountingStatus: row.accounting_status, accountingSnapshot: parse(row.accounting_snapshot_json, undefined), createdAt: row.created_at, updatedAt: row.updated_at });
+const rowIncomingInvoiceDocument = (row: any): IncomingInvoiceDocumentEntity => ({
+  id: row.id,
+  tenantId: row.tenant_id,
+  incomingInvoiceId: row.incoming_invoice_id,
+  originalFilename: row.original_filename,
+  mimeType: row.mime_type,
+  byteLength: Number(row.byte_length),
+  sha256: row.sha256,
+  reviewStatus: row.review_status,
+  journalEntryId: row.accounting_journal_entry_id ?? row.journal_entry_id ?? undefined,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+const incomingInvoiceDocumentContent = (value: unknown): Uint8Array => {
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (Buffer.isBuffer(value)) return new Uint8Array(value);
+  if (typeof value === 'string') return new Uint8Array(Buffer.from(value, 'base64'));
+  throw new Error('INCOMING_INVOICE_DOCUMENT_CONTENT_UNAVAILABLE');
+};
+const assertIncomingInvoiceDocumentInput = (input: IncomingInvoiceDocumentUploadInput): void => {
+  if (!input.originalFilename.trim() || /[\\/\u0000-\u001f\u007f]/.test(input.originalFilename)) throw new Error('INCOMING_INVOICE_DOCUMENT_FILENAME_INVALID');
+  if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(input.mimeType)) throw new Error('INCOMING_INVOICE_DOCUMENT_MIME_UNSUPPORTED');
+  if (!input.content.byteLength || input.content.byteLength > INCOMING_INVOICE_DOCUMENT_MAX_BYTES) throw new Error('INCOMING_INVOICE_DOCUMENT_SIZE_INVALID');
+  assertIncomingInvoiceDocumentContent(input.mimeType, input.content);
+};
+const isUniqueViolation = (error: unknown): boolean => typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === '23505';
 const rowOpenItem = (row: any): OpenItemEntity => ({ id: row.id, tenantId: row.tenant_id, partyType: row.party_type, partyId: row.party_id, sourceType: row.source_type, sourceId: row.source_id, documentNumber: row.document_number, documentDate: row.document_date, dueDate: row.due_date, originalAmount: Number(row.original_amount), allocatedAmount: Number(row.allocated_amount), residualAmount: Number(row.residual_amount), status: row.status, journalEntryId: row.journal_entry_id ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at });
 const rowPayment = (row: any): OpenItemPaymentEntity => ({ id: row.id, tenantId: row.tenant_id, partyType: row.party_type, partyId: row.party_id ?? undefined, paymentDate: row.payment_date, amount: Number(row.amount), bankAccountNumber: row.bank_account_number, method: row.method ?? undefined, sourceType: row.source_type, sourceId: row.source_id, allocatedAmount: Number(row.allocated_amount), residualAmount: Number(row.residual_amount), status: row.status, journalEntryId: row.journal_entry_id ?? undefined, createdAt: row.created_at });
 const requireAllocationEventId = (value: unknown): string => {
@@ -589,6 +627,10 @@ export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGu
   getEurReport(scope: TenantScope, args?: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; product?: 'lite' | 'pro' }): Promise<ServerEurReportResult>;
   listEurCashItems(scope: TenantScope, args?: { from?: string; to?: string; product?: 'lite' | 'pro' }): Promise<ServerEurCashItem[]>;
   upsertEurClassification(scope: TenantScope, input: Omit<ServerEurClassificationRecord, 'id' | 'tenantId' | 'updatedAt'> & { product?: 'lite' | 'pro'; mutation?: AccountingMutationContext }): Promise<ServerEurClassificationRecord>;
+  listIncomingInvoiceDocuments(scope: TenantScope, invoiceId: string): Promise<IncomingInvoiceDocumentEntity[]>;
+  uploadIncomingInvoiceDocument(scope: TenantScope, input: IncomingInvoiceDocumentUploadInput): Promise<IncomingInvoiceDocumentEntity>;
+  downloadIncomingInvoiceDocument(scope: TenantScope, documentId: string): Promise<IncomingInvoiceDocumentDownload>;
+  reviewIncomingInvoiceDocument(scope: TenantScope, input: IncomingInvoiceDocumentReviewInput): Promise<IncomingInvoiceDocumentEntity>;
   listReportSnapshots(scope: TenantScope, reportType?: string): Promise<ReportSnapshotRecord[]>;
   getReportSnapshot(scope: TenantScope, id: string): Promise<ReportSnapshotRecord>;
   saveReportSnapshot(scope: TenantScope, input: { reportType: string; args: unknown; payload: unknown; mutation?: AccountingMutationContext }): Promise<ReportSnapshotRecord>;
@@ -758,6 +800,57 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   async listVendors(scope) { return (await q<any>(db, `SELECT * FROM vendors WHERE tenant_id=$1 ORDER BY name,id`, [tenant(scope)])).map(rowVendor); },
   async upsertVendor(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); const id = input.id || randomUUID(); const stamp = now(); const existing = (await q<any>(tx, `SELECT * FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, id]))[0]; const foreign = (await q<any>(tx, `SELECT tenant_id FROM vendors WHERE id=$1 AND tenant_id<>$2`, [id, t]))[0]; if (foreign) throw new Error('VENDOR_NOT_FOUND'); if (existing && (await q<any>(tx, `SELECT accounting_status FROM incoming_invoices WHERE tenant_id=$1 AND vendor_id=$2 AND accounting_status='posted' LIMIT 1`, [t, id]))[0]) throw new Error('VENDOR_HAS_POSTED_DOCUMENTS'); await q(tx, `INSERT INTO vendors (id,tenant_id,vendor_number,name,email,address,vat_id,iban,default_expense_account,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) ON CONFLICT (id) DO UPDATE SET vendor_number=EXCLUDED.vendor_number,name=EXCLUDED.name,email=EXCLUDED.email,address=EXCLUDED.address,vat_id=EXCLUDED.vat_id,iban=EXCLUDED.iban,default_expense_account=EXCLUDED.default_expense_account,updated_at=EXCLUDED.updated_at`, [id, t, input.vendorNumber ?? null, input.name, input.email ?? null, input.address ?? null, input.vatId ?? null, input.iban ?? null, input.defaultExpenseAccount ?? null, stamp]); await audit(tx as PostgresTransactionClient, scope, 'vendor', id, 'upsert', 'Vendor changed', existing ?? null, { ...input, mutation: undefined }, input.mutation); return rowVendor((await q<any>(tx, `SELECT * FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, id]))[0]); }); },
   async listIncomingInvoices(scope) { const rows = await q<any>(db, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 ORDER BY invoice_date DESC,number`, [tenant(scope)]); return Promise.all(rows.map(async (r) => rowIncoming(r, await q(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [tenant(scope), r.id])))); },
+  async listIncomingInvoiceDocuments(scope, invoiceId) {
+    const rows = await q<any>(db, `SELECT d.*, i.accounting_journal_entry_id FROM incoming_invoice_documents d JOIN incoming_invoices i ON i.id=d.incoming_invoice_id AND i.tenant_id=d.tenant_id WHERE d.tenant_id=$1 AND d.incoming_invoice_id=$2 ORDER BY d.created_at,d.id`, [tenant(scope), invoiceId]);
+    return rows.map(rowIncomingInvoiceDocument);
+  },
+  async uploadIncomingInvoiceDocument(scope, input) {
+    assertIncomingInvoiceDocumentInput(input);
+    return inTx(db, async (tx) => {
+      const t = tenant(scope);
+      const invoice = (await q<any>(tx, `SELECT id FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [t, input.incomingInvoiceId]))[0];
+      if (!invoice) throw new Error('INCOMING_INVOICE_NOT_FOUND');
+      const content = Buffer.from(input.content);
+      const sha256 = createHash('sha256').update(content).digest('hex');
+      const duplicate = (await q<any>(tx, `SELECT id FROM incoming_invoice_documents WHERE tenant_id=$1 AND sha256=$2`, [t, sha256]))[0];
+      if (duplicate) throw new Error('INCOMING_INVOICE_DOCUMENT_DUPLICATE: Diese Datei ist im Mandanten bereits archiviert.');
+      const id = input.id?.trim() || randomUUID();
+      const stamp = now();
+      try {
+        await q(tx, `INSERT INTO incoming_invoice_documents (id,tenant_id,incoming_invoice_id,original_filename,mime_type,byte_length,sha256,content_bytes,review_status,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$9)`, [id, t, input.incomingInvoiceId, input.originalFilename.trim(), input.mimeType, content.byteLength, sha256, content, stamp]);
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new Error('INCOMING_INVOICE_DOCUMENT_DUPLICATE: Diese Datei ist im Mandanten bereits archiviert.');
+        throw error;
+      }
+      const saved = (await q<any>(tx, `SELECT d.*, i.accounting_journal_entry_id FROM incoming_invoice_documents d JOIN incoming_invoices i ON i.id=d.incoming_invoice_id AND i.tenant_id=d.tenant_id WHERE d.tenant_id=$1 AND d.id=$2`, [t, id]))[0];
+      if (!saved) throw new Error('INCOMING_INVOICE_DOCUMENT_NOT_FOUND');
+      const metadata = rowIncomingInvoiceDocument(saved);
+      await audit(tx as PostgresTransactionClient, scope, 'incoming_invoice_document', id, 'upload', input.mutation?.reason ?? 'Incoming invoice document uploaded', null, { ...metadata, mutation: undefined }, input.mutation);
+      return metadata;
+    });
+  },
+  async downloadIncomingInvoiceDocument(scope, documentId) {
+    const row = (await q<any>(db, `SELECT d.*, i.accounting_journal_entry_id FROM incoming_invoice_documents d JOIN incoming_invoices i ON i.id=d.incoming_invoice_id AND i.tenant_id=d.tenant_id WHERE d.tenant_id=$1 AND d.id=$2`, [tenant(scope), documentId]))[0];
+    if (!row) throw new Error('INCOMING_INVOICE_DOCUMENT_NOT_FOUND');
+    const content = incomingInvoiceDocumentContent(row.content_bytes);
+    if (content.byteLength !== Number(row.byte_length) || createHash('sha256').update(content).digest('hex') !== row.sha256) throw new Error('INCOMING_INVOICE_DOCUMENT_HASH_MISMATCH');
+    return { document: rowIncomingInvoiceDocument(row), content };
+  },
+  async reviewIncomingInvoiceDocument(scope, input) {
+    return inTx(db, async (tx) => {
+      const t = tenant(scope);
+      const existing = (await q<any>(tx, `SELECT d.*, i.accounting_journal_entry_id FROM incoming_invoice_documents d JOIN incoming_invoices i ON i.id=d.incoming_invoice_id AND i.tenant_id=d.tenant_id WHERE d.tenant_id=$1 AND d.id=$2 FOR UPDATE`, [t, input.documentId]))[0];
+      if (!existing) throw new Error('INCOMING_INVOICE_DOCUMENT_NOT_FOUND');
+      const stamp = now();
+      await q(tx, `UPDATE incoming_invoice_documents SET review_status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [input.reviewStatus, stamp, t, input.documentId]);
+      const updated = (await q<any>(tx, `SELECT d.*, i.accounting_journal_entry_id FROM incoming_invoice_documents d JOIN incoming_invoices i ON i.id=d.incoming_invoice_id AND i.tenant_id=d.tenant_id WHERE d.tenant_id=$1 AND d.id=$2`, [t, input.documentId]))[0];
+      if (!updated) throw new Error('INCOMING_INVOICE_DOCUMENT_NOT_FOUND');
+      const before = rowIncomingInvoiceDocument(existing);
+      const after = rowIncomingInvoiceDocument(updated);
+      await audit(tx as PostgresTransactionClient, scope, 'incoming_invoice_document', input.documentId, 'review', input.mutation?.reason ?? 'Incoming invoice document reviewed', before, after, input.mutation);
+      return after;
+    });
+  },
   async upsertIncomingInvoice(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); const existing = (await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [t, input.id]))[0]; const foreign = (await q<any>(tx, `SELECT tenant_id FROM incoming_invoices WHERE id=$1 AND tenant_id<>$2`, [input.id, t]))[0]; if (foreign) throw new Error('INCOMING_INVOICE_NOT_FOUND'); if (existing?.accounting_status === 'posted' || existing?.accounting_status === 'reversed') { const oldLines = await q(tx, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, input.id]); return rowIncoming(existing, oldLines); } const vendor = (await q<any>(tx, `SELECT id FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, input.vendorId]))[0]; if (!vendor) throw new Error('VENDOR_NOT_FOUND'); const stamp = now(); await q(tx, `INSERT INTO incoming_invoices (id,tenant_id,vendor_id,number,invoice_date,due_date,service_period,net_amount,tax_amount,gross_amount,status,tax_rate,tax_case_key,notes,accounting_status,accounting_snapshot_json,accounting_journal_entry_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'unposted',NULL,NULL,$15,$16) ON CONFLICT (id) DO UPDATE SET vendor_id=EXCLUDED.vendor_id,number=EXCLUDED.number,invoice_date=EXCLUDED.invoice_date,due_date=EXCLUDED.due_date,service_period=EXCLUDED.service_period,net_amount=EXCLUDED.net_amount,tax_amount=EXCLUDED.tax_amount,gross_amount=EXCLUDED.gross_amount,status=EXCLUDED.status,tax_rate=EXCLUDED.tax_rate,tax_case_key=EXCLUDED.tax_case_key,notes=EXCLUDED.notes,updated_at=EXCLUDED.updated_at`, [input.id, t, input.vendorId, input.number, input.invoiceDate, input.dueDate, input.servicePeriod ?? null, input.netAmount, input.taxAmount, input.grossAmount, input.status, input.taxRate, input.taxCaseKey ?? null, input.notes ?? null, input.createdAt || stamp, stamp]); await q(tx, `DELETE FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2`, [t, input.id]); for (const line of input.lines) await q(tx, `INSERT INTO incoming_invoice_lines (id,tenant_id,incoming_invoice_id,position,description,quantity,unit_price,net_amount,tax_rate,tax_amount,gross_amount,account_number,asset_account_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [line.id, t, input.id, line.position, line.description, line.quantity, line.unitPrice, line.netAmount, line.taxRate, line.taxAmount, line.grossAmount, line.accountNumber ?? null, line.assetAccountNumber ?? null]); await audit(tx as PostgresTransactionClient, scope, 'incoming_invoice', input.id, 'upsert', 'Incoming invoice changed', existing ?? null, { ...input, accountingStatus: undefined, accountingSnapshot: undefined, mutation: undefined }, input.mutation); return rowIncoming((await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [t, input.id]))[0], await q(tx, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, input.id])); }); },
   async previewOutgoingInvoice(scope, invoiceId) { const row = await readInvoice(db, scope, invoiceId); if (!row) throw new Error('INVOICE_NOT_FOUND'); return postingPreview(db, scope, row, 'outgoing_invoice'); },
   async postOutgoingInvoice(scope, invoiceId, options = {}) { return inTx(db, (tx) => postDocument(tx, scope, 'outgoing_invoice', invoiceId, options)); },
@@ -767,7 +860,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   async allocateOpenItemPayment(scope, input) { requireAllocationEventId(input.allocationEventId); return inTx(db, (tx) => allocatePayment(tx, scope, input)); },
   async allocateRemainingOpenItemPayment(scope, paymentId, allocations, allocationEventId, mutation) { const eventId = requireAllocationEventId(allocationEventId); return inTx(db, async (tx) => { const row = (await q<any>(tx, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), paymentId]))[0]; if (!row) throw new Error('PAYMENT_NOT_FOUND'); return allocatePayment(tx, scope, { paymentId, partyType: row.party_type, partyId: row.party_id ?? undefined, paymentDate: row.payment_date, amount: Number(row.amount), bankAccountNumber: row.bank_account_number, method: row.method ?? undefined, sourceType: row.source_type, sourceId: row.source_id, allocations, allocationEventId: eventId, reason: mutation?.reason ?? 'Allocate remaining open item payment', mutation }); }); },
   async reverseDocumentAccounting(scope, input) { return inTx(db, async (tx) => { const table = input.documentType === 'outgoing_invoice' ? 'invoices' : 'incoming_invoices'; const row = (await q<any>(tx, `SELECT * FROM ${table} WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), input.documentId]))[0]; if (!row || row.accounting_status !== 'posted' || !row.accounting_journal_entry_id) throw new Error('DOCUMENT_NOT_POSTED'); if ((await q<any>(tx, `SELECT id FROM assets WHERE tenant_id=$1 AND (activation_journal_entry_id=$2 OR source_incoming_invoice_id=$3) LIMIT 1`, [tenant(scope), row.accounting_journal_entry_id, input.documentId]))[0]) throw new Error('ASSET_CORRECTION_REQUIRED: correct linked asset before reversing its source document'); const item = (await q<any>(tx, `SELECT * FROM open_items WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 FOR UPDATE`, [tenant(scope), input.documentType, input.documentId]))[0]; if (item && Number((await q<any>(tx, `SELECT COUNT(*)::int c FROM open_item_allocations WHERE tenant_id=$1 AND open_item_id=$2`, [tenant(scope), item.id]))[0]?.c)) throw new Error('DOCUMENT_HAS_ALLOCATIONS'); const reversal = await reverseEntryInTransaction(tx, scope, row.accounting_journal_entry_id, input.reason, { postingDate: input.postingDate, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation, allowDocumentSource: true }); if (item) await q(tx, `UPDATE open_items SET status='unresolved',allocated_amount=original_amount,residual_amount=0,updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), tenant(scope), item.id]); await q(tx, `UPDATE ${table} SET accounting_status='reversed',status='cancelled',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), tenant(scope), input.documentId]); return reversal; }); },
-  async previewAccountingBackfill(scope) { return inTx(db, async (tx) => { const candidates: AccountingBackfillPreview['candidates'] = []; const config = await backfillConfig(tx, tenant(scope)); const outgoing = await q<any>(tx, `SELECT i.* FROM invoices i JOIN number_reservations nr ON nr.tenant_id=i.tenant_id AND nr.kind='invoice' AND nr.status='finalized' AND nr.document_id=i.id AND nr.number=i.number WHERE i.tenant_id=$1 AND COALESCE(i.accounting_status,'unposted') NOT IN ('posted','reversed') AND i.status NOT IN ('draft','cancelled') ORDER BY i.id`, [tenant(scope)]); for (const row of outgoing) { const reservation = await finalizedInvoiceReservation(tx, tenant(scope), row); const preview = await postingPreview(tx, scope, row, 'outgoing_invoice'); const documentVersion = preview.snapshot?.sourceVersion ?? hash(row); candidates.push({ sourceType: 'outgoing_invoice', sourceId: row.id, status: preview.status, reason: preview.reason, sourceVersion: backfillOutgoingSourceVersion(row, documentVersion, reservation), snapshot: preview.snapshot ? { ...preview.snapshot, capturedAt: '' } : undefined }); } const incoming = await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND accounting_status NOT IN ('posted','reversed') AND status NOT IN ('draft','cancelled') ORDER BY id`, [tenant(scope)]); for (const row of incoming) { const preview = await postingPreview(tx, scope, row, 'incoming_invoice'); const documentVersion = preview.snapshot?.sourceVersion ?? hash(row); candidates.push({ sourceType: 'incoming_invoice', sourceId: row.id, status: preview.status, reason: preview.reason, sourceVersion: incomingBackfillSourceVersion(row, documentVersion), snapshot: preview.snapshot ? { ...preview.snapshot, capturedAt: '' } : undefined }); } const legacy = await q<any>(tx, `SELECT id,date,amount,type,counterparty,purpose FROM transactions WHERE tenant_id=$1 ORDER BY id`, [tenant(scope)]); for (const row of legacy) candidates.push({ sourceType: 'legacy_transaction', sourceId: row.id, status: 'unresolved', reason: 'Legacy transaction requires explicit review.', sourceVersion: hash(row), snapshot: row }); const confirmationHash = hash({ tenantId: tenant(scope), config, candidates }); const runId = randomUUID(); await q(tx, `INSERT INTO accounting_backfill_runs (id,tenant_id,status,candidates_json,confirmation_hash,created_at,config_json) VALUES ($1,$2,'preview',$3,$4,$5,$6)`, [runId, tenant(scope), JSON.stringify(candidates), confirmationHash, now(), JSON.stringify(config)]); await audit(tx as PostgresTransactionClient, scope, 'accounting_backfill', runId, 'preview', 'dry-run accounting backfill', null, { confirmationHash }); return { runId, status: 'preview', candidates, readyCount: candidates.filter((x) => x.status === 'ready').length, unresolvedCount: candidates.filter((x) => x.status === 'unresolved').length, confirmationHash }; }); },
+  async previewAccountingBackfill(scope) { return inTx(db, async (tx) => { const candidates: AccountingBackfillPreview['candidates'] = []; const config = await backfillConfig(tx, tenant(scope)); const outgoing = await q<any>(tx, `SELECT i.* FROM invoices i JOIN number_reservations nr ON nr.tenant_id=i.tenant_id AND nr.kind='invoice' AND nr.status='finalized' AND nr.document_id=i.id AND nr.number=i.number WHERE i.tenant_id=$1 AND COALESCE(i.document_kind,'invoice') NOT IN ('order_confirmation','delivery_note') AND COALESCE(i.accounting_status,'unposted') NOT IN ('posted','reversed') AND i.status NOT IN ('draft','cancelled') ORDER BY i.id`, [tenant(scope)]); for (const row of outgoing) { const reservation = await finalizedInvoiceReservation(tx, tenant(scope), row); const preview = await postingPreview(tx, scope, row, 'outgoing_invoice'); const documentVersion = preview.snapshot?.sourceVersion ?? hash(row); candidates.push({ sourceType: 'outgoing_invoice', sourceId: row.id, status: preview.status, reason: preview.reason, sourceVersion: backfillOutgoingSourceVersion(row, documentVersion, reservation), snapshot: preview.snapshot ? { ...preview.snapshot, capturedAt: '' } : undefined }); } const incoming = await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND accounting_status NOT IN ('posted','reversed') AND status NOT IN ('draft','cancelled') ORDER BY id`, [tenant(scope)]); for (const row of incoming) { const preview = await postingPreview(tx, scope, row, 'incoming_invoice'); const documentVersion = preview.snapshot?.sourceVersion ?? hash(row); candidates.push({ sourceType: 'incoming_invoice', sourceId: row.id, status: preview.status, reason: preview.reason, sourceVersion: incomingBackfillSourceVersion(row, documentVersion), snapshot: preview.snapshot ? { ...preview.snapshot, capturedAt: '' } : undefined }); } const legacy = await q<any>(tx, `SELECT id,date,amount,type,counterparty,purpose FROM transactions WHERE tenant_id=$1 ORDER BY id`, [tenant(scope)]); for (const row of legacy) candidates.push({ sourceType: 'legacy_transaction', sourceId: row.id, status: 'unresolved', reason: 'Legacy transaction requires explicit review.', sourceVersion: hash(row), snapshot: row }); const confirmationHash = hash({ tenantId: tenant(scope), config, candidates }); const runId = randomUUID(); await q(tx, `INSERT INTO accounting_backfill_runs (id,tenant_id,status,candidates_json,confirmation_hash,created_at,config_json) VALUES ($1,$2,'preview',$3,$4,$5,$6)`, [runId, tenant(scope), JSON.stringify(candidates), confirmationHash, now(), JSON.stringify(config)]); await audit(tx as PostgresTransactionClient, scope, 'accounting_backfill', runId, 'preview', 'dry-run accounting backfill', null, { confirmationHash }); return { runId, status: 'preview', candidates, readyCount: candidates.filter((x) => x.status === 'ready').length, unresolvedCount: candidates.filter((x) => x.status === 'unresolved').length, confirmationHash }; }); },
   async confirmAccountingBackfill(scope, input) { return inTx(db, async (tx) => { if (!input.reason.trim()) throw new Error('BACKFILL_REASON_REQUIRED'); const run = (await q<any>(tx, `SELECT * FROM accounting_backfill_runs WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), input.runId]))[0]; if (!run) throw new Error('BACKFILL_RUN_NOT_FOUND'); if (run.status === 'completed') return parse<AccountingBackfillResult>(run.result_json, { runId: input.runId, postedCount: 0, unresolvedCount: 0, status: 'completed' }); if (run.confirmation_hash !== input.confirmationHash) throw new Error('BACKFILL_CONFIRMATION_HASH_MISMATCH'); const config = await backfillConfig(tx, tenant(scope)); if (hash(config) !== hash(parse(run.config_json, null))) throw new Error('BACKFILL_STALE_PREVIEW'); const candidates = parse<AccountingBackfillPreview['candidates']>(run.candidates_json, []); let postedCount = 0; let unresolvedCount = 0; for (const candidate of candidates) { if (candidate.status !== 'ready') { unresolvedCount += 1; continue; } if (candidate.sourceType === 'outgoing_invoice') { const row = await readInvoice(tx, scope, candidate.sourceId); const reservation = row ? await finalizedInvoiceReservation(tx, tenant(scope), row) : null; if (!row || row.status === 'draft' || row.status === 'cancelled' || row.accounting_status === 'reversed' || !reservation) throw new Error('BACKFILL_STALE_PREVIEW'); const preview = await postingPreview(tx, scope, row, 'outgoing_invoice'); const documentVersion = preview.snapshot?.sourceVersion ?? hash(row); if (backfillOutgoingSourceVersion(row, documentVersion, reservation) !== candidate.sourceVersion) throw new Error('BACKFILL_STALE_PREVIEW'); const result = await postDocument(tx, scope, 'outgoing_invoice', candidate.sourceId, { reservationId: reservation.id, mutation: input.mutation }); if (result.status === 'ready') postedCount += 1; else unresolvedCount += 1; continue; } const row = (await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [tenant(scope), candidate.sourceId]))[0]; const preview = row ? await postingPreview(tx, scope, row, 'incoming_invoice') : null; const documentVersion = preview?.snapshot?.sourceVersion ?? (row ? hash(row) : hash({ missing: candidate.sourceId })); if (!row || row.status === 'draft' || row.status === 'cancelled' || row.accounting_status === 'posted' || row.accounting_status === 'reversed' || incomingBackfillSourceVersion(row, documentVersion) !== candidate.sourceVersion) throw new Error('BACKFILL_STALE_PREVIEW'); const result = await postDocument(tx, scope, 'incoming_invoice', candidate.sourceId, { mutation: input.mutation }); if (result.status === 'ready') postedCount += 1; else unresolvedCount += 1; } const result = { runId: input.runId, postedCount, unresolvedCount, status: 'completed' as const }; await q(tx, `UPDATE accounting_backfill_runs SET status='completed',result_json=$1,confirmed_at=$2,completed_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify(result), now(), tenant(scope), input.runId]); await audit(tx as PostgresTransactionClient, scope, 'accounting_backfill', input.runId, 'confirm', input.reason, { status: 'preview' }, result, input.mutation); return result; }); },
   async listAssets(scope) {
     const rows = await q<AssetDbRow>(db, `SELECT * FROM assets WHERE tenant_id=$1 ORDER BY asset_number,id`, [tenant(scope)]);
@@ -978,17 +1071,78 @@ const postedDepreciationAmount = async (db: PostgresQueryable, scope: TenantScop
 };
 
 const postDocument = async (db: PostgresQueryable, scope: TenantScope, type: 'outgoing_invoice'|'incoming_invoice', id: string, options: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview> => {
-  const t = tenant(scope); const table = type === 'outgoing_invoice' ? 'invoices' : 'incoming_invoices'; const row = (await q<any>(db, `SELECT * FROM ${table} WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, id]))[0]; if (!row) throw new Error(type === 'outgoing_invoice' ? 'INVOICE_NOT_FOUND' : 'INCOMING_INVOICE_NOT_FOUND'); if (row.accounting_status === 'posted') { const snapshot = parse<AccountingSnapshot | undefined>(row.accounting_snapshot_json, undefined); if (snapshot) return { sourceType: type, sourceId: id, status: 'ready', snapshot, issues: [] }; return postingPreview(db, scope, row, type); }
+  const t = tenant(scope);
+  const table = type === 'outgoing_invoice' ? 'invoices' : 'incoming_invoices';
+  const row = (await q<any>(db, `SELECT * FROM ${table} WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, id]))[0];
+  if (!row) throw new Error(type === 'outgoing_invoice' ? 'INVOICE_NOT_FOUND' : 'INCOMING_INVOICE_NOT_FOUND');
+  if (type === 'outgoing_invoice' && isNonBillingInvoice(row)) throw new Error('NON_BILLING_DOCUMENT');
+  // Posting is idempotent.  In particular, a retry after the document and its
+  // open item were committed must not create a second correction allocation.
+  if (row.accounting_status === 'posted') {
+    const snapshot = parse<AccountingSnapshot | undefined>(row.accounting_snapshot_json, undefined);
+    if (snapshot) return { sourceType: type, sourceId: id, status: 'ready', snapshot, issues: [] };
+    return postingPreview(db, scope, row, type);
+  }
   // Keep terminal document state a domain conflict rather than allowing the
   // later immutable-row trigger to report an implementation-specific error.
   if (row.accounting_status === 'reversed' || row.status === 'cancelled' || (type === 'incoming_invoice' && row.status === 'draft')) throw new Error('DOCUMENT_NOT_POSTABLE');
-  if (type === 'outgoing_invoice' && row.client_id) { const client = (await q<any>(db, `SELECT tenant_id FROM clients WHERE id=$1`, [row.client_id]))[0]; if (client && client.tenant_id !== t) throw new Error('CLIENT_NOT_FOUND'); }
+  if (type === 'outgoing_invoice' && row.client_id) {
+    const client = (await q<any>(db, `SELECT tenant_id FROM clients WHERE id=$1`, [row.client_id]))[0];
+    if (client && client.tenant_id !== t) throw new Error('CLIENT_NOT_FOUND');
+  }
   if (type === 'incoming_invoice') {
     const vendor = (await q<any>(db, `SELECT tenant_id FROM vendors WHERE id=$1`, [row.vendor_id]))[0];
     if (!vendor || vendor.tenant_id !== t) throw new Error('VENDOR_NOT_FOUND');
   }
-  if (type === 'outgoing_invoice') { if (!options.reservationId) throw new Error('FINALIZED_RESERVATION_REQUIRED'); const reservation = (await q<any>(db, `SELECT kind,number,status,document_id FROM number_reservations WHERE tenant_id=$1 AND id=$2`, [t, options.reservationId]))[0]; if (!reservation || reservation.kind !== 'invoice' || reservation.status !== 'finalized' || reservation.document_id !== id || reservation.number !== row.number || row.status === 'draft') throw new Error('FINALIZED_RESERVATION_REQUIRED'); }
-  const preview = await postingPreview(db, scope, row, type); if (preview.status !== 'ready' || !preview.snapshot) return preview; const sourceKey = `${type === 'incoming_invoice' ? 'incoming-invoice' : 'outgoing-invoice'}:${id}`; const entryId = await insertEntry(db, scope, type, sourceKey, type === 'outgoing_invoice' ? row.date : row.invoice_date, type === 'outgoing_invoice' ? `Rechnung ${row.number}` : `Eingangsrechnung ${row.number}`, preview.snapshot.lines.map((line, index) => ({ ...line, id: randomUUID(), taxCaseKey: line.taxCaseKey as any, accountNumber: line.accountNumber, debitAmount: round(line.debitAmount), creditAmount: round(line.creditAmount), memo: line.memo })), { reference: row.number, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason, mutation: options.mutation }); const postedAt = now(); await q(db, `UPDATE ${table} SET accounting_status='posted',accounting_snapshot_json=$1,accounting_journal_entry_id=$2,accounting_posted_at=$3,status=CASE WHEN status='draft' THEN 'open' ELSE status END,updated_at=$3 WHERE tenant_id=$4 AND id=$5`, [JSON.stringify(preview.snapshot), entryId, postedAt, t, id]); const itemId = randomUUID(); await q(db, `INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$10,'open',$11,$12,$12) ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`, [itemId, t, type === 'outgoing_invoice' ? 'debtor' : 'creditor', type === 'outgoing_invoice' ? row.client_id ?? row.client ?? id : row.vendor_id, type, id, row.number, type === 'outgoing_invoice' ? row.date : row.invoice_date, row.due_date, preview.snapshot.grossAmount, entryId, postedAt]); await audit(db as PostgresTransactionClient, scope, type, id, 'accounting_post', 'Document accounting posted', null, { entryId, sourceVersion: preview.snapshot.sourceVersion }, options.mutation); return { ...preview, snapshot: { ...preview.snapshot, capturedAt: now() } };
+  if (type === 'outgoing_invoice') {
+    if (!options.reservationId) throw new Error('FINALIZED_RESERVATION_REQUIRED');
+    const reservation = (await q<any>(db, `SELECT kind,number,status,document_id FROM number_reservations WHERE tenant_id=$1 AND id=$2`, [t, options.reservationId]))[0];
+    if (!reservation || reservation.kind !== 'invoice' || reservation.status !== 'finalized' || reservation.document_id !== id || reservation.number !== row.number || row.status === 'draft') throw new Error('FINALIZED_RESERVATION_REQUIRED');
+  }
+
+  const preview = await postingPreview(db, scope, row, type);
+  if (preview.status !== 'ready' || !preview.snapshot) return preview;
+  const correction = type === 'outgoing_invoice'
+    && (row.document_kind === 'credit_note' || row.document_kind === 'cancellation_invoice');
+  // Credit and cancellation documents carry the same tax/accounting snapshot
+  // as an invoice, but their journal is the exact inverse of that snapshot.
+  const accountingSnapshot: AccountingSnapshot = correction
+    ? { ...preview.snapshot, lines: preview.snapshot.lines.map((line) => ({ ...line, debitAmount: line.creditAmount, creditAmount: line.debitAmount })) }
+    : preview.snapshot;
+  const sourceKey = correction ? `outgoing-correction:${id}` : `${type === 'incoming_invoice' ? 'incoming-invoice' : 'outgoing-invoice'}:${id}`;
+  const bookingText = type === 'outgoing_invoice'
+    ? `${row.document_kind === 'credit_note' ? 'Gutschrift' : row.document_kind === 'cancellation_invoice' ? 'Stornorechnung' : 'Rechnung'} ${row.number}`
+    : `Eingangsrechnung ${row.number}`;
+  const entryId = await insertEntry(db, scope, type, sourceKey, type === 'outgoing_invoice' ? row.date : row.invoice_date, bookingText, accountingSnapshot.lines.map((line) => ({
+    ...line,
+    id: randomUUID(),
+    taxCaseKey: line.taxCaseKey as any,
+    accountNumber: line.accountNumber,
+    debitAmount: round(line.debitAmount),
+    creditAmount: round(line.creditAmount),
+    memo: line.memo,
+  })), { reference: row.number, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason, mutation: options.mutation });
+  const postedAt = now();
+  const postedSnapshot = { ...accountingSnapshot, capturedAt: postedAt };
+  await q(db, `UPDATE ${table} SET accounting_status='posted',accounting_snapshot_json=$1,accounting_journal_entry_id=$2,accounting_posted_at=$3,status=CASE WHEN status='draft' THEN 'open' ELSE status END,updated_at=$3 WHERE tenant_id=$4 AND id=$5`, [JSON.stringify(postedSnapshot), entryId, postedAt, t, id]);
+
+  if (correction && row.source_document_id) {
+    // A correction settles the original receivable.  Lock and update that
+    // item in the same transaction as the inverse journal entry, bounded by
+    // the remaining amount so repeated/parallel corrections cannot overdraw.
+    const original = (await q<any>(db, `SELECT id,original_amount,allocated_amount,residual_amount FROM open_items WHERE tenant_id=$1 AND source_type='outgoing_invoice' AND source_id=$2 FOR UPDATE`, [t, row.source_document_id]))[0];
+    if (original) {
+      const allocation = round(Math.min(Math.max(0, Number(original.residual_amount)), Math.abs(accountingSnapshot.grossAmount)));
+      const allocated = round(Number(original.allocated_amount) + allocation);
+      const residual = round(Math.max(0, Number(original.original_amount) - allocated));
+      await q(db, `UPDATE open_items SET allocated_amount=$1,residual_amount=$2,status=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [allocated, residual, residual <= .01 ? 'paid' : allocated > .01 ? 'partially_paid' : 'open', postedAt, t, original.id]);
+    }
+  } else {
+    const itemId = randomUUID();
+    await q(db, `INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$10,'open',$11,$12,$12) ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`, [itemId, t, type === 'outgoing_invoice' ? 'debtor' : 'creditor', type === 'outgoing_invoice' ? row.client_id ?? row.client ?? id : row.vendor_id, type, id, row.number, type === 'outgoing_invoice' ? row.date : row.invoice_date, row.due_date, accountingSnapshot.grossAmount, entryId, postedAt]);
+  }
+  await audit(db as PostgresTransactionClient, scope, type === 'outgoing_invoice' ? 'invoice' : type, id, 'accounting_post', 'Document accounting posted', null, { entryId, sourceVersion: accountingSnapshot.sourceVersion, correctionOf: correction ? row.source_document_id ?? undefined : undefined }, options.mutation);
+  return { ...preview, snapshot: postedSnapshot };
 };
 
 const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity> => {

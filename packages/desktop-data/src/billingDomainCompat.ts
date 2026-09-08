@@ -27,6 +27,11 @@ type InvoiceRow = {
   client_number: string | null;
   project_id: string | null;
   number: string;
+  document_kind: string | null;
+  source_document_id: string | null;
+  root_document_id: string | null;
+  revision_of_id: string | null;
+  revision_number: number | null;
   client: string;
   client_email: string;
   client_address: string | null;
@@ -162,6 +167,11 @@ export interface LegacyInvoiceDocument {
   projectId?: string;
   number: string;
   numberReservationId?: string;
+  documentKind?: Invoice['documentKind'];
+  sourceDocumentId?: string;
+  rootDocumentId?: string;
+  revisionOfId?: string;
+  revisionNumber?: number;
   client: string;
   clientEmail: string;
   clientAddress?: string;
@@ -307,6 +317,11 @@ export const toDomainInvoice = (
     clientNumber: invoice.clientNumber,
     projectId: invoice.projectId,
     number: invoice.number,
+    documentKind: invoice.documentKind ?? 'invoice',
+    sourceDocumentId: invoice.sourceDocumentId,
+    rootDocumentId: invoice.rootDocumentId,
+    revisionOfId: invoice.revisionOfId,
+    revisionNumber: invoice.revisionNumber ?? 0,
     client: invoice.client,
     clientEmail: invoice.clientEmail,
     clientAddress: invoice.clientAddress,
@@ -428,6 +443,11 @@ export const toLegacyInvoice = (invoice: Invoice): LegacyInvoiceDocument => {
     clientNumber: invoice.clientNumber,
     projectId: invoice.projectId,
     number: invoice.number,
+    documentKind: invoice.documentKind ?? 'invoice',
+    sourceDocumentId: invoice.sourceDocumentId,
+    rootDocumentId: invoice.rootDocumentId,
+    revisionOfId: invoice.revisionOfId,
+    revisionNumber: invoice.revisionNumber ?? 0,
     client: invoice.client,
     clientEmail: invoice.clientEmail,
     clientAddress: invoice.clientAddress,
@@ -500,6 +520,11 @@ const rowToInvoice = (
     clientNumber: row.client_number ?? undefined,
     projectId: row.project_id ?? undefined,
     number: row.number,
+    documentKind: (row.document_kind as Invoice['documentKind'] | null) ?? 'invoice',
+    sourceDocumentId: row.source_document_id ?? undefined,
+    rootDocumentId: row.root_document_id ?? undefined,
+    revisionOfId: row.revision_of_id ?? undefined,
+    revisionNumber: row.revision_number ?? 0,
     client: row.client,
     clientEmail: row.client_email,
     clientAddress: row.client_address ?? undefined,
@@ -649,6 +674,11 @@ const invoiceSelect = {
   client_number: schema.invoices.clientNumber,
   project_id: schema.invoices.projectId,
   number: schema.invoices.number,
+  document_kind: schema.invoices.documentKind,
+  source_document_id: schema.invoices.sourceDocumentId,
+  root_document_id: schema.invoices.rootDocumentId,
+  revision_of_id: schema.invoices.revisionOfId,
+  revision_number: schema.invoices.revisionNumber,
   client: schema.invoices.client,
   client_email: schema.invoices.clientEmail,
   client_address: schema.invoices.clientAddress,
@@ -737,6 +767,11 @@ const invoiceValues = (invoice: Invoice, now: string) => ({
   clientNumber: invoice.clientNumber ?? null,
   projectId: invoice.projectId ?? null,
   number: invoice.number,
+  documentKind: invoice.documentKind ?? 'invoice',
+  sourceDocumentId: invoice.sourceDocumentId ?? null,
+  rootDocumentId: invoice.rootDocumentId ?? null,
+  revisionOfId: invoice.revisionOfId ?? null,
+  revisionNumber: invoice.revisionNumber ?? 0,
   client: invoice.client,
   clientEmail: invoice.clientEmail,
   clientAddress: invoice.clientAddress ?? null,

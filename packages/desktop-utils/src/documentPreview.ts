@@ -122,6 +122,14 @@ export const getPreviewElements = (
 
     if (el.type === 'TEXT' && typeof el.content === 'string') {
       let content = el.label === 'invoice_meta' ? enrichInvoiceMetaContent(el.content) : el.content;
+      // Existing user templates often contain the old literal title. Keep those
+      // templates useful for the order chain while preserving custom wording.
+      if (invoice.documentKind && el.label === 'invoice_title') {
+        content = content.replace(/^(Rechnung|Angebot)\b/u, '{{invoice.documentLabel}}');
+      }
+      if (invoice.documentKind && el.label === 'invoice_meta') {
+        content = content.replace(/^(Rechnungs|Angebots)-Nr:/u, '{{invoice.documentLabel}}-Nr:');
+      }
       if (hasTaxNotice && content.includes('{{invoice.taxNotice}}')) {
         renderedNotice = true;
       }

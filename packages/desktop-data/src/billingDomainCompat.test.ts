@@ -16,7 +16,9 @@ const canRunNativeSqlite = (() => {
 const createSchema = (db: Database.Database) => db.exec(`
   CREATE TABLE invoices (
     id TEXT PRIMARY KEY, client_id TEXT, client_number TEXT, project_id TEXT,
-    number TEXT NOT NULL, client TEXT NOT NULL, client_email TEXT NOT NULL,
+    number TEXT NOT NULL, document_kind TEXT NOT NULL DEFAULT 'invoice', source_document_id TEXT,
+    root_document_id TEXT, revision_of_id TEXT, revision_number INTEGER NOT NULL DEFAULT 0,
+    client TEXT NOT NULL, client_email TEXT NOT NULL,
     client_address TEXT, billing_address_json TEXT, shipping_address_json TEXT,
     tax_mode TEXT NOT NULL, tax_meta_json TEXT, tax_snapshot_json TEXT,
     date TEXT NOT NULL, due_date TEXT NOT NULL, service_period TEXT,

@@ -2,12 +2,48 @@
 
 ## Unreleased
 
+- Manueller Portal-Abgleich und Worker übernehmen Kundenentscheidungen jetzt über dieselbe gesperrte Transaktion inklusive Audit und vollständiger Metadaten; bereits entschiedene oder zwischenzeitlich neu veröffentlichte Angebote werden nicht überschrieben.
+- Lite und Pro wandeln Angebote serverseitig in einer Transaktion mit Nummernreservierung, Rechnungssnapshot, Finalisierung und Audit um; wiederholte HTTP-Anfragen mit derselben Rechnungs-ID liefern denselben Beleg, während Fehler sämtliche Schreibschritte zurückrollen.
+- Rechnungs-Upserts können eine bereits in einem anderen Mandanten vergebene Beleg-ID nicht mehr überschreiben.
+- Die Template-Editoren von Lite und Pro verwenden den vorhandenen gemeinsamen Designer mit Verlauf und Kopierfunktion; Produktprüfungen und Aktionsmeldungen bleiben erhalten, Ladefehler verhindern versehentliches Überschreiben und parallele Speicheraktionen werden unterbunden.
+- Der dunkle Template-Editor erhält den bisher fehlenden Textfarbtoken für lesbare Werkzeugbeschriftungen und Lineale; nach fehlgeschlagener Aktivierung verwendet ein erneuter Speicherversuch dieselbe Kopie.
+
+- Das Angebotsportal baut `better-sqlite3` im Alpine-Container gezielt für die laufende Node-ABI nach; der lokale Stack startet dadurch wieder mit persistentem SQLite-Speicher.
+
+- Server- und Browser-Container deklarieren jetzt alle direkt importierten Workspace-, PostgreSQL- und CSV-Typabhängigkeiten, sodass ihre isolierten TypeScript-Builds und der Worker-Healthcheck wieder erfolgreich durchlaufen.
+
+- Das Workspace-Lockfile enthält jetzt alle aktuellen internen UI-Abhängigkeiten; lokale und containerisierte Installationen können wieder mit `--frozen-lockfile` validiert werden.
+
+- Die Desktop- und PGlite-Vertragstests prüfen jetzt die aktuellen Dokumentketten-Defaults sowie die vollständige kanonische Migrationsfolge.
+
+- Pro-Berichte lassen sich als CSV herunterladen und über ein separates Druckdokument als PDF ausgeben; Exportfehler lassen den geladenen Bericht sichtbar. DATEV-Exporte laden die Originaldatei nach Abgleich mit dem Serverbeleg herunter und stellen ihre Beleg-ID sowie Prüfdaten auch Browser-Adaptern bereit.
+- Pro-Buchungsläufe zeigen gespeicherte Serverprotokolle auch ohne vollständige Quelldaten; unerwartete Antworten erscheinen als verständliche Fehlermeldung mit Wiederholungsaktion.
+- Die EÜR startet mit dem unterstützten Steuerjahr 2026 und überträgt das gewählte Jahr durchgehend an Berichte, Zuordnungen und CSV-Exporte; 2025 bleibt auswählbar.
+- Neue Lite- und Pro-Arbeitsbereiche starten mit neutralen Firmendaten, Nummernzählern ab 1 und ohne Demo-Kategorien, Mahnstufen oder Umsatzziel; vorhandene Einstellungen bleiben erhalten.
+- Empfänger lassen sich direkt im Beleg ohne Kundenstamm erfassen; dabei werden alte Kunden-, Projekt- und Empfängerbindungen gelöst und die Steuerregel muss bei Bedarf neu bestätigt werden.
+- Abo-Profile benötigen gültige abrechenbare Positionen. Beim Lauf werden Rechnung und Profilfortschritt je Profil atomar gespeichert, sodass ungültige Profile gültige Rechnungen nicht mehr zurückrollen; parallele Läufe verarbeiten denselben Abrechnungstermin nur einmal. Die Oberfläche zeigt Teilergebnisse und wartet beim Speichern auf die Rückmeldung.
+
+- Formularvalidierung zeigt jetzt feldbezogene, anklickbare Fehlerzusammenfassungen, fokussiert und zentriert das erste fehlerhafte Feld und kennzeichnet Pflichtfelder in Kunden-, OPOS-, Onboarding- und Dokumenteditor-Formularen sichtbar und barrierefrei; im WYSIWYG-Belegeditor erhalten fehlerhafte rahmenlose Felder eine sichtbare Fehlerkante, und „Erneut versuchen“ erscheint in OPOS nur noch bei Ladefehlern.
+
+- Native confirmations now use a shared accessible dialog, while client/article/subscription/account deletes optimistically hide rows with an eight-second undo window and deferred commit; action errors and import/status feedback use scoped toasts.
+- Pro-Buchhaltungsansichten zeigen jetzt immer nur die zuletzt erzeugte Erfolgs- oder Fehlermeldung; Steuerexportfehler blenden veraltete Vorbereitungsstatus aus.
+- Desktop-Aktionsmeldungen laufen jetzt über einen gemeinsamen, scope-basierten Feedback-Stack mit Fortschrittsstatus und optionaler Aktion.
+- Lite- und Pro-Dialoge für den GoBD-Änderungsgrund werden jetzt per Body-Portal viewportweit bedienbar gerendert und verwenden den einheitlichen Overlay-Backdrop.
+- Weitere Desktop-Dialoge (Tastenkürzel, Mahnwesen, Bankkonten, Kontierungsregeln und Kontoanlage) werden jetzt außerhalb der Shell per Body-Portal viewportweit und mit konsistentem Backdrop gerendert.
+- Vollbild-Overlays werden über ein gemeinsames Body-Portal außerhalb der Shell-Stacking-Contexts gerendert; Dialoge bleiben dadurch viewportweit sichtbar und per Maus bedienbar, während Backdrops und Z-Indizes den Design-Tokens folgen.
+- Desktop-Erfolgsmeldungen erscheinen jetzt sichtbar unterhalb der Electron-Titelleiste und werden von Screenreadern angekündigt; Fehlermeldungen erhalten eine sofortige Ansage.
+- Audit-Hashes werden für SQLite, PGlite und Postgres jetzt aus exakt der persistierten JSON-Darstellung gebildet, sodass umfangreiche Beleg-Snapshots nach Erstellung, Buchung und Revision verifizierbar bleiben.
+- Die gemeinsame Dokumentstrecke unterstützt jetzt angenommene Angebote → Auftragsbestätigungen → Lieferscheine sowie Abschlags-, Teil- und Schlussrechnungen; Gutschriften, Stornorechnungen und verknüpfte Revisionen erhalten eigene Nummern, unveränderliche Snapshots, Audit-Historie und dokumenttypspezifische PDF-Titel. Auftragsbestätigungen und Lieferscheine bleiben aus Journal, OPOS und Mahnwesen ausgeschlossen.
+- Der Pro-Desktop-Abnahmetest führt diese Auftragskette über die sichtbaren Aktionen und Betragsdialoge aus, prüft die gespeicherten Relationen sowie Journal-/Audit-Nachweise über die typisierte IPC-Naht und legt je Zustand reproduzierbare Screenshots ab.
+- Pro-Eingangsrechnungen können jetzt PDF-/JPEG-/PNG-/WebP-Originale tenant-sicher in PGlite/Postgres archivieren, per SHA-256 mandantenweit gegen Dubletten schützen, im Reviewstatus mit Journalbezug anzeigen und auditiert als geprüft/abgelehnt markieren sowie unverändert herunterladen; der Upload ist in Pro Desktop/Web typisiert und auditiert.
+- Der Pro-Web-E2E-Nachweis deckt Archivierung, MIME-/Größen-/Duplikatfehler, Review, Download, Reload-Persistenz und Journalbezug mit reproduzierbaren Zustands-Screenshots ab.
+- Die Pro-OPOS-Ansicht übersetzt Dokumentfehler sowie offene, bezahlte und ungeklärte Status verständlich ins Deutsche; archivierte Originale behalten auch bei schmaleren Tabellen ihre sichtbare Download-Aktion.
 - Gemeinsame UI-Primitives und das Firmen-Onboarding verwenden jetzt konsistente Design-Tokens, Radien, Fokus-/Touch-Zustände, Typografie und Icons, wodurch Lite und Pro visuell ruhiger und zugänglicher bedienbar sind.
 - Hosted- und Embedded-Server verwenden jetzt dieselbe `ServerDatabase`-Naht mit adapter-owned Drizzle-Dialekt und zentraler, produkt- sowie rollenbewusster Mutations-/Audit-Autorisierung; lokale Zugriffstokens und fehlerhafte Session-Tokens werden einheitlich und fail-closed mit korrektem HTTP-Status behandelt, manuelle sowie geplante Wiederholungsläufe teilen dieselbe transaktionale Dependency-Assembly-, Audit-/Rollback- und Ergebnisnaht, und Lite/Pro teilen ihre serialisierte Embedded-Lifecycle- sowie native Electron-IPC-Naht bei sichtbarer Pro-Steuerprüfungsexport-Erweiterung.
 - Pro transactions can now inspect PDF/image evidence through a server-side, model-selectable OpenRouter VLM; strict document validation, deterministic amount/currency checks, linked invoice and journal context, evidence metadata, and review-only draft application keep posting authoritative and auditable.
 - Frische Lite-/Pro-Installationen erhalten neutrale Settings für das Onboarding; landlose Kundenrechnungen bleiben speicherbar, Lite-EÜR-GETs übertragen ihren Zeitraum korrekt, und Desktop-Migrationen funktionieren unabhängig vom Arbeitsverzeichnis.
 - Der eingebettete Lite-Server registriert jetzt die EÜR-Berichts- und Item-Routen, sodass EÜR-Aufrufe aus der Lite-Desktop-App nicht mehr mit 404 scheitern.
-- Das neue [User-Story- und Produktabdeckungsdokument](docs/product/user-stories.md) bewertet am 26.08.2026 die vollständige Billme-Produktklasse gegen Lexware Office, sevdesk und BuchhaltungsButler mit 108 atomaren Stories, exakten Statussummen, Repo-Evidenz und priorisierter Roadmap; es trennt aktuelle Implementierung von historischen Plänen und externen Abnahmegates.
+- Das neue [User-Story- und Produktabdeckungsdokument](docs/product/user-stories.md) bewertet am 04.09.2026 die vollständige Billme-Produktklasse gegen Lexware Office, sevdesk und BuchhaltungsButler mit 108 atomaren Stories, exakten Statussummen, Repo-Evidenz und priorisierter Roadmap; es trennt aktuelle Implementierung von historischen Plänen und externen Abnahmegates.
 - Hosted Pro-Auth-Restore erreicht jetzt auch Artikel-, Konto- und Template-Routen; zuvor lieferten diese fünf Katalogpfade fälschlich 404, und die Pro-E2E-Prüfungen nutzen die aktuellen Onboarding- und Accounting-Oberflächen mit vollständigem GmbH-Konten-Fixture, vollständiger Reporting-Zuordnung für gebuchte Steuerkonten sowie dem kanonischen Journal-Source-Key.
 - Der echte Pro-Accounting-Postgres-Test bindet Tenant-Slug, Anzeigenamen und Zeitstempel wieder mit der korrekten Parameteranzahl.
 - Der Lite-Server-E2E-Test prüft die vorausgewählte Rechnungskundin jetzt über die aktuelle Kunden-Combobox und verwendet die aktuellen Billing-Line-Discriminator.

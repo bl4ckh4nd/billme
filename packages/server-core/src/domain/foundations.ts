@@ -325,8 +325,41 @@ export type BillingDocumentBase = z.infer<typeof billingDocumentBaseSchema>;
 export const invoiceStatusSchema = z.enum(['paid', 'open', 'overdue', 'draft', 'cancelled']);
 export type InvoiceStatus = z.infer<typeof invoiceStatusSchema>;
 
+/**
+ * All outgoing order-chain and correction documents deliberately share the
+ * invoice aggregate. `invoice` is the legacy/default kind; the other values
+ * make the business meaning explicit without creating a parallel subsystem.
+ */
+export const invoiceDocumentKindSchema = z.enum([
+  'invoice',
+  'order_confirmation',
+  'delivery_note',
+  'advance_invoice',
+  'partial_invoice',
+  'final_invoice',
+  'credit_note',
+  'cancellation_invoice',
+]);
+export type InvoiceDocumentKind = z.infer<typeof invoiceDocumentKindSchema>;
+
+export const invoiceRelationFieldsSchema = z.object({
+  /** Immediate source document, e.g. an offer, order, or corrected invoice. */
+  sourceDocumentId: entityIdSchema.optional(),
+  /** Stable order/invoice root used to assemble the complete document chain. */
+  rootDocumentId: entityIdSchema.optional(),
+  /** Set when a new immutable draft revises a finalized document. */
+  revisionOfId: entityIdSchema.optional(),
+  revisionNumber: z.number().int().nonnegative().default(0),
+});
+export type InvoiceRelationFields = z.infer<typeof invoiceRelationFieldsSchema>;
+
 export const invoiceSchema = billingDocumentBaseSchema.extend({
   kind: z.literal('invoice'),
+  documentKind: invoiceDocumentKindSchema.optional(),
+  sourceDocumentId: entityIdSchema.optional(),
+  rootDocumentId: entityIdSchema.optional(),
+  revisionOfId: entityIdSchema.optional(),
+  revisionNumber: z.number().int().nonnegative().optional(),
   dueDate: isoDateSchema,
   servicePeriod: z.string().optional(),
   status: invoiceStatusSchema,

@@ -172,6 +172,11 @@ export const runMigrations = (db: Database.Database): void => {
     tryAddColumn(db, 'invoices', 'project_id', 'TEXT');
     tryAddColumn(db, 'offers', 'project_id', 'TEXT');
     tryAddColumn(db, 'invoices', 'client_number', 'TEXT');
+    tryAddColumn(db, 'invoices', 'document_kind', "TEXT NOT NULL DEFAULT 'invoice'");
+    tryAddColumn(db, 'invoices', 'source_document_id', 'TEXT');
+    tryAddColumn(db, 'invoices', 'root_document_id', 'TEXT');
+    tryAddColumn(db, 'invoices', 'revision_of_id', 'TEXT');
+    tryAddColumn(db, 'invoices', 'revision_number', 'INTEGER NOT NULL DEFAULT 0');
     tryAddColumn(db, 'offers', 'client_number', 'TEXT');
     tryAddColumn(db, 'clients', 'customer_number', 'TEXT');
     tryAddColumn(db, 'clients', 'tax_profile_json', 'TEXT');

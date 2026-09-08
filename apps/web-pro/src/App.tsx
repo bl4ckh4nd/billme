@@ -114,6 +114,23 @@ const ROUTES: Array<{ id: AppRoute; label: string; summary: string }> = [
   { id: 'accounting', label: 'Buchhaltung', summary: 'Workflow, Regeln und Ledger' },
 ];
 
+const invoiceDocumentLabels: Record<string, string> = {
+  invoice: 'Rechnung',
+  order_confirmation: 'Auftragsbestätigung',
+  delivery_note: 'Lieferschein',
+  advance_invoice: 'Abschlagsrechnung',
+  partial_invoice: 'Teilrechnung',
+  final_invoice: 'Schlussrechnung',
+  credit_note: 'Gutschrift',
+  cancellation_invoice: 'Stornorechnung',
+};
+
+const invoiceDocumentLabel = (kind: string | undefined) => invoiceDocumentLabels[kind ?? 'invoice'] ?? 'Rechnung';
+const invoiceChainLabel = (invoice: { documentKind?: string; revisionNumber?: number }) =>
+  invoice.revisionNumber && invoice.revisionNumber > 0
+    ? `${invoiceDocumentLabel(invoice.documentKind)} · Revision ${invoice.revisionNumber}`
+    : invoiceDocumentLabel(invoice.documentKind);
+
 const WORKFLOW_ROUTE_TARGET = '#/accounting';
 
 const mapServerRoleToWorkspaceRole = (role: AppData['sessionInfo']['role']): UserRole => {
@@ -1139,6 +1156,18 @@ export default function App() {
       upsertIncomingInvoice(invoice, reason) {
         return client.saveIncomingInvoice({ ...invoice, tenantId: data.sessionInfo.tenantId }, requireMutationReason(reason, 'Eingangsrechnung speichern'));
       },
+      listIncomingInvoiceDocuments(invoiceId) {
+        return client.listIncomingInvoiceDocuments(invoiceId);
+      },
+      uploadIncomingInvoiceDocument(input) {
+        return client.uploadIncomingInvoiceDocument({ ...input, reason: requireMutationReason(input.reason, 'Eingangsbeleg archivieren') });
+      },
+      downloadIncomingInvoiceDocument(documentId) {
+        return client.downloadIncomingInvoiceDocument(documentId);
+      },
+      reviewIncomingInvoiceDocument(input) {
+        return client.reviewIncomingInvoiceDocument({ ...input, reason: requireMutationReason(input.reason, 'Eingangsbeleg prüfen') });
+      },
       previewIncomingInvoiceAccounting(invoiceId) {
         return client.previewIncomingInvoice(invoiceId, 'Vorschau');
       },
@@ -1620,6 +1649,21 @@ export default function App() {
   const openInvoices = data?.invoices.filter((invoice) => invoice.status !== 'paid').length ?? 0;
   const openOffers = data?.offers.filter((offer) => offer.status !== 'cancelled').length ?? 0;
   const activeClients = data?.clients.filter((clientRecord) => clientRecord.status === 'active').length ?? 0;
+  const documentChains = (() => {
+    const groups = new Map<string, NonNullable<typeof data>['invoices']>();
+    for (const invoice of data?.invoices ?? []) {
+      const rootId = invoice.rootDocumentId ?? invoice.id;
+      const group = groups.get(rootId) ?? [];
+      group.push(invoice);
+      groups.set(rootId, group);
+    }
+    return [...groups.entries()]
+      .map(([rootId, documents]) => ({
+        rootId,
+        documents: documents.slice().sort((left, right) => `${left.date}-${left.number}`.localeCompare(`${right.date}-${right.number}`)),
+      }))
+      .filter(({ documents }) => documents.length > 1);
+  })();
   const showOnboarding = Boolean(data) && !loading && shouldShowBusinessOnboarding(settingsDraft);
 
   return (
@@ -1697,6 +1741,21 @@ export default function App() {
 
           {route === 'documents' ? (
             <div className="page-grid wide-grid">
+              {documentChains.length > 0 ? (
+                <SectionCard eyebrow="Vorgang" title="Dokumentkette und Revisionen">
+                  <div className="stacked-list" data-testid="document-chain-overview">
+                    {documentChains.map(({ rootId, documents }) => (
+                      <div className="stacked-list-row" key={rootId} data-testid={`document-chain-row-${rootId}`}>
+                        <div className="stacked-cell">
+                          <strong>{documents[0] ? invoiceChainLabel(documents[0]) : 'Dokument'} · {documents[0]?.number}</strong>
+                          <span>{documents.map((invoice) => `${invoiceChainLabel(invoice)} · ${invoice.number}`).join(' → ')}</span>
+                        </div>
+                        <span className="meta-chip">{documents.length} Dokumente</span>
+                      </div>
+                    ))}
+                  </div>
+                </SectionCard>
+              ) : null}
               <SectionCard
                 eyebrow="Rechnungen"
                 title="Vertrieb und Export"
@@ -1717,6 +1776,7 @@ export default function App() {
                       <thead>
                         <tr>
                           <th>Nummer</th>
+                          <th>Dokument</th>
                           <th>Kunde</th>
                           <th>Status</th>
                           <th>Betrag</th>
@@ -1728,6 +1788,12 @@ export default function App() {
                         {data.invoices.slice(0, 12).map((invoice) => (
                           <tr key={invoice.id}>
                             <td>{invoice.number}</td>
+                            <td>
+                              <div className="stacked-cell">
+                                <strong>{invoiceDocumentLabel(invoice.documentKind)}</strong>
+                                {invoice.revisionOfId ? <span>Revision {invoice.revisionNumber ?? 1}</span> : null}
+                              </div>
+                            </td>
                             <td>{invoice.client}</td>
                             <td>{invoice.status}</td>
                             <td>{formatCurrency(invoice.amount)}</td>

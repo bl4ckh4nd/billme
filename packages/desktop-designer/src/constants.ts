@@ -70,7 +70,7 @@ export const INITIAL_INVOICE_TEMPLATE: InvoiceElement[] = [
     x: 125 * MM_TO_PX, // Right side block
     y: 50 * MM_TO_PX, // Aligned with address block
     zIndex: 10,
-    content: 'Rechnungs-Nr: {{invoice.number}}\nDatum: {{invoice.date}}\nLeistungsdatum: {{invoice.servicePeriod}}\nFälligkeit: {{invoice.dueDate}}\nKunden-Nr: {{client.number}}',
+    content: '{{invoice.documentLabel}}-Nr: {{invoice.number}}\nDatum: {{invoice.date}}\nLeistungsdatum: {{invoice.servicePeriod}}\nFälligkeit: {{invoice.dueDate}}\nKunden-Nr: {{client.number}}',
     style: { ...DEFAULT_TEXT_STYLE, fontSize: 11, textAlign: 'right', width: 250, height: 120, color: '#333333' },
     label: 'invoice_meta',
   },
@@ -82,7 +82,7 @@ export const INITIAL_INVOICE_TEMPLATE: InvoiceElement[] = [
     x: 20 * MM_TO_PX,
     y: 100 * MM_TO_PX,
     zIndex: 10,
-    content: 'Rechnung {{invoice.number}}',
+    content: '{{invoice.documentLabel}} {{invoice.number}}',
     style: { ...DEFAULT_TEXT_STYLE, fontSize: 20, fontWeight: 'bold', width: 700 },
     label: 'invoice_title',
   },

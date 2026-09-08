@@ -45,6 +45,7 @@ export interface DocumentCanvasDocumentFields {
   onChange: DocumentDraftUpdater;
   onClientNameChange?: (value: string) => void;
   onAddressChange?: (value: string) => void;
+  onStartManualRecipient: () => void;
   onSelectClient: (client: ClientLike) => void;
   onSelectProject: (project: ProjectLike) => void;
   onUnlockNumber?: () => void;
@@ -60,6 +61,7 @@ export interface DocumentCanvasDocumentFields {
     datevEvidenceType?: string;
     datevEvidenceReference?: string;
     datevSachverhaltLl?: string;
+    items?: Record<number, string>;
   };
   taxModeOptions?: Array<{ value: string; label: string }>;
   taxRateOptions?: number[];
@@ -73,6 +75,8 @@ export interface DocumentCanvasDocumentFields {
   requiresDestinationVatRate?: boolean;
   requiresDatevEvidence?: boolean;
   requiresDatevSachverhaltLl?: boolean;
+  taxDetailsOpen?: boolean;
+  onTaxDetailsOpenChange?: (open: boolean) => void;
   vatValidationPending?: boolean;
   onValidateBuyerVatId?: () => void;
   /** Existing template persistence seam. No callback means template text stays read-only. */
@@ -126,12 +130,13 @@ interface InlineRowProps {
   defaultTaxRate: number;
   forceZeroVat: boolean;
   articles: ArticleLike[];
+  fieldErrors?: Record<number, string>;
   sortable?: SortableBindings;
 }
 
 type SortableBindings = Pick<ReturnType<typeof useSortable>, 'setNodeRef' | 'setActivatorNodeRef' | 'attributes' | 'listeners' | 'transform' | 'transition' | 'isDragging'>;
 
-const InlineBillingRow: React.FC<InlineRowProps> = ({ row, columns, items, onItemsChange, formatCurrency, taxRateOptions, defaultTaxRate, forceZeroVat, articles, sortable }) => {
+const InlineBillingRow: React.FC<InlineRowProps> = ({ row, columns, items, onItemsChange, formatCurrency, taxRateOptions, defaultTaxRate, forceZeroVat, articles, fieldErrors, sortable }) => {
   const sourceIndex = sourceIndexFromRow(row);
   const item = sourceIndex === undefined ? undefined : items[sourceIndex];
   const continuation = row.kind === 'row-continuation' || row.kind === 'group-continuation';
@@ -165,12 +170,25 @@ const InlineBillingRow: React.FC<InlineRowProps> = ({ row, columns, items, onIte
   const remove = () => onItemsChange(items.filter((_, index) => index !== sourceIndex));
   const effectiveTaxRate = item.taxRate ?? defaultTaxRate;
   const showTaxBadge = isBillableKind(kind) && !forceZeroVat && effectiveTaxRate !== defaultTaxRate;
+  const descriptionError = fieldErrors?.[sourceIndex];
+  const descriptionErrorId = `document-item-${sourceIndex}-description-error`;
+  const descriptionFieldId = `document-item-${sourceIndex}-description`;
   const renderDescription = () => (
     <>
-      <div className="relative flex min-w-0 items-center gap-1">
-      {articles.length > 0 && isBillableKind(kind) ? (
-        <div className="min-w-0 flex-1">
+      <div id={descriptionFieldId} data-field-block data-field-error={descriptionError ? 'true' : undefined} className="relative min-w-0">
+        <div className="flex min-w-0 items-center gap-1">
+        {articles.length > 0 && isBillableKind(kind) ? (
+          <div className="min-w-0 flex-1">
           <Combobox
+            ref={(input) => {
+              if (!input) return;
+              input.id = `${descriptionFieldId}-input`;
+              input.setAttribute('aria-invalid', String(Boolean(descriptionError)));
+              input.required = true;
+              input.setAttribute('aria-required', 'true');
+              if (descriptionError) input.setAttribute('aria-describedby', descriptionErrorId);
+              else input.removeAttribute('aria-describedby');
+            }}
             items={articles}
             value={item.description}
             onValueChange={(value) => update({ description: value })}
@@ -180,26 +198,34 @@ const InlineBillingRow: React.FC<InlineRowProps> = ({ row, columns, items, onIte
             getSearchText={(article) => `${article.title} ${article.sku ?? ''} ${article.description ?? ''} ${article.category}`}
             allowFreeText
             showSearchIcon={false}
-            inputClassName={`${controlClass} min-w-0 font-medium`}
+            inputClassName={`${controlClass} min-w-0 font-medium ${descriptionError ? 'border border-error' : ''}`}
             placeholder="Beschreibung"
             aria-label={`Beschreibung Position ${sourceIndex + 1}`}
           />
-        </div>
-      ) : (
-        <input
-          aria-label={`Beschreibung ${sourceIndex + 1}`}
-          data-line-description={sourceIndex}
-          value={item.description}
-          onChange={(event) => update({ description: event.target.value })}
-          className={`${controlClass} min-w-0 flex-1 font-medium`}
-          placeholder={kind === 'group' ? 'Bauabschnitt' : kind === 'summary' ? 'Zwischensumme' : 'Beschreibung'}
-        />
-      )}
-      {kind === 'optional' ? <span className="shrink-0 rounded bg-warning/15 px-1 text-[9px] font-bold uppercase tracking-wide text-warning">optional</span> : null}
-      {showTaxBadge ? <span className="ml-auto shrink-0 rounded bg-surface-muted px-1 text-[9px] font-semibold text-muted print:hidden">{effectiveTaxRate} %</span> : null}
+          </div>
+        ) : (
+          <input
+            id={`${descriptionFieldId}-input`}
+            aria-label={`Beschreibung ${sourceIndex + 1}`}
+            aria-invalid={Boolean(descriptionError)}
+            aria-describedby={descriptionError ? descriptionErrorId : undefined}
+            aria-required="true"
+            required
+            data-line-description={sourceIndex}
+            value={item.description}
+            onChange={(event) => update({ description: event.target.value })}
+            className={`${controlClass} min-w-0 flex-1 font-medium ${descriptionError ? 'border border-error' : ''}`}
+            placeholder={kind === 'group' ? 'Bauabschnitt' : kind === 'summary' ? 'Zwischensumme' : 'Beschreibung'}
+          />
+        )}
+        <span aria-hidden="true" className="shrink-0 text-error">*</span>
+        {kind === 'optional' ? <span className="shrink-0 rounded bg-warning/15 px-1 text-[9px] font-bold uppercase tracking-wide text-warning">optional</span> : null}
+        {showTaxBadge ? <span className="ml-auto shrink-0 rounded bg-surface-muted px-1 text-[9px] font-semibold text-muted print:hidden">{effectiveTaxRate} %</span> : null}
       <div className="pointer-events-none absolute -left-12 top-1/2 z-20 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-hover/line:pointer-events-auto group-hover/line:opacity-100 print:hidden">
         <button type="button" aria-label={`Zeile ${sourceIndex + 1} nach oben`} onClick={() => move(-1)} className="rounded px-1 text-xs text-muted hover:bg-surface-muted">↑</button>
         <button type="button" aria-label={`Zeile ${sourceIndex + 1} nach unten`} onClick={() => move(1)} className="rounded px-1 text-xs text-muted hover:bg-surface-muted">↓</button>
+        </div>
+        {descriptionError ? <p id={descriptionErrorId} className="mt-0.5 min-w-0 text-[9px] text-error">{descriptionError}</p> : null}
       </div>
       <div className="pointer-events-none absolute -right-14 top-1/2 z-20 flex -translate-y-1/2 -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-hover/line:pointer-events-auto group-hover/line:opacity-100 print:hidden">
         <button type="button" aria-label={`Zeile ${sourceIndex + 1} duplizieren`} onClick={duplicate} className="rounded px-1 text-xs text-muted hover:bg-surface-muted">＋</button>
@@ -309,12 +335,39 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ elements, f
   const payment = anchorFor(elements, 'payment_terms', { x: 76, y: 756, width: 700, height: 50 });
   const authoredTemplate = fields.templateElements ?? elements;
   const authored = (label: string) => authoredTemplate.find((candidate) => candidate.label === label);
-  const error = (value?: string) => value ? <span className="mt-0.5 block text-[9px] text-error">{value}</span> : null;
+  const error = (id: string, value?: string) => value ? <p id={id} className="mt-0.5 min-w-0 text-[9px] text-error">{value}</p> : null;
+  // The WYSIWYG inputs are borderless (`border-0`), so a plain `border` class would lose the
+  // Tailwind order conflict; the error state uses a bottom rule + tint that always wins.
+  const inputClass = (hasError: boolean, additional = '') => `${hasError ? documentInputClass.replace('bg-transparent', 'bg-error-bg/60') : documentInputClass} min-w-0 ${hasError ? 'border-b-2 border-error' : ''} ${additional}`;
+  const requiredMark = (required?: boolean) => required ? <span aria-hidden="true" className="text-error"> *</span> : null;
   const set = (updater: (previous: DocumentDraft) => DocumentDraft, coalesce = true) => fields.onChange(updater, { coalesce });
   const address = document.clientAddress ?? '';
   const taxMode = document.taxMode ?? fields.resolvedTaxMode ?? '';
   const datevTaxMeta = document.taxMeta as (typeof document.taxMeta & { destinationVatRate?: number; datevEvidenceType?: string; datevEvidenceReference?: string; datevSachverhaltLl?: string }) | undefined;
   const defaultRate = defaultTaxRate;
+  const [uncontrolledTaxDetailsOpen, setUncontrolledTaxDetailsOpen] = React.useState(false);
+  const taxDetailsOpen = fields.taxDetailsOpen ?? uncontrolledTaxDetailsOpen;
+  const setTaxDetailsOpen = fields.onTaxDetailsOpenChange ?? setUncontrolledTaxDetailsOpen;
+  const recipientInputRef = React.useRef<HTMLInputElement>(null);
+  const isManualRecipient = !fields.selectedClientId;
+  const startManualRecipient = () => {
+    fields.onStartManualRecipient();
+    recipientInputRef.current?.focus();
+  };
+  const setInputA11y = (input: HTMLInputElement | null, id: string, invalid: boolean, describedBy?: string, required?: boolean) => {
+    if (!input) return;
+    input.id = id;
+    input.setAttribute('aria-invalid', String(invalid));
+    if (describedBy) input.setAttribute('aria-describedby', describedBy);
+    else input.removeAttribute('aria-describedby');
+    if (required) {
+      input.required = true;
+      input.setAttribute('aria-required', 'true');
+    } else {
+      input.required = false;
+      input.removeAttribute('aria-required');
+    }
+  };
   const dateInput = (value: string | undefined, onChange: (next: string) => void, ariaLabel: string) => (
     <input
       type="date"
@@ -328,23 +381,34 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ elements, f
   return (
     <div className="pointer-events-none absolute inset-0 print:hidden" data-inline-document-fields>
       <div className="pointer-events-auto absolute box-border bg-white px-1 py-1 text-[11px] text-foreground" style={{ left: meta.x, top: meta.y, width: meta.width, height: meta.height }}>
-        <div className="space-y-0.5" data-field-error={fields.fieldErrors?.number || fields.fieldErrors?.date ? true : undefined}>
+        <div className="space-y-0.5">
+          <div id="document-field-number" data-field-block data-field-error={fields.fieldErrors?.number ? 'true' : undefined}>
           <div className="flex items-center justify-end gap-2">
-            <label className={documentLabelClass}>{templateType === 'offer' ? 'Angebots-Nr.' : 'Rechnungs-Nr.'}</label>
+            <label htmlFor="document-input-number" className={documentLabelClass}>{templateType === 'offer' ? 'Angebots-Nr.' : 'Rechnungs-Nr.'}{requiredMark(true)}</label>
             <div className="relative min-w-0 flex-1">
               <input
+                id="document-input-number"
                 value={document.number}
                 readOnly={fields.isNumberLocked}
                 aria-label={templateType === 'offer' ? 'Angebots-Nr.' : 'Rechnungs-Nr.'}
+                aria-invalid={Boolean(fields.fieldErrors?.number)}
+                aria-describedby={fields.fieldErrors?.number ? 'document-input-number-error' : undefined}
+                aria-required="true"
+                required
                 onChange={(event) => set((previous) => ({ ...previous, number: event.target.value }))}
-                className={`${documentInputClass} text-right ${fields.isNumberLocked ? 'pr-5 text-muted' : ''}`}
+                className={`${inputClass(Boolean(fields.fieldErrors?.number), `text-right ${fields.isNumberLocked ? 'pr-5 text-muted' : ''}`)}`}
               />
               {fields.onUnlockNumber ? <button type="button" onClick={fields.onUnlockNumber} className="absolute right-0 top-1/2 -translate-y-1/2 p-0.5 text-muted hover:text-foreground" aria-label={fields.isNumberLocked ? 'Nummer entsperren' : 'Nummer sperren'} title="Nummer bearbeiten (GoBD-Warnung)">{fields.isNumberLocked ? <LockKeyhole size={11} /> : <UnlockKeyhole size={11} />}</button> : null}
             </div>
           </div>
+          {error('document-input-number-error', fields.fieldErrors?.number)}
+          </div>
+          <div id="document-field-date" data-field-block data-field-error={fields.fieldErrors?.date ? 'true' : undefined}>
           <div className="flex items-center justify-end gap-2">
-            <label className={documentLabelClass}>Datum</label>
-            {dateInput(document.date, (date) => set((previous) => ({ ...previous, date })), 'Datum')}
+            <label htmlFor="document-input-date" className={documentLabelClass}>Datum{requiredMark(true)}</label>
+            <input id="document-input-date" type="date" value={document.date ?? ''} onChange={(event) => set((previous) => ({ ...previous, date: event.target.value }))} aria-label="Datum" aria-invalid={Boolean(fields.fieldErrors?.date)} aria-describedby={fields.fieldErrors?.date ? 'document-input-date-error' : undefined} aria-required="true" required className={inputClass(Boolean(fields.fieldErrors?.date), 'w-auto text-right text-[11px]')} />
+          </div>
+          {error('document-input-date-error', fields.fieldErrors?.date)}
           </div>
           <div className="flex items-center justify-end gap-2">
             <label className={documentLabelClass}>{templateType === 'offer' ? 'Gültig bis' : 'Fälligkeit'}</label>
@@ -355,14 +419,13 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ elements, f
             {dateInput(document.servicePeriod, (servicePeriod) => set((previous) => ({ ...previous, servicePeriod })), templateType === 'offer' ? 'Leistungszeitraum' : 'Leistungsdatum')}
           </div>
         </div>
-        {error(fields.fieldErrors?.number)}
-        {error(fields.fieldErrors?.date)}
       </div>
 
       <div className="pointer-events-auto absolute box-border bg-white px-1 py-1 text-[11px] text-foreground" style={{ left: recipient.x, top: recipient.y, width: recipient.width, height: recipient.height }}>
-        <div data-field-error={fields.fieldErrors?.client ? true : undefined} className="mb-0.5">
-          <Combobox key={`recipient-${document.id}`} items={fields.clients} value={document.client || fields.selectedClientLabel} onValueChange={fields.onClientNameChange ?? ((value) => set((previous) => ({ ...previous, client: value })))} onSelect={fields.onSelectClient} getLabel={(client) => client.company} getSublabel={clientSublabel} getSearchText={(client) => `${client.company} ${client.customerNumber ?? ''} ${client.email ?? ''} ${client.address ?? ''} ${(client.addresses ?? []).map((entry) => Object.values(entry).join(' ')).join(' ')}`} allowFreeText placeholder="Empfänger oder Kunde suchen…" aria-label="Kunde auswählen" showSearchIcon={false} leadingIcon={<UserRound size={13} />} showChevron showAvatar selectedId={fields.selectedClientId} footer={{ label: 'Neuen Empfänger manuell anlegen', onSelect: () => { if (fields.onClientNameChange) fields.onClientNameChange(''); else set((previous) => ({ ...previous, client: '' })); } }} inputClassName={`${documentInputClass} font-medium`} />
-          {error(fields.fieldErrors?.client)}
+        <div id="document-field-client" data-field-block data-field-error={fields.fieldErrors?.client ? 'true' : undefined} className="mb-0.5 min-w-0">
+          <div className="min-w-0"><span className={documentLabelClass}>{isManualRecipient ? 'Empfänger' : 'Kunde'}{requiredMark(true)}</span><Combobox key={`recipient-${document.id}`} ref={(input) => { recipientInputRef.current = input; setInputA11y(input, 'document-input-client', Boolean(fields.fieldErrors?.client), fields.fieldErrors?.client ? 'document-input-client-error' : undefined, true); }} items={fields.clients} value={document.client || fields.selectedClientLabel} onValueChange={fields.onClientNameChange ?? ((value) => set((previous) => ({ ...previous, client: value })))} onSelect={fields.onSelectClient} getLabel={(client) => client.company} getSublabel={clientSublabel} getSearchText={(client) => `${client.company} ${client.customerNumber ?? ''} ${client.email ?? ''} ${client.address ?? ''} ${(client.addresses ?? []).map((entry) => Object.values(entry).join(' ')).join(' ')}`} allowFreeText placeholder="Empfänger oder Kunde suchen…" aria-label="Kunde auswählen" showSearchIcon={false} leadingIcon={<UserRound size={13} />} showChevron showAvatar selectedId={fields.selectedClientId} footer={{ label: 'Empfänger ohne Kundenstamm eingeben', onSelect: startManualRecipient }} inputClassName={`${inputClass(Boolean(fields.fieldErrors?.client), 'font-medium')}`} /></div>
+          {isManualRecipient ? <p className="mt-0.5 text-[9px] text-muted" role="status">Nur in diesem Beleg gespeichert</p> : null}
+          {error('document-input-client-error', fields.fieldErrors?.client)}
         </div>
         <div className="grid grid-cols-1 gap-y-0.5">
           <div className="col-span-2">
@@ -373,22 +436,24 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ elements, f
 
       <div className="pointer-events-auto absolute" style={{ left: meta.x, top: meta.y, width: meta.width, height: meta.height }} data-inline-tax-fields>
         <div className="group/tax absolute bottom-0 right-0">
-          <button type="button" aria-label="Details bearbeiten" className="border-0 bg-white px-1 text-[9px] text-muted opacity-60 hover:opacity-100 focus:opacity-100">Details</button>
-          <div className="pointer-events-none invisible absolute right-0 top-full z-30 mt-1 w-64 border border-border bg-white p-2 text-[10px] text-foreground opacity-0 shadow-lg group-hover/tax:pointer-events-auto group-hover/tax:visible group-hover/tax:opacity-100 group-focus-within/tax:pointer-events-auto group-focus-within/tax:visible group-focus-within/tax:opacity-100">
+          <button type="button" aria-label="Details bearbeiten" aria-expanded={taxDetailsOpen} onClick={() => setTaxDetailsOpen(!taxDetailsOpen)} className="border-0 bg-white px-1 text-[9px] text-muted opacity-60 hover:opacity-100 focus:opacity-100">Details</button>
+          <div className={`absolute right-0 top-full z-30 mt-1 w-80 border border-border bg-white p-2 text-[10px] text-foreground shadow-lg ${taxDetailsOpen ? 'pointer-events-auto visible opacity-100' : 'pointer-events-none invisible opacity-0 group-hover/tax:pointer-events-auto group-hover/tax:visible group-hover/tax:opacity-100 group-focus-within/tax:pointer-events-auto group-focus-within/tax:visible group-focus-within/tax:opacity-100'}`}>
             <div className="mb-1 space-y-1">
               <label className="flex items-center gap-1"><span className={documentLabelClass}>E-Mail</span><input type="email" value={document.clientEmail} onChange={(event) => set((previous) => ({ ...previous, clientEmail: event.target.value }))} aria-label="E-Mail" placeholder="E-Mail" className={`${documentInputClass} min-w-0 flex-1`} /></label>
               <label className="flex items-center gap-1"><span className={documentLabelClass}>Projekt</span><div className="min-w-0 flex-1"><Combobox items={fields.projects} value={fields.selectedProjectLabel} onSelect={fields.onSelectProject} getLabel={(project) => `${project.code ? `${project.code} – ` : ''}${project.name}`} getSearchText={(project) => `${project.code ?? ''} ${project.name}`} disabled={!fields.selectedClientId} placeholder={fields.selectedClientId ? 'Projekt suchen…' : 'Kunde auswählen'} aria-label="Projekt auswählen" inputClassName={documentInputClass} /></div></label>
             </div>
             <div className="grid grid-cols-[1.2fr_.8fr] gap-1">
-              <label className="flex items-center gap-1"><span className="text-muted">Modell</span><select aria-label="Steuer-Modell" value={taxMode} onChange={(event) => set((previous) => ({ ...previous, taxMode: event.target.value as DocumentDraft['taxMode'], taxMeta: { ...previous.taxMeta, taxRuleConfirmed: true } }))} className={documentInputClass}>{(fields.taxModeOptions ?? []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-              <label className="flex items-center gap-1"><span className="text-muted">USt</span><select aria-label="Standardsatz" value={defaultRate} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, defaultVatRate: Number(event.target.value), taxRuleConfirmed: true } }))} className={documentInputClass}>{(fields.taxRateOptions?.length ? fields.taxRateOptions : [0, 7, 19]).map((rate) => <option key={rate} value={rate}>{rate}%</option>)}</select></label>
+              <div id="document-field-tax-rule" data-field-block data-field-error={fields.fieldErrors?.taxRule ? 'true' : undefined} className="min-w-0">
+                <label htmlFor="document-input-tax-rule" className="flex min-w-0 items-center gap-1"><span className="shrink-0 text-muted">Modell</span><select id="document-input-tax-rule" aria-label="Steuer-Modell" aria-invalid={Boolean(fields.fieldErrors?.taxRule)} aria-describedby={fields.fieldErrors?.taxRule ? 'document-input-tax-rule-error' : undefined} value={taxMode} onChange={(event) => set((previous) => ({ ...previous, taxMode: event.target.value as DocumentDraft['taxMode'], taxMeta: { ...previous.taxMeta, taxRuleConfirmed: true } }))} className={inputClass(Boolean(fields.fieldErrors?.taxRule))}>{(fields.taxModeOptions ?? []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                {error('document-input-tax-rule-error', fields.fieldErrors?.taxRule)}
+              </div>
+              <label className="flex min-w-0 items-center gap-1"><span className="shrink-0 text-muted">USt</span><select aria-label="Standardsatz" value={defaultRate} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, defaultVatRate: Number(event.target.value), taxRuleConfirmed: true } }))} className={inputClass(false)}>{(fields.taxRateOptions?.length ? fields.taxRateOptions : [0, 7, 19]).map((rate) => <option key={rate} value={rate}>{rate}%</option>)}</select></label>
             </div>
-            {fields.requiresBuyerVatId ? <div className="mt-1" data-field-error={fields.fieldErrors?.buyerVatId ? true : undefined}><label className="text-[10px] text-muted">Käufer-USt-IdNr.</label><div className="flex gap-1"><input value={document.taxMeta?.buyerVatId ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, buyerVatId: event.target.value, buyerType: 'business', vatIdValidation: undefined, vatIdValidationAt: undefined } }))} aria-label="USt-IdNr. des Kunden" className={documentInputClass} />{fields.onValidateBuyerVatId ? <button type="button" aria-label="VIES prüfen" onClick={fields.onValidateBuyerVatId} disabled={fields.vatValidationPending || !document.taxMeta?.buyerVatId} className="shrink-0 border border-border px-1 text-[9px] font-bold text-muted disabled:opacity-50">{fields.vatValidationPending ? 'Prüfe…' : 'VIES prüfen'}</button> : null}</div>{document.taxMeta?.vatIdValidation ? <p className="mt-0.5 text-[9px] text-muted">VIES: {document.taxMeta.vatIdValidation}</p> : null}{error(fields.fieldErrors?.buyerVatId)}</div> : null}
-            {fields.requiresTaxCountry ? <div className="mt-1" data-field-error={fields.fieldErrors?.taxCountry ? true : undefined}><label className="flex items-center gap-1"><span className="text-[10px] text-muted">Land</span><input maxLength={2} value={document.taxMeta?.buyerCountryCode ?? fields.buyerCountryCode ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, buyerCountryCode: event.target.value.toUpperCase(), taxRuleConfirmed: true } }))} aria-label="DATEV Land" className={documentInputClass} /></label>{error(fields.fieldErrors?.taxCountry)}</div> : null}
-            {fields.requiresDestinationVatRate ? <div className="mt-1" data-field-error={fields.fieldErrors?.destinationVatRate ? true : undefined}><label className="flex items-center gap-1"><span className="text-[10px] text-muted">EU-Satz</span><input type="number" min="0" max="99.99" step="0.01" value={datevTaxMeta?.destinationVatRate ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, destinationVatRate: event.target.value === '' ? undefined : Number(event.target.value), taxRuleConfirmed: true } }))} aria-label="EU-Steuersatz im Bestimmungsland" className={documentInputClass} /></label>{error(fields.fieldErrors?.destinationVatRate)}</div> : null}
-            {fields.requiresDatevEvidence ? <div className="mt-1 grid grid-cols-2 gap-1"><label className="flex items-center gap-1" data-field-error={fields.fieldErrors?.datevEvidenceType ? true : undefined}><span className="text-[10px] text-muted">Nachweis</span><input value={datevTaxMeta?.datevEvidenceType ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, datevEvidenceType: event.target.value } }))} aria-label="DATEV Nachweistyp" className={documentInputClass} />{error(fields.fieldErrors?.datevEvidenceType)}</label><label className="flex items-center gap-1" data-field-error={fields.fieldErrors?.datevEvidenceReference ? true : undefined}><span className="text-[10px] text-muted">Referenz</span><input value={datevTaxMeta?.datevEvidenceReference ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, datevEvidenceReference: event.target.value } }))} aria-label="DATEV Nachweisreferenz" className={documentInputClass} />{error(fields.fieldErrors?.datevEvidenceReference)}</label></div> : null}
-            {fields.requiresDatevSachverhaltLl ? <label className="mt-1 flex items-center gap-1" data-field-error={fields.fieldErrors?.datevSachverhaltLl ? true : undefined}><span className="text-[10px] text-muted">L+L</span><input inputMode="numeric" maxLength={3} value={datevTaxMeta?.datevSachverhaltLl ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, datevSachverhaltLl: event.target.value } }))} aria-label="DATEV Sachverhalt L+L" className={documentInputClass} />{error(fields.fieldErrors?.datevSachverhaltLl)}</label> : null}
-            {fields.fieldErrors?.taxRule ? <p className="mt-1 text-[9px] text-error">{fields.fieldErrors.taxRule}</p> : null}
+            {fields.requiresBuyerVatId ? <div id="document-field-buyer-vat-id" data-field-block data-field-error={fields.fieldErrors?.buyerVatId ? 'true' : undefined} className="mt-1 min-w-0"><label htmlFor="document-input-buyer-vat-id" className="block text-[10px] text-muted">Käufer-USt-IdNr.{requiredMark(fields.requiresBuyerVatId)}</label><div className="flex min-w-0 gap-1"><input id="document-input-buyer-vat-id" value={document.taxMeta?.buyerVatId ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, buyerVatId: event.target.value, buyerType: 'business', vatIdValidation: undefined, vatIdValidationAt: undefined } }))} aria-label="USt-IdNr. des Kunden" aria-invalid={Boolean(fields.fieldErrors?.buyerVatId)} aria-describedby={fields.fieldErrors?.buyerVatId ? 'document-input-buyer-vat-id-error' : undefined} aria-required={fields.requiresBuyerVatId} required={fields.requiresBuyerVatId} className={inputClass(Boolean(fields.fieldErrors?.buyerVatId), 'flex-1')} />{fields.onValidateBuyerVatId ? <button type="button" aria-label="VIES prüfen" onClick={fields.onValidateBuyerVatId} disabled={fields.vatValidationPending || !document.taxMeta?.buyerVatId} className="shrink-0 border border-border px-1 text-[9px] font-bold text-muted disabled:opacity-50">{fields.vatValidationPending ? 'Prüfe…' : 'VIES prüfen'}</button> : null}</div>{document.taxMeta?.vatIdValidation ? <p className="mt-0.5 min-w-0 text-[9px] text-muted">VIES: {document.taxMeta.vatIdValidation}</p> : null}{error('document-input-buyer-vat-id-error', fields.fieldErrors?.buyerVatId)}</div> : null}
+            {fields.requiresTaxCountry ? <div id="document-field-tax-country" data-field-block data-field-error={fields.fieldErrors?.taxCountry ? 'true' : undefined} className="mt-1 min-w-0"><label htmlFor="document-input-tax-country" className="flex min-w-0 items-center gap-1"><span className="shrink-0 text-[10px] text-muted">Land{requiredMark(fields.requiresTaxCountry)}</span><input id="document-input-tax-country" maxLength={2} value={document.taxMeta?.buyerCountryCode ?? fields.buyerCountryCode ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, buyerCountryCode: event.target.value.toUpperCase(), taxRuleConfirmed: true } }))} aria-label="DATEV Land" aria-invalid={Boolean(fields.fieldErrors?.taxCountry)} aria-describedby={fields.fieldErrors?.taxCountry ? 'document-input-tax-country-error' : undefined} aria-required={fields.requiresTaxCountry} required={fields.requiresTaxCountry} className={inputClass(Boolean(fields.fieldErrors?.taxCountry), 'flex-1')} /></label>{error('document-input-tax-country-error', fields.fieldErrors?.taxCountry)}</div> : null}
+            {fields.requiresDestinationVatRate ? <div id="document-field-destination-vat-rate" data-field-block data-field-error={fields.fieldErrors?.destinationVatRate ? 'true' : undefined} className="mt-1 min-w-0"><label htmlFor="document-input-destination-vat-rate" className="flex min-w-0 items-center gap-1"><span className="shrink-0 text-[10px] text-muted">EU-Satz{requiredMark(fields.requiresDestinationVatRate)}</span><input id="document-input-destination-vat-rate" type="number" min="0" max="99.99" step="0.01" value={datevTaxMeta?.destinationVatRate ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, destinationVatRate: event.target.value === '' ? undefined : Number(event.target.value), taxRuleConfirmed: true } }))} aria-label="EU-Steuersatz im Bestimmungsland" aria-invalid={Boolean(fields.fieldErrors?.destinationVatRate)} aria-describedby={fields.fieldErrors?.destinationVatRate ? 'document-input-destination-vat-rate-error' : undefined} aria-required={fields.requiresDestinationVatRate} required={fields.requiresDestinationVatRate} className={inputClass(Boolean(fields.fieldErrors?.destinationVatRate), 'flex-1')} /></label>{error('document-input-destination-vat-rate-error', fields.fieldErrors?.destinationVatRate)}</div> : null}
+            {fields.requiresDatevEvidence ? <div className="mt-1 grid min-w-0 grid-cols-2 gap-1"><div id="document-field-datev-evidence-type" data-field-block data-field-error={fields.fieldErrors?.datevEvidenceType ? 'true' : undefined} className="min-w-0"><label htmlFor="document-input-datev-evidence-type" className="flex min-w-0 items-center gap-1"><span className="shrink-0 text-[10px] text-muted">Nachweis{requiredMark(fields.requiresDatevEvidence)}</span><input id="document-input-datev-evidence-type" value={datevTaxMeta?.datevEvidenceType ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, datevEvidenceType: event.target.value } }))} aria-label="DATEV Nachweistyp" aria-invalid={Boolean(fields.fieldErrors?.datevEvidenceType)} aria-describedby={fields.fieldErrors?.datevEvidenceType ? 'document-input-datev-evidence-type-error' : undefined} aria-required={fields.requiresDatevEvidence} required={fields.requiresDatevEvidence} className={inputClass(Boolean(fields.fieldErrors?.datevEvidenceType), 'flex-1')} /></label>{error('document-input-datev-evidence-type-error', fields.fieldErrors?.datevEvidenceType)}</div><div id="document-field-datev-evidence-reference" data-field-block data-field-error={fields.fieldErrors?.datevEvidenceReference ? 'true' : undefined} className="min-w-0"><label htmlFor="document-input-datev-evidence-reference" className="flex min-w-0 items-center gap-1"><span className="shrink-0 text-[10px] text-muted">Referenz{requiredMark(fields.requiresDatevEvidence)}</span><input id="document-input-datev-evidence-reference" value={datevTaxMeta?.datevEvidenceReference ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, datevEvidenceReference: event.target.value } }))} aria-label="DATEV Nachweisreferenz" aria-invalid={Boolean(fields.fieldErrors?.datevEvidenceReference)} aria-describedby={fields.fieldErrors?.datevEvidenceReference ? 'document-input-datev-evidence-reference-error' : undefined} aria-required={fields.requiresDatevEvidence} required={fields.requiresDatevEvidence} className={inputClass(Boolean(fields.fieldErrors?.datevEvidenceReference), 'flex-1')} /></label>{error('document-input-datev-evidence-reference-error', fields.fieldErrors?.datevEvidenceReference)}</div></div> : null}
+            {fields.requiresDatevSachverhaltLl ? <div id="document-field-datev-sachverhalt-ll" data-field-block data-field-error={fields.fieldErrors?.datevSachverhaltLl ? 'true' : undefined} className="mt-1 min-w-0"><label htmlFor="document-input-datev-sachverhalt-ll" className="flex min-w-0 items-center gap-1"><span className="shrink-0 text-[10px] text-muted">L+L{requiredMark(fields.requiresDatevSachverhaltLl)}</span><input id="document-input-datev-sachverhalt-ll" inputMode="numeric" maxLength={3} value={datevTaxMeta?.datevSachverhaltLl ?? ''} onChange={(event) => set((previous) => ({ ...previous, taxMeta: { ...previous.taxMeta, datevSachverhaltLl: event.target.value } }))} aria-label="DATEV Sachverhalt L+L" aria-invalid={Boolean(fields.fieldErrors?.datevSachverhaltLl)} aria-describedby={fields.fieldErrors?.datevSachverhaltLl ? 'document-input-datev-sachverhalt-ll-error' : undefined} aria-required={fields.requiresDatevSachverhaltLl} required={fields.requiresDatevSachverhaltLl} className={inputClass(Boolean(fields.fieldErrors?.datevSachverhaltLl), 'flex-1')} /></label>{error('document-input-datev-sachverhalt-ll-error', fields.fieldErrors?.datevSachverhaltLl)}</div> : null}
             {fields.buyerCountryCode && fields.sellerCountryCode && fields.buyerCountryCode !== fields.sellerCountryCode && fields.taxRecommendation && fields.taxRecommendation.mode !== fields.resolvedTaxMode ? <button type="button" aria-label={fields.taxRecommendationLabel ?? fields.taxRecommendation.mode} className="mt-1 text-left text-[9px] font-bold text-accent underline" onClick={() => set((previous) => ({ ...previous, taxMode: fields.taxRecommendation?.mode as DocumentDraft['taxMode'], taxMeta: { ...previous.taxMeta, taxRuleConfirmed: true } }))}>{fields.taxRecommendationLabel ?? fields.taxRecommendation.mode} <span className="font-normal no-underline">({fields.taxRecommendation.reason})</span></button> : null}
           </div>
         </div>
@@ -510,10 +575,10 @@ export const DocumentCanvasEditor: React.FC<DocumentCanvasEditorProps> = ({
     const sourceIndex = sourceIndexFromRow(row);
     const continuation = row.kind === 'row-continuation' || row.kind === 'group-continuation';
     const item = sourceIndex === undefined ? undefined : items[sourceIndex];
-    const rowProps = { row, columns, items, onItemsChange, formatCurrency, taxRateOptions, defaultTaxRate, forceZeroVat, articles };
+    const rowProps = { row, columns, items, onItemsChange, formatCurrency, taxRateOptions, defaultTaxRate, forceZeroVat, articles, fieldErrors: documentFields?.fieldErrors?.items };
     if (sourceIndex === undefined || !item || continuation) return <InlineBillingRow key={row.id} {...rowProps} />;
     return <SortableInlineBillingRow key={row.id} {...rowProps} sortableId={sortableIdFor(item)} />;
-  }, [articles, defaultTaxRate, forceZeroVat, formatCurrency, items, onItemsChange, sortableIdFor, taxRateOptions]);
+  }, [articles, defaultTaxRate, documentFields?.fieldErrors?.items, forceZeroVat, formatCurrency, items, onItemsChange, sortableIdFor, taxRateOptions]);
   const handleDragEnd = React.useCallback((event: DragEndEvent) => {
     if (!items || !onItemsChange || !event.over) return;
     const sourceIndex = sortableIndexById.get(String(event.active.id));

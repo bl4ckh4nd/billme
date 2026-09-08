@@ -51,7 +51,7 @@ export interface ServerBankAccountRecord {
   name: string;
   iban: string;
   balance: number;
-  defaultSkrAccountNumber: string;
+  defaultSkrAccountNumber?: string;
   type: string;
   color: string;
 }
@@ -397,7 +397,7 @@ export const listServerBankAccounts = async (
     name: row.name!,
     iban: row.iban!,
     balance: toNumber(row.balance!),
-    defaultSkrAccountNumber: row.defaultSkrAccountNumber!,
+    defaultSkrAccountNumber: row.defaultSkrAccountNumber ?? undefined,
     type: row.type!,
     color: row.color!,
   }));
@@ -408,9 +408,9 @@ export const saveServerBankAccount = async (
   record: ServerBankAccountRecord,
 ): Promise<ServerBankAccountRecord> => {
   await upsert(db, schema.accounts, { id: record.id, tenantId: record.tenantId, name: record.name, iban: record.iban,
-    balance: record.balance, defaultSkrAccountNumber: record.defaultSkrAccountNumber, type: record.type, color: record.color },
+    balance: record.balance, defaultSkrAccountNumber: record.defaultSkrAccountNumber ?? null, type: record.type, color: record.color },
     schema.accounts.id, { tenantId: record.tenantId, name: record.name, iban: record.iban, balance: record.balance,
-      defaultSkrAccountNumber: record.defaultSkrAccountNumber, type: record.type, color: record.color });
+      defaultSkrAccountNumber: record.defaultSkrAccountNumber ?? null, type: record.type, color: record.color });
   return record;
 };
 

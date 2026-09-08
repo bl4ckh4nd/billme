@@ -19,6 +19,7 @@ export * from './taxSubmission.js';
 export * from './accountingSourceRuns.js';
 export * from './projects.js';
 export * from './portalPublications.js';
+export * from './portalDecision.js';
 export * from './transactionImport.js';
 export * from './eurRules.js';
 export * from './recurring.js';

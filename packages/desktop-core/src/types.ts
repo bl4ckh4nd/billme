@@ -140,6 +140,34 @@ export interface AppSettings {
 
 export type InvoiceStatus = 'paid' | 'open' | 'overdue' | 'draft' | 'cancelled';
 
+export type InvoiceDocumentKind =
+  | 'invoice'
+  | 'order_confirmation'
+  | 'delivery_note'
+  | 'advance_invoice'
+  | 'partial_invoice'
+  | 'final_invoice'
+  | 'credit_note'
+  | 'cancellation_invoice';
+
+/** Human-facing labels shared by list/detail views and the print renderer. */
+export const INVOICE_DOCUMENT_KIND_LABELS: Record<InvoiceDocumentKind, string> = {
+  invoice: 'Rechnung',
+  order_confirmation: 'Auftragsbestätigung',
+  delivery_note: 'Lieferschein',
+  advance_invoice: 'Abschlagsrechnung',
+  partial_invoice: 'Teilrechnung',
+  final_invoice: 'Schlussrechnung',
+  credit_note: 'Gutschrift',
+  cancellation_invoice: 'Stornorechnung',
+};
+
+export const getInvoiceDocumentLabel = (kind?: InvoiceDocumentKind): string =>
+  INVOICE_DOCUMENT_KIND_LABELS[kind ?? 'invoice'];
+
+export const isBillingDocumentKind = (kind?: InvoiceDocumentKind): boolean =>
+  kind !== 'order_confirmation' && kind !== 'delivery_note';
+
 export interface InvoiceItem {
   /** Missing on legacy rows, which are treated as billable `item` rows. */
   kind?: 'item' | 'time' | 'optional' | 'text' | 'group' | 'summary';
@@ -223,6 +251,12 @@ export interface Invoice {
   projectId?: string; // Link to Project (client_projects)
   number: string;
   numberReservationId?: string;
+  /** Explicit document kind while retaining the shared Invoice aggregate. */
+  documentKind?: InvoiceDocumentKind;
+  sourceDocumentId?: string;
+  rootDocumentId?: string;
+  revisionOfId?: string;
+  revisionNumber?: number;
   client: string;
   clientEmail: string;
   clientAddress?: string;

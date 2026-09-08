@@ -8,6 +8,7 @@ import { isRetryableEmailError } from '@billme/desktop-core/utils/retry';
 import { portalClient } from '@billme/desktop-services/portalClient';
 import {
   createPostgresAuditLogPort,
+  applyServerOfferPortalDecision,
   createPostgresClientRepository,
   createPostgresDunningHistoryRepository,
   createPostgresEmailOutboxRepository,
@@ -32,21 +33,15 @@ import {
   type PostgresTransactionClient,
 } from '@billme/server-data';
 import {
-  listOffersPendingPortalSync,
   processDunningRun,
   runMaintenanceSweep,
   runRecurringInvoiceRun,
-  toRecurringRunFailure,
   shouldRunScheduledDunning,
   shouldRunScheduledRecurring,
-  syncPublishedOfferDecisionFromPortal,
   createTaxFilingService,
+  type RecurringResult,
   type AuditActor,
-  type AuditEntry,
-  type AuditEntryDraft,
   type EmailOutboxEntry,
-  type Offer,
-  type OfferDomainDependencies,
   type Tenant,
   type TenantScope,
 } from '@billme/server-core';
@@ -71,6 +66,16 @@ export interface WorkerTaskResult {
   details?: Record<string, unknown>;
 }
 
+export const toRecurringWorkerTaskResult = (result: RecurringResult): WorkerTaskResult => ({
+  status: 'completed',
+  message: 'Recurring run finished',
+  details: {
+    generated: result.generated,
+    deactivated: result.deactivated,
+    errors: result.errors.length,
+  },
+});
+
 type ScopeResolution = {
   scope: TenantScope;
   tenant: Tenant;
@@ -80,63 +85,6 @@ const workerActor: AuditActor = {
   type: 'service',
   id: 'billme-server-worker',
   displayName: 'billme-server-worker',
-};
-
-const stripOfferHistory = (offer: Offer): Offer => {
-  const { history: _history, ...rest } = offer;
-  return {
-    ...rest,
-    history: [],
-  };
-};
-
-const createBufferedAuditLog = () => {
-  const entries: AuditEntryDraft[] = [];
-
-  const toAuditEntry = (entry: AuditEntryDraft, index: number): AuditEntry => ({
-    sequence: index + 1,
-    ...entry,
-    prevHash: null,
-    hash: `buffered-${index + 1}`,
-  });
-
-  return {
-    entries,
-    port: {
-      append(_scope: TenantScope, entry: AuditEntryDraft) {
-        entries.push(entry);
-        return toAuditEntry(entry, entries.length - 1);
-      },
-      listBySubject(_scope: TenantScope, subject: { entityType: string; entityId: string }) {
-        return entries
-          .filter((entry) => entry.subject.entityType === subject.entityType && entry.subject.entityId === subject.entityId)
-          .map((entry, index) => toAuditEntry(entry, index));
-      },
-    },
-  };
-};
-
-const createBufferedOfferRepository = (offer: Offer) => {
-  let current = offer;
-
-  return {
-    port: {
-      list() {
-        return [current];
-      },
-      getById(_scope: TenantScope, id: string) {
-        return id === current.id ? current : null;
-      },
-      save(_scope: TenantScope, nextOffer: Offer) {
-        current = nextOffer;
-        return nextOffer;
-      },
-      remove() {
-        return;
-      },
-    },
-    current: () => current,
-  };
 };
 
 export class ServerWorkerRuntime {
@@ -215,30 +163,10 @@ export class ServerWorkerRuntime {
         },
       );
     } catch (error) {
-      const failure = toRecurringRunFailure(error);
-      if (failure) {
-        return {
-          status: 'blocked',
-          message: failure.error,
-          details: {
-            generated: failure.result.generated,
-            deactivated: failure.result.deactivated,
-            errors: failure.result.errors.length,
-          },
-        };
-      }
-      throw error;
+      return this.blockedJob(error instanceof Error ? error.message : String(error));
     }
 
-    return {
-      status: 'completed',
-      message: 'Recurring run finished',
-      details: {
-        generated: result.generated,
-        deactivated: result.deactivated,
-        errors: result.errors.length,
-      },
-    };
+    return toRecurringWorkerTaskResult(result);
   }
 
   async runDunningJob(): Promise<WorkerTaskResult> {
@@ -498,62 +426,21 @@ export class ServerWorkerRuntime {
       };
     }
 
-    const offerRepository = createPostgresOfferRepository(this.currentQueryable());
-    const auditLog = createPostgresAuditLogPort(this.currentQueryable());
-    const offers = await offerRepository.list(resolved.scope);
-    const pendingOffers = listOffersPendingPortalSync(resolved.scope, {
-      offerRepo: {
-        list: () => offers,
-        getById: (_scope, id) => offers.find((offer) => offer.id === id) ?? null,
-        save: (_scope, offer) => offer,
-        remove: () => undefined,
-      },
-    });
-
+    const offers = await createPostgresOfferRepository(this.database).list(resolved.scope);
+    const pendingOffers = offers.filter((offer) => offer.share?.token && !offer.share.decision && !offer.share.acceptedAt);
     let updated = 0;
-
-    for (const pendingOffer of pendingOffers) {
-      const currentOffer = offers.find((offer) => offer.id === pendingOffer.id);
-      if (!currentOffer) {
-        continue;
-      }
-
-      const bufferedOffers = createBufferedOfferRepository(currentOffer);
-      const bufferedAuditLog = createBufferedAuditLog();
-
+    for (const offer of pendingOffers) {
       try {
-        const result = await syncPublishedOfferDecisionFromPortal(
-          resolved.scope,
-          {
-            offerRepo: bufferedOffers.port,
-            auditLog: bufferedAuditLog.port,
-            portalGateway: {
-              getOfferStatus: (shareToken) => portalClient.getOfferStatus(baseUrl, shareToken),
-            },
-          } satisfies OfferDomainDependencies & {
-            portalGateway: {
-              getOfferStatus: (shareToken: string) => Promise<{ decision?: unknown }>;
-            };
-          },
-          {
-            offerId: pendingOffer.id,
-            actor: workerActor,
-          },
-        );
-
-        if (!result.updated) {
-          continue;
-        }
-
-        await offerRepository.save(resolved.scope, stripOfferHistory(bufferedOffers.current()));
-        for (const entry of bufferedAuditLog.entries) {
-          await auditLog.append(resolved.scope, entry);
-        }
-
-        updated += 1;
+        const shareToken = offer.share!.token!;
+        const { decision } = await portalClient.getOfferStatus(baseUrl, shareToken);
+        if (!decision) continue;
+        const result = await applyServerOfferPortalDecision(this.database, resolved.scope, {
+          offerId: offer.id, shareToken, decision, actor: workerActor,
+        });
+        if (result.updated) updated += 1;
       } catch (error) {
         this.logger.warn('Portal sync offer failed', {
-          offerId: pendingOffer.id,
+          offerId: offer.id,
           error: error instanceof Error ? error.message : String(error),
         });
       }

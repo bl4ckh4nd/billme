@@ -11,6 +11,7 @@ export const colors = {
   dark3: '#1c1c1c',
   darkBorder: '#222222',
   darkBorderSubtle: '#333333',
+  darkMuted: '#9ca3af',
   background: '#ffffff',
   foreground: '#0b0b0b',
   surface: '#ffffff',

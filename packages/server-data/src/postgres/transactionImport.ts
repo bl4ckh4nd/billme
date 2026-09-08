@@ -296,13 +296,14 @@ export const commitServerTransactionImport = async (
         skipped += 1;
         continue;
       }
+      const transactionId = randomUUID();
       await query(session,
         `INSERT INTO transactions
           (id, tenant_id, account_id, date, amount, type, counterparty, purpose,
            linked_invoice_id, status, dedup_hash, import_batch_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11)`,
         [
-          randomUUID(),
+          transactionId,
           tenant(scope),
           input.accountId,
           row.parsed.date,
@@ -313,6 +314,27 @@ export const commitServerTransactionImport = async (
           row.parsed.status ?? 'booked',
           dedupHash,
           batchId,
+        ],
+      );
+      // Inbox, Abgleich, and EÜR read bank_transactions; this mirrors the legacy import row.
+      const bankTransactionTimestamp = now();
+      await query(session,
+        `INSERT INTO bank_transactions
+          (id, tenant_id, account_id, date, amount, type, counterparty, purpose,
+           linked_invoice_id, status, source_transaction_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $11)`,
+        [
+          randomUUID(),
+          tenant(scope),
+          input.accountId,
+          row.parsed.date,
+          row.parsed.amount,
+          row.parsed.type,
+          row.parsed.counterparty ?? '',
+          row.parsed.purpose ?? '',
+          row.parsed.status ?? 'booked',
+          transactionId,
+          bankTransactionTimestamp,
         ],
       );
       imported += 1;

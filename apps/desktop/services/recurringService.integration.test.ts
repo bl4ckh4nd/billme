@@ -3,6 +3,7 @@ import { MOCK_SETTINGS } from '../data/mockData';
 
 const {
   listRecurringProfilesMock,
+  getRecurringProfileMock,
   upsertRecurringProfileMock,
   getClientMock,
   upsertInvoiceMock,
@@ -15,6 +16,7 @@ const {
   uuidMock,
 } = vi.hoisted(() => ({
   listRecurringProfilesMock: vi.fn(),
+  getRecurringProfileMock: vi.fn(),
   upsertRecurringProfileMock: vi.fn(),
   getClientMock: vi.fn(),
   upsertInvoiceMock: vi.fn(),
@@ -29,6 +31,7 @@ const {
 
 vi.mock('../db/recurringRepo', () => ({
   listRecurringProfiles: listRecurringProfilesMock,
+  getRecurringProfile: getRecurringProfileMock,
   upsertRecurringProfile: upsertRecurringProfileMock,
 }));
 
@@ -66,6 +69,7 @@ import {
   generateInvoiceFromProfile,
   processRecurringRun,
 } from './recurringService';
+import { InvalidRecurringProfileError } from '@billme/server-core/services';
 
 const settings = structuredClone(MOCK_SETTINGS);
 const makeClient = () => ({
@@ -129,8 +133,7 @@ const makeProfile = (overrides: Record<string, unknown> = {}) => ({
   nextRun: '2026-05-10',
   amount: 0,
   items: [
-    { description: 'Service A', quantity: 2, price: 50, total: 0 },
-    { description: 'Service B', quantity: 1, price: 25, total: 25 },
+    { description: 'Service', quantity: 1, price: 125, total: 125 },
   ],
   ...overrides,
 });
@@ -141,6 +144,7 @@ describe('recurringService integration', () => {
     vi.setSystemTime(new Date('2026-05-10T09:00:00.000Z'));
 
     listRecurringProfilesMock.mockReset();
+    getRecurringProfileMock.mockReset();
     upsertRecurringProfileMock.mockReset();
     getClientMock.mockReset();
     upsertInvoiceMock.mockReset();
@@ -155,6 +159,9 @@ describe('recurringService integration', () => {
     reserveNumberMock.mockReturnValue({ reservationId: 'res-1', number: 'RE-2026-001' });
     ensureDefaultProjectMock.mockReturnValue({ id: 'project-1' });
     getClientMock.mockReturnValue(makeClient());
+    getRecurringProfileMock.mockImplementation((_db: unknown, id: string) =>
+      (listRecurringProfilesMock() ?? []).find((profile: { id: string }) => profile.id === id) ?? null,
+    );
   });
 
   afterEach(() => {
@@ -253,7 +260,7 @@ describe('recurringService integration', () => {
     );
   });
 
-  it('normalizes invalid item values and guards non-finite invoice totals', () => {
+  it('rejects invalid item values before reserving an invoice number', () => {
     const badProfile = makeProfile({
       items: [{
         description: 'Invalid',
@@ -263,14 +270,9 @@ describe('recurringService integration', () => {
       }],
     });
 
-    const invoice = generateInvoiceFromProfile({} as any, badProfile as any, settings as any);
-
-    expect(invoice.items[0]).toEqual(expect.objectContaining({
-      quantity: 0,
-      price: 0,
-      total: Number.POSITIVE_INFINITY,
-    }));
-    expect(invoice.amount).toBe(0);
+    expect(() => generateInvoiceFromProfile({} as any, badProfile as any, settings as any))
+      .toThrow(InvalidRecurringProfileError);
+    expect(reserveNumberMock).not.toHaveBeenCalled();
   });
 
   it('supports all recurrence intervals in invoice generation', () => {
@@ -288,7 +290,7 @@ describe('recurringService integration', () => {
     getClientMock.mockReturnValue(null);
 
     expect(() => generateInvoiceFromProfile({} as any, makeProfile() as any, settings as any))
-      .toThrow('Client client-1 not found');
+      .toThrow('Der Kunde client-1 wurde nicht gefunden.');
     expect(reserveNumberMock).not.toHaveBeenCalled();
   });
 
@@ -296,7 +298,7 @@ describe('recurringService integration', () => {
     getClientMock.mockReturnValue({ ...makeClient(), status: 'inactive' });
 
     expect(() => generateInvoiceFromProfile({} as any, makeProfile() as any, settings as any))
-      .toThrow('Client client-1 is not active');
+      .toThrow('Der Kunde client-1 ist nicht aktiv (Status: inactive).');
     expect(reserveNumberMock).not.toHaveBeenCalled();
   });
 
@@ -351,7 +353,7 @@ describe('recurringService integration', () => {
     expect(result.generated).toBe(2);
     expect(result.deactivated).toBe(1);
     expect(result.errors).toEqual([
-      { profileName: 'Error profile', error: 'Client missing-client not found' },
+      { profileName: 'Error profile', error: 'Der Kunde missing-client wurde nicht gefunden.' },
     ]);
     expect(upsertRecurringProfileMock).toHaveBeenCalledTimes(2);
 
@@ -383,6 +385,6 @@ describe('recurringService integration', () => {
         makeProfile({ interval: 'hourly' as any }) as any,
         settings as any,
       ),
-    ).toThrow('Unsupported interval');
+    ).toThrow('Das Abo-Profil profile-1 enthält ein ungültiges Intervall.');
   });
 });

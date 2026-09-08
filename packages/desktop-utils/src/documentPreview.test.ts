@@ -18,6 +18,18 @@ const settings = {
 } as never;
 
 describe('getPreviewElements', () => {
+  it('renders the legal document kind in default and legacy template titles', () => {
+    const preview = getPreviewElements({
+      number: 'AB-1', date: '2026-08-07', dueDate: '2026-08-21', client: 'Kunde', clientEmail: '',
+      documentKind: 'order_confirmation', items: [],
+    }, [
+      { id: 'title', type: 'TEXT', label: 'invoice_title', content: 'Rechnung {{invoice.number}}' },
+      { id: 'meta', type: 'TEXT', label: 'invoice_meta', content: 'Rechnungs-Nr: {{invoice.number}}' },
+    ], settings);
+    expect(preview[0]?.content).toBe('Auftragsbestätigung AB-1');
+    expect(preview[1]?.content).toContain('Auftragsbestätigung-Nr: AB-1');
+  });
+
   it('renders resolver subtotals with group scope and running reset', () => {
     const [preview] = getPreviewElements({
       number: 'RE-1', date: '2026-08-07', dueDate: '2026-08-21', client: 'Kunde', clientEmail: '',

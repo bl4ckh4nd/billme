@@ -122,7 +122,18 @@ export const MOCK_SETTINGS: AppSettings = {
 
 /** Neutral settings persisted for a new local workspace before onboarding. */
 export const DEFAULT_SETTINGS: AppSettings = {
-  ...MOCK_SETTINGS,
+  portal: {
+    baseUrl: '',
+  },
+  eInvoice: {
+    enabled: false,
+    standard: 'zugferd-en16931',
+    profile: 'EN16931',
+    version: '2.3',
+  },
+  catalog: {
+    categories: [],
+  },
   company: {
     name: '',
     owner: '',
@@ -140,6 +151,49 @@ export const DEFAULT_SETTINGS: AppSettings = {
     taxId: '',
     vatId: '',
     registerCourt: '',
+  },
+  numbers: {
+    invoicePrefix: 'RE-%Y-',
+    nextInvoiceNumber: 1,
+    numberLength: 3,
+    offerPrefix: 'ANG-%Y-',
+    nextOfferNumber: 1,
+    customerPrefix: 'KD-',
+    nextCustomerNumber: 1,
+    customerNumberLength: 4,
+  },
+  dunning: {
+    levels: [],
+  },
+  legal: {
+    smallBusinessRule: false,
+    defaultVatRate: 19,
+    taxAccountingMethod: 'soll',
+    paymentTermsDays: 14,
+    defaultIntroText: 'Vielen Dank für Ihren Auftrag. Wir stellen Ihnen folgende Leistungen in Rechnung:',
+    defaultFooterText: 'Es gelten unsere Allgemeinen Geschäftsbedingungen.',
+  },
+  email: {
+    provider: 'none',
+    smtpHost: '',
+    smtpPort: 587,
+    smtpSecure: true,
+    smtpUser: '',
+    fromName: '',
+    fromEmail: '',
+  },
+  automation: {
+    dunningEnabled: false,
+    dunningRunTime: '09:00',
+    recurringEnabled: false,
+    recurringRunTime: '03:00',
+  },
+  dashboard: {
+    monthlyRevenueGoal: 0,
+    dueSoonDays: 7,
+    topCategoriesLimit: 5,
+    recentPaymentsLimit: 5,
+    topClientsLimit: 5,
   },
   onboardingCompleted: false,
 };

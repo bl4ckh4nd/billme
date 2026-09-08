@@ -509,6 +509,9 @@ importers:
       '@billme/accounting-engine':
         specifier: workspace:*
         version: link:../../packages/accounting-engine
+      '@billme/accounting-shared':
+        specifier: workspace:*
+        version: link:../../packages/accounting-shared
       '@billme/desktop-core':
         specifier: workspace:*
         version: link:../../packages/desktop-core
@@ -524,6 +527,9 @@ importers:
       '@billme/server-data':
         specifier: workspace:*
         version: link:../../packages/server-data
+      pg:
+        specifier: ^8.16.3
+        version: 8.20.0
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -592,6 +598,9 @@ importers:
 
   apps/web-pro:
     dependencies:
+      '@billme/accounting-shared':
+        specifier: workspace:*
+        version: link:../../packages/accounting-shared
       '@billme/accounting-ui-pro':
         specifier: workspace:*
         version: link:../../packages/accounting-ui-pro
@@ -704,6 +713,9 @@ importers:
       '@billme/desktop-contracts':
         specifier: workspace:*
         version: link:../desktop-contracts
+      '@billme/desktop-designer':
+        specifier: workspace:*
+        version: link:../desktop-designer
       electron:
         specifier: '>=37.0.0'
         version: 37.10.3
@@ -855,6 +867,9 @@ importers:
 
   packages/desktop-renderer:
     dependencies:
+      '@billme/accounting-shared':
+        specifier: workspace:*
+        version: link:../accounting-shared
       '@billme/desktop-contracts':
         specifier: workspace:*
         version: link:../desktop-contracts
@@ -962,6 +977,9 @@ importers:
       '@types/node':
         specifier: ^24.9.1
         version: 24.12.2
+      '@types/papaparse':
+        specifier: ^5.5.2
+        version: 5.5.2
       tsx:
         specifier: ^4.20.5
         version: 4.21.0
@@ -977,6 +995,9 @@ importers:
 
   packages/desktop-ui:
     dependencies:
+      '@billme/ui':
+        specifier: workspace:*
+        version: link:../ui
       lucide-react:
         specifier: ^0.562.0
         version: 0.562.0(react@19.2.4)
@@ -996,6 +1017,9 @@ importers:
 
   packages/desktop-utils:
     dependencies:
+      '@billme/desktop-core':
+        specifier: workspace:*
+        version: link:../desktop-core
       '@billme/server-core':
         specifier: workspace:*
         version: link:../server-core
@@ -1166,12 +1190,12 @@ importers:
       '@billme/accounting-shared':
         specifier: workspace:*
         version: link:../accounting-shared
-      '@billme/desktop-core':
-        specifier: workspace:*
-        version: link:../desktop-core
       '@billme/desktop-contracts-pro':
         specifier: workspace:*
         version: link:../desktop-contracts-pro
+      '@billme/desktop-core':
+        specifier: workspace:*
+        version: link:../desktop-core
       '@billme/desktop-services':
         specifier: workspace:*
         version: link:../desktop-services
@@ -1196,6 +1220,9 @@ importers:
       fastify:
         specifier: ^5.6.1
         version: 5.8.5
+      pg:
+        specifier: ^8.16.3
+        version: 8.20.0
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -1203,6 +1230,9 @@ importers:
       '@types/node':
         specifier: ^22.19.7
         version: 22.19.10
+      '@types/pg':
+        specifier: ^8.15.5
+        version: 8.20.0
       tsx:
         specifier: ^4.20.5
         version: 4.21.0

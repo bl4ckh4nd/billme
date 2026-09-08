@@ -36,7 +36,7 @@ import { useSettingsQuery } from './hooks/useSettings';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { shouldShowBusinessOnboarding } from '@billme/ui';
+import { Portal, shouldShowBusinessOnboarding, useActionFeedback } from '@billme/ui';
 import { MOCK_SETTINGS } from './data/mockData';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 
@@ -164,6 +164,7 @@ const TemplateEditorPage: React.FC<{ templateType: 'invoice' | 'offer' }> = ({
 
 const DocumentsPage: React.FC = () => {
   const navigate = useNavigate();
+  const { notify } = useActionFeedback('documents');
   const setEditingInvoice = useUiStore((s) => s.setEditingInvoice);
   const { data: settingsFromDb } = useSettingsQuery();
   const settings = settingsFromDb ?? MOCK_SETTINGS;
@@ -199,7 +200,7 @@ const DocumentsPage: React.FC = () => {
         setEditingInvoice(newInvoice, type, 'create');
         navigate({ to: '/documents/edit' });
       } catch (error) {
-        alert(`Nummer konnte nicht reserviert werden: ${String(error)}`);
+        notify('error', `Nummer konnte nicht reserviert werden: ${String(error)}`);
       }
     })();
   };
@@ -222,6 +223,7 @@ const DocumentsPage: React.FC = () => {
 
 const DocumentEditorPage: React.FC = () => {
   const navigate = useNavigate();
+  const { notify } = useActionFeedback('documents');
   const invoice = useUiStore((s) => s.editingInvoice);
   const clearEditingInvoice = useUiStore((s) => s.clearEditingInvoice);
   const docType = useUiStore((s) => s.editingDocumentType);
@@ -302,7 +304,7 @@ const DocumentEditorPage: React.FC = () => {
                 clearEditingInvoice();
                 navigate({ to: '/documents' });
               } catch (error) {
-                alert(`Speichern fehlgeschlagen: ${String(error)}`);
+                notify('error', `Speichern fehlgeschlagen: ${String(error)}`);
               }
             })();
             return;
@@ -329,8 +331,9 @@ const DocumentEditorPage: React.FC = () => {
       />
 
       {isReasonOpen && (
+        <Portal>
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm p-4"
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               setIsReasonOpen(false);
@@ -414,6 +417,7 @@ const DocumentEditorPage: React.FC = () => {
             </div>
           </div>
         </div>
+        </Portal>
       )}
     </>
   );

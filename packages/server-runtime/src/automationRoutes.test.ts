@@ -280,7 +280,7 @@ test('automation mutations deny viewer sessions before touching persisted or ext
   }
 });
 
-test('recurring manual runs roll back generated invoices and numbering when a later profile fails', async () => {
+test('recurring manual runs commit good profiles and report legacy empty profiles', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'billme-recurring-rollback-'));
   const database = await PgliteServerDatabase.open(dataDir);
   const rollbackTenantId = 'recurring-rollback-tenant';
@@ -307,11 +307,11 @@ test('recurring manual runs roll back generated invoices and numbering when a la
     await profileRepository.save(scope, {
       id: 'recurring-valid-profile', tenantId: rollbackTenantId, clientId: rollbackClient.id,
       active: true, name: 'A valid profile', interval: 'monthly', nextRun: '2000-01-01', amount: 100,
-      items: [], taxMode: 'standard_vat',
+      items: [{ kind: 'item', description: 'Subscription', quantity: 1, price: 100, total: 100 }], taxMode: 'standard_vat',
     });
     await profileRepository.save(scope, {
-      id: 'recurring-invalid-profile', tenantId: rollbackTenantId, clientId: 'missing-client',
-      active: true, name: 'B failing profile', interval: 'monthly', nextRun: '2000-01-01', amount: 100,
+      id: 'recurring-invalid-profile', tenantId: rollbackTenantId, clientId: rollbackClient.id,
+      active: true, name: 'B failing profile', interval: 'monthly', nextRun: '2000-01-01', amount: 0,
       items: [], taxMode: 'standard_vat',
     });
     await createPostgresClientRepository(database).save(scope, rollbackClient);
@@ -324,16 +324,76 @@ test('recurring manual runs roll back generated invoices and numbering when a la
     });
     assert.equal(run.statusCode, 200, run.body);
     const payload = run.json() as { success: boolean; result?: { errors: unknown[] } };
-    assert.equal(payload.success, false);
+    assert.equal(payload.success, true);
     assert.equal(payload.result?.errors.length, 1);
-    assert.deepEqual(await invoiceRepository.list(scope), []);
+    assert.equal((await invoiceRepository.list(scope)).length, 1);
     const storedValidProfile = await profileRepository.getById(scope, 'recurring-valid-profile');
-    assert.equal(storedValidProfile?.nextRun, '2000-01-01');
-    assert.equal(storedValidProfile?.lastRun, undefined);
+    assert.equal(storedValidProfile?.nextRun, '2000-02-01');
+    assert.equal(storedValidProfile?.lastRun, new Date().toISOString().slice(0, 10));
+    const storedInvalidProfile = await profileRepository.getById(scope, 'recurring-invalid-profile');
+    assert.equal(storedInvalidProfile?.nextRun, '2000-01-01');
+    assert.equal(storedInvalidProfile?.lastRun, undefined);
     const settingsRow = await database.query<{ settings_json: string }>('SELECT settings_json FROM server_settings WHERE tenant_id = $1', [rollbackTenantId]);
-    assert.equal(JSON.parse(settingsRow.rows[0]!.settings_json).numbers.nextInvoiceNumber, 1);
-    const auditRows = await database.query<{ action: string }>('SELECT action FROM audit_log WHERE tenant_id = $1', [rollbackTenantId]);
-    assert.deepEqual(auditRows.rows, []);
+    assert.equal(JSON.parse(settingsRow.rows[0]!.settings_json).numbers.nextInvoiceNumber, 2);
+    const auditRows = await database.query<{ action: string; after_json: string | null }>('SELECT action, after_json FROM audit_log WHERE tenant_id = $1', [rollbackTenantId]);
+    assert.equal(auditRows.rows.filter((row) => row.action === 'recurring.manual_run').length, 1);
+    const summaryAudit = auditRows.rows.find((row) => row.action === 'recurring.manual_run');
+    assert.match(summaryAudit?.after_json ?? '', /B failing profile/);
+  } finally {
+    await app.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('concurrent recurring manual runs claim one overdue profile exactly once', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'billme-recurring-concurrent-'));
+  const database = await PgliteServerDatabase.open(dataDir);
+  const concurrentTenantId = 'recurring-concurrent-tenant';
+  const concurrentToken = 'recurring-concurrent-token';
+  const scope = createSingleTenantScope(concurrentTenantId, 'lite');
+  const concurrentSettings = structuredClone(settings);
+  concurrentSettings.numbers.nextInvoiceNumber = 1;
+  const concurrentClient = { ...client, id: 'recurring-concurrent-client', tenantId: concurrentTenantId };
+  const profileRepository = createPostgresRecurringProfileRepository(database);
+  const invoiceRepository = createPostgresInvoiceRepository(database);
+  const app = await buildServerApi({
+    database,
+    runtime: 'embedded',
+    product: 'lite',
+    logger: false,
+    sessionSecret: 'automation-recurring-concurrent-secret-32-chars',
+    localAuth: { accessToken: concurrentToken, tenantId: concurrentTenantId, userId: 'recurring-user', email: 'owner@example.test', fullName: 'Owner' },
+  });
+
+  try {
+    const timestamp = new Date().toISOString();
+    await database.query(`INSERT INTO tenants (id, slug, display_name, product, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`, [concurrentTenantId, 'recurring-concurrent', 'Recurring Concurrent', 'lite', timestamp]);
+    await database.query(`INSERT INTO server_settings (tenant_id, settings_json, created_at, updated_at) VALUES ($1, $2, $3, $3)`, [concurrentTenantId, JSON.stringify(concurrentSettings), timestamp]);
+    await createPostgresClientRepository(database).save(scope, concurrentClient);
+    await profileRepository.save(scope, {
+      id: 'recurring-concurrent-profile', tenantId: concurrentTenantId, clientId: concurrentClient.id,
+      active: true, name: 'Concurrent profile', interval: 'monthly', nextRun: '2000-01-01', amount: 100,
+      items: [{ kind: 'item', description: 'Subscription', quantity: 1, price: 100, total: 100 }], taxMode: 'standard_vat',
+    });
+    await app.ready();
+
+    const [firstRun, secondRun] = await Promise.all([
+      app.inject({ method: 'POST', url: '/api/v1/lite/recurring/manual-run', headers: { 'x-billme-local-token': concurrentToken } }),
+      app.inject({ method: 'POST', url: '/api/v1/lite/recurring/manual-run', headers: { 'x-billme-local-token': concurrentToken } }),
+    ]);
+    assert.equal(firstRun.statusCode, 200, firstRun.body);
+    assert.equal(secondRun.statusCode, 200, secondRun.body);
+    const firstPayload = firstRun.json() as { success: boolean; result?: { generated: number } };
+    const secondPayload = secondRun.json() as { success: boolean; result?: { generated: number } };
+    assert.equal(firstPayload.success, true, firstRun.body);
+    assert.equal(secondPayload.success, true, secondRun.body);
+    assert.equal((firstPayload.result?.generated ?? 0) + (secondPayload.result?.generated ?? 0), 1);
+    assert.equal((await invoiceRepository.list(scope)).length, 1);
+    const storedProfile = await profileRepository.getById(scope, 'recurring-concurrent-profile');
+    assert.equal(storedProfile?.nextRun, '2000-02-01');
+    assert.equal(storedProfile?.lastRun, new Date().toISOString().slice(0, 10));
+    const settingsRow = await database.query<{ settings_json: string }>('SELECT settings_json FROM server_settings WHERE tenant_id = $1', [concurrentTenantId]);
+    assert.equal(JSON.parse(settingsRow.rows[0]!.settings_json).numbers.nextInvoiceNumber, 2);
   } finally {
     await app.close();
     await rm(dataDir, { recursive: true, force: true });

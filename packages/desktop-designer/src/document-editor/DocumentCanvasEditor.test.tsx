@@ -99,7 +99,7 @@ describe('DocumentCanvasEditor', () => {
         { id: 'outro', type: 'TEXT', label: 'outro_text', x: 76, y: 820, zIndex: 1, style: { width: 700, height: 50 }, content: 'Alt' },
       ],
       templateType: 'invoice', clients: [{ id: 'client-1', company: 'Bauherr' }], projects: [], selectedClientId: 'client-1', selectedClientLabel: 'Bauherr', selectedProjectLabel: '',
-      onChange, onSelectClient: vi.fn(), onSelectProject: vi.fn(), onTemplateTextChange, taxRateOptions: [0, 19], resolvedTaxMode: 'standard_vat',
+      onChange, onStartManualRecipient: vi.fn(), onSelectClient: vi.fn(), onSelectProject: vi.fn(), onTemplateTextChange, taxRateOptions: [0, 19], resolvedTaxMode: 'standard_vat',
     };
     render(<DocumentCanvasEditor elements={[...tableElements,
       { id: 'meta', type: 'TEXT', label: 'invoice_meta', x: 470, y: 180, zIndex: 1, style: { width: 250, height: 120 }, content: '' },
@@ -173,7 +173,7 @@ describe('DocumentCanvasEditor', () => {
     const documentFields: DocumentCanvasDocumentFields = {
       document: { id: 'draft', number: 'RE-2', date: '2026-08-07', client: '', clientEmail: '', amount: 0, items },
       templateType: 'invoice', clients: [client], projects: [], selectedClientId: '', selectedClientLabel: '', selectedProjectLabel: '',
-      onChange: vi.fn(), onSelectClient, onSelectProject: vi.fn(),
+      onChange: vi.fn(), onStartManualRecipient: vi.fn(), onSelectClient, onSelectProject: vi.fn(),
     };
     const article = { id: 'article-1', sku: 'MON-1', title: 'Montage', description: 'Montagearbeiten', price: 85, unit: 'Std.', category: 'Ausbau', taxRate: 19 };
     render(<DocumentCanvasEditor elements={tableElements as never[]} items={items} onItemsChange={onItemsChange} documentFields={documentFields} articles={[article]} />);

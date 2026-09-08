@@ -7,6 +7,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
+    "@billme/desktop-designer": "workspace:*",
     "electron-updater": "^6.8.3",
     "keytar": "^7.9.0",
     "nodemailer": "^6.9.15",
@@ -59,10 +60,6 @@
     "./ipc/errorHandler": {
       "types": "./src/ipc/errorHandler.ts",
       "default": "./src/ipc/errorHandler.ts"
-    },
-    "./hooks/useToast": {
-      "types": "./src/hooks/useToast.ts",
-      "default": "./src/hooks/useToast.ts"
     },
     "./services/emailService": {
       "types": "./src/services/emailService.ts",

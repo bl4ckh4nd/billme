@@ -17,6 +17,7 @@ import {
   accountSchema,
   accountSuggestionRuleSchema,
   appSettingsSchema,
+  accountingSourceFactSchema,
   articleSchema,
   eurRuleSchema,
   bookingDraftEntitySchema,
@@ -29,6 +30,8 @@ import {
   assetSchema,
   assetUpsertSchema,
   incomingInvoiceSchema,
+  incomingInvoiceDocumentSchema,
+  incomingInvoiceDocumentDownloadSchema,
   journalEntryEntitySchema,
   ledgerBalanceRowSchema,
   datevExportResultSchema,
@@ -257,19 +260,28 @@ const bilanzReportSchema = z.object({
 type AccountingSourceRun = z.infer<typeof proAccountingSourceRunSchema>;
 
 const parseAccountingSourceRun = (input: unknown, fallbackFact?: unknown): AccountingSourceRun => {
-  if (isRecord(input) && input.fact === undefined && input.source !== undefined) {
-    const source = isRecord(input.source) && isRecord(input.source.input) ? input.source.input : input.source;
-    const fact = isRecord(fallbackFact) && isRecord(source) ? { ...fallbackFact, ...source } : source;
-    return proAccountingSourceRunSchema.parse({ ...input, fact });
+  if (!isRecord(input) || input.fact !== undefined) {
+    return proAccountingSourceRunSchema.parse(input);
   }
-  return proAccountingSourceRunSchema.parse(input);
+
+  const source = input.source;
+  const sourceInput = isRecord(source) && source.input !== undefined ? source.input : undefined;
+  const candidates = [source, sourceInput, fallbackFact];
+  const fact = candidates
+    .map((candidate) => accountingSourceFactSchema.safeParse(candidate))
+    .find((parsed) => parsed.success)?.data;
+
+  return proAccountingSourceRunSchema.parse(fact === undefined ? input : { ...input, fact });
 };
 
 const accountingSourceRunParser: Parser<AccountingSourceRun> = parseAccountingSourceRun;
 
 const parseAccountingSourcePostResult = (input: unknown, fallbackFact?: unknown) => {
   if (isRecord(input) && typeof input.status === 'string' && Array.isArray(input.errors)) {
-    return proAccountingSourcePostResultSchema.parse(input);
+    const sourceRun = isRecord(input.sourceRun)
+      ? parseAccountingSourceRun(input.sourceRun, fallbackFact)
+      : undefined;
+    return proAccountingSourcePostResultSchema.parse(sourceRun ? { ...input, sourceRun } : input);
   }
   if (!isRecord(input) || !isRecord(input.run)) {
     throw new Error('Die Serverantwort enthält kein Buchungsprotokoll.');
@@ -399,6 +411,8 @@ export type ProWebClientConfig = {
   fetch?: typeof globalThis.fetch;
 };
 
+export type ProBlobDownloader = (blob: Blob, fileName: string) => void;
+
 export class ProEmbeddedConnectionUnavailableError extends Error {
   readonly code = 'PRO_EMBEDDED_CONNECTION_UNAVAILABLE' as const;
 
@@ -407,6 +421,61 @@ export class ProEmbeddedConnectionUnavailableError extends Error {
     this.name = 'ProEmbeddedConnectionUnavailableError';
   }
 }
+
+const downloadBlobInBrowser: ProBlobDownloader = (blob, fileName) => {
+  if (typeof document === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function' || !document.body) return;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.rel = 'noopener';
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    globalThis.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+};
+
+type DatevExportReceiptMetadata = {
+  id: string;
+  recordCount: number;
+  byteSize?: number;
+  sha256?: string;
+  contentSha256?: string;
+};
+
+const sha256Hex = async (bytes: ArrayBuffer): Promise<string> => {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new Error('DATEV-Export-Hashprüfung ist in dieser Umgebung nicht verfügbar.');
+  const digest = await subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+};
+
+const validateDatevExportReceipt = async (
+  exported: { blob: Blob; exportId: string; contentSha256?: string; recordCount: number },
+  receipt: DatevExportReceiptMetadata,
+): Promise<void> => {
+  if (receipt.id !== exported.exportId) throw new Error('DATEV-Exportbeleg stimmt nicht mit dem Export überein.');
+  if (receipt.recordCount !== exported.recordCount) throw new Error('DATEV-Exportbeleg hat eine abweichende Datensatzanzahl.');
+
+  const bytes = await exported.blob.arrayBuffer();
+  if (receipt.byteSize !== undefined && receipt.byteSize !== bytes.byteLength) {
+    throw new Error('DATEV-Exportbeleg hat eine abweichende Dateigröße.');
+  }
+
+  const expectedHashes = [exported.contentSha256, receipt.contentSha256, receipt.sha256].filter(
+    (value): value is string => Boolean(value),
+  );
+  if (expectedHashes.length > 0) {
+    const actualHash = await sha256Hex(bytes);
+    if (expectedHashes.some((expectedHash) => expectedHash.toLowerCase() !== actualHash)) {
+      throw new Error('DATEV-Exportbeleg hat einen abweichenden Datei-Hash.');
+    }
+  }
+};
 
 export const createProWebClient = ({
   baseUrl,
@@ -788,6 +857,23 @@ export const createProWebClient = ({
         '/api/v1/pro/invoices',
       );
     },
+    createDocumentChain(input: unknown) {
+      const parsed = ipcRoutes['documents:chainCreate'].args.parse(input);
+      const endpoint = parsed.operation === 'order_confirmation'
+        ? 'order-confirmations'
+        : parsed.operation === 'delivery_note'
+          ? 'delivery-notes'
+          : parsed.operation === 'settlement_invoice'
+            ? 'settlement-invoices'
+            : parsed.operation === 'correction'
+              ? 'corrections'
+              : 'revisions';
+      const { operation: _operation, ...body } = parsed;
+      return requestJson({ method: 'POST', body, parser: invoiceSchema }, `/api/v1/pro/document-chain/${endpoint}`);
+    },
+    listDocumentChain(rootDocumentId: string) {
+      return requestJson({ parser: parseArray(invoiceSchema) }, `/api/v1/pro/document-chain/${encodeURIComponent(rootDocumentId)}`);
+    },
     deleteInvoice(id: string, reason: string) {
       return requestJson(
         { method: 'DELETE', body: { reason }, parser: (input) => input },
@@ -959,44 +1045,12 @@ export const createProWebClient = ({
     },
     async convertOfferToInvoice(input: unknown) {
       const parsed = ipcRoutes['documents:convertOfferToInvoice'].args.parse(input);
-      const offer = await requestJson(
-        { parser: (payload) => offerSchema.nullable().parse(payload) },
-        `/api/v1/pro/offers/${encodeURIComponent(parsed.offerId)}`,
-      );
-      if (!offer) throw new Error('Angebot nicht gefunden.');
-      const settings = await this.getSettings();
-      const today = new Date().toISOString().split('T')[0] ?? new Date().toISOString();
-      const reservation = await this.reserveNumber('invoice');
-      try {
-        const legacyOffer = toLegacyOffer(offer);
-        const created = toDomainInvoice(proBillingScope, {
-          ...legacyOffer,
-          id: crypto.randomUUID(),
-          number: reservation.number,
-          dueDate: (() => {
-            const dueDate = new Date(today);
-            dueDate.setDate(dueDate.getDate() + (settings?.legal.paymentTermsDays ?? 0));
-            return dueDate.toISOString().split('T')[0] ?? today;
-          })(),
-          date: today,
-          status: 'draft',
-          history: [{ date: today, action: `Erstellt aus Angebot ${offer.number}` }, ...(offer.history ?? [])],
-        });
-        const { tenantId: _tenantId, ...invoice } = created;
-        const saved = await requestJson(
-          {
-            method: 'POST',
-            body: { reason: `Converted from offer ${offer.number}`, invoice },
-            parser: invoiceSchema,
-          },
-          '/api/v1/pro/invoices',
-        );
-        await this.finalizeNumber(reservation.reservationId, saved.id);
-        return toLegacyInvoice(saved);
-      } catch (error) {
-        await this.releaseNumber(reservation.reservationId).catch(() => undefined);
-        throw error;
-      }
+      const saved = await requestJson({
+        method: 'POST',
+        body: { offerId: parsed.offerId, invoiceId: crypto.randomUUID() },
+        parser: invoiceSchema,
+      }, '/api/v1/pro/documents/convert-offer');
+      return toLegacyInvoice(saved);
     },
     listArticles() {
       return requestJson({ parser: parseArray(articleSchema) }, '/api/v1/pro/articles');
@@ -1372,7 +1426,11 @@ export const createProWebClient = ({
       return requestBlob(`/api/v1/pro/accounting/datev/exports/${encodeURIComponent(exportId)}`);
     },
     listDatevExports(limit?: number) {
-      return requestJson({ parser: parseArray(datevExportResultSchema) }, '/api/v1/pro/accounting/datev/exports').then((rows) => (limit ? rows.slice(0, limit) : rows));
+      return requestJson({ parser: parseArray(datevExportResultSchema) }, '/api/v1/pro/accounting/datev/exports').then((rows) => (limit ? rows.slice(0, limit) : rows).map((row) => (
+        row.sha256 === undefined && row.contentSha256 !== undefined
+          ? { ...row, sha256: row.contentSha256 }
+          : row
+      )));
     },
     setAccountingPolicy(input: unknown, reason = 'Kontierungspolitik geändert') {
       return requestJson({ method: 'PUT', body: { ...accountingPolicySchema.omit({ tenantId: true, periodPolicy: true, updatedAt: true }).parse(input), reason }, parser: accountingPolicySchema }, '/api/v1/pro/accounting/policy');
@@ -1408,6 +1466,18 @@ export const createProWebClient = ({
         },
         parser: incomingInvoiceSchema,
       }, '/api/v1/pro/accounting/incoming-invoices');
+    },
+    listIncomingInvoiceDocuments(invoiceId: string) {
+      return requestJson({ parser: parseArray(incomingInvoiceDocumentSchema) }, `/api/v1/pro/accounting/incoming-invoices/${encodeURIComponent(invoiceId)}/documents`);
+    },
+    uploadIncomingInvoiceDocument(input: { invoiceId: string; originalFilename: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; reason: string }) {
+      return requestJson({ method: 'POST', body: { originalFilename: input.originalFilename, mimeType: input.mimeType, data: input.data, reason: input.reason }, parser: incomingInvoiceDocumentSchema }, `/api/v1/pro/accounting/incoming-invoices/${encodeURIComponent(input.invoiceId)}/documents`);
+    },
+    downloadIncomingInvoiceDocument(documentId: string) {
+      return requestJson({ parser: incomingInvoiceDocumentDownloadSchema }, `/api/v1/pro/accounting/incoming-invoice-documents/${encodeURIComponent(documentId)}/download`);
+    },
+    reviewIncomingInvoiceDocument(input: { documentId: string; reviewStatus: 'accepted' | 'rejected'; reason: string }) {
+      return requestJson({ method: 'POST', body: { reviewStatus: input.reviewStatus, reason: input.reason }, parser: incomingInvoiceDocumentSchema }, `/api/v1/pro/accounting/incoming-invoice-documents/${encodeURIComponent(input.documentId)}/review`);
     },
     listOpenItems() {
       return requestJson({ parser: parseArray(openItemSchema) }, '/api/v1/pro/accounting/open-items');
@@ -1623,11 +1693,13 @@ export type ProHttpApiOptions = ProWebClientConfig & {
   fallback?: IpcInvoke;
   /** Test seam for asserting fail-closed behavior on unknown contract keys. */
   onInvoke?: (invoke: IpcInvoke) => void;
+  /** Optional browser download seam; DOM-less callers receive the receipt without a fake download. */
+  downloadBlob?: ProBlobDownloader;
 };
 
 export type ProHttpBillmeApi = BillmeApi;
 
-export const createProHttpBillmeApi = ({ fallback, onInvoke, ...clientConfig }: ProHttpApiOptions): ProHttpBillmeApi => {
+export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...clientConfig }: ProHttpApiOptions): ProHttpBillmeApi => {
   const { embeddedConnectionResolver } = clientConfig;
   const client = createProWebClient(clientConfig);
 
@@ -1707,6 +1779,35 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, ...clientConfig }: 
         case 'pro:upsertIncomingInvoice': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:upsertIncomingInvoice'>;
           const result = await client.saveIncomingInvoice(parsedArgs.invoice, parsedArgs.reason);
+          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'documents:chainCreate': {
+          const result = await client.createDocumentChain(args);
+          return ipcRoutes[key].result.parse(toLegacyInvoice(result)) as IpcResult<K>;
+        }
+        case 'documents:chainList': {
+          const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'documents:chainList'>;
+          const result = await client.listDocumentChain(parsed.rootDocumentId);
+          return ipcRoutes[key].result.parse(result.map(toLegacyInvoice)) as IpcResult<K>;
+        }
+        case 'pro:listIncomingInvoiceDocuments': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:listIncomingInvoiceDocuments'>;
+          const result = await client.listIncomingInvoiceDocuments(parsedArgs.invoiceId);
+          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'pro:uploadIncomingInvoiceDocument': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:uploadIncomingInvoiceDocument'>;
+          const result = await client.uploadIncomingInvoiceDocument(parsedArgs);
+          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'pro:downloadIncomingInvoiceDocument': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:downloadIncomingInvoiceDocument'>;
+          const result = await client.downloadIncomingInvoiceDocument(parsedArgs.documentId);
+          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'pro:reviewIncomingInvoiceDocument': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:reviewIncomingInvoiceDocument'>;
+          const result = await client.reviewIncomingInvoiceDocument(parsedArgs);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
         case 'pro:previewOutgoingInvoiceAccounting': {
@@ -2075,7 +2176,10 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, ...clientConfig }: 
           const history = await client.listDatevExports();
           const receipt = history.find((item) => item.id === exported.exportId);
           if (!receipt) throw new Error('DATEV-Export wurde nicht in der Serverhistorie gefunden.');
-          return ipcRoutes[key].result.parse(receipt) as IpcResult<K>;
+          const parsedReceipt = ipcRoutes[key].result.parse(receipt) as IpcResult<K>;
+          await validateDatevExportReceipt(exported, parsedReceipt as DatevExportReceiptMetadata);
+          (downloadBlob ?? downloadBlobInBrowser)(exported.blob, `datev-buchungsstapel-${parsedArgs.from}-${parsedArgs.to}.csv`);
+          return parsedReceipt;
         }
         case 'pro:listDatevExports': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:listDatevExports'>;

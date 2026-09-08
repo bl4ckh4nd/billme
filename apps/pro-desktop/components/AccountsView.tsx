@@ -7,6 +7,8 @@ import { BankAccountModal } from './BankAccountModal';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../ipc/client';
 import { useAccountsQuery, useDeleteAccountMutation, useUpsertAccountMutation } from '../hooks/useAccounts';
+import { useDeferredDelete } from '@billme/desktop-renderer/hooks/useDeferredDelete';
+import { useActionFeedback } from '@billme/ui';
 import { useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
 
 type ViewMode = 'accounts' | 'matching';
@@ -23,6 +25,16 @@ export function AccountsView(): ReactElement {
   const [selectedImportAccountId, setSelectedImportAccountId] = useState<string>('');
   const { data: accounts = [] } = useAccountsQuery();
   const deleteAccount = useDeleteAccountMutation();
+  const { notify } = useActionFeedback('accounts');
+  const { pendingIds: pendingDeleteAccountIds, requestDelete } = useDeferredDelete({
+    scope: 'accounts',
+    commit: (id: string) => deleteAccount.mutateAsync(id),
+    label: (count: number) => count === 1 ? 'Konto gelöscht' : `${count} Konten gelöscht`,
+  });
+  const visibleAccounts = useMemo(
+    () => accounts.filter((account) => !pendingDeleteAccountIds.has(account.id)),
+    [accounts, pendingDeleteAccountIds],
+  );
   const upsertAccount = useUpsertAccountMutation();
   const [mappingSaveAccountId, setMappingSaveAccountId] = useState<string | null>(null);
   const { data: ledgerStats } = useProLedgerStatsQuery();
@@ -63,19 +75,20 @@ export function AccountsView(): ReactElement {
     : 'Alle Transaktionen zugeordnet';
   const unmatchedWarningText = `Sie haben ${unmatchedCount} unzugeordnete Transaktion${unmatchedPluralSuffix}`;
   const selectedImportAccount = useMemo(
-    () => accounts.find((account) => account.id === selectedImportAccountId),
-    [accounts, selectedImportAccountId],
+    () => visibleAccounts.find((account) => account.id === selectedImportAccountId),
+    [visibleAccounts, selectedImportAccountId],
   );
 
   useEffect(() => {
-    if (accounts.length === 0) {
+    if (visibleAccounts.length === 0) {
       setSelectedImportAccountId('');
       return;
     }
-    if (!selectedImportAccountId || !accounts.some((account) => account.id === selectedImportAccountId)) {
-      setSelectedImportAccountId(accounts[0]!.id);
+    if (pendingDeleteAccountIds.size > 0 && !selectedImportAccountId) return;
+    if (!selectedImportAccountId || !visibleAccounts.some((account) => account.id === selectedImportAccountId)) {
+      setSelectedImportAccountId(visibleAccounts[0]!.id);
     }
-  }, [accounts, selectedImportAccountId]);
+  }, [pendingDeleteAccountIds, selectedImportAccountId, visibleAccounts]);
 
   const handleCsvImport = async () => {
     try {
@@ -113,7 +126,7 @@ export function AccountsView(): ReactElement {
       });
 
       if (commit.imported > 0 || commit.skipped > 0) {
-        alert(`Erfolgreich ${commit.imported} Transaktionen importiert${commit.skipped > 0 ? `, ${commit.skipped} übersprungen` : ''}`);
+        notify('success', `Erfolgreich ${commit.imported} Transaktionen importiert${commit.skipped > 0 ? `, ${commit.skipped} übersprungen` : ''}`);
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ['transactions'] }),
           queryClient.invalidateQueries({ queryKey: ['accounts'] }),
@@ -172,7 +185,7 @@ export function AccountsView(): ReactElement {
             className="flex-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium"
           >
             <option value="">Konto auswählen</option>
-            {accounts.map((account) => (
+            {visibleAccounts.map((account) => (
               <option key={account.id} value={account.id}>
                 {account.name}
               </option>
@@ -312,13 +325,13 @@ export function AccountsView(): ReactElement {
       {/* Accounts List Placeholder */}
       <div className="mt-8">
         <h3 className="text-lg font-bold text-gray-900 mb-4">Ihre Konten</h3>
-        {accounts.length === 0 ? (
+        {visibleAccounts.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
             <p className="text-sm">Noch keine Konten vorhanden. Legen Sie ein neues Konto an.</p>
           </div>
         ) : (
           <div className="space-y-3">
-            {accounts.map((account) => (
+            {visibleAccounts.map((account) => (
               <div key={account.id} className="rounded-2xl border border-gray-200 bg-gray-50 p-4 flex items-center justify-between">
                 <div>
                   <p className="text-sm font-bold text-gray-900">{account.name}</p>
@@ -373,15 +386,10 @@ export function AccountsView(): ReactElement {
                   </button>
                   <button
                     className="px-3 py-1.5 rounded-lg text-xs font-bold bg-error-bg text-error border border-error/30 hover:bg-error hover:text-white"
-                    onClick={async () => {
-                      if (!confirm(`Konto "${account.name}" wirklich löschen?`)) return;
-                      try {
-                        await deleteAccount.mutateAsync(account.id);
-                        if (selectedImportAccountId === account.id) {
-                          setSelectedImportAccountId('');
-                        }
-                      } catch (error) {
-                        setCsvImportError(`Konto konnte nicht gelöscht werden: ${String(error)}`);
+                    onClick={() => {
+                      requestDelete([account.id]);
+                      if (selectedImportAccountId === account.id) {
+                        setSelectedImportAccountId('');
                       }
                     }}
                   >

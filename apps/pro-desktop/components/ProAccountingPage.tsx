@@ -697,6 +697,18 @@ export const ProAccountingPage: React.FC = () => {
       upsertIncomingInvoice(invoice: IncomingInvoiceEntity, reason) {
         return ipc.pro.upsertIncomingInvoice({ invoice, reason });
       },
+      listIncomingInvoiceDocuments(invoiceId) {
+        return ipc.pro.listIncomingInvoiceDocuments({ invoiceId });
+      },
+      uploadIncomingInvoiceDocument(input) {
+        return ipc.pro.uploadIncomingInvoiceDocument(input);
+      },
+      downloadIncomingInvoiceDocument(documentId) {
+        return ipc.pro.downloadIncomingInvoiceDocument({ documentId });
+      },
+      reviewIncomingInvoiceDocument(input) {
+        return ipc.pro.reviewIncomingInvoiceDocument(input);
+      },
       previewIncomingInvoiceAccounting(invoiceId) {
         return ipc.pro.previewIncomingInvoiceAccounting({ invoiceId });
       },

@@ -1,5 +1,6 @@
 import { calculateInvoiceTaxSnapshot } from '@billme/server-core/services';
 import type { BillingDocumentLine } from '@billme/server-core/domain';
+import { getInvoiceDocumentLabel, type InvoiceDocumentKind } from '@billme/desktop-core/types';
 
 type InvoiceItemLike = {
   kind?: BillingDocumentLine['kind'];
@@ -16,6 +17,7 @@ type InvoiceItemLike = {
 
 export type InvoiceLike = {
   number: string;
+  documentKind?: InvoiceDocumentKind;
   date?: string;
   dueDate?: string;
   servicePeriod?: string;
@@ -89,6 +91,7 @@ export const VARIABLE_GROUPS = [
     title: 'Rechnung',
     variables: [
       { key: 'invoice.number', label: 'Nummer', description: 'Rechnungsnummer' },
+      { key: 'invoice.documentLabel', label: 'Dokumenttyp', description: 'Auftragsbestätigung, Lieferschein, Rechnung usw.' },
       { key: 'invoice.date', label: 'Datum', description: 'Rechnungsdatum' },
       { key: 'invoice.dueDate', label: 'Fälligkeit', description: 'Fälligkeitsdatum' },
       { key: 'invoice.servicePeriod', label: 'Leistungszeitraum', description: 'Datum der Leistung' },
@@ -206,6 +209,7 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
 
   const dataMap: Record<string, string> = {
     'invoice.number': invoice.number,
+    'invoice.documentLabel': getInvoiceDocumentLabel(invoice.documentKind),
     'invoice.date': formatDate(invoice.date),
     'invoice.dueDate': formatDate(invoice.dueDate),
     'invoice.servicePeriod': invoice.servicePeriod ? formatDate(invoice.servicePeriod) : formatDate(invoice.date),

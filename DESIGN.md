@@ -17,6 +17,7 @@ colors:
   dark-3: "#1c1c1c"
   dark-border: "#222222"
   dark-border-subtle: "#333333"
+  dark-muted: "#9ca3af"
   background: "#ffffff"
   foreground: "#0b0b0b"
   surface: "#ffffff"

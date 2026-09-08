@@ -3,6 +3,7 @@ import { X, AlertTriangle, FileText, Calendar, CheckCircle2, XCircle, Undo2 } fr
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../runtime-api';
 import { formatCurrency } from '@billme/desktop-utils/formatters';
+import { Portal } from '@billme/ui';
 
 interface ImportHistoryModalProps {
   isOpen: boolean;
@@ -54,7 +55,8 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
   const details = detailsQuery.data;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <Portal>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-[95%] h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
@@ -407,5 +409,6 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
         </div>
       </div>
     </div>
+    </Portal>
   );
 };

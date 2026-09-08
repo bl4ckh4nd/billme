@@ -1,5 +1,6 @@
 import React from 'react';
-import { Button } from '@billme/ui';
+import { Button, useActionFeedback } from '@billme/ui';
+import { LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS } from '@billme/accounting-shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -23,10 +24,9 @@ import {
 } from 'lucide-react';
 import { getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
-import { Toast } from '@billme/desktop-ui/components/Toast';
 import { EurRulesModal } from './EurRulesModal';
 
-const DEFAULT_YEAR = 2025;
+const DEFAULT_YEAR = LATEST_SUPPORTED_EUR_TAX_YEAR;
 
 type SourceType = 'transaction' | 'invoice';
 type VatMode = 'none' | 'default';
@@ -136,14 +136,10 @@ export const EurView: React.FC = () => {
   const [lastUndo, setLastUndo] = React.useState<EurUndo | null>(null);
 
   const [showRulesModal, setShowRulesModal] = React.useState(false);
-  const [showToast, setShowToast] = React.useState(false);
-  const [toastMessage, setToastMessage] = React.useState('');
-  const [toastType, setToastType] = React.useState<'success' | 'error' | 'warning' | 'info'>('success');
+  const { notify } = useActionFeedback('eur');
 
   const showNotification = (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
-    setToastMessage(message);
-    setToastType(type);
-    setShowToast(true);
+    notify(type === 'warning' ? 'info' : type, message);
   };
 
   const {
@@ -412,7 +408,9 @@ export const EurView: React.FC = () => {
             onChange={(e) => setTaxYear(Number(e.target.value))}
             className="rounded-xl border border-gray-300 px-3 py-2 text-sm"
           >
-            <option value={2025}>2025</option>
+            {SUPPORTED_EUR_TAX_YEARS.map((year) => (
+              <option key={year} value={year}>{year}</option>
+            ))}
           </select>
           {!isWebShell && (
             <Button variant="secondary" size="sm" onClick={() => setShowRulesModal(true)}>
@@ -952,12 +950,6 @@ export const EurView: React.FC = () => {
         />
       )}
 
-      <Toast
-        message={toastMessage}
-        type={toastType}
-        isVisible={showToast}
-        onClose={() => setShowToast(false)}
-      />
     </div>
   );
 };

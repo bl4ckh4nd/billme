@@ -2,7 +2,7 @@ import { dialog, shell, type BrowserWindow, type IpcMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import type Database from 'better-sqlite3';
-import type { DocumentTemplateKind, Invoice } from '../types';
+import { getInvoiceDocumentLabel, isBillingDocumentKind, type DocumentTemplateKind, type Invoice } from '../types';
 import { logger } from '../utils/logger';
 import { closeDb, getDb, getDbPath, initDb } from '../db/connection';
 import { createInvoiceFromOffer, deleteInvoice, finalizeOutgoingInvoice, listInvoices, upsertInvoice } from '../db/invoicesRepo';
@@ -98,7 +98,19 @@ import { buildDatevBuchungsstapelCsv } from '../services/datevExport';
 import { buildTaxAuditExportPackage } from '../services/auditExportPackage';
 import { seedAccountKeywords } from '../services/accountKeywordSeed';
 import { resolveRuntimeProTenantScope } from '../tenantScope';
-import { calculateInvoiceTaxSnapshot, createOpenRouterVlmService, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import {
+  calculateInvoiceTaxSnapshot,
+  createOpenRouterVlmService,
+  resolveInvoiceTaxMode,
+  createCancellationInvoice,
+  createCreditNote,
+  createDeliveryNoteFromOrder,
+  createInvoiceRevision,
+  createOrderConfirmationFromOffer,
+  createSettlementInvoice,
+  listDocumentChain,
+} from '@billme/server-core/services';
+import { createBillingScope, createSqliteBillingDependencies, toLegacyInvoice } from '@billme/desktop-data/billingDomainCompat';
 import { listEurAnnexFacts, listEurCashFacts, saveEurAnnexFact, saveEurCashFact } from '@billme/desktop-data/eurFacts';
 import {
   disposeAsset,
@@ -416,6 +428,30 @@ export const registerIpcHandlers = (
     return createInvoiceFromOffer(db, offerId, newInvoiceId);
   });
 
+  register(ipcMain, 'documents:chainCreate', (args) => {
+    const db = requireDb();
+    const scope = createBillingScope(PRODUCT_PROFILE);
+    const dependencies = createSqliteBillingDependencies(db);
+    const params = { ...args, actor: { type: 'system' as const, displayName: 'local' } };
+    const created = args.operation === 'order_confirmation'
+      ? createOrderConfirmationFromOffer(scope, dependencies, params)
+      : args.operation === 'delivery_note'
+        ? createDeliveryNoteFromOrder(scope, dependencies, params as any)
+        : args.operation === 'settlement_invoice'
+          ? createSettlementInvoice(scope, dependencies, params as any)
+          : args.operation === 'correction'
+            ? (args.kind === 'credit_note'
+              ? createCreditNote(scope, dependencies, params as any)
+              : createCancellationInvoice(scope, dependencies, params as any))
+            : createInvoiceRevision(scope, dependencies, params as any);
+    return toLegacyInvoice(created);
+  });
+
+  register(ipcMain, 'documents:chainList', ({ rootDocumentId }) => {
+    const db = requireDb();
+    return listDocumentChain(createBillingScope(PRODUCT_PROFILE), createSqliteBillingDependencies(db), rootDocumentId).map(toLegacyInvoice);
+  });
+
   register(ipcMain, 'templates:list', ({ kind }) => {
     const db = requireDb();
     const normalized = kind === 'offer' ? 'offer' : kind === 'invoice' ? 'invoice' : undefined;
@@ -476,11 +512,11 @@ export const registerIpcHandlers = (
     const res = await exportPdf({
       kind: 'invoice',
       id,
-      suggestedName: `${invoice.number || 'invoice'}-${invoice.client || id}`,
+      suggestedName: `${getInvoiceDocumentLabel(invoice.documentKind)}-${invoice.number || 'invoice'}-${invoice.client || id}`,
       userDataPath,
     });
     const settings = requireSettings(db);
-    if (settings.eInvoice?.enabled) {
+    if (settings.eInvoice?.enabled && isBillingDocumentKind(invoice.documentKind)) {
       const normalized = normalizeInvoiceForEinvoice(invoice, settings);
       const xml = buildZugferdXml(normalized);
       const finalBytes = await embedZugferdInPdf({
@@ -1436,6 +1472,13 @@ export const registerIpcHandlers = (
   register(ipcMain, 'pro:upsertVendor', ({ vendor, reason }) => getProAccountingService().upsertVendor({ ...vendor, mutation: { reason } }));
   register(ipcMain, 'pro:listIncomingInvoices', () => getProAccountingService().listIncomingInvoices());
   register(ipcMain, 'pro:upsertIncomingInvoice', ({ invoice, reason }) => getProAccountingService().upsertIncomingInvoice({ ...invoice, mutation: { reason } }));
+  register(ipcMain, 'pro:listIncomingInvoiceDocuments', ({ invoiceId }) => getProAccountingService().listIncomingInvoiceDocuments(invoiceId));
+  register(ipcMain, 'pro:uploadIncomingInvoiceDocument', ({ invoiceId, originalFilename, mimeType, data, reason }) => getProAccountingService().uploadIncomingInvoiceDocument({ incomingInvoiceId: invoiceId, originalFilename, mimeType, content: Buffer.from(data, 'base64'), mutation: { reason } }));
+  register(ipcMain, 'pro:downloadIncomingInvoiceDocument', async ({ documentId }) => {
+    const downloaded = await getProAccountingService().downloadIncomingInvoiceDocument(documentId);
+    return { document: downloaded.document, data: Buffer.from(downloaded.content).toString('base64') };
+  });
+  register(ipcMain, 'pro:reviewIncomingInvoiceDocument', ({ documentId, reviewStatus, reason }) => getProAccountingService().reviewIncomingInvoiceDocument({ documentId, reviewStatus, mutation: { reason } }));
   register(ipcMain, 'pro:previewOutgoingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewOutgoingInvoice(invoiceId));
   register(ipcMain, 'pro:postOutgoingInvoiceAccounting', ({ invoiceId, reservationId, softLockOverride, overrideReason }) => {
     if (softLockOverride) assertLocalOwner('pro:postOutgoingInvoiceAccounting');

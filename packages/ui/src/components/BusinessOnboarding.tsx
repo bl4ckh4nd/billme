@@ -1,6 +1,7 @@
 import React from 'react';
 import { Button } from './Button';
 import { Input } from './Input';
+import { ValidationSummary } from './ValidationSummary';
 
 export type BusinessReportingProfile = {
   jurisdiction: 'DE';
@@ -81,6 +82,127 @@ type FieldPath =
   | 'businessReportingProfile.fiscalYearStart'
   | 'businessReportingProfile.chart'
   | 'businessReportingProfile.vatMethod';
+
+const FIELD_IDS: Record<FieldPath, string> = {
+  'company.name': 'onboarding-company-name',
+  'company.owner': 'onboarding-company-owner',
+  'company.street': 'onboarding-company-street',
+  'company.zip': 'onboarding-company-zip',
+  'company.city': 'onboarding-company-city',
+  'company.email': 'onboarding-company-email',
+  'finance.taxId': 'onboarding-finance-tax-id',
+  'numbers.invoicePrefix': 'onboarding-invoice-prefix',
+  'numbers.offerPrefix': 'onboarding-offer-prefix',
+  'legal.paymentTermsDays': 'onboarding-payment-terms-days',
+  'legal.defaultVatRate': 'onboarding-default-vat-rate',
+  'finance.bankName': 'onboarding-bank-name',
+  'finance.iban': 'onboarding-iban',
+  'businessReportingProfile.jurisdiction': 'onboarding-reporting-jurisdiction',
+  'businessReportingProfile.legalForm': 'onboarding-reporting-legal-form',
+  'businessReportingProfile.profitDetermination': 'onboarding-reporting-profit-determination',
+  'businessReportingProfile.hgbSizeClass': 'onboarding-reporting-hgb-size-class',
+  'businessReportingProfile.fiscalYearStart': 'onboarding-fiscal-year-start',
+  'businessReportingProfile.chart': 'onboarding-reporting-chart',
+  'businessReportingProfile.vatMethod': 'onboarding-reporting-vat-method',
+};
+
+const FIELD_LABELS: Record<FieldPath, string> = {
+  'company.name': 'Firmenname',
+  'company.owner': 'Inhaber oder Geschäftsführung',
+  'company.street': 'Strasse und Hausnummer',
+  'company.zip': 'PLZ',
+  'company.city': 'Stadt',
+  'company.email': 'E-Mail für Angebote und Rechnungen',
+  'finance.taxId': 'Steuernummer',
+  'numbers.invoicePrefix': 'Rechnungs-Praefix',
+  'numbers.offerPrefix': 'Angebots-Praefix',
+  'legal.paymentTermsDays': 'Zahlungsziel in Tagen',
+  'legal.defaultVatRate': 'Standard-MwSt. in Prozent',
+  'finance.bankName': 'Bankname',
+  'finance.iban': 'IBAN',
+  'businessReportingProfile.jurisdiction': 'Rechtsraum',
+  'businessReportingProfile.legalForm': 'Rechtsform',
+  'businessReportingProfile.profitDetermination': 'Gewinnermittlung',
+  'businessReportingProfile.hgbSizeClass': 'GmbH-Größenklasse',
+  'businessReportingProfile.fiscalYearStart': 'Wirtschaftsjahresbeginn (MM-TT)',
+  'businessReportingProfile.chart': 'Kontenrahmen',
+  'businessReportingProfile.vatMethod': 'Umsatzsteuer-Methode',
+};
+
+const STEP_FIELDS: Record<StepId, readonly FieldPath[]> = {
+  identity: [
+    'company.name',
+    'company.owner',
+    'company.street',
+    'company.zip',
+    'company.city',
+    'company.email',
+  ],
+  billing: [
+    'finance.taxId',
+    'numbers.invoicePrefix',
+    'numbers.offerPrefix',
+    'legal.paymentTermsDays',
+    'legal.defaultVatRate',
+    'businessReportingProfile.jurisdiction',
+    'businessReportingProfile.legalForm',
+    'businessReportingProfile.profitDetermination',
+    'businessReportingProfile.hgbSizeClass',
+    'businessReportingProfile.fiscalYearStart',
+    'businessReportingProfile.chart',
+    'businessReportingProfile.vatMethod',
+  ],
+  details: ['finance.bankName', 'finance.iban'],
+};
+
+type SelectFieldProps = {
+  id: string;
+  label: string;
+  value: string;
+  required?: boolean;
+  error?: string;
+  hint?: React.ReactNode;
+  onChange: (event: React.ChangeEvent<HTMLSelectElement>) => void;
+  children: React.ReactNode;
+};
+
+const SelectField: React.FC<SelectFieldProps> = ({
+  id,
+  label,
+  value,
+  required = false,
+  error,
+  hint,
+  onChange,
+  children,
+}) => {
+  const errorId = `${id}-error`;
+
+  return (
+    <div className="block text-sm font-medium text-foreground">
+      <label htmlFor={id}>
+        <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">
+          {label}
+          {required && <span aria-hidden="true" className="ml-1 text-error">*</span>}
+        </span>
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={onChange}
+        required={required}
+        aria-required={required || undefined}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
+        className={`h-11 w-full rounded-xl border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent ${error ? 'border-error focus:ring-error' : 'border-border'}`}
+      >
+        {children}
+      </select>
+      {hint && <span className="mt-2 block text-xs text-muted">{hint}</span>}
+      {error && <p id={errorId} className="mt-2 block text-xs text-error">{error}</p>}
+    </div>
+  );
+};
 
 type StepDefinition = {
   id: StepId;
@@ -258,17 +380,40 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
   const [draft, setDraft] = React.useState(() => withReportingProfile(initialData));
   const [stepIndex, setStepIndex] = React.useState(() => getInitialStepIndex(initialData));
   const [errors, setErrors] = React.useState<Partial<Record<FieldPath, string>>>({});
+  const [pendingFocusId, setPendingFocusId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     setDraft(withReportingProfile(initialData));
     setStepIndex(getInitialStepIndex(initialData));
     setErrors({});
+    setPendingFocusId(null);
   }, [initialData]);
+
+  React.useEffect(() => {
+    if (!pendingFocusId) return;
+    const field = document.getElementById(pendingFocusId);
+    setPendingFocusId(null);
+    if (!(field instanceof HTMLElement)) return;
+    field.focus({ preventScroll: true });
+    field.scrollIntoView?.({ block: 'center' });
+  }, [pendingFocusId, stepIndex]);
 
   const currentStep = STEPS[stepIndex];
   const progress = ((stepIndex + 1) / STEPS.length) * 100;
   const essentialsCompleted = countEssentials(draft);
   const reportingProfile = reportingProfileOf(draft);
+
+  const currentStepErrors = STEP_FIELDS[currentStep.id]
+    .filter((field) => errors[field])
+    .map((field) => ({
+      id: FIELD_IDS[field],
+      message: `${FIELD_LABELS[field]}: ${errors[field]}`,
+    }));
+  const firstStepError = currentStepErrors[0]?.message;
+
+  const focusField = (id: string) => {
+    setPendingFocusId(id);
+  };
 
   const updateCompany = (field: keyof BusinessOnboardingDraft['company'], value: string) => {
     setDraft((current) => ({
@@ -312,7 +457,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
           ...current,
           businessReportingProfile: {
             ...profile,
-            legalForm: value,
+            legalForm: value as BusinessReportingProfile['legalForm'],
             profitDetermination: 'double_entry',
             hgbSizeClass: profile.hgbSizeClass ?? 'micro',
             chart: profile.chart ?? 'SKR03',
@@ -324,7 +469,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
           ...current,
           businessReportingProfile: {
             ...profile,
-            legalForm: value,
+            legalForm: value as BusinessReportingProfile['legalForm'],
             profitDetermination: 'eur',
             hgbSizeClass: undefined,
           },
@@ -340,26 +485,37 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
   const handleNext = () => {
     const stepErrors = validateStep(stepIndex, draft);
     setErrors(stepErrors);
-    if (Object.keys(stepErrors).length > 0) return;
+    const firstError = Object.keys(stepErrors)[0] as FieldPath | undefined;
+    if (firstError) {
+      setPendingFocusId(FIELD_IDS[firstError]);
+      return;
+    }
     setStepIndex((current) => Math.min(current + 1, STEPS.length - 1));
   };
 
   const handleSubmit = async () => {
-    const allErrors = {
-      ...validateIdentityStep(draft),
-      ...validateBillingStep(draft),
-      ...validateDetailsStep(draft),
-    };
+    const identityErrors = validateIdentityStep(draft);
+    const billingErrors = validateBillingStep(draft);
+    const detailsErrors = validateDetailsStep(draft);
+    const allErrors = { ...identityErrors, ...billingErrors, ...detailsErrors };
     if (Object.keys(allErrors).length > 0) {
+      const firstInvalidStep = identityErrors && Object.keys(identityErrors).length > 0
+        ? 0
+        : billingErrors && Object.keys(billingErrors).length > 0
+          ? 1
+          : 2;
+      const firstError = Object.keys(
+        firstInvalidStep === 0 ? identityErrors : firstInvalidStep === 1 ? billingErrors : detailsErrors,
+      )[0] as FieldPath | undefined;
       setErrors(allErrors);
-      if (Object.keys(validateIdentityStep(draft)).length > 0) setStepIndex(0);
-      else if (Object.keys(validateBillingStep(draft)).length > 0) setStepIndex(1);
-      else setStepIndex(2);
+      setStepIndex(firstInvalidStep);
+      if (firstError) setPendingFocusId(FIELD_IDS[firstError]);
       return;
     }
     await onSubmit(withReportingProfile(draft));
   };
 
+  // Intentionally stays in this tree: onboarding owns its shell-relative layout and mounts outside transformed shells.
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-[#f4f4ef] px-4 py-4 sm:px-6 sm:py-6">
       <div className="mx-auto grid min-h-full w-full max-w-6xl overflow-hidden rounded-xl border border-black/5 bg-surface shadow-[0_28px_90px_rgba(15,23,42,0.14)] lg:grid-cols-[18rem_minmax(0,1fr)]">
@@ -467,20 +623,25 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
           </div>
 
           <div className="flex-1 px-6 py-6 sm:px-8 sm:py-8">
+            <ValidationSummary errors={currentStepErrors} onJump={focusField} />
             {currentStep.id === 'identity' && (
               <div className="space-y-8">
                 <section className="grid gap-4 md:grid-cols-2">
                   <Input
+                    id={FIELD_IDS['company.name']}
                     label="Firmenname"
                     fullWidth
+                    required
                     value={draft.company.name}
                     onChange={(event) => updateCompany('name', event.target.value)}
                     placeholder="Muster GmbH"
                     error={errors['company.name']}
                   />
                   <Input
+                    id={FIELD_IDS['company.owner']}
                     label="Inhaber oder Geschäftsführung"
                     fullWidth
+                    required
                     value={draft.company.owner}
                     onChange={(event) => updateCompany('owner', event.target.value)}
                     placeholder="Max Muster"
@@ -488,8 +649,10 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   />
                   <div className="md:col-span-2">
                     <Input
+                      id={FIELD_IDS['company.street']}
                       label="Strasse und Hausnummer"
                       fullWidth
+                      required
                       value={draft.company.street}
                       onChange={(event) => updateCompany('street', event.target.value)}
                       placeholder="Musterstrasse 12"
@@ -497,16 +660,20 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     />
                   </div>
                   <Input
+                    id={FIELD_IDS['company.zip']}
                     label="PLZ"
                     fullWidth
+                    required
                     value={draft.company.zip}
                     onChange={(event) => updateCompany('zip', event.target.value)}
                     placeholder="10115"
                     error={errors['company.zip']}
                   />
                   <Input
+                    id={FIELD_IDS['company.city']}
                     label="Stadt"
                     fullWidth
+                    required
                     value={draft.company.city}
                     onChange={(event) => updateCompany('city', event.target.value)}
                     placeholder="Berlin"
@@ -514,8 +681,10 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   />
                   <div className="md:col-span-2">
                     <Input
+                      id={FIELD_IDS['company.email']}
                       label="E-Mail für Angebote und Rechnungen"
                       fullWidth
+                      required
                       type="email"
                       value={draft.company.email}
                       onChange={(event) => updateCompany('email', event.target.value)}
@@ -538,16 +707,20 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
               <div className="space-y-8">
                 <section className="grid gap-4 md:grid-cols-2">
                   <Input
+                    id={FIELD_IDS['finance.taxId']}
                     label="Steuernummer"
                     fullWidth
+                    required
                     value={draft.finance.taxId}
                     onChange={(event) => updateFinance('taxId', event.target.value)}
                     placeholder="123/456/78900"
                     error={errors['finance.taxId']}
                   />
                   <Input
+                    id={FIELD_IDS['legal.paymentTermsDays']}
                     label="Zahlungsziel in Tagen"
                     fullWidth
+                    required
                     inputMode="numeric"
                     value={String(draft.legal.paymentTermsDays)}
                     onChange={(event) => updateLegal('paymentTermsDays', Number(event.target.value) || 0)}
@@ -555,16 +728,20 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     error={errors['legal.paymentTermsDays']}
                   />
                   <Input
+                    id={FIELD_IDS['numbers.invoicePrefix']}
                     label="Rechnungs-Praefix"
                     fullWidth
+                    required
                     value={draft.numbers.invoicePrefix}
                     onChange={(event) => updateNumbers('invoicePrefix', event.target.value)}
                     placeholder="RE-2026-"
                     error={errors['numbers.invoicePrefix']}
                   />
                   <Input
+                    id={FIELD_IDS['numbers.offerPrefix']}
                     label="Angebots-Praefix"
                     fullWidth
+                    required
                     value={draft.numbers.offerPrefix}
                     onChange={(event) => updateNumbers('offerPrefix', event.target.value)}
                     placeholder="ANG-2026-"
@@ -594,8 +771,10 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   {!draft.legal.smallBusinessRule && (
                     <div className="mt-5 max-w-xs">
                       <Input
+                        id={FIELD_IDS['legal.defaultVatRate']}
                         label="Standard-MwSt. in Prozent"
                         fullWidth
+                        required
                         inputMode="numeric"
                         value={String(draft.legal.defaultVatRate)}
                         onChange={(event) => updateLegal('defaultVatRate', Number(event.target.value) || 0)}
@@ -615,102 +794,94 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   </div>
 
                   <div className="mt-5 grid gap-4 md:grid-cols-2">
-                    <label className="block text-sm font-medium text-foreground">
-                      <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">Rechtsraum</span>
-                      <select
-                        aria-label="Rechtsraum"
-                        value={reportingProfile.jurisdiction}
-                        onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')}
-                        className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
-                      >
+                    <SelectField
+                      id={FIELD_IDS['businessReportingProfile.jurisdiction']}
+                      label="Rechtsraum"
+                      value={reportingProfile.jurisdiction}
+                      required
+                      error={errors['businessReportingProfile.jurisdiction']}
+                      hint="AT/CH-Berichte sind noch nicht verfügbar."
+                      onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')}
+                    >
                         <option value="DE">Deutschland</option>
-                      </select>
-                      <span className="mt-2 block text-xs text-muted">AT/CH-Berichte sind noch nicht verfügbar.</span>
-                    </label>
+                    </SelectField>
 
-                    <label className="block text-sm font-medium text-foreground">
-                      <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">Rechtsform</span>
-                      <select
-                        aria-label="Rechtsform"
-                        value={reportingProfile.legalForm}
-                        onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])}
-                        className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
-                      >
+                    <SelectField
+                      id={FIELD_IDS['businessReportingProfile.legalForm']}
+                      label="Rechtsform"
+                      value={reportingProfile.legalForm}
+                      required
+                      error={errors['businessReportingProfile.legalForm']}
+                      onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])}
+                    >
                         <option value="sole_proprietor">Einzelunternehmen</option>
                         <option value="gmbh">GmbH</option>
-                      </select>
-                    </label>
+                    </SelectField>
 
-                    <label className="block text-sm font-medium text-foreground">
-                      <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">Gewinnermittlung</span>
-                      <select
-                        aria-label="Gewinnermittlung"
-                        value={reportingProfile.profitDetermination}
-                        onChange={(event) => updateReportingProfile('profitDetermination', event.target.value as BusinessReportingProfile['profitDetermination'])}
-                        className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
-                      >
+                    <SelectField
+                      id={FIELD_IDS['businessReportingProfile.profitDetermination']}
+                      label="Gewinnermittlung"
+                      value={reportingProfile.profitDetermination}
+                      required
+                      error={errors['businessReportingProfile.profitDetermination']}
+                      hint={reportingProfile.legalForm === 'gmbh' ? 'GmbH ist hier nur mit doppelter Buchführung möglich.' : undefined}
+                      onChange={(event) => updateReportingProfile('profitDetermination', event.target.value as BusinessReportingProfile['profitDetermination'])}
+                    >
                         <option value="eur" disabled={reportingProfile.legalForm === 'gmbh'}>EÜR</option>
                         <option value="double_entry">Doppelte Buchführung</option>
-                      </select>
-                      {reportingProfile.legalForm === 'gmbh' && (
-                        <span className="mt-2 block text-xs text-muted">GmbH ist hier nur mit doppelter Buchführung möglich.</span>
-                      )}
-                    </label>
+                    </SelectField>
 
                     {reportingProfile.legalForm === 'gmbh' && (
-                      <label className="block text-sm font-medium text-foreground">
-                        <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">GmbH-Größenklasse</span>
-                        <select
-                          aria-label="GmbH-Größenklasse"
-                          value={reportingProfile.hgbSizeClass ?? ''}
-                          onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')}
-                          className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
-                        >
+                      <SelectField
+                        id={FIELD_IDS['businessReportingProfile.hgbSizeClass']}
+                        label="GmbH-Größenklasse"
+                        value={reportingProfile.hgbSizeClass ?? ''}
+                        required
+                        error={errors['businessReportingProfile.hgbSizeClass']}
+                        onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')}
+                      >
                           <option value="" disabled>Bitte auswählen</option>
                           <option value="micro">Kleinstgesellschaft (Micro)</option>
                           <option value="small">Kleine Gesellschaft (Small)</option>
-                        </select>
-                        {errors['businessReportingProfile.hgbSizeClass'] && <span className="mt-2 block text-xs text-error">{errors['businessReportingProfile.hgbSizeClass']}</span>}
-                      </label>
+                      </SelectField>
                     )}
 
                     {reportingProfile.profitDetermination === 'double_entry' && (
-                      <label className="block text-sm font-medium text-foreground">
-                        <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">Kontenrahmen</span>
-                        <select
-                          aria-label="Kontenrahmen"
-                          value={reportingProfile.chart ?? ''}
-                          onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')}
-                          className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
-                        >
+                      <SelectField
+                        id={FIELD_IDS['businessReportingProfile.chart']}
+                        label="Kontenrahmen"
+                        value={reportingProfile.chart ?? ''}
+                        required
+                        error={errors['businessReportingProfile.chart']}
+                        onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')}
+                      >
                           <option value="" disabled>Bitte auswählen</option>
                           <option value="SKR03">SKR03</option>
                           <option value="SKR04">SKR04</option>
-                        </select>
-                        {errors['businessReportingProfile.chart'] && <span className="mt-2 block text-xs text-error">{errors['businessReportingProfile.chart']}</span>}
-                      </label>
+                      </SelectField>
                     )}
 
                     <Input
+                      id={FIELD_IDS['businessReportingProfile.fiscalYearStart']}
                       label="Wirtschaftsjahresbeginn (MM-TT)"
                       fullWidth
+                      required
                       value={reportingProfile.fiscalYearStart}
                       onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)}
                       placeholder="01-01"
                       error={errors['businessReportingProfile.fiscalYearStart']}
                     />
-                    <label className="block text-sm font-medium text-foreground">
-                      <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted">Umsatzsteuer-Methode</span>
-                      <select
-                        aria-label="Umsatzsteuer-Methode"
-                        value={reportingProfile.vatMethod}
-                        onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])}
-                        className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
-                      >
+                    <SelectField
+                      id={FIELD_IDS['businessReportingProfile.vatMethod']}
+                      label="Umsatzsteuer-Methode"
+                      value={reportingProfile.vatMethod}
+                      required
+                      error={errors['businessReportingProfile.vatMethod']}
+                      onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])}
+                    >
                         <option value="soll">Soll-Versteuerung</option>
                         <option value="ist">Ist-Versteuerung</option>
-                      </select>
-                    </label>
+                    </SelectField>
                   </div>
                 </section>
               </div>
@@ -720,6 +891,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
               <div className="space-y-8">
                 <section className="grid gap-4 md:grid-cols-2">
                   <Input
+                    id="onboarding-company-phone"
                     label="Telefon"
                     fullWidth
                     value={draft.company.phone}
@@ -727,6 +899,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     placeholder="+49 30 123456"
                   />
                   <Input
+                    id="onboarding-company-website"
                     label="Website"
                     fullWidth
                     value={draft.company.website}
@@ -734,22 +907,27 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     placeholder="www.muster.de"
                   />
                   <Input
+                    id={FIELD_IDS['finance.bankName']}
                     label="Bankname"
                     fullWidth
+                    required={Boolean(trim(draft.finance.iban))}
                     value={draft.finance.bankName}
                     onChange={(event) => updateFinance('bankName', event.target.value)}
                     placeholder="Musterbank"
                     error={errors['finance.bankName']}
                   />
                   <Input
+                    id={FIELD_IDS['finance.iban']}
                     label="IBAN"
                     fullWidth
+                    required={Boolean(trim(draft.finance.bankName))}
                     value={draft.finance.iban}
                     onChange={(event) => updateFinance('iban', event.target.value)}
                     placeholder="DE00 0000 0000 0000 0000 00"
                     error={errors['finance.iban']}
                   />
                   <Input
+                    id="onboarding-finance-bic"
                     label="BIC"
                     fullWidth
                     value={draft.finance.bic}
@@ -757,6 +935,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     placeholder="GENODEF1XXX"
                   />
                   <Input
+                    id="onboarding-finance-vat-id"
                     label="USt-IdNr."
                     fullWidth
                     value={draft.finance.vatId}
@@ -765,6 +944,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   />
                   <div className="md:col-span-2">
                     <Input
+                      id="onboarding-finance-register-court"
                       label="Registergericht"
                       fullWidth
                       value={draft.finance.registerCourt}
@@ -816,7 +996,8 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   ? 'Weitere Einstellungen findest du später im Bereich Einstellungen.'
                   : 'Die Pflichtfelder werden für deine Dokumente benötigt.'}
               </p>
-              <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                {firstStepError && <p id="onboarding-action-error" className="max-w-sm text-xs text-error" role="status" aria-live="assertive">{firstStepError}</p>}
                 {stepIndex > 0 && (
                   <Button
                     variant="secondary"
@@ -826,11 +1007,11 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   </Button>
                 )}
                 {stepIndex < STEPS.length - 1 ? (
-                  <Button onClick={handleNext}>
+                  <Button onClick={handleNext} aria-describedby={firstStepError ? 'onboarding-action-error' : undefined}>
                     Weiter zu {STEPS[stepIndex + 1]?.label}
                   </Button>
                 ) : (
-                  <Button onClick={() => void handleSubmit()} disabled={saving}>
+                  <Button onClick={() => void handleSubmit()} disabled={saving} aria-describedby={firstStepError ? 'onboarding-action-error' : undefined}>
                     {saving ? 'Einrichtung wird gespeichert ...' : submitLabel}
                   </Button>
                 )}

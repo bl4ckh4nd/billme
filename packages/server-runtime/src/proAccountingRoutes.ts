@@ -21,7 +21,7 @@ import type {
   AccountingAccountMapping,
   IncomingInvoiceEntity,
 } from '@billme/accounting-shared';
-import { CorrectionSettlementError } from '@billme/accounting-shared';
+import { CorrectionSettlementError, INCOMING_INVOICE_DOCUMENT_UPLOAD_BODY_LIMIT } from '@billme/accounting-shared';
 import { createPostgresProAccountingRepository, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
 import {
   accountingAccountMappingSchema,
@@ -34,6 +34,10 @@ import {
   assetUpsertSchema,
   bookingDraftEntitySchema,
   incomingInvoiceSchema,
+  incomingInvoiceDocumentSchema,
+  incomingInvoiceDocumentDownloadSchema,
+  incomingInvoiceDocumentReviewSchema,
+  incomingInvoiceDocumentUploadSchema,
   journalEntryEntitySchema,
   ledgerBalanceRowSchema,
   openItemSchema,
@@ -84,6 +88,12 @@ const serviceFor = (app: FastifyInstance) => {
 };
 
 const reasonSchema = z.string().trim().min(1, 'reason is required');
+const decodeIncomingInvoiceDocument = (value: string): Uint8Array => {
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error('INCOMING_INVOICE_DOCUMENT_INVALID_BASE64');
+  const bytes = new Uint8Array(Buffer.from(value, 'base64'));
+  if (!bytes.byteLength) throw new Error('INCOMING_INVOICE_DOCUMENT_SIZE_INVALID');
+  return bytes;
+};
 const idParams = z.object({ id: z.string().min(1) });
 const transactionParams = z.object({ transactionId: z.string().min(1) });
 const draftParams = z.object({ draftId: z.string().min(1) });
@@ -1285,6 +1295,64 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       };
       const saved = await serviceFor(app).upsertIncomingInvoice(session.scope, invoice);
       return saved;
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/incoming-invoices/:invoiceId/documents`,
+    params: z.object({ invoiceId: z.string().min(1) }),
+    response: z.array(incomingInvoiceDocumentSchema),
+    async handler({ request, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return serviceFor(app).listIncomingInvoiceDocuments(session.scope, params.invoiceId);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/incoming-invoices/:invoiceId/documents`,
+    params: z.object({ invoiceId: z.string().min(1) }),
+    body: incomingInvoiceDocumentUploadSchema.omit({ invoiceId: true }),
+    bodyLimit: INCOMING_INVOICE_DOCUMENT_UPLOAD_BODY_LIMIT,
+    response: incomingInvoiceDocumentSchema,
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return serviceFor(app).uploadIncomingInvoiceDocument(session.scope, {
+        incomingInvoiceId: params.invoiceId,
+        originalFilename: body.originalFilename,
+        mimeType: body.mimeType,
+        content: decodeIncomingInvoiceDocument(body.data),
+        mutation: mutationFor(session, body.reason),
+      });
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/incoming-invoice-documents/:documentId/review`,
+    params: z.object({ documentId: z.string().min(1) }),
+    body: incomingInvoiceDocumentReviewSchema.omit({ documentId: true }),
+    response: incomingInvoiceDocumentSchema,
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return serviceFor(app).reviewIncomingInvoiceDocument(session.scope, {
+        documentId: params.documentId,
+        reviewStatus: body.reviewStatus,
+        mutation: mutationFor(session, body.reason),
+      });
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/incoming-invoice-documents/:documentId/download`,
+    params: z.object({ documentId: z.string().min(1) }),
+    response: incomingInvoiceDocumentDownloadSchema,
+    async handler({ request, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      const downloaded = await serviceFor(app).downloadIncomingInvoiceDocument(session.scope, params.documentId);
+      return { document: downloaded.document, data: Buffer.from(downloaded.content).toString('base64') };
     },
   });
 

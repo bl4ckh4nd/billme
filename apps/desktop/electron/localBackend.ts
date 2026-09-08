@@ -10,7 +10,7 @@ import type {
 } from '@billme/embedded-server-runtime';
 import { startEmbeddedRuntimeCoordinator } from '@billme/embedded-server-runtime/lifecycleCoordinator';
 import type { RestorePgliteDataDirResult } from '@billme/embedded-server-runtime';
-import { DEFAULT_SETTINGS, MOCK_SETTINGS } from '@billme/desktop-services/mockData';
+import { DEFAULT_SETTINGS } from '@billme/desktop-services/mockData';
 import type { ProductProfile } from '../productProfile';
 
 interface ServerQueryTarget {
@@ -69,7 +69,6 @@ export type LocalBackendMode = 'pglite';
 export interface LocalBackendStartDependencies {
   readonly userDataPath: string;
   readonly profile: ProductProfile;
-  readonly isDev?: boolean;
   readonly startEmbeddedServer?: (
     options: StartEmbeddedServerOptions,
   ) => Promise<EmbeddedServerHandle>;
@@ -96,7 +95,6 @@ const now = (): string => new Date().toISOString();
 const initializeLocalIdentity = async (
   database: ServerDatabase,
   context: EmbeddedDatabaseInitializerContext,
-  seedDevSettings: boolean,
   profile: ProductProfile,
 ): Promise<void> => {
   await database.transaction({}, async (session) => {
@@ -105,7 +103,7 @@ const initializeLocalIdentity = async (
       `INSERT INTO server_settings (tenant_id, settings_json, created_at, updated_at)
        VALUES ($1, $2, $3, $3)
        ON CONFLICT (tenant_id) DO NOTHING`,
-      [context.identity.tenantId, JSON.stringify(seedDevSettings ? MOCK_SETTINGS : DEFAULT_SETTINGS), now()],
+      [context.identity.tenantId, JSON.stringify(DEFAULT_SETTINGS), now()],
     );
   });
 };
@@ -152,7 +150,6 @@ export const createLocalBackend = async (
     initializeLocalIdentity(
       database,
       context,
-      Boolean(dependencies.isDev),
       dependencies.profile,
     );
 

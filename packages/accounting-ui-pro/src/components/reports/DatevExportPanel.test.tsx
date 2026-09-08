@@ -78,7 +78,7 @@ describe('DatevExportPanel', () => {
 
   it('loads immutable history and exports through the productive adapter', async () => {
     const listDatevExports = vi.fn(async () => [historyRow]);
-    const exportDatevBuchungsstapel = vi.fn(async () => ({ ...historyRow, id: 'datev-2', recordCount: 4 }));
+    const exportDatevBuchungsstapel = vi.fn(async () => ({ ...historyRow, id: 'datev-2', recordCount: 1 }));
     const adapter = { listDatevExports, exportDatevBuchungsstapel };
 
     render(<DatevExportPanel dataAdapter={adapter} chartFramework="SKR03" />);
@@ -95,7 +95,12 @@ describe('DatevExportPanel', () => {
       accountLength: 4,
       encoding: 'cp1252',
     })));
-    expect(await screen.findByText(/Export erstellt: 4 Buchungen/)).toBeTruthy();
+    const successStatus = await screen.findByRole('status');
+    expect(successStatus.textContent).toContain('DATEV-Datei heruntergeladen · Serverbeleg datev-2');
+    expect(successStatus.textContent).toContain('1 Buchung');
+    expect(successStatus.textContent).not.toContain('1 Buchungen');
+    expect(successStatus.textContent).not.toContain('/exports/datev-1.CSV');
+    expect(successStatus.textContent).toContain('SHA-256');
     expect(listDatevExports).toHaveBeenCalledWith(20);
   });
 

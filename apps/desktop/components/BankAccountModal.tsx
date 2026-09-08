@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { X, Building2 } from 'lucide-react';
+import { Portal } from '@billme/ui';
 import { ipc } from '../ipc/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
@@ -53,7 +54,8 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <Portal>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm">
       <div className="bg-white rounded-3xl shadow-2xl w-[500px] max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
@@ -145,5 +147,6 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
         </div>
       </div>
     </div>
+    </Portal>
   );
 };

@@ -30,7 +30,7 @@ export type VatAccountingMethod = 'soll' | 'ist';
 
 type InvoiceRow = {
   id: string; client_id: string | null; client?: string | null; client_email?: string | null; client_address?: string | null; billing_address_json?: string | null; shipping_address_json?: string | null; tax_meta_json?: string | null;
-  number: string; date: string; due_date: string; service_period?: string | null;
+  number: string; document_kind?: string | null; source_document_id?: string | null; date: string; due_date: string; service_period?: string | null;
   amount: number; status: string; tax_mode?: string | null; tax_snapshot_json: string | null; accounting_status: string;
   accounting_snapshot_json: string | null; accounting_journal_entry_id: string | null;
 };
@@ -74,6 +74,8 @@ const assertDesktopTenant = (scope: TenantScope): string => {
   if (tenantId !== 'default') throw new Error('DESKTOP_SINGLE_TENANT_ONLY');
   return tenantId;
 };
+const isNonBillingDocument = (row: InvoiceRow): boolean => row.document_kind === 'order_confirmation' || row.document_kind === 'delivery_note';
+const isCorrectionDocument = (row: InvoiceRow): boolean => row.document_kind === 'credit_note' || row.document_kind === 'cancellation_invoice';
 const period = (date: string): string => date.slice(0, 7);
 const fiscalYear = (date: string): number => Number(date.slice(0, 4));
 const taxCaseForRate = (rate: number, taxMode?: string | null, einvoiceCategoryCode?: string): string => {
@@ -365,6 +367,15 @@ export const previewOutgoingInvoice = (db: Database.Database, scope: TenantScope
   const tenantId = assertDesktopTenant(scope);
   const row = invoiceRow(db, tenantId, invoiceId);
   if (!row) throw new Error('Invoice not found');
+  if (isNonBillingDocument(row)) {
+    return {
+      sourceType: 'outgoing_invoice',
+      sourceId: invoiceId,
+      status: 'unresolved',
+      reason: 'Auftragsbestätigungen und Lieferscheine werden nicht gebucht.',
+      issues: [{ code: 'NON_BILLING_DOCUMENT', message: 'Dieses Dokument ist nicht buchungsfähig.', blocking: true }],
+    };
+  }
   const policy = getAccountingPolicyForPro(db, scope);
   const mappings = getMapping(db, tenantId, policy.activeChart);
   const issues = validateMapping(db, policy.activeChart, mappings, ['accounts_receivable', 'revenue']);
@@ -394,6 +405,15 @@ export const postOutgoingInvoice = (db: Database.Database, scope: TenantScope, i
   const tenantId = assertDesktopTenant(scope);
   const existingRow = invoiceRow(db, tenantId, invoiceId);
   if (!existingRow) throw new Error('Invoice not found');
+  if (isNonBillingDocument(existingRow)) {
+    return {
+      sourceType: 'outgoing_invoice',
+      sourceId: invoiceId,
+      status: 'unresolved',
+      reason: 'Auftragsbestätigungen und Lieferscheine werden nicht gebucht.',
+      issues: [{ code: 'NON_BILLING_DOCUMENT', message: 'Dieses Dokument ist nicht buchungsfähig.', blocking: true }],
+    };
+  }
   // Reversed/cancelled documents are terminal. Reject before preview/journal
   // creation so the SQLite immutability trigger is not the domain guard.
   if (existingRow.accounting_status === 'reversed' || existingRow.status === 'cancelled') throw new Error('DOCUMENT_NOT_POSTABLE');
@@ -415,14 +435,38 @@ export const postOutgoingInvoice = (db: Database.Database, scope: TenantScope, i
   }
   const row = existingRow;
   if (row.accounting_status === 'posted' && row.accounting_snapshot_json) return { ...preview, snapshot: json<AccountingSnapshot>(row.accounting_snapshot_json) ?? preview.snapshot };
-  const sourceKey = `outgoing-invoice:${invoiceId}`;
+  const correction = isCorrectionDocument(row);
+  const accountingSnapshot = correction
+    ? {
+      ...preview.snapshot,
+      lines: preview.snapshot.lines.map((line) => ({ ...line, debitAmount: line.creditAmount, creditAmount: line.debitAmount })),
+    }
+    : preview.snapshot;
+  const sourceKey = correction ? `outgoing-correction:${invoiceId}` : `outgoing-invoice:${invoiceId}`;
   const result = db.transaction(() => {
-    const journalEntryId = insertJournal(db, tenantId, 'outgoing_invoice', sourceKey, row.date, `Rechnung ${row.number}`, preview.snapshot!.lines, { chart: preview.snapshot!.chart, ...options });
+    const journalEntryId = insertJournal(db, tenantId, 'outgoing_invoice', sourceKey, row.date, `${row.document_kind === 'credit_note' ? 'Gutschrift' : row.document_kind === 'cancellation_invoice' ? 'Stornorechnung' : 'Rechnung'} ${row.number}`, accountingSnapshot!.lines, { chart: accountingSnapshot!.chart, ...options });
     const timestamp = now();
-    db.prepare(`INSERT INTO open_items (id, tenant_id, party_type, party_id, source_type, source_id, document_number, document_date, due_date, original_amount, allocated_amount, residual_amount, status, journal_entry_id, created_at, updated_at)
-      VALUES (?, ?, 'debtor', ?, 'outgoing_invoice', ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?, ?)
-      ON CONFLICT(tenant_id, source_type, source_id) DO NOTHING`).run(randomUUID(), tenantId, row.client_id ?? row.id, invoiceId, row.number, row.date, row.due_date, preview.snapshot!.grossAmount, preview.snapshot!.grossAmount, journalEntryId, timestamp, timestamp);
-    db.prepare(`UPDATE invoices SET status = CASE WHEN status = 'draft' THEN 'open' ELSE status END, accounting_status = 'posted', accounting_snapshot_json = ?, accounting_journal_entry_id = ?, accounting_posted_at = ? WHERE id = ?`).run(JSON.stringify(preview.snapshot), journalEntryId, timestamp, invoiceId);
+    if (correction && row.source_document_id) {
+      const original = db.prepare(`SELECT id, original_amount, allocated_amount, residual_amount
+        FROM open_items WHERE tenant_id = ? AND source_type = 'outgoing_invoice' AND source_id = ?`).get(tenantId, row.source_document_id) as { id: string; original_amount: number; allocated_amount: number; residual_amount: number } | undefined;
+      if (original) {
+        const allocation = amount(Math.min(Math.max(0, original.residual_amount), Math.abs(accountingSnapshot!.grossAmount)));
+        const allocated = amount(original.allocated_amount + allocation);
+        const residual = amount(Math.max(0, original.original_amount - allocated));
+        db.prepare(`UPDATE open_items SET allocated_amount = ?, residual_amount = ?, status = ?, updated_at = ? WHERE id = ?`).run(
+          allocated,
+          residual,
+          residual <= 0 ? 'paid' : allocated > 0 ? 'partially_paid' : 'open',
+          timestamp,
+          original.id,
+        );
+      }
+    } else {
+      db.prepare(`INSERT INTO open_items (id, tenant_id, party_type, party_id, source_type, source_id, document_number, document_date, due_date, original_amount, allocated_amount, residual_amount, status, journal_entry_id, created_at, updated_at)
+        VALUES (?, ?, 'debtor', ?, 'outgoing_invoice', ?, ?, ?, ?, ?, 0, ?, 'open', ?, ?, ?)
+        ON CONFLICT(tenant_id, source_type, source_id) DO NOTHING`).run(randomUUID(), tenantId, row.client_id ?? row.id, invoiceId, row.number, row.date, row.due_date, preview.snapshot!.grossAmount, preview.snapshot!.grossAmount, journalEntryId, timestamp, timestamp);
+    }
+    db.prepare(`UPDATE invoices SET status = CASE WHEN status = 'draft' THEN 'open' ELSE status END, accounting_status = 'posted', accounting_snapshot_json = ?, accounting_journal_entry_id = ?, accounting_posted_at = ? WHERE id = ?`).run(JSON.stringify(accountingSnapshot), journalEntryId, timestamp, invoiceId);
     appendAuditLog(db, { entityType: 'invoice', entityId: invoiceId, action: 'accounting_post', reason: 'outgoing invoice finalized', before: { accountingStatus: row.accounting_status }, after: { journalEntryId, snapshot: preview.snapshot }, actor: 'pro' });
     return journalEntryId;
   })();
@@ -781,6 +825,7 @@ export const previewAccountingBackfill = (db: Database.Database, scope: TenantSc
     FROM invoices i
     JOIN number_reservations nr ON nr.kind = 'invoice' AND nr.status = 'finalized' AND nr.document_id = i.id AND nr.number = i.number
     WHERE i.status NOT IN ('draft', 'cancelled') AND COALESCE(i.accounting_status, 'unposted') NOT IN ('posted', 'reversed')
+      AND COALESCE(i.document_kind, 'invoice') NOT IN ('order_confirmation', 'delivery_note')
     ORDER BY i.id`).all() as Array<{ id: string }>;
   for (const row of invoices) {
     const preview = previewOutgoingInvoice(db, scope, row.id);

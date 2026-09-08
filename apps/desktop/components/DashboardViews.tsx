@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -6,7 +5,7 @@ import {
     ArrowUpRight, CheckCircle, CreditCard, MoreHorizontal, ShieldCheck,
     PieChart, ArrowLeft, ArrowDownLeft, Search, Link, X, LayoutTemplate, Settings2
 } from 'lucide-react';
-import { Button } from '@billme/ui';
+import { Button, Portal, useActionFeedback } from '@billme/ui';
 import { Account, Transaction, Invoice, AppSettings } from '../types';
 import { useInvoicesQuery } from '../hooks/useInvoices';
 import { useAccountsQuery, useUpsertAccountMutation } from '../hooks/useAccounts';
@@ -1272,7 +1271,8 @@ export const AccountsView: React.FC = () => {
 
             {/* Add Account Modal */}
             {isAddAccountOpen && (
-              <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center p-4">
+              <Portal>
+              <div className="fixed inset-0 z-50 bg-dark-base/20 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden">
                   <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                     <h3 className="font-bold text-lg">Konto hinzufügen</h3>
@@ -1354,6 +1354,7 @@ export const AccountsView: React.FC = () => {
                   </div>
                 </div>
               </div>
+              </Portal>
             )}
             
              <div className="grid grid-cols-1 gap-4">
@@ -1390,6 +1391,7 @@ export const AccountsView: React.FC = () => {
 
 export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer') => void }> = ({ onOpenEditor }) => {
     const [activeTab, setActiveTab] = useState<'invoice' | 'offer'>('invoice');
+    const { notify } = useActionFeedback('templates');
     const { data: templates = [] } = useTemplatesQuery(activeTab);
     const { data: activeTemplate } = useActiveTemplateQuery(activeTab);
     const setActiveTemplateMutation = useSetActiveTemplateMutation();
@@ -1419,7 +1421,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
             await setActiveTemplateMutation.mutateAsync({ kind: activeTab, templateId: saved.id });
             onOpenEditor(activeTab);
         } catch (e) {
-            alert(`Vorlage anlegen fehlgeschlagen: ${String(e)}`);
+            notify('error', `Vorlage anlegen fehlgeschlagen: ${String(e)}`);
         }
     };
 

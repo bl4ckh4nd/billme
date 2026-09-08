@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Portal } from '@billme/ui';
 import type { JournalEntryEntity } from '@billme/accounting-shared';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
 
@@ -120,7 +121,8 @@ export function JournalEntryDetailModal({ entryId, dataAdapter, onClose }: Journ
   if (!entryId) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-dark-base/40 p-4 sm:p-8" role="presentation">
+    <Portal>
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-dark-base/20 backdrop-blur-sm p-4 sm:p-8" role="presentation">
       <div className="w-full max-w-3xl rounded-2xl border border-border bg-surface p-4 shadow-xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="journal-entry-dialog-heading">
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 id="journal-entry-dialog-heading" className="text-lg font-black text-foreground">Journalbuchung</h2>
@@ -129,5 +131,6 @@ export function JournalEntryDetailModal({ entryId, dataAdapter, onClose }: Journ
         <JournalEntryDetail entryId={entryId} dataAdapter={dataAdapter} />
       </div>
     </div>
+    </Portal>
   );
 }

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { FeedbackProvider } from '@billme/ui';
 
 const { mockIpc, mockProduct } = vi.hoisted(() => ({
   mockProduct: vi.fn(() => 'pro' as 'lite' | 'pro'),
@@ -72,7 +73,9 @@ const renderView = (initialTab: 'matching' | 'eur' = 'eur') => {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <TransactionMatchingView onBack={() => {}} initialTab={initialTab} />
+      <FeedbackProvider>
+        <TransactionMatchingView onBack={() => {}} initialTab={initialTab} />
+      </FeedbackProvider>
     </QueryClientProvider>,
   );
 };

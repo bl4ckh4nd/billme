@@ -1,4 +1,4 @@
-import { Button } from '@billme/ui';
+import { Button, Portal, useActionFeedback } from '@billme/ui';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRendererProduct, ipc } from '../runtime-api';
-import { Toast } from '@billme/desktop-ui/components/Toast';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
 import type { Transaction, Invoice as InvoiceType } from '@billme/desktop-core/types';
 
@@ -89,17 +88,13 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showLinked, setShowLinked] = useState(false);
-  const [showToast, setShowToast] = useState(false);
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastType, setToastType] = useState<'success' | 'error' | 'warning' | 'info'>('success');
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false);
   const [invoiceToUnlink, setInvoiceToUnlink] = useState<{ transactionId: string; invoiceWillBeOverdue: boolean } | null>(null);
   const queryClient = useQueryClient();
+  const { notify } = useActionFeedback('transaction-matching');
 
   const showNotification = (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
-    setToastMessage(message);
-    setToastType(type);
-    setShowToast(true);
+    notify(type === 'warning' ? 'info' : type, message);
   };
 
   // Existing invoice matching flow
@@ -1006,7 +1001,8 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
       </div>
 
       {showUnlinkConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <Portal>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl w-[90%] max-w-md p-6">
             <div className="flex items-start gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0">
@@ -1048,14 +1044,9 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
             </div>
           </div>
         </div>
+        </Portal>
       )}
 
-      <Toast
-        message={toastMessage}
-        type={toastType}
-        isVisible={showToast}
-        onClose={() => setShowToast(false)}
-      />
     </div>
   );
 };

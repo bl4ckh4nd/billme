@@ -127,6 +127,12 @@ export const createServerRecurringDependencies = (
     recurringProfileStore: {
       list: (innerScope) => profileRepository().list(innerScope),
       getById: (innerScope, id) => profileRepository().getById(innerScope, id),
+      getByIdForUpdate: (innerScope, id) => {
+        const repository = profileRepository();
+        return repository.getByIdForUpdate
+          ? repository.getByIdForUpdate(innerScope, id)
+          : repository.getById(innerScope, id);
+      },
       save: (innerScope, profile) => profileRepository().save(innerScope, profile),
       remove: (innerScope, id) => profileRepository().remove(innerScope, id),
     },

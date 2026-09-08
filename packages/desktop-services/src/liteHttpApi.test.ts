@@ -18,6 +18,29 @@ const textResponse = (payload: string, status = 200): Response => ({
   json: async () => JSON.parse(payload),
 } as Response);
 
+test('Lite converts an offer with one validated server request and propagates failures', async () => {
+  const calls: Array<{ url: string; body: { offerId: string; invoiceId: string } }> = [];
+  let fail = false;
+  const api = createLiteHttpBillmeApi({ baseUrl: 'https://example.test', auth: { mode: 'bearer', token: 'test-token' },
+    fetch: async (input, init) => {
+      const body = JSON.parse(String(init?.body));
+      calls.push({ url: String(input), body });
+      if (fail) return response({ message: 'Conversion rolled back' }, 500);
+      return response({ kind: 'invoice', id: body.invoiceId, tenantId: 'tenant', sourceDocumentId: body.offerId,
+        documentKind: 'invoice', number: 'RE-1', client: 'Buyer', clientEmail: 'buyer@example.test',
+        date: '2026-09-07', dueDate: '2026-09-21', amount: 0, status: 'draft', items: [], payments: [], history: [] });
+    },
+  });
+  const invoice = await api.documents.convertOfferToInvoice({ offerId: 'offer-1' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, 'https://example.test/api/v1/lite/documents/convert-offer');
+  assert.equal(invoice.id, calls[0]?.body.invoiceId);
+  assert.equal(invoice.sourceDocumentId, 'offer-1');
+  fail = true;
+  await assert.rejects(api.documents.convertOfferToInvoice({ offerId: 'offer-1' }), /Conversion rolled back/);
+  assert.equal(calls.length, 2); // No separate reservation/finalization/compensation requests.
+});
+
 test('Lite HTTP adapter sends hosted Bearer and embedded local-token auth', async () => {
   const seen: Array<{ headers: HeadersInit | undefined; url: string }> = [];
 
@@ -303,9 +326,68 @@ test('Lite HTTP adapter sends EÜR ranges as encoded query parameters without GE
   await api.eur.listItems({ taxYear: 2025 });
 
   assert.deepEqual(requests, [
-    { url: 'https://example.test/api/v1/lite/reports/eur?from=2025-01-01&to=2025-12-31', method: 'GET', body: undefined },
-    { url: 'https://example.test/api/v1/lite/reports/eur/items?from=2025-01-01&to=2025-12-31', method: 'GET', body: undefined },
+    { url: 'https://example.test/api/v1/lite/reports/eur?taxYear=2025&from=2025-01-01&to=2025-12-31', method: 'GET', body: undefined },
+    { url: 'https://example.test/api/v1/lite/reports/eur/items?taxYear=2025&from=2025-01-01&to=2025-12-31', method: 'GET', body: undefined },
   ]);
+});
+
+test('Lite HTTP adapter routes the 2026 EÜR report, items, classification, and CSV consistently', async () => {
+  const requests: Array<{ url: string; method: string; body: unknown }> = [];
+  const report = {
+    taxYear: 2026,
+    from: '2026-01-01',
+    to: '2026-12-31',
+    rows: [{ id: 'line-2026', kennziffer: '112', label: 'Betriebseinnahmen', kind: 'income' as const, exportable: true, sortOrder: 0, total: 42 }],
+    summary: { incomeTotal: 42, expenseTotal: 0, surplus: 42 },
+    unclassifiedCount: 0,
+    warnings: [],
+    catalog: { id: 'anlage-euer-2026', version: 'BMF-2026-2026-08-14', sourceHash: 'b'.repeat(64), delivery: 'print-form-only' as const, elsterReady: false },
+  };
+  const item = {
+    sourceType: 'transaction' as const,
+    sourceId: 'transaction-2026',
+    date: '2026-06-01',
+    amountGross: 42,
+    amountNet: 42,
+    flowType: 'income' as const,
+    counterparty: 'Kunde',
+    purpose: 'Leistung 2026',
+  };
+  const classification = {
+    id: 'classification-2026',
+    sourceType: 'transaction' as const,
+    sourceId: 'transaction-2026',
+    taxYear: 2026,
+    eurLineId: 'line-2026',
+    excluded: false,
+    vatMode: 'none' as const,
+    updatedAt: '2026-06-02T00:00:00.000Z',
+  };
+  const api = createLiteHttpBillmeApi({
+    baseUrl: 'https://example.test',
+    auth: { mode: 'bearer', token: 'token' },
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method ?? 'GET', body: init?.body });
+      if (url.includes('/reports/eur/items')) return response([item]);
+      if (url.endsWith('/reports/eur/classifications')) return response(classification);
+      return response(report);
+    },
+  });
+
+  await api.eur.getReport({ taxYear: 2026 });
+  await api.eur.listItems({ taxYear: 2026 });
+  await api.eur.upsertClassification({ sourceType: 'transaction', sourceId: item.sourceId, taxYear: 2026, eurLineId: 'line-2026', reason: 'Jahresklassifikation' });
+  const csv = await api.eur.exportCsv({ taxYear: 2026 });
+
+  assert.match(csv, /Betriebseinnahmen;42,00/);
+  assert.deepEqual(requests, [
+    { url: 'https://example.test/api/v1/lite/reports/eur?taxYear=2026&from=2026-01-01&to=2026-12-31', method: 'GET', body: undefined },
+    { url: 'https://example.test/api/v1/lite/reports/eur/items?taxYear=2026&from=2026-01-01&to=2026-12-31', method: 'GET', body: undefined },
+    { url: 'https://example.test/api/v1/lite/reports/eur/classifications', method: 'PUT', body: JSON.stringify({ sourceType: 'transaction', sourceId: item.sourceId, taxYear: 2026, reason: 'Jahresklassifikation', eurLineId: 'line-2026' }) },
+    { url: 'https://example.test/api/v1/lite/reports/eur?taxYear=2026&from=2026-01-01&to=2026-12-31', method: 'GET', body: undefined },
+  ]);
+  await assert.rejects(api.eur.getReport({ taxYear: 2027 }), /EUR_CATALOG_UNAVAILABLE:2027/);
 });
 
 test('Lite HTTP adapter routes finance import lifecycle through the embedded server', async () => {

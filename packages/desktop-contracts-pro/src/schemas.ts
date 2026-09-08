@@ -156,6 +156,11 @@ export const invoiceSchema = z.object({
   projectId: z.string().optional(),
   number: z.string(),
   numberReservationId: z.string().optional(),
+  documentKind: z.enum(['invoice', 'order_confirmation', 'delivery_note', 'advance_invoice', 'partial_invoice', 'final_invoice', 'credit_note', 'cancellation_invoice']).optional(),
+  sourceDocumentId: z.string().optional(),
+  rootDocumentId: z.string().optional(),
+  revisionOfId: z.string().optional(),
+  revisionNumber: z.number().int().nonnegative().optional(),
   client: z.string(),
   clientEmail: z.string(),
   clientAddress: z.string().optional(),
@@ -649,6 +654,38 @@ export const accountingAccountMappingSchema = z.object({ id: z.string(), tenantI
 export const vendorSchema = z.object({ id: z.string(), tenantId: z.string(), vendorNumber: z.string().optional(), name: z.string().min(1), email: z.string().optional(), address: z.string().optional(), vatId: z.string().optional(), iban: z.string().optional(), defaultExpenseAccount: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
 const incomingInvoiceLineSchema = z.object({ id: z.string(), incomingInvoiceId: z.string(), position: z.number().int(), description: z.string(), quantity: z.number(), unitPrice: z.number(), netAmount: z.number(), taxRate: z.number(), taxAmount: z.number(), grossAmount: z.number(), accountNumber: z.string().optional(), assetAccountNumber: z.string().optional() });
 export const incomingInvoiceSchema = z.object({ id: z.string(), tenantId: z.string(), vendorId: z.string(), number: z.string(), invoiceDate: z.string(), dueDate: z.string(), servicePeriod: z.string().optional(), netAmount: z.number(), taxAmount: z.number(), grossAmount: z.number(), status: z.enum(['draft', 'open', 'paid', 'cancelled', 'unresolved']), taxRate: z.number(), taxCaseKey: z.string().optional(), notes: z.string().optional(), lines: z.array(incomingInvoiceLineSchema), accountingStatus: z.enum(['unposted', 'posted', 'unresolved', 'reversed']), accountingSnapshot: accountingSnapshotSchema.optional(), createdAt: z.string(), updatedAt: z.string() });
+export const incomingInvoiceDocumentMimeSchema = z.enum(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
+export const incomingInvoiceDocumentReviewStatusSchema = z.enum(['pending', 'accepted', 'rejected']);
+export const incomingInvoiceDocumentSchema = z.object({
+  id: z.string().min(1),
+  tenantId: z.string().min(1),
+  incomingInvoiceId: z.string().min(1),
+  originalFilename: z.string().min(1).max(255),
+  mimeType: incomingInvoiceDocumentMimeSchema,
+  byteLength: z.number().int().positive(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  reviewStatus: incomingInvoiceDocumentReviewStatusSchema,
+  journalEntryId: z.string().min(1).optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+const incomingInvoiceDocumentBase64Schema = z.string().min(1).max(35_000_000).regex(/^[A-Za-z0-9+/]+={0,2}$/);
+export const incomingInvoiceDocumentUploadSchema = z.object({
+  invoiceId: z.string().min(1),
+  originalFilename: z.string().min(1).max(255).refine((value) => !/[\u0000-\u001f\u007f]/.test(value), 'Dateiname enthält ungültige Steuerzeichen.'),
+  mimeType: incomingInvoiceDocumentMimeSchema,
+  data: incomingInvoiceDocumentBase64Schema,
+  reason: z.string().trim().min(1),
+});
+export const incomingInvoiceDocumentDownloadSchema = z.object({
+  document: incomingInvoiceDocumentSchema,
+  data: incomingInvoiceDocumentBase64Schema,
+});
+export const incomingInvoiceDocumentReviewSchema = z.object({
+  documentId: z.string().min(1),
+  reviewStatus: z.enum(['accepted', 'rejected']),
+  reason: z.string().trim().min(1),
+});
 export const openItemSchema = z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string(), sourceType: accountingDocumentSourceTypeSchema, sourceId: z.string(), documentNumber: z.string(), documentDate: z.string(), dueDate: z.string(), originalAmount: z.number(), allocatedAmount: z.number(), residualAmount: z.number(), status: z.enum(['open', 'partially_paid', 'paid', 'overpaid', 'unresolved']), journalEntryId: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
 const accountingCandidateSchema = z.object({ sourceType: accountingDocumentSourceTypeSchema, sourceId: z.string(), status: z.enum(['ready', 'unresolved']), reason: z.string().optional(), sourceVersion: z.string(), snapshot: z.unknown().optional() });
 export const accountingBackfillPreviewSchema = z.object({ runId: z.string(), status: z.enum(['preview', 'confirmed', 'completed']), candidates: z.array(accountingCandidateSchema), readyCount: z.number().int(), unresolvedCount: z.number().int(), confirmationHash: z.string() });
@@ -1388,7 +1425,10 @@ export const proAccountingSourceRunSchema = z.object({
   sourceId: z.string().min(1),
   sourceRevision: z.string().min(1),
   idempotencyKey: z.string().min(1),
-  fact: accountingSourceFactSchema,
+  // Server history stores the immutable command envelope as `source`.
+  // Domain-command inputs do not necessarily contain a complete source fact.
+  source: z.record(z.unknown()).optional(),
+  fact: accountingSourceFactSchema.optional(),
   result: z.unknown(),
   status: z.enum(['posted', 'rejected', 'prepared', 'noop']),
   journalEntryId: z.string().optional(),

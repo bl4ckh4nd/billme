@@ -12,7 +12,7 @@ import {
 } from '@billme/desktop-data/recurring';
 import type { AppSettings, Client, Invoice, Project, RecurringProfile } from '../types';
 import { getClient } from '../db/clientsRepo';
-import { listRecurringProfiles, upsertRecurringProfile } from '../db/recurringRepo';
+import { getRecurringProfile, listRecurringProfiles, upsertRecurringProfile } from '../db/recurringRepo';
 import { upsertInvoice } from '../db/invoicesRepo';
 import { ensureDefaultProjectForClient } from '../db/projectsRepo';
 import { finalizeNumber, releaseNumber, reserveNumber } from '../db/numberingRepo';
@@ -22,6 +22,7 @@ const PRODUCT = 'lite' as const;
 
 const runtime: SqliteRecurringRuntime<Client, LegacyRecurringInvoice, Project> = {
   listRecurringProfiles: (db) => listRecurringProfiles(db) as RecurringProfile[],
+  getRecurringProfile: (db, id) => getRecurringProfile(db, id) as RecurringProfile | null,
   saveRecurringProfile: (db, profile) => upsertRecurringProfile(db, profile as RecurringProfile) as RecurringProfile,
   getClient: (db, id) => getClient(db, id) as Client | null,
   saveInvoice: (db, invoice, reason) => upsertInvoice(db, invoice as Invoice, reason) as unknown as LegacyRecurringInvoice,

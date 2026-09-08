@@ -12,6 +12,7 @@ import {
   recommendInvoiceTaxMode,
   resolveInvoiceTaxMode,
 } from '@billme/server-core/services';
+import { ConfirmDialog, ValidationSummary } from '@billme/ui';
 import { useHistory } from '../hooks/useHistory';
 import type { ArticleLike, ClientLike, DocumentDraft, ProjectLike, SettingsLike } from './types';
 
@@ -45,6 +46,46 @@ interface FieldErrors {
   datevSachverhaltLl?: string;
   items: Record<number, string>;
 }
+
+interface DocumentValidationError {
+  id: string;
+  message: string;
+  opensDetails: boolean;
+}
+
+const detailFieldIds = new Set([
+  'document-field-tax-rule',
+  'document-field-buyer-vat-id',
+  'document-field-tax-country',
+  'document-field-destination-vat-rate',
+  'document-field-datev-evidence-type',
+  'document-field-datev-evidence-reference',
+  'document-field-datev-sachverhalt-ll',
+]);
+
+const getValidationErrors = (errors: FieldErrors): DocumentValidationError[] => {
+  const fields: Array<[keyof Omit<FieldErrors, 'items'>, string, string]> = [
+    ['number', 'Nummer', 'document-field-number'],
+    ['date', 'Datum', 'document-field-date'],
+    ['client', 'Kunde', 'document-field-client'],
+    ['buyerVatId', 'Käufer-USt-IdNr.', 'document-field-buyer-vat-id'],
+    ['taxRule', 'Umsatzsteuer-Modell', 'document-field-tax-rule'],
+    ['taxCountry', 'DATEV-Land', 'document-field-tax-country'],
+    ['destinationVatRate', 'EU-Steuersatz im Bestimmungsland', 'document-field-destination-vat-rate'],
+    ['datevEvidenceType', 'DATEV-Nachweistyp', 'document-field-datev-evidence-type'],
+    ['datevEvidenceReference', 'DATEV-Nachweisreferenz', 'document-field-datev-evidence-reference'],
+    ['datevSachverhaltLl', 'DATEV-Sachverhalt L+L', 'document-field-datev-sachverhalt-ll'],
+  ];
+  const result = fields.flatMap(([key, label, id]) => errors[key] ? [{ id, message: `${label}: ${errors[key]}`, opensDetails: detailFieldIds.has(id) }] : []);
+  return Object.entries(errors.items)
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .map(([index, message]) => ({
+      id: `document-item-${index}-description`,
+      message: `Position ${Number(index) + 1} Beschreibung: ${message}`,
+      opensDetails: false,
+    }))
+    .reduce((all, item) => [...all, item], result);
+};
 
 const normalizeCountry = (country: string | undefined) => {
   const normalized = country?.trim();
@@ -110,6 +151,9 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const [vatValidationPending, setVatValidationPending] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({ items: {} });
   const [view, setView] = useState<'edit' | 'preview'>('edit');
+  const [taxDetailsOpen, setTaxDetailsOpen] = useState(false);
+  const [showDiscardConfirmation, setShowDiscardConfirmation] = useState(false);
+  const [showUnlockConfirmation, setShowUnlockConfirmation] = useState(false);
   const projectTouchedRef = useRef(false);
   const editorSurfaceRef = useRef<HTMLDivElement>(null);
 
@@ -125,6 +169,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     setFieldErrors({ items: {} });
     setSaveError(null);
     setView('edit');
+    setTaxDetailsOpen(false);
     projectTouchedRef.current = false;
   }, [document, history.reset, mode]);
 
@@ -249,6 +294,34 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     projectTouchedRef.current = false;
   }, [effectiveSettings.finance.vatId, onSelectedClientChange, sellerCountryCode, setFormData]);
 
+  const startManualRecipient = useCallback(() => {
+    setFormData((previous) => {
+      const next = { ...previous };
+      delete next.clientId;
+      delete next.clientNumber;
+      delete next.projectId;
+      delete next.billingAddressJson;
+      delete next.shippingAddressJson;
+      next.client = '';
+      next.clientEmail = '';
+      next.clientAddress = '';
+      if (next.taxMeta) {
+        const taxMeta = { ...next.taxMeta };
+        delete taxMeta.buyerCountryCode;
+        delete taxMeta.buyerType;
+        delete taxMeta.buyerVatId;
+        delete taxMeta.vatIdValidation;
+        delete taxMeta.vatIdValidationAt;
+        taxMeta.taxRuleConfirmed = false;
+        next.taxMeta = taxMeta;
+      }
+      return next;
+    });
+    setSelectedClientId('');
+    onSelectedClientChange?.('');
+    projectTouchedRef.current = false;
+  }, [onSelectedClientChange, setFormData]);
+
   const updateClientName = useCallback((client: string) => {
     setFormData((previous) => ({
       ...previous,
@@ -295,23 +368,31 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     if (requiresDatevEvidence && !datevTaxMeta?.datevEvidenceReference?.trim()) errors.datevEvidenceReference = 'Nachweisreferenz ist erforderlich.';
     if (requiresDatevSachverhaltLl && !/^[1-9]\d{0,2}$/.test(datevTaxMeta?.datevSachverhaltLl ?? '')) errors.datevSachverhaltLl = 'DATEV-Sachverhalt L+L ist erforderlich.';
     setFieldErrors(errors);
+    setTaxDetailsOpen(getValidationErrors(errors).some((error) => error.opensDetails));
     return errors;
   }, [buyerCountryCode, datevTaxMeta, effectiveSettings, formData, requiresBuyerVatId, requiresDatevEvidence, requiresDatevSachverhaltLl, requiresDestinationRate, requiresTaxCountry, sellerCountryCode]);
 
-  const focusValidationError = useCallback(() => {
+  const focusValidationField = useCallback((fieldId: string) => {
+    if (detailFieldIds.has(fieldId)) setTaxDetailsOpen(true);
     window.requestAnimationFrame(() => {
-      const target = editorSurfaceRef.current?.querySelector<HTMLElement>('[data-field-error="true"] input, [data-field-error="true"] textarea, [data-field-error="true"] button, [data-field-error="true"] select');
+      const block = globalThis.document.getElementById(fieldId);
+      const target = block?.querySelector<HTMLElement>('input, textarea, button, select, [role="combobox"]') ?? block;
       target?.focus();
-      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (typeof block?.scrollIntoView === 'function') block.scrollIntoView({ block: 'center' });
     });
   }, []);
+
+  const focusValidationError = useCallback((errors: FieldErrors) => {
+    const firstError = getValidationErrors(errors)[0];
+    if (firstError) focusValidationField(firstError.id);
+  }, [focusValidationField]);
 
   const handleSave = useCallback(() => {
     const errors = validate();
     if (errors.number || errors.date || errors.client || errors.buyerVatId || errors.taxRule || errors.taxCountry || errors.destinationVatRate || errors.datevEvidenceType || errors.datevEvidenceReference || errors.datevSachverhaltLl || Object.keys(errors.items).length > 0) {
       setSaveError('Bitte korrigiere die markierten Pflichtfelder.');
       setView('edit');
-      focusValidationError();
+      focusValidationError(errors);
       return;
     }
     setSaveError(null);
@@ -319,7 +400,10 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   }, [focusValidationError, formData, onSave, resolvedTaxMode, taxSnapshot, validate]);
 
   const handleCancel = useCallback(() => {
-    if (dirty && !window.confirm('Ungespeicherte Änderungen verwerfen?')) return;
+    if (dirty) {
+      setShowDiscardConfirmation(true);
+      return;
+    }
     onCancel();
   }, [dirty, onCancel]);
 
@@ -352,7 +436,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const title = templateType === 'offer' ? 'Angebot' : 'Rechnung';
   const unlockNumber = useCallback(() => {
     if (isNumberLocked) {
-      if (window.confirm('Achtung: Die manuelle Änderung der Nummer kann die GoBD-konforme Nummerierung gefährden.\n\nNur fortfahren, wenn Sie sicher sind.')) setIsNumberLocked(false);
+      setShowUnlockConfirmation(true);
     } else {
       setIsNumberLocked(true);
     }
@@ -361,6 +445,8 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     projectTouchedRef.current = true;
     setFormData((previous) => ({ ...previous, projectId: project.id }));
   }, [setFormData]);
+  const validationErrors = useMemo(() => getValidationErrors(fieldErrors), [fieldErrors]);
+  const detailValidationOpen = validationErrors.some((error) => error.opensDetails);
   const documentFields = useMemo<DocumentCanvasDocumentFields>(() => ({
     document: formData,
     templateElements: effectiveTemplate,
@@ -373,11 +459,14 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     onChange: setFormData,
     onClientNameChange: updateClientName,
     onAddressChange: (value) => setFormData((previous) => ({ ...previous, clientAddress: value, billingAddressJson: parseAddressText(value, previous.client, previous.billingAddressJson) }), { coalesce: true }),
+    onStartManualRecipient: startManualRecipient,
     onSelectClient: applyClientToDocument,
     onSelectProject: selectProject,
     onUnlockNumber: unlockNumber,
     isNumberLocked,
     fieldErrors,
+    taxDetailsOpen: taxDetailsOpen || detailValidationOpen,
+    onTaxDetailsOpenChange: setTaxDetailsOpen,
     taxModeOptions: INVOICE_TAX_MODE_DEFINITIONS.map((definition) => ({ value: definition.mode, label: definition.label })),
     taxRateOptions,
     resolvedTaxMode,
@@ -398,6 +487,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     applyClientToDocument,
     buyerCountryCode,
     clients,
+    detailValidationOpen,
     fieldErrors,
     formData,
     effectiveTemplate,
@@ -417,7 +507,9 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     selectedProjectLabel,
     selectProject,
     sellerCountryCode,
+    startManualRecipient,
     setFormData,
+    taxDetailsOpen,
     taxRecommendation,
     taxRateOptions,
     templateType,
@@ -426,6 +518,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     validateBuyerVatId,
     vatValidationPending,
   ]);
+  const firstValidationError = validationErrors[0]?.message;
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-canvas">
@@ -444,10 +537,12 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
           <button type="button" aria-pressed={view === 'edit'} onClick={() => setView('edit')} className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${view === 'edit' ? 'bg-surface text-foreground shadow-sm' : 'text-muted'}`}>Bearbeiten</button>
           <button type="button" aria-pressed={view === 'preview'} onClick={() => setView('preview')} className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold ${view === 'preview' ? 'bg-surface text-foreground shadow-sm' : 'text-muted'}`}><Eye size={13} /> Vorschau</button>
         </div>
-        <button type="button" onClick={handleSave} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground hover:bg-accent-hover" aria-label="Speichern"><Save size={15} /> <span className="hidden sm:inline">Speichern</span></button>
+        {firstValidationError ? <span id="document-save-validation-error" className="max-w-56 text-right text-xs text-error" role="status" aria-live="assertive">{firstValidationError}</span> : null}
+        <button type="button" onClick={handleSave} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground hover:bg-accent-hover" aria-label="Speichern" aria-describedby={firstValidationError ? 'document-save-validation-error' : undefined}><Save size={15} /> <span className="hidden sm:inline">Speichern</span></button>
       </header>
 
-      {saveError ? <div className="mx-auto mt-3 w-full max-w-[900px] rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm font-medium text-error" role="alert">{saveError}</div> : null}
+      {saveError && validationErrors.length === 0 ? <div className="mx-auto mt-3 w-full max-w-[900px] rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm font-medium text-error" role="alert" aria-live="assertive">{saveError}</div> : null}
+      {validationErrors.length > 0 ? <div className="mx-auto mt-3 w-full max-w-[900px]"><ValidationSummary title="Bitte korrigiere die markierten Pflichtfelder." errors={validationErrors.map(({ id, message }) => ({ id, message }))} onJump={focusValidationField} /></div> : null}
 
       <main className="flex-1 overflow-auto bg-editor-viewport p-4 sm:p-8">
         {view === 'preview' ? (
@@ -468,6 +563,33 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
           </div>
         )}
       </main>
+
+      <ConfirmDialog
+        open={showDiscardConfirmation}
+        title="Ungespeicherte Änderungen verwerfen?"
+        description="Deine bisher eingetragenen Änderungen gehen verloren."
+        confirmLabel="Änderungen verwerfen"
+        cancelLabel="Weiter bearbeiten"
+        destructive
+        onConfirm={() => {
+          setShowDiscardConfirmation(false);
+          onCancel();
+        }}
+        onCancel={() => setShowDiscardConfirmation(false)}
+      />
+      <ConfirmDialog
+        open={showUnlockConfirmation}
+        title="Nummer entsperren?"
+        description="Achtung: Die manuelle Änderung der Nummer kann die GoBD-konforme Nummerierung gefährden. Nur fortfahren, wenn Sie sicher sind."
+        confirmLabel="Nummer entsperren"
+        cancelLabel="Abbrechen"
+        destructive
+        onConfirm={() => {
+          setShowUnlockConfirmation(false);
+          setIsNumberLocked(false);
+        }}
+        onCancel={() => setShowUnlockConfirmation(false)}
+      />
     </div>
   );
 };

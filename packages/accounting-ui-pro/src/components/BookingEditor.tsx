@@ -22,6 +22,7 @@ import {
   getTransactionById,
   saveDraft,
 } from '../services/mockBookingStore';
+import { ConfirmDialog } from '@billme/ui';
 import { Account, BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
 import AccountCombobox from './AccountCombobox';
 import ActivityTimeline from './ActivityTimeline';
@@ -60,6 +61,8 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
   const shortcutDialogRef = useRef<HTMLDivElement>(null);
   const shortcutPreviousFocusRef = useRef<HTMLElement | null>(null);
   const [announceMessage, setAnnounceMessage] = useState('');
+  const [announceKind, setAnnounceKind] = useState<'success' | 'error' | null>(null);
+  const [confirmationAction, setConfirmationAction] = useState<BookingAction | null>(null);
 
   useEffect(() => {
     if (!transactionId) return;
@@ -229,22 +232,16 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
     return saved;
   }
 
-  async function handleWorkflowAction(action: BookingAction) {
+  async function executeWorkflowAction(action: BookingAction) {
     if (!draft) return;
-    if (actionRequiresConfirmation(action)) {
-      const ok = window.confirm(
-        action === 'reverse'
-          ? 'Buchung wirklich stornieren?'
-          : 'Freigabe ablehnen und zur Korrektur zurückgeben?',
-      );
-      if (!ok) return;
-    }
-
     setBusy(true);
+    setAnnounceMessage('');
+    setAnnounceKind(null);
     try {
       if (action === 'save_draft') {
         await persistDraft({ ...draft });
         setAnnounceMessage('Entwurf gespeichert');
+        setAnnounceKind('success');
       } else {
         const saved = await saveDraft({ ...draft }, role);
         setDraft(saved);
@@ -253,21 +250,49 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         setTransaction(getTransactionById(activeTransactionId) ?? transaction);
         onStoreChange();
         setAnnounceMessage(`Aktion ausgeführt: ${action}`);
+        setAnnounceKind('success');
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Aktion fehlgeschlagen';
       setAnnounceMessage(message);
-      window.alert(message);
+      setAnnounceKind('error');
     } finally {
       setBusy(false);
     }
   }
 
+  function handleWorkflowAction(action: BookingAction) {
+    if (!draft) return;
+    if (actionRequiresConfirmation(action)) {
+      setConfirmationAction(action);
+      return;
+    }
+    void executeWorkflowAction(action);
+  }
+
+  const confirmationCopy = confirmationAction === 'reverse'
+    ? {
+      title: 'Buchung wirklich stornieren?',
+      description: 'Die Buchung wird storniert und kann nicht direkt zurückgesetzt werden.',
+      confirmLabel: 'Buchung stornieren',
+    }
+    : {
+      title: 'Freigabe ablehnen?',
+      description: 'Die Buchung wird zur Korrektur zurückgegeben.',
+      confirmLabel: 'Freigabe ablehnen',
+    };
+
   return (
     <div className="flex h-full min-w-0 flex-col bg-surface">
-      <div className="sr-only" aria-live="polite">
-        {announceMessage}
-      </div>
+      {announceMessage ? (
+        <div
+          className={`mx-4 mt-3 rounded-xl border px-3 py-2 text-sm font-medium ${announceKind === 'error' ? 'border-error-border bg-error-bg text-error' : 'border-success-border bg-success-bg text-success'}`}
+          role={announceKind === 'error' ? 'alert' : 'status'}
+          aria-live={announceKind === 'error' ? 'assertive' : 'polite'}
+        >
+          {announceMessage}
+        </div>
+      ) : null}
 
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-subtle shrink-0 gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -694,6 +719,22 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmationAction !== null}
+        title={confirmationCopy.title}
+        description={confirmationCopy.description}
+        confirmLabel={confirmationCopy.confirmLabel}
+        cancelLabel="Abbrechen"
+        destructive
+        busy={busy}
+        onConfirm={() => {
+          const action = confirmationAction;
+          setConfirmationAction(null);
+          if (action) void executeWorkflowAction(action);
+        }}
+        onCancel={() => setConfirmationAction(null)}
+      />
     </div>
   );
 }

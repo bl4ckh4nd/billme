@@ -269,8 +269,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
   const [scheduleLoading, setScheduleLoading] = useState(Boolean(dataAdapter));
   const [assetsError, setAssetsError] = useState<string | null>(null);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
-  const [mutationError, setMutationError] = useState<string | null>(null);
-  const [mutationMessage, setMutationMessage] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const [editForm, setEditForm] = useState<AssetFormState | null>(null);
   const [busyAction, setBusyAction] = useState<'save' | 'depreciation' | 'disposal' | null>(null);
   const [depreciationYear, setDepreciationYear] = useState(String(new Date().getFullYear()));
@@ -321,8 +320,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
 
   useEffect(() => {
     setEditForm(null);
-    setMutationError(null);
-    setMutationMessage(null);
+    setFeedback(null);
   }, [dataAdapter]);
 
   const filtered = useMemo(() => {
@@ -432,20 +430,19 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
       ['Status', editForm.status],
     ].filter(([, value]) => !value.trim()).map(([label]) => label);
     if (missingFields.length > 0) {
-      setMutationError(`Bitte Pflichtfelder ausfüllen: ${missingFields.join(', ')}.`);
+      setFeedback({ kind: 'error', text: `Bitte Pflichtfelder ausfüllen: ${missingFields.join(', ')}.` });
       return;
     }
     if (!editForm.reason.trim()) {
-      setMutationError('Bitte einen Audit-Grund angeben.');
+      setFeedback({ kind: 'error', text: 'Bitte einen Audit-Grund angeben.' });
       return;
     }
     if (!Number.isFinite(acquisitionCost) || acquisitionCost < 0 || (usefulLifeYears !== undefined && (!Number.isInteger(usefulLifeYears) || usefulLifeYears < 1))) {
-      setMutationError('Bitte gültige Anschaffungskosten und Nutzungsdauer angeben.');
+      setFeedback({ kind: 'error', text: 'Bitte gültige Anschaffungskosten und Nutzungsdauer angeben.' });
       return;
     }
     if (!beginMutation('save')) return;
-    setMutationError(null);
-    setMutationMessage(null);
+    setFeedback(null);
     try {
       const saved = await dataAdapter.upsertAsset({
         id: editForm.id,
@@ -467,9 +464,9 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
       await reloadCanonical(saved.id);
       setSelectedId(saved.id);
       setEditForm(null);
-      setMutationMessage(saved.status === 'aktiv' ? 'Anlage gespeichert und aktiviert.' : 'Anlage gespeichert.');
+      setFeedback({ kind: 'success', text: saved.status === 'aktiv' ? 'Anlage gespeichert und aktiviert.' : 'Anlage gespeichert.' });
     } catch (error) {
-      setMutationError(error instanceof Error ? error.message : 'Anlage konnte nicht gespeichert werden.');
+      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Anlage konnte nicht gespeichert werden.' });
     } finally {
       endMutation();
     }
@@ -479,16 +476,15 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
     if (!canMutate || !selected || !dataAdapter?.runDepreciation) return;
     const year = Number(depreciationYear);
     if (!depreciationReason.trim()) {
-      setMutationError('Bitte einen Audit-Grund für die AfA-Buchung angeben.');
+      setFeedback({ kind: 'error', text: 'Bitte einen Audit-Grund für die AfA-Buchung angeben.' });
       return;
     }
     if (!Number.isInteger(year) || year < 2000 || !postingDate) {
-      setMutationError('Bitte ein gültiges AfA-Jahr und Buchungsdatum angeben.');
+      setFeedback({ kind: 'error', text: 'Bitte ein gültiges AfA-Jahr und Buchungsdatum angeben.' });
       return;
     }
     if (!beginMutation('depreciation')) return;
-    setMutationError(null);
-    setMutationMessage(null);
+    setFeedback(null);
     try {
       const result = await dataAdapter.runDepreciation({
         assetId: selected.id,
@@ -498,10 +494,10 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
         actorRole: accountingActorRole,
       });
       await reloadCanonical(result.asset.id);
-      setMutationMessage(`AfA ${year} gebucht${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.`);
+      setFeedback({ kind: 'success', text: `AfA ${year} gebucht${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.` });
       setDepreciationReason('');
     } catch (error) {
-      setMutationError(error instanceof Error ? error.message : 'AfA konnte nicht gebucht werden.');
+      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'AfA konnte nicht gebucht werden.' });
     } finally {
       endMutation();
     }
@@ -512,20 +508,19 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
     const proceeds = Number(disposalProceeds.replace(',', '.'));
     const taxRate = Number(disposalTaxRate);
     if (!disposalConfirmed) {
-      setMutationError('Bitte die Ausbuchung ausdrücklich bestätigen.');
+      setFeedback({ kind: 'error', text: 'Bitte die Ausbuchung ausdrücklich bestätigen.' });
       return;
     }
     if (!disposalReason.trim()) {
-      setMutationError('Bitte einen Audit-Grund für die Ausbuchung angeben.');
+      setFeedback({ kind: 'error', text: 'Bitte einen Audit-Grund für die Ausbuchung angeben.' });
       return;
     }
     if (!Number.isFinite(proceeds) || proceeds < 0 || !disposalDate || ![0, 7, 19].includes(taxRate)) {
-      setMutationError('Bitte gültige Ausbuchungsdaten angeben.');
+      setFeedback({ kind: 'error', text: 'Bitte gültige Ausbuchungsdaten angeben.' });
       return;
     }
     if (!beginMutation('disposal')) return;
-    setMutationError(null);
-    setMutationMessage(null);
+    setFeedback(null);
     try {
       const result = await dataAdapter.disposeAsset({
         assetId: selected.id,
@@ -537,11 +532,11 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
         actorRole: accountingActorRole,
       });
       await reloadCanonical(result.asset.id);
-      setMutationMessage(`Anlage ${result.asset.status === 'verkauft' ? 'verkauft' : 'stillgelegt'}; Ergebnis ${euro(result.gainLoss)}${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.`);
+      setFeedback({ kind: 'success', text: `Anlage ${result.asset.status === 'verkauft' ? 'verkauft' : 'stillgelegt'}; Ergebnis ${euro(result.gainLoss)}${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.` });
       setDisposalReason('');
       setDisposalConfirmed(false);
     } catch (error) {
-      setMutationError(error instanceof Error ? error.message : 'Anlage konnte nicht ausgebucht werden.');
+      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Anlage konnte nicht ausgebucht werden.' });
     } finally {
       endMutation();
     }
@@ -571,7 +566,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                 {canMutate && dataAdapter?.upsertAsset && (
                   <Button
                     type="button"
-                    onClick={() => { if (busyAction !== null) return; setMutationError(null); setMutationMessage(null); setEditForm(formFromAsset()); }}
+                    onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset()); }}
                     disabled={busyAction !== null}
                     variant="dark"
                     size="sm"
@@ -676,8 +671,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
       </div>
 
       <div className="flex min-h-0 flex-1 min-w-0 flex-col">
-        {mutationError && <div className="mx-6 mt-4 rounded-xl border border-error-border bg-error-bg p-3 text-sm text-error" role="alert" aria-live="assertive">{mutationError}</div>}
-        {mutationMessage && <div className="mx-6 mt-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success" role="status" aria-live="polite">{mutationMessage}</div>}
+        {feedback ? <div data-testid="asset-mutation-feedback" className={`mx-6 mt-4 rounded-xl border p-3 text-sm ${feedback.kind === 'error' ? 'border-error-border bg-error-bg text-error' : 'border-success-border bg-success-bg text-success'}`} role={feedback.kind === 'error' ? 'alert' : 'status'} aria-live={feedback.kind === 'error' ? 'assertive' : 'polite'}>{feedback.text}</div> : null}
         {editForm ? (
           <AssetEditor
             form={editForm}
@@ -709,8 +703,8 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                 </div>
                 {canMutate && dataAdapter?.upsertAsset && ['entwurf', 'aktiv'].includes(selected.status) && (
                   <div className="flex flex-wrap justify-end gap-2">
-                    <Button type="button" onClick={() => { if (busyAction !== null) return; setMutationError(null); setMutationMessage(null); setEditForm(formFromAsset(selected)); }} disabled={busyAction !== null} variant="secondary" size="sm" className="h-8 px-3 text-xs">Bearbeiten</Button>
-                    {selected.status === 'entwurf' && <Button type="button" onClick={() => { if (busyAction !== null) return; setMutationError(null); setMutationMessage(null); setEditForm(formFromAsset(selected, true)); }} disabled={busyAction !== null} variant="dark" size="sm" className="h-8 px-3 text-xs">Aktivieren</Button>}
+                    <Button type="button" onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset(selected)); }} disabled={busyAction !== null} variant="secondary" size="sm" className="h-8 px-3 text-xs">Bearbeiten</Button>
+                    {selected.status === 'entwurf' && <Button type="button" onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset(selected, true)); }} disabled={busyAction !== null} variant="dark" size="sm" className="h-8 px-3 text-xs">Aktivieren</Button>}
                   </div>
                 )}
               </div>

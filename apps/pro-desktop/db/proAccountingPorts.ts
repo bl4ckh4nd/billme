@@ -112,6 +112,10 @@ const persistLocalReportMappingOverride = persistReportMappingOverride as unknow
   scope: TenantScope,
 ) => import('@billme/accounting-shared').ReportingMapping;
 
+const incomingInvoiceDocumentsRequirePglite = (): never => {
+  throw new Error('PGLITE_SQLITE_IPC_UNAVAILABLE: Eingangsbelege werden über den eingebetteten PGlite-Server verwaltet.');
+};
+
 export const createSqliteProAccountingRepository = (db: Database.Database): ProAccountingRepository & ProAccountingOposRepository & {
   getReportSnapshot: typeof readReportSnapshot;
   listReportSnapshots: typeof readReportSnapshots;
@@ -156,6 +160,10 @@ export const createSqliteProAccountingRepository = (db: Database.Database): ProA
   upsertVendor: async (scope, input) => upsertVendor(db, scope, input),
   listIncomingInvoices: async (scope) => listIncomingInvoices(db, scope),
   upsertIncomingInvoice: async (scope, input) => upsertIncomingInvoice(db, scope, input),
+  listIncomingInvoiceDocuments: async () => incomingInvoiceDocumentsRequirePglite(),
+  uploadIncomingInvoiceDocument: async () => incomingInvoiceDocumentsRequirePglite(),
+  downloadIncomingInvoiceDocument: async () => incomingInvoiceDocumentsRequirePglite(),
+  reviewIncomingInvoiceDocument: async () => incomingInvoiceDocumentsRequirePglite(),
   previewOutgoingInvoice: async (scope, invoiceId) => previewOutgoingInvoice(db, scope, invoiceId),
   postOutgoingInvoice: async (scope, invoiceId, options) => postOutgoingInvoice(db, scope, invoiceId, options),
   previewIncomingInvoice: async (scope, invoiceId) => previewIncomingInvoice(db, scope, invoiceId),

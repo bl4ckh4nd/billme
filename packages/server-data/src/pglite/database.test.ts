@@ -3,7 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { readMigrationFiles } from 'drizzle-orm/migrator';
+import { billingLineItemSchema, createSingleTenantScope, type Invoice } from '@billme/server-core';
 import { PgliteServerDatabase } from './database.js';
+import { createPostgresInvoiceRepository } from '../postgres/billing.js';
+import { resolveCanonicalMigrationDirectory } from '../postgres/migrations.js';
 
 const openDatabase = async (): Promise<{
   database: PgliteServerDatabase;
@@ -32,7 +36,10 @@ test('PGlite applies the canonical migrations and reports a current schema', asy
     const result = await database.query<{ count: string }>(
       'SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations',
     );
-    assert.equal(Number(result.rows[0]?.count), 24);
+    const canonicalMigrations = readMigrationFiles({
+      migrationsFolder: resolveCanonicalMigrationDirectory(),
+    });
+    assert.equal(Number(result.rows[0]?.count), canonicalMigrations.length);
   } finally {
     await closeDatabase(database, dataDir);
   }
@@ -101,6 +108,52 @@ test('PGlite transactions commit, rollback, serialize, and remain reentrant', as
       'SELECT count(*)::text AS count FROM seam_values',
     );
     assert.equal(Number(reentrant.rows[0]?.count), 4);
+  } finally {
+    await closeDatabase(database, dataDir);
+  }
+});
+
+test('PGlite saves and refetches the shared outgoing document-chain fields', async () => {
+  const { database, dataDir } = await openDatabase();
+  const scope = createSingleTenantScope('pglite-chain', 'lite');
+  try {
+    await database.migrate();
+    const now = new Date().toISOString();
+    await database.query(
+      `INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+      [scope.tenantId, scope.tenantId, 'PGlite chain test', scope.product, scope.deploymentMode, 'active', now],
+    );
+    const invoiceRepo = createPostgresInvoiceRepository(database);
+    const invoice: Invoice = {
+      kind: 'invoice',
+      tenantId: scope.tenantId,
+      id: 'chain-invoice-1',
+      number: 'RE-CHAIN-1',
+      documentKind: 'partial_invoice',
+      sourceDocumentId: 'order-1',
+      rootDocumentId: 'order-1',
+      revisionOfId: undefined,
+      revisionNumber: 0,
+      client: 'PGlite Customer',
+      clientEmail: 'billing@example.test',
+      date: '2026-09-04',
+      dueDate: '2026-09-18',
+      amount: 50,
+      status: 'draft',
+      taxMode: 'standard_vat',
+      items: [billingLineItemSchema.parse({ description: 'Service', quantity: 1, price: 50, total: 50, taxRate: 19 })],
+      payments: [],
+      history: [],
+    };
+    await invoiceRepo.save(scope, invoice);
+    const refetched = await invoiceRepo.getById(scope, invoice.id);
+    assert.equal(refetched?.documentKind, 'partial_invoice');
+    assert.equal(refetched?.sourceDocumentId, 'order-1');
+    assert.equal(refetched?.rootDocumentId, 'order-1');
+    assert.equal(refetched?.revisionNumber, 0);
+    await database.query('DELETE FROM invoices WHERE tenant_id = $1 AND id = $2', [scope.tenantId, invoice.id]);
+    await database.query('DELETE FROM tenants WHERE id = $1', [scope.tenantId]);
   } finally {
     await closeDatabase(database, dataDir);
   }

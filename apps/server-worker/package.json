@@ -13,11 +13,13 @@
   },
   "dependencies": {
     "@billme/accounting-engine": "workspace:*",
+    "@billme/accounting-shared": "workspace:*",
     "@billme/desktop-core": "workspace:*",
     "@billme/desktop-data": "workspace:*",
     "@billme/desktop-services": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/server-data": "workspace:*",
+    "pg": "^8.16.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { Invoice } from '../types';
+import { isBillingDocumentKind, type Invoice } from '../types';
 import {
   createInvoiceFromOffer as createSharedInvoiceFromOffer,
   deleteInvoice as deleteSharedInvoice,
@@ -47,7 +47,7 @@ export const upsertInvoice = (
   }
   return db.transaction(() => {
     const saved = upsertSharedInvoice(db, PRODUCT, invoice, reason) as Invoice;
-    if (finalize) {
+    if (finalize && isBillingDocumentKind(invoice.documentKind)) {
       const result = postOutgoingInvoice(db, scope, invoice.id);
       if (result.status !== 'ready') throw new Error(`ACCOUNTING_UNRESOLVED:${result.issues[0]?.code ?? 'unknown'}`);
     }
@@ -58,8 +58,11 @@ export const upsertInvoice = (
 /** Number finalization and accounting posting are one SQLite transaction. */
 export const finalizeOutgoingInvoice = (db: Database.Database, reservationId: string, documentId: string): { ok: true } => db.transaction(() => {
   finalizeNumber(db, reservationId, documentId);
-  const result = postOutgoingInvoice(db, createProTenantScope('default'), documentId);
-  if (result.status !== 'ready') throw new Error(`ACCOUNTING_UNRESOLVED:${result.issues[0]?.code ?? 'unknown'}`);
+  const invoice = getInvoice(db, documentId);
+  if (!invoice || isBillingDocumentKind(invoice.documentKind)) {
+    const result = postOutgoingInvoice(db, createProTenantScope('default'), documentId);
+    if (result.status !== 'ready') throw new Error(`ACCOUNTING_UNRESOLVED:${result.issues[0]?.code ?? 'unknown'}`);
+  }
   return { ok: true as const };
 })();
 

@@ -127,7 +127,14 @@ export interface EurAnnexValueResult {
   facts: EurAnnexValueFact[];
 }
 
-const SUPPORTED_EUR_YEARS = new Set([2025, 2026]);
+/** Tax years for which a bundled EÜR catalog is available. */
+export const SUPPORTED_EUR_TAX_YEARS = [2025, 2026] as const;
+export type SupportedEurTaxYear = (typeof SUPPORTED_EUR_TAX_YEARS)[number];
+export const LATEST_SUPPORTED_EUR_TAX_YEAR = 2026 as const;
+
+export const isSupportedEurTaxYear = (year: number): year is SupportedEurTaxYear =>
+  Number.isInteger(year) && (SUPPORTED_EUR_TAX_YEARS as readonly number[]).includes(year);
+
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const toCents = (value: number): number => Math.round((value + Number.EPSILON) * 100);
 const fromCents = (value: number): number => value / 100;
@@ -142,7 +149,7 @@ const assertDate = (value: string, field: string): void => {
 };
 
 const assertYear = (year: number): void => {
-  if (!Number.isInteger(year) || !SUPPORTED_EUR_YEARS.has(year)) {
+  if (!isSupportedEurTaxYear(year)) {
     throw new RangeError(`EUR_CATALOG_UNAVAILABLE:${year}`);
   }
 };

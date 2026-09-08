@@ -36,7 +36,7 @@ export function useDesignerKeyboard(handlers: DesignerKeyboardHandlers): void {
         return;
       }
 
-      if (isTypingTarget(e.target)) return;
+      if (!h.enabled || isTypingTarget(e.target)) return;
 
       const mod = e.ctrlKey || e.metaKey;
 

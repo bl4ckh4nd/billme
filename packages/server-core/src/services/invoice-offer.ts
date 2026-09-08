@@ -250,18 +250,18 @@ export const deleteInvoice = (
   return { ok: true };
 };
 
-export const createInvoiceFromOffer = (
+/** Shared document snapshot for SQLite and server-side offer conversion. */
+export const buildInvoiceFromOffer = (
   scope: TenantScope,
-  dependencies: InvoiceOfferDomainDependencies,
+  offer: Offer,
   params: CreateInvoiceFromOfferParams,
 ): Invoice => {
-  const offer = dependencies.offerRepo.getById(scope, params.offerId);
-  if (!offer) {
-    throw new Error('Offer not found');
-  }
-
-  const invoice: Invoice = {
+  return {
     kind: 'invoice',
+    documentKind: 'invoice',
+    revisionNumber: 0,
+    sourceDocumentId: offer.id,
+    rootDocumentId: params.invoiceId,
     tenantId: scope.tenantId,
     id: params.invoiceId,
     clientId: offer.clientId,
@@ -286,6 +286,19 @@ export const createInvoiceFromOffer = (
     payments: [],
     history: [],
   };
+};
+
+export const createInvoiceFromOffer = (
+  scope: TenantScope,
+  dependencies: InvoiceOfferDomainDependencies,
+  params: CreateInvoiceFromOfferParams,
+): Invoice => {
+  const offer = dependencies.offerRepo.getById(scope, params.offerId);
+  if (!offer) {
+    throw new Error('Offer not found');
+  }
+
+  const invoice = buildInvoiceFromOffer(scope, offer, params);
 
   const after = dependencies.invoiceRepo.save(scope, invoice);
   dependencies.auditLog.append(scope, {

@@ -70,6 +70,26 @@ describe('SonderbuchungenWorkspace', () => {
     await waitFor(() => expect(screen.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toBeTruthy());
   });
 
+  it('replaces a successful booking with the next validation failure', async () => {
+    const adapter = valid();
+    adapter.postAccountingCommand
+      .mockResolvedValueOnce({ status: 'posted', errors: [], idempotencyKey: 'k', sourceRun: { id: 'run-1', sourceType: 'standalone_source', sourceId: 'beleg-1', sourceRevision: '1', status: 'posted', journalEntryId: 'journal-1', createdAt: new Date().toISOString() } })
+      .mockResolvedValueOnce({ status: 'rejected', errors: [], idempotencyKey: 'k' });
+    render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'Prüfen & verbindlich buchen' }));
+    await waitFor(() => expect(screen.getByTestId('sonderbuchungen-feedback').textContent).toBe('Sonderbuchung wurde erfolgreich gebucht.'));
+
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'Prüfen & verbindlich buchen' }));
+
+    const feedback = await screen.findByTestId('sonderbuchungen-feedback');
+    expect(screen.getAllByTestId('sonderbuchungen-feedback')).toHaveLength(1);
+    expect(feedback.getAttribute('role')).toBe('alert');
+    expect(feedback.getAttribute('aria-live')).toBe('assertive');
+    expect(feedback.textContent).toContain('Buchung abgelehnt: Der Fachworkflow hat keinen buchbaren Vorgang zurückgegeben.');
+  });
+
   it('keeps a successful booking when the follow-up history refresh fails', async () => {
     const listAccountingSourceRuns = vi.fn()
       .mockResolvedValueOnce([])
@@ -297,15 +317,35 @@ describe('SonderbuchungenWorkspace', () => {
     expect(screen.queryByText(/Tax provider unavailable/)).toBeNull();
   });
 
-  it('shows a retryable history error instead of an empty history', async () => {
+  it('hides Zod and transport details behind a retryable history error', async () => {
+    const zodError = new Error('ZodError: [{"code":"invalid_type","path":["source"],"message":"Required"}]');
+    zodError.name = 'ZodError';
+    const zodDump = '[{"code":"invalid_type","path":["source"],"message":"Required"}]';
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const listAccountingSourceRuns = vi.fn()
-      .mockRejectedValueOnce(new Error('503 Service Unavailable'))
+      .mockRejectedValueOnce(zodError)
+      .mockRejectedValueOnce(zodDump)
       .mockResolvedValueOnce([]);
-    render(<SonderbuchungenWorkspace dataAdapter={{ listAccountingSourceRuns }} />);
-    expect((await screen.findByText(/503 Service Unavailable/)).textContent).toContain('503 Service Unavailable');
-    fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }));
-    await waitFor(() => expect(listAccountingSourceRuns).toHaveBeenCalledTimes(2));
-    expect(screen.getByText('Noch keine Sonderbuchung vorhanden.')).toBeTruthy();
+    try {
+      render(<SonderbuchungenWorkspace dataAdapter={{ listAccountingSourceRuns }} />);
+      const firstError = await screen.findByText('Buchungshistorie konnte nicht geladen werden: Bitte versuchen Sie es erneut.');
+      expect(firstError.textContent).toContain('Buchungshistorie konnte nicht geladen werden: Bitte versuchen Sie es erneut.');
+      expect(firstError.textContent).not.toContain('ZodError');
+      expect(firstError.textContent).not.toContain('invalid_type');
+      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('Buchungshistorie konnte nicht geladen werden'), zodError);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }));
+      const secondError = await screen.findByText('Buchungshistorie konnte nicht geladen werden: Bitte versuchen Sie es erneut.');
+      expect(secondError.textContent).not.toContain('invalid_type');
+      expect(secondError.textContent).toContain('Bitte versuchen Sie es erneut.');
+      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('Buchungshistorie konnte nicht geladen werden'), zodDump);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }));
+      await waitFor(() => expect(listAccountingSourceRuns).toHaveBeenCalledTimes(3));
+      expect(screen.getByText('Noch keine Sonderbuchung vorhanden.')).toBeTruthy();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('marks required fields invalid with German inline guidance', () => {

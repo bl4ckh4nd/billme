@@ -5,7 +5,7 @@ import {
   Building2, Landmark, FileDigit, Scale,
   Save, CheckCircle, HelpCircle, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Repeat
 } from 'lucide-react';
-import { Button } from '@billme/ui';
+import { Button, useActionFeedback } from '@billme/ui';
 import type { AppSettings, BusinessReportingProfile, DunningLevel } from '@billme/desktop-core/types';
 import { MOCK_SETTINGS } from '@billme/desktop-services/mockData';
 import { ipc } from '../runtime-api';
@@ -41,7 +41,6 @@ export const SettingsView: React.FC = () => {
   const setSettingsMutation = useSetSettingsMutation();
   const [settings, setSettings] = useState<AppSettings>(loadedSettings ?? MOCK_SETTINGS);
   const [reportingProfile, setReportingProfile] = useState<BusinessReportingProfile>(() => inferBusinessReportingProfile(loadedSettings ?? MOCK_SETTINGS));
-  const [showSaveToast, setShowSaveToast] = useState(false);
   const [backupPath, setBackupPath] = useState('');
   const [auditStatus, setAuditStatus] = useState<string | null>(null);
   const [backupStatus, setBackupStatus] = useState<string | null>(null);
@@ -67,6 +66,7 @@ export const SettingsView: React.FC = () => {
   const [emailTesting, setEmailTesting] = useState(false);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [previewLevelIndex, setPreviewLevelIndex] = useState<number | null>(null);
+  const { notify } = useActionFeedback('settings');
 
   React.useEffect(() => {
     if (loadedSettings) {
@@ -211,8 +211,7 @@ export const SettingsView: React.FC = () => {
       // ignore secret save errors (OS keychain issues should not block settings save)
     }
 
-    setShowSaveToast(true);
-    setTimeout(() => setShowSaveToast(false), 3000);
+    notify('success', 'Einstellungen gespeichert!');
   };
 
   const updateNested = (section: keyof AppSettings, field: string, value: any) => {
@@ -286,10 +285,10 @@ export const SettingsView: React.FC = () => {
         setShowDunningResult(true);
       } else {
         // Show error
-        alert('Fehler beim Mahnlauf: ' + (response.error || 'Unbekannter Fehler'));
+        notify('error', 'Fehler beim Mahnlauf: ' + (response.error || 'Unbekannter Fehler'));
       }
     } catch (error) {
-      alert('Fehler beim Mahnlauf: ' + String(error));
+      notify('error', 'Fehler beim Mahnlauf: ' + String(error));
     } finally {
       setDunningRunning(false);
     }
@@ -1728,14 +1727,6 @@ export const SettingsView: React.FC = () => {
 
   return (
     <div className="bg-white rounded-[2.5rem] shadow-sm min-h-full flex overflow-hidden relative animate-enter">
-
-      {/* Toast */}
-      {showSaveToast && (
-        <div className="absolute top-8 right-8 bg-black text-accent px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 z-50 animate-in fade-in slide-in-from-top-4">
-          <CheckCircle size={18} />
-          <span className="font-bold text-sm">Einstellungen gespeichert!</span>
-        </div>
-      )}
 
       {/* Sidebar Navigation */}
       <div className="w-72 bg-gray-50 border-r border-gray-100 p-8 flex flex-col">

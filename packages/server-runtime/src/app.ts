@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { createNumberingPortsForDb } from './numbering.js';
+import { convertServerOfferToInvoice } from './offerConversion.js';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { z } from 'zod';
@@ -8,6 +10,15 @@ import {
   capabilitiesResponseSchema,
   clientSchema,
   createSingleTenantScope,
+  createCancellationInvoiceAsync,
+  createCreditNoteAsync,
+  createDeliveryNoteFromOrderAsync,
+  createInvoiceRevisionAsync,
+  createOrderConfirmationFromOfferAsync,
+  createSettlementInvoiceAsync,
+  listDocumentChainAsync,
+  listInvoiceRevisionsAsync,
+  upsertRecurringProfile,
   finalizeDocumentNumber,
   healthResponseSchema,
   invoiceSchema,
@@ -37,20 +48,18 @@ import {
   getServerSettings,
   listServerArticles,
   listServerBankAccounts,
-  listServerNumberReservations,
   listServerTemplates,
   readDatabaseUrl,
   assertDrizzleSchemaCurrent,
   saveServerActiveTemplates,
   saveServerArticle,
   saveServerBankAccount,
-  saveServerNumberReservation,
   saveServerSettings,
   saveServerTemplate,
   createPostgresProjectRepository,
+  createPostgresProAccountingRepository,
   buildPostgresTaxAuditExportArtifact,
   type ServerDatabase,
-  type ServerDatabaseSession,
 } from '@billme/server-data';
 import {
   accountSchema,
@@ -67,7 +76,6 @@ import {
   setSettingsPayloadSchema,
   templateKindSchema,
   templateSchema,
-  upsertAccountPayloadSchema,
   upsertArticlePayloadSchema,
   upsertTemplatePayloadSchema,
   projectSchema,
@@ -89,11 +97,11 @@ import {
   requireAuditExportSession,
   createMutationContext,
   requireMutationSession,
+  requireMutationSessionFor,
   requireSession,
   authorizeEmbeddedRequest,
 } from './runtimeContext.js';
 
-type AppSettings = z.infer<typeof appSettingsSchema>;
 type RuntimeProfile = 'server' | 'embedded';
 
 export interface EmbeddedLocalAuthOptions {
@@ -135,6 +143,29 @@ const productAuthStatusQuerySchema = z.object({
 const documentExportQuerySchema = z.object({
   kind: documentKindSchema,
 });
+const chainCommonSchema = z.object({
+  id: z.string().trim().min(1),
+  number: z.string().trim().min(1),
+  date: z.string().trim().min(1),
+  dueDate: z.string().trim().min(1).optional(),
+  servicePeriod: z.string().trim().min(1).optional(),
+  reason: z.string().trim().min(1),
+});
+const orderConfirmationBodySchema = chainCommonSchema.extend({ offerId: z.string().trim().min(1) });
+const deliveryNoteBodySchema = chainCommonSchema.extend({ orderId: z.string().trim().min(1), items: invoiceSchema.shape.items.optional() });
+const settlementInvoiceBodySchema = chainCommonSchema.extend({
+  orderId: z.string().trim().min(1),
+  kind: z.enum(['advance_invoice', 'partial_invoice', 'final_invoice']),
+  amount: z.number().finite().positive(),
+  items: invoiceSchema.shape.items.optional(),
+});
+const correctionBodySchema = chainCommonSchema.extend({
+  invoiceId: z.string().trim().min(1),
+  kind: z.enum(['credit_note', 'cancellation_invoice']),
+  amount: z.number().finite().positive().optional(),
+  items: invoiceSchema.shape.items.optional(),
+});
+const revisionBodySchema = chainCommonSchema.extend({ invoiceId: z.string().trim().min(1) });
 const numberReserveBodySchema = z.object({
   kind: z.enum(['invoice', 'offer', 'customer']),
 });
@@ -295,8 +326,16 @@ const mapArticleRecord = (record: Awaited<ReturnType<typeof listServerArticles>>
     taxRate: record.taxRate,
   });
 
+// Lite has no SKR chart of accounts, so its accounts carry no default SKR
+// number. Pro clients still send one and validate it against the strict Pro
+// schema before the request, so the guarantee stays where it belongs.
+const serverAccountSchema = accountSchema.extend({
+  defaultSkrAccountNumber: z.string().min(1).optional(),
+});
+const serverUpsertAccountPayloadSchema = z.object({ account: serverAccountSchema });
+
 const mapAccountRecord = (record: Awaited<ReturnType<typeof listServerBankAccounts>>[number]) =>
-  accountSchema.parse({
+  serverAccountSchema.parse({
     id: record.id,
     name: record.name,
     iban: record.iban,
@@ -306,100 +345,6 @@ const mapAccountRecord = (record: Awaited<ReturnType<typeof listServerBankAccoun
     type: record.type,
     color: record.color,
   });
-
-const createNumberingPortsForDb = (
-  db: ServerDatabaseSession,
-  scope: TenantScope,
-) => ({
-  tx: {
-    async inTransaction<TResult>(work: () => Promise<TResult> | TResult): Promise<TResult> {
-      return await work();
-    },
-  },
-  async getSettings() {
-    return parseStoredSettings(await getServerSettings(db, scope.tenantId));
-  },
-  async saveSettings(settings: AppSettings) {
-    await saveServerSettings(db, {
-      tenantId: scope.tenantId,
-      settingsJson: JSON.stringify(appSettingsSchema.parse(settings)),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-  },
-  async createReservation(reservation: {
-    id: string;
-    kind: 'invoice' | 'offer' | 'customer';
-    number: string;
-    counterValue: number;
-    status: 'reserved' | 'released' | 'finalized';
-    documentId: string | null;
-  }) {
-    await saveServerNumberReservation(db, {
-      ...reservation,
-      tenantId: scope.tenantId,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-  },
-  async getReservationById(reservationId: string) {
-    const reservations = await listServerNumberReservations(db, scope.tenantId);
-    const reservation = reservations.find((entry) => entry.id === reservationId);
-    return reservation
-      ? {
-          id: reservation.id,
-          kind: reservation.kind,
-          number: reservation.number,
-          counterValue: reservation.counterValue,
-          status: reservation.status,
-          documentId: reservation.documentId,
-        }
-      : null;
-  },
-  async updateReservation(reservation: {
-    id: string;
-    kind: 'invoice' | 'offer' | 'customer';
-    number: string;
-    counterValue: number;
-    status: 'reserved' | 'released' | 'finalized';
-    documentId: string | null;
-  }) {
-    await saveServerNumberReservation(db, {
-      ...reservation,
-      tenantId: scope.tenantId,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-  },
-  async isNumberTaken(kind: 'invoice' | 'offer' | 'customer', number: string) {
-    const entityTable = kind === 'customer' ? 'clients' : kind === 'invoice' ? 'invoices' : 'offers';
-    const entityColumn = kind === 'customer' ? 'customer_number' : 'number';
-    const entityMatch = await db.query<{ exists: boolean }>(
-      `SELECT EXISTS(SELECT 1 FROM ${entityTable} WHERE tenant_id = $1 AND ${entityColumn} = $2) AS exists`,
-      [scope.tenantId, number],
-    );
-    if (entityMatch.rows[0]?.exists) {
-      return true;
-    }
-    const reservationMatch = await db.query<{ exists: boolean }>(
-      `
-        SELECT EXISTS(
-          SELECT 1
-          FROM number_reservations
-          WHERE tenant_id = $1
-            AND kind = $2
-            AND number = $3
-            AND status <> 'released'
-        ) AS exists
-      `,
-      [scope.tenantId, kind, number],
-    );
-    return Boolean(reservationMatch.rows[0]?.exists);
-  },
-  async generateReservationId() {
-    return randomUUID();
-  },
-});
 
 const reserveNumberForScope = async (
   database: ServerDatabase,
@@ -555,9 +500,9 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: invoiceSchema,
     async handler({ request, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const pool = requireDatabase(app);
-      const unitOfWork = createPostgresBillingUnitOfWork(pool);
-      const saved = await unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
+      const database = requireDatabase(app);
+      const saved = await database.transaction({}, async (transaction) => {
+        const repositories = createPostgresBillingDependencies(transaction);
         const nextInvoice = invoiceSchema.parse({
           ...body.invoice,
           tenantId: session.scope.tenantId,
@@ -577,9 +522,144 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
             after,
           ),
         );
+
+        // Browser/server Pro uses the same persisted invoice aggregate as Lite.
+        // Once a reserved number is finalized and the draft becomes open, post
+        // the billing document in this transaction.  Non-billing chain
+        // documents intentionally remain outside journal/OPOS and correction
+        // posting is handled by the accounting repository's source relation.
+        const billingKind = !['order_confirmation', 'delivery_note'].includes(nextInvoice.documentKind ?? 'invoice');
+        if (product === 'pro' && before?.status === 'draft' && after.status === 'open' && billingKind) {
+          const reservation = (await transaction.query<{ id: string }>(
+            `SELECT id FROM number_reservations WHERE tenant_id=$1 AND kind='invoice' AND status='finalized' AND document_id=$2 AND number=$3 LIMIT 1`,
+            [session.scope.tenantId, after.id, after.number],
+          )).rows[0];
+          if (!reservation) throw new Error('FINALIZED_RESERVATION_REQUIRED');
+          const posted = await createPostgresProAccountingRepository(transaction).postOutgoingInvoice(
+            session.scope,
+            after.id,
+            { reservationId: reservation.id, mutation: createMutationContext(session, body.reason) },
+          );
+          if (posted.status !== 'ready' || !posted.snapshot) {
+            throw new Error(posted.reason ?? posted.issues[0]?.code ?? 'ACCOUNTING_POSTING_UNRESOLVED');
+          }
+        }
         return after;
       });
+      return withInvoiceHistory(database, session.scope, saved);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/documents/convert-offer`,
+    body: z.object({ offerId: z.string().min(1), invoiceId: z.string().uuid() }),
+    response: invoiceSchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
+      const database = requireDatabase(app);
+      const saved = await convertServerOfferToInvoice(database, session.scope, body, createMutationContext(session, 'Converted from offer').actor);
+      return withInvoiceHistory(database, session.scope, saved);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/document-chain/order-confirmations`,
+    body: orderConfirmationBodySchema,
+    response: invoiceSchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
+      const pool = requireDatabase(app);
+      const saved = await createPostgresBillingUnitOfWork(pool).withTransaction(session.scope, async ({ repositories }) =>
+        createOrderConfirmationFromOfferAsync(session.scope, repositories, { ...body, actor: createMutationContext(session, body.reason).actor }));
       return withInvoiceHistory(pool, session.scope, saved);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/document-chain/delivery-notes`,
+    body: deliveryNoteBodySchema,
+    response: invoiceSchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
+      const pool = requireDatabase(app);
+      const saved = await createPostgresBillingUnitOfWork(pool).withTransaction(session.scope, async ({ repositories }) =>
+        createDeliveryNoteFromOrderAsync(session.scope, repositories, { ...body, actor: createMutationContext(session, body.reason).actor }));
+      return withInvoiceHistory(pool, session.scope, saved);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/document-chain/settlement-invoices`,
+    body: settlementInvoiceBodySchema,
+    response: invoiceSchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
+      const pool = requireDatabase(app);
+      const saved = await createPostgresBillingUnitOfWork(pool).withTransaction(session.scope, async ({ repositories }) =>
+        createSettlementInvoiceAsync(session.scope, repositories, { ...body, actor: createMutationContext(session, body.reason).actor }));
+      return withInvoiceHistory(pool, session.scope, saved);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/document-chain/corrections`,
+    body: correctionBodySchema,
+    response: invoiceSchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
+      const pool = requireDatabase(app);
+      const saved = await createPostgresBillingUnitOfWork(pool).withTransaction(session.scope, async ({ repositories }) => {
+        const actor = createMutationContext(session, body.reason).actor;
+        return body.kind === 'credit_note'
+          ? createCreditNoteAsync(session.scope, repositories, { ...body, actor })
+          : createCancellationInvoiceAsync(session.scope, repositories, { ...body, actor });
+      });
+      return withInvoiceHistory(pool, session.scope, saved);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/document-chain/revisions`,
+    body: revisionBodySchema,
+    response: invoiceSchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
+      const pool = requireDatabase(app);
+      const saved = await createPostgresBillingUnitOfWork(pool).withTransaction(session.scope, async ({ repositories }) =>
+        createInvoiceRevisionAsync(session.scope, repositories, { ...body, actor: createMutationContext(session, body.reason).actor }));
+      return withInvoiceHistory(pool, session.scope, saved);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/document-chain/:rootDocumentId`,
+    params: z.object({ rootDocumentId: z.string().trim().min(1) }),
+    response: z.array(invoiceSchema),
+    async handler({ request, params }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      const pool = requireDatabase(app);
+      const dependencies = createPostgresBillingDependencies(pool);
+      return listDocumentChainAsync(session.scope, dependencies, params.rootDocumentId);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/document-chain/:invoiceId/revisions`,
+    params: z.object({ invoiceId: z.string().trim().min(1) }),
+    response: z.array(invoiceSchema),
+    async handler({ request, params }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      const pool = requireDatabase(app);
+      const dependencies = createPostgresBillingDependencies(pool);
+      return listInvoiceRevisionsAsync(session.scope, dependencies, params.invoiceId);
     },
   });
 
@@ -739,7 +819,9 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
           tenantId: session.scope.tenantId,
         });
         const before = await repositories.recurringProfileRepo.getById(session.scope, nextProfile.id);
-        const saved = await repositories.recurringProfileRepo.save(session.scope, nextProfile);
+        const saved = await upsertRecurringProfile(session.scope, {
+          recurringProfileStore: repositories.recurringProfileRepo,
+        }, nextProfile);
         await repositories.auditLog.append(
           session.scope,
           buildAuditEntry(
@@ -1025,7 +1107,7 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
   typedRoute(app, {
     method: 'GET',
     url: `${prefix}/accounts`,
-    response: z.array(accountSchema),
+    response: z.array(serverAccountSchema),
     async handler({ request }) {
       const session = await requireSession(app, product, request.headers.authorization);
       return (await listServerBankAccounts(requireDatabase(app), session.scope.tenantId)).map(mapAccountRecord);
@@ -1035,8 +1117,8 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
   typedRoute(app, {
     method: 'POST',
     url: `${prefix}/accounts`,
-    body: upsertAccountPayloadSchema,
-    response: accountSchema,
+    body: serverUpsertAccountPayloadSchema,
+    response: serverAccountSchema,
     async handler({ request, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
       const saved = await saveServerBankAccount(requireDatabase(app), {
@@ -1385,6 +1467,11 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     origin: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['authorization', 'content-type', 'x-billme-local-token'],
+    exposedHeaders: [
+      'x-billme-datev-export-id',
+      'x-billme-datev-content-sha256',
+      'x-billme-datev-record-count',
+    ],
   });
 
   const secretEnv = {

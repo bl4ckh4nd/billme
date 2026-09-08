@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { verifyAuditChain } from './audit';
+import { appendAuditLog, verifyAuditChain } from './audit';
 import { getEurClassification, upsertEurClassification } from './eurClassificationRepo';
 
 const databases: Database.Database[] = [];
@@ -57,6 +57,21 @@ afterEach(() => {
 });
 
 describe('EÜR classification audit boundary', () => {
+  it('hashes the same normalized JSON representation that is persisted', () => {
+    const db = createDb();
+
+    appendAuditLog(db, {
+      entityType: 'invoice',
+      entityId: 'invoice-with-snapshot',
+      action: 'invoice.chain.create',
+      after: { kept: true, omitted: undefined, values: [1, undefined] },
+    });
+
+    expect(verifyAuditChain(db)).toMatchObject({ ok: true, count: 1 });
+    const row = db.prepare('SELECT after_json AS afterJson FROM audit_log').get() as { afterJson: string };
+    expect(JSON.parse(row.afterJson)).toEqual({ kept: true, values: [1, null] });
+  });
+
   it('persists before/after audit entries in the same hash chain', () => {
     const db = createDb();
 

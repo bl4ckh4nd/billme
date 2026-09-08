@@ -108,6 +108,17 @@ export const ensureEurFactsSchema = (db: Database.Database): void => {
       WHERE idempotency_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_eur_annex_facts_year
       ON eur_annex_facts (tenant_id, tax_year, annex);
+    CREATE TABLE IF NOT EXISTS report_snapshots (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL DEFAULT 'default',
+      report_type TEXT NOT NULL,
+      args_json TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      source_hash TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_report_snapshots_tenant_type
+      ON report_snapshots (tenant_id, report_type, created_at);
     CREATE TRIGGER IF NOT EXISTS eur_report_snapshots_eur_no_update
       BEFORE UPDATE ON report_snapshots
       WHEN OLD.report_type = 'eur'

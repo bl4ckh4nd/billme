@@ -52,6 +52,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare legacy SQLite test binding
+        run: pnpm ci:prepare-sqlite-tests
+
       - name: Shared desktop data tests
         run: pnpm -C packages/desktop-data test
 
@@ -110,6 +113,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Prepare legacy SQLite test binding
+        run: pnpm ci:prepare-sqlite-tests
 
       - name: Server core typecheck
         run: pnpm -C packages/server-core typecheck
@@ -171,6 +177,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare legacy SQLite test binding
+        run: pnpm ci:prepare-sqlite-tests
+
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
@@ -219,6 +228,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Prepare legacy SQLite test binding
+        run: pnpm ci:prepare-sqlite-tests
 
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium

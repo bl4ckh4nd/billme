@@ -7,7 +7,8 @@ import { ensureEurFactsSchema, listEurAnnexFacts, listEurCashFacts, saveEurAnnex
 const dbForFacts = (): Database.Database => {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE audit_log (
-    sequence INTEGER PRIMARY KEY, ts TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT, sequence INTEGER NOT NULL UNIQUE,
+    ts TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
     action TEXT NOT NULL, reason TEXT, before_json TEXT, after_json TEXT, prev_hash TEXT, hash TEXT NOT NULL, actor TEXT NOT NULL
   )`);
   ensureEurFactsSchema(db);
@@ -27,7 +28,7 @@ describe('EÜR runtime facts', () => {
     expect(saved.provenance.catalogId).toBe('anlage-euer-2026');
     expect(saveEurCashFact(db, input).id).toBe(saved.id);
     expect(listEurCashFacts(db, 2026, 'tenant-b')).toEqual([]);
-    expect(() => saveEurCashFact(db, { ...input, idempotencyKey: 'fact-1', amountNet: 101 })).toThrow('EUR_FACT_IDEMPOTENCY_CONFLICT');
+    expect(() => saveEurCashFact(db, { ...input, idempotencyKey: 'fact-1', sourceId: 'tx-2' })).toThrow('EUR_FACT_IDEMPOTENCY_CONFLICT');
     expect(() => saveEurCashFact(db, { ...input, idempotencyKey: 'fact-2', splits: [{ amountNet: 99, lineId: expense.id, reason: 'Zu kurz' }] })).toThrow('EUR_SPLIT_ALLOCATION_MISMATCH');
   });
 

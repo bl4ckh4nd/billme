@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Workspace und CI verwenden pnpm 10.1, damit die bestehende Native-Build-Allowlist das nur für SQLite-Import-, Kompatibilitäts- und Portaltests benötigte `better-sqlite3`-Binding zuverlässig erzeugt; der produktive Lite-/Pro-Desktop bleibt auf PGlite.
+- Die additive EÜR-Kompatibilitätsschicht initialisiert fehlende Berichtssnapshots jetzt vor ihren Unveränderlichkeits-Triggern, sodass alte oder minimale SQLite-Importquellen zuverlässig geöffnet werden können.
+- Workspace und CI verwenden pnpm 10.1 und bauen sowie prüfen das nur für SQLite-Import-, Kompatibilitäts- und Portaltests benötigte `better-sqlite3`-Binding explizit; der produktive Lite-/Pro-Desktop bleibt auf PGlite.
 - Manueller Portal-Abgleich und Worker übernehmen Kundenentscheidungen jetzt über dieselbe gesperrte Transaktion inklusive Audit und vollständiger Metadaten; bereits entschiedene oder zwischenzeitlich neu veröffentlichte Angebote werden nicht überschrieben.
 - Lite und Pro wandeln Angebote serverseitig in einer Transaktion mit Nummernreservierung, Rechnungssnapshot, Finalisierung und Audit um; wiederholte HTTP-Anfragen mit derselben Rechnungs-ID liefern denselben Beleg, während Fehler sämtliche Schreibschritte zurückrollen.
 - Rechnungs-Upserts können eine bereits in einem anderen Mandanten vergebene Beleg-ID nicht mehr überschreiben.

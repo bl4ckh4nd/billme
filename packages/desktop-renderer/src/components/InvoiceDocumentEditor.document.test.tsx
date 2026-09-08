@@ -117,13 +117,13 @@ describe('document-first invoice editor', () => {
     await user.click(recipient);
     await user.click(screen.getByRole('button', { name: 'Empfänger ohne Kundenstamm eingeben' }));
 
+    await waitFor(() => expect(onSelectedClientChange).toHaveBeenLastCalledWith(''));
     expect(recipient).toHaveFocus();
     expect(screen.getByText('Nur in diesem Beleg gespeichert')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Rechnungsadresse' })).toHaveValue('');
     expect(screen.getByRole('textbox', { name: 'E-Mail' })).toHaveValue('');
     expect(project).toHaveValue('');
     expect(project).toBeDisabled();
-    expect(onSelectedClientChange).toHaveBeenLastCalledWith('');
 
     await user.type(recipient, 'Manueller Empfänger');
     const address = screen.getByRole('textbox', { name: 'Rechnungsadresse' });

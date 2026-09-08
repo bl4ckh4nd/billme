@@ -68,8 +68,8 @@ function ComboboxInner<T extends ComboboxItem>(
   const blurTimeout = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!focused) setQuery(value);
-  }, [focused, value]);
+    if (disabled || !focused) setQuery(value);
+  }, [disabled, focused, value]);
 
   useEffect(() => () => {
     if (blurTimeout.current) window.clearTimeout(blurTimeout.current);

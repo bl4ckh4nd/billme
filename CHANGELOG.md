@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Deaktivierte Auswahlfelder übernehmen extern zurückgesetzte Werte sofort; beim Wechsel auf einen freien Belegempfänger bleibt dadurch kein zuvor gewähltes Projekt sichtbar.
 - Die additive EÜR-Kompatibilitätsschicht initialisiert fehlende Berichtssnapshots jetzt vor ihren Unveränderlichkeits-Triggern, sodass alte oder minimale SQLite-Importquellen zuverlässig geöffnet werden können.
 - Workspace und CI verwenden pnpm 10.1 und bauen sowie prüfen das nur für SQLite-Import-, Kompatibilitäts- und Portaltests benötigte `better-sqlite3`-Binding explizit; der produktive Lite-/Pro-Desktop bleibt auf PGlite.
 - Manueller Portal-Abgleich und Worker übernehmen Kundenentscheidungen jetzt über dieselbe gesperrte Transaktion inklusive Audit und vollständiger Metadaten; bereits entschiedene oder zwischenzeitlich neu veröffentlichte Angebote werden nicht überschrieben.

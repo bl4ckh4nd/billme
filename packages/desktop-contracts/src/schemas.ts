@@ -14,6 +14,7 @@ const isAllowedPortalBaseUrl = (value: string): boolean => {
 };
 
 export const invoiceItemSchema = z.object({
+  kind: z.enum(['item', 'time', 'optional', 'text', 'group', 'summary']).optional(),
   description: z.string(),
   quantity: z.number(),
   price: z.number(),
@@ -23,6 +24,14 @@ export const invoiceItemSchema = z.object({
   unit: z.string().optional(),
   discountPercent: z.number().min(0).max(100).optional(),
   taxRate: z.number().min(0).optional(),
+  note: z.string().optional(),
+  optionNote: z.string().optional(),
+  date: z.string().optional(),
+  durationMinutes: z.number().nonnegative().optional(),
+  groupId: z.string().optional(),
+  summaryScope: z.enum(['running', 'group']).optional(),
+  summaryMetric: z.enum(['amount', 'quantity']).optional(),
+  summaryUnit: z.string().optional(),
 });
 
 export const paymentSchema = z.object({
@@ -48,6 +57,17 @@ export const invoiceTaxMetaSchema = z.object({
   exemptionReasonOverride: z.string().optional(),
   buyerVatId: z.string().optional(),
   sellerVatId: z.string().optional(),
+  defaultVatRate: z.number().min(0).max(100).optional(),
+  destinationVatRate: z.number().min(0).max(99.99).optional(),
+  buyerCountryCode: z.string().length(2).optional(),
+  sellerCountryCode: z.string().length(2).optional(),
+  buyerType: z.enum(['business', 'consumer']).optional(),
+  vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
+  vatIdValidationAt: z.string().optional(),
+  taxRuleConfirmed: z.boolean().optional(),
+  datevSachverhaltLl: z.string().regex(/^[1-9]\d{0,2}$/).optional(),
+  datevEvidenceType: z.string().min(1).optional(),
+  datevEvidenceReference: z.string().min(1).optional(),
 });
 
 export const invoiceTaxSnapshotSchema = z.object({
@@ -55,13 +75,15 @@ export const invoiceTaxSnapshotSchema = z.object({
   vatAmount: z.number(),
   netAmount: z.number(),
   grossAmount: z.number(),
-  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']),
+  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O', 'K', 'G']),
   label: z.string().optional(),
   vatBreakdown: z.array(z.object({
     rate: z.number(),
     netAmount: z.number(),
     vatAmount: z.number(),
   })).optional(),
+  taxNotice: z.string().optional(),
+  taxRuleConfirmed: z.boolean().optional(),
 });
 
 export const invoiceSchema = z.object({
@@ -71,6 +93,11 @@ export const invoiceSchema = z.object({
   projectId: z.string().optional(),
   number: z.string(),
   numberReservationId: z.string().optional(),
+  documentKind: z.enum(['invoice', 'order_confirmation', 'delivery_note', 'advance_invoice', 'partial_invoice', 'final_invoice', 'credit_note', 'cancellation_invoice']).optional(),
+  sourceDocumentId: z.string().optional(),
+  rootDocumentId: z.string().optional(),
+  revisionOfId: z.string().optional(),
+  revisionNumber: z.number().int().nonnegative().optional(),
   client: z.string(),
   clientEmail: z.string(),
   clientAddress: z.string().optional(),
@@ -143,6 +170,13 @@ export const clientSchema = z.object({
   avatar: z.string().optional(),
   tags: z.array(z.string()),
   notes: z.string(),
+  taxProfile: z.object({
+    type: z.enum(['business', 'consumer']),
+    countryCode: z.string().optional(),
+    vatId: z.string().optional(),
+    vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
+    vatIdValidationAt: z.string().optional(),
+  }).optional(),
   projects: z.array(projectSchema),
   activities: z.array(activitySchema),
   addresses: z
@@ -231,6 +265,7 @@ export const eurClassificationSchema = z.object({
 export const eurReportRowSchema = z.object({
   lineId: z.string(),
   kennziffer: z.string().optional(),
+  providerPath: z.string().optional(),
   label: z.string(),
   kind: z.enum(['income', 'expense', 'computed']),
   exportable: z.boolean(),
@@ -250,6 +285,13 @@ export const eurReportResultSchema = z.object({
   }),
   unclassifiedCount: z.number().int(),
   warnings: z.array(z.string()),
+  catalog: z.object({
+    id: z.string().min(1),
+    version: z.string().min(1),
+    sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    delivery: z.enum(['print-form-only', 'elster-ready']),
+    elsterReady: z.boolean(),
+  }),
 });
 
 export const eurListItemsArgsSchema = z.object({
@@ -294,6 +336,7 @@ export const eurUpsertClassificationArgsSchema = z.object({
   sourceType: z.enum(['transaction', 'invoice']),
   sourceId: z.string().min(1),
   taxYear: z.number().int().min(2025),
+  reason: z.string().trim().min(1),
   eurLineId: z.string().optional(),
   excluded: z.boolean().optional(),
   vatMode: z.enum(['none', 'default']).optional(),
@@ -381,7 +424,44 @@ export const dunningLevelSchema = z.object({
   text: z.string(),
 });
 
-export const appSettingsSchema = z.object({
+const isValidMonthDay = (value: string): boolean => {
+  const [month, day] = value.split('-').map(Number);
+  return day <= [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+};
+
+export const businessReportingProfileSchema = z
+  .object({
+    jurisdiction: z.literal('DE'),
+    legalForm: z.enum(['sole_proprietor', 'gmbh']),
+    profitDetermination: z.enum(['eur', 'double_entry']),
+    hgbSizeClass: z.enum(['micro', 'small']).optional(),
+    fiscalYearStart: z.string()
+      .regex(/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/, 'Expected MM-DD')
+      .refine(isValidMonthDay, 'Expected a valid MM-DD date'),
+    chart: z.enum(['SKR03', 'SKR04']).optional(),
+    vatMethod: z.enum(['soll', 'ist']),
+  })
+  .superRefine((profile, ctx) => {
+    if (profile.profitDetermination === 'eur' && profile.fiscalYearStart !== '01-01') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['fiscalYearStart'], message: 'EÜR requires a calendar-year start (01-01)' });
+    }
+    if (profile.legalForm === 'sole_proprietor' && profile.profitDetermination !== 'eur') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profitDetermination'], message: 'Sole proprietors require EÜR (cash-basis accounting)' });
+    }
+    if (profile.legalForm !== 'gmbh') return;
+    if (profile.profitDetermination !== 'double_entry') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profitDetermination'], message: 'GmbH requires double-entry accounting' });
+    }
+    if (!profile.hgbSizeClass) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['hgbSizeClass'], message: 'GmbH requires an HGB size class' });
+    }
+    if (!profile.chart) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['chart'], message: 'GmbH requires a ledger chart' });
+    }
+  });
+
+const appSettingsBaseSchema = z.object({
+  businessReportingProfile: businessReportingProfileSchema.optional(),
   company: z.object({
     name: z.string(),
     owner: z.string(),
@@ -426,6 +506,7 @@ export const appSettingsSchema = z.object({
   legal: z.object({
     smallBusinessRule: z.boolean(),
     defaultVatRate: z.number(),
+    countryCode: z.enum(['DE', 'AT', 'CH']).optional(),
     taxAccountingMethod: z.enum(['soll', 'ist']).default('soll'),
     paymentTermsDays: z.number(),
     defaultIntroText: z.string(),
@@ -502,6 +583,28 @@ export const appSettingsSchema = z.object({
       topClientsLimit: 5,
     }),
   onboardingCompleted: z.boolean().optional(),
+});
+
+export const appSettingsSchema: z.ZodType<
+  z.output<typeof appSettingsBaseSchema>,
+  z.ZodTypeDef,
+  z.input<typeof appSettingsBaseSchema>
+> = appSettingsBaseSchema.transform((settings) => {
+  const businessReportingProfile = settings.businessReportingProfile ?? {
+    jurisdiction: 'DE' as const,
+    legalForm: 'sole_proprietor' as const,
+    profitDetermination: 'eur' as const,
+    fiscalYearStart: '01-01',
+    vatMethod: settings.legal.taxAccountingMethod,
+  };
+  return {
+    ...settings,
+    businessReportingProfile,
+    legal: {
+      ...settings.legal,
+      taxAccountingMethod: businessReportingProfile.vatMethod,
+    },
+  };
 });
 
 export const upsertClientPayloadSchema = z.object({

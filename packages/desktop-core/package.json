@@ -3,11 +3,17 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "scripts": {
+    "test": "vitest --run"
+  },
   "dependencies": {
+    "@billme/desktop-designer": "workspace:*",
     "electron-updater": "^6.8.3",
     "keytar": "^7.9.0",
     "nodemailer": "^6.9.15",
-    "zustand": "^5.0.10"
+    "zod": "^3.25.76",
+    "zustand": "^5.0.10",
+    "@billme/desktop-contracts": "workspace:*"
   },
   "peerDependencies": {
     "electron": ">=37.0.0",
@@ -55,10 +61,6 @@
       "types": "./src/ipc/errorHandler.ts",
       "default": "./src/ipc/errorHandler.ts"
     },
-    "./hooks/useToast": {
-      "types": "./src/hooks/useToast.ts",
-      "default": "./src/hooks/useToast.ts"
-    },
     "./services/emailService": {
       "types": "./src/services/emailService.ts",
       "default": "./src/services/emailService.ts"
@@ -91,6 +93,14 @@
       "types": "./src/electron/preload.ts",
       "default": "./src/electron/preload.ts"
     },
+    "./electron/embeddedConnection": {
+      "types": "./src/electron/embeddedConnection.ts",
+      "default": "./src/electron/embeddedConnection.ts"
+    },
+    "./electron/nativeIpc": {
+      "types": "./src/electron/nativeIpc.ts",
+      "default": "./src/electron/nativeIpc.ts"
+    },
     "./electron/portalPolling": {
       "types": "./src/electron/portalPolling.ts",
       "default": "./src/electron/portalPolling.ts"
@@ -98,6 +108,26 @@
     "./test/setup": {
       "types": "./src/test/setup.ts",
       "default": "./src/test/setup.ts"
+    },
+    "./electron/tax-filing/types": {
+      "types": "./src/electron/tax-filing/types.ts",
+      "default": "./src/electron/tax-filing/types.ts"
+    },
+    "./electron/tax-filing/provider": {
+      "types": "./src/electron/tax-filing/provider.ts",
+      "default": "./src/electron/tax-filing/provider.ts"
+    },
+    "./electron/tax-filing/certificateStore": {
+      "types": "./src/electron/tax-filing/certificateStore.ts",
+      "default": "./src/electron/tax-filing/certificateStore.ts"
+    },
+    "./electron/tax-filing/adapter": {
+      "types": "./src/electron/tax-filing/adapter.ts",
+      "default": "./src/electron/tax-filing/adapter.ts"
+    },
+    "./electron/tax-filing/ipc": {
+      "types": "./src/electron/tax-filing/ipc.ts",
+      "default": "./src/electron/tax-filing/ipc.ts"
     }
   }
 }

@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
+import { and, asc, desc, eq, isNull, like, ne } from 'drizzle-orm';
 import {
   buildNextProjectCode,
   ensureDefaultProjectForClient as ensureDefaultProjectForClientDomain,
@@ -7,6 +8,7 @@ import {
 import type { SyncDefaultProjectPorts } from '@billme/server-core/ports';
 import type { Project } from '@billme/desktop-core/types';
 import { appendAuditLog } from './audit';
+import { createDrizzle, schema } from './drizzle';
 
 type ProjectRow = {
   id: string;
@@ -41,8 +43,8 @@ const rowToProject = (row: ProjectRow): Project => {
 };
 
 const listProjectCodesByPrefix = (db: Database.Database, prefix: string): Array<string | null> => {
-  return (db.prepare('SELECT code FROM client_projects WHERE code LIKE ?').all(`${prefix}%`) as Array<{ code: string | null }>)
-    .map((row) => row.code);
+  return createDrizzle(db).select({ code: schema.clientProjects.code }).from(schema.clientProjects)
+    .where(like(schema.clientProjects.code, `${prefix}%`)).all().map((row) => row.code);
 };
 
 const nextProjectCode = (db: Database.Database, year: string): string => {
@@ -50,6 +52,7 @@ const nextProjectCode = (db: Database.Database, year: string): string => {
 };
 
 export const ensureDefaultProjectForClient = (db: Database.Database, clientId: string): Project => {
+  const drizzle = createDrizzle(db);
   const ports: SyncDefaultProjectPorts<Project & { clientId: string }> = {
     tx: {
       inTransaction<TResult>(work: () => TResult): TResult {
@@ -57,31 +60,29 @@ export const ensureDefaultProjectForClient = (db: Database.Database, clientId: s
       },
     },
     getActiveDefaultProjectForClient: (currentClientId) => {
-      const existing = db
-        .prepare(
-          `
-            SELECT * FROM client_projects
-            WHERE client_id = ? AND name = 'Allgemein' AND archived_at IS NULL
-            ORDER BY start_date DESC
-            LIMIT 1
-          `,
-        )
-        .get(currentClientId) as ProjectRow | undefined;
+      const existing = drizzle.select({
+        id: schema.clientProjects.id,
+        client_id: schema.clientProjects.clientId,
+        code: schema.clientProjects.code,
+        name: schema.clientProjects.name,
+        status: schema.clientProjects.status,
+        budget: schema.clientProjects.budget,
+        start_date: schema.clientProjects.startDate,
+        end_date: schema.clientProjects.endDate,
+        description: schema.clientProjects.description,
+        archived_at: schema.clientProjects.archivedAt,
+        created_at: schema.clientProjects.createdAt,
+        updated_at: schema.clientProjects.updatedAt,
+      }).from(schema.clientProjects).where(and(
+        eq(schema.clientProjects.clientId, currentClientId),
+        eq(schema.clientProjects.name, 'Allgemein'),
+        isNull(schema.clientProjects.archivedAt),
+      )).orderBy(desc(schema.clientProjects.startDate)).limit(1).get() as ProjectRow | undefined;
       return existing ? rowToProject(existing) as Project & { clientId: string } : null;
     },
     listProjectCodesByPrefix: (prefix) => listProjectCodesByPrefix(db, prefix),
     saveProject: (project) => {
-      db.prepare(
-        `
-          INSERT INTO client_projects (
-            id, client_id, code, name, status, budget, start_date, end_date, description,
-            archived_at, created_at, updated_at
-          ) VALUES (
-            @id, @clientId, @code, @name, @status, @budget, @startDate, @endDate, @description,
-            @archivedAt, @createdAt, @updatedAt
-          )
-        `,
-      ).run({
+      drizzle.insert(schema.clientProjects).values({
         id: project.id,
         clientId: project.clientId,
         code: project.code ?? null,
@@ -94,7 +95,7 @@ export const ensureDefaultProjectForClient = (db: Database.Database, clientId: s
         archivedAt: project.archivedAt ?? null,
         createdAt: project.createdAt ?? null,
         updatedAt: project.updatedAt ?? null,
-      });
+      }).run();
       return project;
     },
   };
@@ -127,32 +128,49 @@ export const listProjects = (
     ensureDefaultProjectForClient(db, args.clientId);
   }
 
-  const rows = args?.clientId
-    ? (db
-        .prepare(
-          `
-            SELECT * FROM client_projects
-            WHERE client_id = ?
-              AND (${includeArchived ? '1=1' : 'archived_at IS NULL'})
-            ORDER BY archived_at IS NOT NULL, start_date DESC, name ASC
-          `,
-        )
-        .all(args.clientId) as ProjectRow[])
-    : (db
-        .prepare(
-          `
-            SELECT * FROM client_projects
-            WHERE ${includeArchived ? '1=1' : 'archived_at IS NULL'}
-            ORDER BY archived_at IS NOT NULL, start_date DESC, name ASC
-          `,
-        )
-        .all() as ProjectRow[]);
+  const drizzle = createDrizzle(db);
+  const selection = drizzle.select({
+    id: schema.clientProjects.id,
+    client_id: schema.clientProjects.clientId,
+    code: schema.clientProjects.code,
+    name: schema.clientProjects.name,
+    status: schema.clientProjects.status,
+    budget: schema.clientProjects.budget,
+    start_date: schema.clientProjects.startDate,
+    end_date: schema.clientProjects.endDate,
+    description: schema.clientProjects.description,
+    archived_at: schema.clientProjects.archivedAt,
+    created_at: schema.clientProjects.createdAt,
+    updated_at: schema.clientProjects.updatedAt,
+  }).from(schema.clientProjects);
+  const projectFilter = args?.clientId && !includeArchived
+    ? and(eq(schema.clientProjects.clientId, args.clientId), isNull(schema.clientProjects.archivedAt))
+    : args?.clientId
+      ? eq(schema.clientProjects.clientId, args.clientId)
+      : !includeArchived
+        ? isNull(schema.clientProjects.archivedAt)
+        : undefined;
+  const rows = (projectFilter ? selection.where(projectFilter) : selection)
+    .orderBy(asc(schema.clientProjects.archivedAt), desc(schema.clientProjects.startDate), asc(schema.clientProjects.name)).all() as ProjectRow[];
 
   return rows.map(rowToProject);
 };
 
 export const getProject = (db: Database.Database, id: string): Project | null => {
-  const row = db.prepare('SELECT * FROM client_projects WHERE id = ?').get(id) as ProjectRow | undefined;
+  const row = createDrizzle(db).select({
+    id: schema.clientProjects.id,
+    client_id: schema.clientProjects.clientId,
+    code: schema.clientProjects.code,
+    name: schema.clientProjects.name,
+    status: schema.clientProjects.status,
+    budget: schema.clientProjects.budget,
+    start_date: schema.clientProjects.startDate,
+    end_date: schema.clientProjects.endDate,
+    description: schema.clientProjects.description,
+    archived_at: schema.clientProjects.archivedAt,
+    created_at: schema.clientProjects.createdAt,
+    updated_at: schema.clientProjects.updatedAt,
+  }).from(schema.clientProjects).where(eq(schema.clientProjects.id, id)).get() as ProjectRow | undefined;
   return row ? rowToProject(row) : null;
 };
 
@@ -167,34 +185,23 @@ export const upsertProject = (
   if (!project.clientId) throw new Error('clientId is required');
 
   const tx = db.transaction(() => {
+    const drizzle = createDrizzle(db);
     const before = getProject(db, project.id);
     const now = new Date().toISOString();
     const nowDate = now.split('T')[0] ?? now;
 
-    const exists = db
-      .prepare('SELECT 1 FROM client_projects WHERE id = ?')
-      .get(project.id) as { 1: 1 } | undefined;
+    const exists = drizzle.select({ id: schema.clientProjects.id }).from(schema.clientProjects)
+      .where(eq(schema.clientProjects.id, project.id)).get();
 
     const year = (project.startDate?.slice(0, 4) || String(new Date(now).getFullYear())).padStart(4, '0');
     const code = (project.code && project.code.trim().length > 0 ? project.code.trim() : null) ?? nextProjectCode(db, year);
 
-    const collision = db
-      .prepare('SELECT id FROM client_projects WHERE code = ? AND id <> ?')
-      .get(code, project.id) as { id: string } | undefined;
+    const collision = drizzle.select({ id: schema.clientProjects.id }).from(schema.clientProjects)
+      .where(and(eq(schema.clientProjects.code, code), ne(schema.clientProjects.id, project.id))).get();
     if (collision) throw new Error('Project code already exists');
 
     if (!exists) {
-      db.prepare(
-        `
-          INSERT INTO client_projects (
-            id, client_id, code, name, status, budget, start_date, end_date, description,
-            archived_at, created_at, updated_at
-          ) VALUES (
-            @id, @clientId, @code, @name, @status, @budget, @startDate, @endDate, @description,
-            @archivedAt, @createdAt, @updatedAt
-          )
-        `,
-      ).run({
+      drizzle.insert(schema.clientProjects).values({
         id: project.id,
         clientId: project.clientId,
         code,
@@ -207,24 +214,9 @@ export const upsertProject = (
         archivedAt: null,
         createdAt: now,
         updatedAt: now,
-      });
+      }).run();
     } else {
-      db.prepare(
-        `
-          UPDATE client_projects SET
-            client_id=@clientId,
-            code=@code,
-            name=@name,
-            status=@status,
-            budget=@budget,
-            start_date=@startDate,
-            end_date=@endDate,
-            description=@description,
-            updated_at=@updatedAt
-          WHERE id=@id
-        `,
-      ).run({
-        id: project.id,
+      drizzle.update(schema.clientProjects).set({
         clientId: project.clientId,
         code,
         name: project.name,
@@ -234,7 +226,7 @@ export const upsertProject = (
         endDate: project.endDate ?? null,
         description: project.description ?? null,
         updatedAt: now,
-      });
+      }).where(eq(schema.clientProjects.id, project.id)).run();
     }
 
     const after = getProject(db, project.id);
@@ -265,11 +257,8 @@ export const archiveProject = (db: Database.Database, id: string, reason: string
     if (!before) throw new Error('Project not found');
 
     const now = new Date().toISOString();
-    db.prepare('UPDATE client_projects SET archived_at = @archivedAt, updated_at = @updatedAt WHERE id = @id').run({
-      id,
-      archivedAt: now,
-      updatedAt: now,
-    });
+    createDrizzle(db).update(schema.clientProjects).set({ archivedAt: now, updatedAt: now })
+      .where(eq(schema.clientProjects.id, id)).run();
 
     const after = getProject(db, id);
     if (!after) throw new Error('Project not found after archive');

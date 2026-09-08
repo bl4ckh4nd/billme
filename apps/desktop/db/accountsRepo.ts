@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3';
+import { asc, desc, eq } from 'drizzle-orm';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import type { Account, Transaction } from '../types';
 
 type AccountRow = {
@@ -23,10 +25,26 @@ type TransactionRow = {
 };
 
 export const listAccounts = (db: Database.Database): Account[] => {
-  const accountRows = db.prepare('SELECT * FROM accounts ORDER BY name ASC').all() as AccountRow[];
-  const txRows = db
-    .prepare('SELECT * FROM transactions ORDER BY account_id, date DESC')
-    .all() as TransactionRow[];
+  const drizzle = createDrizzle(db);
+  const accountRows = drizzle.select({
+    id: schema.accounts.id,
+    name: schema.accounts.name,
+    iban: schema.accounts.iban,
+    balance: schema.accounts.balance,
+    type: schema.accounts.type,
+    color: schema.accounts.color,
+  }).from(schema.accounts).orderBy(asc(schema.accounts.name)).all() as AccountRow[];
+  const txRows = drizzle.select({
+    id: schema.transactions.id,
+    account_id: schema.transactions.accountId,
+    date: schema.transactions.date,
+    amount: schema.transactions.amount,
+    type: schema.transactions.type,
+    counterparty: schema.transactions.counterparty,
+    purpose: schema.transactions.purpose,
+    linked_invoice_id: schema.transactions.linkedInvoiceId,
+    status: schema.transactions.status,
+  }).from(schema.transactions).orderBy(asc(schema.transactions.accountId), desc(schema.transactions.date)).all() as TransactionRow[];
 
   const txByAccount = new Map<string, Transaction[]>();
   for (const t of txRows) {
@@ -57,57 +75,31 @@ export const listAccounts = (db: Database.Database): Account[] => {
 
 export const upsertAccount = (db: Database.Database, account: Account): Account => {
   const tx = db.transaction(() => {
-    const exists = db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(account.id) as
-      | { 1: 1 }
-      | undefined;
+    const drizzle = createDrizzle(db);
+    const exists = drizzle.select({ id: schema.accounts.id }).from(schema.accounts).where(eq(schema.accounts.id, account.id)).get();
 
     if (!exists) {
-      db.prepare(
-        `
-          INSERT INTO accounts (id, name, iban, balance, type, color)
-          VALUES (@id, @name, @iban, @balance, @type, @color)
-        `,
-      ).run({
+      drizzle.insert(schema.accounts).values({
         id: account.id,
         name: account.name,
         iban: account.iban,
         balance: account.balance,
         type: account.type,
         color: account.color,
-      });
+      }).run();
     } else {
-      db.prepare(
-        `
-          UPDATE accounts SET
-            name=@name,
-            iban=@iban,
-            balance=@balance,
-            type=@type,
-            color=@color
-          WHERE id=@id
-        `,
-      ).run({
-        id: account.id,
+      drizzle.update(schema.accounts).set({
         name: account.name,
         iban: account.iban,
         balance: account.balance,
         type: account.type,
         color: account.color,
-      });
+      }).where(eq(schema.accounts.id, account.id)).run();
     }
 
-    db.prepare('DELETE FROM transactions WHERE account_id = ?').run(account.id);
-    const insertTx = db.prepare(
-      `
-        INSERT INTO transactions (
-          id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status
-        ) VALUES (
-          @id, @accountId, @date, @amount, @type, @counterparty, @purpose, @linkedInvoiceId, @status
-        )
-      `,
-    );
+    drizzle.delete(schema.transactions).where(eq(schema.transactions.accountId, account.id)).run();
     for (const t of account.transactions ?? []) {
-      insertTx.run({
+      drizzle.insert(schema.transactions).values({
         id: t.id,
         accountId: account.id,
         date: t.date,
@@ -117,7 +109,7 @@ export const upsertAccount = (db: Database.Database, account: Account): Account 
         purpose: t.purpose,
         linkedInvoiceId: t.linkedInvoiceId ?? null,
         status: t.status,
-      });
+      }).run();
     }
 
     return account;
@@ -128,8 +120,9 @@ export const upsertAccount = (db: Database.Database, account: Account): Account 
 
 export const deleteAccount = (db: Database.Database, id: string): void => {
   const tx = db.transaction(() => {
-    db.prepare('DELETE FROM transactions WHERE account_id = ?').run(id);
-    db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
+    const drizzle = createDrizzle(db);
+    drizzle.delete(schema.transactions).where(eq(schema.transactions.accountId, id)).run();
+    drizzle.delete(schema.accounts).where(eq(schema.accounts.id, id)).run();
   });
   tx();
 };

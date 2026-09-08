@@ -13,6 +13,7 @@ export * from './eurClassificationRepo';
 export * from './eurRulesRepo';
 export * from './eurClassificationPipeline';
 export * from './eurReport';
+export * from './eurFacts';
 export * from './financeImportRepo';
 export * from './transactionsRepo';
 export * from './billingDomainCompat';

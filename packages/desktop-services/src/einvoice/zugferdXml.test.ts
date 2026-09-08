@@ -22,6 +22,7 @@ const fixture: NormalizedEinvoice = {
     postalCode: '20095',
     countryCode: 'DE',
   },
+  buyerVatId: 'ATU12345678',
   lines: [
     {
       lineId: '1',
@@ -32,6 +33,7 @@ const fixture: NormalizedEinvoice = {
       netLineTotal: 100,
       taxRate: 19,
       taxCategoryCode: 'S',
+      lineKind: 'item',
     },
   ],
   totals: {
@@ -50,5 +52,27 @@ describe('buildZugferdXml', () => {
     expect(xml).toContain('<ram:GrandTotalAmount>119.00</ram:GrandTotalAmount>');
     expect(xml).toContain('<ram:Name>Billme GmbH</ram:Name>');
     expect(xml).toContain('<ram:Name>Kunde GmbH</ram:Name>');
+    expect(xml).toContain('ATU12345678');
+  });
+
+  it('serializes optional rows as an explicit zero-value line with its notice', () => {
+    const xml = buildZugferdXml({
+      ...fixture,
+      lines: [
+        {
+          ...fixture.lines[0]!,
+          lineId: '1',
+          lineKind: 'optional',
+          name: 'Premium Support (Optional: nur bei Beauftragung)',
+          netUnitPrice: 0,
+          netLineTotal: 0,
+        },
+      ],
+      totals: { lineNetTotal: 0, taxTotal: 0, grandTotal: 0 },
+    });
+    expect(xml).toContain('<ram:Name>Premium Support (Optional: nur bei Beauftragung)</ram:Name>');
+    expect(xml).toContain('<ram:ChargeAmount>0.00</ram:ChargeAmount>');
+    expect(xml).toContain('<ram:LineTotalAmount>0.00</ram:LineTotalAmount>');
+    expect((xml.match(/<ram:IncludedSupplyChainTradeLineItem>/g) ?? [])).toHaveLength(1);
   });
 });

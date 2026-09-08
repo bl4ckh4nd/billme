@@ -88,6 +88,10 @@
       "types": "./src/eurReport.ts",
       "default": "./src/eurReport.ts"
     },
+    "./eurFacts": {
+      "types": "./src/eurFacts.ts",
+      "default": "./src/eurFacts.ts"
+    },
     "./financeImportRepo": {
       "types": "./src/financeImportRepo.ts",
       "default": "./src/financeImportRepo.ts"

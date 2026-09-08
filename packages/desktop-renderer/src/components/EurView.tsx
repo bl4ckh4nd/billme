@@ -1,5 +1,6 @@
 import React from 'react';
-import { Button } from '@billme/ui';
+import { Button, useActionFeedback } from '@billme/ui';
+import { LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS } from '@billme/accounting-shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -21,12 +22,11 @@ import {
   Tags,
   Settings2,
 } from 'lucide-react';
-import { ipc } from '../runtime-api';
+import { getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
-import { Toast } from '@billme/desktop-ui/components/Toast';
 import { EurRulesModal } from './EurRulesModal';
 
-const DEFAULT_YEAR = 2025;
+const DEFAULT_YEAR = LATEST_SUPPORTED_EUR_TAX_YEAR;
 
 type SourceType = 'transaction' | 'invoice';
 type VatMode = 'none' | 'default';
@@ -44,6 +44,7 @@ type EurItem = {
   flowType: 'income' | 'expense';
   counterparty: string;
   purpose: string;
+  vatWarning?: string;
   suggestedLineId?: string;
   suggestionReason?: string;
   suggestionLayer?: SuggestionLayer;
@@ -51,6 +52,8 @@ type EurItem = {
     eurLineId?: string;
     excluded: boolean;
     vatMode: VatMode;
+    vatRate?: number;
+    note?: string;
     updatedAt: string;
   };
   line?: {
@@ -82,7 +85,10 @@ type UndoChange = {
   prevLineId?: string;
   prevExcluded: boolean;
   prevVatMode: VatMode;
+  prevVatRate?: number;
 };
+
+type EurUndo = { label: string; reason: string; changes: UndoChange[] };
 
 const formatCurrency = (amount: number): string =>
   new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
@@ -102,14 +108,24 @@ const triggerCsvDownload = (content: string, fileName: string): void => {
 const itemKey = (item: { sourceType: SourceType; sourceId: string }): string =>
   `${item.sourceType}:${item.sourceId}`;
 
+const queryErrorDetail = (error: unknown): string =>
+  error instanceof Error && error.message.trim().length > 0
+    ? error.message
+    : 'Unbekannter Fehler beim Laden.';
+
 export const EurView: React.FC = () => {
+  const isProProduct = getRendererProduct() === 'pro';
+  const isWebShell = getRendererRuntime().shell === 'web';
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [taxYear, setTaxYear] = React.useState<number>(DEFAULT_YEAR);
   const [activeSource, setActiveSource] = React.useState<{ sourceType: SourceType; sourceId: string } | null>(null);
   const [selectedLineId, setSelectedLineId] = React.useState<string>('');
   const [vatMode, setVatMode] = React.useState<VatMode>('none');
+  const [vatRate, setVatRate] = React.useState<number | undefined>(undefined);
   const [excluded, setExcluded] = React.useState<boolean>(false);
+  const [taxNote, setTaxNote] = React.useState('');
+  const [auditReason, setAuditReason] = React.useState('');
 
   const [query, setQuery] = React.useState('');
   const [queueStatus, setQueueStatus] = React.useState<QueueStatus>('unclassified');
@@ -117,25 +133,33 @@ export const EurView: React.FC = () => {
   const [queueSort, setQueueSort] = React.useState<QueueSort>('date_desc');
   const [selectedKeys, setSelectedKeys] = React.useState<Set<string>>(new Set());
   const [isApplying, setIsApplying] = React.useState(false);
-  const [lastUndo, setLastUndo] = React.useState<{ label: string; changes: UndoChange[] } | null>(null);
+  const [lastUndo, setLastUndo] = React.useState<EurUndo | null>(null);
 
   const [showRulesModal, setShowRulesModal] = React.useState(false);
-  const [showToast, setShowToast] = React.useState(false);
-  const [toastMessage, setToastMessage] = React.useState('');
-  const [toastType, setToastType] = React.useState<'success' | 'error' | 'warning' | 'info'>('success');
+  const { notify } = useActionFeedback('eur');
 
   const showNotification = (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
-    setToastMessage(message);
-    setToastType(type);
-    setShowToast(true);
+    notify(type === 'warning' ? 'info' : type, message);
   };
 
-  const { data: report, isLoading: reportLoading } = useQuery({
+  const {
+    data: report,
+    isLoading: reportLoading,
+    isError: reportIsError,
+    error: reportQueryError,
+    refetch: refetchReport,
+  } = useQuery({
     queryKey: ['eur', 'report', taxYear],
     queryFn: () => ipc.eur.getReport({ taxYear }),
   });
 
-  const { data: items = [], isLoading: itemsLoading } = useQuery({
+  const {
+    data: items = [],
+    isLoading: itemsLoading,
+    isError: itemsIsError,
+    error: itemsQueryError,
+    refetch: refetchItems,
+  } = useQuery({
     queryKey: ['eur', 'items', taxYear],
     queryFn: () => ipc.eur.listItems({ taxYear }),
   });
@@ -148,6 +172,9 @@ export const EurView: React.FC = () => {
       eurLineId?: string;
       excluded?: boolean;
       vatMode?: VatMode;
+      vatRate?: number;
+      note?: string;
+      reason: string;
     }) => ipc.eur.upsertClassification(payload),
   });
 
@@ -239,14 +266,21 @@ export const EurView: React.FC = () => {
     if (!activeItem) return;
     setSelectedLineId(activeItem.classification?.eurLineId ?? activeItem.suggestedLineId ?? '');
     setVatMode(activeItem.classification?.vatMode ?? 'none');
+    setVatRate(activeItem.classification?.vatRate);
     setExcluded(activeItem.classification?.excluded ?? false);
+    setTaxNote(activeItem.classification?.note ?? '');
   }, [activeItem]);
 
   const applyBulk = async (
     label: string,
-    resolver: (item: EurItem) => { eurLineId?: string; excluded?: boolean; vatMode?: VatMode },
+    resolver: (item: EurItem) => { eurLineId?: string; excluded?: boolean; vatMode?: VatMode; vatRate?: number },
   ) => {
     if (selectedItems.length === 0) return;
+    const reason = auditReason.trim();
+    if (!reason) {
+      showNotification('Bitte eine Begründung für den Audit-Eintrag eingeben.', 'warning');
+      return;
+    }
 
     const changes: UndoChange[] = selectedItems.map((item) => ({
       sourceType: item.sourceType,
@@ -255,21 +289,25 @@ export const EurView: React.FC = () => {
       prevLineId: item.classification?.eurLineId,
       prevExcluded: item.classification?.excluded ?? false,
       prevVatMode: item.classification?.vatMode ?? 'none',
+      prevVatRate: item.classification?.vatRate,
     }));
 
     setIsApplying(true);
     try {
       await Promise.all(
-        selectedItems.map((item) =>
-          upsertClassification.mutateAsync({
+        selectedItems.map((item) => {
+          const resolved = resolver(item);
+          return upsertClassification.mutateAsync({
             sourceType: item.sourceType,
             sourceId: item.sourceId,
             taxYear,
-            ...resolver(item),
-          }),
-        ),
+            ...resolved,
+            vatRate: isProProduct ? resolved.vatRate : undefined,
+            reason,
+          });
+        }),
       );
-      setLastUndo({ label, changes });
+      setLastUndo({ label, reason, changes });
       setSelectedKeys(new Set());
       await invalidateEur();
       showNotification(`${selectedItems.length} Einträge klassifiziert`, 'success');
@@ -280,6 +318,11 @@ export const EurView: React.FC = () => {
 
   const applySingle = async () => {
     if (!activeItem) return;
+    const reason = auditReason.trim();
+    if (!reason) {
+      showNotification('Bitte eine Begründung für den Audit-Eintrag eingeben.', 'warning');
+      return;
+    }
 
     const changes: UndoChange[] = [
       {
@@ -289,6 +332,7 @@ export const EurView: React.FC = () => {
         prevLineId: activeItem.classification?.eurLineId,
         prevExcluded: activeItem.classification?.excluded ?? false,
         prevVatMode: activeItem.classification?.vatMode ?? 'none',
+        prevVatRate: activeItem.classification?.vatRate,
       },
     ];
 
@@ -301,8 +345,11 @@ export const EurView: React.FC = () => {
         eurLineId: selectedLineId || undefined,
         excluded,
         vatMode,
+        vatRate: isProProduct ? vatRate : undefined,
+        note: taxNote.trim() || undefined,
+        reason,
       });
-      setLastUndo({ label: 'Einzelklassifizierung', changes });
+      setLastUndo({ label: 'Einzelklassifizierung', reason, changes });
       await invalidateEur();
       showNotification('Klassifizierung gespeichert', 'success');
     } finally {
@@ -323,6 +370,8 @@ export const EurView: React.FC = () => {
             eurLineId: change.prevLineId,
             excluded: change.prevExcluded,
             vatMode: change.prevVatMode,
+            vatRate: isProProduct ? change.prevVatRate : undefined,
+            reason: `Undo: ${lastUndo.label}; ursprüngliche Begründung: ${lastUndo.reason}`,
           }),
         ),
       );
@@ -359,20 +408,26 @@ export const EurView: React.FC = () => {
             onChange={(e) => setTaxYear(Number(e.target.value))}
             className="rounded-xl border border-gray-300 px-3 py-2 text-sm"
           >
-            <option value={2025}>2025</option>
+            {SUPPORTED_EUR_TAX_YEARS.map((year) => (
+              <option key={year} value={year}>{year}</option>
+            ))}
           </select>
-          <Button variant="secondary" size="sm" onClick={() => setShowRulesModal(true)}>
-            <Settings2 size={16} />
-            Regeln
-          </Button>
+          {!isWebShell && (
+            <Button variant="secondary" size="sm" onClick={() => setShowRulesModal(true)}>
+              <Settings2 size={16} />
+              Regeln
+            </Button>
+          )}
           <Button variant="dark" size="sm" onClick={() => void exportCsv()}>
             <Download size={16} />
             CSV exportieren
           </Button>
-          <Button variant="dark" size="sm" onClick={() => void exportPdf()} disabled={isPdfExporting}>
-            <Download size={16} />
-            {isPdfExporting ? 'PDF...' : 'PDF exportieren'}
-          </Button>
+          {!isWebShell && (
+            <Button variant="dark" size="sm" onClick={() => void exportPdf()} disabled={isPdfExporting}>
+              <Download size={16} />
+              {isPdfExporting ? 'PDF...' : 'PDF exportieren'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -486,15 +541,26 @@ export const EurView: React.FC = () => {
               </button>
             </div>
             <div className="grid grid-cols-1 gap-1.5">
+              <label className="text-xs font-bold text-foreground">
+                Begründung (Audit) <span className="text-error">*</span>
+                <input
+                  aria-label="Begründung für EÜR-Änderung"
+                  value={auditReason}
+                  onChange={(event) => setAuditReason(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+                  placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
+                />
+              </label>
               <button
                 onClick={() =>
                   void applyBulk('Bulk: Vorschlag anwenden', (item) => ({
                     eurLineId: item.suggestedLineId,
                     excluded: false,
                     vatMode: item.classification?.vatMode ?? 'none',
+                    vatRate: item.classification?.vatRate,
                   }))
                 }
-                disabled={selectedItems.length === 0 || isApplying}
+                disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
                 className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-50"
               >
                 <Sparkles size={14} className="text-blue-500 flex-shrink-0" />
@@ -506,9 +572,10 @@ export const EurView: React.FC = () => {
                     eurLineId: undefined,
                     excluded: true,
                     vatMode: 'none',
+                    vatRate: undefined,
                   }))
                 }
-                disabled={selectedItems.length === 0 || isApplying}
+                disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
                 className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-50"
               >
                 <Ban size={14} className="text-red-500 flex-shrink-0" />
@@ -520,9 +587,10 @@ export const EurView: React.FC = () => {
                     eurLineId: undefined,
                     excluded: false,
                     vatMode: 'none',
+                    vatRate: undefined,
                   }))
                 }
-                disabled={selectedItems.length === 0 || isApplying}
+                disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
                 className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-50"
               >
                 <RotateCcw size={14} className="text-gray-500 flex-shrink-0" />
@@ -532,7 +600,16 @@ export const EurView: React.FC = () => {
           </div>
 
           {/* Queue Items */}
-          {itemsLoading ? (
+          {itemsIsError ? (
+            <div className="flex flex-col items-center justify-center py-12 text-error">
+              <AlertCircle size={48} className="mb-4 opacity-70" />
+              <p className="text-lg font-medium">Einträge konnten nicht geladen werden.</p>
+              <p className="text-sm text-center mt-2">{queryErrorDetail(itemsQueryError)}</p>
+              <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={() => void refetchItems()}>
+                Erneut versuchen
+              </Button>
+            </div>
+          ) : itemsLoading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Spinner size="md" />
               <p className="text-sm text-gray-500 mt-3">Lade Einträge...</p>
@@ -542,7 +619,7 @@ export const EurView: React.FC = () => {
               <CheckCircle2 size={48} className="mb-4 opacity-50" />
               <p className="text-lg font-medium">Keine Einträge</p>
               <p className="text-sm text-center mt-2">
-                {queueStatus === 'unclassified'
+                {queueStatus === 'unclassified' && statusCounts.unclassified === 0
                   ? 'Alle Einträge sind bereits klassifiziert.'
                   : 'Keine Einträge für diesen Filter.'}
               </p>
@@ -706,6 +783,21 @@ export const EurView: React.FC = () => {
                 </select>
               </div>
 
+              <label className="block text-xs font-bold text-gray-700">Steuerliche Korrektur / Begründung
+                <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm" placeholder="z. B. privater Anteil" />
+              </label>
+
+              <label className="block text-xs font-bold text-foreground">
+                Begründung (Audit) <span className="text-error">*</span>
+                <input
+                  aria-label="Begründung für EÜR-Änderung"
+                  value={auditReason}
+                  onChange={(event) => setAuditReason(event.target.value)}
+                  className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm"
+                  placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
+                />
+              </label>
+
               {/* VAT Mode Select */}
               <div>
                 <label className="block text-xs font-bold text-gray-700">USt. Modus</label>
@@ -719,6 +811,23 @@ export const EurView: React.FC = () => {
                 </select>
               </div>
 
+              {isProProduct && vatMode === 'default' && (
+                <div>
+                  <label className="block text-xs font-bold text-gray-700">USt.-Satz (%)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={vatRate ?? ''}
+                    onChange={(e) => setVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
+                    className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
+                    placeholder="z. B. 19"
+                  />
+                  {activeItem.vatWarning && <p className="mt-1 text-xs text-amber-700">{activeItem.vatWarning}</p>}
+                </div>
+              )}
+
               {/* Excluded Checkbox */}
               <label className="flex items-center gap-2 text-sm text-gray-700">
                 <input
@@ -731,7 +840,7 @@ export const EurView: React.FC = () => {
 
               {/* Action Buttons */}
               <div className="flex items-center gap-2">
-                <Button onClick={() => void applySingle()} disabled={isApplying} fullWidth>
+                <Button onClick={() => void applySingle()} disabled={isApplying || auditReason.trim().length === 0} fullWidth>
                   <Save size={16} />
                   {isApplying ? 'Speichern...' : 'Klassifizierung speichern'}
                 </Button>
@@ -757,10 +866,25 @@ export const EurView: React.FC = () => {
             <Layers size={18} className="text-gray-500" />
             Report
           </h3>
-          {reportLoading || !report ? (
+          {reportIsError ? (
+            <div className="flex flex-col items-center justify-center py-12 text-error">
+              <AlertCircle size={48} className="mb-4 opacity-70" />
+              <p className="text-lg font-medium">Report konnte nicht geladen werden.</p>
+              <p className="text-sm text-center mt-2">{queryErrorDetail(reportQueryError)}</p>
+              <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={() => void refetchReport()}>
+                Erneut versuchen
+              </Button>
+            </div>
+          ) : reportLoading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Spinner size="md" />
               <p className="text-sm text-gray-500 mt-3">Report wird geladen...</p>
+            </div>
+          ) : !report ? (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+              <XCircle size={48} className="mb-4 opacity-50" />
+              <p className="text-lg font-medium">Kein Report verfügbar</p>
+              <p className="text-sm text-center mt-2">Für diesen Zeitraum liegt noch kein Report vor.</p>
             </div>
           ) : (
             <>
@@ -818,7 +942,7 @@ export const EurView: React.FC = () => {
         </div>
       </div>
 
-      {showRulesModal && (
+      {showRulesModal && !isWebShell && (
         <EurRulesModal
           taxYear={taxYear}
           onClose={() => setShowRulesModal(false)}
@@ -826,12 +950,6 @@ export const EurView: React.FC = () => {
         />
       )}
 
-      <Toast
-        message={toastMessage}
-        type={toastType}
-        isVisible={showToast}
-        onClose={() => setShowToast(false)}
-      />
     </div>
   );
 };

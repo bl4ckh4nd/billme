@@ -1,7 +1,24 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, max, or, sum } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
+import { sourceHash as taxFilingSourceHash } from '@billme/desktop-core/electron/tax-filing/adapter';
+import type { TaxFilingSnapshot } from '@billme/desktop-core/electron/tax-filing/types';
 import type { TenantScope } from '@billme/server-core';
+import type {
+  MappingHealth,
+  ReportKind,
+  ReportResult,
+  ReportingCalculationProfile,
+  ReportingMapping,
+  ReportingStatement,
+} from '@billme/accounting-shared';
+import { AccountingPolicyError } from '@billme/accounting-shared';
+import { calculateReport, listReportMappingPositions } from '@billme/accounting-engine';
+import { fiscalYearForDate, fiscalYearRange, validateDatevTaxEvidence } from '@billme/accounting-shared';
 import { appendAuditLog } from './audit';
+import { getSettings } from './settingsRepo';
 import { listAccountSuggestionRules } from './accountSuggestionRulesRepo';
 import {
   buildAccountSuggestionContext,
@@ -10,12 +27,13 @@ import {
 } from '../services/accountSuggestionPipeline';
 import { seedAccountKeywords } from '../services/accountKeywordSeed';
 import { getTenantId } from '../tenantScope';
+import { DATEV_MAX_ROWS } from '../services/datevExport';
 import {
   ensureTaxCaseSeedData,
   getTaxCaseByKey,
+  listTaxCaseAccountMappings,
   normalizeTaxCaseKey,
   resolveTaxAccountsForCase,
-  resolveDatevBuKeyForTaxCase,
   type TaxCaseDefinition,
   type TaxCaseKey,
 } from './taxCasesRepo';
@@ -48,6 +66,7 @@ export interface BookingDraftLineEntity {
   taxCode?: string;
   taxCaseKey?: TaxCaseKey;
   taxRate?: number;
+  destinationVatRate?: number;
   netAmount?: number;
   taxAmount?: number;
   grossAmount?: number;
@@ -55,6 +74,7 @@ export interface BookingDraftLineEntity {
   counterpartyVatId?: string;
   evidenceType?: string;
   evidenceReference?: string;
+  datevSachverhaltLl?: string;
   costCenter?: string;
   memo?: string;
 }
@@ -94,6 +114,16 @@ export interface BookingDraftEntity {
   lines: BookingDraftLineEntity[];
   validationIssues: DraftValidationIssue[];
   updatedAt: string;
+  isVirtualProjection?: boolean;
+}
+
+export class PostedDraftImmutableError extends Error {
+  readonly code = 'POSTED_DRAFT_IMMUTABLE';
+
+  constructor() {
+    super('POSTED_DRAFT_IMMUTABLE: Storno oder Korrektur erforderlich.');
+    this.name = 'PostedDraftImmutableError';
+  }
 }
 
 export interface JournalLineEntity {
@@ -107,6 +137,7 @@ export interface JournalLineEntity {
   netAmount?: number;
   taxAmount?: number;
   grossAmount?: number;
+  datevSachverhaltLl?: string;
   countryCode?: string;
   counterpartyVatId?: string;
   evidenceType?: string;
@@ -127,6 +158,8 @@ export interface JournalEntryEntity {
   fiscalYear: number;
   status: JournalEntryStatus;
   sourceDraftId?: string;
+  sourceType?: 'booking_draft' | 'reversal' | 'depreciation' | 'manual' | 'outgoing_invoice' | 'incoming_invoice' | 'payment' | 'payment_vat' | 'legacy_transaction' | 'asset_activation' | 'asset_depreciation' | 'asset_disposal' | 'standalone_source' | 'fiscal_close' | 'carry_forward' | 'provision' | 'accrual' | 'inventory_closing' | 'fx_valuation' | 'loan_schedule' | 'payroll_batch' | 'shareholder_flow';
+  sourceKey?: string;
   reversedEntryId?: string;
   createdAt: string;
   lines: JournalLineEntity[];
@@ -140,6 +173,25 @@ export interface LedgerBalanceRow {
   closingBalance: number;
 }
 
+export interface DesktopReportSnapshotRecord {
+  id: string;
+  reportType: string;
+  args: unknown;
+  payload: unknown;
+  createdAt: string;
+  sourceHash: string;
+}
+
+export interface ReportMappingOverrideInput extends ReportingMapping {
+  chart: 'SKR03' | 'SKR04';
+  asOfDate: string;
+  /** Mapping overrides are scoped to one explicit report catalog. */
+  statement: ReportingStatement;
+  position: string;
+  label?: string;
+  reason?: string;
+}
+
 export interface DatevExportResult {
   id: string;
   filePath: string;
@@ -147,9 +199,41 @@ export interface DatevExportResult {
   fromDate?: string;
   toDate?: string;
   createdAt: string;
+  sha256?: string;
+  byteSize?: number;
+  encoding?: 'cp1252' | 'utf8-bom';
+  headerVersion?: number;
+  formatVersion?: number;
+  chart?: 'SKR03' | 'SKR04';
+  sourceSnapshotHash?: string;
+  manifestJson?: string;
+  status?: string;
+  validationJson?: string;
 }
 
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+const toCents = (value: unknown): number | null => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return null;
+  const cents = Math.round(amount * 100);
+  return Math.abs(amount - cents / 100) <= 1e-9 ? cents : null;
+};
+
+const isIsoDate = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year!, month! - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month! - 1 && parsed.getUTCDate() === day;
+};
+
+const periodForDate = (date: string): string => date.slice(0, 7);
+
+/** Fiscal-year policy is persisted in settings.settings_json, never copied to accounting policy. */
+export const fiscalYearForPostingDate = (db: Database.Database, date: string): number =>
+  fiscalYearForDate(date, getSettings(db)?.businessReportingProfile?.fiscalYearStart ?? '01-01');
+
+const isPeriod = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
 
 const safeJsonParse = <T>(value: string, fallback: T): T => {
   try {
@@ -235,6 +319,7 @@ const normalizeDraftLine = (line: BookingDraftLineEntity, idx: number): BookingD
   taxCode: line.taxCode || undefined,
   taxCaseKey: normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode),
   taxRate: line.taxRate !== undefined ? Number(line.taxRate || 0) : undefined,
+  destinationVatRate: line.destinationVatRate !== undefined ? Number(line.destinationVatRate || 0) : undefined,
   netAmount: line.netAmount !== undefined ? round2(Number(line.netAmount || 0)) : undefined,
   taxAmount: line.taxAmount !== undefined ? round2(Number(line.taxAmount || 0)) : undefined,
   grossAmount: line.grossAmount !== undefined ? round2(Number(line.grossAmount || 0)) : undefined,
@@ -242,15 +327,22 @@ const normalizeDraftLine = (line: BookingDraftLineEntity, idx: number): BookingD
   counterpartyVatId: line.counterpartyVatId ? String(line.counterpartyVatId).trim().toUpperCase() : undefined,
   evidenceType: line.evidenceType ? String(line.evidenceType).trim() : undefined,
   evidenceReference: line.evidenceReference ? String(line.evidenceReference).trim() : undefined,
+  datevSachverhaltLl: line.datevSachverhaltLl ? String(line.datevSachverhaltLl).trim() : undefined,
   costCenter: line.costCenter || undefined,
   memo: line.memo || undefined,
 });
 
 const ensurePeriodExists = (db: Database.Database, period: string, fiscalYear: number, tenantId: string): void => {
-  const existing = db
-    .prepare('SELECT id FROM accounting_periods WHERE tenant_id = ? AND period = ?')
-    .get(tenantId, period) as { id: string } | undefined;
-  if (existing) return;
+  if (!isPeriod(period) || fiscalYear !== Number(period.slice(0, 4))) {
+    throw new Error('Invalid accounting period');
+  }
+  const drizzle = createDrizzle(db);
+  const existing = drizzle.select({ id: schema.accountingPeriods.id, fiscalYear: schema.accountingPeriods.fiscalYear }).from(schema.accountingPeriods)
+    .where(and(eq(schema.accountingPeriods.tenantId, tenantId), eq(schema.accountingPeriods.period, period))).get();
+  if (existing) {
+    if (existing.fiscalYear !== fiscalYear) throw new Error('Accounting period fiscal year mismatch');
+    return;
+  }
 
   const startsAt = `${period}-01`;
   const [yearStr, monthStr] = period.split('-');
@@ -260,18 +352,12 @@ const ensurePeriodExists = (db: Database.Database, period: string, fiscalYear: n
   const endsAt = `${endDate.getUTCFullYear()}-${String(endDate.getUTCMonth() + 1).padStart(2, '0')}-${String(endDate.getUTCDate()).padStart(2, '0')}`;
   const now = new Date().toISOString();
 
-  db.prepare(
-    `
-      INSERT INTO accounting_periods (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)
-    `,
-  ).run(randomUUID(), tenantId, period, fiscalYear, startsAt, endsAt, now, now);
+  drizzle.insert(schema.accountingPeriods).values({ id: randomUUID(), tenantId, period, fiscalYear, status: 'open', startsAt, endsAt, createdAt: now, updatedAt: now }).run();
 };
 
 const loadPeriodStatus = (db: Database.Database, period: string, tenantId: string): AccountingPeriodStatus => {
-  const row = db
-    .prepare('SELECT status FROM accounting_periods WHERE tenant_id = ? AND period = ?')
-    .get(tenantId, period) as { status: AccountingPeriodStatus } | undefined;
+  const row = createDrizzle(db).select({ status: schema.accountingPeriods.status }).from(schema.accountingPeriods)
+    .where(and(eq(schema.accountingPeriods.tenantId, tenantId), eq(schema.accountingPeriods.period, period))).get() as { status: AccountingPeriodStatus } | undefined;
   return row?.status ?? 'open';
 };
 
@@ -279,11 +365,12 @@ const defaultDraftFromBankTx = (
   tx: ProBankTransaction,
   suggestedAccountNumber?: string,
   bankLedgerAccountNumber?: string,
+  configuredFiscalYear?: number,
 ): BookingDraftEntity => {
   const absAmount = round2(Math.abs(tx.amount));
   const draftId = `draft-${tx.id}`;
   const period = (tx.date || new Date().toISOString().slice(0, 10)).slice(0, 7);
-  const fiscalYear = Number(period.slice(0, 4));
+  const fiscalYear = configuredFiscalYear ?? Number(period.slice(0, 4));
   const suggested = suggestedAccountNumber?.trim();
   const expenseAccount = suggested || '6000';
   const incomeAccount = suggested || '8400';
@@ -341,79 +428,162 @@ const parseDraftRow = (
     lines: (draft.lines ?? []).map(normalizeDraftLine),
     validationIssues: draft.validationIssues ?? [],
     updatedAt: row.updated_at,
+    isVirtualProjection: undefined,
   };
 };
 
+const canonicalDraftSnapshot = (draft: BookingDraftEntity, tenantId: string): string => JSON.stringify({
+  id: draft.id,
+  tenantId,
+  transactionId: draft.transactionId,
+  workflowStatus: draft.workflowStatus,
+  postingDate: draft.postingDate ?? null,
+  documentDate: draft.documentDate ?? null,
+  bookingText: draft.bookingText,
+  reference: draft.reference ?? null,
+  period: draft.period,
+  fiscalYear: draft.fiscalYear,
+  lines: (draft.lines ?? []).map((line) => ({
+    id: line.id,
+    accountNumber: line.accountNumber,
+    debitAmount: round2(Number(line.debitAmount ?? 0)),
+    creditAmount: round2(Number(line.creditAmount ?? 0)),
+    taxCode: line.taxCode ?? null,
+    taxCaseKey: line.taxCaseKey ?? null,
+    taxRate: line.taxRate ?? null,
+    destinationVatRate: line.destinationVatRate ?? null,
+    netAmount: line.netAmount ?? null,
+    taxAmount: line.taxAmount ?? null,
+    grossAmount: line.grossAmount ?? null,
+    countryCode: line.countryCode ?? null,
+    counterpartyVatId: line.counterpartyVatId ?? null,
+    evidenceType: line.evidenceType ?? null,
+    evidenceReference: line.evidenceReference ?? null,
+    datevSachverhaltLl: line.datevSachverhaltLl ?? null,
+    costCenter: line.costCenter ?? null,
+    memo: line.memo ?? null,
+  })),
+});
+
+const isVirtualBookedProjection = (db: Database.Database, draft: BookingDraftEntity, tenantId: string): boolean => {
+  const bankTransaction = createDrizzle(db).select({ status: schema.bankTransactions.status })
+    .from(schema.bankTransactions)
+    .where(and(
+      eq(schema.bankTransactions.tenantId, tenantId),
+      eq(schema.bankTransactions.id, draft.transactionId),
+    ))
+    .get() as { status: string } | undefined;
+  if (bankTransaction?.status !== 'booked') return false;
+
+  const persistedDraft = createDrizzle(db).select({ id: schema.bookingDrafts.id })
+    .from(schema.bookingDrafts)
+    .where(and(
+      eq(schema.bookingDrafts.tenantId, tenantId),
+      eq(schema.bookingDrafts.id, draft.id),
+    ))
+    .get();
+  if (persistedDraft) return false;
+
+  const postedJournal = createDrizzle(db).select({ id: schema.journalEntries.id })
+    .from(schema.journalEntries)
+    .where(and(
+      eq(schema.journalEntries.tenantId, tenantId),
+      eq(schema.journalEntries.sourceDraftId, draft.id),
+      eq(schema.journalEntries.status, 'posted'),
+    ))
+    .get();
+  return !postedJournal;
+};
+
+const rejectPostedDraftMutationUnlessReplay = (
+  db: Database.Database,
+  draft: BookingDraftEntity,
+  scope: TenantScope,
+): BookingDraftEntity | undefined => {
+  const tenantId = getTenantId(scope);
+  const postedJournal = createDrizzle(db).select({ id: schema.journalEntries.id })
+    .from(schema.journalEntries)
+    .where(and(
+      eq(schema.journalEntries.tenantId, tenantId),
+      eq(schema.journalEntries.sourceDraftId, draft.id),
+      eq(schema.journalEntries.status, 'posted'),
+    ))
+    .get();
+  const bankTransaction = createDrizzle(db).select({ status: schema.bankTransactions.status })
+    .from(schema.bankTransactions)
+    .where(and(
+      eq(schema.bankTransactions.tenantId, tenantId),
+      eq(schema.bankTransactions.id, draft.transactionId),
+    ))
+    .get() as { status: string } | undefined;
+  if (!postedJournal && bankTransaction?.status !== 'booked') return undefined;
+  if (!postedJournal) {
+    if (!isVirtualBookedProjection(db, draft, tenantId)) throw new PostedDraftImmutableError();
+    const txRow = createDrizzle(db).select({
+      id: schema.bankTransactions.id,
+      tenant_id: schema.bankTransactions.tenantId,
+      account_id: schema.bankTransactions.accountId,
+      date: schema.bankTransactions.date,
+      amount: schema.bankTransactions.amount,
+      type: schema.bankTransactions.type,
+      counterparty: schema.bankTransactions.counterparty,
+      purpose: schema.bankTransactions.purpose,
+      status: schema.bankTransactions.status,
+      linked_invoice_id: schema.bankTransactions.linkedInvoiceId,
+    }).from(schema.bankTransactions).where(and(
+      eq(schema.bankTransactions.tenantId, tenantId),
+      eq(schema.bankTransactions.id, draft.transactionId),
+    )).get() as {
+      id: string;
+      tenant_id: string;
+      account_id: string;
+      date: string;
+      amount: number;
+      type: string;
+      counterparty: string;
+      purpose: string;
+      status: string;
+      linked_invoice_id: string | null;
+    } | undefined;
+    if (!txRow) throw new PostedDraftImmutableError();
+    const tx = toBankTransaction(txRow);
+    const suggestion = buildSuggestionsByTransaction(db, [tx], scope).get(tx.id);
+    const canonical = defaultDraftFromBankTx(tx, suggestion?.accountNumber, resolveBankLedgerAccountForTransaction(db, tx), fiscalYearForPostingDate(db, tx.date));
+    if (canonicalDraftSnapshot(canonical, tenantId) !== canonicalDraftSnapshot(draft, tenantId)) {
+      throw new PostedDraftImmutableError();
+    }
+    return canonical;
+  }
+
+  const row = createDrizzle(db).select({ draft_json: schema.bookingDrafts.draftJson, updated_at: schema.bookingDrafts.updatedAt })
+    .from(schema.bookingDrafts)
+    .where(and(eq(schema.bookingDrafts.tenantId, tenantId), eq(schema.bookingDrafts.id, draft.id)))
+    .get() as { draft_json: string; updated_at: string } | undefined;
+  const persisted = row ? parseDraftRow(row, tenantId) : undefined;
+  if (!persisted || canonicalDraftSnapshot(persisted, tenantId) !== canonicalDraftSnapshot(draft, tenantId)) {
+    throw new PostedDraftImmutableError();
+  }
+  return persisted;
+};
+
 const getNextEntryNumber = (db: Database.Database, tenantId: string): number => {
-  const row = db
-    .prepare('SELECT COALESCE(MAX(entry_number), 0) as n FROM journal_entries WHERE tenant_id = ?')
-    .get(tenantId) as { n: number };
-  return Number(row.n || 0) + 1;
+  const row = createDrizzle(db).select({ n: max(schema.journalEntries.entryNumber) }).from(schema.journalEntries)
+    .where(eq(schema.journalEntries.tenantId, tenantId)).get();
+  return Number(row?.n || 0) + 1;
 };
 
 const saveDraftLinesAndIssues = (db: Database.Database, draft: BookingDraftEntity): void => {
-  db.prepare('DELETE FROM booking_draft_lines WHERE draft_id = ?').run(draft.id);
-  db.prepare('DELETE FROM draft_validation_issues WHERE draft_id = ?').run(draft.id);
-
-  const insertLine = db.prepare(
-    `
-      INSERT INTO booking_draft_lines
-        (
-          id, tenant_id, draft_id, line_no, account_number, debit_amount, credit_amount, tax_code,
-          tax_case_key, tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id,
-          evidence_type, evidence_reference, cost_center, memo
-        )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-  );
+  const drizzle = createDrizzle(db);
+  drizzle.delete(schema.bookingDraftLines).where(eq(schema.bookingDraftLines.draftId, draft.id)).run();
+  drizzle.delete(schema.draftValidationIssues).where(eq(schema.draftValidationIssues.draftId, draft.id)).run();
 
   draft.lines.forEach((line, idx) => {
-    insertLine.run(
-      line.id || randomUUID(),
-      draft.tenantId,
-      draft.id,
-      idx + 1,
-      line.accountNumber,
-      round2(line.debitAmount),
-      round2(line.creditAmount),
-      line.taxCode ?? null,
-      line.taxCaseKey ?? null,
-      line.taxRate ?? null,
-      line.netAmount ?? null,
-      line.taxAmount ?? null,
-      line.grossAmount ?? null,
-      line.countryCode ?? null,
-      line.counterpartyVatId ?? null,
-      line.evidenceType ?? null,
-      line.evidenceReference ?? null,
-      line.costCenter ?? null,
-      line.memo ?? null,
-    );
+    drizzle.insert(schema.bookingDraftLines).values({ id: line.id || randomUUID(), tenantId: draft.tenantId, draftId: draft.id, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: round2(line.debitAmount), creditAmount: round2(line.creditAmount), taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
   });
-
-  const insertIssue = db.prepare(
-    `
-      INSERT INTO draft_validation_issues
-        (id, tenant_id, draft_id, code, severity, message, field_path, blocking, source, issue_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-  );
 
   const now = new Date().toISOString();
   for (const issue of draft.validationIssues) {
-    insertIssue.run(
-      issue.id || randomUUID(),
-      draft.tenantId,
-      draft.id,
-      issue.code,
-      issue.severity,
-      issue.message,
-      issue.fieldPath ?? null,
-      issue.blocking ? 1 : 0,
-      issue.source,
-      JSON.stringify(issue),
-      now,
-    );
+    drizzle.insert(schema.draftValidationIssues).values({ id: issue.id || randomUUID(), tenantId: draft.tenantId, draftId: draft.id, code: issue.code, severity: issue.severity, message: issue.message, fieldPath: issue.fieldPath ?? null, blocking: issue.blocking ? 1 : 0, source: issue.source, issueJson: JSON.stringify(issue), createdAt: now }).run();
   }
 };
 
@@ -422,12 +592,38 @@ const validateDraft = (
   draft: BookingDraftEntity,
   periodStatus: AccountingPeriodStatus,
   chart: 'SKR03' | 'SKR04',
+  trustedSourceType?: string,
 ): DraftValidationIssue[] => {
   const issues: DraftValidationIssue[] = [];
-  const debit = round2(draft.lines.reduce((sum, line) => sum + Number(line.debitAmount || 0), 0));
-  const credit = round2(draft.lines.reduce((sum, line) => sum + Number(line.creditAmount || 0), 0));
+  const trustedDepreciationAssetId =
+    trustedSourceType === 'asset_depreciation' &&
+    draft.id.startsWith('asset-depreciation:')
+      ? draft.id.slice('asset-depreciation:'.length).split(':')[0]
+      : '';
+  const trustedAssetDepreciation = Boolean(
+    trustedDepreciationAssetId &&
+      db
+        .prepare(
+          "SELECT 1 FROM assets WHERE tenant_id = ? AND id = ? AND status <> 'entwurf' LIMIT 1",
+        )
+        .get(draft.tenantId, trustedDepreciationAssetId),
+  );
+  const debit = draft.lines.reduce((total, line) => total + (toCents(line.debitAmount) ?? 0), 0);
+  const credit = draft.lines.reduce((total, line) => total + (toCents(line.creditAmount) ?? 0), 0);
 
-  if (Math.abs(debit - credit) > 0.01) {
+  if (draft.postingDate === undefined || !isIsoDate(draft.postingDate)) {
+    issues.push({ id: randomUUID(), code: 'INVALID_POSTING_DATE', severity: 'error', message: 'Buchungsdatum muss ein gültiges Datum (YYYY-MM-DD) sein.', fieldPath: 'postingDate', blocking: true, source: 'system' });
+  } else if (draft.period !== periodForDate(draft.postingDate) || draft.fiscalYear !== fiscalYearForPostingDate(db, draft.postingDate)) {
+    issues.push({ id: randomUUID(), code: 'POSTING_PERIOD_MISMATCH', severity: 'error', message: 'Periode und Geschäftsjahr müssen aus dem Buchungsdatum abgeleitet werden.', fieldPath: 'period', blocking: true, source: 'system' });
+  }
+  if (draft.documentDate !== undefined && !isIsoDate(draft.documentDate)) {
+    issues.push({ id: randomUUID(), code: 'INVALID_DOCUMENT_DATE', severity: 'error', message: 'Belegdatum muss ein gültiges Datum (YYYY-MM-DD) sein.', fieldPath: 'documentDate', blocking: true, source: 'system' });
+  }
+  if (!isPeriod(draft.period) || (draft.postingDate && isIsoDate(draft.postingDate) && draft.fiscalYear !== fiscalYearForPostingDate(db, draft.postingDate))) {
+    issues.push({ id: randomUUID(), code: 'INVALID_PERIOD', severity: 'error', message: 'Periode oder Geschäftsjahr ist ungültig.', fieldPath: 'period', blocking: true, source: 'system' });
+  }
+
+  if (debit !== credit) {
     issues.push({
       id: randomUUID(),
       code: 'UNBALANCED_ENTRY',
@@ -449,13 +645,36 @@ const validateDraft = (
     });
   }
 
+  const lineIds = new Set<string>();
   draft.lines.forEach((line, idx) => {
-    const amount = Math.max(Number(line.debitAmount || 0), Number(line.creditAmount || 0));
-    if (amount <= 0) return;
+    const debitCents = toCents(line.debitAmount);
+    const creditCents = toCents(line.creditAmount);
+    if (!line.accountNumber) {
+      issues.push({ id: randomUUID(), code: 'MISSING_ACCOUNT', severity: 'error', message: 'Sachkonto fehlt.', fieldPath: `lines[${idx}].accountNumber`, blocking: true, source: 'system' });
+    } else if (lineIds.has(line.id)) {
+      issues.push({ id: randomUUID(), code: 'DUPLICATE_LINE_ID', severity: 'error', message: 'Buchungszeilen müssen eindeutige IDs haben.', fieldPath: `lines[${idx}].id`, blocking: true, source: 'system' });
+    } else {
+      const accountExists = createDrizzle(db).select({ id: schema.ledgerAccounts.id }).from(schema.ledgerAccounts)
+        .where(and(eq(schema.ledgerAccounts.chart, chart), eq(schema.ledgerAccounts.accountNumber, line.accountNumber))).get();
+      const chartHasAccounts = createDrizzle(db).select({ c: count() }).from(schema.ledgerAccounts)
+        .where(eq(schema.ledgerAccounts.chart, chart)).get()?.c ?? 0;
+      if (Number(chartHasAccounts) > 0 && !accountExists) {
+        issues.push({ id: randomUUID(), code: 'UNKNOWN_ACCOUNT', severity: 'error', message: `Sachkonto ${line.accountNumber} ist im aktiven Kontenrahmen nicht vorhanden.`, fieldPath: `lines[${idx}].accountNumber`, blocking: true, source: 'system' });
+      }
+    }
+    if (line.id) lineIds.add(line.id);
+    if (debitCents === null || creditCents === null || debitCents < 0 || creditCents < 0) {
+      issues.push({ id: randomUUID(), code: 'INVALID_LINE_AMOUNT', severity: 'error', message: 'Beträge müssen endliche, nichtnegative Centbeträge sein.', fieldPath: `lines[${idx}]`, blocking: true, source: 'system' });
+    } else if ((debitCents > 0) === (creditCents > 0)) {
+      issues.push({ id: randomUUID(), code: 'INVALID_LINE_SIDE', severity: 'error', message: 'Jede Buchungszeile muss genau eine Soll- oder Habenseite enthalten.', fieldPath: `lines[${idx}]`, blocking: true, source: 'system' });
+    }
+    if ((debitCents ?? 0) + (creditCents ?? 0) <= 0) return;
 
     const taxCaseKey = normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode);
     const isPnl = line.accountNumber.startsWith('4') || line.accountNumber.startsWith('8');
-    if (isPnl && !taxCaseKey) {
+    if (isPnl && !taxCaseKey && !(
+      trustedAssetDepreciation && line.evidenceType === 'asset_depreciation'
+    )) {
       issues.push({
         id: randomUUID(),
         code: 'MISSING_TAX_CASE',
@@ -484,37 +703,31 @@ const validateDraft = (
       return;
     }
 
-    if (taxCase.requiresCounterpartyVatId && !line.counterpartyVatId) {
+    const datevEvidence = validateDatevTaxEvidence(taxCase, {
+      buyerCountryCode: line.countryCode,
+      buyerVatId: line.counterpartyVatId,
+      destinationVatRate: line.destinationVatRate,
+      datevSachverhaltLl: line.datevSachverhaltLl,
+      datevEvidenceType: line.evidenceType,
+      datevEvidenceReference: line.evidenceReference,
+    });
+    for (const issue of datevEvidence) {
+      const code = issue.code === 'MISSING_TAX_COUNTRY' ? 'MISSING_COUNTRY_CODE' : issue.code;
+      const fieldPath = code === 'MISSING_COUNTERPARTY_VAT_ID'
+        ? `lines[${idx}].counterpartyVatId`
+        : code === 'MISSING_COUNTRY_CODE'
+          ? `lines[${idx}].countryCode`
+          : code === 'MISSING_DESTINATION_VAT_RATE'
+            ? `lines[${idx}].destinationVatRate`
+            : code === 'MISSING_DATEV_SACHVERHALT'
+              ? `lines[${idx}].datevSachverhaltLl`
+              : `lines[${idx}].evidenceReference`;
       issues.push({
         id: randomUUID(),
-        code: 'MISSING_COUNTERPARTY_VAT_ID',
+        code,
         severity: 'error',
-        message: 'USt-IdNr. des Gegenübers ist für diesen Steuerfall Pflicht.',
-        fieldPath: `lines[${idx}].counterpartyVatId`,
-        blocking: true,
-        source: 'system',
-      });
-    }
-
-    if (taxCase.requiresCountry && !line.countryCode) {
-      issues.push({
-        id: randomUUID(),
-        code: 'MISSING_COUNTRY_CODE',
-        severity: 'error',
-        message: 'Ländercode ist für diesen Steuerfall Pflicht.',
-        fieldPath: `lines[${idx}].countryCode`,
-        blocking: true,
-        source: 'system',
-      });
-    }
-
-    if (taxCase.requiresEvidence && (!line.evidenceType || !line.evidenceReference)) {
-      issues.push({
-        id: randomUUID(),
-        code: 'MISSING_TAX_EVIDENCE',
-        severity: 'error',
-        message: 'Steuernachweis (Typ und Referenz) ist für diesen Steuerfall Pflicht.',
-        fieldPath: `lines[${idx}].evidenceReference`,
+        message: issue.message,
+        fieldPath,
         blocking: true,
         source: 'system',
       });
@@ -583,16 +796,64 @@ const toBankTransaction = (row: {
   linkedInvoiceId: row.linked_invoice_id ?? undefined,
 });
 
-const getActiveChart = (db: Database.Database): 'SKR03' | 'SKR04' => {
-  const rows = db
-    .prepare(
-      `
-      SELECT chart, COUNT(*) as c
-      FROM ledger_accounts
-      GROUP BY chart
-      `,
-    )
-    .all() as Array<{ chart: string; c: number }>;
+export const getAccountingPolicy = (db: Database.Database, tenantId = 'default') => {
+  const row = createDrizzle(db).select({
+    tenantId: schema.accountingPolicies.tenantId,
+    activeChart: schema.accountingPolicies.activeChart,
+    vatMethod: schema.accountingPolicies.vatMethod,
+    periodPolicy: schema.accountingPolicies.periodPolicy,
+    updatedAt: schema.accountingPolicies.updatedAt,
+  }).from(schema.accountingPolicies).where(eq(schema.accountingPolicies.tenantId, tenantId)).get() as {
+    tenantId: string;
+    activeChart: 'SKR03' | 'SKR04';
+    vatMethod: 'soll' | 'ist';
+    periodPolicy: 'calendar_month';
+    updatedAt: string;
+  } | undefined;
+  return row ?? { tenantId, activeChart: 'SKR03' as const, vatMethod: 'soll' as const, periodPolicy: 'calendar_month' as const, updatedAt: '' };
+};
+
+export const setAccountingPolicy = (
+  db: Database.Database,
+  policy: { activeChart: 'SKR03' | 'SKR04'; vatMethod?: 'soll' | 'ist'; periodPolicy?: 'calendar_month' },
+  scope: TenantScope,
+) => {
+  const tenantId = getTenantId(scope);
+  const before = getAccountingPolicy(db, tenantId);
+  if (policy.activeChart !== before.activeChart && createDrizzle(db).select({ id: schema.journalEntries.id })
+    .from(schema.journalEntries)
+    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.status, 'posted')))
+    .limit(1).get()) {
+    throw new AccountingPolicyError(
+      'ACCOUNTING_CHART_LOCKED',
+      'Der Kontenrahmen kann nach einer gebuchten Journalbuchung nicht mehr geändert werden.',
+    );
+  }
+  const updatedAt = new Date().toISOString();
+  const vatMethod = policy.vatMethod ?? getAccountingPolicy(db, tenantId).vatMethod;
+  createDrizzle(db).insert(schema.accountingPolicies).values({
+    tenantId,
+    activeChart: policy.activeChart,
+    vatMethod,
+    periodPolicy: policy.periodPolicy ?? 'calendar_month',
+    updatedAt,
+  }).onConflictDoUpdate({
+    target: schema.accountingPolicies.tenantId,
+    set: { activeChart: policy.activeChart, vatMethod, periodPolicy: policy.periodPolicy ?? 'calendar_month', updatedAt },
+  }).run();
+  return getAccountingPolicy(db, tenantId);
+};
+
+const getActiveChart = (db: Database.Database, tenantId: string): 'SKR03' | 'SKR04' => {
+  const configured = getAccountingPolicy(db, tenantId).activeChart;
+  const configuredCount = createDrizzle(db).select({ c: count() }).from(schema.ledgerAccounts)
+    .where(eq(schema.ledgerAccounts.chart, configured)).get()?.c ?? 0;
+  if (Number(configuredCount) > 0) return configured;
+
+  // Legacy installs may not have imported a chart yet; retain deterministic
+  // fallback instead of changing chart based on row counts.
+  const rows = createDrizzle(db).select({ chart: schema.ledgerAccounts.chart, c: count() })
+    .from(schema.ledgerAccounts).groupBy(schema.ledgerAccounts.chart).all() as Array<{ chart: string; c: number }>;
   const byChart = rows.reduce(
     (acc, row) => {
       if (row.chart === 'SKR03') acc.SKR03 = row.c;
@@ -604,46 +865,29 @@ const getActiveChart = (db: Database.Database): 'SKR03' | 'SKR04' => {
   return byChart.SKR03 >= byChart.SKR04 ? 'SKR03' : 'SKR04';
 };
 
+const getPostingChart = (db: Database.Database, tenantId: string): 'SKR03' | 'SKR04' | null => {
+  const chart = getAccountingPolicy(db, tenantId).activeChart;
+  const countForChart = createDrizzle(db).select({ c: count() }).from(schema.ledgerAccounts)
+    .where(eq(schema.ledgerAccounts.chart, chart)).get()?.c ?? 0;
+  return Number(countForChart) > 0 ? chart : null;
+};
+
 const resolveFallbackBankLedgerAccount = (
   db: Database.Database,
   chart: 'SKR03' | 'SKR04',
 ): string => {
   const preferred = chart === 'SKR04' ? '1800' : '1200';
-  const preferredRow = db
-    .prepare(
-      `
-      SELECT account_number
-      FROM ledger_accounts
-      WHERE chart = ? AND account_number = ?
-      LIMIT 1
-      `,
-    )
-    .get(chart, preferred) as { account_number: string } | undefined;
+  const drizzle = createDrizzle(db);
+  const preferredRow = drizzle.select({ account_number: schema.ledgerAccounts.accountNumber }).from(schema.ledgerAccounts)
+    .where(and(eq(schema.ledgerAccounts.chart, chart), eq(schema.ledgerAccounts.accountNumber, preferred))).limit(1).get();
   if (preferredRow?.account_number) return preferredRow.account_number;
 
-  const chartRow = db
-    .prepare(
-      `
-      SELECT account_number
-      FROM ledger_accounts
-      WHERE chart = ?
-      ORDER BY account_number
-      LIMIT 1
-      `,
-    )
-    .get(chart) as { account_number: string } | undefined;
+  const chartRow = drizzle.select({ account_number: schema.ledgerAccounts.accountNumber }).from(schema.ledgerAccounts)
+    .where(eq(schema.ledgerAccounts.chart, chart)).orderBy(asc(schema.ledgerAccounts.accountNumber)).limit(1).get();
   if (chartRow?.account_number) return chartRow.account_number;
 
-  const anyRow = db
-    .prepare(
-      `
-      SELECT account_number
-      FROM ledger_accounts
-      ORDER BY chart, account_number
-      LIMIT 1
-      `,
-    )
-    .get() as { account_number: string } | undefined;
+  const anyRow = drizzle.select({ account_number: schema.ledgerAccounts.accountNumber }).from(schema.ledgerAccounts)
+    .orderBy(asc(schema.ledgerAccounts.chart), asc(schema.ledgerAccounts.accountNumber)).limit(1).get();
   if (anyRow?.account_number) return anyRow.account_number;
 
   return preferred;
@@ -653,26 +897,17 @@ const resolveBankLedgerAccountForTransaction = (
   db: Database.Database,
   tx: ProBankTransaction,
 ): string => {
-  const activeChart = getActiveChart(db);
-  const row = db
-    .prepare(
-      `
-      SELECT default_skr_account_number
-      FROM accounts
-      WHERE id = ?
-      LIMIT 1
-      `,
-    )
-    .get(tx.accountId) as { default_skr_account_number: string | null } | undefined;
+  const activeChart = getActiveChart(db, tx.tenantId);
+  const row = createDrizzle(db).select({ default_skr_account_number: schema.accounts.defaultSkrAccountNumber }).from(schema.accounts)
+    .where(eq(schema.accounts.id, tx.accountId)).limit(1).get() as { default_skr_account_number: string | null } | undefined;
 
   const candidate = String(row?.default_skr_account_number ?? '').trim();
   if (!candidate) {
     return resolveFallbackBankLedgerAccount(db, activeChart);
   }
 
-  const exists = db
-    .prepare('SELECT 1 FROM ledger_accounts WHERE account_number = ? LIMIT 1')
-    .get(candidate) as { 1: 1 } | undefined;
+  const exists = createDrizzle(db).select({ id: schema.ledgerAccounts.id }).from(schema.ledgerAccounts)
+    .where(eq(schema.ledgerAccounts.accountNumber, candidate)).limit(1).get();
 
   return exists ? candidate : resolveFallbackBankLedgerAccount(db, activeChart);
 };
@@ -684,7 +919,7 @@ const buildSuggestionsByTransaction = (
 ): Map<string, ReturnType<typeof suggestAccountForTransaction>> => {
   if (items.length === 0) return new Map();
   const tenantId = getTenantId(scope);
-  const chart = getActiveChart(db);
+  const chart = getActiveChart(db, tenantId);
   const rules = listAccountSuggestionRules(db, { chart, activeOnly: true }, scope);
   const ctx = buildAccountSuggestionContext(db, { chart, rules, tenantId });
   const out = new Map<string, ReturnType<typeof suggestAccountForTransaction>>();
@@ -703,16 +938,19 @@ const buildSuggestionsByTransaction = (
 
 export const listBankTransactions = (db: Database.Database, scope: TenantScope): ProBankTransaction[] => {
   const tenantId = getTenantId(scope);
-  const rows = db
-    .prepare(
-      `
-      SELECT id, tenant_id, account_id, date, amount, type, counterparty, purpose, status, linked_invoice_id
-      FROM bank_transactions
-      WHERE tenant_id = ?
-      ORDER BY date DESC, id ASC
-    `,
-    )
-    .all(tenantId) as Array<{
+  const rows = createDrizzle(db).select({
+    id: schema.bankTransactions.id,
+    tenant_id: schema.bankTransactions.tenantId,
+    account_id: schema.bankTransactions.accountId,
+    date: schema.bankTransactions.date,
+    amount: schema.bankTransactions.amount,
+    type: schema.bankTransactions.type,
+    counterparty: schema.bankTransactions.counterparty,
+    purpose: schema.bankTransactions.purpose,
+    status: schema.bankTransactions.status,
+    linked_invoice_id: schema.bankTransactions.linkedInvoiceId,
+  }).from(schema.bankTransactions).where(and(eq(schema.bankTransactions.tenantId, tenantId), or(isNull(schema.bankTransactions.deletedAt), eq(schema.bankTransactions.deletedAt, ''))))
+    .orderBy(desc(schema.bankTransactions.date), asc(schema.bankTransactions.id)).all() as Array<{
     id: string;
     tenant_id: string;
     account_id: string;
@@ -746,29 +984,25 @@ export const getDraftByTransactionId = (
   scope: TenantScope,
 ): BookingDraftEntity | null => {
   const tenantId = getTenantId(scope);
-  const row = db
-    .prepare(
-      `
-        SELECT draft_json, updated_at
-        FROM booking_drafts
-        WHERE tenant_id = ? AND transaction_id = ?
-      `,
-    )
-    .get(tenantId, transactionId) as { draft_json: string; updated_at: string } | undefined;
+  const row = createDrizzle(db).select({ draft_json: schema.bookingDrafts.draftJson, updated_at: schema.bookingDrafts.updatedAt })
+    .from(schema.bookingDrafts).where(and(eq(schema.bookingDrafts.tenantId, tenantId), eq(schema.bookingDrafts.transactionId, transactionId))).get() as { draft_json: string; updated_at: string } | undefined;
 
   if (row) {
     return parseDraftRow(row, tenantId);
   }
 
-  const txRow = db
-    .prepare(
-      `
-      SELECT id, tenant_id, account_id, date, amount, type, counterparty, purpose, status, linked_invoice_id
-      FROM bank_transactions
-      WHERE tenant_id = ? AND id = ?
-    `,
-    )
-    .get(tenantId, transactionId) as
+  const txRow = createDrizzle(db).select({
+    id: schema.bankTransactions.id,
+    tenant_id: schema.bankTransactions.tenantId,
+    account_id: schema.bankTransactions.accountId,
+    date: schema.bankTransactions.date,
+    amount: schema.bankTransactions.amount,
+    type: schema.bankTransactions.type,
+    counterparty: schema.bankTransactions.counterparty,
+    purpose: schema.bankTransactions.purpose,
+    status: schema.bankTransactions.status,
+    linked_invoice_id: schema.bankTransactions.linkedInvoiceId,
+  }).from(schema.bankTransactions).where(and(eq(schema.bankTransactions.tenantId, tenantId), eq(schema.bankTransactions.id, transactionId), or(isNull(schema.bankTransactions.deletedAt), eq(schema.bankTransactions.deletedAt, '')))).get() as
     | {
         id: string;
         tenant_id: string;
@@ -788,20 +1022,46 @@ export const getDraftByTransactionId = (
   const tx = toBankTransaction(txRow);
   const suggestion = buildSuggestionsByTransaction(db, [tx], scope).get(tx.id);
   const bankLedgerAccount = resolveBankLedgerAccountForTransaction(db, tx);
-  const draft = defaultDraftFromBankTx(tx, suggestion?.accountNumber, bankLedgerAccount);
-  return saveDraft(db, draft, scope);
+  const draft = defaultDraftFromBankTx(tx, suggestion?.accountNumber, bankLedgerAccount, fiscalYearForPostingDate(db, tx.date));
+  const postedSourceDraft = createDrizzle(db).select({ id: schema.journalEntries.id })
+    .from(schema.journalEntries)
+    .where(and(
+      eq(schema.journalEntries.tenantId, tenantId),
+      eq(schema.journalEntries.sourceDraftId, draft.id),
+      eq(schema.journalEntries.status, 'posted'),
+    ))
+    .get();
+  // A booked bank movement with no persisted draft/source-draft journal is an
+  // OPOS payment projection. Keep it read-only and explicit across IPC.
+  if (tx.status === 'booked' && !postedSourceDraft) {
+    return { ...draft, isVirtualProjection: true };
+  }
+  return tx.status === 'booked' ? draft : saveDraft(db, draft, scope);
 };
 
 export const saveDraft = (
   db: Database.Database,
   draft: BookingDraftEntity,
   scope: TenantScope,
+  options: { trustedSourceType?: string; inTransaction?: boolean; allowPostedTransition?: boolean } = {},
 ): BookingDraftEntity => {
   const tenantId = getTenantId(scope);
+  const replay = options.allowPostedTransition
+    ? undefined
+    : rejectPostedDraftMutationUnlessReplay(db, draft, scope);
+  if (replay) {
+    if (!isVirtualBookedProjection(db, replay, tenantId)) return replay;
+    const chart = getActiveChart(db, tenantId);
+    return {
+      ...replay,
+      validationIssues: validateDraft(db, replay, loadPeriodStatus(db, replay.period, tenantId), chart, options.trustedSourceType),
+    };
+  }
   const now = new Date().toISOString();
-  const chart = getActiveChart(db);
+  const chart = getActiveChart(db, tenantId);
   const normalized: BookingDraftEntity = {
     ...draft,
+    isVirtualProjection: undefined,
     tenantId,
     lines: (draft.lines ?? []).map(normalizeDraftLine).map((line) => {
       const taxCase = getTaxCaseByKey(db, line.taxCaseKey ?? line.taxCode);
@@ -817,39 +1077,32 @@ export const saveDraft = (
     }),
     validationIssues: draft.validationIssues ?? [],
     period: draft.period || (draft.postingDate || now.slice(0, 10)).slice(0, 7),
-    fiscalYear: draft.fiscalYear || Number((draft.period || now.slice(0, 7)).slice(0, 4)),
+    fiscalYear: draft.fiscalYear || (draft.postingDate && isIsoDate(draft.postingDate) ? fiscalYearForPostingDate(db, draft.postingDate) : Number((draft.period || now.slice(0, 7)).slice(0, 4))),
     updatedAt: now,
   };
 
   ensurePeriodExists(db, normalized.period, normalized.fiscalYear, tenantId);
   const periodStatus = loadPeriodStatus(db, normalized.period, tenantId);
-  normalized.validationIssues = validateDraft(db, normalized, periodStatus, chart);
+  normalized.validationIssues = validateDraft(
+    db,
+    normalized,
+    periodStatus,
+    chart,
+    options.trustedSourceType,
+  );
   normalized.workflowStatus = normalized.validationIssues.some((issue) => issue.blocking)
     ? periodStatus === 'closed'
       ? 'period_locked'
       : 'incomplete'
     : normalized.workflowStatus;
 
-  db.prepare(
-    `
-      INSERT INTO booking_drafts (id, tenant_id, transaction_id, workflow_status, draft_json, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        transaction_id = excluded.transaction_id,
-        workflow_status = excluded.workflow_status,
-        draft_json = excluded.draft_json,
-        updated_at = excluded.updated_at
-    `,
-  ).run(
-    normalized.id,
-    tenantId,
-    normalized.transactionId,
-    normalized.workflowStatus,
-    JSON.stringify(normalized),
-    now,
-  );
-
-  saveDraftLinesAndIssues(db, normalized);
+  const persist = () => {
+    createDrizzle(db).insert(schema.bookingDrafts).values({ id: normalized.id, tenantId, transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus, draftJson: JSON.stringify(normalized), updatedAt: now })
+      .onConflictDoUpdate({ target: schema.bookingDrafts.id, set: { transactionId: normalized.transactionId, workflowStatus: normalized.workflowStatus, draftJson: JSON.stringify(normalized), updatedAt: now } }).run();
+    saveDraftLinesAndIssues(db, normalized);
+  };
+  if (options.inTransaction) persist();
+  else db.transaction(persist)();
   return normalized;
 };
 
@@ -867,20 +1120,54 @@ export const dispatchDraftAction = (
   if (!draft) {
     throw new Error('Draft not found');
   }
+  if (
+    draft.workflowStatus === 'posted' &&
+    (args.action === 'reverse' || args.action === 'create_correction') &&
+    isVirtualBookedProjection(db, draft, tenantId)
+  ) {
+    throw new Error('PAYMENT_REVERSAL_REQUIRED: OPOS-Zahlungen müssen über die Zahlungsstornierung mit Allocation-Reversal korrigiert werden.');
+  }
 
   const next = { ...draft };
+  const transitions: Record<BookingDraftEntity['workflowStatus'], BookingDraftEntity['workflowStatus'][]> = {
+    imported: ['suggested', 'incomplete', 'pending_approval'],
+    suggested: ['suggested', 'incomplete', 'pending_approval'],
+    incomplete: ['suggested', 'incomplete', 'pending_approval'],
+    ready_for_review: ['pending_approval'],
+    pending_approval: ['approved', 'incomplete'],
+    approved: ['approved'],
+    posted: ['reversed'],
+    reversed: ['corrected'],
+    corrected: ['suggested', 'incomplete'],
+    period_locked: ['incomplete', 'suggested'],
+    integration_error: ['incomplete', 'suggested'],
+  };
+  const requested: Record<typeof args.action, BookingDraftEntity['workflowStatus']> = {
+    save_draft: 'suggested',
+    submit_for_review: 'pending_approval',
+    approve: 'approved',
+    reject: 'incomplete',
+    post: 'approved',
+    reverse: 'reversed',
+    create_correction: 'corrected',
+    request_receipt: 'incomplete',
+  };
+  const target = requested[args.action];
+  if (!transitions[draft.workflowStatus].includes(target)) {
+    throw new Error(`Invalid workflow transition: ${draft.workflowStatus} -> ${target}`);
+  }
   switch (args.action) {
     case 'save_draft':
-      next.workflowStatus = 'suggested';
+      next.workflowStatus = target;
       break;
     case 'submit_for_review':
-      next.workflowStatus = 'pending_approval';
+      next.workflowStatus = target;
       break;
     case 'approve':
-      next.workflowStatus = 'approved';
+      next.workflowStatus = target;
       break;
     case 'reject':
-      next.workflowStatus = 'incomplete';
+      next.workflowStatus = target;
       if (args.rejectReason) {
         next.validationIssues = [
           {
@@ -895,20 +1182,22 @@ export const dispatchDraftAction = (
       }
       break;
     case 'post':
-      next.workflowStatus = 'approved';
+      next.workflowStatus = target;
       break;
     case 'reverse':
-      next.workflowStatus = 'reversed';
+      next.workflowStatus = target;
       break;
     case 'create_correction':
-      next.workflowStatus = 'corrected';
+      next.workflowStatus = target;
       break;
     case 'request_receipt':
-      next.workflowStatus = 'incomplete';
+      next.workflowStatus = target;
       break;
   }
 
-  return saveDraft(db, next, scope);
+  return saveDraft(db, next, scope, {
+    allowPostedTransition: args.action === 'reverse',
+  });
 };
 
 export const validateTaxCompliance = (
@@ -919,9 +1208,8 @@ export const validateTaxCompliance = (
   const tenantId = getTenantId(scope);
   let draft: BookingDraftEntity | null = null;
   if (args.draftId) {
-    const row = db
-      .prepare('SELECT draft_json FROM booking_drafts WHERE tenant_id = ? AND id = ?')
-      .get(tenantId, args.draftId) as { draft_json: string } | undefined;
+    const row = createDrizzle(db).select({ draft_json: schema.bookingDrafts.draftJson }).from(schema.bookingDrafts)
+      .where(and(eq(schema.bookingDrafts.tenantId, tenantId), eq(schema.bookingDrafts.id, args.draftId))).get() as { draft_json: string } | undefined;
     if (!row) throw new Error('Draft not found');
     draft = safeJsonParse<BookingDraftEntity>(row.draft_json, null as never);
   } else if (args.transactionId) {
@@ -944,7 +1232,25 @@ interface PostingPairSeed {
   datevBuKey?: string;
 }
 
+const validatePostingLinesForDatev = (lines: JournalLineEntity[]): void => {
+  const lineIds = new Set<string>();
+  for (const line of lines) {
+    if (lineIds.has(line.id)) throw new Error('DATEV Export blockiert: Buchungszeilen enthalten doppelte IDs.');
+    lineIds.add(line.id);
+    const debit = Number(line.debitAmount ?? 0);
+    const credit = Number(line.creditAmount ?? 0);
+    const validAmount = (value: number) => Number.isFinite(value) && value >= 0 && Math.abs(value * 100 - Math.round(value * 100)) <= 1e-9;
+    if (!validAmount(debit) || !validAmount(credit) || (debit > 0) === (credit > 0)) {
+      throw new Error('DATEV Export blockiert: Jede Buchungszeile muss genau eine positive Soll- oder Habenseite mit Centgenauigkeit enthalten.');
+    }
+    if (!line.accountNumber || !/^\d+$/.test(line.accountNumber) || /^0+$/.test(line.accountNumber)) {
+      throw new Error('DATEV Export blockiert: Buchungszeile enthält ein ungültiges Konto.');
+    }
+  }
+};
+
 const buildPostingPairs = (lines: JournalLineEntity[]): PostingPairSeed[] => {
+  validatePostingLinesForDatev(lines);
   type RemainingLine = JournalLineEntity & { remaining: number };
   const debits: RemainingLine[] = lines
     .filter((line) => Number(line.debitAmount || 0) > 0)
@@ -982,268 +1288,297 @@ const buildPostingPairs = (lines: JournalLineEntity[]): PostingPairSeed[] => {
 export const postDraft = (
   db: Database.Database,
   draftId: string,
-  options: { postingDate?: string } = {},
+  options: {
+    postingDate?: string;
+    idempotencyKey?: string;
+    sourceType?: string;
+    trustedSourceType?: string;
+    inTransaction?: boolean;
+    softLockOverride?: boolean;
+    overrideReason?: string;
+    // Compatibility aliases for callers that used the wording in the policy.
+    allowSoftLocked?: boolean;
+    reason?: string;
+  } = {},
   scope: TenantScope,
 ): { entry: JournalEntryEntity; issues: DraftValidationIssue[] } => {
   const tenantId = getTenantId(scope);
-  const row = db
-    .prepare('SELECT draft_json FROM booking_drafts WHERE tenant_id = ? AND id = ?')
-    .get(tenantId, draftId) as { draft_json: string } | undefined;
+  const drizzle = createDrizzle(db);
+  const row = drizzle.select({ draft_json: schema.bookingDrafts.draftJson, workflow_status: schema.bookingDrafts.workflowStatus }).from(schema.bookingDrafts)
+    .where(and(eq(schema.bookingDrafts.tenantId, tenantId), eq(schema.bookingDrafts.id, draftId))).get() as {
+      draft_json: string;
+      workflow_status: BookingDraftEntity['workflowStatus'];
+    } | undefined;
+  if (!row) throw new Error('Draft not found');
 
-  if (!row) {
-    throw new Error('Draft not found');
+  const sourceType = options.sourceType?.trim() || 'booking_draft';
+  const sourceKey = options.idempotencyKey?.trim() || `booking-draft:${draftId}`;
+  const existingSource = drizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
+    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, sourceType), eq(schema.journalEntries.sourceKey, sourceKey))).get();
+  const existingDraft = drizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
+    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceDraftId, draftId))).get();
+  const existingId = existingSource?.id ?? existingDraft?.id;
+  if (existingId) {
+    const existing = getJournalEntryById(db, existingId, scope);
+    if (existing) return { entry: existing, issues: [] };
   }
 
   const draft = safeJsonParse<BookingDraftEntity>(row.draft_json, null as never);
-  const postingDate = options.postingDate || draft.postingDate || new Date().toISOString().slice(0, 10);
-  const period = postingDate.slice(0, 7);
-  const fiscalYear = Number(period.slice(0, 4));
+  const postingDate = options.postingDate || draft.postingDate;
+  const period = postingDate && isIsoDate(postingDate) ? periodForDate(postingDate) : draft.period;
+  const fiscalYear = postingDate && isIsoDate(postingDate) ? fiscalYearForPostingDate(db, postingDate) : draft.fiscalYear;
+  if (!postingDate || !isIsoDate(postingDate)) {
+    return { entry: emptyJournalEntry(tenantId, postingDate || '', period, fiscalYear), issues: [{ id: randomUUID(), code: 'INVALID_POSTING_DATE', severity: 'error', message: 'Buchungsdatum muss ein gültiges Datum (YYYY-MM-DD) sein.', fieldPath: 'postingDate', blocking: true, source: 'system' }] };
+  }
 
   ensurePeriodExists(db, period, fiscalYear, tenantId);
   const periodStatus = loadPeriodStatus(db, period, tenantId);
-  const validated = saveDraft(db, {
-    ...draft,
-    postingDate,
-    period,
-    fiscalYear,
-    workflowStatus: 'approved',
-  }, scope);
-
-  const blockingIssues = validated.validationIssues.filter((issue) => issue.blocking);
+  const chart = getPostingChart(db, tenantId);
+  if (!chart) {
+    return {
+      entry: emptyJournalEntry(tenantId, postingDate, period, fiscalYear),
+      issues: [{ id: randomUUID(), code: 'CHART_UNAVAILABLE', severity: 'error', message: `Aktiver Kontenrahmen ${getAccountingPolicy(db, tenantId).activeChart} enthält keine Konten.`, blocking: true, source: 'system' }],
+    };
+  }
+  const draftForPosting = { ...draft, postingDate, period, fiscalYear };
+  const validationIssues = validateDraft(
+    db,
+    draftForPosting,
+    periodStatus,
+    chart,
+    options.trustedSourceType,
+  );
+  if (row.workflow_status !== 'approved') {
+    validationIssues.push({ id: randomUUID(), code: 'DRAFT_NOT_APPROVED', severity: 'error', message: 'Nur freigegebene Buchungsentwürfe dürfen gebucht werden.', blocking: true, source: 'system' });
+  }
+  const blockingIssues = validationIssues.filter((issue) => issue.blocking);
+  const softLockOverride = options.softLockOverride ?? options.allowSoftLocked ?? false;
+  const overrideReason = (options.overrideReason ?? options.reason ?? '').trim();
+  if (periodStatus === 'soft_locked' && (!softLockOverride || !overrideReason)) {
+    blockingIssues.push({ id: randomUUID(), code: 'SOFT_LOCK_OVERRIDE_REQUIRED', severity: 'error', message: 'Die Periode ist vorläufig gesperrt; Freigabe und Begründung sind erforderlich.', blocking: true, source: 'system' });
+  }
+  if (periodStatus === 'closed') {
+    blockingIssues.push({ id: randomUUID(), code: 'POSTING_DATE_IN_CLOSED_PERIOD', severity: 'error', message: 'Periode ist geschlossen.', blocking: true, source: 'system' });
+  }
   if (!isOpenOrSoftLocked(periodStatus) || blockingIssues.length > 0) {
     return {
-      entry: {
-        id: '',
-        tenantId,
-        entryNumber: 0,
-        postingDate,
-        bookingText: validated.bookingText,
-        period,
-        fiscalYear,
-        status: 'posted',
-        createdAt: new Date().toISOString(),
-        lines: [],
-      },
-      issues: validated.validationIssues,
+      entry: emptyJournalEntry(tenantId, postingDate, period, fiscalYear),
+      issues: [...validationIssues, ...blockingIssues.filter((issue) => !validationIssues.some((existing) => existing.code === issue.code))],
     };
   }
 
-  const entryNumber = getNextEntryNumber(db, tenantId);
-  const entryId = randomUUID();
-  const createdAt = new Date().toISOString();
-  const chart = getActiveChart(db);
-
+  const validated = saveDraft(db, draftForPosting, scope, {
+    trustedSourceType: options.trustedSourceType,
+    inTransaction: options.inTransaction,
+  });
   const postingLines: JournalLineEntity[] = [];
-  validated.lines.forEach((line, idx) => {
+  validated.lines.forEach((line) => {
     const taxCaseKey = normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode);
-    const baseLine: JournalLineEntity = {
-      ...line,
-      id: line.id || randomUUID(),
-      taxCaseKey,
-      taxCode: toLegacyTaxCode(taxCaseKey) ?? line.taxCode,
-    };
+    const baseLine: JournalLineEntity = { ...line, id: line.id || randomUUID(), taxCaseKey, taxCode: toLegacyTaxCode(taxCaseKey) ?? line.taxCode };
     postingLines.push(baseLine);
-
     const taxCase = getTaxCaseByKey(db, taxCaseKey);
     if (!taxCase || taxCase.mechanism !== 'reverse_charge') return;
     const taxAmount = round2(Number(line.taxAmount || 0));
     if (taxAmount <= 0) return;
     const taxAccounts = resolveTaxAccountsForCase(db, chart, taxCaseKey);
     if (!taxAccounts.inputTaxAccount || !taxAccounts.outputTaxAccount) return;
-
-    postingLines.push({
-      id: randomUUID(),
-      accountNumber: taxAccounts.inputTaxAccount,
-      debitAmount: taxAmount,
-      creditAmount: 0,
-      taxCode: toLegacyTaxCode(taxCaseKey),
-      taxCaseKey,
-      taxRate: Number(line.taxRate || taxCase.defaultRate || 0),
-      netAmount: line.netAmount,
-      taxAmount,
-      grossAmount: line.grossAmount,
-      countryCode: line.countryCode,
-      counterpartyVatId: line.counterpartyVatId,
-      evidenceType: line.evidenceType,
-      evidenceReference: line.evidenceReference,
-      memo: `RC Vorsteuer ${taxCaseKey}`,
-    });
-    postingLines.push({
-      id: randomUUID(),
-      accountNumber: taxAccounts.outputTaxAccount,
-      debitAmount: 0,
-      creditAmount: taxAmount,
-      taxCode: toLegacyTaxCode(taxCaseKey),
-      taxCaseKey,
-      taxRate: Number(line.taxRate || taxCase.defaultRate || 0),
-      netAmount: line.netAmount,
-      taxAmount,
-      grossAmount: line.grossAmount,
-      countryCode: line.countryCode,
-      counterpartyVatId: line.counterpartyVatId,
-      evidenceType: line.evidenceType,
-      evidenceReference: line.evidenceReference,
-      memo: `RC Umsatzsteuer ${taxCaseKey}`,
-    });
+    // The source line owns the tax basis. Control lines keep only their
+    // accounts and memo so VAT summaries and evidence are not duplicated.
+    postingLines.push({ id: randomUUID(), accountNumber: taxAccounts.inputTaxAccount, debitAmount: taxAmount, creditAmount: 0, memo: `RC Vorsteuer ${taxCaseKey}` });
+    postingLines.push({ id: randomUUID(), accountNumber: taxAccounts.outputTaxAccount, debitAmount: 0, creditAmount: taxAmount, memo: `RC Umsatzsteuer ${taxCaseKey}` });
   });
 
-  const tx = db.transaction(() => {
-    db.prepare(
-      `
-      INSERT INTO journal_entries
-        (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, reversed_entry_id, created_at)
-      VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, 'posted', ?, NULL, ?)
-      `,
-    ).run(
-      entryId,
-      tenantId,
-      entryNumber,
-      postingDate,
-      validated.documentDate ?? null,
-      validated.bookingText,
-      validated.reference ?? null,
-      period,
-      fiscalYear,
-      validated.id,
-      createdAt,
-    );
-
-    const insertLine = db.prepare(
-      `
-      INSERT INTO journal_lines
-        (
-          id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount, tax_code,
-          tax_case_key, tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id,
-          evidence_type, evidence_reference, cost_center, memo
-        )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
-
+  const entryId = randomUUID();
+  const createdAt = new Date().toISOString();
+  let entryNumber = 0;
+  let duplicateEntryId: string | undefined;
+  const persistPosting = () => {
+    const txDrizzle = createDrizzle(db);
+    const duplicate = txDrizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
+      .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, sourceType), eq(schema.journalEntries.sourceKey, sourceKey))).get();
+    if (duplicate) {
+      duplicateEntryId = duplicate.id;
+      return;
+    }
+    // Allocation deliberately occurs inside the same SQLite transaction as the
+    // insert; SQLite serializes writers and the unique index is the final guard.
+    entryNumber = getNextEntryNumber(db, tenantId);
+    txDrizzle.insert(schema.journalEntries).values({ id: entryId, tenantId, entryNumber, postingDate, documentDate: validated.documentDate ?? null, bookingText: validated.bookingText, reference: validated.reference ?? null, period, fiscalYear, status: 'posted', sourceDraftId: validated.id, sourceType, sourceKey, reversedEntryId: null, createdAt }).run();
     postingLines.forEach((line, idx) => {
-      insertLine.run(
-        line.id,
-        tenantId,
-        entryId,
-        idx + 1,
-        line.accountNumber,
-        round2(line.debitAmount),
-        round2(line.creditAmount),
-        line.taxCode ?? null,
-        line.taxCaseKey ?? null,
-        line.taxRate ?? null,
-        line.netAmount ?? null,
-        line.taxAmount ?? null,
-        line.grossAmount ?? null,
-        line.countryCode ?? null,
-        line.counterpartyVatId ?? null,
-        line.evidenceType ?? null,
-        line.evidenceReference ?? null,
-        line.costCenter ?? null,
-        line.memo ?? null,
-      );
+      txDrizzle.insert(schema.journalLines).values({ id: line.id, tenantId, entryId, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: round2(line.debitAmount), creditAmount: round2(line.creditAmount), taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, datevSachverhaltLl: line.datevSachverhaltLl ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
     });
-
-    const insertEvidence = db.prepare(
-      `
-      INSERT INTO vat_evidence
-        (id, tenant_id, draft_id, entry_id, line_id, tax_case_key, evidence_type, evidence_reference, country_code, counterparty_vat_id, captured_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
     for (const line of postingLines) {
       const taxCase = getTaxCaseByKey(db, line.taxCaseKey ?? line.taxCode);
       if (!taxCase) continue;
       const hasEvidence = Boolean(line.evidenceType || line.evidenceReference || line.countryCode || line.counterpartyVatId);
       if (!taxCase.requiresEvidence && !hasEvidence) continue;
-      insertEvidence.run(
-        randomUUID(),
-        tenantId,
-        validated.id,
-        entryId,
-        line.id,
-        taxCase.key,
-        line.evidenceType ?? null,
-        line.evidenceReference ?? null,
-        line.countryCode ?? null,
-        line.counterpartyVatId ?? null,
-        createdAt,
-      );
+      txDrizzle.insert(schema.vatEvidence).values({ id: randomUUID(), tenantId, draftId: validated.id, entryId, lineId: line.id, taxCaseKey: taxCase.key, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, capturedAt: createdAt }).run();
     }
-
-    const insertPair = db.prepare(
-      `
-      INSERT INTO journal_posting_pairs
-        (id, tenant_id, entry_id, debit_line_id, credit_line_id, amount, tax_case_key, datev_bu_key, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
     for (const pair of buildPostingPairs(postingLines)) {
-      const datevBuKey = resolveDatevBuKeyForTaxCase(db, chart, pair.taxCaseKey);
-      insertPair.run(
-        randomUUID(),
-        tenantId,
-        entryId,
-        pair.debitLineId,
-        pair.creditLineId,
-        round2(pair.amount),
-        pair.taxCaseKey ?? null,
-        datevBuKey ?? null,
-        createdAt,
-      );
+      txDrizzle.insert(schema.journalPostingPairs).values({ id: randomUUID(), tenantId, entryId, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: round2(pair.amount), taxCaseKey: pair.taxCaseKey ?? null, datevBuKey: resolveDatevBuKeyForPosting(db, chart, pair.taxCaseKey, postingDate) ?? null, createdAt }).run();
     }
-
-    db.prepare('UPDATE booking_drafts SET workflow_status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?').run(
-      'posted',
-      createdAt,
-      validated.id,
-      tenantId,
-    );
-
-    db.prepare('UPDATE bank_transactions SET status = ? WHERE id = ? AND tenant_id = ?').run(
-      'booked',
-      validated.transactionId,
-      tenantId,
-    );
-
-    appendAuditLog(db, {
-      entityType: 'pro_journal_entry',
-      entityId: entryId,
-      action: 'post',
-      reason: 'Draft posted',
-      before: null,
-      after: {
-        entryNumber,
-        postingDate,
-        period,
-        fiscalYear,
-        sourceDraftId: validated.id,
-      },
-      actor: 'pro',
-    });
-  });
-
-  tx();
-
-  return {
-    entry: {
-      id: entryId,
-      tenantId,
-      entryNumber,
-      postingDate,
-      documentDate: validated.documentDate,
-      bookingText: validated.bookingText,
-      reference: validated.reference,
-      period,
-      fiscalYear,
-      status: 'posted',
-      sourceDraftId: validated.id,
-      createdAt,
-      lines: postingLines,
-    },
-    issues: validated.validationIssues,
+    txDrizzle.update(schema.bookingDrafts).set({ workflowStatus: 'posted', draftJson: JSON.stringify({ ...validated, workflowStatus: 'posted', updatedAt: createdAt }), updatedAt: createdAt }).where(and(eq(schema.bookingDrafts.id, validated.id), eq(schema.bookingDrafts.tenantId, tenantId))).run();
+    txDrizzle.update(schema.bankTransactions).set({ status: 'booked', updatedAt: createdAt }).where(and(eq(schema.bankTransactions.id, validated.transactionId), eq(schema.bankTransactions.tenantId, tenantId))).run();
+    appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: entryId, action: 'post', reason: overrideReason || 'Draft posted', before: null, after: { entryNumber, postingDate, period, fiscalYear, sourceDraftId: validated.id, sourceKey }, actor: 'pro' });
   };
+  if (options.inTransaction) persistPosting();
+  else db.transaction(persistPosting)();
+
+  if (duplicateEntryId) {
+    const existing = getJournalEntryById(db, duplicateEntryId, scope);
+    if (existing) return { entry: existing, issues: [] };
+  }
+  return { entry: { id: entryId, tenantId, entryNumber, postingDate, documentDate: validated.documentDate, bookingText: validated.bookingText, reference: validated.reference, period, fiscalYear, status: 'posted', sourceDraftId: validated.id, sourceType: sourceType as JournalEntryEntity['sourceType'], sourceKey, createdAt, lines: postingLines }, issues: validated.validationIssues };
+};
+
+const emptyJournalEntry = (tenantId: string, postingDate: string, period: string, fiscalYear: number): JournalEntryEntity => ({ id: '', tenantId, entryNumber: 0, postingDate, bookingText: '', period, fiscalYear, status: 'posted', createdAt: new Date().toISOString(), lines: [] });
+
+const reverseJournalEntryInternal = (
+  db: Database.Database,
+  entryId: string,
+  reason: string,
+  scope: TenantScope,
+  options: { postingDate?: string; softLockOverride?: boolean; overrideReason?: string } = {},
+  allowOwnedSource = false,
+): { ok: true; reversalEntryId: string } => {
+  const tenantId = getTenantId(scope);
+  const cleanReason = reason.trim();
+  if (!cleanReason) throw new Error('Reversal reason is required');
+  const drizzle = createDrizzle(db);
+  const entry = drizzle.select({
+    id: schema.journalEntries.id, entry_number: schema.journalEntries.entryNumber,
+    posting_date: schema.journalEntries.postingDate, document_date: schema.journalEntries.documentDate,
+    booking_text: schema.journalEntries.bookingText, reference: schema.journalEntries.reference,
+    period: schema.journalEntries.period, fiscal_year: schema.journalEntries.fiscalYear,
+    status: schema.journalEntries.status, reversed_entry_id: schema.journalEntries.reversedEntryId,
+    source_type: schema.journalEntries.sourceType,
+  }).from(schema.journalEntries).where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.id, entryId))).get() as
+    | { id: string; entry_number: number; posting_date: string; document_date: string | null; booking_text: string; reference: string | null; period: string; fiscal_year: number; status: string; reversed_entry_id: string | null; source_type: string }
+    | undefined;
+  if (!entry) throw new Error('Journal entry not found');
+  if (entry.status === 'reversed' || entry.reversed_entry_id || entry.source_type === 'reversal') {
+    throw new Error('Journal entry cannot be reversed again');
+  }
+  if (!allowOwnedSource && (entry.source_type === 'outgoing_invoice' || entry.source_type === 'incoming_invoice')) {
+    throw new Error('DOCUMENT_REVERSAL_REQUIRED: reverseDocumentAccounting must be used for document-owned entries');
+  }
+  if (entry.source_type === 'asset_activation' || entry.source_type === 'asset_depreciation' || entry.source_type === 'asset_disposal') {
+    throw new Error('ASSET_REVERSAL_REQUIRED: use the asset-specific correction flow');
+  }
+  if (entry.source_type === 'payment' || entry.source_type === 'payment_vat') {
+    throw new Error('PAYMENT_REVERSAL_REQUIRED: use payment-specific reversal with allocation reversal');
+  }
+  if (['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'correction'].includes(entry.source_type)) {
+    throw new Error('AGGREGATE_REVERSAL_BLOCKED: use the source-specific correction flow');
+  }
+  if (!allowOwnedSource && db.prepare(`SELECT 1 FROM accounting_source_runs
+    WHERE tenant_id = ? AND journal_entry_id = ? LIMIT 1`).get(tenantId, entryId)) {
+    throw new Error('SOURCE_REVERSAL_REQUIRED: use the accounting source command reversal flow');
+  }
+  if (!allowOwnedSource) {
+    const ownership = db.prepare(`SELECT
+      EXISTS (SELECT 1 FROM invoices WHERE accounting_journal_entry_id = ?) AS outgoing_document,
+      EXISTS (SELECT 1 FROM incoming_invoices WHERE accounting_journal_entry_id = ?) AS incoming_document,
+      EXISTS (SELECT 1 FROM open_items WHERE tenant_id = ? AND journal_entry_id = ?) AS open_item,
+      EXISTS (SELECT 1 FROM open_item_payments WHERE tenant_id = ? AND journal_entry_id = ?) AS payment
+    `).get(entryId, entryId, tenantId, entryId, tenantId, entryId) as { outgoing_document: number; incoming_document: number; open_item: number; payment: number };
+    if (ownership.outgoing_document || ownership.incoming_document || ownership.open_item || ownership.payment) {
+      throw new Error('DOCUMENT_REVERSAL_REQUIRED: use the document-specific reversal flow');
+    }
+  }
+
+  const postingDate = options.postingDate || new Date().toISOString().slice(0, 10);
+  if (!isIsoDate(postingDate)) throw new Error('Invalid reversal posting date');
+  const period = periodForDate(postingDate);
+  const fiscalYear = fiscalYearForPostingDate(db, postingDate);
+  ensurePeriodExists(db, period, fiscalYear, tenantId);
+  const periodStatus = loadPeriodStatus(db, period, tenantId);
+  if (periodStatus === 'closed') throw new Error('Reversal posting period is closed');
+  const overrideReason = (options.overrideReason ?? '').trim();
+  if (periodStatus === 'soft_locked' && (!options.softLockOverride || !overrideReason)) {
+    throw new Error('Soft-locked reversal period requires explicit override and reason');
+  }
+
+  const lineSelect = {
+    id: schema.journalLines.id, account_number: schema.journalLines.accountNumber,
+    debit_amount: schema.journalLines.debitAmount, credit_amount: schema.journalLines.creditAmount,
+    tax_code: schema.journalLines.taxCode, tax_case_key: schema.journalLines.taxCaseKey,
+    tax_rate: schema.journalLines.taxRate, net_amount: schema.journalLines.netAmount,
+    tax_amount: schema.journalLines.taxAmount, gross_amount: schema.journalLines.grossAmount,
+    country_code: schema.journalLines.countryCode, datev_sachverhalt_ll: schema.journalLines.datevSachverhaltLl, counterparty_vat_id: schema.journalLines.counterpartyVatId,
+    evidence_type: schema.journalLines.evidenceType, evidence_reference: schema.journalLines.evidenceReference,
+    cost_center: schema.journalLines.costCenter, memo: schema.journalLines.memo,
+  };
+  const lines = drizzle.select(lineSelect).from(schema.journalLines)
+    .where(and(eq(schema.journalLines.tenantId, tenantId), eq(schema.journalLines.entryId, entryId)))
+    .orderBy(asc(schema.journalLines.lineNo)).all() as Array<{
+      id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
+      tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
+    gross_amount: number | null; country_code: string | null; datev_sachverhalt_ll: string | null; counterparty_vat_id: string | null;
+      evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
+    }>;
+  if (!lines.length) throw new Error('Journal entry has no lines');
+
+  const originalPairs = drizzle.select({
+    debit_line_id: schema.journalPostingPairs.debitLineId,
+    credit_line_id: schema.journalPostingPairs.creditLineId,
+    amount: schema.journalPostingPairs.amount,
+    tax_case_key: schema.journalPostingPairs.taxCaseKey,
+    datev_bu_key: schema.journalPostingPairs.datevBuKey,
+  }).from(schema.journalPostingPairs)
+    .where(and(eq(schema.journalPostingPairs.tenantId, tenantId), eq(schema.journalPostingPairs.entryId, entryId))).all() as Array<{
+      debit_line_id: string; credit_line_id: string; amount: number; tax_case_key: TaxCaseKey | null; datev_bu_key: string | null;
+    }>;
+
+  const reversalEntryId = randomUUID();
+  const auditReason = overrideReason ? `${cleanReason} (soft-lock override: ${overrideReason})` : cleanReason;
+  const sourceKey = `reversal:${entryId}`;
+  const now = new Date().toISOString();
+  let reversalNumber = 0;
+  db.transaction(() => {
+    const txDrizzle = createDrizzle(db);
+    const current = txDrizzle.select({ status: schema.journalEntries.status, reversedEntryId: schema.journalEntries.reversedEntryId })
+      .from(schema.journalEntries).where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.id, entryId))).get() as { status: string; reversedEntryId: string | null } | undefined;
+    if (!current || current.status === 'reversed' || current.reversedEntryId) throw new Error('Journal entry cannot be reversed again');
+    const duplicate = txDrizzle.select({ id: schema.journalEntries.id }).from(schema.journalEntries)
+      .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.sourceType, 'reversal'), eq(schema.journalEntries.sourceKey, sourceKey))).get();
+    if (duplicate) throw new Error('Journal entry already reversed');
+    reversalNumber = getNextEntryNumber(db, tenantId);
+    txDrizzle.insert(schema.journalEntries).values({ id: reversalEntryId, tenantId, entryNumber: reversalNumber, postingDate, documentDate: entry.document_date, bookingText: `Storno ${entry.entry_number}: ${entry.booking_text}`, reference: cleanReason, period, fiscalYear, status: 'posted', sourceDraftId: null, sourceType: 'reversal', sourceKey, reversedEntryId: entryId, createdAt: now }).run();
+    const reversalLines: JournalLineEntity[] = lines.map((line) => ({
+      id: randomUUID(), accountNumber: line.account_number,
+      debitAmount: round2(Number(line.credit_amount || 0)), creditAmount: round2(Number(line.debit_amount || 0)),
+      taxCode: line.tax_code ?? undefined, taxCaseKey: line.tax_case_key ?? undefined, taxRate: line.tax_rate ?? undefined,
+      netAmount: line.net_amount === null ? undefined : -Number(line.net_amount),
+      taxAmount: line.tax_amount === null ? undefined : -Number(line.tax_amount),
+      grossAmount: line.gross_amount === null ? undefined : -Number(line.gross_amount),
+      countryCode: line.country_code ?? undefined, counterpartyVatId: line.counterparty_vat_id ?? undefined,
+      datevSachverhaltLl: line.datev_sachverhalt_ll ?? undefined,
+      evidenceType: line.evidence_type ?? undefined, evidenceReference: line.evidence_reference ?? undefined,
+      costCenter: line.cost_center ?? undefined, memo: line.memo ?? undefined,
+    }));
+    reversalLines.forEach((line, idx) => {
+      txDrizzle.insert(schema.journalLines).values({ id: line.id, tenantId, entryId: reversalEntryId, lineNo: idx + 1, accountNumber: line.accountNumber, debitAmount: line.debitAmount, creditAmount: line.creditAmount, taxCode: line.taxCode ?? null, taxCaseKey: line.taxCaseKey ?? null, taxRate: line.taxRate ?? null, netAmount: line.netAmount ?? null, taxAmount: line.taxAmount ?? null, grossAmount: line.grossAmount ?? null, countryCode: line.countryCode ?? null, counterpartyVatId: line.counterpartyVatId ?? null, datevSachverhaltLl: line.datevSachverhaltLl ?? null, evidenceType: line.evidenceType ?? null, evidenceReference: line.evidenceReference ?? null, costCenter: line.costCenter ?? null, memo: line.memo ?? null }).run();
+    });
+    const chart = getActiveChart(db, tenantId);
+    const reversalLineId = new Map(lines.map((line, index) => [line.id, reversalLines[index]!.id]));
+    const reversalPairs = originalPairs.length
+      ? originalPairs.map((pair) => {
+        const debitLineId = reversalLineId.get(pair.credit_line_id);
+        const creditLineId = reversalLineId.get(pair.debit_line_id);
+        if (!debitLineId || !creditLineId) throw new Error('JOURNAL_POSTING_PAIRS_INVALID');
+        return { debitLineId, creditLineId, amount: Number(pair.amount), taxCaseKey: pair.tax_case_key ?? undefined, datevBuKey: pair.datev_bu_key ?? undefined };
+      })
+      : buildPostingPairs(reversalLines).map((pair) => ({ ...pair, datevBuKey: resolveDatevBuKeyForPosting(db, chart, pair.taxCaseKey, entry.posting_date) }));
+    for (const pair of reversalPairs) {
+      txDrizzle.insert(schema.journalPostingPairs).values({ id: randomUUID(), tenantId, entryId: reversalEntryId, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: pair.amount, taxCaseKey: pair.taxCaseKey ?? null, datevBuKey: pair.datevBuKey ?? null, createdAt: now }).run();
+    }
+    txDrizzle.update(schema.journalEntries).set({ status: 'reversed', reversedEntryId: reversalEntryId })
+      .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.id, entryId))).run();
+    appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: entryId, action: 'reverse', reason: auditReason, before: { status: 'posted' }, after: { status: 'reversed', reversalEntryId, postingDate, period, fiscalYear, reversalReason: cleanReason, softLockOverrideReason: overrideReason || undefined }, actor: 'pro' });
+    appendAuditLog(db, { entityType: 'pro_journal_entry', entityId: reversalEntryId, action: 'post_reversal', reason: auditReason, before: null, after: { reversesEntryId: entryId, entryNumber: reversalNumber, postingDate, period, fiscalYear, reversalReason: cleanReason, softLockOverrideReason: overrideReason || undefined }, actor: 'pro' });
+  })();
+  return { ok: true, reversalEntryId };
 };
 
 export const reverseJournalEntry = (
@@ -1251,338 +1586,72 @@ export const reverseJournalEntry = (
   entryId: string,
   reason: string,
   scope: TenantScope,
-): { ok: true; reversalEntryId: string } => {
-  const tenantId = getTenantId(scope);
-  const entry = db
-    .prepare(
-      `
-      SELECT id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status
-      FROM journal_entries
-      WHERE tenant_id = ? AND id = ?
-    `,
-    )
-    .get(tenantId, entryId) as
-    | {
-        id: string;
-        entry_number: number;
-        posting_date: string;
-        document_date: string | null;
-        booking_text: string;
-        reference: string | null;
-        period: string;
-        fiscal_year: number;
-        status: string;
-      }
-    | undefined;
+  options: { postingDate?: string; softLockOverride?: boolean; overrideReason?: string } = {},
+): { ok: true; reversalEntryId: string } => reverseJournalEntryInternal(db, entryId, reason, scope, options);
 
-  if (!entry) {
-    throw new Error('Journal entry not found');
-  }
-  if (entry.status === 'reversed') {
-    throw new Error('Journal entry already reversed');
-  }
-
-  const lines = db
-    .prepare(
-      `
-      SELECT
-        id,
-        account_number,
-        debit_amount,
-        credit_amount,
-        tax_code,
-        tax_case_key,
-        tax_rate,
-        net_amount,
-        tax_amount,
-        gross_amount,
-        country_code,
-        counterparty_vat_id,
-        evidence_type,
-        evidence_reference,
-        cost_center,
-        memo
-      FROM journal_lines
-      WHERE tenant_id = ? AND entry_id = ?
-      ORDER BY line_no ASC
-    `,
-    )
-    .all(tenantId, entryId) as Array<{
-    id: string;
-    account_number: string;
-    debit_amount: number;
-    credit_amount: number;
-    tax_code: string | null;
-    tax_case_key: TaxCaseKey | null;
-    tax_rate: number | null;
-    net_amount: number | null;
-    tax_amount: number | null;
-    gross_amount: number | null;
-    country_code: string | null;
-    counterparty_vat_id: string | null;
-    evidence_type: string | null;
-    evidence_reference: string | null;
-    cost_center: string | null;
-    memo: string | null;
-  }>;
-
-  const reversalEntryId = randomUUID();
-  const reversalNumber = getNextEntryNumber(db, tenantId);
-  const now = new Date().toISOString();
-
-  const tx = db.transaction(() => {
-    db.prepare(
-      `
-      INSERT INTO journal_entries
-        (id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, reversed_entry_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'posted', NULL, ?, ?)
-      `,
-    ).run(
-      reversalEntryId,
-      tenantId,
-      reversalNumber,
-      now.slice(0, 10),
-      entry.document_date,
-      `Storno ${entry.entry_number}: ${entry.booking_text}`,
-      reason,
-      entry.period,
-      entry.fiscal_year,
-      entryId,
-      now,
-    );
-
-    const insertLine = db.prepare(
-      `
-      INSERT INTO journal_lines
-        (
-          id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount, tax_code,
-          tax_case_key, tax_rate, net_amount, tax_amount, gross_amount, country_code, counterparty_vat_id,
-          evidence_type, evidence_reference, cost_center, memo
-        )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
-
-    lines.forEach((line, idx) => {
-      insertLine.run(
-        randomUUID(),
-        tenantId,
-        reversalEntryId,
-        idx + 1,
-        line.account_number,
-        round2(Number(line.credit_amount || 0)),
-        round2(Number(line.debit_amount || 0)),
-        line.tax_code,
-        line.tax_case_key,
-        line.tax_rate,
-        line.net_amount,
-        line.tax_amount,
-        line.gross_amount,
-        line.country_code,
-        line.counterparty_vat_id,
-        line.evidence_type,
-        line.evidence_reference,
-        line.cost_center,
-        line.memo,
-      );
-    });
-
-    const reversalLines = db
-      .prepare(
-        `
-        SELECT
-          id, account_number, debit_amount, credit_amount, tax_code, tax_case_key, tax_rate, net_amount, tax_amount, gross_amount,
-          country_code, counterparty_vat_id, evidence_type, evidence_reference, cost_center, memo
-        FROM journal_lines
-        WHERE tenant_id = ? AND entry_id = ?
-        ORDER BY line_no ASC
-        `,
-      )
-      .all(tenantId, reversalEntryId) as Array<{
-      id: string;
-      account_number: string;
-      debit_amount: number;
-      credit_amount: number;
-      tax_code: string | null;
-      tax_case_key: TaxCaseKey | null;
-      tax_rate: number | null;
-      net_amount: number | null;
-      tax_amount: number | null;
-      gross_amount: number | null;
-      country_code: string | null;
-      counterparty_vat_id: string | null;
-      evidence_type: string | null;
-      evidence_reference: string | null;
-      cost_center: string | null;
-      memo: string | null;
-    }>;
-    const chart = getActiveChart(db);
-    const insertPair = db.prepare(
-      `
-      INSERT INTO journal_posting_pairs
-        (id, tenant_id, entry_id, debit_line_id, credit_line_id, amount, tax_case_key, datev_bu_key, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
-    const pairLines: JournalLineEntity[] = reversalLines.map((line) => ({
-      id: line.id,
-      accountNumber: line.account_number,
-      debitAmount: Number(line.debit_amount || 0),
-      creditAmount: Number(line.credit_amount || 0),
-      taxCode: line.tax_code ?? undefined,
-      taxCaseKey: line.tax_case_key ?? undefined,
-      taxRate: line.tax_rate ?? undefined,
-      netAmount: line.net_amount ?? undefined,
-      taxAmount: line.tax_amount ?? undefined,
-      grossAmount: line.gross_amount ?? undefined,
-      countryCode: line.country_code ?? undefined,
-      counterpartyVatId: line.counterparty_vat_id ?? undefined,
-      evidenceType: line.evidence_type ?? undefined,
-      evidenceReference: line.evidence_reference ?? undefined,
-      costCenter: line.cost_center ?? undefined,
-      memo: line.memo ?? undefined,
-    }));
-    for (const pair of buildPostingPairs(pairLines)) {
-      const datevBuKey = resolveDatevBuKeyForTaxCase(db, chart, pair.taxCaseKey);
-      insertPair.run(
-        randomUUID(),
-        tenantId,
-        reversalEntryId,
-        pair.debitLineId,
-        pair.creditLineId,
-        round2(pair.amount),
-        pair.taxCaseKey ?? null,
-        datevBuKey ?? null,
-        now,
-      );
-    }
-
-    db.prepare('UPDATE journal_entries SET status = ?, reversed_entry_id = ? WHERE tenant_id = ? AND id = ?').run(
-      'reversed',
-      reversalEntryId,
-      tenantId,
-      entryId,
-    );
-
-    appendAuditLog(db, {
-      entityType: 'pro_journal_entry',
-      entityId: entryId,
-      action: 'reverse',
-      reason,
-      before: {
-        status: 'posted',
-      },
-      after: {
-        status: 'reversed',
-        reversalEntryId,
-      },
-      actor: 'pro',
-    });
-    appendAuditLog(db, {
-      entityType: 'pro_journal_entry',
-      entityId: reversalEntryId,
-      action: 'post_reversal',
-      reason,
-      before: null,
-      after: {
-        reversesEntryId: entryId,
-        entryNumber: reversalNumber,
-      },
-      actor: 'pro',
-    });
-  });
-
-  tx();
-  return { ok: true, reversalEntryId };
-};
+/** Document/OPOS callers own the surrounding state transition and may reverse their journal atomically. */
+export const reverseDocumentJournalEntry = (
+  db: Database.Database,
+  entryId: string,
+  reason: string,
+  scope: TenantScope,
+  options: { postingDate?: string; softLockOverride?: boolean; overrideReason?: string } = {},
+): { ok: true; reversalEntryId: string } => reverseJournalEntryInternal(db, entryId, reason, scope, options, true);
 
 export const listJournalEntries = (
   db: Database.Database,
-  args: { from?: string; to?: string; accountNumbers?: string[]; limit?: number; offset?: number } = {},
+  args: { from?: string; to?: string; accountNumbers?: string[]; status?: Array<'posted' | 'reversed'>; limit?: number; offset?: number } = {},
   scope: TenantScope,
 ): JournalEntryEntity[] => {
   const tenantId = getTenantId(scope);
-  const where: string[] = ['je.tenant_id = @tenantId'];
-  const params: Record<string, unknown> = { tenantId };
-
-  if (args.from) {
-    where.push('je.posting_date >= @from');
-    params.from = args.from;
-  }
-  if (args.to) {
-    where.push('je.posting_date <= @to');
-    params.to = args.to;
-  }
+  const drizzle = createDrizzle(db);
+  const conditions = [eq(schema.journalEntries.tenantId, tenantId)];
+  if (args.from) conditions.push(gte(schema.journalEntries.postingDate, args.from));
+  if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
   if (args.accountNumbers?.length) {
-    const placeholders = args.accountNumbers.map((accountNumber, index) => {
-      const key = `accountNumber${index}`;
-      params[key] = accountNumber;
-      return `@${key}`;
-    });
-    where.push(
-      `EXISTS (
-        SELECT 1
-        FROM journal_lines filtered_line
-        WHERE filtered_line.tenant_id = je.tenant_id
-          AND filtered_line.entry_id = je.id
-          AND filtered_line.account_number IN (${placeholders.join(', ')})
-      )`,
-    );
+    const matching = drizzle.select({ entryId: schema.journalLines.entryId }).from(schema.journalLines)
+      .where(and(eq(schema.journalLines.tenantId, tenantId), inArray(schema.journalLines.accountNumber, args.accountNumbers))).all();
+    const ids = [...new Set(matching.map((row) => row.entryId))];
+    if (ids.length === 0) return [];
+    conditions.push(inArray(schema.journalEntries.id, ids));
   }
+  if (args.status?.length) conditions.push(inArray(schema.journalEntries.status, args.status));
+  const rows = drizzle.select({
+    id: schema.journalEntries.id, tenant_id: schema.journalEntries.tenantId, entry_number: schema.journalEntries.entryNumber,
+    posting_date: schema.journalEntries.postingDate, document_date: schema.journalEntries.documentDate,
+    booking_text: schema.journalEntries.bookingText, reference: schema.journalEntries.reference,
+    period: schema.journalEntries.period, fiscal_year: schema.journalEntries.fiscalYear, status: schema.journalEntries.status,
+    source_draft_id: schema.journalEntries.sourceDraftId, source_type: schema.journalEntries.sourceType,
+    source_key: schema.journalEntries.sourceKey, reversed_entry_id: schema.journalEntries.reversedEntryId,
+    created_at: schema.journalEntries.createdAt,
+  }).from(schema.journalEntries).where(and(...conditions))
+    .orderBy(desc(schema.journalEntries.postingDate), desc(schema.journalEntries.entryNumber))
+    .limit(Math.max(1, Math.min(5000, Math.floor(args.limit ?? 500))))
+    .offset(Math.max(0, Math.floor(args.offset ?? 0))).all() as Array<{
+      id: string; tenant_id: string; entry_number: number; posting_date: string; document_date: string | null;
+      booking_text: string; reference: string | null; period: string; fiscal_year: number; status: string;
+      source_draft_id: string | null; source_type: string; source_key: string | null; reversed_entry_id: string | null; created_at: string;
+    }>;
 
-  params.limit = Math.max(1, Math.min(5000, Math.floor(args.limit ?? 500)));
-  params.offset = Math.max(0, Math.floor(args.offset ?? 0));
-
-  const rows = db
-    .prepare(
-      `
-      SELECT id, tenant_id, entry_number, posting_date, document_date, booking_text, reference, period, fiscal_year, status, source_draft_id, reversed_entry_id, created_at
-      FROM journal_entries je
-      WHERE ${where.join(' AND ')}
-      ORDER BY posting_date DESC, entry_number DESC
-      LIMIT @limit OFFSET @offset
-    `,
-    )
-    .all(params) as Array<{
-    id: string;
-    tenant_id: string;
-    entry_number: number;
-    posting_date: string;
-    document_date: string | null;
-    booking_text: string;
-    reference: string | null;
-    period: string;
-    fiscal_year: number;
-    status: string;
-    source_draft_id: string | null;
-    reversed_entry_id: string | null;
-    created_at: string;
-  }>;
-
-  const getLines = db.prepare(
-    `
-      SELECT
-        id,
-        account_number,
-        debit_amount,
-        credit_amount,
-        tax_code,
-        tax_case_key,
-        tax_rate,
-        net_amount,
-        tax_amount,
-        gross_amount,
-        country_code,
-        counterparty_vat_id,
-        evidence_type,
-        evidence_reference,
-        cost_center,
-        memo
-      FROM journal_lines
-      WHERE tenant_id = ? AND entry_id = ?
-      ORDER BY line_no ASC
-    `,
-  );
+  type JournalLineRow = {
+    id: string; entry_id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
+    tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
+    gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null;
+    datev_sachverhalt_ll: string | null; evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
+  };
+  const lineRows = rows.length ? drizzle.select({
+    id: schema.journalLines.id, entry_id: schema.journalLines.entryId, account_number: schema.journalLines.accountNumber,
+    debit_amount: schema.journalLines.debitAmount, credit_amount: schema.journalLines.creditAmount,
+    tax_code: schema.journalLines.taxCode, tax_case_key: schema.journalLines.taxCaseKey,
+    tax_rate: schema.journalLines.taxRate, net_amount: schema.journalLines.netAmount, tax_amount: schema.journalLines.taxAmount,
+    gross_amount: schema.journalLines.grossAmount, country_code: schema.journalLines.countryCode, datev_sachverhalt_ll: schema.journalLines.datevSachverhaltLl,
+    counterparty_vat_id: schema.journalLines.counterpartyVatId, evidence_type: schema.journalLines.evidenceType,
+    evidence_reference: schema.journalLines.evidenceReference, cost_center: schema.journalLines.costCenter,
+    memo: schema.journalLines.memo,
+  }).from(schema.journalLines).where(and(eq(schema.journalLines.tenantId, tenantId), inArray(schema.journalLines.entryId, rows.map((row) => row.id))))
+    .orderBy(asc(schema.journalLines.entryId), asc(schema.journalLines.lineNo)).all() as JournalLineRow[] : [];
+  const linesByEntry = new Map<string, JournalLineRow[]>();
+  for (const line of lineRows) linesByEntry.set(line.entry_id, [...(linesByEntry.get(line.entry_id) ?? []), line]);
 
   return rows.map((row) => ({
     id: row.id,
@@ -1596,26 +1665,11 @@ export const listJournalEntries = (
     fiscalYear: row.fiscal_year,
     status: row.status === 'reversed' ? 'reversed' : 'posted',
     sourceDraftId: row.source_draft_id ?? undefined,
+    sourceType: row.source_type as JournalEntryEntity['sourceType'],
+    sourceKey: row.source_key ?? undefined,
     reversedEntryId: row.reversed_entry_id ?? undefined,
     createdAt: row.created_at,
-    lines: (getLines.all(tenantId, row.id) as Array<{
-      id: string;
-      account_number: string;
-      debit_amount: number;
-      credit_amount: number;
-      tax_code: string | null;
-      tax_case_key: TaxCaseKey | null;
-      tax_rate: number | null;
-      net_amount: number | null;
-      tax_amount: number | null;
-      gross_amount: number | null;
-      country_code: string | null;
-      counterparty_vat_id: string | null;
-      evidence_type: string | null;
-      evidence_reference: string | null;
-      cost_center: string | null;
-      memo: string | null;
-    }>).map((line) => ({
+    lines: (linesByEntry.get(row.id) ?? []).map((line) => ({
       id: line.id,
       accountNumber: line.account_number,
       debitAmount: Number(line.debit_amount || 0),
@@ -1626,6 +1680,7 @@ export const listJournalEntries = (
       netAmount: line.net_amount ?? undefined,
       taxAmount: line.tax_amount ?? undefined,
       grossAmount: line.gross_amount ?? undefined,
+      datevSachverhaltLl: line.datev_sachverhalt_ll ?? undefined,
       countryCode: line.country_code ?? undefined,
       counterpartyVatId: line.counterparty_vat_id ?? undefined,
       evidenceType: line.evidence_type ?? undefined,
@@ -1636,158 +1691,289 @@ export const listJournalEntries = (
   }));
 };
 
+/**
+ * DATEV is deliberately independent of the UI listing cap. The normal journal
+ * listing is capped at 5,000 rows, while DATEV permits 99,999 booking rows and
+ * must observe the overflow instead of silently exporting a truncated prefix.
+ */
+const listDatevJournalEntries = (
+  db: Database.Database,
+  args: { from: string; to: string },
+  scope: TenantScope,
+): JournalEntryEntity[] => {
+  const pageSize = 5_000;
+  const entries: JournalEntryEntity[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const page = listJournalEntries(db, { ...args, status: ['posted', 'reversed'], limit: pageSize, offset }, scope);
+    entries.push(...page);
+    if (page.length < pageSize || entries.length > DATEV_MAX_ROWS) break;
+  }
+  return entries;
+};
+
+// Idempotent mutations must not depend on the paginated journal listing.
+// Keep this lookup intentionally direct so a replay remains correct after the
+// journal grows beyond the list endpoint's page cap.
+export function getJournalEntryById(
+  db: Database.Database,
+  entryId: string,
+  scope: TenantScope,
+): JournalEntryEntity | null {
+  const tenantId = getTenantId(scope);
+  const drizzle = createDrizzle(db);
+  const row = drizzle.select({
+    id: schema.journalEntries.id, tenant_id: schema.journalEntries.tenantId, entry_number: schema.journalEntries.entryNumber,
+    posting_date: schema.journalEntries.postingDate, document_date: schema.journalEntries.documentDate,
+    booking_text: schema.journalEntries.bookingText, reference: schema.journalEntries.reference,
+    period: schema.journalEntries.period, fiscal_year: schema.journalEntries.fiscalYear, status: schema.journalEntries.status,
+    source_draft_id: schema.journalEntries.sourceDraftId, source_type: schema.journalEntries.sourceType,
+    source_key: schema.journalEntries.sourceKey, reversed_entry_id: schema.journalEntries.reversedEntryId,
+    created_at: schema.journalEntries.createdAt,
+  }).from(schema.journalEntries).where(and(
+    eq(schema.journalEntries.tenantId, tenantId),
+    eq(schema.journalEntries.id, entryId),
+  )).get() as {
+    id: string; tenant_id: string; entry_number: number; posting_date: string; document_date: string | null;
+    booking_text: string; reference: string | null; period: string; fiscal_year: number; status: string;
+    source_draft_id: string | null; source_type: string; source_key: string | null; reversed_entry_id: string | null; created_at: string;
+  } | undefined;
+  if (!row) return null;
+
+  const lines = drizzle.select({
+    id: schema.journalLines.id, account_number: schema.journalLines.accountNumber,
+    debit_amount: schema.journalLines.debitAmount, credit_amount: schema.journalLines.creditAmount,
+    tax_code: schema.journalLines.taxCode, tax_case_key: schema.journalLines.taxCaseKey,
+    tax_rate: schema.journalLines.taxRate, net_amount: schema.journalLines.netAmount, tax_amount: schema.journalLines.taxAmount,
+    gross_amount: schema.journalLines.grossAmount, country_code: schema.journalLines.countryCode, datev_sachverhalt_ll: schema.journalLines.datevSachverhaltLl,
+    counterparty_vat_id: schema.journalLines.counterpartyVatId, evidence_type: schema.journalLines.evidenceType,
+    evidence_reference: schema.journalLines.evidenceReference, cost_center: schema.journalLines.costCenter,
+    memo: schema.journalLines.memo,
+  }).from(schema.journalLines).where(and(
+    eq(schema.journalLines.tenantId, tenantId),
+    eq(schema.journalLines.entryId, row.id),
+  )).orderBy(asc(schema.journalLines.lineNo)).all() as Array<{
+    id: string; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null;
+    tax_case_key: TaxCaseKey | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null;
+      gross_amount: number | null; country_code: string | null; datev_sachverhalt_ll: string | null; counterparty_vat_id: string | null;
+    evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null;
+  }>;
+
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    entryNumber: row.entry_number,
+    postingDate: row.posting_date,
+    documentDate: row.document_date ?? undefined,
+    bookingText: row.booking_text,
+    reference: row.reference ?? undefined,
+    period: row.period,
+    fiscalYear: row.fiscal_year,
+    status: row.status === 'reversed' ? 'reversed' : 'posted',
+    sourceDraftId: row.source_draft_id ?? undefined,
+    sourceType: row.source_type as JournalEntryEntity['sourceType'],
+    sourceKey: row.source_key ?? undefined,
+    reversedEntryId: row.reversed_entry_id ?? undefined,
+    createdAt: row.created_at,
+    lines: lines.map((line) => ({
+      id: line.id,
+      accountNumber: line.account_number,
+      debitAmount: Number(line.debit_amount || 0),
+      creditAmount: Number(line.credit_amount || 0),
+      taxCode: line.tax_code ?? undefined,
+      taxCaseKey: line.tax_case_key ?? undefined,
+      taxRate: line.tax_rate ?? undefined,
+      netAmount: line.net_amount ?? undefined,
+      taxAmount: line.tax_amount ?? undefined,
+      grossAmount: line.gross_amount ?? undefined,
+      datevSachverhaltLl: line.datev_sachverhalt_ll ?? undefined,
+      countryCode: line.country_code ?? undefined,
+      counterpartyVatId: line.counterparty_vat_id ?? undefined,
+      evidenceType: line.evidence_type ?? undefined,
+      evidenceReference: line.evidence_reference ?? undefined,
+      costCenter: line.cost_center ?? undefined,
+      memo: line.memo ?? undefined,
+    })),
+  };
+}
+
+type ReportJournalLineRow = {
+  account_number: string;
+  posting_date: string;
+  debit_amount: number | null;
+  credit_amount: number | null;
+};
+
+type HgbMappingRow = {
+  account_number: string;
+  /** Persisted rows may use legacy names or one of the report-specific catalog scopes. */
+  statement_type: string;
+  position_key: string;
+  position_label: string;
+  balance_side: 'asset' | 'liability' | null;
+  valid_from: string | null;
+  updated_at: string;
+};
+
+const centsForReport = (value: unknown): number => Math.round(Number(value || 0) * 100);
+const amountForReport = (cents: number): number => cents === 0 ? 0 : cents / 100;
+
+const loadReportJournalLines = (
+  db: Database.Database,
+  tenantId: string,
+  args: { from?: string; to?: string } = {},
+): ReportJournalLineRow[] => {
+  const conditions = [
+    eq(schema.journalLines.tenantId, tenantId),
+    eq(schema.journalEntries.tenantId, tenantId),
+    inArray(schema.journalEntries.status, ['posted', 'reversed']),
+  ];
+  if (args.from) conditions.push(gte(schema.journalEntries.postingDate, args.from));
+  if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
+  return createDrizzle(db).select({
+    account_number: schema.journalLines.accountNumber,
+    posting_date: schema.journalEntries.postingDate,
+    debit_amount: schema.journalLines.debitAmount,
+    credit_amount: schema.journalLines.creditAmount,
+  }).from(schema.journalLines)
+    .innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
+    .where(and(...conditions)).all() as ReportJournalLineRow[];
+};
+
+const loadHgbMappings = (
+  db: Database.Database,
+  tenantId: string,
+  chart: 'SKR03' | 'SKR04',
+  asOfDate?: string,
+): HgbMappingRow[] => {
+  const conditions = [
+    eq(schema.accountMappingsHgb.tenantId, tenantId),
+    eq(schema.accountMappingsHgb.chart, chart),
+  ];
+  const rows = createDrizzle(db).select({
+    account_number: schema.accountMappingsHgb.accountNumber,
+    statement_type: schema.accountMappingsHgb.statementType,
+    position_key: schema.accountMappingsHgb.positionKey,
+    position_label: schema.accountMappingsHgb.positionLabel,
+    balance_side: schema.accountMappingsHgb.balanceSide,
+    valid_from: schema.accountMappingsHgb.validFrom,
+    updated_at: schema.accountMappingsHgb.updatedAt,
+  }).from(schema.accountMappingsHgb).where(and(...conditions)).all() as HgbMappingRow[];
+  const selected = new Map<string, HgbMappingRow>();
+  for (const row of rows) {
+    if (asOfDate && row.valid_from && row.valid_from > asOfDate) continue;
+    const key = `${row.account_number}:${row.statement_type}`;
+    const current = selected.get(key);
+    if (!current) {
+      selected.set(key, row);
+      continue;
+    }
+    const rowDate = row.valid_from ?? '';
+    const currentDate = current.valid_from ?? '';
+    if (rowDate > currentDate || (rowDate === currentDate && row.updated_at > current.updated_at)) selected.set(key, row);
+  }
+  return [...selected.values()];
+};
+
+const aggregateUnmapped = (
+  rows: ReportJournalLineRow[],
+  mappedAccounts: Set<string>,
+  amount: (row: ReportJournalLineRow) => number,
+): Array<{ accountNumber: string; amount: number }> => {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    if (mappedAccounts.has(row.account_number)) continue;
+    totals.set(row.account_number, (totals.get(row.account_number) ?? 0) + amount(row));
+  }
+  return [...totals.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([accountNumber, cents]) => ({ accountNumber, amount: amountForReport(cents) }));
+};
+
 export const getLedgerBalances = (
   db: Database.Database,
-  args: { asOfDate?: string } = {},
+  args: { from?: string; to?: string; asOfDate?: string } = {},
   scope: TenantScope,
 ): LedgerBalanceRow[] => {
   const tenantId = getTenantId(scope);
-  const rows = db
-    .prepare(
-      `
-      SELECT jl.account_number,
-             SUM(jl.debit_amount) as debit_turnover,
-             SUM(jl.credit_amount) as credit_turnover
-      FROM journal_lines jl
-      INNER JOIN journal_entries je ON je.id = jl.entry_id
-      WHERE jl.tenant_id = ?
-        AND je.tenant_id = ?
-        AND je.status = 'posted'
-        AND (? IS NULL OR je.posting_date <= ?)
-      GROUP BY jl.account_number
-      ORDER BY jl.account_number ASC
-    `,
-    )
-    .all(tenantId, tenantId, args.asOfDate ?? null, args.asOfDate ?? null) as Array<{
-    account_number: string;
-    debit_turnover: number;
-    credit_turnover: number;
-  }>;
+  const upperDate = args.to ?? args.asOfDate;
+  const rows = loadReportJournalLines(db, tenantId);
+  const balances = new Map<string, { opening: number; debit: number; credit: number }>();
 
-  return rows.map((row) => {
-    const debit = Number(row.debit_turnover || 0);
-    const credit = Number(row.credit_turnover || 0);
-    return {
-      accountNumber: row.account_number,
-      openingBalance: 0,
-      debitTurnover: round2(debit),
-      creditTurnover: round2(credit),
-      closingBalance: round2(debit - credit),
-    };
-  });
+  for (const row of rows) {
+    if (upperDate && row.posting_date > upperDate) continue;
+    const current = balances.get(row.account_number) ?? { opening: 0, debit: 0, credit: 0 };
+    const debit = centsForReport(row.debit_amount);
+    const credit = centsForReport(row.credit_amount);
+    if (args.from && row.posting_date < args.from) current.opening += debit - credit;
+    else {
+      current.debit += debit;
+      current.credit += credit;
+    }
+    balances.set(row.account_number, current);
+  }
+
+  return [...balances.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([accountNumber, value]) => ({
+    accountNumber,
+    openingBalance: amountForReport(value.opening),
+    debitTurnover: amountForReport(value.debit),
+    creditTurnover: amountForReport(value.credit),
+    closingBalance: amountForReport(value.opening + value.debit - value.credit),
+  }));
 };
 
 export const getSusaReport = (
   db: Database.Database,
-  args: { asOfDate?: string } = {},
+  args: { from?: string; to?: string; asOfDate?: string } = {},
   scope: TenantScope,
 ): {
+  from?: string;
+  to?: string;
+  chart: 'SKR03' | 'SKR04';
   asOfDate: string;
-  rows: LedgerBalanceRow[];
+  rows: Array<LedgerBalanceRow & { mappedTo?: string; hasWarnings?: boolean }>;
   totals: { debit: number; credit: number; balance: number };
+  unmappedAccounts: Array<{ accountNumber: string; amount: number }>;
+  blocking: boolean;
 } => {
   const tenantId = getTenantId(scope);
+  const chart = getAccountingPolicy(db, tenantId).activeChart;
+  const upperDate = args.to ?? args.asOfDate;
   const rows = getLedgerBalances(db, args, scope);
+  // SuSa is a ledger-level account list, not a categorized report. Category
+  // mappings belong to GuV/Bilanz/BWA and must never hide or block accounts in
+  // this statement.
+  const mappings = loadHgbMappings(db, tenantId, chart, upperDate);
+  const mappingByAccount = new Map(mappings.map((mapping) => [mapping.account_number, mapping]));
   const totals = rows.reduce(
     (acc, row) => {
-      acc.debit += row.debitTurnover;
-      acc.credit += row.creditTurnover;
-      acc.balance += row.closingBalance;
+      acc.debit += centsForReport(row.debitTurnover);
+      acc.credit += centsForReport(row.creditTurnover);
+      acc.balance += centsForReport(row.closingBalance);
       return acc;
     },
     { debit: 0, credit: 0, balance: 0 },
   );
-
   return {
-    asOfDate: args.asOfDate ?? new Date().toISOString().slice(0, 10),
-    rows,
+    from: args.from,
+    to: upperDate,
+    chart,
+    asOfDate: upperDate ?? new Date().toISOString().slice(0, 10),
+    rows: rows.map((row) => {
+      const mapping = mappingByAccount.get(row.accountNumber);
+      return {
+        ...row,
+        mappedTo: mapping?.position_key,
+        hasWarnings: false,
+      };
+    }),
     totals: {
-      debit: round2(totals.debit),
-      credit: round2(totals.credit),
-      balance: round2(totals.balance),
+      debit: amountForReport(totals.debit),
+      credit: amountForReport(totals.credit),
+      balance: amountForReport(totals.balance),
     },
+    unmappedAccounts: [],
+    blocking: false,
   };
-};
-
-const ensureDefaultMappings = (db: Database.Database, tenantId: string): void => {
-  const row = db
-    .prepare('SELECT COUNT(*) as c FROM account_mappings_hgb WHERE tenant_id = ?')
-    .get(tenantId) as { c: number };
-  if (row.c > 0) return;
-
-  const accounts = db
-    .prepare('SELECT chart, account_number FROM ledger_accounts ORDER BY chart, account_number')
-    .all() as Array<{ chart: string; account_number: string }>;
-  if (!accounts.length) return;
-
-  const now = new Date().toISOString();
-  const insert = db.prepare(
-    `
-      INSERT INTO account_mappings_hgb
-        (id, tenant_id, chart, account_number, statement_type, position_key, position_label, balance_side, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(tenant_id, chart, account_number, statement_type) DO UPDATE SET
-        position_key = excluded.position_key,
-        position_label = excluded.position_label,
-        balance_side = excluded.balance_side,
-        updated_at = excluded.updated_at
-    `,
-  );
-
-  for (const account of accounts) {
-    const first = account.account_number[0] ?? '';
-    if (['8', '9'].includes(first)) {
-      insert.run(
-        randomUUID(),
-        tenantId,
-        account.chart,
-        account.account_number,
-        'guv',
-        'revenue',
-        'Umsatzerloese',
-        null,
-        now,
-      );
-    } else if (['4', '5', '6', '7'].includes(first)) {
-      insert.run(
-        randomUUID(),
-        tenantId,
-        account.chart,
-        account.account_number,
-        'guv',
-        'expense',
-        'Aufwendungen',
-        null,
-        now,
-      );
-    }
-
-    if (['0', '1'].includes(first)) {
-      insert.run(
-        randomUUID(),
-        tenantId,
-        account.chart,
-        account.account_number,
-        'bilanz',
-        'assets',
-        'Aktiva',
-        'asset',
-        now,
-      );
-    } else if (['2', '3'].includes(first)) {
-      insert.run(
-        randomUUID(),
-        tenantId,
-        account.chart,
-        account.account_number,
-        'bilanz',
-        'liabilities',
-        'Passiva',
-        'liability',
-        now,
-      );
-    }
-  }
 };
 
 export const getGuvReport = (
@@ -1797,138 +1983,558 @@ export const getGuvReport = (
 ): {
   from?: string;
   to?: string;
-  rows: Array<{ positionKey: string; positionLabel: string; amount: number }>;
+  chart: 'SKR03' | 'SKR04';
+  rows: Array<{ positionKey: string; positionLabel: string; amount: number; accountRefs: string[] }>;
   netResult: number;
+  unmappedAccounts: Array<{ accountNumber: string; amount: number }>;
+  blocking: boolean;
 } => {
   const tenantId = getTenantId(scope);
-  ensureDefaultMappings(db, tenantId);
-
-  const rows = db
-    .prepare(
-      `
-      SELECT map.position_key, map.position_label,
-             SUM(jl.credit_amount - jl.debit_amount) as amount
-      FROM journal_lines jl
-      INNER JOIN journal_entries je ON je.id = jl.entry_id
-      INNER JOIN account_mappings_hgb map
-              ON map.tenant_id = jl.tenant_id
-             AND map.account_number = jl.account_number
-             AND map.statement_type = 'guv'
-      WHERE jl.tenant_id = @tenantId
-        AND je.tenant_id = @tenantId
-        AND je.status = 'posted'
-        AND (@from IS NULL OR je.posting_date >= @from)
-        AND (@to IS NULL OR je.posting_date <= @to)
-      GROUP BY map.position_key, map.position_label
-      ORDER BY map.position_key ASC
-    `,
-    )
-    .all({ tenantId, from: args.from ?? null, to: args.to ?? null }) as Array<{
-    position_key: string;
-    position_label: string;
-    amount: number;
-  }>;
-
-  const mapped = rows.map((row) => ({
-    positionKey: row.position_key,
-    positionLabel: row.position_label,
-    amount: round2(Number(row.amount || 0)),
+  const chart = getAccountingPolicy(db, tenantId).activeChart;
+  const sourceRows = loadReportJournalLines(db, tenantId, args);
+  const mappings = loadHgbMappings(db, tenantId, chart, args.to);
+  const guvMappings = new Map(mappings.filter((mapping) => mapping.statement_type === 'guv').map((mapping) => [mapping.account_number, mapping]));
+  const knownAccounts = new Set(mappings.map((mapping) => mapping.account_number));
+  const unmappedAccounts = aggregateUnmapped(sourceRows, knownAccounts, (row) => centsForReport(row.credit_amount) - centsForReport(row.debit_amount));
+  const grouped = new Map<string, { positionKey: string; positionLabel: string; amount: number; accountRefs: Set<string> }>();
+  for (const row of sourceRows) {
+    const mapping = guvMappings.get(row.account_number);
+    if (!mapping) continue;
+    const current = grouped.get(mapping.position_key) ?? { positionKey: mapping.position_key, positionLabel: mapping.position_label, amount: 0, accountRefs: new Set<string>() };
+    current.amount += centsForReport(row.credit_amount) - centsForReport(row.debit_amount);
+    current.accountRefs.add(row.account_number);
+    grouped.set(mapping.position_key, current);
+  }
+  const rows = [...grouped.values()].sort((left, right) => left.positionKey.localeCompare(right.positionKey)).map((row) => ({
+    positionKey: row.positionKey,
+    positionLabel: row.positionLabel,
+    amount: amountForReport(row.amount),
+    accountRefs: [...row.accountRefs].sort(),
   }));
-
-  const revenue = mapped
-    .filter((row) => row.positionKey === 'revenue')
-    .reduce((sum, row) => sum + row.amount, 0);
-  const expense = mapped
-    .filter((row) => row.positionKey === 'expense')
-    .reduce((sum, row) => sum + Math.abs(row.amount), 0);
-
+  const revenue = rows.filter((row) => row.positionKey === 'revenue').reduce((sum, row) => sum + centsForReport(row.amount), 0);
+  const expenses = rows.filter((row) => row.positionKey === 'expense').reduce((sum, row) => sum + centsForReport(row.amount), 0);
   return {
     from: args.from,
     to: args.to,
-    rows: mapped,
-    netResult: round2(revenue - expense),
+    chart,
+    rows,
+    netResult: amountForReport(revenue + expenses),
+    unmappedAccounts,
+    blocking: unmappedAccounts.length > 0,
   };
 };
 
 export const getBilanzReport = (
   db: Database.Database,
-  args: { asOfDate?: string } = {},
+  args: { asOfDate?: string; to?: string } = {},
   scope: TenantScope,
 ): {
+  chart: 'SKR03' | 'SKR04';
   asOfDate: string;
   assets: Array<{ accountNumber: string; amount: number }>;
   liabilities: Array<{ accountNumber: string; amount: number }>;
   totals: { assets: number; liabilities: number; delta: number };
+  unmappedAccounts: Array<{ accountNumber: string; amount: number }>;
+  blocking: boolean;
 } => {
   const tenantId = getTenantId(scope);
-  ensureDefaultMappings(db, tenantId);
-
-  const rows = db
-    .prepare(
-      `
-      SELECT map.balance_side, jl.account_number,
-             SUM(jl.debit_amount - jl.credit_amount) as amount
-      FROM journal_lines jl
-      INNER JOIN journal_entries je ON je.id = jl.entry_id
-      INNER JOIN account_mappings_hgb map
-              ON map.tenant_id = jl.tenant_id
-             AND map.account_number = jl.account_number
-             AND map.statement_type = 'bilanz'
-      WHERE jl.tenant_id = @tenantId
-        AND je.tenant_id = @tenantId
-        AND je.status = 'posted'
-        AND (@asOfDate IS NULL OR je.posting_date <= @asOfDate)
-      GROUP BY map.balance_side, jl.account_number
-      ORDER BY jl.account_number ASC
-    `,
-    )
-    .all({ tenantId, asOfDate: args.asOfDate ?? null }) as Array<{
-    balance_side: 'asset' | 'liability' | null;
-    account_number: string;
-    amount: number;
-  }>;
-
-  const assets = rows
-    .filter((row) => row.balance_side === 'asset')
-    .map((row) => ({ accountNumber: row.account_number, amount: round2(Number(row.amount || 0)) }));
-  const liabilities = rows
-    .filter((row) => row.balance_side === 'liability')
-    .map((row) => ({ accountNumber: row.account_number, amount: round2(Math.abs(Number(row.amount || 0))) }));
-
-  const totalAssets = round2(assets.reduce((sum, row) => sum + row.amount, 0));
-  const totalLiabilities = round2(liabilities.reduce((sum, row) => sum + row.amount, 0));
-
+  const chart = getAccountingPolicy(db, tenantId).activeChart;
+  const upperDate = args.to ?? args.asOfDate;
+  const sourceRows = loadReportJournalLines(db, tenantId, upperDate ? { to: upperDate } : {});
+  const mappings = loadHgbMappings(db, tenantId, chart, upperDate);
+  const balanceMappings = new Map(mappings.filter((mapping) => mapping.statement_type === 'bilanz').map((mapping) => [mapping.account_number, mapping]));
+  const knownAccounts = new Set(mappings.map((mapping) => mapping.account_number));
+  const unmappedAccounts = aggregateUnmapped(sourceRows, knownAccounts, (row) => centsForReport(row.debit_amount) - centsForReport(row.credit_amount));
+  const grouped = new Map<string, { balanceSide: 'asset' | 'liability'; amount: number }>();
+  for (const row of sourceRows) {
+    const mapping = balanceMappings.get(row.account_number);
+    if (!mapping || !mapping.balance_side) continue;
+    const current = grouped.get(row.account_number) ?? { balanceSide: mapping.balance_side, amount: 0 };
+    current.amount += centsForReport(row.debit_amount) - centsForReport(row.credit_amount);
+    grouped.set(row.account_number, current);
+  }
+  const assets = [...grouped.entries()].filter(([, row]) => row.balanceSide === 'asset')
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([accountNumber, row]) => ({ accountNumber, amount: amountForReport(row.amount) }));
+  const liabilities = [...grouped.entries()].filter(([, row]) => row.balanceSide === 'liability')
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([accountNumber, row]) => ({ accountNumber, amount: amountForReport(-row.amount) }));
+  const totalAssets = assets.reduce((sum, row) => sum + centsForReport(row.amount), 0);
+  const totalLiabilities = liabilities.reduce((sum, row) => sum + centsForReport(row.amount), 0);
   return {
-    asOfDate: args.asOfDate ?? new Date().toISOString().slice(0, 10),
+    chart,
+    asOfDate: upperDate ?? new Date().toISOString().slice(0, 10),
     assets,
     liabilities,
     totals: {
-      assets: totalAssets,
-      liabilities: totalLiabilities,
-      delta: round2(totalAssets - totalLiabilities),
+      assets: amountForReport(totalAssets),
+      liabilities: amountForReport(totalLiabilities),
+      delta: amountForReport(totalAssets - totalLiabilities),
     },
+    unmappedAccounts,
+    blocking: unmappedAccounts.length > 0,
+  };
+};
+
+/**
+ * Run every double-entry report through the shared calculation engine.  The
+ * local repository only supplies immutable ledger balances and explicit HGB
+ * mappings; it must not invent report categories from account prefixes.
+ */
+export const getReportingReport = async (
+  db: Database.Database,
+  args: { kind: ReportKind; from?: string; to?: string; asOfDate?: string },
+  scope: TenantScope,
+): Promise<ReportResult<object>> => {
+  const tenantId = getTenantId(scope);
+  const policy = getAccountingPolicy(db, tenantId);
+  const profile = getSettings(db)?.businessReportingProfile;
+  const kind = args.kind.replaceAll('_', '-');
+  const hgbReport = kind === 'hgb-guv' || kind === 'hgb-bilanz';
+  const ledgerReport = kind === 'bwa01' || kind === 'management-guv' || kind === 'eur-ledger-reconciliation';
+  const supportedProfile = profile
+    && profile.jurisdiction === 'DE'
+    && ((profile.legalForm === 'gmbh' && profile.profitDetermination === 'double_entry')
+      || (profile.legalForm === 'sole_proprietor' && profile.profitDetermination === 'eur'));
+  if (!supportedProfile) {
+    throw new Error('REPORTING_PROFILE_REQUIRED');
+  }
+  if (profile.chart && profile.chart !== policy.activeChart) {
+    throw new Error('REPORTING_CHART_MISMATCH');
+  }
+  if (profile.profitDetermination === 'eur' && profile.fiscalYearStart !== '01-01') {
+    throw new Error('REPORTING_PROFILE_INVALID');
+  }
+  if (hgbReport && (profile.legalForm !== 'gmbh' || profile.profitDetermination !== 'double_entry' || !profile.hgbSizeClass)) {
+    throw new Error('REPORTING_PROFILE_REQUIRED');
+  }
+  if (!hgbReport && !ledgerReport) {
+    throw new Error('REPORT_KIND_UNAVAILABLE');
+  }
+  const calculationProfile: ReportingCalculationProfile = {
+    // BWA/management reports are ledger views and remain available for a
+    // valid sole-proprietor EÜR profile; HGB reports are guarded above.
+    size: profile.hgbSizeClass ?? 'micro',
+    fiscalYearStart: profile.fiscalYearStart,
+    chart: profile.chart,
+    currency: 'EUR',
+    hgbGuvMethod: 'gkv',
+  };
+  const ledgerFrom = kind === 'hgb-bilanz' && !args.from && (args.to ?? args.asOfDate)
+    ? fiscalYearRange(
+      fiscalYearForDate(args.to ?? args.asOfDate!, calculationProfile.fiscalYearStart),
+      calculationProfile.fiscalYearStart,
+    ).start
+    : args.from;
+  const reportSpecificStatements: ReportingStatement[] = [
+    'bwa01', 'management-guv', 'hgb-guv', 'hgb-gkv', 'hgb-bilanz', 'hgb-balance', 'eur',
+  ];
+  const reportTo = args.to ?? args.asOfDate ?? (kind === 'hgb-bilanz' ? undefined : new Date().toISOString().slice(0, 10));
+  const mappings = loadHgbMappings(db, tenantId, policy.activeChart, reportTo)
+    // Generic guv/bilanz rows predate the licensed report catalogs. Excluding
+    // them makes legacy-only accounts visible as blocking until overridden.
+    .filter((mapping) => reportSpecificStatements.includes(mapping.statement_type as ReportingStatement))
+    .map((mapping) => ({
+      accountNumber: mapping.account_number,
+      statement: mapping.statement_type as ReportingStatement,
+      position: mapping.position_key,
+      label: mapping.position_label,
+      ...(mapping.balance_side ? { side: mapping.balance_side } : {}),
+    }));
+  const balances = getLedgerBalances(db, { from: ledgerFrom, to: reportTo }, scope);
+  return calculateReport({
+    kind: args.kind,
+    profile: calculationProfile,
+    ledger: { balances: balances.map((balance) => ({
+      accountNumber: balance.accountNumber,
+      openingBalance: balance.openingBalance,
+      debitTurnover: balance.debitTurnover,
+      creditTurnover: balance.creditTurnover,
+      closingBalance: balance.closingBalance,
+    })) },
+    mappings,
+    from: ledgerFrom,
+    to: reportTo,
+    asOfDate: args.asOfDate ?? reportTo,
+  });
+};
+
+const parseJson = <T>(value: string | null | undefined, fallback: T): T => {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+};
+
+type SnapshotDateArgs = {
+  periodFromDate?: unknown;
+  periodToDate?: unknown;
+  periodFrom?: unknown;
+  periodTo?: unknown;
+  from?: unknown;
+  to?: unknown;
+};
+
+const snapshotDate = (args: unknown, key: keyof SnapshotDateArgs): string | undefined => {
+  const value = args && typeof args === 'object' ? (args as SnapshotDateArgs)[key] : undefined;
+  if (typeof value !== 'string') return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return undefined;
+  if (key.toLowerCase().includes('to')) {
+    const [year, month] = value.split('-').map(Number);
+    return `${value}-${String(new Date(Date.UTC(year!, month!, 0)).getUTCDate()).padStart(2, '0')}`;
+  }
+  return `${value}-01`;
+};
+
+const filingKindForReport = (reportType: string): TaxFilingSnapshot['kind'] =>
+  reportType === 'eur' ? 'euer' : reportType === 'e_bilanz' ? 'e_bilanz' : 'unternehmensregister';
+
+const sourceSnapshotForReport = (record: {
+  id: string;
+  reportType: string;
+  args: unknown;
+  payload: unknown;
+}): TaxFilingSnapshot => ({
+  id: record.id,
+  kind: filingKindForReport(record.reportType),
+  periodStart: snapshotDate(record.args, 'periodFromDate')
+    ?? snapshotDate(record.args, 'periodFrom')
+    ?? snapshotDate(record.args, 'from')
+    ?? '',
+  periodEnd: snapshotDate(record.args, 'periodToDate')
+    ?? snapshotDate(record.args, 'periodTo')
+    ?? snapshotDate(record.args, 'to')
+    ?? '',
+  payload: { reportType: record.reportType, args: record.args, payload: record.payload },
+  sourceHash: '',
+  status: 'frozen',
+});
+
+const sourceHashForReport = (record: {
+  id: string;
+  reportType: string;
+  args: unknown;
+  payload: unknown;
+}): string => taxFilingSourceHash(sourceSnapshotForReport(record));
+
+const reportQuality = (payload: unknown): Record<string, unknown> | null => {
+  if (!payload || typeof payload !== 'object') return null;
+  const quality = (payload as Record<string, unknown>).quality;
+  return quality && typeof quality === 'object' ? quality as Record<string, unknown> : null;
+};
+
+const countIncompleteAccounts = (value: unknown): number => {
+  if (Array.isArray(value)) return value.length;
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
+};
+
+const hasEurCatalogProvenance = (payload: Record<string, unknown>): boolean => {
+  const filing = payload.filing;
+  if (!filing || typeof filing !== 'object') return false;
+  const provenance = filing as Record<string, unknown>;
+  const catalog = provenance.catalog;
+  if (!catalog || typeof catalog !== 'object') return false;
+  const catalogRecord = catalog as Record<string, unknown>;
+  if (provenance.kind !== 'euer' || provenance.taxYear !== 2025) return false;
+  if (typeof catalogRecord.id !== 'string' || !catalogRecord.id.trim()) return false;
+  if (typeof catalogRecord.version !== 'string' || !catalogRecord.version.trim()) return false;
+  if (typeof catalogRecord.sourceHash !== 'string' || !/^[a-f0-9]{64}$/i.test(catalogRecord.sourceHash)) return false;
+  if (catalogRecord.delivery !== 'print-form-only' && catalogRecord.delivery !== 'elster-ready') return false;
+  if (typeof catalogRecord.elsterReady !== 'boolean') return false;
+  const lineProvenance = provenance.lineProvenance;
+  if (!Array.isArray(lineProvenance) || lineProvenance.length === 0) return false;
+  return lineProvenance.every((line) => {
+    if (!line || typeof line !== 'object') return false;
+    const row = line as Record<string, unknown>;
+    if (typeof row.lineId !== 'string' || row.lineId.trim().length === 0 || typeof row.exportable !== 'boolean') return false;
+    if (!row.exportable) return true;
+    return typeof row.kennziffer === 'string'
+      && row.kennziffer.trim().length > 0
+      && typeof row.providerPath === 'string'
+      && row.providerPath.trim().length > 0;
+  });
+};
+
+/**
+ * EÜR snapshots are filing inputs, not a best-effort report cache.  Keep the
+ * check here (in addition to the UI) because IPC callers are untrusted.
+ */
+export const assertReportSnapshotFreezable = (input: {
+  reportType: string;
+  payload: unknown;
+}): void => {
+  if (input.reportType !== 'eur') return;
+  const payload = input.payload && typeof input.payload === 'object' ? input.payload as Record<string, unknown> : {};
+  const quality = reportQuality(input.payload);
+  const unmappedAccounts = countIncompleteAccounts(quality?.unmappedAccounts ?? payload.unmappedAccounts);
+  const warnings = typeof quality?.warnings === 'number' && Number.isFinite(quality.warnings) ? quality.warnings : 0;
+  const unclassifiedCount = typeof quality?.unclassifiedCount === 'number' && Number.isFinite(quality.unclassifiedCount)
+    ? quality.unclassifiedCount
+    : typeof payload.unclassifiedCount === 'number' && Number.isFinite(payload.unclassifiedCount)
+      ? payload.unclassifiedCount
+      : 0;
+  const incomplete = quality?.incomplete === true
+    || quality?.mappingStatus === 'blocked'
+    || quality?.mappingStatus === 'warning'
+    || payload.blocking === true
+    || payload.complete === false
+    || unmappedAccounts > 0
+    || warnings > 0
+    || unclassifiedCount > 0;
+  if (incomplete) throw new Error('REPORT_SNAPSHOT_BLOCKED_INCOMPLETE_MAPPING');
+  if (quality && quality.source !== 'live') throw new Error('REPORT_SNAPSHOT_LIVE_SOURCE_REQUIRED');
+  if (!hasEurCatalogProvenance(payload)) throw new Error('REPORT_SNAPSHOT_EUR_PROVENANCE_REQUIRED');
+};
+
+const reportSnapshotFromRow = (row: {
+  id: string;
+  report_type: string;
+  args_json: string;
+  payload_json: string;
+  created_at: string;
+  source_hash: string | null;
+}): DesktopReportSnapshotRecord => ({
+  id: row.id,
+  reportType: row.report_type,
+  args: parseJson(row.args_json, {}),
+  payload: parseJson(row.payload_json, null),
+  createdAt: row.created_at,
+  sourceHash: row.source_hash ?? sourceHashForReport({
+    id: row.id,
+    reportType: row.report_type,
+    args: parseJson(row.args_json, {}),
+    payload: parseJson(row.payload_json, null),
+  }),
+});
+
+/** Immutable report payloads make an exported view reproducible and auditable. */
+export const saveReportSnapshot = (
+  db: Database.Database,
+  input: { reportType: string; args?: unknown; payload: unknown; id?: string; reason?: string },
+  scope: TenantScope,
+): DesktopReportSnapshotRecord => {
+  const tenantId = getTenantId(scope);
+  const reportType = input.reportType.trim();
+  if (!reportType) throw new Error('REPORT_SNAPSHOT_TYPE_REQUIRED');
+  assertReportSnapshotFreezable({ reportType, payload: input.payload });
+  const id = input.id ?? randomUUID();
+  const createdAt = new Date().toISOString();
+  const args = input.args ?? {};
+  const sourceHash = sourceHashForReport({ id, reportType, args, payload: input.payload });
+  createDrizzle(db).insert(schema.reportSnapshots).values({
+    id,
+    tenantId,
+    reportType,
+    argsJson: JSON.stringify(args),
+    payloadJson: JSON.stringify(input.payload),
+    createdAt,
+    sourceHash,
+  }).run();
+  const result = { id, reportType, args, payload: input.payload, createdAt, sourceHash };
+  appendAuditLog(db, {
+    entityType: 'report_snapshot',
+    entityId: id,
+    action: 'freeze',
+    reason: input.reason ?? 'Report snapshot frozen',
+    before: null,
+    after: result,
+    actor: 'pro',
+    ts: createdAt,
+  });
+  return result;
+};
+
+export const listReportSnapshots = (
+  db: Database.Database,
+  scope: TenantScope,
+  reportType?: string,
+): DesktopReportSnapshotRecord[] => {
+  const tenantId = getTenantId(scope);
+  const rows = createDrizzle(db).select({
+    id: schema.reportSnapshots.id,
+    report_type: schema.reportSnapshots.reportType,
+    args_json: schema.reportSnapshots.argsJson,
+    payload_json: schema.reportSnapshots.payloadJson,
+    created_at: schema.reportSnapshots.createdAt,
+    source_hash: schema.reportSnapshots.sourceHash,
+  }).from(schema.reportSnapshots).where(and(
+    eq(schema.reportSnapshots.tenantId, tenantId),
+    ...(reportType ? [eq(schema.reportSnapshots.reportType, reportType)] : []),
+  )).orderBy(desc(schema.reportSnapshots.createdAt), desc(schema.reportSnapshots.id)).all() as Array<{
+    id: string;
+    report_type: string;
+    args_json: string;
+    payload_json: string;
+    created_at: string;
+    source_hash: string | null;
+  }>;
+  return rows.map(reportSnapshotFromRow);
+};
+
+export const getReportSnapshot = (
+  db: Database.Database,
+  snapshotId: string,
+  scope: TenantScope,
+): DesktopReportSnapshotRecord | null => {
+  const tenantId = getTenantId(scope);
+  const row = createDrizzle(db).select({
+    id: schema.reportSnapshots.id,
+    report_type: schema.reportSnapshots.reportType,
+    args_json: schema.reportSnapshots.argsJson,
+    payload_json: schema.reportSnapshots.payloadJson,
+    created_at: schema.reportSnapshots.createdAt,
+    source_hash: schema.reportSnapshots.sourceHash,
+  }).from(schema.reportSnapshots).where(and(
+    eq(schema.reportSnapshots.tenantId, tenantId),
+    eq(schema.reportSnapshots.id, snapshotId),
+  )).get() as {
+    id: string;
+    report_type: string;
+    args_json: string;
+    payload_json: string;
+    created_at: string;
+    source_hash: string | null;
+  } | undefined;
+  return row ? reportSnapshotFromRow(row) : null;
+};
+
+export const getReportMappingHealth = (
+  db: Database.Database,
+  scope: TenantScope,
+  args: { chart?: 'SKR03' | 'SKR04'; statement?: ReportingStatement; asOfDate?: string } = {},
+): MappingHealth => {
+  const tenantId = getTenantId(scope);
+  const activeChart = getAccountingPolicy(db, tenantId).activeChart;
+  if (args.chart && args.chart !== activeChart) throw new Error('REPORT_CHART_MISMATCH');
+  const chart = args.chart ?? activeChart;
+  const canonicalStatement = (statement: string): ReportingStatement | undefined => {
+    if (statement === 'hgb-gkv') return 'hgb-guv';
+    if (statement === 'hgb-balance') return 'hgb-bilanz';
+    if (statement === 'bwa01' || statement === 'management-guv' || statement === 'hgb-guv' || statement === 'hgb-bilanz') return statement;
+    return undefined;
+  };
+  const requestedStatement = args.statement ?? 'management-guv';
+  const requested = canonicalStatement(requestedStatement) ?? requestedStatement;
+  const mappingsByAccount = new Map<string, Set<ReportingStatement>>();
+  for (const mapping of loadHgbMappings(db, tenantId, chart, args.asOfDate)) {
+    const statement = canonicalStatement(mapping.statement_type);
+    if (!statement) continue;
+    const accountMappings = mappingsByAccount.get(mapping.account_number) ?? new Set<ReportingStatement>();
+    accountMappings.add(statement);
+    mappingsByAccount.set(mapping.account_number, accountMappings);
+  }
+  const relevantStatements = requested === 'hgb-bilanz'
+    ? new Set<ReportingStatement>(['hgb-bilanz'])
+    : new Set<ReportingStatement>(['bwa01', 'management-guv', 'hgb-guv']);
+  const rows = loadReportJournalLines(db, tenantId, args.asOfDate ? { to: args.asOfDate } : {});
+  const seenAccounts = new Set(rows.map((row) => row.account_number));
+  const unmappedAccounts = [...seenAccounts].filter((accountNumber) => {
+    const accountMappings = mappingsByAccount.get(accountNumber);
+    const mappedForRequested = accountMappings?.has(requested) ?? false;
+    const hasRelevantMapping = [...(accountMappings ?? [])].some((statement) => relevantStatements.has(statement));
+    // An account already mapped to the other report family must not block this
+    // report. Accounts with no report-specific mapping remain actionable.
+    return !mappedForRequested && (hasRelevantMapping || !accountMappings?.size);
+  }).sort();
+  const warnings = unmappedAccounts.map((accountNumber) => `Konto ${accountNumber} ist keinem Report zugeordnet.`);
+  return {
+    mappedAccounts: seenAccounts.size - unmappedAccounts.length,
+    inferredAccounts: 0,
+    unmappedAccounts,
+    warnings,
+    blocking: unmappedAccounts.length > 0,
+  };
+};
+
+export const upsertReportMappingOverride = (
+  db: Database.Database,
+  input: ReportMappingOverrideInput,
+  scope: TenantScope,
+): ReportingMapping => {
+  const tenantId = getTenantId(scope);
+  const activeChart = getAccountingPolicy(db, tenantId).activeChart;
+  if (input.chart !== activeChart) throw new Error('REPORT_CHART_MISMATCH');
+  const accountNumber = input.accountNumber.trim();
+  const position = input.position.trim();
+  if (!accountNumber || !position) throw new Error('REPORT_MAPPING_REQUIRED');
+  const reportSpecificStatements: ReportingStatement[] = [
+    'bwa01', 'management-guv', 'hgb-guv', 'hgb-gkv', 'hgb-bilanz', 'hgb-balance', 'eur',
+  ];
+  if (!reportSpecificStatements.includes(input.statement)) {
+    throw new Error('REPORT_MAPPING_STATEMENT_REQUIRED');
+  }
+  const catalogStatement = input.statement === 'hgb-gkv' ? 'hgb-guv' : input.statement === 'hgb-balance' ? 'hgb-bilanz' : input.statement;
+  if (catalogStatement !== 'bwa01' && catalogStatement !== 'management-guv' && catalogStatement !== 'hgb-guv' && catalogStatement !== 'hgb-bilanz') {
+    throw new Error('REPORT_MAPPING_STATEMENT_REQUIRED');
+  }
+  const size = getSettings(db)?.businessReportingProfile?.hgbSizeClass ?? 'small';
+  const catalogPosition = listReportMappingPositions(catalogStatement, size, input.asOfDate).find((entry) => entry.key === position);
+  if (!catalogPosition) throw new Error('REPORT_MAPPING_POSITION_NOT_ALLOWED');
+  if (input.side && catalogPosition.side && input.side !== catalogPosition.side) throw new Error('REPORT_MAPPING_SIDE_INVALID');
+  const reason = input.reason?.trim();
+  if (!reason) throw new Error('REPORT_MAPPING_REASON_REQUIRED');
+  const definition = {
+    id: `report-override:${tenantId}:${input.chart}:${accountNumber}:${input.statement}:${input.asOfDate}`,
+    tenantId,
+    chart: input.chart,
+    accountNumber,
+    statementType: input.statement,
+    positionKey: position,
+    positionLabel: input.label?.trim() || position,
+    balanceSide: input.side ?? null,
+    validFrom: input.asOfDate,
+    updatedAt: new Date().toISOString(),
+  } as const;
+  db.transaction(() => {
+    createDrizzle(db).insert(schema.accountMappingsHgb).values(definition)
+      .onConflictDoUpdate({
+        target: [schema.accountMappingsHgb.tenantId, schema.accountMappingsHgb.chart, schema.accountMappingsHgb.accountNumber, schema.accountMappingsHgb.statementType, schema.accountMappingsHgb.validFrom],
+        set: {
+          positionKey: definition.positionKey,
+          positionLabel: definition.positionLabel,
+          balanceSide: definition.balanceSide,
+          validFrom: definition.validFrom,
+          updatedAt: definition.updatedAt,
+        },
+      }).run();
+    appendAuditLog(db, {
+      entityType: 'report_mapping',
+      entityId: definition.id,
+      action: 'override',
+      reason,
+      before: null,
+      after: definition,
+      actor: 'pro',
+    });
+  })();
+  return {
+    accountNumber,
+    statement: input.statement,
+    position,
+    label: definition.positionLabel,
+    ...(input.side ? { side: input.side } : {}),
   };
 };
 
 export const listDatevExports = (db: Database.Database, scope: TenantScope): DatevExportResult[] => {
   const tenantId = getTenantId(scope);
-  const rows = db
-    .prepare(
-      `
-      SELECT id, file_path, record_count, from_date, to_date, created_at
-      FROM datev_exports
-      WHERE tenant_id = ?
-      ORDER BY created_at DESC
-    `,
-    )
-    .all(tenantId) as Array<{
-    id: string;
-    file_path: string;
-    record_count: number;
-    from_date: string | null;
-    to_date: string | null;
-    created_at: string;
-  }>;
+  const rows = createDrizzle(db).select({ id: schema.datevExports.id, file_path: schema.datevExports.filePath,
+    record_count: schema.datevExports.recordCount, from_date: schema.datevExports.fromDate,
+    to_date: schema.datevExports.toDate, created_at: schema.datevExports.createdAt,
+    sha256: schema.datevExports.sha256, byte_size: schema.datevExports.byteSize, encoding: schema.datevExports.encoding,
+    header_version: schema.datevExports.headerVersion, format_version: schema.datevExports.formatVersion,
+    chart: schema.datevExports.chart, source_snapshot_hash: schema.datevExports.sourceSnapshotHash,
+    manifest_json: schema.datevExports.manifestJson, status: schema.datevExports.status,
+    validation_json: schema.datevExports.validationJson }).from(schema.datevExports)
+    .where(eq(schema.datevExports.tenantId, tenantId)).orderBy(desc(schema.datevExports.createdAt)).all() as Array<{
+      id: string; file_path: string; record_count: number; from_date: string | null; to_date: string | null; created_at: string;
+      sha256: string | null; byte_size: number | null; encoding: string | null; header_version: number | null;
+      format_version: number | null; chart: 'SKR03' | 'SKR04' | null; source_snapshot_hash: string | null;
+      manifest_json: string | null; status: string | null; validation_json: string | null;
+    }>;
 
   return rows.map((row) => ({
     id: row.id,
@@ -1937,38 +2543,61 @@ export const listDatevExports = (db: Database.Database, scope: TenantScope): Dat
     fromDate: row.from_date ?? undefined,
     toDate: row.to_date ?? undefined,
     createdAt: row.created_at,
+    sha256: row.sha256 ?? undefined,
+    byteSize: row.byte_size ?? undefined,
+    encoding: row.encoding === 'cp1252' || row.encoding === 'utf8-bom' ? row.encoding : undefined,
+    headerVersion: row.header_version ?? undefined,
+    formatVersion: row.format_version ?? undefined,
+    chart: row.chart ?? undefined,
+    sourceSnapshotHash: row.source_snapshot_hash ?? undefined,
+    manifestJson: row.manifest_json ?? undefined,
+    status: row.status ?? undefined,
+    validationJson: row.validation_json ?? undefined,
   }));
 };
 
 export const insertDatevExport = (
   db: Database.Database,
-  args: { filePath: string; recordCount: number; fromDate?: string; toDate?: string },
+  args: {
+    id?: string;
+    filePath: string;
+    recordCount: number;
+    fromDate?: string;
+    toDate?: string;
+    sha256?: string;
+    byteSize?: number;
+    encoding?: 'cp1252' | 'utf8-bom';
+    headerVersion?: number;
+    formatVersion?: number;
+    chart?: 'SKR03' | 'SKR04';
+    sourceSnapshotHash?: string;
+    manifestJson?: string;
+    status?: string;
+    validationJson?: string;
+  },
   scope: TenantScope,
 ): DatevExportResult => {
   const tenantId = getTenantId(scope);
-  const id = randomUUID();
+  const id = args.id ?? randomUUID();
   const createdAt = new Date().toISOString();
-  db.prepare(
-    `
-      INSERT INTO datev_exports (id, tenant_id, file_path, record_count, from_date, to_date, created_at, meta_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-  ).run(id, tenantId, args.filePath, args.recordCount, args.fromDate ?? null, args.toDate ?? null, createdAt, '{}');
+  db.transaction(() => {
+    createDrizzle(db).insert(schema.datevExports).values({ id, tenantId, filePath: args.filePath, recordCount: args.recordCount,
+      fromDate: args.fromDate ?? null, toDate: args.toDate ?? null, createdAt, metaJson: args.manifestJson ?? '{}',
+      sha256: args.sha256 ?? null, byteSize: args.byteSize ?? null, encoding: args.encoding ?? null,
+      headerVersion: args.headerVersion ?? null, formatVersion: args.formatVersion ?? null, chart: args.chart ?? null,
+      sourceSnapshotHash: args.sourceSnapshotHash ?? null, manifestJson: args.manifestJson ?? null,
+      status: args.status ?? 'validated', validationJson: args.validationJson ?? null }).run();
 
-  appendAuditLog(db, {
-    entityType: 'pro_datev_export',
-    entityId: id,
-    action: 'export',
-    reason: 'DATEV Buchungsstapel generated',
-    before: null,
-    after: {
-      filePath: args.filePath,
-      recordCount: args.recordCount,
-      fromDate: args.fromDate ?? null,
-      toDate: args.toDate ?? null,
-    },
-    actor: 'pro',
-  });
+    appendAuditLog(db, {
+      entityType: 'pro_datev_export',
+      entityId: id,
+      action: 'export',
+      reason: 'DATEV Buchungsstapel generated',
+      before: null,
+      after: { ...args, id },
+      actor: 'pro',
+    });
+  })();
 
   return {
     id,
@@ -1977,6 +2606,16 @@ export const insertDatevExport = (
     fromDate: args.fromDate,
     toDate: args.toDate,
     createdAt,
+    sha256: args.sha256,
+    byteSize: args.byteSize,
+    encoding: args.encoding,
+    headerVersion: args.headerVersion,
+    formatVersion: args.formatVersion,
+    chart: args.chart,
+    sourceSnapshotHash: args.sourceSnapshotHash,
+    manifestJson: args.manifestJson,
+    status: args.status ?? 'validated',
+    validationJson: args.validationJson,
   };
 };
 
@@ -1989,37 +2628,27 @@ export const getAccountingHealth = (
   reversedCount: number;
   unbalancedDraftCount: number;
   unmappedAccountCount: number;
+  unmappedAccounts: string[];
+  blocking: boolean;
   lastDatevExportAt?: string;
 } => {
   const tenantId = getTenantId(scope);
-  const draftCount = (db
-    .prepare('SELECT COUNT(*) as c FROM booking_drafts WHERE tenant_id = ?')
-    .get(tenantId) as { c: number }).c;
-  const postedCount = (db
-    .prepare("SELECT COUNT(*) as c FROM journal_entries WHERE tenant_id = ? AND status = 'posted'")
-    .get(tenantId) as { c: number }).c;
-  const reversedCount = (db
-    .prepare("SELECT COUNT(*) as c FROM journal_entries WHERE tenant_id = ? AND status = 'reversed'")
-    .get(tenantId) as { c: number }).c;
-  const unbalancedDraftCount = (db
-    .prepare("SELECT COUNT(*) as c FROM draft_validation_issues WHERE tenant_id = ? AND code = 'UNBALANCED_ENTRY'")
-    .get(tenantId) as { c: number }).c;
-  const unmappedAccountCount = (db
-    .prepare(
-      `
-        SELECT COUNT(DISTINCT jl.account_number) as c
-        FROM journal_lines jl
-        LEFT JOIN account_mappings_hgb map
-          ON map.tenant_id = jl.tenant_id
-         AND map.account_number = jl.account_number
-        WHERE jl.tenant_id = ?
-          AND map.account_number IS NULL
-      `,
-    )
-    .get(tenantId) as { c: number }).c;
-  const lastDatevExport = db
-    .prepare('SELECT created_at FROM datev_exports WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 1')
-    .get(tenantId) as { created_at: string } | undefined;
+  const drizzle = createDrizzle(db);
+  const draftCount = Number(drizzle.select({ c: count() }).from(schema.bookingDrafts)
+    .where(eq(schema.bookingDrafts.tenantId, tenantId)).get()?.c ?? 0);
+  const postedCount = Number(drizzle.select({ c: count() }).from(schema.journalEntries)
+    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.status, 'posted'))).get()?.c ?? 0);
+  const reversedCount = Number(drizzle.select({ c: count() }).from(schema.journalEntries)
+    .where(and(eq(schema.journalEntries.tenantId, tenantId), eq(schema.journalEntries.status, 'reversed'))).get()?.c ?? 0);
+  const unbalancedDraftCount = Number(drizzle.select({ c: count() }).from(schema.draftValidationIssues)
+    .where(and(eq(schema.draftValidationIssues.tenantId, tenantId), eq(schema.draftValidationIssues.code, 'UNBALANCED_ENTRY'))).get()?.c ?? 0);
+  const activeChart = getAccountingPolicy(db, tenantId).activeChart;
+  const lineAccounts = new Set(loadReportJournalLines(db, tenantId).map((row) => row.account_number));
+  const mappedAccounts = new Set(loadHgbMappings(db, tenantId, activeChart).map((row) => row.account_number));
+  const unmappedAccounts = [...lineAccounts].filter((accountNumber) => !mappedAccounts.has(accountNumber)).sort();
+  const unmappedAccountCount = unmappedAccounts.length;
+  const lastDatevExport = drizzle.select({ created_at: schema.datevExports.createdAt }).from(schema.datevExports)
+    .where(eq(schema.datevExports.tenantId, tenantId)).orderBy(desc(schema.datevExports.createdAt)).limit(1).get() as { created_at: string } | undefined;
 
   return {
     draftCount,
@@ -2027,6 +2656,8 @@ export const getAccountingHealth = (
     reversedCount,
     unbalancedDraftCount,
     unmappedAccountCount,
+    unmappedAccounts,
+    blocking: unmappedAccountCount > 0,
     lastDatevExportAt: lastDatevExport?.created_at,
   };
 };
@@ -2047,38 +2678,28 @@ export const getVatSummary = (
   }>;
 } => {
   const tenantId = getTenantId(scope);
-  const rows = db
-    .prepare(
-      `
-      SELECT
-        jl.tax_case_key,
-        SUM(COALESCE(jl.net_amount, 0)) AS net_amount,
-        SUM(COALESCE(jl.tax_amount, 0)) AS tax_amount,
-        SUM(COALESCE(jl.gross_amount, CASE WHEN jl.debit_amount > 0 THEN jl.debit_amount ELSE jl.credit_amount END)) AS gross_amount,
-        COUNT(*) AS line_count
-      FROM journal_lines jl
-      INNER JOIN journal_entries je ON je.id = jl.entry_id
-      WHERE jl.tenant_id = @tenantId
-        AND je.tenant_id = @tenantId
-        AND je.status = 'posted'
-        AND jl.tax_case_key IS NOT NULL
-        AND (@from IS NULL OR je.posting_date >= @from)
-        AND (@to IS NULL OR je.posting_date <= @to)
-      GROUP BY jl.tax_case_key
-      ORDER BY jl.tax_case_key ASC
-      `,
-    )
-    .all({
-      tenantId,
-      from: args.from ?? null,
-      to: args.to ?? null,
-    }) as Array<{
-    tax_case_key: TaxCaseKey;
-    net_amount: number;
-    tax_amount: number;
-    gross_amount: number;
-    line_count: number;
-  }>;
+  const conditions = [eq(schema.journalLines.tenantId, tenantId), eq(schema.journalEntries.tenantId, tenantId),
+    inArray(schema.journalEntries.status, ['posted', 'reversed']), isNotNull(schema.journalLines.taxCaseKey)];
+  if (args.from) conditions.push(gte(schema.journalEntries.postingDate, args.from));
+  if (args.to) conditions.push(lte(schema.journalEntries.postingDate, args.to));
+  const sourceRows = createDrizzle(db).select({ tax_case_key: schema.journalLines.taxCaseKey,
+    net: schema.journalLines.netAmount, tax: schema.journalLines.taxAmount, gross: schema.journalLines.grossAmount,
+    debit: schema.journalLines.debitAmount, credit: schema.journalLines.creditAmount, status: schema.journalEntries.status })
+    .from(schema.journalLines).innerJoin(schema.journalEntries, eq(schema.journalEntries.id, schema.journalLines.entryId))
+    .where(and(...conditions)).all();
+  const grouped = new Map<string, { tax_case_key: TaxCaseKey; net_amount: number; tax_amount: number; gross_amount: number; line_count: number }>();
+  for (const row of sourceRows) {
+    if (!row.tax_case_key) continue;
+    const current = grouped.get(row.tax_case_key) ?? { tax_case_key: row.tax_case_key as TaxCaseKey, net_amount: 0, tax_amount: 0, gross_amount: 0, line_count: 0 };
+    // Reversal lines persist the negated tax basis. The original entry remains
+    // visible as reversed, so summing stored signed values yields net zero.
+    current.net_amount += Number(row.net ?? 0);
+    current.tax_amount += Number(row.tax ?? 0);
+    current.gross_amount += Number(row.gross ?? (Number(row.debit ?? 0) > 0 ? row.debit : row.credit) ?? 0);
+    current.line_count += 1;
+    grouped.set(row.tax_case_key, current);
+  }
+  const rows = [...grouped.values()].sort((a, b) => a.tax_case_key.localeCompare(b.tax_case_key));
 
   return {
     from: args.from,
@@ -2093,6 +2714,85 @@ export const getVatSummary = (
   };
 };
 
+const resolveDatevBuKeyForPosting = (
+  db: Database.Database,
+  chart: 'SKR03' | 'SKR04',
+  taxCaseKey: string | undefined,
+  postingDate: string,
+): string | undefined => {
+  const normalized = normalizeTaxCaseKey(taxCaseKey);
+  if (!normalized) return undefined;
+  const candidates = listTaxCaseAccountMappings(db, { chart, taxCaseKey: normalized })
+    .filter((mapping) => mapping.role === 'datev_bu')
+    .filter((mapping) => (!mapping.validFrom || mapping.validFrom <= postingDate) && (!mapping.validTo || mapping.validTo >= postingDate))
+    .sort((a, b) => (b.validFrom ?? '').localeCompare(a.validFrom ?? '') || b.updatedAt.localeCompare(a.updatedAt));
+  const key = candidates[0]?.datevBuKey;
+  const taxCase = getTaxCaseByKey(db, normalized);
+  if (!taxCase) throw new Error(`DATEV Steuerfall-Mapping fehlt für ${normalized}.`);
+  if (!key && taxCase && taxCase.mechanism !== 'exempt' && taxCase.mechanism !== 'zero_rate') {
+    throw new Error(`DATEV BU-Schlüssel fehlt für Steuerfall ${normalized} am ${postingDate}.`);
+  }
+  if (key !== undefined && !/^\d{1,4}$/.test(key)) throw new Error(`DATEV BU-Schlüssel ist ungültig für Steuerfall ${normalized}.`);
+  return key;
+};
+
+interface DatevTaxDetails {
+  euLandUstId?: string;
+  euSteuersatz?: number;
+  sachverhaltLl?: string;
+}
+
+/**
+ * DATEV's extended tax fields are not inferred from a BU key. They are built
+ * only from the persisted tax/evidence values on the journal line; incomplete
+ * EU or §13b evidence blocks the complete export instead of emitting a
+ * misleading booking.
+ */
+const resolveDatevTaxDetails = (
+  db: Database.Database,
+  line: JournalLineEntity,
+  taxCaseKey: string | undefined,
+): DatevTaxDetails => {
+  const normalized = normalizeTaxCaseKey(taxCaseKey ?? line.taxCaseKey ?? line.taxCode);
+  if (!normalized) return {};
+  const taxCase = getTaxCaseByKey(db, normalized);
+  if (!taxCase) throw new Error(`DATEV Steuerfall-Mapping fehlt für ${normalized}.`);
+  const euDestinationCases = new Set(['EU_B2C_OSS', 'DE_TRIANGULAR_25B', 'EU_B2B_SERVICE_RC', 'EU_IGL_GOODS_0', 'EU_IGE_GOODS_RC'] as const);
+  const needsEuDestination = euDestinationCases.has(normalized as typeof euDestinationCases extends Set<infer Key> ? Key : never);
+  const details: DatevTaxDetails = {};
+  if (needsEuDestination) {
+    const country = line.countryCode;
+    const vatId = line.counterpartyVatId;
+    if (!country || !/^[A-Z]{2}$/.test(country)) {
+      throw new Error(`DATEV Export blockiert: EU-Land fehlt für ${normalized}.`);
+    }
+    // OSS is a B2C case: the canonical tax case intentionally does not
+    // require a counterparty VAT ID. Other EU cases persist one as evidence.
+    if (taxCase.requiresCounterpartyVatId && (!vatId || !/^[A-Z0-9]+$/.test(vatId))) {
+      throw new Error(`DATEV Export blockiert: EU-USt-IdNr. fehlt für ${normalized}.`);
+    }
+    if (vatId && (vatId.length > 13 || (vatId.length >= 2 && /^[A-Z]{2}/.test(vatId) && !vatId.startsWith(country)))) {
+      throw new Error(`DATEV Export blockiert: EU-USt-IdNr. ist ungültig für ${normalized}.`);
+    }
+    const combinedVatId = !vatId ? country : vatId.startsWith(country) ? vatId : `${country}${vatId}`;
+    if (combinedVatId.length > 15) throw new Error(`DATEV Export blockiert: EU-USt-IdNr. ist zu lang für ${normalized}.`);
+    const rate = Number(line.taxRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate >= 100 || Math.abs(rate * 100 - Math.round(rate * 100)) > 1e-9) {
+      throw new Error(`DATEV Export blockiert: EU-Steuersatz fehlt oder ist ungültig für ${normalized}.`);
+    }
+    details.euLandUstId = combinedVatId;
+    details.euSteuersatz = rate;
+  }
+  if (['DE_RC_13B_DOMESTIC', 'EU_B2B_SERVICE_RC', 'EU_IGE_GOODS_RC', 'NON_EU_SERVICE_RC'].includes(normalized)) {
+    const fact = line.datevSachverhaltLl ?? line.evidenceReference;
+    if (!fact || !/^[1-9]\d{0,2}$/.test(fact)) {
+      throw new Error(`DATEV Export blockiert: Sachverhalt L+L (§13b) fehlt für ${normalized}.`);
+    }
+    details.sachverhaltLl = fact;
+  }
+  return details;
+};
+
 export const buildDatevRows = (
   db: Database.Database,
   args: { from?: string; to?: string } = {},
@@ -2105,76 +2805,109 @@ export const buildDatevRows = (
   gegenkonto: string;
   sollHabenKennzeichen: 'S' | 'H';
   buSchluessel?: string;
+  euLandUstId?: string;
+  euSteuersatz?: number;
+  sachverhaltLl?: string;
   umsatz: number;
 }> => {
-  const tenantId = getTenantId(scope);
-  const params = {
-    tenantId,
-    from: args.from ?? null,
-    to: args.to ?? null,
-  };
-  const pairedRows = db
-    .prepare(
-      `
-      SELECT
-        je.posting_date,
-        je.entry_number,
-        je.booking_text,
-        debit.account_number AS debit_account,
-        credit.account_number AS credit_account,
-        jpp.amount,
-        jpp.datev_bu_key
-      FROM journal_posting_pairs jpp
-      INNER JOIN journal_entries je ON je.id = jpp.entry_id AND je.tenant_id = jpp.tenant_id
-      INNER JOIN journal_lines debit ON debit.id = jpp.debit_line_id AND debit.entry_id = je.id
-      INNER JOIN journal_lines credit ON credit.id = jpp.credit_line_id AND credit.entry_id = je.id
-      WHERE jpp.tenant_id = @tenantId
-        AND je.status = 'posted'
-        AND (@from IS NULL OR je.posting_date >= @from)
-        AND (@to IS NULL OR je.posting_date <= @to)
-      ORDER BY je.posting_date ASC, je.entry_number ASC, jpp.id ASC
-      `,
-    )
-    .all(params) as Array<{
-    posting_date: string;
-    entry_number: number;
-    booking_text: string;
-    debit_account: string;
-    credit_account: string;
-    amount: number;
-    datev_bu_key: string | null;
-  }>;
-
-  if (pairedRows.length > 0) {
-    return pairedRows.map((row) => ({
-      date: row.posting_date,
-      belegfeld1: String(row.entry_number),
-      buchungstext: row.booking_text,
-      konto: row.debit_account,
-      gegenkonto: row.credit_account,
-      sollHabenKennzeichen: 'S' as const,
-      buSchluessel: row.datev_bu_key ?? undefined,
-      umsatz: round2(Number(row.amount || 0)),
-    }));
+  if (!args.from || !args.to || !isIsoDate(args.from) || !isIsoDate(args.to) || args.from > args.to) {
+    throw new Error('DATEV Export benötigt einen gültigen, geschlossenen Zeitraum.');
   }
+  if (periodForDate(args.from) !== periodForDate(args.to)) throw new Error('DATEV Export darf genau eine Buchungsperiode enthalten.');
+  const tenantId = getTenantId(scope);
+  const chart = getActiveChart(db, tenantId);
+  const entries = listDatevJournalEntries(db, { from: args.from, to: args.to }, scope);
+  if (entries.length === 0) return [];
+  const entryIds = entries.map((entry) => entry.id);
+  const storedPairs = createDrizzle(db).select({
+    id: schema.journalPostingPairs.id,
+    entry_id: schema.journalPostingPairs.entryId,
+    debit_line_id: schema.journalPostingPairs.debitLineId,
+    credit_line_id: schema.journalPostingPairs.creditLineId,
+    amount: schema.journalPostingPairs.amount,
+    tax_case_key: schema.journalPostingPairs.taxCaseKey,
+    datev_bu_key: schema.journalPostingPairs.datevBuKey,
+  }).from(schema.journalPostingPairs).where(and(eq(schema.journalPostingPairs.tenantId, tenantId), inArray(schema.journalPostingPairs.entryId, entryIds)))
+    .orderBy(asc(schema.journalPostingPairs.id)).all() as Array<{
+      id: string; entry_id: string; debit_line_id: string; credit_line_id: string; amount: number; tax_case_key: string | null; datev_bu_key: string | null;
+    }>;
+  const byEntry = new Map<string, typeof storedPairs>();
+  for (const pair of storedPairs) byEntry.set(pair.entry_id, [...(byEntry.get(pair.entry_id) ?? []), pair]);
 
-  // Fallback for legacy entries without persisted posting pairs.
-  return listJournalEntries(db, { from: args.from, to: args.to, limit: 100_000, offset: 0 }, scope)
-    .filter((entry) => entry.status === 'posted')
-    .flatMap((entry) => {
-      const debitLines = entry.lines.filter((line) => Number(line.debitAmount || 0) > 0);
-      const creditLines = entry.lines.filter((line) => Number(line.creditAmount || 0) > 0);
-      return debitLines.map((debitLine) => ({
-        date: entry.postingDate,
-        belegfeld1: String(entry.entryNumber),
+  const exportTransaction = db.transaction(() => entries.flatMap((entry) => {
+    validatePostingLinesForDatev(entry.lines);
+    const lines = new Map(entry.lines.map((line) => [line.id, line]));
+    let pairs = [...(byEntry.get(entry.id) ?? [])];
+    if (pairs.length === 0) {
+      const seeds = buildPostingPairs(entry.lines);
+      const debitTotal = round2(entry.lines.reduce((sum, line) => sum + Number(line.debitAmount || 0), 0));
+      const creditTotal = round2(entry.lines.reduce((sum, line) => sum + Number(line.creditAmount || 0), 0));
+      const pairTotal = round2(seeds.reduce((sum, pair) => sum + pair.amount, 0));
+      if (debitTotal <= 0 || debitTotal !== creditTotal || pairTotal !== debitTotal || seeds.length === 0) {
+        throw new Error(`DATEV Export blockiert: Buchung ${entry.entryNumber} ist ungepaart oder unausgeglichen.`);
+      }
+      pairs = seeds.map((pair) => {
+        const id = randomUUID();
+        const datevBuKey = resolveDatevBuKeyForPosting(db, chart, pair.taxCaseKey, entry.postingDate) ?? null;
+        createDrizzle(db).insert(schema.journalPostingPairs).values({ id, tenantId, entryId: entry.id, debitLineId: pair.debitLineId, creditLineId: pair.creditLineId, amount: pair.amount, taxCaseKey: pair.taxCaseKey ?? null, datevBuKey, createdAt: new Date().toISOString() }).run();
+        return { id, entry_id: entry.id, debit_line_id: pair.debitLineId, credit_line_id: pair.creditLineId, amount: pair.amount, tax_case_key: pair.taxCaseKey ?? null, datev_bu_key: datevBuKey };
+      });
+    }
+    // Pair rows are persisted with UUIDs. Sort by the stable journal line
+    // order instead of UUID insertion order so a repeat export is byte-identical.
+    const lineOrder = new Map(entry.lines.map((line, index) => [line.id, index]));
+    pairs.sort((a, b) => (lineOrder.get(a.debit_line_id) ?? Number.MAX_SAFE_INTEGER) - (lineOrder.get(b.debit_line_id) ?? Number.MAX_SAFE_INTEGER)
+      || (lineOrder.get(a.credit_line_id) ?? Number.MAX_SAFE_INTEGER) - (lineOrder.get(b.credit_line_id) ?? Number.MAX_SAFE_INTEGER)
+      || String(a.tax_case_key ?? '').localeCompare(String(b.tax_case_key ?? ''))
+      || String(a.datev_bu_key ?? '').localeCompare(String(b.datev_bu_key ?? ''))
+      || Number(a.amount) - Number(b.amount));
+    const pairTotal = round2(pairs.reduce((sum, pair) => sum + Number(pair.amount || 0), 0));
+    const debitTotal = round2(entry.lines.reduce((sum, line) => sum + Number(line.debitAmount || 0), 0));
+    if (pairTotal !== debitTotal) throw new Error(`DATEV Export blockiert: Persistierte Paare für Buchung ${entry.entryNumber} sind unvollständig.`);
+    const debitPaired = new Map<string, number>();
+    const creditPaired = new Map<string, number>();
+    for (const pair of pairs) {
+      debitPaired.set(pair.debit_line_id, round2((debitPaired.get(pair.debit_line_id) ?? 0) + Number(pair.amount || 0)));
+      creditPaired.set(pair.credit_line_id, round2((creditPaired.get(pair.credit_line_id) ?? 0) + Number(pair.amount || 0)));
+    }
+    for (const line of entry.lines) {
+      const expected = Number(line.debitAmount || 0) > 0 ? debitPaired.get(line.id) : creditPaired.get(line.id);
+      const actual = Number(line.debitAmount || line.creditAmount || 0);
+      if (round2(expected ?? 0) !== round2(actual)) throw new Error(`DATEV Export blockiert: Persistierte Paare für Buchung ${entry.entryNumber} stimmen nicht mit den Buchungszeilen überein.`);
+    }
+    return pairs.map((pair) => {
+      const debit = lines.get(pair.debit_line_id);
+      const credit = lines.get(pair.credit_line_id);
+      const pairAmount = Number(pair.amount);
+      if (!debit || !credit || debit.id === credit.id || debit.accountNumber === credit.accountNumber || !Number.isFinite(pairAmount) || pairAmount <= 0 || Math.abs(pairAmount * 100 - Math.round(pairAmount * 100)) > 1e-9) {
+        throw new Error(`DATEV Export blockiert: Buchung ${entry.entryNumber} enthält ein ungültiges Paar.`);
+      }
+      const persistedBuKey = pair.datev_bu_key;
+      if (persistedBuKey !== null && !/^\d{1,4}$/.test(persistedBuKey)) throw new Error(`DATEV BU-Schlüssel ist ungültig für Buchung ${entry.entryNumber}.`);
+      const taxCaseKey = pair.tax_case_key ?? debit.taxCaseKey ?? credit.taxCaseKey ?? debit.taxCode ?? credit.taxCode;
+      // A posted pair is immutable evidence.  Only legacy pairs without a
+      // persisted BU key may be resolved from the posting-date mapping.
+      const buKey = persistedBuKey?.padStart(4, '0')
+        ?? resolveDatevBuKeyForPosting(db, chart, taxCaseKey, entry.postingDate)?.padStart(4, '0');
+      const debitTaxCase = normalizeTaxCaseKey(debit.taxCaseKey ?? debit.taxCode);
+      const taxLine = debitTaxCase === normalizeTaxCaseKey(taxCaseKey) ? debit : credit;
+      const taxDetails = resolveDatevTaxDetails(db, taxLine, taxCaseKey);
+      return {
+        date: entry.documentDate ?? entry.postingDate,
+        belegfeld1: entry.reference ?? String(entry.entryNumber),
         buchungstext: entry.bookingText,
-        konto: debitLine.accountNumber,
-        gegenkonto: creditLines[0]?.accountNumber ?? '',
+        konto: debit.accountNumber,
+        gegenkonto: credit.accountNumber,
         sollHabenKennzeichen: 'S' as const,
-        buSchluessel: resolveDatevBuKeyForTaxCase(db, getActiveChart(db), debitLine.taxCaseKey ?? debitLine.taxCode),
-        umsatz: round2(debitLine.debitAmount),
-      }));
+        buSchluessel: buKey,
+        ...taxDetails,
+        umsatz: round2(pairAmount),
+      };
     });
+  }));
+  const result = exportTransaction();
+  if (result.length > DATEV_MAX_ROWS) throw new Error(`DATEV Buchungsstapel darf höchstens ${DATEV_MAX_ROWS} Buchungen enthalten.`);
+  return result;
 };
 
 export const ensureProAccountingSeedData = (db: Database.Database, scope: TenantScope): void => {
@@ -2188,33 +2921,20 @@ export const ensureProAccountingSeedData = (db: Database.Database, scope: Tenant
   ensurePeriodExists(db, prevPeriod, Number(prevPeriod.slice(0, 4)), tenantId);
   ensurePeriodExists(db, thisPeriod, now.getFullYear(), tenantId);
 
-  const bankCount = (db
-    .prepare('SELECT COUNT(*) as c FROM bank_transactions WHERE tenant_id = ?')
-    .get(tenantId) as { c: number }).c;
+  const drizzle = createDrizzle(db);
+  const bankCount = Number(drizzle.select({ c: count() }).from(schema.bankTransactions)
+    .where(eq(schema.bankTransactions.tenantId, tenantId)).get()?.c ?? 0);
 
   if (bankCount === 0) {
-    db.prepare(
-      `
-      INSERT INTO bank_transactions (id, tenant_id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, source_transaction_id, created_at, updated_at)
-      SELECT
-        t.id,
-        ?,
-        t.account_id,
-        t.date,
-        t.amount,
-        CASE WHEN t.amount >= 0 THEN 'income' ELSE 'expense' END,
-        t.counterparty,
-        t.purpose,
-        t.linked_invoice_id,
-        t.status,
-        t.id,
-        COALESCE(t.date || 'T00:00:00.000Z', datetime('now')),
-        datetime('now')
-      FROM transactions t
-      `,
-    ).run(tenantId);
+    const sourceTransactions = drizzle.select().from(schema.transactions).where(or(isNull(schema.transactions.deletedAt), eq(schema.transactions.deletedAt, ''))).all();
+    for (const transaction of sourceTransactions) {
+      const createdAt = `${transaction.date}T00:00:00.000Z`;
+      drizzle.insert(schema.bankTransactions).values({ id: transaction.id, tenantId, accountId: transaction.accountId,
+        date: transaction.date, amount: transaction.amount, type: Number(transaction.amount) >= 0 ? 'income' : 'expense',
+        counterparty: transaction.counterparty, purpose: transaction.purpose, linkedInvoiceId: transaction.linkedInvoiceId,
+        status: transaction.status, sourceTransactionId: transaction.id, createdAt, updatedAt: createdAt }).onConflictDoNothing().run();
+    }
   }
 
   seedAccountKeywords(db, scope);
-  ensureDefaultMappings(db, tenantId);
 };

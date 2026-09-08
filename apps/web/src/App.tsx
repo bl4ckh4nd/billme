@@ -51,7 +51,7 @@ const fetchLiteSession = async (baseUrl: string, token: string) => {
   if (!response.ok) {
     const message = payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string'
       ? payload.message
-      : `Request failed with status ${response.status}`;
+      : `Anfrage fehlgeschlagen (HTTP ${response.status}).`;
     throw new Error(message);
   }
   return sessionInfoSchema.parse(payload);
@@ -77,8 +77,9 @@ const DesktopShell: React.FC<{
     const runtime: DesktopRendererRuntime = {
       shell: 'web',
       product: 'lite',
-      navigation: ['dashboard', 'clients', 'documents'],
+      navigation: ['dashboard', 'clients', 'documents', 'finance'],
       onLogout,
+      validateVatId: api.validateVatId,
     };
 
     let cancelled = false;
@@ -108,10 +109,10 @@ const DesktopShell: React.FC<{
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 py-10 text-slate-50">
         <div className="w-full max-w-xl rounded-3xl border border-red-500/30 bg-slate-900/90 p-6 shadow-2xl shadow-black/30">
-          <h1 className="text-xl font-semibold">Billme Lite Web shell failed to start</h1>
+          <h1 className="text-xl font-semibold">Billme Lite konnte im Browser nicht gestartet werden</h1>
           <p className="mt-3 text-sm text-slate-300">{mountError}</p>
           <Button className="mt-5" onClick={onLogout}>
-            Back to login
+            Zur Anmeldung
           </Button>
         </div>
       </main>
@@ -123,7 +124,7 @@ const DesktopShell: React.FC<{
 
 export default function App() {
   const authClient = React.useMemo(() => createServerApiClient(DEFAULT_API_URL), []);
-  const [health, setHealth] = React.useState<string>('Checking server...');
+  const [health, setHealth] = React.useState<string>('Server wird geprüft ...');
   const [capabilities, setCapabilities] = React.useState<string[]>([]);
   const [bootstrapReady, setBootstrapReady] = React.useState(false);
   const [loadingSession, setLoadingSession] = React.useState(true);
@@ -136,7 +137,7 @@ export default function App() {
   const handleLogout = React.useCallback(() => {
     clearStoredSession();
     setSession(null);
-    setMessage('You have been signed out.');
+    setMessage('Du wurdest abgemeldet.');
   }, []);
 
   React.useEffect(() => {
@@ -215,15 +216,15 @@ export default function App() {
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
         <section className="rounded-3xl border border-white/10 bg-white/5 p-8 shadow-2xl shadow-black/25">
           <p className="mb-3 text-sm font-semibold uppercase tracking-[0.25em] text-emerald-300">Billme Lite Web</p>
-          <h1 className="text-4xl font-semibold">Browser shell for the lite product</h1>
+          <h1 className="text-4xl font-semibold">Billme Lite im Browser</h1>
           <p className="mt-3 max-w-2xl text-sm text-slate-300">
-            Shared renderer, shared billing contracts, and authenticated HTTP transport backed by the new server API.
+            Arbeite mit dem Lite-Arbeitsbereich über eine Anmeldung und die Server-API.
           </p>
         </section>
 
         <section className="grid gap-6 md:grid-cols-2">
           <div className="rounded-3xl border border-white/10 bg-slate-900/80 p-6">
-            <h2 className="text-lg font-semibold">Backend status</h2>
+            <h2 className="text-lg font-semibold">Serverstatus</h2>
             <p className="mt-3 text-sm text-slate-300">API URL: {DEFAULT_API_URL}</p>
             <p className="mt-2 text-sm text-slate-200">{health}</p>
             <div className="mt-4 flex flex-wrap gap-2">
@@ -236,20 +237,20 @@ export default function App() {
           </div>
 
           <div className="rounded-3xl border border-white/10 bg-slate-900/80 p-6">
-            <h2 className="text-lg font-semibold">{bootstrapReady ? 'Bootstrap lite owner' : 'Login'}</h2>
+            <h2 className="text-lg font-semibold">{bootstrapReady ? 'Lite-Konto einrichten' : 'Anmelden'}</h2>
             <div className="mt-4 grid gap-3">
               {bootstrapReady ? (
-                <Input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Full name" />
+                <Input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Vollständiger Name" />
               ) : null}
-              <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" />
+              <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="E-Mail" />
               <Input
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                placeholder="Password"
+                placeholder="Passwort"
               />
               <Button onClick={bootstrapReady ? handleBootstrap : handleLogin}>
-                {bootstrapReady ? 'Create owner account' : 'Open lite workspace'}
+                {bootstrapReady ? 'Konto anlegen' : 'Lite-Arbeitsbereich öffnen'}
               </Button>
               {message ? <p className="text-sm text-slate-300">{message}</p> : null}
             </div>

@@ -1,11 +1,38 @@
+export type ReportTabId = 'eur' | 'susa' | 'bwa01' | 'management_guv' | 'hgb_guv' | 'bilanz';
+export type ReportProfile = 'all' | 'standard' | 'management' | 'tax';
+export type ReportPeriodPreset = 'current' | 'ytd' | 'prev_year';
+
+export interface BusinessReportingProfile {
+  legalForm: 'sole_proprietor' | 'gmbh';
+  profitDetermination: 'eur' | 'double_entry';
+  fiscalYearStart?: string;
+  chart?: 'SKR03' | 'SKR04';
+}
+
 export interface ReportFilterState {
   chart: 'SKR03' | 'SKR04';
-  mandantId: string;
   asOfDate: string;
   periodFrom?: string;
   periodTo?: string;
+  /** Exact boundaries are used for fiscal years that do not start on the first day of a month. */
+  periodFromDate?: string;
+  periodToDate?: string;
   compareMode: 'none' | 'prev_period' | 'prev_year';
   includeDrafts: boolean;
+  /** Convenience period selector; explicit date/month boundaries remain authoritative. */
+  periodPreset?: ReportPeriodPreset;
+  businessReportingProfile?: BusinessReportingProfile;
+}
+
+export interface ReportQuality {
+  generatedAt: string;
+  source: 'mock' | 'live';
+  /** Reports with unresolved mappings must not be treated as accounting truth. */
+  unmappedAccounts?: number | ReportUnmappedAccount[];
+  warnings: number;
+  state?: 'preview' | 'frozen';
+  mappingStatus?: 'healthy' | 'warning' | 'blocked';
+  mappingNotes?: string[];
 }
 
 export interface SusaRow {
@@ -36,6 +63,9 @@ export interface SusaReport {
     warnings: number;
     generatedAt: string;
     source: 'mock' | 'live';
+    state?: 'preview' | 'frozen';
+    mappingStatus?: 'healthy' | 'warning' | 'blocked';
+    mappingNotes?: string[];
   };
 }
 
@@ -59,21 +89,77 @@ export interface GuvReport {
     result: number;
   };
   quality: {
-    unmappedAccounts: number;
+    unmappedAccounts: ReportUnmappedAccount[];
     warnings: number;
     generatedAt: string;
     source: 'mock' | 'live';
+    state?: 'preview' | 'frozen';
+    mappingStatus?: 'healthy' | 'warning' | 'blocked';
+    mappingNotes?: string[];
   };
+  filing?: ReportFilingProvenance;
+}
+
+export interface EurCashClassification {
+  id?: string;
+  sourceType: 'transaction' | 'invoice';
+  sourceId: string;
+  taxYear: number;
+  eurLineId?: string;
+  excluded: boolean;
+  vatMode: 'none' | 'default';
+  vatRate?: number;
+  note?: string;
+  updatedAt?: string;
+}
+
+export interface EurCashItem {
+  sourceType: 'transaction' | 'invoice';
+  sourceId: string;
+  date: string;
+  amountGross: number;
+  amountNet: number;
+  flowType: 'income' | 'expense';
+  counterparty: string;
+  purpose: string;
+  vatWarning?: string;
+  kind?: 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through';
+  splits?: Array<{ amountNet: number; deductibility?: 'deductible' | 'non-deductible'; lineId?: string; reason: string }>;
+  classification?: EurCashClassification;
+}
+
+export interface ReportFilingProvenance {
+  kind: 'euer';
+  taxYear: number;
+  catalog: {
+    id: string;
+    version: string;
+    sourceHash: string;
+    delivery: 'print-form-only' | 'elster-ready';
+    elsterReady: boolean;
+  };
+  lineProvenance: Array<{ lineId: string; kennziffer?: string; providerPath?: string; exportable: boolean }>;
+}
+
+export interface ReportUnmappedAccount {
+  accountNumber: string;
+  amount: number;
 }
 
 export interface BalanceSheetPreviewLine {
   id: string;
+  /** Catalog position key from the authoritative HGB report. */
+  position?: string;
   code: string;
   label: string;
   amount: number;
   level: number;
   side: 'aktiva' | 'passiva';
+  /** Authoritative account references supplied by the report adapter. */
+  accountRefs?: string[];
   isSubtotal?: boolean;
+  kind?: 'heading' | 'line' | 'subtotal' | 'result';
+  parentPosition?: string;
 }
 
 export interface BalanceSheetPreview {
@@ -89,14 +175,68 @@ export interface BalanceSheetPreview {
     notes: string[];
     generatedAt: string;
     source: 'mock' | 'live';
+    state?: 'preview' | 'frozen';
+    mappingStatus?: 'healthy' | 'warning' | 'blocked';
+    mappingNotes?: string[];
+    unmappedAccounts?: ReportUnmappedAccount[];
   };
 }
+
+export interface ReportExportRequest {
+  report: ReportTabId;
+  filters: ReportFilterState;
+  format: 'pdf' | 'csv';
+}
+
+export interface ReportExportResult {
+  format: 'pdf' | 'csv';
+  fileName?: string;
+  content?: string;
+  path?: string;
+}
+
+export const REPORT_TABS: ReadonlyArray<{ id: ReportTabId; label: string; description: string }> = [
+  { id: 'eur', label: 'EÜR', description: 'Einnahmenüberschussrechnung' },
+  { id: 'susa', label: 'SuSa', description: 'Summen- und Saldenliste' },
+  { id: 'bwa01', label: 'BWA01', description: 'Betriebswirtschaftliche Auswertung' },
+  { id: 'management_guv', label: 'Management-GuV', description: 'Interne Ergebnisrechnung' },
+  { id: 'hgb_guv', label: 'HGB-GuV', description: 'Gewinn- und Verlustrechnung nach HGB' },
+  { id: 'bilanz', label: 'Bilanz', description: 'Bilanz nach HGB' },
+];
+
+export const reportTabsForProfile = (profile: ReportProfile): ReportTabId[] => {
+  if (profile === 'management') return ['bwa01', 'management_guv', 'susa'];
+  if (profile === 'tax') return ['eur', 'hgb_guv', 'bilanz', 'susa'];
+  if (profile === 'standard') return ['susa', 'hgb_guv', 'bilanz'];
+  return REPORT_TABS.map((tab) => tab.id);
+};
+
+/** Fail closed when onboarding has not supplied the canonical legal/reporting profile. */
+export const reportTabsForBusinessProfile = (profile?: BusinessReportingProfile): ReportTabId[] => {
+  if (!profile) return ['susa'];
+  if (profile.legalForm === 'sole_proprietor' && profile.profitDetermination === 'eur') {
+    return ['eur', 'susa', 'bwa01', 'management_guv'];
+  }
+  if (profile.legalForm === 'gmbh' && profile.profitDetermination === 'double_entry') {
+    return ['susa', 'bwa01', 'management_guv', 'hgb_guv', 'bilanz'];
+  }
+  return ['susa'];
+};
 
 export interface ReportDrilldownSelection {
   reportType: 'susa' | 'guv' | 'bilanz';
   targetId: string;
   targetLabel: string;
   accountNumbers: string[];
+  from?: string;
+  to?: string;
+}
+
+export type ReportDrilldownSourceType = 'bank_transaction' | 'invoice' | 'incoming_invoice' | 'receipt' | 'payment' | 'journal_entry';
+
+export interface ReportDrilldownSource {
+  sourceType: ReportDrilldownSourceType;
+  sourceId: string;
 }
 
 export interface ReportDrilldownEntry {
@@ -104,6 +244,9 @@ export interface ReportDrilldownEntry {
   date: string;
   bookingText: string;
   reference?: string;
+  journalEntryId: string;
+  sourceType: ReportDrilldownSourceType;
+  sourceId: string;
   transactionId?: string;
   accountNumber: string;
   debit: number;

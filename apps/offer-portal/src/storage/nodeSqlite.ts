@@ -1,396 +1,281 @@
-import Database from 'better-sqlite3';
+import Database from "better-sqlite3";
+import { and, desc, eq, isNull, lt } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import type {
   CustomerAccessTokenRecord,
   DecisionRecord,
   OfferStore,
   PortalDocumentKind,
   PortalDocumentListItem,
-} from './types';
+} from "./types";
+import { ensurePortalSchema } from "./legacySqliteBridge";
+import * as schema from "./schema";
 
-const documentIdFromTokenHash = (tokenHash: string): string => `d${tokenHash.slice(0, 31)}`;
-
-const bootstrapSql = `
-  CREATE TABLE IF NOT EXISTS offers (
-    token_hash TEXT PRIMARY KEY,
-    published_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    snapshot_json TEXT NOT NULL,
-    pdf_key TEXT,
-    decision_json TEXT
-  );
-  CREATE TABLE IF NOT EXISTS portal_documents (
-    token_hash TEXT PRIMARY KEY,
-    token_value TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL CHECK(kind IN ('offer', 'invoice')),
-    customer_ref TEXT NOT NULL,
-    customer_label TEXT,
-    published_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    snapshot_json TEXT NOT NULL,
-    pdf_key TEXT,
-    decision_json TEXT
-  );
-  CREATE TABLE IF NOT EXISTS customer_access_tokens (
-    token_hash TEXT PRIMARY KEY,
-    customer_ref TEXT NOT NULL,
-    customer_label TEXT,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    revoked_at TEXT
-  );
-  CREATE INDEX IF NOT EXISTS idx_portal_docs_customer_ref_pub
-    ON portal_documents(customer_ref, published_at DESC);
-  CREATE INDEX IF NOT EXISTS idx_customer_tokens_customer_ref
-    ON customer_access_tokens(customer_ref);
-`;
-
-const mapPortalDocRow = (row: {
-  token_hash: string;
-  kind: string;
-  token_value: string;
-  published_at: string;
-  expires_at: string;
-  customer_ref: string;
-  customer_label: string | null;
-  snapshot_json: string;
-  pdf_key: string | null;
-  decision_json: string | null;
-}): PortalDocumentListItem => ({
-  documentId: row.token_value,
-  tokenHash: row.token_hash,
+const documentIdFromTokenHash = (tokenHash: string): string =>
+  `d${tokenHash.slice(0, 31)}`;
+const parseDecision = (value: string | null): DecisionRecord | null =>
+  value ? (JSON.parse(value) as DecisionRecord) : null;
+const mapPortalDocRow = (
+  row: typeof schema.portalDocuments.$inferSelect,
+): PortalDocumentListItem => ({
+  documentId: row.tokenValue,
+  tokenHash: row.tokenHash,
   kind: row.kind as PortalDocumentKind,
-  publishedAt: row.published_at,
-  expiresAt: row.expires_at,
-  customerRef: row.customer_ref,
-  customerLabel: row.customer_label ?? null,
-  snapshotJson: JSON.parse(row.snapshot_json),
-  pdfKey: row.pdf_key ?? null,
-  decision: row.decision_json ? (JSON.parse(row.decision_json) as DecisionRecord) : null,
+  publishedAt: row.publishedAt,
+  expiresAt: row.expiresAt,
+  customerRef: row.customerRef,
+  customerLabel: row.customerLabel ?? null,
+  snapshotJson: JSON.parse(row.snapshotJson),
+  pdfKey: row.pdfKey ?? null,
+  decision: parseDecision(row.decisionJson),
 });
 
 export const createNodeSqliteOfferStore = (dbPath: string): OfferStore => {
-  const db = new Database(dbPath);
-  db.exec(bootstrapSql);
-  db.prepare("UPDATE portal_documents SET token_value = 'd' || substr(token_hash, 1, 31)").run();
+  const rawDb = new Database(dbPath);
+  rawDb.pragma("foreign_keys = ON");
+  ensurePortalSchema(rawDb);
+  const db = drizzle(rawDb, { schema });
+
+  const findDocument = (tokenHash: string) =>
+    db
+      .select()
+      .from(schema.portalDocuments)
+      .where(eq(schema.portalDocuments.tokenHash, tokenHash))
+      .get();
+  const findOffer = (tokenHash: string) =>
+    db
+      .select()
+      .from(schema.offers)
+      .where(eq(schema.offers.tokenHash, tokenHash))
+      .get();
+  const setDecision = (
+    tokenHash: string,
+    decision: DecisionRecord,
+  ): DecisionRecord => {
+    const existing = findOffer(tokenHash);
+    if (!existing) throw new Error("not found");
+    if (existing.decisionJson)
+      return JSON.parse(existing.decisionJson) as DecisionRecord;
+    const decisionJson = JSON.stringify(decision);
+    db.update(schema.offers)
+      .set({ decisionJson })
+      .where(eq(schema.offers.tokenHash, tokenHash))
+      .run();
+    db.update(schema.portalDocuments)
+      .set({ decisionJson })
+      .where(
+        and(
+          eq(schema.portalDocuments.tokenHash, tokenHash),
+          eq(schema.portalDocuments.kind, "offer"),
+        ),
+      )
+      .run();
+    return decision;
+  };
 
   return {
-    upsertOffer: async (offer) => {
-      const documentId = offer.documentId ?? documentIdFromTokenHash(offer.tokenHash);
-      db.prepare(
-        `
-          INSERT INTO offers (token_hash, published_at, expires_at, snapshot_json, pdf_key, decision_json)
-          VALUES (@tokenHash, @publishedAt, @expiresAt, @snapshotJson, @pdfKey, @decisionJson)
-          ON CONFLICT(token_hash) DO UPDATE SET
-            published_at=excluded.published_at,
-            expires_at=excluded.expires_at,
-            snapshot_json=excluded.snapshot_json,
-            pdf_key=excluded.pdf_key,
-            decision_json=excluded.decision_json
-        `,
-      ).run({
+    async upsertOffer(offer) {
+      const documentId =
+        offer.documentId ?? documentIdFromTokenHash(offer.tokenHash);
+      const values = {
         tokenHash: offer.tokenHash,
         publishedAt: offer.publishedAt,
         expiresAt: offer.expiresAt,
         snapshotJson: JSON.stringify(offer.snapshotJson ?? null),
         pdfKey: offer.pdfKey ?? null,
         decisionJson: offer.decision ? JSON.stringify(offer.decision) : null,
-      });
-      const customerRef = offer.customerRef ?? `anon:${offer.tokenHash.slice(0, 16)}`;
-      db.prepare(
-        `
-          INSERT INTO portal_documents (
-            token_hash, token_value, kind, customer_ref, customer_label, published_at, expires_at, snapshot_json, pdf_key, decision_json
-          ) VALUES (
-            @tokenHash, @documentId, 'offer', @customerRef, @customerLabel, @publishedAt, @expiresAt, @snapshotJson, @pdfKey, @decisionJson
-          )
-          ON CONFLICT(token_hash) DO UPDATE SET
-            token_value=excluded.token_value,
-            customer_ref=excluded.customer_ref,
-            customer_label=excluded.customer_label,
-            published_at=excluded.published_at,
-            expires_at=excluded.expires_at,
-            snapshot_json=excluded.snapshot_json,
-            pdf_key=excluded.pdf_key,
-            decision_json=excluded.decision_json
-        `,
-      ).run({
+      };
+      db.insert(schema.offers)
+        .values(values)
+        .onConflictDoUpdate({ target: schema.offers.tokenHash, set: values })
+        .run();
+      const docValues = {
         tokenHash: offer.tokenHash,
-        documentId,
-        customerRef,
+        tokenValue: documentId,
+        kind: "offer",
+        customerRef:
+          offer.customerRef ?? `anon:${offer.tokenHash.slice(0, 16)}`,
         customerLabel: offer.customerLabel ?? null,
         publishedAt: offer.publishedAt,
         expiresAt: offer.expiresAt,
         snapshotJson: JSON.stringify(offer.snapshotJson ?? null),
         pdfKey: offer.pdfKey ?? null,
         decisionJson: offer.decision ? JSON.stringify(offer.decision) : null,
-      });
+      } as const;
+      db.insert(schema.portalDocuments)
+        .values(docValues)
+        .onConflictDoUpdate({
+          target: schema.portalDocuments.tokenHash,
+          set: { ...docValues, tokenHash: undefined },
+        })
+        .run();
     },
-    upsertInvoice: async (invoice) => {
-      const documentId = invoice.documentId ?? documentIdFromTokenHash(invoice.tokenHash);
-      db.prepare(
-        `
-          INSERT INTO portal_documents (
-            token_hash, token_value, kind, customer_ref, customer_label, published_at, expires_at, snapshot_json, pdf_key, decision_json
-          ) VALUES (
-            @tokenHash, @tokenValue, 'invoice', @customerRef, @customerLabel, @publishedAt, @expiresAt, @snapshotJson, @pdfKey, NULL
-          )
-          ON CONFLICT(token_hash) DO UPDATE SET
-            token_value=excluded.token_value,
-            customer_ref=excluded.customer_ref,
-            customer_label=excluded.customer_label,
-            published_at=excluded.published_at,
-            expires_at=excluded.expires_at,
-            snapshot_json=excluded.snapshot_json,
-            pdf_key=excluded.pdf_key,
-            decision_json=NULL
-        `,
-      ).run({
+    async upsertInvoice(invoice) {
+      const documentId =
+        invoice.documentId ?? documentIdFromTokenHash(invoice.tokenHash);
+      const values = {
         tokenHash: invoice.tokenHash,
         tokenValue: documentId,
+        kind: "invoice",
         customerRef: invoice.customerRef,
         customerLabel: invoice.customerLabel ?? null,
         publishedAt: invoice.publishedAt,
         expiresAt: invoice.expiresAt,
         snapshotJson: JSON.stringify(invoice.snapshotJson ?? null),
         pdfKey: invoice.pdfKey ?? null,
-      });
+        decisionJson: null,
+      } as const;
+      db.insert(schema.portalDocuments)
+        .values(values)
+        .onConflictDoUpdate({
+          target: schema.portalDocuments.tokenHash,
+          set: { ...values, tokenHash: undefined },
+        })
+        .run();
     },
-    getOfferByTokenHash: async (tokenHash) => {
-      const row = db
-        .prepare(
-          `SELECT o.token_hash, d.token_value, o.published_at, o.expires_at, o.snapshot_json, o.pdf_key, o.decision_json, d.customer_ref, d.customer_label
-           FROM offers o
-           LEFT JOIN portal_documents d ON d.token_hash = o.token_hash
-           WHERE o.token_hash = ?`,
-        )
-        .get(tokenHash) as
-        | {
-            token_hash: string;
-            token_value: string | null;
-            published_at: string;
-            expires_at: string;
-            snapshot_json: string;
-            pdf_key: string | null;
-            decision_json: string | null;
-            customer_ref: string | null;
-            customer_label: string | null;
-          }
-        | undefined;
-
-      if (!row) return null;
+    async getOfferByTokenHash(tokenHash) {
+      const offer = findOffer(tokenHash);
+      if (!offer) return null;
+      const doc = findDocument(tokenHash);
       return {
-        tokenHash: row.token_hash,
-        documentId: row.token_value ?? documentIdFromTokenHash(row.token_hash),
-        publishedAt: row.published_at,
-        expiresAt: row.expires_at,
-        snapshotJson: JSON.parse(row.snapshot_json),
-        pdfKey: row.pdf_key ?? null,
-        customerRef: row.customer_ref ?? undefined,
-        customerLabel: row.customer_label ?? null,
-        decision: row.decision_json ? (JSON.parse(row.decision_json) as DecisionRecord) : null,
+        tokenHash: offer.tokenHash,
+        documentId: doc?.tokenValue ?? documentIdFromTokenHash(tokenHash),
+        publishedAt: offer.publishedAt,
+        expiresAt: offer.expiresAt,
+        snapshotJson: JSON.parse(offer.snapshotJson),
+        pdfKey: offer.pdfKey ?? null,
+        customerRef: doc?.customerRef,
+        customerLabel: doc?.customerLabel ?? null,
+        decision: parseDecision(offer.decisionJson),
       };
     },
-    getInvoiceByTokenHash: async (tokenHash) => {
-      const row = db
-        .prepare(
-          `SELECT token_hash, token_value, published_at, expires_at, snapshot_json, pdf_key, customer_ref, customer_label
-           FROM portal_documents WHERE token_hash = ? AND kind = 'invoice'`,
+    async getInvoiceByTokenHash(tokenHash) {
+      const doc = db
+        .select()
+        .from(schema.portalDocuments)
+        .where(
+          and(
+            eq(schema.portalDocuments.tokenHash, tokenHash),
+            eq(schema.portalDocuments.kind, "invoice"),
+          ),
         )
-        .get(tokenHash) as
-        | {
-            token_hash: string;
-            token_value: string;
-            published_at: string;
-            expires_at: string;
-            snapshot_json: string;
-            pdf_key: string | null;
-            customer_ref: string;
-            customer_label: string | null;
-          }
-        | undefined;
-      if (!row) return null;
+        .get();
+      if (!doc) return null;
       return {
-        tokenHash: row.token_hash,
-        documentId: row.token_value,
-        publishedAt: row.published_at,
-        expiresAt: row.expires_at,
-        snapshotJson: JSON.parse(row.snapshot_json),
-        pdfKey: row.pdf_key ?? null,
-        customerRef: row.customer_ref,
-        customerLabel: row.customer_label ?? null,
+        tokenHash: doc.tokenHash,
+        documentId: doc.tokenValue,
+        publishedAt: doc.publishedAt,
+        expiresAt: doc.expiresAt,
+        snapshotJson: JSON.parse(doc.snapshotJson),
+        pdfKey: doc.pdfKey ?? null,
+        customerRef: doc.customerRef,
+        customerLabel: doc.customerLabel ?? null,
       };
     },
-    getDocumentById: async (documentId) => {
+    async getDocumentById(documentId) {
       const row = db
-        .prepare(
-          `SELECT token_hash, kind, token_value, published_at, expires_at, customer_ref, customer_label, snapshot_json, pdf_key, decision_json
-           FROM portal_documents WHERE token_value = ?`,
-        )
-        .get(documentId) as
-        | {
-            token_hash: string;
-            kind: string;
-            token_value: string;
-            published_at: string;
-            expires_at: string;
-            customer_ref: string;
-            customer_label: string | null;
-            snapshot_json: string;
-            pdf_key: string | null;
-            decision_json: string | null;
-          }
-        | undefined;
+        .select()
+        .from(schema.portalDocuments)
+        .where(eq(schema.portalDocuments.tokenValue, documentId))
+        .get();
       return row ? mapPortalDocRow(row) : null;
     },
-    getDocumentByTokenHash: async (tokenHash) => {
-      const row = db
-        .prepare(
-          `SELECT token_hash, kind, token_value, published_at, expires_at, customer_ref, customer_label, snapshot_json, pdf_key, decision_json
-           FROM portal_documents WHERE token_hash = ?`,
-        )
-        .get(tokenHash) as
-        | {
-            token_hash: string;
-            kind: string;
-            token_value: string;
-            published_at: string;
-            expires_at: string;
-            customer_ref: string;
-            customer_label: string | null;
-            snapshot_json: string;
-            pdf_key: string | null;
-            decision_json: string | null;
-          }
-        | undefined;
+    async getDocumentByTokenHash(tokenHash) {
+      const row = findDocument(tokenHash);
       return row ? mapPortalDocRow(row) : null;
     },
-    setDecisionOnce: async (tokenHash, decision) => {
-      const row = db.prepare('SELECT decision_json FROM offers WHERE token_hash = ?').get(tokenHash) as
-        | { decision_json: string | null }
-        | undefined;
-      if (!row) throw new Error('not found');
-      if (row.decision_json) return JSON.parse(row.decision_json) as DecisionRecord;
-
-      db.prepare('UPDATE offers SET decision_json = ? WHERE token_hash = ?').run(
-        JSON.stringify(decision),
-        tokenHash,
-      );
-      db.prepare(
-        "UPDATE portal_documents SET decision_json = ? WHERE token_hash = ? AND kind = 'offer'",
-      ).run(JSON.stringify(decision), tokenHash);
-      return decision;
+    async setDecisionOnce(tokenHash, decision) {
+      return setDecision(tokenHash, decision);
     },
-    setDecisionOnceByDocumentId: async (documentId, decision) => {
+    async setDecisionOnceByDocumentId(documentId, decision) {
       const row = db
-        .prepare("SELECT token_hash FROM portal_documents WHERE token_value = ? AND kind = 'offer'")
-        .get(documentId) as { token_hash: string } | undefined;
-      if (!row) throw new Error('not found');
-      return (await (async () => {
-        const existing = db.prepare('SELECT decision_json FROM offers WHERE token_hash = ?').get(row.token_hash) as
-          | { decision_json: string | null }
-          | undefined;
-        if (!existing) throw new Error('not found');
-        if (existing.decision_json) return JSON.parse(existing.decision_json) as DecisionRecord;
-        db.prepare('UPDATE offers SET decision_json = ? WHERE token_hash = ?').run(
-          JSON.stringify(decision),
-          row.token_hash,
-        );
-        db.prepare(
-          "UPDATE portal_documents SET decision_json = ? WHERE token_hash = ? AND kind = 'offer'",
-        ).run(JSON.stringify(decision), row.token_hash);
-        return decision;
-      })()) as DecisionRecord;
+        .select({ tokenHash: schema.portalDocuments.tokenHash })
+        .from(schema.portalDocuments)
+        .where(
+          and(
+            eq(schema.portalDocuments.tokenValue, documentId),
+            eq(schema.portalDocuments.kind, "offer"),
+          ),
+        )
+        .get();
+      if (!row) throw new Error("not found");
+      return setDecision(row.tokenHash, decision);
     },
-    createCustomerAccessToken: async (token) => {
-      db.prepare(
-        `
-          INSERT INTO customer_access_tokens (
-            token_hash, customer_ref, customer_label, created_at, expires_at, revoked_at
-          ) VALUES (
-            @tokenHash, @customerRef, @customerLabel, @createdAt, @expiresAt, @revokedAt
-          )
-        `,
-      ).run({
+    async createCustomerAccessToken(token: CustomerAccessTokenRecord) {
+      const values = {
         tokenHash: token.tokenHash,
         customerRef: token.customerRef,
         customerLabel: token.customerLabel ?? null,
         createdAt: token.createdAt,
         expiresAt: token.expiresAt,
         revokedAt: token.revokedAt ?? null,
-      });
+      };
+      db.insert(schema.customerAccessTokens)
+        .values(values)
+        .onConflictDoUpdate({
+          target: schema.customerAccessTokens.tokenHash,
+          set: values,
+        })
+        .run();
     },
-    revokeCustomerAccessTokens: async (customerRef) => {
-      db.prepare(
-        "UPDATE customer_access_tokens SET revoked_at = ? WHERE customer_ref = ? AND revoked_at IS NULL",
-      ).run(new Date().toISOString(), customerRef);
-    },
-    getCustomerAccessByTokenHash: async (tokenHash) => {
-      const row = db
-        .prepare(
-          `SELECT token_hash, customer_ref, customer_label, created_at, expires_at, revoked_at
-           FROM customer_access_tokens WHERE token_hash = ?`,
+    async revokeCustomerAccessTokens(customerRef) {
+      db.update(schema.customerAccessTokens)
+        .set({ revokedAt: new Date().toISOString() })
+        .where(
+          and(
+            eq(schema.customerAccessTokens.customerRef, customerRef),
+            isNull(schema.customerAccessTokens.revokedAt),
+          ),
         )
-        .get(tokenHash) as
-        | {
-            token_hash: string;
-            customer_ref: string;
-            customer_label: string | null;
-            created_at: string;
-            expires_at: string;
-            revoked_at: string | null;
-          }
-        | undefined;
-      if (!row) return null;
-      return {
-        tokenHash: row.token_hash,
-        customerRef: row.customer_ref,
-        customerLabel: row.customer_label ?? null,
-        createdAt: row.created_at,
-        expiresAt: row.expires_at,
-        revokedAt: row.revoked_at ?? null,
-      } as CustomerAccessTokenRecord;
+        .run();
     },
-    listDocumentsByCustomerRef: async ({ customerRef, kind = 'all', limit, cursor }) => {
+    async getCustomerAccessByTokenHash(tokenHash) {
+      const row = db
+        .select()
+        .from(schema.customerAccessTokens)
+        .where(eq(schema.customerAccessTokens.tokenHash, tokenHash))
+        .get();
+      return row
+        ? {
+            tokenHash: row.tokenHash,
+            customerRef: row.customerRef,
+            customerLabel: row.customerLabel ?? null,
+            createdAt: row.createdAt,
+            expiresAt: row.expiresAt,
+            revokedAt: row.revokedAt ?? null,
+          }
+        : null;
+    },
+    async listDocumentsByCustomerRef({
+      customerRef,
+      kind = "all",
+      limit,
+      cursor,
+    }) {
       const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
-      const query =
-        kind === 'all'
-          ? `
-            SELECT token_hash, kind, token_value, published_at, expires_at, customer_ref, customer_label, snapshot_json, pdf_key, decision_json
-            FROM portal_documents
-            WHERE customer_ref = @customerRef
-              AND (@cursor IS NULL OR published_at < @cursor)
-            ORDER BY published_at DESC, token_hash DESC
-            LIMIT @limit
-          `
-          : `
-            SELECT token_hash, kind, token_value, published_at, expires_at, customer_ref, customer_label, snapshot_json, pdf_key, decision_json
-            FROM portal_documents
-            WHERE customer_ref = @customerRef
-              AND kind = @kind
-              AND (@cursor IS NULL OR published_at < @cursor)
-            ORDER BY published_at DESC, token_hash DESC
-            LIMIT @limit
-          `;
-      const rows = db.prepare(query).all({
-        customerRef,
-        kind,
-        cursor: cursor ?? null,
-        limit: safeLimit,
-      }) as Array<{
-        token_hash: string;
-        kind: string;
-        token_value: string;
-        published_at: string;
-        expires_at: string;
-        customer_ref: string;
-        customer_label: string | null;
-        snapshot_json: string;
-        pdf_key: string | null;
-        decision_json: string | null;
-      }>;
+      const predicates = [eq(schema.portalDocuments.customerRef, customerRef)];
+      if (kind !== "all")
+        predicates.push(eq(schema.portalDocuments.kind, kind));
+      if (cursor)
+        predicates.push(lt(schema.portalDocuments.publishedAt, cursor));
+      const rows = db
+        .select()
+        .from(schema.portalDocuments)
+        .where(and(...predicates))
+        .orderBy(
+          desc(schema.portalDocuments.publishedAt),
+          desc(schema.portalDocuments.tokenHash),
+        )
+        .limit(safeLimit)
+        .all();
       const items = rows.map(mapPortalDocRow);
-      const nextCursor = items.length === safeLimit ? items[items.length - 1]!.publishedAt : null;
-      return { items, nextCursor };
+      return {
+        items,
+        nextCursor:
+          items.length === safeLimit
+            ? items[items.length - 1]!.publishedAt
+            : null,
+      };
     },
   };
 };

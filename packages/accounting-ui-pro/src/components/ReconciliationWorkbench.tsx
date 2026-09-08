@@ -1,17 +1,76 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowRightLeft, CheckCircle2, GitBranch, Play, Wand2 } from 'lucide-react';
-import { getStatusPresentation } from '../domain/selectors';
+import { bookingActionLabels, getStatusPresentation } from '../domain/selectors';
 import { normalizeTaxCaseKey, toLegacyTaxCode } from '../domain/taxCases';
 import { getAllowedActions } from '../domain/workflow';
 import { mockAccounts } from '../mocks/accounts';
 import { permissionContextForRole } from '../mocks/users';
 import { dispatchBookingAction, getBookingDraftByTransactionId, saveDraft } from '../services/mockBookingStore';
-import { BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
+import { Account, BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
 import AccountCombobox from './AccountCombobox';
 import IssueBadges from './IssueBadges';
 
+export interface ReconciliationTotals {
+  target: number;
+  bank: number;
+  counterpart: number;
+  difference: number;
+  bankLineCount: number;
+  bankAccountNumber?: string;
+}
+
+const amountValue = (amount: number | string) => {
+  const value = typeof amount === 'string' ? Number(amount.replace(',', '.')) : amount;
+  return Number.isFinite(value) ? Math.abs(value) : 0;
+};
+
+export function getBankAccountNumber(
+  draft: BookingDraft,
+  accounts: Account[] = [],
+  configuredBankAccountNumber?: string,
+  allowMockHeuristic = accounts.length === 0,
+): string | undefined {
+  if (configuredBankAccountNumber) return configuredBankAccountNumber;
+  if (!allowMockHeuristic) return undefined;
+  const bankAccounts = new Set(
+    accounts
+      .filter((account) => /bank|giro|konto/i.test(`${account.name} ${account.keywords?.join(' ') ?? ''}`))
+      .map((account) => account.number),
+  );
+  return draft.lines.find((line) => bankAccounts.has(line.accountId))?.accountId
+    ?? draft.lines.find((line) => /bank|giro|konto/i.test(line.accountName))?.accountId;
+}
+
+export const getConfiguredBankAccountNumber = getBankAccountNumber;
+
+export function calculateReconciliationTotals(
+  draft: BookingDraft,
+  transactionAmount: number,
+  accounts: Account[] = [],
+  configuredBankAccountNumber?: string,
+  allowMockHeuristic = accounts.length === 0,
+): ReconciliationTotals {
+  const bankAccountNumber = getBankAccountNumber(draft, accounts, configuredBankAccountNumber, allowMockHeuristic);
+  const bankLines = bankAccountNumber ? draft.lines.filter((line) => line.accountId === bankAccountNumber) : [];
+  const counterpartLines = bankAccountNumber ? draft.lines.filter((line) => line.accountId !== bankAccountNumber) : [];
+  const target = Math.abs(transactionAmount);
+  const bank = bankLines.reduce((sum, line) => sum + amountValue(line.amount), 0);
+  const counterpart = counterpartLines.reduce((sum, line) => sum + amountValue(line.amount), 0);
+  return {
+    target,
+    bank,
+    counterpart,
+    difference: Math.abs(counterpart - target),
+    bankLineCount: bankLines.length,
+    bankAccountNumber,
+  };
+}
+
 interface ReconciliationWorkbenchProps {
   role: UserRole;
+  accounts?: Account[];
+  bankAccountNumber?: string;
+  bankAccountNumberByTransactionId?: Record<string, string>;
   transactions: Transaction[];
   onOpenTransaction: (transactionId: string) => void;
   onRefresh: () => void;
@@ -26,13 +85,23 @@ function getPrimaryAction(actions: BookingAction[]): BookingAction | null {
   return actions.find((a) => ['approve', 'post', 'submit_for_review'].includes(a)) ?? null;
 }
 
+function actionLabel(action: BookingAction): string {
+  return bookingActionLabels[action];
+}
+
 export default function ReconciliationWorkbench({
   role,
+  accounts,
+  bankAccountNumber: configuredBankAccountNumber,
+  bankAccountNumberByTransactionId,
   transactions,
   onOpenTransaction,
   onRefresh,
 }: ReconciliationWorkbenchProps) {
+  const accountOptions = accounts ?? mockAccounts;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [mutationBusy, setMutationBusy] = useState(false);
   const permissionCtx = permissionContextForRole(role);
 
   const queue = useMemo(
@@ -52,38 +121,49 @@ export default function ReconciliationWorkbench({
   }, [storeDraft?.id, storeDraft?.activity.length]);
 
   const draft = localDraft ?? storeDraft;
+  const draftReadOnly = !permissionCtx.canMutate || (!!draft && ['posted', 'reversed'].includes(draft.workflowStatus));
   const allowed = draft ? getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues) : [];
   const primary = getPrimaryAction(allowed);
-  const splitTotal = draft
-    ? draft.lines.reduce((sum, line) => {
-        const value = typeof line.amount === 'string' ? Number(line.amount.replace(',', '.')) : line.amount;
-        return sum + (Number.isFinite(value) ? value : 0);
-      }, 0)
-    : 0;
-  const targetTotal = selectedTx ? Math.abs(selectedTx.amount) : 0;
-  const splitDifference = Math.abs(splitTotal - targetTotal);
+  const bankAccountNumber = draft
+    ? getConfiguredBankAccountNumber(
+        draft,
+        accounts ?? [],
+        bankAccountNumberByTransactionId?.[draft.transactionId] ?? configuredBankAccountNumber,
+        accounts === undefined,
+      )
+    : undefined;
+  const totals = draft && selectedTx
+    ? calculateReconciliationTotals(
+        draft,
+        selectedTx.amount,
+        accounts ?? [],
+        bankAccountNumberByTransactionId?.[selectedTx.id] ?? configuredBankAccountNumber,
+        accounts === undefined,
+      )
+    : null;
+  const targetTotal = totals?.target ?? 0;
+  const splitDifference = totals?.difference ?? 0;
   const expectedBankType = selectedTx ? (selectedTx.amount >= 0 ? 'Soll' : 'Haben') : null;
   const expectedCounterType = expectedBankType === 'Soll' ? 'Haben' : expectedBankType === 'Haben' ? 'Soll' : null;
-  const bankLines = draft ? draft.lines.filter((line) => line.accountId === '1200') : [];
-  const nonBankLines = draft ? draft.lines.filter((line) => line.accountId !== '1200') : [];
+  const bankLines = draft && bankAccountNumber ? draft.lines.filter((line) => line.accountId === bankAccountNumber) : [];
+  // Without the authoritative bank account we cannot identify a counterpart
+  // line safely. Never treat every line as a counterpart based on a guess.
+  const nonBankLines = draft && bankAccountNumber
+    ? draft.lines.filter((line) => line.accountId !== bankAccountNumber)
+    : [];
   const bankLine = bankLines[0];
-  const bankLineAmount = bankLine
-    ? typeof bankLine.amount === 'string'
-      ? Number(bankLine.amount.replace(',', '.'))
-      : bankLine.amount
-    : NaN;
+  const bankLineAmount = bankLine ? amountValue(bankLine.amount) : NaN;
   const nonBankSameDirectionViolation = nonBankLines.some(
     (line) => expectedCounterType && line.accountId && line.type !== expectedCounterType,
   );
   const nonBankCounterTotal = nonBankLines.reduce((sum, line) => {
-    const value = typeof line.amount === 'string' ? Number(line.amount.replace(',', '.')) : line.amount;
-    if (!Number.isFinite(value)) return sum;
+    const value = amountValue(line.amount);
     return expectedCounterType && line.type === expectedCounterType ? sum + value : sum;
   }, 0);
   const directionErrors: string[] = [];
   if (draft && expectedBankType) {
     if (bankLines.length !== 1) {
-      directionErrors.push('Es muss genau eine Bankzeile (Konto 1200) vorhanden sein.');
+      directionErrors.push(`Es muss genau eine Bankzeile (${bankAccountNumber ?? 'Bankkonto'}) vorhanden sein.`);
     }
     if (bankLine && bankLine.type !== expectedBankType) {
       directionErrors.push(
@@ -100,15 +180,19 @@ export default function ReconciliationWorkbench({
       directionErrors.push('Summe der Gegenkonten entspricht nicht dem Bankumsatz.');
     }
   }
-  const splitIsValid = !draft || (splitDifference < 0.01 && directionErrors.length === 0);
+  const splitIsValid = !draft || (totals?.bankLineCount === 1 && splitDifference < 0.01 && directionErrors.length === 0);
 
-  const runPrimaryAction = () => {
+  const runPrimaryAction = async () => {
     if (!selectedTx || !primary || !splitIsValid) return;
+    setMutationBusy(true);
+    setMutationError(null);
     try {
-      dispatchBookingAction(selectedTx.id, primary, { role, actorName: role });
+      await dispatchBookingAction(selectedTx.id, primary, { role, actorName: role });
       onRefresh();
-    } catch {
-      onOpenTransaction(selectedTx.id);
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
+    } finally {
+      setMutationBusy(false);
     }
   };
 
@@ -154,24 +238,37 @@ export default function ReconciliationWorkbench({
     );
   };
 
-  const saveInlineSplit = () => {
+  const saveInlineSplit = async () => {
     if (!draft) return;
-    saveDraft(draft, role);
-    onRefresh();
+    if (draftReadOnly) {
+      setMutationError('POSTED_DRAFT_IMMUTABLE: Storno oder Korrektur erforderlich.');
+      return;
+    }
+    setMutationBusy(true);
+    setMutationError(null);
+    try {
+      await saveDraft(draft, role);
+      onRefresh();
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : 'Split konnte nicht gespeichert werden.');
+      setLocalDraft(storeDraft ?? null);
+    } finally {
+      setMutationBusy(false);
+    }
   };
 
   return (
     <div className="flex">
-      <div className="w-[28rem] shrink-0 border-r border-gray-100 flex flex-col">
-        <div className="px-4 py-3 border-b border-gray-100">
+      <div className="w-96 shrink-0 border-r border-subtle flex flex-col">
+        <div className="px-4 py-3 border-b border-subtle">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-black text-[#ccff00] flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-dark-base text-accent flex items-center justify-center shrink-0">
               <ArrowRightLeft size={15} />
             </div>
             <div className="min-w-0">
-              <h1 className="text-sm font-black tracking-tight text-gray-900 leading-tight">Bankabgleich Workbench</h1>
-              <p className="text-xs text-gray-400 font-medium leading-tight">
-                Vorschläge prüfen, matchen und in den Buchungsworkflow überführen.
+              <h1 className="text-sm font-black tracking-tight text-foreground leading-tight">Bankabgleich Workbench</h1>
+              <p className="text-xs text-muted font-medium leading-tight">
+                Vorschläge prüfen und in den Buchungsworkflow überführen.
               </p>
             </div>
           </div>
@@ -185,14 +282,14 @@ export default function ReconciliationWorkbench({
                 onClick={() => setSelectedId(tx.id)}
                 className={`w-full text-left border rounded-xl p-3 transition-colors ${
                   selectedTx?.id === tx.id
-                    ? 'border-black bg-gray-50'
-                    : 'border-gray-200 bg-white hover:bg-gray-50'
+                    ? 'border-dark-base bg-surface-muted'
+                    : 'border-border bg-surface hover:bg-surface-muted'
                 }`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="font-bold text-sm text-gray-900 leading-tight">{tx.payee}</div>
-                    <div className="text-[11px] text-gray-500 mt-0.5 line-clamp-2">
+                    <div className="font-bold text-sm text-foreground leading-tight">{tx.payee}</div>
+                    <div className="text-[11px] text-muted mt-0.5 line-clamp-2">
                       {new Date(tx.date).toLocaleDateString('de-DE')} • {tx.description}
                     </div>
                   </div>
@@ -200,7 +297,7 @@ export default function ReconciliationWorkbench({
                     {status.label}
                   </span>
                 </div>
-                <div className={`text-xs font-bold mt-1.5 ${tx.amount < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                <div className={`text-xs font-bold mt-1.5 ${tx.amount < 0 ? 'text-error' : 'text-success'}`}>
                   {formatCurrency(tx.amount, tx.currency)}
                 </div>
                 <div className="mt-1.5">
@@ -210,7 +307,7 @@ export default function ReconciliationWorkbench({
             );
           })}
           {queue.length === 0 && (
-            <div className="border border-gray-200 rounded-xl p-6 text-sm text-gray-500 bg-white">
+            <div className="border border-border rounded-xl p-6 text-sm text-muted bg-surface">
               Keine offenen Transaktionen im Abgleich.
             </div>
           )}
@@ -219,33 +316,36 @@ export default function ReconciliationWorkbench({
 
       <div className="flex-1 min-w-0 p-6 overflow-y-auto max-h-[56vh]">
         {!selectedTx || !draft ? (
-          <div className="text-gray-500">Keine Position ausgewählt.</div>
-        ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-6">
+            <div className="text-muted">Keine Position ausgewählt.</div>
+          ) : (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <section className="space-y-4">
-              <div className="border border-gray-200 rounded-2xl bg-white p-5">
-                <div className="text-xs uppercase tracking-wider text-gray-400 font-bold">Bankbewegung</div>
-                <div className="mt-2 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-3 items-start">
+              {mutationError && <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">{mutationError}</div>}
+              <div className="border border-border rounded-2xl bg-surface p-5">
+                <div className="text-xs uppercase tracking-wider text-muted font-bold">Bankbewegung</div>
+                <div className="mt-2 grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
                   <div className="min-w-0">
-                    <div className="font-bold text-base text-gray-900">{selectedTx.payee}</div>
-                    <div className="text-sm text-gray-500 line-clamp-2">{selectedTx.description}</div>
-                    <div className="text-xs text-gray-400 mt-1">
+                    <div className="font-bold text-base text-foreground">{selectedTx.payee}</div>
+                    <div className="text-sm text-muted line-clamp-2">{selectedTx.description}</div>
+                    <div className="text-xs text-muted mt-1">
                       {new Date(selectedTx.date).toLocaleDateString('de-DE')} • {selectedTx.id}
                     </div>
                   </div>
-                  <div className={`text-xl font-bold whitespace-nowrap ${selectedTx.amount < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                  <div className={`text-xl font-bold whitespace-nowrap ${selectedTx.amount < 0 ? 'text-error' : 'text-success'}`}>
                     {formatCurrency(selectedTx.amount, selectedTx.currency)}
                   </div>
                 </div>
                 <div className="mt-4">
-                  <div className="text-xs font-bold uppercase tracking-wide text-gray-500 mb-1">Gegenkonto (Quick)</div>
+                  <div className="text-xs font-bold uppercase tracking-wide text-muted mb-1">Gegenkonto</div>
                   <AccountCombobox
-                    accounts={mockAccounts}
-                    valueAccountId={draft.lines.find((line) => line.accountId !== '1200')?.accountId ?? ''}
-                    valueAccountName={draft.lines.find((line) => line.accountId !== '1200')?.accountName ?? ''}
+                    accounts={accountOptions}
+                    valueAccountId={bankAccountNumber ? draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountId ?? '' : ''}
+                    valueAccountName={bankAccountNumber ? draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountName ?? '' : ''}
+                    disabled={draftReadOnly || !bankAccountNumber}
                     placeholder="Gegenkonto wählen..."
                     onSelect={(account) => {
-                      const line = draft.lines.find((item) => item.accountId !== '1200');
+                      if (!bankAccountNumber) return;
+                      const line = draft.lines.find((item) => item.accountId !== bankAccountNumber);
                       if (!line) return;
                       updateLine(line.id, (cur) => ({
                         ...cur,
@@ -263,44 +363,45 @@ export default function ReconciliationWorkbench({
                 </div>
               </div>
 
-              <div className="border border-gray-200 rounded-2xl bg-white p-5">
+              <div className="border border-border rounded-2xl bg-surface p-5">
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-bold text-gray-900">Matching-Kandidaten (Mock)</div>
-                  <span className="text-xs text-gray-500 font-medium">
-                    Confidence {Math.round((selectedTx.suggestionConfidence ?? 0.5) * 100)}%
+                  <div className="text-sm font-bold text-foreground">Kontierungsvorschlag</div>
+                  <span className="text-xs text-muted font-medium">
+                    Sicherheit {Math.round((selectedTx.suggestionConfidence ?? 0.5) * 100)} %
                   </span>
                 </div>
                 <div className="mt-4 space-y-3">
-                  <div className="border border-gray-200 rounded-xl p-4 bg-gray-50/50">
+                  <div className="border border-border rounded-xl p-4 bg-surface-muted/50">
                     <div className="flex items-center justify-between">
-                      <div className="font-bold text-gray-900">
+                      <div className="font-bold text-foreground">
                         {selectedTx.suggestion ?? 'Kein Vorschlag'}
                       </div>
-                      <span className="text-xs font-bold px-2 py-1 rounded-full bg-blue-100 text-blue-700">
+                      <span className="text-xs font-bold px-2 py-1 rounded-full bg-info-bg text-info">
                         Regel / Historie
                       </span>
                     </div>
-                    <div className="text-sm text-gray-600 mt-2">
+                    <div className="text-sm text-muted mt-2">
                       Entwurf enthält {draft.lines.length} Buchungszeilen und {draft.validationIssues.length} Validierungshinweise.
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <button
-                        onClick={runPrimaryAction}
-                        disabled={!primary || !splitIsValid}
-                        className="px-4 py-2 rounded-full bg-black text-white text-sm font-bold hover:bg-gray-900 disabled:opacity-40 inline-flex items-center gap-1"
+                        <button
+                          onClick={runPrimaryAction}
+                          disabled={!primary || !splitIsValid || mutationBusy}
+                        className="px-4 py-2 rounded-full bg-dark-base text-background text-sm font-bold hover:bg-dark-2 disabled:opacity-40 inline-flex items-center gap-1"
                       >
                         <CheckCircle2 size={14} />
-                        {primary ? 'Match & nächste Aktion' : 'Kein Schritt möglich'}
+                        {primary ? 'Nächste Aktion' : 'Kein Schritt möglich'}
                       </button>
-                      <button
-                        onClick={() => onOpenTransaction(selectedTx.id)}
-                        className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50"
+                        <button
+                          onClick={() => onOpenTransaction(selectedTx.id)}
+                        className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted"
                       >
                         Im Editor öffnen
                       </button>
-                      <button
-                        className="px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1"
-                        onClick={addSplitLine}
+                        <button
+                          className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
+                          onClick={addSplitLine}
+                          disabled={draftReadOnly}
                       >
                         <GitBranch size={14} />
                         Split-Zeile hinzufügen
@@ -308,12 +409,12 @@ export default function ReconciliationWorkbench({
                     </div>
                   </div>
                   {!splitIsValid && (
-                    <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    <div className="mt-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error">
                       <div className="font-bold">Abgleich-Validierung fehlgeschlagen</div>
                       <ul className="mt-1 space-y-1">
                         {splitDifference >= 0.01 && (
                           <li>
-                            Split-Summe stimmt nicht mit der Bankbewegung überein. Differenz:{' '}
+                            Summe der Gegenbuchungen stimmt nicht mit der Bankbewegung überein. Differenz:{' '}
                             <span className="font-bold">{formatCurrency(splitDifference, selectedTx.currency)}</span>
                           </li>
                         )}
@@ -328,12 +429,13 @@ export default function ReconciliationWorkbench({
             </section>
 
             <section className="space-y-4">
-              <div className="border border-gray-200 rounded-2xl bg-white p-5">
+              <div className="border border-border rounded-2xl bg-surface p-5">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-bold text-gray-900">Entwurf / Split-Bearbeitung inline</div>
-                  <button
+                  <div className="text-sm font-bold text-foreground">Entwurf / Split-Bearbeitung inline</div>
+                    <button
                     onClick={saveInlineSplit}
-                    className="px-3 py-1.5 rounded-full bg-black text-white text-xs font-bold hover:bg-gray-900"
+                    disabled={draftReadOnly || mutationBusy}
+                    className="px-3 py-1.5 rounded-full bg-dark-base text-background text-xs font-bold hover:bg-dark-2"
                   >
                     Split speichern
                   </button>
@@ -342,14 +444,15 @@ export default function ReconciliationWorkbench({
                   {draft.lines.map((line) => (
                     <div
                       key={line.id}
-                      className="grid grid-cols-12 gap-2 items-center text-sm border border-gray-100 rounded-lg p-2"
+                      className="grid grid-cols-12 gap-2 items-center text-sm border border-subtle rounded-lg p-2"
                     >
                       <select
                         value={line.type}
                         onChange={(e) =>
                           updateLine(line.id, (cur) => ({ ...cur, type: e.target.value as 'Soll' | 'Haben' }))
                         }
-                        className="col-span-2 border border-gray-200 rounded-xl px-2 py-2 text-sm"
+                        disabled={draftReadOnly}
+                        className="col-span-2 border border-border rounded-xl px-2 py-2 text-sm"
                         aria-label="Soll/Haben"
                       >
                         <option value="Soll">Soll</option>
@@ -357,9 +460,10 @@ export default function ReconciliationWorkbench({
                       </select>
                       <div className="col-span-6">
                         <AccountCombobox
-                          accounts={mockAccounts}
+                          accounts={accountOptions}
                           valueAccountId={line.accountId}
                           valueAccountName={line.accountName}
+                          disabled={draftReadOnly || !bankAccountNumber}
                           onSelect={(account) =>
                             updateLine(line.id, (cur) => ({
                               ...cur,
@@ -381,39 +485,39 @@ export default function ReconciliationWorkbench({
                         min="0"
                         value={line.amount}
                         onChange={(e) => updateLine(line.id, (cur) => ({ ...cur, amount: e.target.value }))}
-                        className="col-span-3 border border-gray-200 rounded-xl px-2 py-2 text-sm text-right"
+                        disabled={draftReadOnly}
+                        className="col-span-3 border border-border rounded-xl px-2 py-2 text-sm text-right"
                         aria-label="Betrag"
                       />
                       <button
                         onClick={() => removeLine(line.id)}
-                        className="col-span-1 text-xs font-bold text-gray-500 hover:text-red-600"
+                        className="col-span-1 text-xs font-bold text-muted hover:text-error"
                         aria-label="Zeile entfernen"
-                        disabled={draft.lines.length <= 2}
+                        disabled={draftReadOnly || draft.lines.length <= 2}
                       >
                         ×
                       </button>
                     </div>
                   ))}
                 </div>
-                <div className="mt-3 flex items-center justify-between text-xs text-gray-500">
+                <div className="mt-3 flex items-center justify-between text-xs text-muted">
                   <span>{draft.lines.length} Zeilen</span>
-                  <span>
-                    Split-Summe: {formatCurrency(splitTotal, selectedTx.currency)}
-                  </span>
+                  <span>Bank: {formatCurrency(totals?.bank ?? 0, selectedTx.currency)}</span>
+                  <span>Gegenbuchungen: {formatCurrency(totals?.counterpart ?? 0, selectedTx.currency)}</span>
                   <span>
                     Ziel: {formatCurrency(targetTotal, selectedTx.currency)}
                   </span>
                   <span>
                     Richtung: {selectedTx.amount >= 0 ? 'Eingang (Bank Soll)' : 'Ausgang (Bank Haben)'}
                   </span>
-                  <span className={splitIsValid ? 'text-emerald-700 font-bold' : 'text-red-700 font-bold'}>
+                  <span className={splitIsValid ? 'text-success font-bold' : 'text-error font-bold'}>
                     {splitIsValid ? 'OK' : `Diff ${formatCurrency(splitDifference, selectedTx.currency)}`}
                   </span>
                 </div>
               </div>
 
-              <div className="border border-gray-200 rounded-2xl bg-white p-5">
-                <div className="text-sm font-bold text-gray-900 mb-2">Workflow Schnellaktionen</div>
+              <div className="border border-border rounded-2xl bg-surface p-5">
+                <div className="text-sm font-bold text-foreground mb-2">Workflow Schnellaktionen</div>
                 <div className="flex flex-wrap gap-2">
                   {allowed.map((action) => (
                     <button
@@ -422,18 +526,24 @@ export default function ReconciliationWorkbench({
                         if (!splitIsValid && (action === 'submit_for_review' || action === 'approve' || action === 'post')) {
                           return;
                         }
-                        try {
-                          dispatchBookingAction(selectedTx.id, action, { role, actorName: role });
-                          onRefresh();
-                        } catch {
-                          onOpenTransaction(selectedTx.id);
-                        }
+                        void (async () => {
+                          setMutationBusy(true);
+                          setMutationError(null);
+                          try {
+                            await dispatchBookingAction(selectedTx.id, action, { role, actorName: role });
+                            onRefresh();
+                          } catch (error) {
+                            setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
+                          } finally {
+                            setMutationBusy(false);
+                          }
+                        })();
                       }}
-                      className="px-3 py-2 rounded-full border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1"
-                      disabled={!splitIsValid && (action === 'submit_for_review' || action === 'approve' || action === 'post')}
+                      className="px-3 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
+                      disabled={mutationBusy || (!splitIsValid && (action === 'submit_for_review' || action === 'approve' || action === 'post'))}
                     >
                       {action === 'post' ? <Play size={13} /> : <Wand2 size={13} />}
-                      {action}
+                      {actionLabel(action)}
                     </button>
                   ))}
                 </div>

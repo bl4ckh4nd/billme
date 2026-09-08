@@ -6,6 +6,11 @@ export const invoices = sqliteTable('invoices', {
   clientNumber: text('client_number'),
   projectId: text('project_id'),
   number: text('number').notNull(),
+  documentKind: text('document_kind').notNull().default('invoice'),
+  sourceDocumentId: text('source_document_id'),
+  rootDocumentId: text('root_document_id'),
+  revisionOfId: text('revision_of_id'),
+  revisionNumber: integer('revision_number').notNull().default(0),
   client: text('client').notNull(),
   clientEmail: text('client_email').notNull(),
   clientAddress: text('client_address'),
@@ -19,6 +24,10 @@ export const invoices = sqliteTable('invoices', {
   servicePeriod: text('service_period'),
   amount: real('amount').notNull(),
   status: text('status').notNull(),
+  accountingStatus: text('accounting_status').notNull().default('unposted'),
+  accountingSnapshotJson: text('accounting_snapshot_json'),
+  accountingJournalEntryId: text('accounting_journal_entry_id'),
+  accountingPostedAt: text('accounting_posted_at'),
   dunningLevel: integer('dunning_level').notNull().default(0),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
@@ -31,6 +40,7 @@ export const invoiceItems = sqliteTable('invoice_items', {
     .references(() => invoices.id, { onDelete: 'cascade' }),
   position: integer('position').notNull(),
   description: text('description').notNull(),
+  lineMetaJson: text('line_meta_json'),
   articleId: text('article_id'),
   category: text('category'),
   unit: text('unit'),
@@ -88,6 +98,7 @@ export const offerItems = sqliteTable('offer_items', {
     .references(() => offers.id, { onDelete: 'cascade' }),
   position: integer('position').notNull(),
   description: text('description').notNull(),
+  lineMetaJson: text('line_meta_json'),
   articleId: text('article_id'),
   category: text('category'),
   unit: text('unit'),
@@ -112,6 +123,7 @@ export const clients = sqliteTable(
     avatar: text('avatar'),
     tagsJson: text('tags_json').notNull(),
     notes: text('notes').notNull(),
+    taxProfileJson: text('tax_profile_json'),
   },
   (t) => ({
     byCustomerNumber: uniqueIndex('idx_clients_customer_number_unique').on(t.customerNumber),
@@ -260,10 +272,13 @@ export const bankTransactions = sqliteTable(
     linkedInvoiceId: text('linked_invoice_id'),
     status: text('status').notNull(),
     sourceTransactionId: text('source_transaction_id'),
+    deletedAt: text('deleted_at'),
+    rollbackReason: text('rollback_reason'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
   (t) => ({
+    uniqueTenantSource: uniqueIndex('idx_bank_transactions_tenant_source').on(t.tenantId, t.sourceTransactionId),
     byTenantDate: index('idx_bank_transactions_tenant_date').on(t.tenantId, t.date),
     byTenantStatus: index('idx_bank_transactions_status').on(t.tenantId, t.status),
   }),
@@ -355,6 +370,189 @@ export const accountingPeriods = sqliteTable(
   }),
 );
 
+export const accountingPolicies = sqliteTable(
+  'accounting_policies',
+  {
+    tenantId: text('tenant_id').primaryKey(),
+    activeChart: text('active_chart').notNull().default('SKR03'),
+    vatMethod: text('vat_method').notNull().default('soll'),
+    periodPolicy: text('period_policy').notNull().default('calendar_month'),
+    updatedAt: text('updated_at').notNull(),
+  },
+);
+
+export const vendors = sqliteTable(
+  'vendors',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    vendorNumber: text('vendor_number'),
+    name: text('name').notNull(),
+    email: text('email'),
+    address: text('address'),
+    vatId: text('vat_id'),
+    iban: text('iban'),
+    defaultExpenseAccount: text('default_expense_account'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    byTenantNumber: uniqueIndex('idx_vendors_tenant_number').on(t.tenantId, t.vendorNumber),
+    byTenantName: index('idx_vendors_tenant_name').on(t.tenantId, t.name),
+  }),
+);
+
+export const incomingInvoices = sqliteTable(
+  'incoming_invoices',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    vendorId: text('vendor_id').notNull().references(() => vendors.id, { onDelete: 'restrict' }),
+    number: text('number').notNull(),
+    invoiceDate: text('invoice_date').notNull(),
+    dueDate: text('due_date').notNull(),
+    servicePeriod: text('service_period'),
+    netAmount: real('net_amount').notNull(),
+    taxAmount: real('tax_amount').notNull(),
+    grossAmount: real('gross_amount').notNull(),
+    taxRate: real('tax_rate').notNull().default(0),
+    taxCaseKey: text('tax_case_key'),
+    notes: text('notes'),
+    status: text('status').notNull().default('draft'),
+    accountingStatus: text('accounting_status').notNull().default('unposted'),
+    accountingSnapshotJson: text('accounting_snapshot_json'),
+    accountingJournalEntryId: text('accounting_journal_entry_id'),
+    accountingPostedAt: text('accounting_posted_at'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    byTenantNumber: uniqueIndex('idx_incoming_invoices_tenant_number').on(t.tenantId, t.number),
+    byTenantDueDate: index('idx_incoming_invoices_tenant_due_date').on(t.tenantId, t.dueDate),
+  }),
+);
+
+export const incomingInvoiceLines = sqliteTable(
+  'incoming_invoice_lines',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    incomingInvoiceId: text('incoming_invoice_id').notNull().references(() => incomingInvoices.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    description: text('description').notNull(),
+    quantity: real('quantity').notNull(),
+    unitPrice: real('unit_price').notNull(),
+    netAmount: real('net_amount').notNull(),
+    taxRate: real('tax_rate').notNull(),
+    taxAmount: real('tax_amount').notNull(),
+    grossAmount: real('gross_amount').notNull(),
+    accountNumber: text('account_number'),
+    assetAccountNumber: text('asset_account_number'),
+  },
+  (t) => ({
+    byInvoice: index('idx_incoming_invoice_lines_invoice').on(t.incomingInvoiceId, t.position),
+  }),
+);
+
+export const accountingAccountMappings = sqliteTable(
+  'accounting_account_mappings',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    chart: text('chart').notNull(),
+    role: text('role').notNull(),
+    accountNumber: text('account_number').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    byTenantChartRole: uniqueIndex('idx_accounting_account_mappings_tenant_chart_role').on(t.tenantId, t.chart, t.role),
+  }),
+);
+
+export const openItems = sqliteTable(
+  'open_items',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    partyType: text('party_type').notNull(),
+    partyId: text('party_id').notNull(),
+    sourceType: text('source_type').notNull(),
+    sourceId: text('source_id').notNull(),
+    documentNumber: text('document_number').notNull(),
+    documentDate: text('document_date').notNull(),
+    dueDate: text('due_date').notNull(),
+    originalAmount: real('original_amount').notNull(),
+    allocatedAmount: real('allocated_amount').notNull().default(0),
+    residualAmount: real('residual_amount').notNull(),
+    status: text('status').notNull().default('open'),
+    journalEntryId: text('journal_entry_id'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    byTenantSource: uniqueIndex('idx_open_items_tenant_source').on(t.tenantId, t.sourceType, t.sourceId),
+    byTenantStatusDueDate: index('idx_open_items_tenant_status_due_date').on(t.tenantId, t.status, t.dueDate),
+  }),
+);
+
+export const openItemPayments = sqliteTable(
+  'open_item_payments',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    partyType: text('party_type').notNull(),
+    partyId: text('party_id'),
+    paymentDate: text('payment_date').notNull(),
+    amount: real('amount').notNull(),
+    bankAccountNumber: text('bank_account_number').notNull(),
+    method: text('method'),
+    sourceType: text('source_type').notNull(),
+    sourceId: text('source_id').notNull(),
+    allocatedAmount: real('allocated_amount').notNull().default(0),
+    residualAmount: real('residual_amount').notNull(),
+    status: text('status').notNull().default('open'),
+    journalEntryId: text('journal_entry_id'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => ({
+    byTenantSource: uniqueIndex('idx_open_item_payments_tenant_source').on(t.tenantId, t.sourceType, t.sourceId),
+  }),
+);
+
+export const openItemAllocations = sqliteTable(
+  'open_item_allocations',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    paymentId: text('payment_id').notNull().references(() => openItemPayments.id, { onDelete: 'cascade' }),
+    openItemId: text('open_item_id').notNull().references(() => openItems.id, { onDelete: 'cascade' }),
+    amount: real('amount').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => ({
+    byPayment: index('idx_open_item_allocations_payment').on(t.tenantId, t.paymentId),
+    byOpenItem: index('idx_open_item_allocations_open_item').on(t.tenantId, t.openItemId),
+  }),
+);
+
+export const accountingBackfillRuns = sqliteTable(
+  'accounting_backfill_runs',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    status: text('status').notNull(),
+    candidatesJson: text('candidates_json').notNull(),
+    confirmationHash: text('confirmation_hash').notNull(),
+    resultJson: text('result_json'),
+    confirmedAt: text('confirmed_at'),
+    completedAt: text('completed_at'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => ({
+    byTenantStatus: index('idx_accounting_backfill_runs_tenant_status').on(t.tenantId, t.status),
+  }),
+);
+
 export const journalEntries = sqliteTable(
   'journal_entries',
   {
@@ -369,12 +567,44 @@ export const journalEntries = sqliteTable(
     fiscalYear: integer('fiscal_year').notNull(),
     status: text('status').notNull(),
     sourceDraftId: text('source_draft_id'),
+    sourceType: text('source_type').notNull().default('booking_draft'),
+    sourceKey: text('source_key'),
     reversedEntryId: text('reversed_entry_id'),
     createdAt: text('created_at').notNull(),
   },
   (t) => ({
     byTenantEntryNo: uniqueIndex('idx_journal_entries_tenant_entry_number').on(t.tenantId, t.entryNumber),
     byTenantPostingDate: index('idx_journal_entries_tenant_posting_date').on(t.tenantId, t.postingDate),
+    byTenantSource: uniqueIndex('idx_journal_entries_tenant_source').on(t.tenantId, t.sourceType, t.sourceKey),
+    byTenantSourceDraft: uniqueIndex('idx_journal_entries_tenant_source_draft').on(t.tenantId, t.sourceDraftId),
+  }),
+);
+
+export const accountingSourceRuns = sqliteTable(
+  'accounting_source_runs',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').notNull().default('default'),
+    sourceType: text('source_type').notNull(),
+    sourceId: text('source_id').notNull(),
+    sourceRevision: text('source_revision').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    factJson: text('fact_json').notNull(),
+    resultJson: text('result_json').notNull(),
+    status: text('status').notNull(),
+    journalEntryId: text('journal_entry_id').references(() => journalEntries.id),
+    effectiveDate: text('effective_date').notNull(),
+    postingDate: text('posting_date').notNull(),
+    period: text('period').notNull(),
+    fiscalYear: integer('fiscal_year').notNull(),
+    currency: text('currency').notNull(),
+    bookingText: text('booking_text').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => ({
+    byTenantRevision: uniqueIndex('idx_accounting_source_runs_revision').on(t.tenantId, t.sourceType, t.sourceId, t.sourceRevision),
+    byTenantIdempotency: uniqueIndex('idx_accounting_source_runs_idempotency').on(t.tenantId, t.idempotencyKey),
+    byTenantCreated: index('idx_accounting_source_runs_created').on(t.tenantId, t.createdAt),
   }),
 );
 
@@ -396,6 +626,7 @@ export const journalLines = sqliteTable(
     netAmount: real('net_amount'),
     taxAmount: real('tax_amount'),
     grossAmount: real('gross_amount'),
+    datevSachverhaltLl: text('datev_sachverhalt_ll'),
     countryCode: text('country_code'),
     counterpartyVatId: text('counterparty_vat_id'),
     evidenceType: text('evidence_type'),
@@ -430,6 +661,9 @@ export const assets = sqliteTable(
     assetAccountNumber: text('asset_account_number').notNull(),
     disposalDate: text('disposal_date'),
     disposalProceeds: real('disposal_proceeds'),
+    acquisitionOffsetAccountNumber: text('acquisition_offset_account_number'),
+    sourceIncomingInvoiceId: text('source_incoming_invoice_id'),
+    activationJournalEntryId: text('activation_journal_entry_id'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
@@ -451,6 +685,8 @@ export const assetDepreciationSchedule = sqliteTable(
     months: integer('months').notNull(),
     status: text('status').notNull(),
     journalEntryId: text('journal_entry_id'),
+    sourceType: text('source_type'),
+    sourceKey: text('source_key'),
     postedAt: text('posted_at'),
   },
   (t) => ({
@@ -471,11 +707,15 @@ export const assetMovements = sqliteTable(
     amount: real('amount').notNull().default(0),
     proceeds: real('proceeds'),
     gainLoss: real('gain_loss'),
+    journalEntryId: text('journal_entry_id'),
+    sourceType: text('source_type'),
+    sourceKey: text('source_key'),
     reason: text('reason').notNull(),
     createdAt: text('created_at').notNull(),
   },
   (t) => ({
     byTenantAssetDate: index('idx_asset_movements_tenant_asset_date').on(t.tenantId, t.assetId, t.movementDate),
+    bySource: uniqueIndex('idx_asset_movements_tenant_source').on(t.tenantId, t.sourceType, t.sourceKey),
   }),
 );
 
@@ -490,6 +730,7 @@ export const accountMappingsHgb = sqliteTable(
     positionKey: text('position_key').notNull(),
     positionLabel: text('position_label').notNull(),
     balanceSide: text('balance_side'),
+    validFrom: text('valid_from'),
     updatedAt: text('updated_at').notNull(),
   },
   (t) => ({
@@ -498,6 +739,7 @@ export const accountMappingsHgb = sqliteTable(
       t.chart,
       t.accountNumber,
       t.statementType,
+      t.validFrom,
     ),
   }),
 );
@@ -510,6 +752,7 @@ export const reportSnapshots = sqliteTable(
     reportType: text('report_type').notNull(),
     argsJson: text('args_json').notNull(),
     payloadJson: text('payload_json').notNull(),
+    sourceHash: text('source_hash'),
     createdAt: text('created_at').notNull(),
   },
   (t) => ({
@@ -528,6 +771,16 @@ export const datevExports = sqliteTable(
     toDate: text('to_date'),
     createdAt: text('created_at').notNull(),
     metaJson: text('meta_json').notNull(),
+    sha256: text('sha256'),
+    byteSize: integer('byte_size'),
+    encoding: text('encoding'),
+    headerVersion: integer('header_version'),
+    formatVersion: integer('format_version'),
+    chart: text('chart'),
+    sourceSnapshotHash: text('source_snapshot_hash'),
+    manifestJson: text('manifest_json'),
+    status: text('status'),
+    validationJson: text('validation_json'),
   },
   (t) => ({
     byTenantCreated: index('idx_datev_exports_tenant_created').on(t.tenantId, t.createdAt),
@@ -631,7 +884,8 @@ export const transactions = sqliteTable('transactions', {
   linkedInvoiceId: text('linked_invoice_id'),
   status: text('status').notNull(),
   dedupHash: text('dedup_hash'),
-  importBatchId: text('import_batch_id'),
+    importBatchId: text('import_batch_id'),
+    linkedPaymentId: text('linked_payment_id'),
   deletedAt: text('deleted_at'),
 });
 
@@ -640,12 +894,14 @@ export const eurLines = sqliteTable(
   {
     id: text('id').primaryKey(),
     taxYear: integer('tax_year').notNull(),
+    providerPath: text('provider_path').notNull().default('main'),
     kennziffer: text('kennziffer'),
     label: text('label').notNull(),
     kind: text('kind').notNull(),
     exportable: integer('exportable').notNull().default(1),
     sortOrder: integer('sort_order').notNull(),
     computedFromJson: text('computed_from_json'),
+    computedTermsJson: text('computed_terms_json'),
     sourceVersion: text('source_version').notNull(),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
@@ -665,6 +921,7 @@ export const eurClassifications = sqliteTable(
     eurLineId: text('eur_line_id').references(() => eurLines.id, { onDelete: 'set null' }),
     excluded: integer('excluded').notNull().default(0),
     vatMode: text('vat_mode').notNull().default('none'),
+    vatRate: real('vat_rate'),
     note: text('note'),
     updatedAt: text('updated_at').notNull(),
   },
@@ -785,6 +1042,8 @@ export const recurringProfiles = sqliteTable('recurring_profiles', {
   endDate: text('end_date'),
   amount: real('amount').notNull(),
   itemsJson: text('items_json').notNull(),
+  taxMode: text('tax_mode').notNull().default('standard_vat'),
+  taxMetaJson: text('tax_meta_json'),
 });
 
 export const settings = sqliteTable('settings', {

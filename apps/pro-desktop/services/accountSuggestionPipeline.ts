@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { and, asc, desc, eq, like, or } from 'drizzle-orm';
 import {
   normalizeGermanText,
   normalizeLooseText,
@@ -7,6 +8,7 @@ import {
   type NaiveBayesModel as SharedNaiveBayesModel,
 } from '@billme/finance-intelligence';
 import type { AccountSuggestionRule } from '@billme/accounting-shared';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 
 type FlowType = 'income' | 'expense';
 
@@ -46,13 +48,12 @@ const loadKeywords = (
   chart: 'SKR03' | 'SKR04',
   tenantId: string,
 ): Map<string, string[]> => {
-  const rows = db.prepare(
-    `
-      SELECT account_number, keyword
-      FROM account_keywords
-      WHERE tenant_id = ? AND chart = ? AND active = 1
-    `,
-  ).all(tenantId, chart) as AccountKeywordRow[];
+  const rows = createDrizzle(db).select({ account_number: schema.accountKeywords.accountNumber, keyword: schema.accountKeywords.keyword })
+    .from(schema.accountKeywords).where(and(
+      eq(schema.accountKeywords.tenantId, tenantId),
+      eq(schema.accountKeywords.chart, chart),
+      eq(schema.accountKeywords.active, 1),
+    )).all() as AccountKeywordRow[];
 
   const out = new Map<string, string[]>();
   for (const row of rows) {
@@ -72,23 +73,21 @@ const loadCounterpartyMemory = (
   chart: 'SKR03' | 'SKR04',
   tenantId: string,
 ): Map<string, string> => {
-  const rows = db.prepare(
-    `
-      SELECT bt.counterparty AS counterparty, jl.account_number AS account_number, MAX(je.created_at) AS latest_at
-      FROM journal_entries je
-      INNER JOIN journal_lines jl ON jl.entry_id = je.id AND jl.tenant_id = je.tenant_id
-      INNER JOIN booking_drafts bd ON bd.id = je.source_draft_id AND bd.tenant_id = je.tenant_id
-      INNER JOIN bank_transactions bt ON bt.id = bd.transaction_id AND bt.tenant_id = bd.tenant_id
-      INNER JOIN ledger_accounts la ON la.chart = ? AND la.account_number = jl.account_number
-      WHERE je.tenant_id = ?
-        AND je.status = 'posted'
-        AND bt.counterparty IS NOT NULL
-        AND TRIM(bt.counterparty) <> ''
-        AND substr(jl.account_number, 1, 1) NOT IN ('0', '1')
-      GROUP BY LOWER(TRIM(bt.counterparty))
-      ORDER BY latest_at DESC
-    `,
-  ).all(chart, tenantId) as Array<{ counterparty: string; account_number: string }>;
+  const rows = createDrizzle(db).select({
+    counterparty: schema.bankTransactions.counterparty,
+    account_number: schema.journalLines.accountNumber,
+    latest_at: schema.journalEntries.createdAt,
+  }).from(schema.journalEntries)
+    .innerJoin(schema.journalLines, and(eq(schema.journalLines.entryId, schema.journalEntries.id), eq(schema.journalLines.tenantId, schema.journalEntries.tenantId)))
+    .innerJoin(schema.bookingDrafts, and(eq(schema.bookingDrafts.id, schema.journalEntries.sourceDraftId), eq(schema.bookingDrafts.tenantId, schema.journalEntries.tenantId)))
+    .innerJoin(schema.bankTransactions, and(eq(schema.bankTransactions.id, schema.bookingDrafts.transactionId), eq(schema.bankTransactions.tenantId, schema.bookingDrafts.tenantId)))
+    .innerJoin(schema.ledgerAccounts, and(eq(schema.ledgerAccounts.chart, chart), eq(schema.ledgerAccounts.accountNumber, schema.journalLines.accountNumber)))
+    .where(and(
+      eq(schema.journalEntries.tenantId, tenantId),
+      eq(schema.journalEntries.status, 'posted'),
+      or(like(schema.journalLines.accountNumber, '4%'), like(schema.journalLines.accountNumber, '8%')),
+    ))
+    .orderBy(desc(schema.journalEntries.createdAt)).all() as Array<{ counterparty: string; account_number: string }>;
 
   const out = new Map<string, string>();
   for (const row of rows) {
@@ -104,19 +103,20 @@ const loadBayesTraining = (
   chart: 'SKR03' | 'SKR04',
   tenantId: string,
 ): Array<{ text: string; classId: string }> => {
-  const rows = db.prepare(
-    `
-      SELECT bt.counterparty AS counterparty, bt.purpose AS purpose, jl.account_number AS account_number
-      FROM journal_entries je
-      INNER JOIN journal_lines jl ON jl.entry_id = je.id AND jl.tenant_id = je.tenant_id
-      INNER JOIN booking_drafts bd ON bd.id = je.source_draft_id AND bd.tenant_id = je.tenant_id
-      INNER JOIN bank_transactions bt ON bt.id = bd.transaction_id AND bt.tenant_id = bd.tenant_id
-      INNER JOIN ledger_accounts la ON la.chart = ? AND la.account_number = jl.account_number
-      WHERE je.tenant_id = ?
-        AND je.status = 'posted'
-        AND substr(jl.account_number, 1, 1) NOT IN ('0', '1')
-    `,
-  ).all(chart, tenantId) as Array<{ counterparty: string; purpose: string; account_number: string }>;
+  const rows = createDrizzle(db).select({
+    counterparty: schema.bankTransactions.counterparty,
+    purpose: schema.bankTransactions.purpose,
+    account_number: schema.journalLines.accountNumber,
+  }).from(schema.journalEntries)
+    .innerJoin(schema.journalLines, and(eq(schema.journalLines.entryId, schema.journalEntries.id), eq(schema.journalLines.tenantId, schema.journalEntries.tenantId)))
+    .innerJoin(schema.bookingDrafts, and(eq(schema.bookingDrafts.id, schema.journalEntries.sourceDraftId), eq(schema.bookingDrafts.tenantId, schema.journalEntries.tenantId)))
+    .innerJoin(schema.bankTransactions, and(eq(schema.bankTransactions.id, schema.bookingDrafts.transactionId), eq(schema.bankTransactions.tenantId, schema.bookingDrafts.tenantId)))
+    .innerJoin(schema.ledgerAccounts, and(eq(schema.ledgerAccounts.chart, chart), eq(schema.ledgerAccounts.accountNumber, schema.journalLines.accountNumber)))
+    .where(and(
+      eq(schema.journalEntries.tenantId, tenantId),
+      eq(schema.journalEntries.status, 'posted'),
+      or(like(schema.journalLines.accountNumber, '4%'), like(schema.journalLines.accountNumber, '8%')),
+    )).all() as Array<{ counterparty: string; purpose: string; account_number: string }>;
 
   return rows.map((row) => ({
     text: `${row.counterparty || ''} ${row.purpose || ''}`.trim(),
@@ -130,16 +130,10 @@ const loadFallbackAccount = (
   startsWith: string[],
 ): string | undefined => {
   if (startsWith.length === 0) return undefined;
-  const clause = startsWith.map(() => 'substr(account_number, 1, 1) = ?').join(' OR ');
-  const row = db.prepare(
-    `
-      SELECT account_number
-      FROM ledger_accounts
-      WHERE chart = ? AND (${clause})
-      ORDER BY account_number ASC
-      LIMIT 1
-    `,
-  ).get(chart, ...startsWith) as { account_number: string } | undefined;
+  const rows = createDrizzle(db).select({ account_number: schema.ledgerAccounts.accountNumber })
+    .from(schema.ledgerAccounts).where(eq(schema.ledgerAccounts.chart, chart))
+    .orderBy(asc(schema.ledgerAccounts.accountNumber)).all() as Array<{ account_number: string }>;
+  const row = rows.find((candidate) => startsWith.some((prefix) => candidate.account_number.startsWith(prefix)));
   return row?.account_number;
 };
 

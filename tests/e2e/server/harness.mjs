@@ -107,6 +107,42 @@ const getPodmanSocketPath = () => {
 
 const getPodmanHomePath = (projectName) => path.join(process.env.TMPDIR ?? os.tmpdir(), `${projectName}-podman-home`);
 
+const cleanupPodmanHome = async (state) => {
+  const podmanHome = state.podmanHome;
+  if (!podmanHome) return;
+
+  const expectedHome = path.resolve(getPodmanHomePath(state.projectName));
+  const tempRoot = path.resolve(process.env.TMPDIR ?? os.tmpdir());
+  const resolvedHome = path.resolve(podmanHome);
+  if (resolvedHome !== expectedHome || !resolvedHome.startsWith(`${tempRoot}${path.sep}`)) {
+    debugLog('podman:skip-unsafe-home-cleanup', podmanHome);
+    return;
+  }
+
+  const unshareCleanup = await runCommand(
+    'podman',
+    ['unshare', 'find', resolvedHome, '-depth', '-delete'],
+    {
+      allowFailure: true,
+      env: getContainerEnv(state),
+      timeoutMs: 120_000,
+    }
+  );
+  if (unshareCleanup.code !== 0) {
+    debugLog('podman:unshare-home-cleanup-failed', unshareCleanup.stderr.trim());
+  }
+
+  await fs.rm(resolvedHome, { recursive: true, force: true }).catch(() => {});
+  try {
+    await fs.access(resolvedHome);
+    debugLog('podman:home-remains-after-cleanup', resolvedHome);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      debugLog('podman:home-cleanup-verification-failed', error?.message ?? String(error));
+    }
+  }
+};
+
 const getFreePort = async () =>
   await new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -574,6 +610,15 @@ const startServerModeProcessStack = async (state, startupError) => {
   debugLog('process:wait-postgres-health');
   await waitForPostgresReady(databaseUrl, 'Postgres database');
 
+  debugLog('process:migrate');
+  await runCommand('pnpm', ['-C', 'packages/server-data', 'migrate'], {
+    timeoutMs: bootTimeoutMs,
+    env: {
+      ...process.env,
+      DATABASE_URL: databaseUrl,
+    },
+  });
+
   const commonServerEnv = {
     ...process.env,
     DATABASE_URL: databaseUrl,
@@ -890,9 +935,7 @@ export async function stopServerModeStack(currentState = null) {
     } catch {}
   }
 
-  if (state.podmanHome) {
-    await fs.rm(state.podmanHome, { recursive: true, force: true }).catch(() => {});
-  }
+  await cleanupPodmanHome(state);
 
   await writeRuntimeState({
     ...state,

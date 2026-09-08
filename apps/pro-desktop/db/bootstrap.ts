@@ -9,6 +9,11 @@ CREATE TABLE IF NOT EXISTS invoices (
   client_number TEXT,
   project_id TEXT,
   number TEXT NOT NULL,
+  document_kind TEXT NOT NULL DEFAULT 'invoice',
+  source_document_id TEXT,
+  root_document_id TEXT,
+  revision_of_id TEXT,
+  revision_number INTEGER NOT NULL DEFAULT 0,
   client TEXT NOT NULL,
   client_email TEXT NOT NULL,
   client_address TEXT,
@@ -22,6 +27,10 @@ CREATE TABLE IF NOT EXISTS invoices (
   service_period TEXT,
   amount REAL NOT NULL,
   status TEXT NOT NULL,
+  accounting_status TEXT NOT NULL DEFAULT 'unposted',
+  accounting_snapshot_json TEXT,
+  accounting_journal_entry_id TEXT,
+  accounting_posted_at TEXT,
   dunning_level INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -32,6 +41,11 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
   description TEXT NOT NULL,
+  line_meta_json TEXT,
+  article_id TEXT,
+  category TEXT,
+  unit TEXT,
+  discount_percent REAL,
   tax_rate REAL,
   quantity REAL NOT NULL,
   price REAL NOT NULL,
@@ -81,6 +95,11 @@ CREATE TABLE IF NOT EXISTS offer_items (
   offer_id TEXT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
   description TEXT NOT NULL,
+  line_meta_json TEXT,
+  article_id TEXT,
+  category TEXT,
+  unit TEXT,
+  discount_percent REAL,
   tax_rate REAL,
   quantity REAL NOT NULL,
   price REAL NOT NULL,
@@ -98,7 +117,8 @@ CREATE TABLE IF NOT EXISTS clients (
   status TEXT NOT NULL,
   avatar TEXT,
   tags_json TEXT NOT NULL,
-  notes TEXT NOT NULL
+  notes TEXT NOT NULL,
+  tax_profile_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS client_addresses (
@@ -196,7 +216,6 @@ CREATE INDEX IF NOT EXISTS idx_ledger_accounts_chart
   ON ledger_accounts(chart);
 CREATE INDEX IF NOT EXISTS idx_ledger_accounts_name
   ON ledger_accounts(name);
-
 CREATE TABLE IF NOT EXISTS pro_workflow_entries (
   tenant_id TEXT NOT NULL DEFAULT 'default',
   transaction_id TEXT NOT NULL,
@@ -221,6 +240,8 @@ CREATE TABLE IF NOT EXISTS bank_transactions (
   linked_invoice_id TEXT,
   status TEXT NOT NULL CHECK (status IN ('pending', 'booked')),
   source_transaction_id TEXT,
+  deleted_at TEXT,
+  rollback_reason TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -298,6 +319,14 @@ CREATE TABLE IF NOT EXISTS accounting_periods (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS accounting_policies (
+  tenant_id TEXT PRIMARY KEY,
+  active_chart TEXT NOT NULL DEFAULT 'SKR03' CHECK (active_chart IN ('SKR03', 'SKR04')),
+  vat_method TEXT NOT NULL DEFAULT 'soll' CHECK (vat_method IN ('soll', 'ist')),
+  period_policy TEXT NOT NULL DEFAULT 'calendar_month' CHECK (period_policy IN ('calendar_month')),
+  updated_at TEXT NOT NULL
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_accounting_periods_tenant_period
   ON accounting_periods(tenant_id, period);
 
@@ -322,6 +351,44 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_tenant_entry_number
 CREATE INDEX IF NOT EXISTS idx_journal_entries_tenant_posting_date
   ON journal_entries(tenant_id, posting_date DESC);
 
+/* One append-only provenance seam for all non-document accounting sources. */
+CREATE TABLE IF NOT EXISTS accounting_source_runs (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  source_revision TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  fact_json TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('posted', 'rejected', 'noop')),
+  journal_entry_id TEXT,
+  effective_date TEXT NOT NULL,
+  posting_date TEXT NOT NULL,
+  period TEXT NOT NULL,
+  fiscal_year INTEGER NOT NULL,
+  currency TEXT NOT NULL,
+  booking_text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accounting_source_runs_revision
+  ON accounting_source_runs(tenant_id, source_type, source_id, source_revision);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accounting_source_runs_idempotency
+  ON accounting_source_runs(tenant_id, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_accounting_source_runs_created
+  ON accounting_source_runs(tenant_id, created_at DESC);
+CREATE TRIGGER IF NOT EXISTS accounting_source_runs_no_update
+BEFORE UPDATE ON accounting_source_runs
+BEGIN
+  SELECT RAISE(ABORT, 'accounting_source_runs are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS accounting_source_runs_no_delete
+BEFORE DELETE ON accounting_source_runs
+BEGIN
+  SELECT RAISE(ABORT, 'accounting_source_runs are immutable');
+END;
+
 CREATE TABLE IF NOT EXISTS journal_lines (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL DEFAULT 'default',
@@ -336,6 +403,7 @@ CREATE TABLE IF NOT EXISTS journal_lines (
   net_amount REAL,
   tax_amount REAL,
   gross_amount REAL,
+  datev_sachverhalt_ll TEXT,
   country_code TEXT,
   counterparty_vat_id TEXT,
   evidence_type TEXT,
@@ -368,6 +436,11 @@ CREATE TABLE IF NOT EXISTS assets (
   asset_account_number TEXT NOT NULL,
   disposal_date TEXT,
   disposal_proceeds REAL,
+  acquisition_offset_account_number TEXT,
+  source_incoming_invoice_id TEXT,
+  activation_journal_entry_id TEXT,
+  accounting_repair_required INTEGER NOT NULL DEFAULT 0 CHECK (accounting_repair_required IN (0,1)),
+  accounting_repair_reason TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -383,7 +456,10 @@ CREATE TABLE IF NOT EXISTS asset_depreciation_schedule (
   months INTEGER NOT NULL,
   status TEXT NOT NULL,
   journal_entry_id TEXT,
-  posted_at TEXT
+  source_type TEXT,
+  source_key TEXT,
+  posted_at TEXT,
+  CHECK (status <> 'posted' OR (journal_entry_id IS NOT NULL AND source_type IS NOT NULL AND source_key IS NOT NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_schedule_tenant_asset_year
   ON asset_depreciation_schedule(tenant_id, asset_id, year);
@@ -397,11 +473,133 @@ CREATE TABLE IF NOT EXISTS asset_movements (
   amount REAL NOT NULL DEFAULT 0,
   proceeds REAL,
   gain_loss REAL,
+  journal_entry_id TEXT,
+  source_type TEXT,
+  source_key TEXT,
   reason TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  CHECK (type NOT IN ('activation', 'depreciation', 'disposal') OR (journal_entry_id IS NOT NULL AND source_type IS NOT NULL AND source_key IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_asset_movements_tenant_asset_date
   ON asset_movements(tenant_id, asset_id, movement_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_movements_tenant_source
+  ON asset_movements(tenant_id, source_type, source_key)
+  WHERE source_type IS NOT NULL AND source_key IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS assets_protect_accounting_fields
+BEFORE UPDATE ON assets FOR EACH ROW
+WHEN (EXISTS (SELECT 1 FROM asset_movements m WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id)
+  OR EXISTS (SELECT 1 FROM asset_depreciation_schedule s WHERE s.asset_id = OLD.id AND s.tenant_id = OLD.tenant_id AND s.status = 'posted')
+  OR COALESCE(OLD.accounting_repair_required, 0) = 1)
+  AND (
+    NEW.asset_number != OLD.asset_number OR NEW.asset_class != OLD.asset_class OR
+    NEW.activation_date != OLD.activation_date OR NEW.acquisition_cost != OLD.acquisition_cost OR
+    COALESCE(NEW.useful_life_years, -1) != COALESCE(OLD.useful_life_years, -1) OR
+    NEW.depreciation_method != OLD.depreciation_method OR NEW.asset_account_number != OLD.asset_account_number OR
+    COALESCE(NEW.acquisition_offset_account_number, '') != COALESCE(OLD.acquisition_offset_account_number, '') OR
+    COALESCE(NEW.source_incoming_invoice_id, '') != COALESCE(OLD.source_incoming_invoice_id, '') OR
+    COALESCE(NEW.activation_journal_entry_id, '') != COALESCE(OLD.activation_journal_entry_id, '') OR
+    COALESCE(NEW.accounting_repair_required, 0) != COALESCE(OLD.accounting_repair_required, 0) OR
+    COALESCE(NEW.accounting_repair_reason, '') != COALESCE(OLD.accounting_repair_reason, '') OR
+    COALESCE(NEW.status, '') != COALESCE(OLD.status, '') OR
+    COALESCE(NEW.disposal_date, '') != COALESCE(OLD.disposal_date, '') OR
+    COALESCE(NEW.disposal_proceeds, -1) != COALESCE(OLD.disposal_proceeds, -1)
+  )
+  AND NOT (
+    OLD.status = 'aktiv' AND NEW.status = 'voll_abgeschrieben' AND
+    NEW.disposal_date IS NULL AND OLD.disposal_date IS NULL AND
+    NOT EXISTS (SELECT 1 FROM asset_depreciation_schedule s
+                WHERE s.asset_id = OLD.id AND s.tenant_id = OLD.tenant_id AND s.status = 'planned') AND
+    COALESCE((SELECT SUM(s.amount) FROM asset_depreciation_schedule s
+              WHERE s.asset_id = OLD.id AND s.tenant_id = OLD.tenant_id AND s.status = 'posted'), 0) >= OLD.acquisition_cost AND
+    EXISTS (SELECT 1 FROM asset_movements m
+            WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id
+              AND m.type = 'depreciation' AND m.source_type = 'asset_depreciation'
+              AND m.journal_entry_id IS NOT NULL)
+  )
+  AND NOT (
+    OLD.accounting_repair_required = 1 AND NEW.accounting_repair_required = 0 AND
+    NEW.status = OLD.status AND COALESCE(NEW.disposal_date, '') = COALESCE(OLD.disposal_date, '') AND
+    COALESCE(NEW.disposal_proceeds, -1) = COALESCE(OLD.disposal_proceeds, -1) AND
+    NEW.asset_number = OLD.asset_number AND NEW.asset_class = OLD.asset_class AND
+    NEW.activation_date = OLD.activation_date AND NEW.acquisition_cost = OLD.acquisition_cost AND
+    COALESCE(NEW.useful_life_years, -1) = COALESCE(OLD.useful_life_years, -1) AND
+    NEW.depreciation_method = OLD.depreciation_method AND NEW.asset_account_number = OLD.asset_account_number AND
+    COALESCE(NEW.acquisition_offset_account_number, '') = COALESCE(OLD.acquisition_offset_account_number, '') AND
+    NEW.activation_journal_entry_id IS NOT NULL AND NEW.source_incoming_invoice_id IS NOT NULL AND
+    EXISTS (
+      SELECT 1 FROM asset_movements m
+      JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
+      WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id AND m.type = 'activation'
+        AND m.journal_entry_id = NEW.activation_journal_entry_id AND m.source_type = 'incoming_invoice'
+        AND m.source_key = 'incoming-invoice:' || NEW.source_incoming_invoice_id
+        AND j.source_type = m.source_type AND j.source_key = m.source_key
+    )
+  )
+  AND NOT (
+    OLD.status IN ('aktiv', 'voll_abgeschrieben') AND OLD.disposal_date IS NULL AND
+    NEW.status IN ('verkauft', 'stillgelegt') AND NEW.disposal_date IS NOT NULL AND
+    EXISTS (
+      SELECT 1 FROM asset_movements m
+      JOIN journal_entries j ON j.tenant_id = m.tenant_id AND j.id = m.journal_entry_id
+      WHERE m.asset_id = OLD.id AND m.tenant_id = OLD.tenant_id
+        AND m.type = 'disposal' AND m.source_type = 'asset_disposal'
+        AND m.source_key = 'asset_disposal:' || OLD.id AND m.journal_entry_id IS NOT NULL
+        AND m.movement_date = NEW.disposal_date
+        AND COALESCE(m.proceeds, -1) = COALESCE(NEW.disposal_proceeds, -1)
+        AND ((m.proceeds > 0 AND NEW.status = 'verkauft') OR
+             (COALESCE(m.proceeds, 0) = 0 AND NEW.status = 'stillgelegt'))
+        AND j.source_type = m.source_type AND j.source_key = m.source_key
+    )
+  )
+BEGIN SELECT RAISE(ABORT, 'accounting-affecting asset fields are immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS asset_movements_require_source
+BEFORE INSERT ON asset_movements FOR EACH ROW
+WHEN NEW.type IN ('activation', 'depreciation', 'disposal') AND (
+  NEW.journal_entry_id IS NULL OR NEW.source_type IS NULL OR NEW.source_key IS NULL OR
+  (NEW.type = 'activation' AND NEW.source_type NOT IN ('asset_activation', 'incoming_invoice')) OR
+  (NEW.type = 'depreciation' AND NEW.source_type != 'asset_depreciation') OR
+  (NEW.type = 'disposal' AND NEW.source_type != 'asset_disposal') OR
+  NOT EXISTS (SELECT 1 FROM journal_entries j
+              WHERE j.id = NEW.journal_entry_id AND j.tenant_id = NEW.tenant_id
+                AND j.source_type = NEW.source_type AND j.source_key = NEW.source_key)
+)
+BEGIN SELECT RAISE(ABORT, 'asset movement requires a valid journal source'); END;
+
+CREATE TRIGGER IF NOT EXISTS asset_movements_no_update
+BEFORE UPDATE ON asset_movements FOR EACH ROW
+WHEN NOT (
+  EXISTS (
+    SELECT 1 FROM assets a
+    JOIN journal_entries j ON j.tenant_id = a.tenant_id AND j.id = NEW.journal_entry_id
+    WHERE a.id = OLD.asset_id AND a.tenant_id = OLD.tenant_id
+      AND a.accounting_repair_required = 1
+      AND NEW.id = OLD.id AND NEW.asset_id = OLD.asset_id AND NEW.type = OLD.type
+      AND NEW.movement_date = OLD.movement_date AND NEW.amount = OLD.amount
+      AND COALESCE(NEW.proceeds, -1) = COALESCE(OLD.proceeds, -1)
+      AND COALESCE(NEW.gain_loss, -1) = COALESCE(OLD.gain_loss, -1)
+      AND NEW.reason = OLD.reason AND NEW.created_at = OLD.created_at
+      AND NEW.type = 'activation' AND NEW.journal_entry_id IS NOT NULL
+      AND OLD.journal_entry_id IS NULL AND OLD.source_type IS NULL AND OLD.source_key IS NULL
+      AND NEW.source_type = 'incoming_invoice'
+      AND NEW.source_key IS NOT NULL
+      AND j.source_type = NEW.source_type AND j.source_key = NEW.source_key
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'asset movements are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS asset_movements_no_delete
+BEFORE DELETE ON asset_movements FOR EACH ROW
+BEGIN SELECT RAISE(ABORT, 'asset movements are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS asset_schedule_posted_no_update
+BEFORE UPDATE ON asset_depreciation_schedule FOR EACH ROW WHEN OLD.status = 'posted'
+BEGIN SELECT RAISE(ABORT, 'posted depreciation schedules are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS asset_schedule_posted_no_delete
+BEFORE DELETE ON asset_depreciation_schedule FOR EACH ROW WHEN OLD.status = 'posted'
+BEGIN SELECT RAISE(ABORT, 'posted depreciation schedules are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS asset_delete_with_movements
+BEFORE DELETE ON assets FOR EACH ROW WHEN EXISTS (SELECT 1 FROM asset_movements WHERE asset_id = OLD.id)
+BEGIN SELECT RAISE(ABORT, 'accounting asset cannot be deleted'); END;
 
 CREATE TRIGGER IF NOT EXISTS journal_entries_protect_core_fields
 BEFORE UPDATE ON journal_entries
@@ -448,15 +646,16 @@ CREATE TABLE IF NOT EXISTS account_mappings_hgb (
   tenant_id TEXT NOT NULL DEFAULT 'default',
   chart TEXT NOT NULL,
   account_number TEXT NOT NULL,
-  statement_type TEXT NOT NULL CHECK (statement_type IN ('guv', 'bilanz')),
+  statement_type TEXT NOT NULL CHECK (statement_type IN ('bwa01', 'management-guv', 'hgb-guv', 'hgb-gkv', 'hgb-bilanz', 'hgb-balance', 'eur', 'guv', 'bilanz')),
   position_key TEXT NOT NULL,
   position_label TEXT NOT NULL,
   balance_side TEXT CHECK (balance_side IN ('asset', 'liability')),
+  valid_from TEXT,
   updated_at TEXT NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_account_mappings_unique
-  ON account_mappings_hgb(tenant_id, chart, account_number, statement_type);
+  ON account_mappings_hgb(tenant_id, chart, account_number, statement_type, valid_from);
 
 CREATE TABLE IF NOT EXISTS report_snapshots (
   id TEXT PRIMARY KEY,
@@ -464,11 +663,26 @@ CREATE TABLE IF NOT EXISTS report_snapshots (
   report_type TEXT NOT NULL,
   args_json TEXT NOT NULL,
   payload_json TEXT NOT NULL,
+  source_hash TEXT,
   created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_report_snapshots_tenant_type
   ON report_snapshots(tenant_id, report_type, created_at DESC);
+
+CREATE TRIGGER IF NOT EXISTS report_snapshots_no_update
+BEFORE UPDATE ON report_snapshots
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'report_snapshots are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS report_snapshots_no_delete
+BEFORE DELETE ON report_snapshots
+FOR EACH ROW
+BEGIN
+  SELECT RAISE(ABORT, 'report_snapshots are immutable');
+END;
 
 CREATE TABLE IF NOT EXISTS datev_exports (
   id TEXT PRIMARY KEY,
@@ -478,7 +692,17 @@ CREATE TABLE IF NOT EXISTS datev_exports (
   from_date TEXT,
   to_date TEXT,
   created_at TEXT NOT NULL,
-  meta_json TEXT NOT NULL
+  meta_json TEXT NOT NULL,
+  sha256 TEXT,
+  byte_size INTEGER,
+  encoding TEXT,
+  header_version INTEGER,
+  format_version INTEGER,
+  chart TEXT,
+  source_snapshot_hash TEXT,
+  manifest_json TEXT,
+  status TEXT,
+  validation_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_datev_exports_tenant_created
@@ -575,26 +799,30 @@ CREATE TABLE IF NOT EXISTS transactions (
   linked_invoice_id TEXT,
   status TEXT NOT NULL,
   dedup_hash TEXT,
-  import_batch_id TEXT
+  import_batch_id TEXT,
+  linked_payment_id TEXT,
+  deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS eur_lines (
   id TEXT PRIMARY KEY,
   tax_year INTEGER NOT NULL,
+  provider_path TEXT NOT NULL DEFAULT 'main',
   kennziffer TEXT,
   label TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('income', 'expense', 'computed')),
   exportable INTEGER NOT NULL DEFAULT 1 CHECK (exportable IN (0, 1)),
   sort_order INTEGER NOT NULL,
   computed_from_json TEXT,
+  computed_terms_json TEXT,
   source_version TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_eur_lines_year_sort ON eur_lines(tax_year, sort_order);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_kennziffer
-  ON eur_lines(tax_year, kennziffer)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_provider_kennziffer
+  ON eur_lines(tax_year, provider_path, kennziffer)
   WHERE kennziffer IS NOT NULL AND TRIM(kennziffer) <> '';
 
 CREATE TABLE IF NOT EXISTS eur_classifications (
@@ -605,6 +833,7 @@ CREATE TABLE IF NOT EXISTS eur_classifications (
   eur_line_id TEXT REFERENCES eur_lines(id) ON DELETE SET NULL,
   excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0, 1)),
   vat_mode TEXT NOT NULL DEFAULT 'none' CHECK (vat_mode IN ('none', 'default')),
+  vat_rate REAL,
   note TEXT,
   updated_at TEXT NOT NULL,
   CHECK (NOT (excluded = 1 AND eur_line_id IS NOT NULL))
@@ -662,7 +891,9 @@ CREATE TABLE IF NOT EXISTS import_batches (
   imported_count INTEGER NOT NULL,
   skipped_count INTEGER NOT NULL,
   error_count INTEGER NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  rolled_back_at TEXT,
+  rollback_reason TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_import_batches_account ON import_batches(account_id, created_at DESC);
@@ -677,7 +908,9 @@ CREATE TABLE IF NOT EXISTS recurring_profiles (
   last_run TEXT,
   end_date TEXT,
   amount REAL NOT NULL,
-  items_json TEXT NOT NULL
+  items_json TEXT NOT NULL,
+  tax_mode TEXT NOT NULL DEFAULT 'standard_vat',
+  tax_meta_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -742,4 +975,147 @@ BEFORE DELETE ON audit_log
 BEGIN
   SELECT RAISE(ABORT, 'audit_log is append-only');
 END;
+
+CREATE TABLE IF NOT EXISTS vendors (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  vendor_number TEXT,
+  name TEXT NOT NULL,
+  email TEXT,
+  address TEXT,
+  vat_id TEXT,
+  iban TEXT,
+  default_expense_account TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vendors_tenant_number
+  ON vendors(tenant_id, vendor_number);
+CREATE INDEX IF NOT EXISTS idx_vendors_tenant_name ON vendors(tenant_id, name);
+
+CREATE TABLE IF NOT EXISTS incoming_invoices (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  vendor_id TEXT NOT NULL REFERENCES vendors(id) ON DELETE RESTRICT,
+  number TEXT NOT NULL,
+  invoice_date TEXT NOT NULL,
+  due_date TEXT NOT NULL,
+  service_period TEXT,
+  net_amount REAL NOT NULL,
+  tax_amount REAL NOT NULL,
+  gross_amount REAL NOT NULL,
+  tax_rate REAL NOT NULL DEFAULT 0,
+  tax_case_key TEXT,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  accounting_status TEXT NOT NULL DEFAULT 'unposted',
+  accounting_snapshot_json TEXT,
+  accounting_journal_entry_id TEXT,
+  accounting_posted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_incoming_invoices_tenant_number
+  ON incoming_invoices(tenant_id, number);
+CREATE INDEX IF NOT EXISTS idx_incoming_invoices_tenant_due_date
+  ON incoming_invoices(tenant_id, due_date);
+
+CREATE TABLE IF NOT EXISTS incoming_invoice_lines (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  incoming_invoice_id TEXT NOT NULL REFERENCES incoming_invoices(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  description TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  unit_price REAL NOT NULL,
+  net_amount REAL NOT NULL,
+  tax_rate REAL NOT NULL,
+  tax_amount REAL NOT NULL,
+  gross_amount REAL NOT NULL,
+  account_number TEXT,
+  asset_account_number TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_incoming_invoice_lines_invoice
+  ON incoming_invoice_lines(incoming_invoice_id, position);
+
+CREATE TABLE IF NOT EXISTS accounting_account_mappings (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  chart TEXT NOT NULL CHECK (chart IN ('SKR03', 'SKR04')),
+  role TEXT NOT NULL,
+  account_number TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accounting_account_mappings_tenant_chart_role
+  ON accounting_account_mappings(tenant_id, chart, role);
+
+CREATE TABLE IF NOT EXISTS open_items (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  party_type TEXT NOT NULL CHECK (party_type IN ('debtor', 'creditor')),
+  party_id TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  document_number TEXT NOT NULL,
+  document_date TEXT NOT NULL,
+  due_date TEXT NOT NULL,
+  original_amount REAL NOT NULL,
+  allocated_amount REAL NOT NULL DEFAULT 0,
+  residual_amount REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  journal_entry_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_open_items_tenant_source
+  ON open_items(tenant_id, source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_open_items_tenant_status_due_date
+  ON open_items(tenant_id, status, due_date);
+
+CREATE TABLE IF NOT EXISTS open_item_payments (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  party_type TEXT NOT NULL CHECK (party_type IN ('debtor', 'creditor')),
+  party_id TEXT,
+  payment_date TEXT NOT NULL,
+  amount REAL NOT NULL,
+  bank_account_number TEXT NOT NULL,
+  method TEXT,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  allocated_amount REAL NOT NULL DEFAULT 0,
+  residual_amount REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  journal_entry_id TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_open_item_payments_tenant_source
+  ON open_item_payments(tenant_id, source_type, source_id);
+
+CREATE TABLE IF NOT EXISTS open_item_allocations (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  payment_id TEXT NOT NULL REFERENCES open_item_payments(id) ON DELETE CASCADE,
+  open_item_id TEXT NOT NULL REFERENCES open_items(id) ON DELETE CASCADE,
+  amount REAL NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_open_item_allocations_payment
+  ON open_item_allocations(tenant_id, payment_id);
+CREATE INDEX IF NOT EXISTS idx_open_item_allocations_open_item
+  ON open_item_allocations(tenant_id, open_item_id);
+
+CREATE TABLE IF NOT EXISTS accounting_backfill_runs (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  status TEXT NOT NULL,
+  candidates_json TEXT NOT NULL,
+  confirmation_hash TEXT NOT NULL,
+  result_json TEXT,
+  confirmed_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_accounting_backfill_runs_tenant_status
+  ON accounting_backfill_runs(tenant_id, status);
 `;

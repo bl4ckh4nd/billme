@@ -3,11 +3,14 @@ import type {
   AccountSuggestionRule,
   BookingDraftEntity,
   DatevExportResult,
+  DatevExportSourceSnapshot,
+  DatevExportContent,
   JournalEntryEntity,
   LedgerAccount,
   LedgerAccountStats,
   LedgerBalance,
   ListLedgerAccountsArgs,
+  ReportUnmappedAccount,
   ProBankTransaction,
   ProWorkflowEntry,
   TaxCaseAccountMapping,
@@ -15,7 +18,31 @@ import type {
   TaxCaseKey,
   UpsertAccountSuggestionRuleInput,
   ValidationIssue,
+  AccountingAccountMapping,
+  AccountingBackfillConfirmation,
+  AccountingBackfillPreview,
+  AccountingBackfillResult,
+  AccountingPostingPreview,
+  AccountingMutationContext,
+  IncomingInvoiceEntity,
+  OpenItemEntity,
+  OpenItemPaymentEntity,
+  OpenItemPaymentInput,
+  VendorEntity,
+  TaxFilingAction,
+  TaxFilingMutation,
+  TaxFilingProviderResult,
+  TaxFilingRecord,
+  CorrectionDeltaInput,
+  ImmutableOriginalDocument,
+  LinkedCorrectionDocument,
+  TaxExportEntry,
+  TaxExportPeriod,
+  TaxExportPreparation,
 } from '@billme/accounting-shared';
+
+export type { AccountingMutationContext } from '@billme/accounting-shared';
+export type { TaxFilingAction, TaxFilingMutation, TaxFilingProviderResult, TaxFilingRecord } from '@billme/accounting-shared';
 import type {
   DunningEmailProvider,
   DunningHistoryEntry,
@@ -185,6 +212,11 @@ export interface OfferPortalGateway {
 export interface RecurringProfileRepository {
   list(scope: TenantScope): MaybePromise<RecurringProfile[]>;
   getById(scope: TenantScope, id: string): MaybePromise<RecurringProfile | null>;
+  /**
+   * Read one profile while holding its database row lock when the adapter can
+   * provide one. Embedded adapters may omit this and use the fresh read path.
+   */
+  getByIdForUpdate?(scope: TenantScope, id: string): MaybePromise<RecurringProfile | null>;
   save(scope: TenantScope, profile: RecurringProfile): MaybePromise<RecurringProfile>;
   remove(scope: TenantScope, id: string): MaybePromise<void>;
 }
@@ -321,10 +353,22 @@ export interface ProDraftActionRequest {
   transactionId: string;
   action: 'save_draft' | 'submit_for_review' | 'approve' | 'reject' | 'post' | 'reverse' | 'create_correction' | 'request_receipt';
   rejectReason?: string;
+  mutation?: AccountingMutationContext;
 }
 
 export interface PostDraftOptions {
   postingDate?: string;
+  idempotencyKey?: string;
+  softLockOverride?: boolean;
+  overrideReason?: string;
+  mutation?: AccountingMutationContext;
+}
+
+export interface ReverseJournalEntryOptions {
+  postingDate?: string;
+  softLockOverride?: boolean;
+  overrideReason?: string;
+  mutation?: AccountingMutationContext;
 }
 
 export interface ListJournalEntriesOptions {
@@ -337,6 +381,10 @@ export interface ListJournalEntriesOptions {
 
 export interface LedgerBalanceOptions {
   asOfDate?: string;
+  from?: string;
+  to?: string;
+  /** Optional first day of the turnover range; opening is everything before it. */
+  fromDate?: string;
 }
 
 export interface ReportRangeOptions {
@@ -345,13 +393,18 @@ export interface ReportRangeOptions {
 }
 
 export interface SusaReport {
+  from?: string;
+  to?: string;
+  chart?: 'SKR03' | 'SKR04';
   asOfDate: string;
-  rows: LedgerBalance[];
+  rows: Array<LedgerBalance & { mappedTo?: string; hasWarnings?: boolean }>;
   totals: {
     debit: number;
     credit: number;
     balance: number;
   };
+  unmappedAccounts?: ReportUnmappedAccount[];
+  blocking?: boolean;
 }
 
 export interface GuvReport {
@@ -361,11 +414,16 @@ export interface GuvReport {
     positionKey: string;
     positionLabel: string;
     amount: number;
+    accountRefs?: string[];
   }>;
+  chart?: 'SKR03' | 'SKR04';
   netResult: number;
+  unmappedAccounts?: ReportUnmappedAccount[];
+  blocking?: boolean;
 }
 
 export interface BilanzReport {
+  chart?: 'SKR03' | 'SKR04';
   asOfDate: string;
   assets: Array<{
     accountNumber: string;
@@ -380,6 +438,8 @@ export interface BilanzReport {
     liabilities: number;
     delta: number;
   };
+  unmappedAccounts?: ReportUnmappedAccount[];
+  blocking?: boolean;
 }
 
 export interface AccountingHealthSnapshot {
@@ -388,6 +448,8 @@ export interface AccountingHealthSnapshot {
   reversedCount: number;
   unbalancedDraftCount: number;
   unmappedAccountCount: number;
+  unmappedAccounts?: string[];
+  blocking?: boolean;
   lastDatevExportAt?: string;
 }
 
@@ -411,37 +473,290 @@ export interface DatevPostingRow {
   gegenkonto: string;
   sollHabenKennzeichen: 'S' | 'H';
   buSchluessel?: string;
+  euLandUstId?: string;
+  euSteuersatz?: number;
+  sachverhaltLl?: string;
   umsatz: number;
 }
 
 export interface ProAccountingRepository {
   listBankTransactions(scope: TenantScope): Promise<ProBankTransaction[]>;
   getDraftByTransactionId(scope: TenantScope, transactionId: string): Promise<BookingDraftEntity | null>;
-  saveDraft(scope: TenantScope, draft: BookingDraftEntity): Promise<BookingDraftEntity>;
+  saveDraft(scope: TenantScope, draft: BookingDraftEntity & { mutation?: AccountingMutationContext }): Promise<BookingDraftEntity>;
   dispatchDraftAction(scope: TenantScope, args: ProDraftActionRequest): Promise<BookingDraftEntity>;
   validateTaxCompliance(
     scope: TenantScope,
-    args: { draftId?: string; transactionId?: string },
+    args: { draftId?: string; transactionId?: string; mutation?: AccountingMutationContext },
   ): Promise<{ ok: boolean; issues: ValidationIssue[] }>;
   postDraft(scope: TenantScope, draftId: string, options?: PostDraftOptions): Promise<{
     entry: JournalEntryEntity;
     issues: ValidationIssue[];
   }>;
-  reverseJournalEntry(scope: TenantScope, entryId: string, reason: string): Promise<{ ok: true; reversalEntryId: string }>;
+  reverseJournalEntry(scope: TenantScope, entryId: string, reason: string, options?: ReverseJournalEntryOptions): Promise<{ ok: true; reversalEntryId: string }>;
   listJournalEntries(scope: TenantScope, args?: ListJournalEntriesOptions): Promise<JournalEntryEntity[]>;
+  getJournalEntryById(scope: TenantScope, entryId: string): Promise<JournalEntryEntity | null>;
   getLedgerBalances(scope: TenantScope, args?: LedgerBalanceOptions): Promise<LedgerBalance[]>;
   getSusaReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<SusaReport>;
   getGuvReport(scope: TenantScope, args?: ReportRangeOptions): Promise<GuvReport>;
   getBilanzReport(scope: TenantScope, args?: LedgerBalanceOptions): Promise<BilanzReport>;
   listDatevExports(scope: TenantScope): Promise<DatevExportResult[]>;
+  getDatevExportContent?(scope: TenantScope, exportId: string): Promise<DatevExportContent>;
   insertDatevExport(
     scope: TenantScope,
-    args: { filePath: string; recordCount: number; fromDate?: string; toDate?: string },
+    args: {
+      id?: string;
+      filePath: string;
+      recordCount: number;
+      fromDate?: string;
+      toDate?: string;
+      sha256?: string;
+      byteSize?: number;
+      encoding?: 'cp1252' | 'utf8-bom';
+      headerVersion?: number;
+      formatVersion?: number;
+      chart?: 'SKR03' | 'SKR04';
+      sourceSnapshotHash?: string;
+      manifestJson?: string;
+      status?: string;
+      validationJson?: string;
+      content?: Uint8Array;
+      contentSha256?: string;
+      sourceSnapshot?: DatevExportSourceSnapshot;
+      mutation?: AccountingMutationContext;
+    },
   ): Promise<DatevExportResult>;
   getAccountingHealth(scope: TenantScope): Promise<AccountingHealthSnapshot>;
   getVatSummary(scope: TenantScope, args?: ReportRangeOptions): Promise<VatSummary>;
   buildDatevRows(scope: TenantScope, args?: ReportRangeOptions): Promise<DatevPostingRow[]>;
+  getAccountingPolicy(scope: TenantScope): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
+  setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; mutation?: AccountingMutationContext }): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
+  listAccountingAccountMappings(scope: TenantScope, chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
+  upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string; mutation?: AccountingMutationContext }): Promise<AccountingAccountMapping>;
+  listVendors(scope: TenantScope): Promise<VendorEntity[]>;
+  upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
+  listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
+  upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
+  previewOutgoingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postOutgoingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; reservationId?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
+  previewIncomingInvoice(scope: TenantScope, invoiceId: string): Promise<AccountingPostingPreview>;
+  postIncomingInvoice(scope: TenantScope, invoiceId: string, options?: { softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<AccountingPostingPreview>;
+  listOpenItems(scope: TenantScope): Promise<OpenItemEntity[]>;
+  allocateOpenItemPayment(scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity>;
+  allocateRemainingOpenItemPayment(scope: TenantScope, paymentId: string, allocations: Array<{ openItemId: string; amount: number }>, allocationEventId: string, mutation?: AccountingMutationContext): Promise<OpenItemPaymentEntity>;
+  reverseDocumentAccounting(scope: TenantScope, input: { documentType: 'outgoing_invoice' | 'incoming_invoice'; documentId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<{ ok: true; reversalEntryId: string }>;
+  previewAccountingBackfill(scope: TenantScope): Promise<AccountingBackfillPreview>;
+  confirmAccountingBackfill(scope: TenantScope, input: AccountingBackfillConfirmation): Promise<AccountingBackfillResult>;
   ensureSeedData(scope: TenantScope): Promise<void>;
+}
+
+/**
+ * Server-only persistence seam for immutable source facts and their results.
+ * Every write is keyed by (tenant, source type, source id, source revision).
+ */
+export interface AccountingSourceRunRecord {
+  id: string;
+  tenantId: string;
+  sourceType: string;
+  sourceId: string;
+  sourceRevision: string;
+  idempotencyKey: string;
+  status: 'posted' | 'rejected' | 'prepared' | 'noop';
+  source: unknown;
+  result: unknown;
+  journalEntryId?: string;
+  sourceHash: string;
+  createdBy?: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface AccountingSourceRunRepository {
+  listAccountingSourceRuns(scope: TenantScope, args?: { sourceType?: string; limit?: number }): Promise<AccountingSourceRunRecord[]>;
+  getAccountingSourceRun(scope: TenantScope, id: string): Promise<AccountingSourceRunRecord | null>;
+  createCorrectionSettlement(scope: TenantScope, input: {
+    id: string;
+    idempotencyKey: string;
+    correctionDate: string;
+    taxEffectiveDate?: string;
+    original: ImmutableOriginalDocument;
+    deltas: readonly CorrectionDeltaInput[];
+    documentType?: 'outgoing_invoice' | 'incoming_invoice';
+    reason: string;
+    postingDate?: string;
+    softLockOverride?: boolean;
+    overrideReason?: string;
+    mutation?: AccountingMutationContext;
+  }): Promise<{ run: AccountingSourceRunRecord; document: LinkedCorrectionDocument; replayed: boolean }>;
+  runClosingCommand(scope: TenantScope, input: {
+    command?: string;
+    commandType?: string;
+    sourceId?: string;
+    sourceRevision?: string;
+    idempotencyKey?: string;
+    input?: Record<string, unknown>;
+    reason: string;
+    softLockOverride?: boolean;
+    overrideReason?: string;
+    mutation?: AccountingMutationContext;
+    [key: string]: unknown;
+  }): Promise<{ run: AccountingSourceRunRecord; result: unknown; replayed: boolean }>;
+  prepareTaxExport(scope: TenantScope, input: {
+    kind: 'ustva' | 'zm' | 'oss';
+    period: string | TaxExportPeriod;
+    year?: number;
+    entries?: readonly TaxExportEntry[];
+    catalog?: unknown;
+    idempotencyKey?: string;
+    reason: string;
+    mutation?: AccountingMutationContext;
+  }): Promise<{ run: AccountingSourceRunRecord; artifact: TaxExportPreparation; replayed: boolean }>;
+  getTaxExportArtifact(scope: TenantScope, kind: 'ustva' | 'zm' | 'oss', id: string): Promise<TaxExportPreparation>;
+  exportTaxArtifact(scope: TenantScope, kind: 'ustva' | 'zm' | 'oss', id: string): Promise<Uint8Array>;
+}
+
+export type AssetStatus = 'entwurf' | 'aktiv' | 'voll_abgeschrieben' | 'verkauft' | 'stillgelegt';
+export type DepreciationMethod = 'linear' | 'gwg' | 'pool';
+
+export interface AssetItem {
+  id: string;
+  assetNumber: string;
+  name: string;
+  assetClass: string;
+  status: AssetStatus;
+  activationDate: string;
+  acquisitionCost: number;
+  residualValue: number;
+  annualDepreciation: number;
+  usefulLifeYears?: number;
+  depreciationMethod: DepreciationMethod;
+  costCenter: string;
+  location: string;
+  nextDepreciation: string;
+  receiptLinked: boolean;
+  supplier?: string;
+  invoiceRef?: string;
+  assetAccountNumber: string;
+  acquisitionOffsetAccountNumber?: string;
+  sourceIncomingInvoiceId?: string;
+  activationJournalEntryId?: string;
+  accountingRepairRequired?: boolean;
+  accountingRepairReason?: string;
+  disposalDate?: string;
+  disposalProceeds?: number;
+}
+
+export type AssetUpsertInput = Omit<AssetItem, 'id' | 'residualValue' | 'annualDepreciation' | 'nextDepreciation' | 'disposalDate' | 'disposalProceeds' | 'accountingRepairRequired' | 'accountingRepairReason'> & {
+  id?: string;
+  softLockOverride?: boolean;
+  overrideReason?: string;
+};
+
+export interface AssetDepreciationScheduleEntry {
+  id: string;
+  assetId: string;
+  year: number;
+  amount: number;
+  months: number;
+  status: 'planned' | 'posted' | 'cancelled';
+  journalEntryId?: string;
+  sourceType?: string;
+  sourceKey?: string;
+  postedAt?: string;
+}
+
+export interface AssetMutationOptions {
+  softLockOverride?: boolean;
+  overrideReason?: string;
+  mutation?: AccountingMutationContext;
+}
+
+export interface AssetDepreciationInput extends AssetMutationOptions {
+  assetId: string;
+  year: number;
+  postingDate: string;
+  reason: string;
+}
+
+export interface AssetDepreciationResult {
+  asset: AssetItem;
+  scheduleEntry: AssetDepreciationScheduleEntry;
+  journalEntryId: string;
+}
+
+export interface AssetDisposalInput extends AssetMutationOptions {
+  assetId: string;
+  disposalDate: string;
+  proceeds: number;
+  taxRate?: 0 | 7 | 19;
+  proceedsAccountNumber?: string;
+  reason: string;
+}
+
+export interface AssetDisposalResult {
+  asset: AssetItem;
+  residualBookValue: number;
+  gainLoss: number;
+  journalEntryId: string;
+}
+
+/**
+ * Fixed-asset persistence is intentionally a separate capability from the
+ * general Pro accounting repository.  Desktop Pro has its own local asset
+ * store, while server mode composes this capability onto the Postgres ledger
+ * repository.  Keeping the port separate prevents the server-only asset
+ * methods from leaking into the desktop repository contract.
+ */
+export interface ProAccountingAssetRepository {
+  listAssets(scope: TenantScope): Promise<AssetItem[]>;
+  upsertAsset(scope: TenantScope, input: AssetUpsertInput, reason: string, options?: AssetMutationOptions): Promise<AssetItem>;
+  getDepreciationSchedule(scope: TenantScope, assetId: string): Promise<AssetDepreciationScheduleEntry[]>;
+  runDepreciation(scope: TenantScope, input: AssetDepreciationInput): Promise<AssetDepreciationResult>;
+  disposeAsset(scope: TenantScope, input: AssetDisposalInput): Promise<AssetDisposalResult>;
+}
+
+/** Tenant-scoped persistence for immutable, auditable tax filing snapshots. */
+export interface TaxFilingRepository {
+  list(scope: TenantScope): MaybePromise<TaxFilingRecord[]>;
+  getById(scope: TenantScope, id: string): MaybePromise<TaxFilingRecord | null>;
+  getByIdempotencyKey(scope: TenantScope, idempotencyKey: string): MaybePromise<TaxFilingRecord | null>;
+  create(scope: TenantScope, record: TaxFilingRecord): MaybePromise<TaxFilingRecord>;
+  update(scope: TenantScope, record: TaxFilingRecord, expectedStatus?: TaxFilingRecord['status']): MaybePromise<TaxFilingRecord>;
+  enqueueSubmissionJob?(scope: TenantScope, filingId: string, idempotencyKey: string): MaybePromise<void>;
+  recordProviderResult?(scope: TenantScope, input: {
+    id: string;
+    record: TaxFilingRecord;
+    result: TaxFilingProviderResult;
+    action: TaxFilingAction;
+    actorId: string;
+    reason: string;
+    idempotencyKey: string;
+    now?: string;
+  }): MaybePromise<TaxFilingRecord>;
+  recordApproval?(scope: TenantScope, input: {
+    id: string;
+    record: TaxFilingRecord;
+    requesterId: string;
+    approverId: string;
+    reason: string;
+    idempotencyKey: string;
+    now?: string;
+  }): MaybePromise<TaxFilingRecord>;
+}
+
+export interface TaxFilingStateMachinePort {
+  create(input: {
+    id: string;
+    tenantId: string;
+    provider: TaxFilingRecord['provider'];
+    snapshot: TaxFilingRecord['snapshot'];
+    idempotencyKey: string;
+    actorId: string;
+    now: string;
+  }): TaxFilingRecord;
+  transition(record: TaxFilingRecord, action: TaxFilingAction, mutation: TaxFilingMutation): {
+    record: TaxFilingRecord;
+    replayed: boolean;
+  };
 }
 
 export interface ProWorkflowRepository {
@@ -471,6 +786,7 @@ export interface ProAccountingCatalogRepository {
       datevBuKey?: string;
       validFrom?: string;
       validTo?: string;
+      mutation?: AccountingMutationContext;
     },
   ): Promise<TaxCaseAccountMapping>;
   listAccountSuggestionRules(
@@ -479,9 +795,9 @@ export interface ProAccountingCatalogRepository {
   ): Promise<AccountSuggestionRule[]>;
   upsertAccountSuggestionRule(
     scope: TenantScope,
-    input: UpsertAccountSuggestionRuleInput,
+    input: UpsertAccountSuggestionRuleInput & { mutation?: AccountingMutationContext },
   ): Promise<AccountSuggestionRule>;
-  deleteAccountSuggestionRule(scope: TenantScope, id: string): Promise<void>;
+  deleteAccountSuggestionRule(scope: TenantScope, id: string, mutation?: AccountingMutationContext): Promise<void>;
 }
 
 export interface TransactionPort {
@@ -624,6 +940,8 @@ export interface SyncRecurringInvoicePort extends RecurringInvoicePort {
 export interface RecurringProfileStore {
   list(scope: TenantScope): MaybePromise<RecurringProfile[]>;
   getById(scope: TenantScope, id: string): MaybePromise<RecurringProfile | null>;
+  /** Optional row lock for one profile run; callers retain a fresh-read fallback. */
+  getByIdForUpdate?(scope: TenantScope, id: string): MaybePromise<RecurringProfile | null>;
   save(scope: TenantScope, profile: RecurringProfile): MaybePromise<RecurringProfile>;
   remove(scope: TenantScope, id: string): MaybePromise<void>;
 }

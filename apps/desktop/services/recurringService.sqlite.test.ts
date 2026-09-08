@@ -79,8 +79,8 @@ const profile: RecurringProfile = {
   nextRun: '2026-05-10',
   amount: 0,
   items: [
-    { description: 'Service A', quantity: 2, price: 50, total: 0 },
-    { description: 'Service B', quantity: 1, price: 25, total: 25 },
+    { kind: 'item', description: 'Service A', quantity: 2, price: 50, total: 0 },
+    { kind: 'item', description: 'Service B', quantity: 1, price: 25, total: 25 },
   ],
 };
 
@@ -132,9 +132,10 @@ describe.skipIf(!canRunNativeSqlite)('recurringService sqlite adapters', () => {
     settings.automation.recurringEnabled = true;
     settings.automation.recurringRunTime = '09:00';
 
-    expect(shouldRunScheduledRecurring(settings, new Date('2026-05-10T09:05:00.000Z'))).toBe(true);
+    const scheduledNow = new Date(2026, 4, 10, 9, 5);
+    expect(shouldRunScheduledRecurring(settings, scheduledNow)).toBe(true);
 
-    settings.automation.lastRecurringRun = '2026-05-10T08:00:00.000Z';
-    expect(shouldRunScheduledRecurring(settings, new Date('2026-05-10T09:05:00.000Z'))).toBe(false);
+    settings.automation.lastRecurringRun = new Date(2026, 4, 10, 8, 0).toISOString();
+    expect(shouldRunScheduledRecurring(settings, scheduledNow)).toBe(false);
   });
 });

@@ -46,6 +46,11 @@ export interface TableColumn {
 export interface TableRow {
   id: string;
   cells: string[];
+  kind?: 'item' | 'time' | 'optional' | 'text' | 'group' | 'summary' | 'group-continuation' | 'row-continuation';
+  groupId?: string;
+  groupLabel?: string;
+  /** Pagination adds derived row metadata without changing persisted templates. */
+  [key: string]: unknown;
 }
 
 export interface InvoiceElement {

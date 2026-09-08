@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildEurCsv } from './eurReport';
-import { getCatalogForYear, validateEurLineCatalog } from '@billme/desktop-services/eurCatalog';
+import { getCatalogForYear, getCatalogManifestForYear, validateEurLineCatalog } from '@billme/desktop-services/eurCatalog';
 
 describe('eurCatalog validation', () => {
   it('rejects duplicate ids', () => {
@@ -25,6 +25,22 @@ describe('eurCatalog validation', () => {
     const lines = getCatalogForYear(2025);
     expect(lines.length).toBeGreaterThan(0);
     expect(lines.some((line) => line.id === 'E2025_KZ111')).toBe(true);
+  });
+
+  it('loads supported 2026 catalog entries with provenance', () => {
+    const lines = getCatalogForYear(2026);
+    expect(lines).toHaveLength(107);
+    expect(lines[0]).toMatchObject({ year: 2026, id: 'E2026_GENERAL_001' });
+
+    expect(getCatalogManifestForYear(2026)).toMatchObject({
+      id: 'anlage-euer-2026',
+      version: 'BMF-2026-2026-08-14',
+      validFrom: '2026-01-01',
+      validTo: '2026-12-31',
+      delivery: 'print-form-only',
+      elsterReady: false,
+      sha256: '50d6c8c8d8c5fb7cab8c26f6255e7776f9bac6beac29562ccf3c741cb9d92f18',
+    });
   });
 });
 
@@ -61,6 +77,13 @@ describe('eurReport CSV export', () => {
       },
       unclassifiedCount: 0,
       warnings: [],
+      catalog: {
+        id: 'anlage-euer-2025',
+        version: 'BMF-2025-2025-08-29',
+        sourceHash: 'b'.repeat(64),
+        delivery: 'print-form-only',
+        elsterReady: false,
+      },
     });
 
     expect(csv.startsWith('\uFEFFKennziffer;Bezeichnung;Betrag')).toBe(true);

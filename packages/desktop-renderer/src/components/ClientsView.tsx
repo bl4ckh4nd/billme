@@ -7,16 +7,24 @@ import {
     ArrowRight, ArrowLeft, Trash2, Edit3, X,
     CheckCircle, Clock, AlertCircle, LayoutGrid, List, Check
 } from 'lucide-react';
-import { Button } from '@billme/ui';
+import { Button, ValidationSummary, useActionFeedback } from '@billme/ui';
 import type { Client, ClientAddress, ClientEmail } from '@billme/desktop-core/types';
 import { useClientsQuery, useDeleteClientMutation, useUpsertClientMutation } from '../hooks/useClients';
+import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useInvoicesQuery } from '../hooks/useInvoices';
 import { useCreateDocumentFromClientMutation } from '../hooks/useDocuments';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useUiStore } from '../ui-store';
 import { v4 as uuidv4 } from 'uuid';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
 import { SkeletonLoader } from '@billme/desktop-ui/components/SkeletonLoader';
+
+type ClientEditorErrors = Record<string, string>;
+
+const emailFieldKey = (id: string) => `email:${id}`;
+const addressFieldKey = (id: string, field: 'street' | 'zip' | 'city' | 'country') => `address:${id}:${field}`;
+
+const requiredMark = <span aria-hidden="true" className="ml-0.5 text-error">*</span>;
 
 export const ClientsView: React.FC = () => {
     const { data: clients = [], isLoading } = useClientsQuery();
@@ -24,6 +32,12 @@ export const ClientsView: React.FC = () => {
     const createFromClient = useCreateDocumentFromClientMutation();
     const upsertClient = useUpsertClientMutation();
     const deleteClient = useDeleteClientMutation();
+    const { notify } = useActionFeedback('clients');
+    const { pendingIds, requestDelete } = useDeferredDelete({
+        scope: 'clients',
+        commit: (id) => deleteClient.mutateAsync(id),
+        label: (count) => count === 1 ? 'Kunde gelöscht' : `${count} Kunden gelöscht`,
+    });
     const navigate = useNavigate();
     const setEditingInvoice = useUiStore((s) => s.setEditingInvoice);
     const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
@@ -31,13 +45,55 @@ export const ClientsView: React.FC = () => {
     const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
     const [isEditorOpen, setIsEditorOpen] = useState(false);
     const [draft, setDraft] = useState<Client | null>(null);
-    const [editorErrors, setEditorErrors] = useState<string[]>([]);
-    const locationSearch = window.location.search;
+    const [editorErrors, setEditorErrors] = useState<ClientEditorErrors>({});
+    const editorId = React.useId();
+    const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
 
-    const selectedClient = clients.find(c => c.id === selectedClientId);
+    const getInputId = (field: string) => `${editorId}-${field.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+    const getFieldErrorId = (field: string) => `${getInputId(field)}-error`;
+    const getValidationTargetId = (field: string) => {
+        if (field === 'email' || field === 'emails') {
+            return getInputId(emailFieldKey(draft?.emails?.[0]?.id ?? ''));
+        }
+        if (field === 'addresses') {
+            return getInputId(addressFieldKey(draft?.addresses?.[0]?.id ?? '', 'street'));
+        }
+        return getInputId(field);
+    };
+
+    const focusEditorField = (field: string) => {
+        const fieldId = field.startsWith(`${editorId}-`) ? field.slice(`${editorId}-`.length) : field;
+        let inputId = field.startsWith(`${editorId}-`) ? field : getInputId(field);
+        if (fieldId === 'email' || fieldId === 'emails') {
+            inputId = getInputId(emailFieldKey(draft?.emails?.[0]?.id ?? ''));
+        } else if (fieldId === 'addresses') {
+            inputId = getInputId(addressFieldKey(draft?.addresses?.[0]?.id ?? '', 'street'));
+        }
+
+        const target = document.getElementById(inputId);
+        if (!(target instanceof HTMLElement)) return;
+        target.focus();
+        target.scrollIntoView?.({ block: 'center' });
+    };
+
+    // Several address fields share one rule text; the summary lists each message once.
+    const editorValidationIssues = Object.entries(editorErrors)
+        .map(([field, message]) => ({ id: getValidationTargetId(field), message }))
+        .filter((issue, index, all) => all.findIndex((other) => other.message === issue.message) === index);
+    const firstEditorError = editorValidationIssues[0];
+    const saveErrorId = `${editorId}-save-error`;
+
+    React.useEffect(() => {
+        const firstError = Object.keys(editorErrors)[0];
+        if (!firstError || !isEditorOpen) return;
+        focusEditorField(firstError);
+    }, [editorErrors, isEditorOpen]);
+
+    const visibleClients = clients.filter((client) => !pendingIds.has(client.id));
+    const selectedClient = visibleClients.find(c => c.id === selectedClientId);
 
     const normalizedSearch = searchTerm.trim().toLowerCase();
-    const filteredClients = clients.filter((c) => {
+    const filteredClients = visibleClients.filter((c) => {
         if (!normalizedSearch) return true;
         const searchable = [
             c.company,
@@ -53,12 +109,11 @@ export const ClientsView: React.FC = () => {
     });
 
     React.useEffect(() => {
-        const params = new URLSearchParams(locationSearch);
-        const deepLinkClientId = params.get('id');
+        const deepLinkClientId = typeof locationSearch.id === 'string' ? locationSearch.id : undefined;
         if (!deepLinkClientId) return;
-        if (!clients.some((client) => client.id === deepLinkClientId)) return;
+        if (!visibleClients.some((client) => client.id === deepLinkClientId)) return;
         setSelectedClientId(deepLinkClientId);
-    }, [locationSearch, clients]);
+    }, [locationSearch, visibleClients]);
 
     const formatCurrency = (amount: number) => {
         return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
@@ -113,7 +168,7 @@ export const ClientsView: React.FC = () => {
             emails: (base.emails ?? []).map((e) => ({ ...e, clientId: base.id })),
         };
 
-        setEditorErrors([]);
+        setEditorErrors({});
         setDraft(fixed);
         setIsEditorOpen(true);
     };
@@ -121,7 +176,7 @@ export const ClientsView: React.FC = () => {
     const closeEditor = () => {
         setIsEditorOpen(false);
         setDraft(null);
-        setEditorErrors([]);
+        setEditorErrors({});
     };
 
     const setOnlyOneFlag = <T extends { id: string }>(
@@ -156,17 +211,20 @@ export const ClientsView: React.FC = () => {
 
     const saveDraft = async () => {
         if (!draft) return;
-        const errors: string[] = [];
+        const errors: ClientEditorErrors = {};
+        const addError = (field: string, message: string) => {
+            if (!errors[field]) errors[field] = message;
+        };
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
         const company = draft.company.trim();
         if (!company) {
-            errors.push('Firma ist erforderlich.');
+            addError('company', 'Firma ist erforderlich.');
         }
 
         const legacyEmail = (draft.email ?? '').trim();
         if (legacyEmail && !emailRegex.test(legacyEmail)) {
-            errors.push('Primäre E-Mail ist ungültig.');
+            addError('email', 'Primäre E-Mail ist ungültig.');
         }
 
         const normalizedEmails = (draft.emails ?? [])
@@ -179,13 +237,16 @@ export const ClientsView: React.FC = () => {
             .filter((email) => email.email.length > 0 || email.label.length > 0);
 
         for (const email of normalizedEmails) {
+            if (email.isDefaultBilling && !email.email) {
+                addError(emailFieldKey(email.id), 'E-Mail-Adresse ist erforderlich.');
+            }
             if (email.email && !emailRegex.test(email.email)) {
-                errors.push(`Ungültige E-Mail-Adresse: ${email.email}`);
+                addError(emailFieldKey(email.id), `Ungültige E-Mail-Adresse: ${email.email}`);
             }
         }
 
         if (normalizedEmails.length > 0 && !normalizedEmails.some((email) => email.isDefaultBilling)) {
-            errors.push('Mindestens eine E-Mail muss als Standard Rechnung markiert sein.');
+            addError('emails', 'Mindestens eine E-Mail muss als Standard Rechnung markiert sein.');
         }
 
         const normalizedAddresses = (draft.addresses ?? [])
@@ -197,7 +258,7 @@ export const ClientsView: React.FC = () => {
                 line2: address.line2?.trim(),
                 zip: address.zip.trim(),
                 city: address.city.trim(),
-                country: address.country.trim() || 'DE',
+                country: address.country.trim(),
             }))
             .filter((address) =>
                 address.street.length > 0 ||
@@ -208,19 +269,29 @@ export const ClientsView: React.FC = () => {
 
         const billingAddress = normalizedAddresses.find((address) => address.isDefaultBilling);
         if (normalizedAddresses.length > 0 && !billingAddress) {
-            errors.push('Mindestens eine Adresse muss als Standard Rechnung markiert sein.');
+            addError('addresses', 'Mindestens eine Adresse muss als Standard Rechnung markiert sein.');
         }
         if (billingAddress) {
-            if (!billingAddress.street || !billingAddress.zip || !billingAddress.city || !billingAddress.country) {
-                errors.push('Standard-Rechnungsadresse benötigt Straße, PLZ, Stadt und Land.');
+            const billingAddressMessage = 'Standard-Rechnungsadresse benötigt Straße, PLZ, Stadt und Land.';
+            if (!billingAddress.street) {
+                addError(addressFieldKey(billingAddress.id, 'street'), billingAddressMessage);
+            }
+            if (!billingAddress.zip) {
+                addError(addressFieldKey(billingAddress.id, 'zip'), billingAddressMessage);
+            }
+            if (!billingAddress.city) {
+                addError(addressFieldKey(billingAddress.id, 'city'), billingAddressMessage);
+            }
+            if (!billingAddress.country) {
+                addError(addressFieldKey(billingAddress.id, 'country'), billingAddressMessage);
             }
         }
 
-        if (errors.length > 0) {
+        if (Object.keys(errors).length > 0) {
             setEditorErrors(errors);
             return;
         }
-        setEditorErrors([]);
+        setEditorErrors({});
 
         const payload: Client = {
             ...draft,
@@ -242,7 +313,7 @@ export const ClientsView: React.FC = () => {
             setSelectedClientId(saved.id);
             closeEditor();
         } catch (e) {
-            alert(`Speichern fehlgeschlagen: ${String(e)}`);
+            notify('error', `Speichern fehlgeschlagen: ${String(e)}`);
         }
     };
 
@@ -319,14 +390,9 @@ export const ClientsView: React.FC = () => {
                             <Edit3 size={16} />
                         </button>
                         <button
-                          onClick={async () => {
-                            if (!confirm('Kunde wirklich löschen?')) return;
-                            try {
-                              await deleteClient.mutateAsync(selectedClient.id);
-                              setSelectedClientId(null);
-                            } catch (error) {
-                              alert(`Kunde konnte nicht gelöscht werden: ${String(error)}`);
-                            }
+                          onClick={() => {
+                            requestDelete([selectedClient.id]);
+                            setSelectedClientId(null);
                           }}
                           className="w-10 h-10 border border-gray-200 rounded-full flex items-center justify-center hover:bg-error-bg transition-colors text-error"
                         >
@@ -450,8 +516,7 @@ export const ClientsView: React.FC = () => {
                                     key={inv.id}
                                     type="button"
                                     onClick={() => {
-                                        const to = `/documents?kind=invoice&id=${encodeURIComponent(inv.id)}`;
-                                        navigate({ to });
+                                        navigate({ to: '/documents', search: { kind: 'invoice', id: inv.id } });
                                     }}
                                     className="group w-full text-left flex items-center justify-between p-4 rounded-2xl border border-gray-100 hover:border-black hover:bg-gray-50 transition-all cursor-pointer animate-enter"
                                     style={{ animationDelay: `${200 + idx * 50}ms` }}
@@ -587,13 +652,10 @@ export const ClientsView: React.FC = () => {
                           </div>
 
                          <div className="p-6 space-y-12 flex-1 overflow-y-auto">
-                              {editorErrors.length > 0 && (
-                                  <div className="rounded-2xl border border-error/30 bg-error-bg p-4 space-y-1">
-                                      {editorErrors.map((error) => (
-                                          <p key={error} className="text-sm font-medium text-error">{error}</p>
-                                      ))}
-                                  </div>
-                              )}
+                              <ValidationSummary
+                                  errors={editorValidationIssues}
+                                  onJump={focusEditorField}
+                              />
                               <section>
                                   <h4 className="text-lg font-bold mb-6 pb-3 border-b border-border">Stammdaten</h4>
                                  <div className="grid grid-cols-2 gap-4">
@@ -607,16 +669,23 @@ export const ClientsView: React.FC = () => {
                                      />
                                  </div>
                                   <div className="col-span-2">
-                                      <label className="block text-xs font-bold text-gray-500 mb-1">Firma</label>
+                                      <label htmlFor={getInputId('company')} className="block text-xs font-bold text-gray-500 mb-1">Firma{requiredMark}</label>
                                       <input
+                                         id={getInputId('company')}
                                          value={draft.company}
                                          onChange={(e) => setDraft({ ...draft, company: e.target.value })}
-                                         className="w-full bg-surface-muted border border-border rounded-xl p-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                         required
+                                         aria-required="true"
+                                         aria-invalid={editorErrors.company ? 'true' : undefined}
+                                         aria-describedby={editorErrors.company ? getFieldErrorId('company') : undefined}
+                                         className={`w-full bg-surface-muted border rounded-xl p-3 text-sm font-medium outline-none focus:ring-2 transition-shadow ${editorErrors.company ? 'border-error focus:ring-error' : 'border-border focus:ring-accent'}`}
                                      />
+                                     {editorErrors.company && <p id={getFieldErrorId('company')} className="mt-1 text-xs font-medium text-error">{editorErrors.company}</p>}
                                  </div>
                                  <div>
-                                     <label className="block text-xs font-bold text-gray-500 mb-1">Ansprechpartner</label>
+                                     <label htmlFor={getInputId('contactPerson')} className="block text-xs font-bold text-gray-500 mb-1">Ansprechpartner</label>
                                      <input
+                                         id={getInputId('contactPerson')}
                                          value={draft.contactPerson}
                                          onChange={(e) => setDraft({ ...draft, contactPerson: e.target.value })}
                                          className="w-full bg-surface-muted border border-border rounded-xl p-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent transition-shadow"
@@ -670,6 +739,48 @@ export const ClientsView: React.FC = () => {
                              </section>
 
                               <section className="space-y-3">
+                                  <div>
+                                      <h4 className="font-bold text-sm">Steuerprofil</h4>
+                                      <p className="text-[11px] text-gray-500 mt-0.5">
+                                          Wird beim Erstellen einer Rechnung als Vorschlag übernommen. Die Rechnung speichert danach ihren eigenen Snapshot.
+                                      </p>
+                                  </div>
+                                  <div className="grid grid-cols-12 gap-4">
+                                      <div className="col-span-4">
+                                          <label className="block text-[10px] font-bold text-gray-500 mb-1">Kundentyp</label>
+                                          <select
+                                              value={draft.taxProfile?.type ?? 'business'}
+                                              onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: event.target.value as 'business' | 'consumer' } })}
+                                              className="w-full bg-surface-muted border border-border rounded-xl p-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                          >
+                                              <option value="business">Unternehmen</option>
+                                              <option value="consumer">Privatkunde</option>
+                                          </select>
+                                      </div>
+                                      <div className="col-span-4">
+                                          <label className="block text-[10px] font-bold text-gray-500 mb-1">Land (ISO)</label>
+                                          <input
+                                              value={draft.taxProfile?.countryCode ?? ''}
+                                              onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', countryCode: event.target.value.toUpperCase() } })}
+                                              placeholder="DE"
+                                              maxLength={2}
+                                              className="w-full bg-surface-muted border border-border rounded-xl p-3 text-sm font-medium uppercase outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                          />
+                                      </div>
+                                      <div className="col-span-4">
+                                          <label className="block text-[10px] font-bold text-gray-500 mb-1">USt-IdNr.</label>
+                                          <input
+                                              value={draft.taxProfile?.vatId ?? ''}
+                                              onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', vatId: event.target.value.toUpperCase(), vatIdValidation: undefined, vatIdValidationAt: undefined } })}
+                                              placeholder="DE123456789"
+                                              className="w-full bg-surface-muted border border-border rounded-xl p-3 text-sm font-mono outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                          />
+                                          {draft.taxProfile?.vatIdValidation ? <p className="mt-1 text-[11px] text-muted">Status: {draft.taxProfile.vatIdValidation}</p> : null}
+                                      </div>
+                                  </div>
+                              </section>
+
+                              <section className="space-y-3">
                                   <div className="flex items-center justify-between">
                                       <div>
                                           <h4 className="font-bold text-sm">E-Mails</h4>
@@ -699,7 +810,19 @@ export const ClientsView: React.FC = () => {
                                       </button>
                                   </div>
 
-                                  {(draft.emails ?? []).map((em, idx) => (
+                                  {(draft.emails ?? []).map((em, idx) => {
+                                      const field = emailFieldKey(em.id);
+                                      const errorField = editorErrors[field]
+                                          ? field
+                                          : idx === 0 && editorErrors.email
+                                              ? 'email'
+                                              : idx === 0 && editorErrors.emails
+                                                  ? 'emails'
+                                                  : undefined;
+                                      const errorMessage = errorField ? editorErrors[errorField] : undefined;
+                                      const hasDefaultBillingEmail = (draft.emails ?? []).some((email) => email.isDefaultBilling);
+                                      const isRequiredEmail = Boolean(em.isDefaultBilling) || (!hasDefaultBillingEmail && idx === 0);
+                                      return (
                                       <div
                                           key={em.id}
                                           className="p-4 rounded-2xl border border-border bg-surface-muted space-y-3"
@@ -735,16 +858,22 @@ export const ClientsView: React.FC = () => {
                                               </select>
                                           </div>
                                           <div className="col-span-5">
-                                              <label className="block text-[10px] font-bold text-gray-500 mb-1">E-Mail-Adresse</label>
+                                              <label htmlFor={getInputId(field)} className="block text-[10px] font-bold text-gray-500 mb-1">E-Mail-Adresse{isRequiredEmail && requiredMark}</label>
                                               <input
+                                                  id={getInputId(field)}
                                                   value={em.email}
+                                                  required={isRequiredEmail}
+                                                  aria-required={isRequiredEmail ? 'true' : undefined}
+                                                  aria-invalid={errorMessage ? 'true' : undefined}
+                                                  aria-describedby={errorMessage ? getFieldErrorId(field) : undefined}
                                                   onChange={(e) => {
                                                       const next = [...(draft.emails ?? [])];
                                                      next[idx] = { ...em, email: e.target.value };
                                                      setDraft({ ...draft, emails: next });
                                                  }}
-                                                  className="w-full bg-surface border border-border rounded-xl p-2 text-sm outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                                  className={`w-full bg-surface border rounded-xl p-2 text-sm outline-none focus:ring-2 transition-shadow ${errorMessage ? 'border-error focus:ring-error' : 'border-border focus:ring-accent'}`}
                                               />
+                                              {errorMessage && <p id={getFieldErrorId(field)} className="mt-1 text-xs font-medium text-error">{errorMessage}</p>}
                                           </div>
                                           </div>
                                           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -787,7 +916,8 @@ export const ClientsView: React.FC = () => {
                                               </button>
                                           </div>
                                       </div>
-                                  ))}
+                                      );
+                                  })}
                               </section>
 
                               <section className="space-y-3">
@@ -823,7 +953,21 @@ export const ClientsView: React.FC = () => {
                                       </button>
                                   </div>
 
-                                  {(draft.addresses ?? []).map((ad, idx) => (
+                                  {(draft.addresses ?? []).map((ad, idx) => {
+                                      const addressRequired = Boolean(ad.isDefaultBilling);
+                                      const fieldError = (field: 'street' | 'zip' | 'city' | 'country') => {
+                                          const key = addressFieldKey(ad.id, field);
+                                          if (editorErrors[key]) return { key, message: editorErrors[key] };
+                                          if (idx === 0 && field === 'street' && editorErrors.addresses) {
+                                              return { key: 'addresses', message: editorErrors.addresses };
+                                          }
+                                          return undefined;
+                                      };
+                                      const streetError = fieldError('street');
+                                      const zipError = fieldError('zip');
+                                      const cityError = fieldError('city');
+                                      const countryError = fieldError('country');
+                                      return (
                                       <div key={ad.id} className="p-4 bg-surface-muted rounded-2xl border border-border space-y-3">
                                           <div className="grid grid-cols-12 gap-3">
                                               <div className="col-span-4">
@@ -884,16 +1028,22 @@ export const ClientsView: React.FC = () => {
 
                                          <div className="grid grid-cols-12 gap-3">
                                              <div className="col-span-6">
-                                                 <label className="block text-[10px] font-bold text-gray-500 mb-1">Straße</label>
+                                                 <label htmlFor={getInputId(addressFieldKey(ad.id, 'street'))} className="block text-[10px] font-bold text-gray-500 mb-1">Straße{addressRequired && requiredMark}</label>
                                                  <input
+                                                     id={getInputId(addressFieldKey(ad.id, 'street'))}
                                                      value={ad.street}
+                                                     required={addressRequired}
+                                                     aria-required={addressRequired ? 'true' : undefined}
+                                                     aria-invalid={streetError ? 'true' : undefined}
+                                                     aria-describedby={streetError ? getFieldErrorId(streetError.key) : undefined}
                                                      onChange={(e) => {
                                                          const next = [...(draft.addresses ?? [])];
                                                          next[idx] = { ...ad, street: e.target.value };
                                                          setDraft({ ...draft, addresses: next });
                                                      }}
-                                                     className="w-full bg-surface border border-border rounded-xl p-2 text-sm outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                                     className={`w-full bg-surface border rounded-xl p-2 text-sm outline-none focus:ring-2 transition-shadow ${streetError ? 'border-error focus:ring-error' : 'border-border focus:ring-accent'}`}
                                                  />
+                                                 {streetError && <p id={getFieldErrorId(streetError.key)} className="mt-1 text-xs font-medium text-error">{streetError.message}</p>}
                                              </div>
                                              <div className="col-span-6">
                                                  <label className="block text-[10px] font-bold text-gray-500 mb-1">Zusatz</label>
@@ -908,40 +1058,58 @@ export const ClientsView: React.FC = () => {
                                                  />
                                              </div>
                                              <div className="col-span-3">
-                                                 <label className="block text-[10px] font-bold text-gray-500 mb-1">PLZ</label>
+                                                 <label htmlFor={getInputId(addressFieldKey(ad.id, 'zip'))} className="block text-[10px] font-bold text-gray-500 mb-1">PLZ{addressRequired && requiredMark}</label>
                                                  <input
+                                                     id={getInputId(addressFieldKey(ad.id, 'zip'))}
                                                      value={ad.zip}
+                                                     required={addressRequired}
+                                                     aria-required={addressRequired ? 'true' : undefined}
+                                                     aria-invalid={zipError ? 'true' : undefined}
+                                                     aria-describedby={zipError ? getFieldErrorId(zipError.key) : undefined}
                                                      onChange={(e) => {
                                                          const next = [...(draft.addresses ?? [])];
                                                          next[idx] = { ...ad, zip: e.target.value };
                                                          setDraft({ ...draft, addresses: next });
                                                      }}
-                                                     className="w-full bg-surface border border-border rounded-xl p-2 text-sm outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                                     className={`w-full bg-surface border rounded-xl p-2 text-sm outline-none focus:ring-2 transition-shadow ${zipError ? 'border-error focus:ring-error' : 'border-border focus:ring-accent'}`}
                                                  />
+                                                 {zipError && <p id={getFieldErrorId(zipError.key)} className="mt-1 text-xs font-medium text-error">{zipError.message}</p>}
                                              </div>
                                              <div className="col-span-5">
-                                                 <label className="block text-[10px] font-bold text-gray-500 mb-1">Stadt</label>
+                                                 <label htmlFor={getInputId(addressFieldKey(ad.id, 'city'))} className="block text-[10px] font-bold text-gray-500 mb-1">Stadt{addressRequired && requiredMark}</label>
                                                  <input
+                                                     id={getInputId(addressFieldKey(ad.id, 'city'))}
                                                      value={ad.city}
+                                                     required={addressRequired}
+                                                     aria-required={addressRequired ? 'true' : undefined}
+                                                     aria-invalid={cityError ? 'true' : undefined}
+                                                     aria-describedby={cityError ? getFieldErrorId(cityError.key) : undefined}
                                                      onChange={(e) => {
                                                          const next = [...(draft.addresses ?? [])];
                                                          next[idx] = { ...ad, city: e.target.value };
                                                          setDraft({ ...draft, addresses: next });
                                                      }}
-                                                     className="w-full bg-surface border border-border rounded-xl p-2 text-sm outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                                     className={`w-full bg-surface border rounded-xl p-2 text-sm outline-none focus:ring-2 transition-shadow ${cityError ? 'border-error focus:ring-error' : 'border-border focus:ring-accent'}`}
                                                  />
+                                                 {cityError && <p id={getFieldErrorId(cityError.key)} className="mt-1 text-xs font-medium text-error">{cityError.message}</p>}
                                              </div>
                                              <div className="col-span-4">
-                                                 <label className="block text-[10px] font-bold text-gray-500 mb-1">Land</label>
+                                                 <label htmlFor={getInputId(addressFieldKey(ad.id, 'country'))} className="block text-[10px] font-bold text-gray-500 mb-1">Land{addressRequired && requiredMark}</label>
                                                  <input
+                                                     id={getInputId(addressFieldKey(ad.id, 'country'))}
                                                      value={ad.country}
+                                                     required={addressRequired}
+                                                     aria-required={addressRequired ? 'true' : undefined}
+                                                     aria-invalid={countryError ? 'true' : undefined}
+                                                     aria-describedby={countryError ? getFieldErrorId(countryError.key) : undefined}
                                                      onChange={(e) => {
                                                          const next = [...(draft.addresses ?? [])];
                                                          next[idx] = { ...ad, country: e.target.value };
                                                          setDraft({ ...draft, addresses: next });
                                                      }}
-                                                     className="w-full bg-surface border border-border rounded-xl p-2 text-sm outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                                                     className={`w-full bg-surface border rounded-xl p-2 text-sm outline-none focus:ring-2 transition-shadow ${countryError ? 'border-error focus:ring-error' : 'border-border focus:ring-accent'}`}
                                                  />
+                                                 {countryError && <p id={getFieldErrorId(countryError.key)} className="mt-1 text-xs font-medium text-error">{countryError.message}</p>}
                                              </div>
                                          </div>
 
@@ -957,12 +1125,18 @@ export const ClientsView: React.FC = () => {
                                                  Entfernen
                                              </button>
                                          </div>
-                                     </div>
-                                  ))}
+                                      </div>
+                                      );
+                                  })}
                               </section>
                           </div>
 
                           <div className="p-6 border-t border-border bg-surface-muted rounded-b-[2.5rem]">
+                              {firstEditorError && (
+                                  <p id={saveErrorId} className="mb-3 text-right text-xs font-medium text-error">
+                                      {firstEditorError.message}
+                                  </p>
+                              )}
                               <div className="flex justify-end gap-3">
                               <button
                                   onClick={closeEditor}
@@ -972,6 +1146,7 @@ export const ClientsView: React.FC = () => {
                               </button>
                               <button
                                   onClick={() => void saveDraft()}
+                                  aria-describedby={firstEditorError ? saveErrorId : undefined}
                                   className="px-4 py-2 bg-black text-white rounded-full text-xs font-bold hover:bg-gray-800 transition-colors"
                               >
                                   Speichern
@@ -1030,6 +1205,16 @@ export const ClientsView: React.FC = () => {
                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto pb-4">
                      {isLoading ? (
                        <SkeletonLoader variant="card" count={6} />
+                     ) : filteredClients.length === 0 ? (
+                       <div className="col-span-full flex flex-col items-center justify-center h-64 text-gray-400">
+                           <Briefcase size={48} className="mb-4 opacity-20" />
+                           <p className="font-bold text-gray-500">
+                               {searchTerm.trim() ? 'Keine Treffer für die aktuelle Suche' : 'Noch keine Kunden vorhanden'}
+                           </p>
+                           {!searchTerm.trim() && (
+                               <p className="text-sm mt-1">Klicke auf das + oben rechts, um einen Kunden zu erstellen.</p>
+                           )}
+                       </div>
                      ) : filteredClients.map((client, idx) => (
                          <div
                             key={client.id}
@@ -1074,6 +1259,16 @@ export const ClientsView: React.FC = () => {
 
                      {isLoading ? (
                        <SkeletonLoader variant="list" count={5} />
+                     ) : filteredClients.length === 0 ? (
+                       <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                           <Briefcase size={48} className="mb-4 opacity-20" />
+                           <p className="font-bold text-gray-500">
+                               {searchTerm.trim() ? 'Keine Treffer für die aktuelle Suche' : 'Noch keine Kunden vorhanden'}
+                           </p>
+                           {!searchTerm.trim() && (
+                               <p className="text-sm mt-1">Klicke auf das + oben rechts, um einen Kunden zu erstellen.</p>
+                           )}
+                       </div>
                      ) : filteredClients.map((client, idx) => (
                          <div
                             key={client.id}

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { taxFilingRoutes } from '@billme/desktop-contracts/taxFiling';
 import {
   deleteByIdSchema,
   listTemplatesParamsSchema,
@@ -45,6 +46,11 @@ import {
   eurListItemSchema,
   eurUpsertClassificationArgsSchema,
   eurClassificationSchema,
+  eurCashFactSchema,
+  eurAnnexFactSchema,
+  eurSaveCashFactArgsSchema,
+  eurSaveAnnexFactArgsSchema,
+  eurListFactsArgsSchema,
   eurExportCsvArgsSchema,
   eurExportPdfArgsSchema,
   eurExportPdfResultSchema,
@@ -59,6 +65,37 @@ import {
   assetSchema,
   assetUpsertSchema,
   assetDepreciationScheduleEntrySchema,
+  accountingPolicySchema,
+  accountingAccountMappingSchema,
+  vendorSchema,
+  incomingInvoiceSchema,
+  incomingInvoiceDocumentSchema,
+  incomingInvoiceDocumentUploadSchema,
+  incomingInvoiceDocumentDownloadSchema,
+  incomingInvoiceDocumentReviewSchema,
+  openItemSchema,
+  accountingPostingPreviewSchema,
+  accountingBackfillPreviewSchema,
+  accountingBackfillResultSchema,
+  listReportSnapshotsArgsSchema,
+  reportSnapshotRecordSchema,
+  saveReportSnapshotArgsSchema,
+  proGetReportingReportArgsSchema,
+  proGetReportingReportResultSchema,
+  proGetReportMappingHealthArgsSchema,
+  proGetReportMappingHealthResultSchema,
+  proListReportMappingPositionsArgsSchema,
+  reportMappingPositionSchema,
+  proUpsertReportMappingOverrideArgsSchema,
+  proPostAccountingSourceArgsSchema,
+  proPostAccountingCommandArgsSchema,
+  proAccountingSourcePostResultSchema,
+  proGetAccountingSourceRunArgsSchema,
+  proAccountingSourceRunSchema,
+  taxAuditExportArtifactSchema,
+  openRouterVlmConfigSchema,
+  openRouterVlmAnalyzeInputSchema,
+  openRouterVlmAnalyzeResultSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -101,6 +138,23 @@ const numbersFinalizeArgsSchema = z.object({
 const convertOfferToInvoiceSchema = z.object({
   offerId: z.string().min(1),
 });
+
+const documentChainCommonSchema = z.object({
+  id: z.string().min(1),
+  number: z.string().min(1),
+  date: z.string().min(1),
+  dueDate: z.string().min(1).optional(),
+  servicePeriod: z.string().min(1).optional(),
+  reason: z.string().min(1),
+});
+const documentChainCreateSchema = z.discriminatedUnion('operation', [
+  documentChainCommonSchema.extend({ operation: z.literal('order_confirmation'), offerId: z.string().min(1) }),
+  documentChainCommonSchema.extend({ operation: z.literal('delivery_note'), orderId: z.string().min(1), items: invoiceSchema.shape.items.optional() }),
+  documentChainCommonSchema.extend({ operation: z.literal('settlement_invoice'), orderId: z.string().min(1), kind: z.enum(['advance_invoice', 'partial_invoice', 'final_invoice']), amount: z.number().finite().positive(), items: invoiceSchema.shape.items.optional() }),
+  documentChainCommonSchema.extend({ operation: z.literal('correction'), invoiceId: z.string().min(1), kind: z.enum(['credit_note', 'cancellation_invoice']), amount: z.number().finite().positive().optional(), items: invoiceSchema.shape.items.optional() }),
+  documentChainCommonSchema.extend({ operation: z.literal('revision'), invoiceId: z.string().min(1) }),
+]);
+const documentChainListSchema = z.object({ rootDocumentId: z.string().min(1) });
 
 const sendEmailSchema = z.object({
   documentType: z.enum(['invoice', 'offer']),
@@ -390,7 +444,6 @@ const taxAuditExportPackageArgsSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
   includeDocuments: z.boolean().optional(),
-  actorRole: proActorRoleSchema,
 });
 const taxAuditExportPackageResultSchema = z.object({
   bundleDir: z.string().min(1),
@@ -562,7 +615,10 @@ const proDispatchDraftActionArgsSchema = z.object({
 const proPostDraftArgsSchema = z.object({
   draftId: z.string().min(1),
   postingDate: z.string().optional(),
-  actorRole: proActorRoleSchema,
+  actorRole: proActorRoleSchema.optional(),
+  idempotencyKey: z.string().min(1).optional(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().optional(),
 });
 
 const proPostDraftResultSchema = z.object({
@@ -573,7 +629,10 @@ const proPostDraftResultSchema = z.object({
 const proReverseJournalEntryArgsSchema = z.object({
   entryId: z.string().min(1),
   reason: z.string().min(1),
-  actorRole: proActorRoleSchema,
+  actorRole: proActorRoleSchema.optional(),
+  postingDate: z.string().optional(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().optional(),
 });
 
 const proReverseJournalEntryResultSchema = z.object({
@@ -589,22 +648,38 @@ const proListJournalEntriesArgsSchema = z.object({
   offset: z.number().int().min(0).optional(),
 });
 
+const proGetJournalEntryByIdArgsSchema = z.object({
+  entryId: z.string().min(1),
+});
+
 const proGetLedgerBalancesArgsSchema = z.object({
   asOfDate: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
 });
 
 const proGetSusaReportArgsSchema = z.object({
   asOfDate: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
 });
 
 const proGetSusaReportResultSchema = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
   asOfDate: z.string(),
-  rows: z.array(ledgerBalanceRowSchema),
+  rows: z.array(ledgerBalanceRowSchema.extend({
+    mappedTo: z.string().optional(),
+    hasWarnings: z.boolean().optional(),
+  })),
   totals: z.object({
     debit: z.number(),
     credit: z.number(),
     balance: z.number(),
   }),
+  unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
+  blocking: z.boolean().optional(),
 });
 
 const proGetGuvReportArgsSchema = z.object({
@@ -620,9 +695,13 @@ const proGetGuvReportResultSchema = z.object({
       positionKey: z.string(),
       positionLabel: z.string(),
       amount: z.number(),
+      accountRefs: z.array(z.string()).optional(),
     }),
   ),
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
   netResult: z.number(),
+  unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
+  blocking: z.boolean().optional(),
 });
 
 const proGetBilanzReportArgsSchema = z.object({
@@ -630,6 +709,7 @@ const proGetBilanzReportArgsSchema = z.object({
 });
 
 const proGetBilanzReportResultSchema = z.object({
+  chart: z.enum(['SKR03', 'SKR04']).optional(),
   asOfDate: z.string(),
   assets: z.array(
     z.object({
@@ -648,6 +728,8 @@ const proGetBilanzReportResultSchema = z.object({
     liabilities: z.number(),
     delta: z.number(),
   }),
+  unmappedAccounts: z.array(z.object({ accountNumber: z.string(), amount: z.number() })).optional(),
+  blocking: z.boolean().optional(),
 });
 
 const proUpsertAssetArgsSchema = z.object({
@@ -663,22 +745,33 @@ const proRunDepreciationArgsSchema = z.object({
   assetId: z.string().min(1),
   year: z.number().int(),
   postingDate: z.string(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().min(1).optional(),
   reason: z.string().min(1),
-  actorRole: proActorRoleSchema,
-});
+  actorRole: proActorRoleSchema.optional(),
+}).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
 
 const proDisposeAssetArgsSchema = z.object({
   assetId: z.string().min(1),
   disposalDate: z.string(),
   proceeds: z.number().nonnegative(),
+  taxRate: z.union([z.literal(0), z.literal(7), z.literal(19)]).optional(),
+  proceedsAccountNumber: z.string().min(1).optional(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().min(1).optional(),
   reason: z.string().min(1),
-  actorRole: proActorRoleSchema,
-});
+  actorRole: proActorRoleSchema.optional(),
+}).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
 
 const proExportDatevBuchungsstapelArgsSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
-  actorRole: proActorRoleSchema,
+  consultantNumber: z.union([z.string(), z.number().int()]).optional(),
+  clientNumber: z.union([z.string(), z.number().int()]).optional(),
+  fiscalYearStart: z.string().optional(),
+  accountLength: z.number().int().min(4).max(8).optional(),
+  encoding: z.enum(['cp1252', 'utf8-bom']).optional(),
+  actorRole: proActorRoleSchema.optional(),
 });
 
 const proListDatevExportsArgsSchema = z.object({
@@ -691,8 +784,24 @@ const proGetAccountingHealthResultSchema = z.object({
   reversedCount: z.number().int(),
   unbalancedDraftCount: z.number().int(),
   unmappedAccountCount: z.number().int(),
+  unmappedAccounts: z.array(z.string()).optional(),
+  blocking: z.boolean().optional(),
   lastDatevExportAt: z.string().optional(),
 });
+
+const proSetAccountingPolicyArgsSchema = z.object({ activeChart: ledgerChartSchema, vatMethod: z.enum(['soll', 'ist']) });
+const proListAccountingAccountMappingsArgsSchema = z.object({ chart: ledgerChartSchema.optional() });
+const proUpsertAccountingAccountMappingArgsSchema = z.object({ id: z.string().optional(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat']), accountNumber: z.string().min(1) });
+const proUpsertVendorArgsSchema = z.object({ vendor: vendorSchema, reason: z.string().trim().min(1) });
+const proUpsertIncomingInvoiceArgsSchema = z.object({ invoice: incomingInvoiceSchema, reason: z.string().trim().min(1) });
+const proInvoiceAccountingArgsBaseSchema = z.object({ invoiceId: z.string().min(1), softLockOverride: z.boolean().optional(), overrideReason: z.string().min(1).optional() });
+const proInvoiceAccountingArgsSchema = proInvoiceAccountingArgsBaseSchema.refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
+const proPostIncomingInvoiceAccountingArgsSchema = proInvoiceAccountingArgsBaseSchema.extend({ reason: z.string().trim().min(1) }).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
+const proOutgoingInvoiceAccountingArgsSchema = proInvoiceAccountingArgsBaseSchema.extend({ reservationId: z.string().min(1) }).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
+const proAllocateOpenItemPaymentArgsSchema = z.object({ payment: z.object({ paymentId: z.string().optional(), sourceType: z.enum(['bank_transaction', 'invoice_payment', 'manual']), sourceId: z.string().min(1), partyType: z.enum(['debtor', 'creditor']), partyId: z.string().optional(), paymentDate: z.string(), amount: z.number().positive(), bankAccountNumber: z.string().min(1), method: z.string().optional(), allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })), reason: z.string().trim().min(1), allocationEventId: z.string().trim().min(1) }) });
+const proReverseDocumentAccountingArgsSchema = z.object({ documentType: z.enum(['outgoing_invoice', 'incoming_invoice']), documentId: z.string().min(1), reason: z.string().min(1), postingDate: z.string().optional(), softLockOverride: z.boolean().optional(), overrideReason: z.string().min(1).optional() }).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
+const proAllocateRemainingPaymentArgsSchema = z.object({ paymentId: z.string().min(1), allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })), reason: z.string().trim().min(1), allocationEventId: z.string().trim().min(1) });
+const proConfirmAccountingBackfillArgsSchema = z.object({ runId: z.string().min(1), confirmationHash: z.string().min(1), reason: z.string().min(1) });
 
 export type RouteDef<Args extends z.ZodTypeAny, Result extends z.ZodTypeAny> = {
   channel: string;
@@ -701,6 +810,7 @@ export type RouteDef<Args extends z.ZodTypeAny, Result extends z.ZodTypeAny> = {
 };
 
 export const ipcRoutes = {
+  ...taxFilingRoutes,
   'invoices:list': {
     channel: 'invoices:list',
     args: z.undefined(),
@@ -855,6 +965,16 @@ export const ipcRoutes = {
     args: convertOfferToInvoiceSchema,
     result: invoiceSchema,
   },
+  'documents:chainCreate': {
+    channel: 'documents:chainCreate',
+    args: documentChainCreateSchema,
+    result: invoiceSchema,
+  },
+  'documents:chainList': {
+    channel: 'documents:chainList',
+    args: documentChainListSchema,
+    result: z.array(invoiceSchema),
+  },
 
   'templates:list': {
     channel: 'templates:list',
@@ -998,6 +1118,16 @@ export const ipcRoutes = {
     args: z.undefined(),
     result: proLedgerStatsSchema,
   },
+  'pro:getOpenRouterVlmConfig': {
+    channel: 'pro:getOpenRouterVlmConfig',
+    args: z.undefined(),
+    result: openRouterVlmConfigSchema,
+  },
+  'pro:analyzeTransactionDocument': {
+    channel: 'pro:analyzeTransactionDocument',
+    args: openRouterVlmAnalyzeInputSchema,
+    result: openRouterVlmAnalyzeResultSchema,
+  },
   'pro:listBankTransactions': {
     channel: 'pro:listBankTransactions',
     args: z.undefined(),
@@ -1048,6 +1178,11 @@ export const ipcRoutes = {
     args: proListJournalEntriesArgsSchema,
     result: z.array(journalEntryEntitySchema),
   },
+  'pro:getJournalEntryById': {
+    channel: 'pro:getJournalEntryById',
+    args: proGetJournalEntryByIdArgsSchema,
+    result: journalEntryEntitySchema.nullable(),
+  },
   'pro:getLedgerBalances': {
     channel: 'pro:getLedgerBalances',
     args: proGetLedgerBalancesArgsSchema,
@@ -1067,6 +1202,36 @@ export const ipcRoutes = {
     channel: 'pro:getBilanzReport',
     args: proGetBilanzReportArgsSchema,
     result: proGetBilanzReportResultSchema,
+  },
+  'pro:getReportingReport': {
+    channel: 'pro:getReportingReport',
+    args: proGetReportingReportArgsSchema,
+    result: proGetReportingReportResultSchema,
+  },
+  'pro:listReportSnapshots': {
+    channel: 'pro:listReportSnapshots',
+    args: listReportSnapshotsArgsSchema,
+    result: z.array(reportSnapshotRecordSchema),
+  },
+  'pro:saveReportSnapshot': {
+    channel: 'pro:saveReportSnapshot',
+    args: saveReportSnapshotArgsSchema,
+    result: reportSnapshotRecordSchema,
+  },
+  'pro:getReportMappingHealth': {
+    channel: 'pro:getReportMappingHealth',
+    args: proGetReportMappingHealthArgsSchema,
+    result: proGetReportMappingHealthResultSchema,
+  },
+  'pro:listReportMappingPositions': {
+    channel: 'pro:listReportMappingPositions',
+    args: proListReportMappingPositionsArgsSchema,
+    result: z.array(reportMappingPositionSchema),
+  },
+  'pro:upsertReportMappingOverride': {
+    channel: 'pro:upsertReportMappingOverride',
+    args: proUpsertReportMappingOverrideArgsSchema,
+    result: z.unknown(),
   },
   'pro:listAssets': {
     channel: 'pro:listAssets',
@@ -1099,6 +1264,7 @@ export const ipcRoutes = {
       asset: assetSchema,
       residualBookValue: z.number().nonnegative(),
       gainLoss: z.number(),
+      journalEntryId: z.string().min(1),
     }),
   },
   'pro:exportDatevBuchungsstapel': {
@@ -1136,6 +1302,32 @@ export const ipcRoutes = {
     args: proUpsertWorkflowEntryArgsSchema,
     result: okSchema,
   },
+  'pro:getAccountingPolicy': { channel: 'pro:getAccountingPolicy', args: z.undefined(), result: accountingPolicySchema },
+  'pro:setAccountingPolicy': { channel: 'pro:setAccountingPolicy', args: proSetAccountingPolicyArgsSchema, result: accountingPolicySchema },
+  'pro:listAccountingAccountMappings': { channel: 'pro:listAccountingAccountMappings', args: proListAccountingAccountMappingsArgsSchema, result: z.array(accountingAccountMappingSchema) },
+  'pro:upsertAccountingAccountMapping': { channel: 'pro:upsertAccountingAccountMapping', args: proUpsertAccountingAccountMappingArgsSchema, result: accountingAccountMappingSchema },
+  'pro:listVendors': { channel: 'pro:listVendors', args: z.undefined(), result: z.array(vendorSchema) },
+  'pro:upsertVendor': { channel: 'pro:upsertVendor', args: proUpsertVendorArgsSchema, result: vendorSchema },
+  'pro:listIncomingInvoices': { channel: 'pro:listIncomingInvoices', args: z.undefined(), result: z.array(incomingInvoiceSchema) },
+  'pro:upsertIncomingInvoice': { channel: 'pro:upsertIncomingInvoice', args: proUpsertIncomingInvoiceArgsSchema, result: incomingInvoiceSchema },
+  'pro:listIncomingInvoiceDocuments': { channel: 'pro:listIncomingInvoiceDocuments', args: z.object({ invoiceId: z.string().min(1) }), result: z.array(incomingInvoiceDocumentSchema) },
+  'pro:uploadIncomingInvoiceDocument': { channel: 'pro:uploadIncomingInvoiceDocument', args: incomingInvoiceDocumentUploadSchema, result: incomingInvoiceDocumentSchema },
+  'pro:downloadIncomingInvoiceDocument': { channel: 'pro:downloadIncomingInvoiceDocument', args: z.object({ documentId: z.string().min(1) }), result: incomingInvoiceDocumentDownloadSchema },
+  'pro:reviewIncomingInvoiceDocument': { channel: 'pro:reviewIncomingInvoiceDocument', args: incomingInvoiceDocumentReviewSchema, result: incomingInvoiceDocumentSchema },
+  'pro:previewOutgoingInvoiceAccounting': { channel: 'pro:previewOutgoingInvoiceAccounting', args: proInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
+  'pro:postOutgoingInvoiceAccounting': { channel: 'pro:postOutgoingInvoiceAccounting', args: proOutgoingInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
+  'pro:previewIncomingInvoiceAccounting': { channel: 'pro:previewIncomingInvoiceAccounting', args: proInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
+  'pro:postIncomingInvoiceAccounting': { channel: 'pro:postIncomingInvoiceAccounting', args: proPostIncomingInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
+  'pro:listOpenItems': { channel: 'pro:listOpenItems', args: z.undefined(), result: z.array(openItemSchema) },
+  'pro:allocateOpenItemPayment': { channel: 'pro:allocateOpenItemPayment', args: proAllocateOpenItemPaymentArgsSchema, result: z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string().optional(), paymentDate: z.string(), amount: z.number(), bankAccountNumber: z.string(), method: z.string().optional(), sourceType: z.enum(['bank_transaction', 'invoice_payment', 'manual']), sourceId: z.string(), allocatedAmount: z.number(), residualAmount: z.number(), status: z.enum(['open', 'partially_allocated', 'overpaid', 'allocated']), journalEntryId: z.string().optional(), createdAt: z.string() }) },
+  'pro:allocateRemainingPayment': { channel: 'pro:allocateRemainingPayment', args: proAllocateRemainingPaymentArgsSchema, result: z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string().optional(), paymentDate: z.string(), amount: z.number(), bankAccountNumber: z.string(), method: z.string().optional(), sourceType: z.enum(['bank_transaction', 'invoice_payment', 'manual']), sourceId: z.string(), allocatedAmount: z.number(), residualAmount: z.number(), status: z.enum(['open', 'partially_allocated', 'overpaid', 'allocated']), journalEntryId: z.string().optional(), createdAt: z.string() }) },
+  'pro:reverseDocumentAccounting': { channel: 'pro:reverseDocumentAccounting', args: proReverseDocumentAccountingArgsSchema, result: z.object({ ok: z.literal(true), reversalEntryId: z.string() }) },
+  'pro:previewAccountingBackfill': { channel: 'pro:previewAccountingBackfill', args: z.undefined(), result: accountingBackfillPreviewSchema },
+  'pro:confirmAccountingBackfill': { channel: 'pro:confirmAccountingBackfill', args: proConfirmAccountingBackfillArgsSchema, result: accountingBackfillResultSchema },
+  'pro:postAccountingSource': { channel: 'pro:postAccountingSource', args: proPostAccountingSourceArgsSchema, result: proAccountingSourcePostResultSchema },
+  'pro:postAccountingCommand': { channel: 'pro:postAccountingCommand', args: proPostAccountingCommandArgsSchema, result: proAccountingSourcePostResultSchema },
+  'pro:listAccountingSourceRuns': { channel: 'pro:listAccountingSourceRuns', args: z.undefined(), result: z.array(proAccountingSourceRunSchema) },
+  'pro:getAccountingSourceRun': { channel: 'pro:getAccountingSourceRun', args: proGetAccountingSourceRunArgsSchema, result: proAccountingSourceRunSchema.nullable() },
 
   'eur:getReport': {
     channel: 'eur:getReport',
@@ -1151,6 +1343,26 @@ export const ipcRoutes = {
     channel: 'eur:upsertClassification',
     args: eurUpsertClassificationArgsSchema,
     result: eurClassificationSchema,
+  },
+  'eur:saveCashFact': {
+    channel: 'eur:saveCashFact',
+    args: eurSaveCashFactArgsSchema,
+    result: eurCashFactSchema,
+  },
+  'eur:listCashFacts': {
+    channel: 'eur:listCashFacts',
+    args: eurListFactsArgsSchema,
+    result: z.array(eurCashFactSchema),
+  },
+  'eur:saveAnnexFact': {
+    channel: 'eur:saveAnnexFact',
+    args: eurSaveAnnexFactArgsSchema,
+    result: eurAnnexFactSchema,
+  },
+  'eur:listAnnexFacts': {
+    channel: 'eur:listAnnexFacts',
+    args: eurListFactsArgsSchema,
+    result: z.array(eurAnnexFactSchema),
   },
   'eur:exportCsv': {
     channel: 'eur:exportCsv',
@@ -1243,6 +1455,11 @@ export const ipcRoutes = {
   'tax:auditExportPackage': {
     channel: 'tax:auditExportPackage',
     args: taxAuditExportPackageArgsSchema,
+    result: taxAuditExportPackageResultSchema,
+  },
+  'tax:saveAuditExportPackage': {
+    channel: 'tax:saveAuditExportPackage',
+    args: taxAuditExportArtifactSchema,
     result: taxAuditExportPackageResultSchema,
   },
 

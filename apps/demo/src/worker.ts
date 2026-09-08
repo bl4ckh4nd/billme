@@ -95,7 +95,7 @@ export class DemoSession {
       }
     }
 
-    return json({ error: 'Not found' }, 404);
+    return json({ error: 'Nicht gefunden.' }, 404);
   }
 }
 
@@ -161,7 +161,7 @@ export default {
         );
       }
 
-      return finalizeResponse(request, json({ error: 'Not found' }, 404), sessionId);
+      return finalizeResponse(request, json({ error: 'Nicht gefunden.' }, 404), sessionId);
     }
 
     const assetResponse = await env.ASSETS.fetch(request);

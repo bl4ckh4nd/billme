@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { createSingleTenantScope } from '@billme/server-core';
 import {
   createSqliteRecurringProfileStore as createSharedSqliteRecurringProfileStore,
   deleteRecurringProfile as deleteSharedRecurringProfile,
@@ -14,6 +15,13 @@ export const createSqliteRecurringProfileStore = (db: Database.Database) => crea
 
 export const listRecurringProfiles = (db: Database.Database): RecurringProfile[] => {
   return listSharedRecurringProfiles(db, PRODUCT) as RecurringProfile[];
+};
+
+export const getRecurringProfile = (db: Database.Database, id: string): RecurringProfile | null => {
+  return createSharedSqliteRecurringProfileStore(db).getById(
+    createSingleTenantScope('default', PRODUCT),
+    id,
+  ) as RecurringProfile | null;
 };
 
 export const upsertRecurringProfile = (

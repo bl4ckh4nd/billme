@@ -1,6 +1,6 @@
 import React from 'react';
 import { BusinessOnboarding, type BusinessOnboardingDraft } from '@billme/ui';
-import type { AppSettings } from '../types';
+import type { AppSettings, BusinessReportingProfile } from '../types';
 import { useSetSettingsMutation } from '../hooks/useSettings';
 
 interface OnboardingWizardProps {
@@ -10,6 +10,16 @@ interface OnboardingWizardProps {
 
 export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ settings, onComplete }) => {
   const setSettingsMutation = useSetSettingsMutation();
+
+  const reportingProfile = settings.businessReportingProfile ?? ({
+    jurisdiction: 'DE',
+    legalForm: /(?:GmbH|HRB)/i.test(`${settings.company.name} ${settings.finance.registerCourt}`) ? 'gmbh' : 'sole_proprietor',
+    profitDetermination: 'double_entry',
+    hgbSizeClass: /(?:GmbH|HRB)/i.test(`${settings.company.name} ${settings.finance.registerCourt}`) ? 'small' : undefined,
+    fiscalYearStart: '01-01',
+    chart: 'SKR03',
+    vatMethod: settings.legal.taxAccountingMethod ?? 'soll',
+  } satisfies BusinessReportingProfile);
 
   const initialData = React.useMemo<BusinessOnboardingDraft>(() => ({
     company: {
@@ -39,7 +49,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ settings, on
       invoicePrefix: settings.numbers.invoicePrefix,
       offerPrefix: settings.numbers.offerPrefix,
     },
-  }), [settings]);
+    businessReportingProfile: reportingProfile,
+  }), [reportingProfile, settings]);
 
   const handleComplete = async (draft: BusinessOnboardingDraft) => {
     const updated: AppSettings = {
@@ -49,11 +60,13 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ settings, on
       legal: {
         ...settings.legal,
         ...draft.legal,
+        taxAccountingMethod: draft.businessReportingProfile?.vatMethod ?? settings.legal.taxAccountingMethod,
       },
       numbers: {
         ...settings.numbers,
         ...draft.numbers,
       },
+      businessReportingProfile: draft.businessReportingProfile,
       onboardingCompleted: true,
     };
     await setSettingsMutation.mutateAsync(updated);

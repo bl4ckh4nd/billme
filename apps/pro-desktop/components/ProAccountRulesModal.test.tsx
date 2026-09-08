@@ -27,6 +27,7 @@ vi.mock('../ipc/client', () => ({
 
 vi.mock('@billme/ui', () => ({
   Button: (props: any) => <button {...props}>{props.children}</button>,
+  Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 const renderModal = (props?: Partial<React.ComponentProps<typeof ProAccountRulesModal>>) => {
@@ -62,7 +63,7 @@ describe('ProAccountRulesModal', () => {
     renderModal();
 
     expect(await screen.findByText(/Keine Regeln vorhanden/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /Schliessen/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Schließen/i }));
   });
 
   it('creates a new pro account suggestion rule with trimmed values', async () => {

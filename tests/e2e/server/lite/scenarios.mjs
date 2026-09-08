@@ -20,8 +20,8 @@ export const runLiteSmokeScenario = async (page) => {
 
   await expect(page.getByText('Billme Lite Web')).toBeVisible();
   await expect(page.getByText('billme-server-api (fastify)')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Create owner account|Open lite workspace/ })).toBeVisible();
-  await expect(page.getByText(/Bootstrap lite owner|Login/)).toBeVisible();
+  await expect(page.getByRole('button', { name: /Konto anlegen|Lite-Arbeitsbereich öffnen/ })).toBeVisible();
+  await expect(page.getByText(/Lite-Konto einrichten|Anmelden/)).toBeVisible();
 };
 
 export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
@@ -30,19 +30,19 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
 
   await page.goto(state.urls.web, { waitUntil: 'networkidle' });
 
-  const bootstrapButton = page.getByRole('button', { name: 'Create owner account' });
-  const loginButton = page.getByRole('button', { name: 'Open lite workspace' });
+  const bootstrapButton = page.getByRole('button', { name: 'Konto anlegen' });
+  const loginButton = page.getByRole('button', { name: 'Lite-Arbeitsbereich öffnen' });
 
   if (await bootstrapButton.isVisible().catch(() => false)) {
-    await expect(page.getByRole('heading', { name: 'Bootstrap lite owner' })).toBeVisible();
-    await page.getByPlaceholder('Full name').fill(identity.fullName);
-    await page.getByPlaceholder('Email').fill(identity.email);
-    await page.getByPlaceholder('Password').fill(litePassword);
+    await expect(page.getByRole('heading', { name: 'Lite-Konto einrichten' })).toBeVisible();
+    await page.getByPlaceholder('Vollständiger Name').fill(identity.fullName);
+    await page.getByPlaceholder('E-Mail').fill(identity.email);
+    await page.getByPlaceholder('Passwort').fill(litePassword);
     await bootstrapButton.click();
   } else {
-    await expect(page.getByRole('heading', { name: 'Login' })).toBeVisible();
-    await page.getByPlaceholder('Email').fill(identity.email);
-    await page.getByPlaceholder('Password').fill(litePassword);
+    await expect(page.getByRole('heading', { name: 'Anmelden' })).toBeVisible();
+    await page.getByPlaceholder('E-Mail').fill(identity.email);
+    await page.getByPlaceholder('Passwort').fill(litePassword);
     await loginButton.click();
   }
 
@@ -59,12 +59,12 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
   });
 
   await page.getByRole('button', { name: 'Abmelden' }).click();
-  await expect(page.getByRole('heading', { name: 'Login' })).toBeVisible();
-  await expect(page.getByText('You have been signed out.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Anmelden' })).toBeVisible();
+  await expect(page.getByText('Du wurdest abgemeldet.')).toBeVisible();
 
-  await page.getByPlaceholder('Email').fill(identity.email);
-  await page.getByPlaceholder('Password').fill(litePassword);
-  await page.getByRole('button', { name: 'Open lite workspace' }).click();
+  await page.getByPlaceholder('E-Mail').fill(identity.email);
+  await page.getByPlaceholder('Passwort').fill(litePassword);
+  await page.getByRole('button', { name: 'Lite-Arbeitsbereich öffnen' }).click();
 
   await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
   await page.reload({ waitUntil: 'networkidle' });
@@ -78,8 +78,8 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
   await page.goto(state.urls.web, { waitUntil: 'networkidle' });
   await page.goto(liteAppUrl(state, '/documents'), { waitUntil: 'networkidle' });
 
-  await expect(page.getByRole('heading', { name: 'Login' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Open lite workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Anmelden' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Lite-Arbeitsbereich öffnen' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Abmelden' })).toHaveCount(0);
 
   const clearedSession = await page.evaluate((key) => window.localStorage.getItem(key), liteSessionStorageKey);
@@ -116,7 +116,7 @@ export const runLiteRegressionScenario = async (page, scenarioKey = 'regressions
   await page.getByRole('button', { name: 'Export' }).click();
 
   await expect(page.getByText(/PDF Fehler:/)).toBeVisible();
-  await expect(page.getByText(/Billme Lite web shell yet/)).toBeVisible();
+  await expect(page.getByText(/Billme Lite im Browser noch nicht verfügbar/)).toBeVisible();
   await expect(page.getByText(seed.invoices[0].number)).toBeVisible();
 };
 
@@ -131,6 +131,22 @@ export const runLiteVatPersistenceScenario = async (scenarioKey = 'vat-persisten
   const source = await apiJson(runtime.state, session, `/api/v1/lite/invoices/${seed.invoices[0].id}`);
   const invoice = {
     ...source,
+    taxMode: 'intra_eu_service_reverse_charge',
+    taxMeta: {
+      sellerCountryCode: 'DE',
+      buyerCountryCode: 'AT',
+      buyerVatId: 'ATU12345678',
+      taxRuleConfirmed: true,
+    },
+    taxSnapshot: {
+      netAmount: source.amount,
+      vatAmount: 0,
+      grossAmount: source.amount,
+      vatRateApplied: 0,
+      einvoiceCategoryCode: 'AE',
+      label: 'EU-Leistung Reverse Charge',
+      taxNotice: 'Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)',
+    },
     items: source.items.map((item, index) => ({
       ...item,
       taxRate: index === 0 ? 7 : item.taxRate,
@@ -145,6 +161,33 @@ export const runLiteVatPersistenceScenario = async (scenarioKey = 'vat-persisten
 
   const refetched = await apiJson(runtime.state, session, `/api/v1/lite/invoices/${invoice.id}`);
   expect(refetched.items[0]?.taxRate).toBe(7);
+  expect(refetched.taxMode).toBe(invoice.taxMode);
+  expect(refetched.taxMeta).toEqual(invoice.taxMeta);
+  expect(refetched.taxSnapshot).toEqual(invoice.taxSnapshot);
+
+  const sourceOffer = await apiJson(runtime.state, session, `/api/v1/lite/offers/${seed.offers[0].id}`);
+  const offer = {
+    ...sourceOffer,
+    taxMode: 'export_third_country',
+    taxMeta: { sellerCountryCode: 'DE', buyerCountryCode: 'CH', taxRuleConfirmed: true },
+    taxSnapshot: {
+      netAmount: sourceOffer.amount,
+      vatAmount: 0,
+      grossAmount: sourceOffer.amount,
+      vatRateApplied: 0,
+      einvoiceCategoryCode: 'G',
+      label: 'Drittlandsausfuhr',
+      taxNotice: 'Steuerfreie Ausfuhrlieferung',
+    },
+  };
+  await apiJson(runtime.state, session, '/api/v1/lite/offers', {
+    method: 'POST',
+    body: { offer, reason: 'Verify offer tax persistence' },
+  });
+  const refetchedOffer = await apiJson(runtime.state, session, `/api/v1/lite/offers/${offer.id}`);
+  expect(refetchedOffer.taxMode).toBe(offer.taxMode);
+  expect(refetchedOffer.taxMeta).toEqual(offer.taxMeta);
+  expect(refetchedOffer.taxSnapshot).toEqual(offer.taxSnapshot);
 };
 
 export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') => {
@@ -199,7 +242,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
   await expect(page.getByText(companyName)).toBeVisible();
   await page.getByRole('button', { name: 'Neue Rechnung' }).click();
   await expect(page.getByRole('heading', { name: 'Rechnung erstellen' })).toBeVisible();
-  await expect(page.locator('label:has-text("Firmenname / Kunde") + input')).toHaveValue(companyName);
+  await expect(page.getByRole('combobox', { name: 'Kunde auswählen' })).toHaveValue(companyName);
   const createdInvoice = await page.evaluate(async ({ clientId, description, price }) => {
     const api = globalThis.billmeApi;
     if (!api) {
@@ -210,7 +253,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
     const persisted = {
       ...draft,
       amount: price,
-      items: [{ description, quantity: 1, price, total: price }],
+      items: [{ kind: 'item', description, quantity: 1, price, total: price }],
     };
     delete persisted.numberReservationId;
     const saved = await api.invoices.upsert({ invoice: persisted, reason: 'create' });
@@ -235,7 +278,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
     const persisted = {
       ...draft,
       amount: price,
-      items: [{ description, quantity: 1, price, total: price }],
+      items: [{ kind: 'item', description, quantity: 1, price, total: price }],
     };
     delete persisted.numberReservationId;
     const saved = await api.offers.upsert({ offer: persisted, reason: 'create' });

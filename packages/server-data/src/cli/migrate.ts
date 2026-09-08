@@ -1,4 +1,4 @@
-import { createPostgresPool, readDatabaseUrl, runPostgresMigrations } from '../postgres';
+import { createPostgresPool, readDatabaseUrl, runDrizzleMigrations } from '../postgres';
 
 const databaseUrl = readDatabaseUrl(process.env);
 if (!databaseUrl) {
@@ -7,8 +7,8 @@ if (!databaseUrl) {
 
 const pool = createPostgresPool(databaseUrl);
 try {
-  const result = await runPostgresMigrations(pool);
-  console.log(JSON.stringify(result, null, 2));
+  await runDrizzleMigrations(pool);
+  console.log(JSON.stringify({ status: 'migrated' }, null, 2));
 } finally {
   await pool.end();
 }

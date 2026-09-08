@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { createEmbeddedConnectionResolver, type EmbeddedConnectionResolver } from './embeddedConnection';
 
 type RouteDefinition = {
   channel: string;
@@ -6,9 +7,17 @@ type RouteDefinition = {
   result: { parse: (value: unknown) => unknown };
 };
 
+export type DesktopPreloadContext = {
+  embeddedConnectionResolver?: EmbeddedConnectionResolver;
+};
+
 export const installDesktopPreload = <TApi>(options: {
   routes: Record<string, RouteDefinition>;
-  createApi: (invoke: (key: string, args: unknown) => Promise<unknown>) => TApi;
+  embeddedConnectionChannel?: string;
+  createApi: (
+    invoke: (key: string, args: unknown) => Promise<unknown>,
+    context: DesktopPreloadContext,
+  ) => TApi;
 }): void => {
   const invoke = async (key: string, args: unknown): Promise<unknown> => {
     if (key === 'secrets:get') {
@@ -23,7 +32,15 @@ export const installDesktopPreload = <TApi>(options: {
     return route.result.parse(result);
   };
 
-  contextBridge.exposeInMainWorld('billmeApi', options.createApi(invoke));
+  const context: DesktopPreloadContext = options.embeddedConnectionChannel
+    ? {
+        embeddedConnectionResolver: createEmbeddedConnectionResolver(
+          () => ipcRenderer.invoke(options.embeddedConnectionChannel!),
+        ),
+      }
+    : {};
+
+  contextBridge.exposeInMainWorld('billmeApi', options.createApi(invoke, context));
 
   const exposeListener = <TPayload>(channel: string) => ({
     on: (callback: (payload: TPayload) => void) => {

@@ -27,17 +27,17 @@ interface RetryConfig {
 
 const normalizeBaseUrl = (baseUrl: string): string => {
   const trimmed = baseUrl.trim();
-  if (!trimmed) throw new Error('Portal baseUrl is required');
+  if (!trimmed) throw new Error('Portal-Basis-URL ist erforderlich.');
   let parsed: URL;
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error('Portal baseUrl is invalid');
+    throw new Error('Portal-Basis-URL ist ungültig.');
   }
   const hostname = parsed.hostname.toLowerCase();
   const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
   if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLocalhost)) {
-    throw new Error('Portal baseUrl must use https (except localhost)');
+    throw new Error('Die Portal-Basis-URL muss https verwenden (außer bei localhost).');
   }
   return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, '');
 };
@@ -135,7 +135,7 @@ const fetchWithRetry = async <T>(
     }
   }
 
-  throw lastError || new Error('Retry failed');
+  throw lastError || new Error('Erneuter Versuch fehlgeschlagen.');
 };
 
 const requireOk = async (res: Response) => {

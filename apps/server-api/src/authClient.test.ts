@@ -75,3 +75,23 @@ test('createServerApiClient.ensureSession logs into an already bootstrapped pro 
     assert.equal(second.tenantId, first.tenantId);
   });
 });
+
+test('createServerApiClient.validateVatId keeps non-EU IDs out of VIES', async () => {
+  await withHttpServer(async (baseUrl) => {
+    const client = createServerApiClient(baseUrl);
+    const session = await client.ensureSession({
+      product: 'lite',
+      email: 'vat.owner@example.com',
+      password: 'billme-server-123',
+      fullName: 'VAT Owner',
+    });
+    const result = await client.validateVatId({
+      token: session.token,
+      product: 'lite',
+      countryCode: 'CH',
+      vatNumber: 'CHE 123.456.789 MWST',
+    });
+    assert.equal(result.status, 'unavailable');
+    assert.equal(result.normalizedVatId, 'CHE123.456.789MWST');
+  });
+});

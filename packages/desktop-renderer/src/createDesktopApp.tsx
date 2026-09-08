@@ -1,4 +1,5 @@
 import React from 'react';
+import { FeedbackProvider } from '@billme/ui';
 import { PrintDocument } from './components/PrintDocument';
 import { PrintEurDocument } from './components/PrintEurDocument';
 
@@ -15,7 +16,9 @@ export const createDesktopApp = (
     if (params.get('__print') !== '1') {
       return (
         <ErrorBoundary>
-          <RouterProvider />
+          <FeedbackProvider>
+            <RouterProvider />
+          </FeedbackProvider>
         </ErrorBoundary>
       );
     }

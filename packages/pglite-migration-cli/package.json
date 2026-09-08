@@ -1,0 +1,25 @@
+{
+  "name": "@billme/pglite-migration-cli",
+  "private": true,
+  "version": "0.0.0",
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "bin": {
+    "billme-pglite-migrate": "./bin/billme-pglite-migrate.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@billme/server-core": "workspace:*",
+    "@billme/server-data": "workspace:*",
+    "better-sqlite3": "^12.4.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.19.7",
+    "tsx": "^4.20.5",
+    "typescript": "~5.8.3"
+  }
+}

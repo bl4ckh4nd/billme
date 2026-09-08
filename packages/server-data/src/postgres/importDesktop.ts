@@ -2,9 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { Database as SqliteDatabaseType } from 'better-sqlite3';
 import type { Pool } from 'pg';
-import { createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile, type ServerProduct, type Tenant } from '@billme/server-core';
+import { count, eq, sql } from 'drizzle-orm';
+import { billingLineItemSchema, createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile, type ServerProduct, type Tenant } from '@billme/server-core';
 import { DEFAULT_TAX_MODE } from '@billme/server-core/services';
-import { verifyAuditChainRows, verifyPostgresAuditChain } from './audit.js';
+import { EUR_SOURCE_VERSION_2025, getCatalogForYear, type EurLineDef } from '@billme/desktop-services/eurCatalog';
+import { sha256Hex, stableStringify, verifyAuditChainRows, verifyPostgresAuditChain } from './audit.js';
+import type { ServerDatabase, ServerDatabaseSession } from '../database.js';
 import {
   countTenantCoreRows,
   createPostgresBillingDependencies,
@@ -13,11 +16,13 @@ import {
   saveServerNumberReservation,
   saveServerSettings,
 } from './billing.js';
-import { withPostgresTransaction } from './connection.js';
+import { withPostgresTransaction, type PostgresTransactionClient } from './connection.js';
+import { schema, tryCreateDrizzle } from './drizzle.js';
 import { runPostgresMigrations } from './migrations.js';
+import { CANONICAL_LEDGER_ACCOUNTS, CANONICAL_TAX_CASES } from './canonicalCatalog.js';
+import { importRawTenantRows, restoreIncomingInvoiceAccountingRows } from './oposImport.js';
 import {
   saveServerAccountKeyword,
-  saveServerAccountMappingHgb,
   saveServerAccountSuggestionRule,
   saveServerAccountingPeriod,
   saveServerActiveTemplates,
@@ -29,22 +34,21 @@ import {
   saveServerDatevExport,
   saveServerDraftValidationIssue,
   saveServerEurClassification,
-  saveServerEurLine,
   saveServerEurRule,
   saveServerImportBatch,
   saveServerImportedTransaction,
   saveServerJournalEntry,
   saveServerJournalLine,
   saveServerJournalPostingPair,
-  saveServerLedgerAccount,
   saveServerProWorkflowEntry,
   saveServerReportSnapshot,
-  saveServerTaxCase,
+  saveServerAccountMappingHgb,
+  saveServerReportAccountMapping,
   saveServerTaxCaseAccountMapping,
+  saveServerTaxCaseAccountMappingForTenant,
   saveServerTemplate,
   saveServerVatEvidence,
   type ServerAccountKeywordRecord,
-  type ServerAccountMappingHgbRecord,
   type ServerAccountingPeriodRecord,
   type ServerActiveTemplatesRecord,
   type ServerArticleRecord,
@@ -64,6 +68,8 @@ import {
   type ServerJournalPostingPairRecord,
   type ServerProWorkflowRecord,
   type ServerReportSnapshotRecord,
+  type ServerReportAccountMappingRecord,
+  type ServerAccountMappingHgbRecord,
   type ServerTaxCaseRecord,
   type ServerTemplateRecord,
   type ServerVatEvidenceRecord,
@@ -72,17 +78,17 @@ import {
 type SqliteDatabaseCtor = new (path: string, options?: { readonly?: boolean; fileMustExist?: boolean }) => SqliteDatabaseType;
 type SqliteTableRow = { name: string };
 
-type SqliteClientRow = { id: string; customer_number: string | null; company: string; contact_person: string; email: string; phone: string; address: string; status: Client['status']; avatar: string | null; tags_json: string; notes: string };
+type SqliteClientRow = { id: string; customer_number: string | null; company: string; contact_person: string; email: string; phone: string; address: string; status: Client['status']; avatar: string | null; tags_json: string; notes: string; tax_profile_json?: string | null };
 type SqliteClientAddressRow = { id: string; client_id: string; label: string; kind: 'billing' | 'shipping' | 'other'; company: string | null; contact_person: string | null; street: string; line2: string | null; zip: string; city: string; country: string; is_default_billing: number; is_default_shipping: number };
 type SqliteClientEmailRow = { id: string; client_id: string; label: string; kind: 'general' | 'billing' | 'shipping' | 'other'; email: string; is_default_general: number; is_default_billing: number };
 type SqliteClientProjectRow = { id: string; client_id: string; code: string | null; name: string; status: string; budget: number; start_date: string; end_date: string | null; description: string | null; archived_at: string | null; created_at: string | null; updated_at: string | null };
 type SqliteClientActivityRow = { id: string; client_id: string; type: 'note' | 'email' | 'call' | 'meeting'; content: string; date: string; author: string };
-type SqliteInvoiceRow = { id: string; client_id: string | null; client_number: string | null; project_id: string | null; number: string; client: string; client_email: string; client_address: string | null; billing_address_json: string | null; shipping_address_json: string | null; date: string; due_date: string; service_period: string | null; amount: number; status: Invoice['status']; dunning_level: number; created_at: string; updated_at: string };
-type SqliteInvoiceItemRow = { invoice_id: string; position: number; description: string; article_id: string | null; category: string | null; tax_rate?: number | null; quantity: number; price: number; total: number };
+type SqliteInvoiceRow = { id: string; client_id: string | null; client_number: string | null; project_id: string | null; number: string; document_kind?: Invoice['documentKind'] | null; source_document_id?: string | null; root_document_id?: string | null; revision_of_id?: string | null; revision_number?: number | null; client: string; client_email: string; client_address: string | null; billing_address_json: string | null; shipping_address_json: string | null; tax_mode?: Invoice['taxMode'] | null; tax_meta_json?: string | null; tax_snapshot_json?: string | null; accounting_status?: string | null; accounting_snapshot_json?: string | null; accounting_journal_entry_id?: string | null; accounting_posted_at?: string | null; date: string; due_date: string; service_period: string | null; amount: number; status: Invoice['status']; dunning_level: number; created_at: string; updated_at: string };
+type SqliteInvoiceItemRow = { invoice_id: string; position: number; description: string; article_id: string | null; category: string | null; tax_rate?: number | null; quantity: number; price: number; total: number; line_meta_json?: string | null };
 type SqliteInvoicePaymentRow = { id: string; invoice_id: string; date: string; amount: number; method: string };
-type SqliteOfferRow = { id: string; client_id: string | null; client_number: string | null; project_id: string | null; number: string; client: string; client_email: string; client_address: string | null; billing_address_json: string | null; shipping_address_json: string | null; date: string; valid_until: string; amount: number; status: Offer['status']; share_token: string | null; share_published_at: string | null; accepted_at: string | null; accepted_by: string | null; accepted_email: string | null; accepted_user_agent: string | null; decision: string | null; decision_text_version: string | null; created_at: string; updated_at: string };
-type SqliteOfferItemRow = { offer_id: string; position: number; description: string; article_id: string | null; category: string | null; tax_rate?: number | null; quantity: number; price: number; total: number };
-type SqliteRecurringRow = { id: string; client_id: string; active: number; name: string; interval: RecurringProfile['interval']; next_run: string; last_run: string | null; end_date: string | null; amount: number; items_json: string };
+type SqliteOfferRow = { id: string; client_id: string | null; client_number: string | null; project_id: string | null; number: string; client: string; client_email: string; client_address: string | null; billing_address_json: string | null; shipping_address_json: string | null; tax_mode?: Offer['taxMode'] | null; tax_meta_json?: string | null; tax_snapshot_json?: string | null; date: string; valid_until: string; amount: number; status: Offer['status']; share_token: string | null; share_published_at: string | null; accepted_at: string | null; accepted_by: string | null; accepted_email: string | null; accepted_user_agent: string | null; decision: string | null; decision_text_version: string | null; created_at: string; updated_at: string };
+type SqliteOfferItemRow = { offer_id: string; position: number; description: string; article_id: string | null; category: string | null; tax_rate?: number | null; quantity: number; price: number; total: number; line_meta_json?: string | null };
+type SqliteRecurringRow = { id: string; client_id: string; active: number; name: string; interval: RecurringProfile['interval']; next_run: string; last_run: string | null; end_date: string | null; amount: number; items_json: string; tax_mode?: RecurringProfile['taxMode'] | null; tax_meta_json?: string | null };
 type SqliteEmailLogRow = { id: string; document_type: string; document_id: string; document_number: string; recipient_email: string; recipient_name: string; subject: string; body_text: string; provider: string; status: string; error_message: string | null; sent_at: string; created_at: string };
 type SqliteDunningHistoryRow = { id: string; invoice_id: string; invoice_number: string; dunning_level: number; days_overdue: number; fee_applied: number; email_sent: number; email_log_id: string | null; processed_at: string; created_at: string };
 type SqliteAuditRow = { sequence: number; ts: string; entity_type: string; entity_id: string; action: string; reason: string | null; before_json: string | null; after_json: string | null; prev_hash: string | null; hash: string; actor: string };
@@ -92,33 +98,57 @@ type SqliteLedgerAccountRow = { id: string; chart: 'SKR03' | 'SKR04'; account_nu
 type SqliteProWorkflowEntryRow = { transaction_id: string; transaction_json: string; draft_json: string; updated_at: string };
 type SqliteBankTransactionRow = { id: string; account_id: string; date: string; amount: number; type: ServerBankTransactionRecord['type']; counterparty: string; purpose: string; linked_invoice_id: string | null; status: ServerBankTransactionRecord['status']; source_transaction_id: string | null; created_at: string; updated_at: string };
 type SqliteBookingDraftRow = { id: string; transaction_id: string; workflow_status: string; draft_json: string; updated_at: string };
-type SqliteBookingDraftLineRow = { id: string; draft_id: string; line_no: number; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null; tax_case_key: string | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null; gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null; evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null };
+type SqliteBookingDraftLineRow = { id: string; draft_id: string; line_no: number; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null; tax_case_key: string | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null; gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null; evidence_type: string | null; evidence_reference: string | null; datev_sachverhalt_ll?: string | null; cost_center: string | null; memo: string | null };
 type SqliteDraftValidationIssueRow = { id: string; draft_id: string; code: string; severity: ServerDraftValidationIssueRecord['severity']; message: string; field_path: string | null; blocking: number; source: ServerDraftValidationIssueRecord['source']; issue_json: string; created_at: string };
 type SqliteAccountingPeriodRow = { id: string; period: string; fiscal_year: number; status: string; starts_at: string; ends_at: string; created_at: string; updated_at: string };
-type SqliteJournalEntryRow = { id: string; entry_number: number; posting_date: string; document_date: string | null; booking_text: string; reference: string | null; period: string; fiscal_year: number; status: string; source_draft_id: string | null; reversed_entry_id: string | null; created_at: string };
-type SqliteJournalLineRow = { id: string; entry_id: string; line_no: number; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null; tax_case_key: string | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null; gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null; evidence_type: string | null; evidence_reference: string | null; cost_center: string | null; memo: string | null };
-type SqliteAssetRow = { id: string; asset_number: string; name: string; asset_class: string; status: string; activation_date: string; acquisition_cost: number; useful_life_years: number | null; depreciation_method: string; cost_center: string; location: string; receipt_linked: number; supplier: string | null; invoice_ref: string | null; asset_account_number: string; disposal_date: string | null; disposal_proceeds: number | null; created_at: string; updated_at: string };
-type SqliteAssetScheduleRow = { id: string; asset_id: string; year: number; amount: number; months: number; status: string; journal_entry_id: string | null; posted_at: string | null };
-type SqliteAssetMovementRow = { id: string; asset_id: string; type: string; movement_date: string; amount: number; proceeds: number | null; gain_loss: number | null; reason: string; created_at: string };
-type SqliteAccountMappingHgbRow = { id: string; chart: string; account_number: string; statement_type: string; position_key: string; position_label: string; balance_side: string | null; updated_at: string };
-type SqliteReportSnapshotRow = { id: string; report_type: string; args_json: string; payload_json: string; created_at: string };
+type SqliteJournalEntryRow = { id: string; entry_number: number; posting_date: string; document_date: string | null; booking_text: string; reference: string | null; period: string; fiscal_year: number; status: string; source_draft_id: string | null; source_type?: string | null; source_key?: string | null; reversed_entry_id: string | null; created_at: string };
+type SqliteJournalLineRow = { id: string; entry_id: string; line_no: number; account_number: string; debit_amount: number; credit_amount: number; tax_code: string | null; tax_case_key: string | null; tax_rate: number | null; net_amount: number | null; tax_amount: number | null; gross_amount: number | null; country_code: string | null; counterparty_vat_id: string | null; evidence_type: string | null; evidence_reference: string | null; datev_sachverhalt_ll?: string | null; cost_center: string | null; memo: string | null };
+type SqliteAssetRow = { id: string; asset_number: string; name: string; asset_class: string; status: string; activation_date: string; acquisition_cost: number; useful_life_years: number | null; depreciation_method: string; cost_center: string; location: string; receipt_linked: number; supplier: string | null; invoice_ref: string | null; asset_account_number: string; disposal_date: string | null; disposal_proceeds: number | null; acquisition_offset_account_number?: string | null; source_incoming_invoice_id?: string | null; activation_journal_entry_id?: string | null; accounting_repair_required?: number | boolean | null; accounting_repair_reason?: string | null; created_at: string; updated_at: string };
+type SqliteAssetScheduleRow = { id: string; asset_id: string; year: number; amount: number; months: number; status: string; journal_entry_id: string | null; source_type?: string | null; source_key?: string | null; posted_at: string | null };
+type SqliteAssetMovementRow = { id: string; asset_id: string; type: string; movement_date: string; amount: number; proceeds: number | null; gain_loss: number | null; journal_entry_id?: string | null; source_type?: string | null; source_key?: string | null; reason: string; created_at: string };
+type SqliteAccountMappingHgbRow = { id: string; chart: string; account_number: string; statement_type: string; position_key: string; position_label: string; balance_side: string | null; valid_from?: string | null; valid_to?: string | null; updated_at: string };
+type SqliteReportSnapshotRow = { id: string; report_type: string; args_json: string; payload_json: string; source_hash?: string | null; created_at: string };
+type SqliteEurCashFactRow = { id: string; source_type: string; source_id: string; tax_year: number; kind: string; amount_net: number; flow_type: string | null; eur_line_id: string | null; splits_json: string | null; reason: string; actor_id: string; actor_name: string | null; idempotency_key: string | null; provenance_json: string; created_at: string; updated_at: string };
+type SqliteEurAnnexFactRow = { id: string; tax_year: number; annex: string; line_id: string; amount: number; source_id: string | null; fact_date: string | null; reason: string; actor_id: string; actor_name: string | null; idempotency_key: string | null; provenance_json: string; created_at: string };
+type SqliteAccountingSourceRunRow = { id: string; source_type: string; source_id: string; source_revision: string; idempotency_key: string; fact_json: string; result_json: string; status: string; journal_entry_id: string | null; created_at: string };
 type SqliteDatevExportRow = { id: string; file_path: string; record_count: number; from_date: string | null; to_date: string | null; created_at: string; meta_json: string };
 type SqliteTaxCaseRow = { key: ServerTaxCaseRecord['key']; label: string; mechanism: ServerTaxCaseRecord['mechanism']; default_rate: number; requires_counterparty_vat_id: number; requires_country: number; requires_evidence: number; active: number; updated_at: string };
 type SqliteTaxCaseAccountMappingRow = { id: string; chart: 'SKR03' | 'SKR04'; tax_case_key: ServerTaxCaseRecord['key']; role: 'output_tax' | 'input_tax' | 'datev_bu'; account_number: string; datev_bu_key: string | null; valid_from: string | null; valid_to: string | null; updated_at: string };
 type SqliteVatEvidenceRow = { id: string; draft_id: string | null; entry_id: string | null; line_id: string | null; tax_case_key: string; evidence_type: string | null; evidence_reference: string | null; country_code: string | null; counterparty_vat_id: string | null; captured_at: string };
 type SqliteJournalPostingPairRow = { id: string; entry_id: string; debit_line_id: string; credit_line_id: string; amount: number; tax_case_key: string | null; datev_bu_key: string | null; created_at: string };
 type SqliteImportedTransactionRow = { id: string; account_id: string; date: string; amount: number; type: string; counterparty: string; purpose: string; linked_invoice_id: string | null; status: string; dedup_hash: string | null; import_batch_id: string | null; deleted_at: string | null };
-type SqliteEurLineRow = { id: string; tax_year: number; kennziffer: string | null; label: string; kind: string; exportable: number; sort_order: number; computed_from_json: string | null; source_version: string; created_at: string; updated_at: string };
-type SqliteEurClassificationRow = { id: string; source_type: string; source_id: string; tax_year: number; eur_line_id: string | null; excluded: number; vat_mode: string; note: string | null; updated_at: string };
+type SqliteEurLineRow = { id: string; tax_year: number; kennziffer: string | null; provider_path?: string | null; label: string; kind: string; exportable: number; sort_order: number; computed_from_json: string | null; computed_terms_json?: string | null; source_version: string; created_at: string; updated_at: string };
+type SqliteEurClassificationRow = { id: string; source_type: string; source_id: string; tax_year: number; eur_line_id: string | null; excluded: number; vat_mode: string; vat_rate?: number | null; note: string | null; updated_at: string };
 type SqliteEurRuleRow = { id: string; tax_year: number; priority: number; field: string; operator: string; value: string; target_eur_line_id: string; active: number; created_at: string; updated_at: string };
 type SqliteAccountKeywordRow = { id: string; chart: string; account_number: string; keyword: string; source: string; active: number; created_at: string; updated_at: string };
 type SqliteAccountSuggestionRuleRow = { id: string; chart: 'SKR03' | 'SKR04'; priority: number; field: ServerAccountKeywordRecord['source'] | 'counterparty' | 'purpose' | 'any'; operator: 'contains' | 'equals' | 'startsWith'; value: string; target_account_number: string; flow_type: 'income' | 'expense' | 'any'; active: number; created_at: string; updated_at: string };
 type SqliteImportBatchRow = { id: string; account_id: string; profile: string; file_name: string; file_sha256: string; mapping_json: string; imported_count: number; skipped_count: number; error_count: number; created_at: string; rolled_back_at: string | null; rollback_reason: string | null };
 type SqliteTemplateRow = { id: string; kind: string; name: string; elements_json: string; created_at: string; updated_at: string };
 type SqliteActiveTemplateRow = { id: number; invoice_template_id: string | null; offer_template_id: string | null };
+type LoadedInvoice = { invoice: Invoice; accountingStatus: string; accountingSnapshotJson: string | null; accountingJournalEntryId: string | null; accountingPostedAt: string | null };
+
+type ImportQueryable = PostgresTransactionClient | ServerDatabaseSession;
+type ImportTarget = Pool | ServerDatabase;
+
+const isServerDatabase = (target: ImportTarget): target is ServerDatabase => 'engine' in target;
+const requireImportTarget = (options: DesktopSqliteImportOptions): ImportTarget => {
+  const target = options.database ?? options.pool;
+  if (!target) throw new Error('SQLite import requires either a PostgreSQL pool or a ServerDatabase target');
+  return target;
+};
+const requireImportDrizzle = (target: ImportTarget | ImportQueryable) => {
+  const database = tryCreateDrizzle(target as unknown as { query: (...args: any[]) => any });
+  if (!database) throw new Error('SQLite import requires a supported server database target');
+  return database;
+};
+const isPgliteTarget = (target: unknown): boolean => {
+  const candidate = target as { engine?: unknown; exec?: unknown; release?: unknown };
+  return candidate.engine === 'pglite' || (typeof candidate.exec === 'function' && typeof candidate.release !== 'function');
+};
 
 export interface DesktopSqliteImportOptions {
-  pool: Pool;
+  pool?: Pool;
+  database?: ServerDatabase;
   sqlitePath: string;
   product: ServerProduct;
   tenant: Pick<Tenant, 'id' | 'slug' | 'displayName'>;
@@ -148,6 +178,7 @@ export interface DesktopSqliteImportCounts {
   assetMovements: number;
   accountMappingsHgb: number;
   reportSnapshots: number;
+  eurReportSnapshots: number;
   datevExports: number;
   taxCases: number;
   taxCaseAccountMappings: number;
@@ -157,6 +188,8 @@ export interface DesktopSqliteImportCounts {
   eurLines: number;
   eurClassifications: number;
   eurRules: number;
+  eurCashFacts: number;
+  eurAnnexFacts: number;
   accountKeywords: number;
   accountSuggestionRules: number;
   importBatches: number;
@@ -164,6 +197,16 @@ export interface DesktopSqliteImportCounts {
   dunningHistory: number;
   auditLog: number;
   numberReservations: number;
+  accountingPolicies: number;
+  accountingAccountMappings: number;
+  vendors: number;
+  incomingInvoices: number;
+  incomingInvoiceLines: number;
+  openItems: number;
+  openItemPayments: number;
+  openItemAllocations: number;
+  accountingBackfillRuns: number;
+  accountingSourceRuns: number;
 }
 
 export interface DesktopSqliteImportResult {
@@ -202,6 +245,9 @@ export const desktopSqliteImportedTables = [
   'asset_movements',
   'account_mappings_hgb',
   'report_snapshots',
+  'eur_cash_facts',
+  'eur_annex_facts',
+  'accounting_source_runs',
   'datev_exports',
   'tax_cases',
   'tax_case_account_mappings',
@@ -219,6 +265,15 @@ export const desktopSqliteImportedTables = [
   'email_log',
   'dunning_history',
   'audit_log',
+  'accounting_policies',
+  'accounting_account_mappings',
+  'vendors',
+  'incoming_invoices',
+  'incoming_invoice_lines',
+  'open_items',
+  'open_item_payments',
+  'open_item_allocations',
+  'accounting_backfill_runs',
 ] as const;
 
 export const desktopSqliteIgnoredTables = ['migration_log'] as const;
@@ -232,8 +287,233 @@ const parseJson = <T>(value: string | null, fallback: T): T => { if (!value) ret
 const loadSqliteModule = async (): Promise<SqliteDatabaseCtor> => { const module = await import('better-sqlite3'); return module.default as unknown as SqliteDatabaseCtor; };
 const sha256File = async (targetPath: string): Promise<string> => createHash('sha256').update(await readFile(targetPath)).digest('hex');
 const tableExists = (db: SqliteDatabaseType, table: string): boolean => Boolean((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { name?: string } | undefined)?.name);
+const tableColumns = (db: SqliteDatabaseType, table: string): Set<string> => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
 const listTables = (db: SqliteDatabaseType): string[] => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as SqliteTableRow[]).map((row) => row.name).filter(Boolean);
 const countTable = (db: SqliteDatabaseType, table: string): number => Number(((db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count) ?? 0);
+const pgTextArrayParam = (values: string[]) => sql.param(values, {
+  mapToDriverValue: (items: string[]) => `{${items.map((item) => `"${item.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`).join(',')}}`,
+});
+
+const lockDesktopImportTenant = async (client: ImportQueryable, tenantId: string): Promise<void> => {
+  // PGlite is a single-process target; its FIFO/transaction already provides
+  // the serialization that PostgreSQL advisory locks provide across workers.
+  if (isPgliteTarget(client)) return;
+  await requireImportDrizzle(client).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billme:desktop-import:${tenantId}`}, 0))`);
+};
+
+// Repository upserts are intentionally tenant-scoped at read time, but most
+// imported tables still have a globally unique legacy id.  Refuse those ids
+// before any upsert can move another tenant's row into the import target.
+const tenantScopedIdentityTables = [
+  'number_reservations', 'clients', 'invoices', 'offers', 'recurring_profiles',
+  'articles', 'accounts', 'bank_transactions', 'booking_drafts', 'booking_draft_lines',
+  'draft_validation_issues', 'accounting_periods', 'journal_entries', 'journal_lines',
+  'assets', 'asset_depreciation_schedule', 'asset_movements', 'account_mappings_hgb',
+  'report_snapshots', 'eur_cash_facts', 'eur_annex_facts', 'accounting_source_runs',
+  'datev_exports', 'vat_evidence', 'journal_posting_pairs',
+  'transactions', 'eur_classifications', 'eur_rules', 'account_keywords',
+  'account_suggestion_rules', 'import_batches', 'templates', 'email_log',
+  'dunning_history', 'accounting_account_mappings', 'vendors', 'incoming_invoices',
+  'incoming_invoice_lines', 'open_items', 'open_item_payments', 'open_item_allocations',
+  'accounting_backfill_runs',
+] as const;
+
+export const assertNoCrossTenantIdentityCollisions = async (
+  client: ImportQueryable,
+  sqliteDb: SqliteDatabaseType,
+  tenantId: string,
+): Promise<void> => {
+  for (const table of tenantScopedIdentityTables) {
+    if (!tableExists(sqliteDb, table)) continue;
+    const ids = [...new Set((sqliteDb.prepare(`SELECT id FROM ${table} WHERE id IS NOT NULL`).all() as Array<{ id: string }>).map((row) => String(row.id)))].sort();
+    if (ids.length === 0) continue;
+    // Serialize imports for this table while checking and upserting its ids.
+    // One lock per table keeps PostgreSQL shared-memory usage bounded even for
+    // large desktop databases, while the fixed table order avoids deadlocks.
+    if (!isPgliteTarget(client)) {
+      await requireImportDrizzle(client).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`billme:desktop-import:${table}`}, 0))`);
+    }
+    const existing = await requireImportDrizzle(client).execute(sql`SELECT id, tenant_id FROM ${sql.raw(table)} WHERE id = ANY(${pgTextArrayParam(ids)}::text[])`);
+    const collision = (existing.rows as Array<{ id: string; tenant_id: string }>).find((row) => row.tenant_id !== tenantId);
+    if (collision) throw new Error(`IMPORT_ID_TENANT_COLLISION:${table}:${String(collision.id)}`);
+  }
+};
+
+type DesktopImportTenantReferenceCheck = Readonly<{
+  childTable: string;
+  childReferenceColumn: string;
+  parentTable: string;
+  childIdColumn?: string;
+  parentIdColumn?: string;
+  where?: string;
+}>;
+
+/**
+ * PostgreSQL's legacy foreign keys validate global ids, not tenant ownership.
+ * Keep this list fixed and query it after all import writes, while the import
+ * transaction is still open.  The identifier guard makes the generated SQL
+ * safe; all entries below are source-controlled constants, never source data.
+ */
+const desktopImportTenantReferenceChecks: readonly DesktopImportTenantReferenceCheck[] = [
+  { childTable: 'invoices', childReferenceColumn: 'client_id', parentTable: 'clients' },
+  { childTable: 'invoices', childReferenceColumn: 'accounting_journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'offers', childReferenceColumn: 'client_id', parentTable: 'clients' },
+  { childTable: 'recurring_profiles', childReferenceColumn: 'client_id', parentTable: 'clients' },
+  { childTable: 'number_reservations', childReferenceColumn: 'document_id', parentTable: 'invoices', where: "c.kind = 'invoice'" },
+  { childTable: 'number_reservations', childReferenceColumn: 'document_id', parentTable: 'offers', where: "c.kind = 'offer'" },
+  { childTable: 'number_reservations', childReferenceColumn: 'document_id', parentTable: 'clients', where: "c.kind = 'customer'" },
+  { childTable: 'email_log', childReferenceColumn: 'document_id', parentTable: 'invoices', where: "c.document_type = 'invoice'" },
+  { childTable: 'email_log', childReferenceColumn: 'document_id', parentTable: 'offers', where: "c.document_type = 'offer'" },
+  { childTable: 'dunning_history', childReferenceColumn: 'invoice_id', parentTable: 'invoices' },
+  { childTable: 'dunning_history', childReferenceColumn: 'email_log_id', parentTable: 'email_log' },
+  { childTable: 'active_templates', childReferenceColumn: 'invoice_template_id', parentTable: 'templates' },
+  { childTable: 'active_templates', childReferenceColumn: 'offer_template_id', parentTable: 'templates' },
+  { childTable: 'pro_workflow_entries', childIdColumn: 'transaction_id', childReferenceColumn: 'transaction_id', parentTable: 'transactions' },
+  { childTable: 'bank_transactions', childReferenceColumn: 'account_id', parentTable: 'accounts' },
+  { childTable: 'bank_transactions', childReferenceColumn: 'linked_invoice_id', parentTable: 'invoices' },
+  { childTable: 'bank_transactions', childReferenceColumn: 'source_transaction_id', parentTable: 'transactions' },
+  { childTable: 'booking_drafts', childReferenceColumn: 'transaction_id', parentTable: 'transactions' },
+  { childTable: 'booking_draft_lines', childReferenceColumn: 'draft_id', parentTable: 'booking_drafts' },
+  { childTable: 'draft_validation_issues', childReferenceColumn: 'draft_id', parentTable: 'booking_drafts' },
+  { childTable: 'journal_entries', childReferenceColumn: 'source_draft_id', parentTable: 'booking_drafts' },
+  { childTable: 'journal_entries', childReferenceColumn: 'reversed_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'journal_lines', childReferenceColumn: 'entry_id', parentTable: 'journal_entries' },
+  { childTable: 'journal_posting_pairs', childReferenceColumn: 'entry_id', parentTable: 'journal_entries' },
+  { childTable: 'journal_posting_pairs', childReferenceColumn: 'debit_line_id', parentTable: 'journal_lines' },
+  { childTable: 'journal_posting_pairs', childReferenceColumn: 'credit_line_id', parentTable: 'journal_lines' },
+  { childTable: 'transactions', childReferenceColumn: 'account_id', parentTable: 'accounts' },
+  { childTable: 'transactions', childReferenceColumn: 'linked_invoice_id', parentTable: 'invoices' },
+  { childTable: 'transactions', childReferenceColumn: 'import_batch_id', parentTable: 'import_batches' },
+  { childTable: 'import_batches', childReferenceColumn: 'account_id', parentTable: 'accounts' },
+  { childTable: 'incoming_invoices', childReferenceColumn: 'vendor_id', parentTable: 'vendors' },
+  { childTable: 'incoming_invoices', childReferenceColumn: 'accounting_journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'incoming_invoice_lines', childReferenceColumn: 'incoming_invoice_id', parentTable: 'incoming_invoices' },
+  { childTable: 'open_items', childReferenceColumn: 'journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'open_items', childReferenceColumn: 'source_id', parentTable: 'invoices', where: "c.source_type = 'outgoing_invoice'" },
+  { childTable: 'open_items', childReferenceColumn: 'source_id', parentTable: 'incoming_invoices', where: "c.source_type = 'incoming_invoice'" },
+  { childTable: 'open_items', childReferenceColumn: 'party_id', parentTable: 'clients', where: "c.party_type = 'debtor'" },
+  { childTable: 'open_items', childReferenceColumn: 'party_id', parentTable: 'vendors', where: "c.party_type = 'creditor'" },
+  { childTable: 'open_item_payments', childReferenceColumn: 'journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'open_item_payments', childReferenceColumn: 'source_id', parentTable: 'bank_transactions', where: "c.source_type = 'bank_transaction'" },
+  { childTable: 'open_item_payments', childReferenceColumn: 'party_id', parentTable: 'clients', where: "c.party_type = 'debtor'" },
+  { childTable: 'open_item_payments', childReferenceColumn: 'party_id', parentTable: 'vendors', where: "c.party_type = 'creditor'" },
+  { childTable: 'open_item_allocations', childReferenceColumn: 'payment_id', parentTable: 'open_item_payments' },
+  { childTable: 'open_item_allocations', childReferenceColumn: 'open_item_id', parentTable: 'open_items' },
+  { childTable: 'assets', childReferenceColumn: 'source_incoming_invoice_id', parentTable: 'incoming_invoices' },
+  { childTable: 'assets', childReferenceColumn: 'activation_journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'asset_depreciation_schedule', childReferenceColumn: 'asset_id', parentTable: 'assets' },
+  { childTable: 'asset_depreciation_schedule', childReferenceColumn: 'journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'asset_movements', childReferenceColumn: 'asset_id', parentTable: 'assets' },
+  { childTable: 'asset_movements', childReferenceColumn: 'journal_entry_id', parentTable: 'journal_entries' },
+  { childTable: 'vat_evidence', childReferenceColumn: 'draft_id', parentTable: 'booking_drafts' },
+  { childTable: 'vat_evidence', childReferenceColumn: 'entry_id', parentTable: 'journal_entries' },
+  { childTable: 'vat_evidence', childReferenceColumn: 'line_id', parentTable: 'journal_lines' },
+  { childTable: 'eur_classifications', childReferenceColumn: 'source_id', parentTable: 'invoices', where: "c.source_type = 'invoice'" },
+  { childTable: 'eur_classifications', childReferenceColumn: 'source_id', parentTable: 'transactions', where: "c.source_type = 'transaction'" },
+  { childTable: 'eur_cash_facts', childReferenceColumn: 'source_id', parentTable: 'invoices', where: "c.source_type = 'invoice'" },
+  { childTable: 'eur_cash_facts', childReferenceColumn: 'source_id', parentTable: 'transactions', where: "c.source_type = 'transaction'" },
+  { childTable: 'accounting_source_runs', childReferenceColumn: 'journal_entry_id', parentTable: 'journal_entries' },
+] as const;
+
+const desktopImportArticleJsonTables = ['invoices', 'offers', 'recurring_profiles'] as const;
+
+const quoteImportIdentifier = (identifier: string): string => {
+  if (!/^[a-z_][a-z0-9_]*$/.test(identifier)) throw new Error(`Invalid import assertion identifier: ${identifier}`);
+  return `"${identifier}"`;
+};
+
+export class DesktopImportCrossTenantReferenceError extends Error {
+  readonly code = 'IMPORT_CROSS_TENANT_REFERENCE';
+
+  constructor(
+    readonly details: {
+      childTable: string;
+      childId: string;
+      childReferenceColumn: string;
+      parentTable: string;
+      parentId: string;
+      parentTenantId: string;
+      tenantId: string;
+    },
+  ) {
+    super(`IMPORT_CROSS_TENANT_REFERENCE:${details.childTable}.${details.childReferenceColumn}:${details.childId}->${details.parentTable}:${details.parentId} (tenant ${details.parentTenantId}, expected ${details.tenantId})`);
+    this.name = 'DesktopImportCrossTenantReferenceError';
+  }
+}
+
+export const assertNoCrossTenantTenantReferences = async (
+  client: ImportQueryable,
+  tenantId: string,
+): Promise<void> => {
+  for (const check of desktopImportTenantReferenceChecks) {
+    const childTable = quoteImportIdentifier(check.childTable);
+    const childIdColumn = quoteImportIdentifier(check.childIdColumn ?? 'id');
+    const childReferenceColumn = quoteImportIdentifier(check.childReferenceColumn);
+    const parentTable = quoteImportIdentifier(check.parentTable);
+    const parentIdColumn = quoteImportIdentifier(check.parentIdColumn ?? 'id');
+    const result = await requireImportDrizzle(client).execute(
+      sql.raw(`SELECT c.${childIdColumn}::text AS child_id, c.${childReferenceColumn}::text AS parent_id, p.tenant_id::text AS parent_tenant_id
+       FROM ${childTable} c
+       JOIN ${parentTable} p ON p.${parentIdColumn} = c.${childReferenceColumn}
+       WHERE c.tenant_id = `).append(sql`${tenantId}`).append(sql.raw(` AND p.tenant_id IS DISTINCT FROM `)).append(sql`${tenantId}`).append(sql.raw(`${check.where ? ` AND ${check.where}` : ''}
+       ORDER BY c.${childIdColumn}::text
+       LIMIT 1`)),
+    );
+    const row = result.rows[0] as { child_id?: string; parent_id?: string; parent_tenant_id?: string } | undefined;
+    if (row?.child_id && row.parent_id && row.parent_tenant_id) {
+      throw new DesktopImportCrossTenantReferenceError({
+        childTable: check.childTable,
+        childId: row.child_id,
+        childReferenceColumn: check.childReferenceColumn,
+        parentTable: check.parentTable,
+        parentId: row.parent_id,
+        parentTenantId: row.parent_tenant_id,
+        tenantId,
+      });
+    }
+  }
+
+  for (const table of desktopImportArticleJsonTables) {
+    const childTable = quoteImportIdentifier(table);
+    const result = await requireImportDrizzle(client).execute(
+      sql.raw(`SELECT c.id::text AS child_id, item->>'articleId' AS parent_id, a.tenant_id::text AS parent_tenant_id
+       FROM ${childTable} c
+       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.items_json, '[]')::jsonb) AS item
+       JOIN "articles" a ON a.id = item->>'articleId'
+       WHERE c.tenant_id = `).append(sql`${tenantId}`).append(sql.raw(` AND a.tenant_id IS DISTINCT FROM `)).append(sql`${tenantId}`).append(sql.raw(`
+       ORDER BY c.id::text
+       LIMIT 1`)),
+    );
+    const row = result.rows[0] as { child_id?: string; parent_id?: string; parent_tenant_id?: string } | undefined;
+    if (row?.child_id && row.parent_id && row.parent_tenant_id) {
+      throw new DesktopImportCrossTenantReferenceError({
+        childTable: table,
+        childId: row.child_id,
+        childReferenceColumn: 'items_json.articleId',
+        parentTable: 'articles',
+        parentId: row.parent_id,
+        parentTenantId: row.parent_tenant_id,
+        tenantId,
+      });
+    }
+  }
+
+  const missingCashSource = await requireImportDrizzle(client).execute(sql`
+    SELECT c.id::text AS child_id, c.source_type, c.source_id::text AS parent_id
+    FROM eur_cash_facts c
+    LEFT JOIN invoices i ON i.id = c.source_id AND c.source_type = 'invoice'
+    LEFT JOIN transactions t ON t.id = c.source_id AND c.source_type = 'transaction'
+    WHERE c.tenant_id = ${tenantId}
+      AND c.source_id IS NOT NULL
+      AND ((c.source_type = 'invoice' AND i.id IS NULL)
+        OR (c.source_type = 'transaction' AND t.id IS NULL)
+        OR c.source_type NOT IN ('invoice', 'transaction'))
+    ORDER BY c.id::text
+    LIMIT 1
+  `);
+  const missing = missingCashSource.rows[0] as { child_id?: string; source_type?: string; parent_id?: string } | undefined;
+  if (missing?.child_id) throw new Error(`IMPORT_MISSING_PARENT:eur_cash_facts.source_id:${missing.child_id}:${missing.source_type ?? 'unknown'}:${missing.parent_id ?? ''}`);
+};
 
 export const detectUnsupportedSqliteTables = (tables: string[], countLookup: (table: string) => number): Array<{ table: string; rowCount: number }> => {
   return tables.filter((table) => !systemTable(table) && !importableTables.has(table)).map((table) => ({ table, rowCount: countLookup(table) })).filter((entry) => entry.rowCount > 0).sort((left, right) => left.table.localeCompare(right.table));
@@ -254,10 +534,10 @@ const loadClients = (db: SqliteDatabaseType, tenantId: string): Client[] => {
   for (const row of emailRows) { const list = emailsByClient.get(row.client_id) ?? []; list.push(row); emailsByClient.set(row.client_id, list); }
   for (const row of projectRows) { const list = projectsByClient.get(row.client_id) ?? []; list.push(row); projectsByClient.set(row.client_id, list); }
   for (const row of activityRows) { const list = activitiesByClient.get(row.client_id) ?? []; list.push(row); activitiesByClient.set(row.client_id, list); }
-  return clientRows.map((row) => ({ id: row.id, tenantId, customerNumber: row.customer_number ?? undefined, company: row.company, contactPerson: row.contact_person, email: row.email, phone: row.phone, address: row.address, status: row.status, avatar: row.avatar ?? undefined, tags: parseJson(row.tags_json, []), notes: row.notes, addresses: (addressesByClient.get(row.id) ?? []).map((address) => ({ id: address.id, clientId: address.client_id, label: address.label, kind: address.kind, company: address.company ?? undefined, contactPerson: address.contact_person ?? undefined, street: address.street, line2: address.line2 ?? undefined, zip: address.zip, city: address.city, country: address.country, isDefaultBilling: Boolean(address.is_default_billing), isDefaultShipping: Boolean(address.is_default_shipping) })), emails: (emailsByClient.get(row.id) ?? []).map((email) => ({ id: email.id, clientId: email.client_id, label: email.label, kind: email.kind, email: email.email, isDefaultGeneral: Boolean(email.is_default_general), isDefaultBilling: Boolean(email.is_default_billing) })), projects: (projectsByClient.get(row.id) ?? []).map((project) => ({ id: project.id, clientId: project.client_id, code: project.code ?? undefined, name: project.name, status: project.status as Client['projects'][number]['status'], budget: project.budget, startDate: project.start_date, endDate: project.end_date ?? undefined, description: project.description ?? undefined, archivedAt: project.archived_at ?? undefined, createdAt: project.created_at ?? undefined, updatedAt: project.updated_at ?? undefined })), activities: (activitiesByClient.get(row.id) ?? []).map((activity) => ({ id: activity.id, clientId: activity.client_id, type: activity.type, content: activity.content, date: activity.date, author: activity.author })) }));
+  return clientRows.map((row) => ({ id: row.id, tenantId, customerNumber: row.customer_number ?? undefined, company: row.company, contactPerson: row.contact_person, email: row.email, phone: row.phone, address: row.address, status: row.status, avatar: row.avatar ?? undefined, tags: parseJson(row.tags_json, []), notes: row.notes, taxProfile: parseJson(row.tax_profile_json ?? null, undefined), addresses: (addressesByClient.get(row.id) ?? []).map((address) => ({ id: address.id, clientId: address.client_id, label: address.label, kind: address.kind, company: address.company ?? undefined, contactPerson: address.contact_person ?? undefined, street: address.street, line2: address.line2 ?? undefined, zip: address.zip, city: address.city, country: address.country, isDefaultBilling: Boolean(address.is_default_billing), isDefaultShipping: Boolean(address.is_default_shipping) })), emails: (emailsByClient.get(row.id) ?? []).map((email) => ({ id: email.id, clientId: email.client_id, label: email.label, kind: email.kind, email: email.email, isDefaultGeneral: Boolean(email.is_default_general), isDefaultBilling: Boolean(email.is_default_billing) })), projects: (projectsByClient.get(row.id) ?? []).map((project) => ({ id: project.id, clientId: project.client_id, code: project.code ?? undefined, name: project.name, status: project.status as Client['projects'][number]['status'], budget: project.budget, startDate: project.start_date, endDate: project.end_date ?? undefined, description: project.description ?? undefined, archivedAt: project.archived_at ?? undefined, createdAt: project.created_at ?? undefined, updatedAt: project.updated_at ?? undefined })), activities: (activitiesByClient.get(row.id) ?? []).map((activity) => ({ id: activity.id, clientId: activity.client_id, type: activity.type, content: activity.content, date: activity.date, author: activity.author })) }));
 };
 
-const loadInvoices = (db: SqliteDatabaseType, tenantId: string): Invoice[] => {
+const loadInvoices = (db: SqliteDatabaseType, tenantId: string): LoadedInvoice[] => {
   if (!tableExists(db, 'invoices')) return [];
   const rows = db.prepare('SELECT * FROM invoices ORDER BY date DESC, created_at DESC').all() as SqliteInvoiceRow[];
   const itemRows = tableExists(db, 'invoice_items') ? (db.prepare('SELECT * FROM invoice_items ORDER BY invoice_id, position ASC').all() as SqliteInvoiceItemRow[]) : [];
@@ -266,7 +546,31 @@ const loadInvoices = (db: SqliteDatabaseType, tenantId: string): Invoice[] => {
   const paymentsByInvoice = new Map<string, SqliteInvoicePaymentRow[]>();
   for (const row of itemRows) { const list = itemsByInvoice.get(row.invoice_id) ?? []; list.push(row); itemsByInvoice.set(row.invoice_id, list); }
   for (const row of paymentRows) { const list = paymentsByInvoice.get(row.invoice_id) ?? []; list.push(row); paymentsByInvoice.set(row.invoice_id, list); }
-  return rows.map((row) => ({ kind: 'invoice', id: row.id, tenantId, clientId: row.client_id ?? undefined, clientNumber: row.client_number ?? undefined, projectId: row.project_id ?? undefined, number: row.number, client: row.client, clientEmail: row.client_email, clientAddress: row.client_address ?? undefined, billingAddress: parseJson(row.billing_address_json, undefined), shippingAddress: parseJson(row.shipping_address_json, undefined), taxMode: DEFAULT_TAX_MODE, date: row.date, dueDate: row.due_date, servicePeriod: row.service_period ?? undefined, amount: row.amount, status: row.status, dunningLevel: row.dunning_level, items: (itemsByInvoice.get(row.id) ?? []).map((item) => ({ description: item.description, quantity: item.quantity, price: item.price, total: item.total, articleId: item.article_id ?? undefined, category: item.category ?? undefined, taxRate: item.tax_rate ?? undefined })), payments: (paymentsByInvoice.get(row.id) ?? []).map((payment) => ({ id: payment.id, date: payment.date, amount: payment.amount, method: payment.method })), history: [], createdAt: row.created_at, updatedAt: row.updated_at }));
+  return rows.map((row) => ({
+    invoice: { kind: 'invoice', id: row.id, tenantId, clientId: row.client_id ?? undefined, clientNumber: row.client_number ?? undefined, projectId: row.project_id ?? undefined, number: row.number, documentKind: row.document_kind ?? 'invoice', sourceDocumentId: row.source_document_id ?? undefined, rootDocumentId: row.root_document_id ?? (row.document_kind === 'order_confirmation' || row.document_kind === 'delivery_note' ? undefined : row.id), revisionOfId: row.revision_of_id ?? undefined, revisionNumber: row.revision_number ?? 0, client: row.client, clientEmail: row.client_email, clientAddress: row.client_address ?? undefined, billingAddress: parseJson(row.billing_address_json, undefined), shippingAddress: parseJson(row.shipping_address_json, undefined), taxMode: row.tax_mode ?? DEFAULT_TAX_MODE, taxMeta: parseJson(row.tax_meta_json ?? null, undefined), taxSnapshot: parseJson(row.tax_snapshot_json ?? null, undefined), date: row.date, dueDate: row.due_date, servicePeriod: row.service_period ?? undefined, amount: row.amount, status: row.status, dunningLevel: row.dunning_level, items: (itemsByInvoice.get(row.id) ?? []).map((item) => billingLineItemSchema.parse({ description: item.description, quantity: item.quantity, price: item.price, total: item.total, articleId: item.article_id ?? undefined, category: item.category ?? undefined, taxRate: item.tax_rate ?? undefined, ...parseJson(item.line_meta_json ?? null, {}) })), payments: (paymentsByInvoice.get(row.id) ?? []).map((payment) => ({ id: payment.id, date: payment.date, amount: payment.amount, method: payment.method })), history: [], createdAt: row.created_at, updatedAt: row.updated_at },
+    accountingStatus: row.accounting_status ?? 'unposted', accountingSnapshotJson: row.accounting_snapshot_json ?? null, accountingJournalEntryId: row.accounting_journal_entry_id ?? null, accountingPostedAt: row.accounting_posted_at ?? null,
+  }));
+};
+
+const outgoingInvoiceColumns = ['id', 'tenant_id', 'client_id', 'client_number', 'project_id', 'number', 'document_kind', 'source_document_id', 'root_document_id', 'revision_of_id', 'revision_number', 'client', 'client_email', 'client_address', 'billing_address_json', 'shipping_address_json', 'date', 'due_date', 'service_period', 'amount', 'status', 'dunning_level', 'items_json', 'payments_json', 'history_json', 'tax_mode', 'tax_meta_json', 'tax_snapshot_json', 'accounting_status', 'accounting_snapshot_json', 'accounting_journal_entry_id', 'accounting_posted_at', 'created_at', 'updated_at'];
+
+const importOutgoingInvoices = async (client: Parameters<typeof importRawTenantRows>[0], invoices: LoadedInvoice[], tenantId: string): Promise<number> => importRawTenantRows(client, 'invoices', invoices.map(({ invoice, accountingStatus, accountingSnapshotJson, accountingJournalEntryId, accountingPostedAt }) => ({
+  id: invoice.id, tenant_id: tenantId, client_id: invoice.clientId ?? null, client_number: invoice.clientNumber ?? null, project_id: invoice.projectId ?? null,
+  number: invoice.number, document_kind: invoice.documentKind ?? 'invoice', source_document_id: invoice.sourceDocumentId ?? null, root_document_id: invoice.rootDocumentId ?? (invoice.documentKind === 'order_confirmation' || invoice.documentKind === 'delivery_note' ? null : invoice.id), revision_of_id: invoice.revisionOfId ?? null, revision_number: invoice.revisionNumber ?? 0, client: invoice.client, client_email: invoice.clientEmail, client_address: invoice.clientAddress ?? null,
+  billing_address_json: invoice.billingAddress ? JSON.stringify(invoice.billingAddress) : null, shipping_address_json: invoice.shippingAddress ? JSON.stringify(invoice.shippingAddress) : null,
+  date: invoice.date, due_date: invoice.dueDate, service_period: invoice.servicePeriod ?? null, amount: invoice.amount, status: invoice.status, dunning_level: invoice.dunningLevel ?? 0,
+  items_json: JSON.stringify(invoice.items ?? []), payments_json: JSON.stringify(invoice.payments ?? []), history_json: JSON.stringify(invoice.history ?? []),
+  tax_mode: invoice.taxMode ?? DEFAULT_TAX_MODE, tax_meta_json: invoice.taxMeta ? JSON.stringify(invoice.taxMeta) : null, tax_snapshot_json: invoice.taxSnapshot ? JSON.stringify(invoice.taxSnapshot) : null,
+  accounting_status: accountingStatus, accounting_snapshot_json: accountingSnapshotJson, accounting_journal_entry_id: accountingJournalEntryId, accounting_posted_at: accountingPostedAt,
+  created_at: invoice.createdAt ?? null, updated_at: invoice.updatedAt ?? null,
+})), tenantId, outgoingInvoiceColumns);
+
+const incomingInvoiceColumns = ['id', 'tenant_id', 'vendor_id', 'number', 'invoice_date', 'due_date', 'service_period', 'net_amount', 'tax_amount', 'gross_amount', 'status', 'tax_rate', 'tax_case_key', 'notes', 'accounting_status', 'accounting_snapshot_json', 'accounting_journal_entry_id', 'accounting_posted_at', 'created_at', 'updated_at'];
+const importIncomingInvoices = async (client: Parameters<typeof importRawTenantRows>[0], sourceRows: Array<Record<string, unknown>>, tenantId: string): Promise<{ count: number; insertedIds: string[] }> => {
+  const stagedRows = sourceRows.map((row) => ({ ...row, accounting_status: 'unposted', accounting_snapshot_json: null, accounting_journal_entry_id: null, accounting_posted_at: null }));
+  const insertedIds: string[] = [];
+  const count = await importRawTenantRows(client, 'incoming_invoices', stagedRows, tenantId, incomingInvoiceColumns, insertedIds);
+  return { count, insertedIds };
 };
 
 const loadOffers = (db: SqliteDatabaseType, tenantId: string): Offer[] => {
@@ -275,17 +579,19 @@ const loadOffers = (db: SqliteDatabaseType, tenantId: string): Offer[] => {
   const itemRows = tableExists(db, 'offer_items') ? (db.prepare('SELECT * FROM offer_items ORDER BY offer_id, position ASC').all() as SqliteOfferItemRow[]) : [];
   const itemsByOffer = new Map<string, SqliteOfferItemRow[]>();
   for (const row of itemRows) { const list = itemsByOffer.get(row.offer_id) ?? []; list.push(row); itemsByOffer.set(row.offer_id, list); }
-  return rows.map((row) => ({ kind: 'offer', id: row.id, tenantId, clientId: row.client_id ?? undefined, clientNumber: row.client_number ?? undefined, projectId: row.project_id ?? undefined, number: row.number, client: row.client, clientEmail: row.client_email, clientAddress: row.client_address ?? undefined, billingAddress: parseJson(row.billing_address_json, undefined), shippingAddress: parseJson(row.shipping_address_json, undefined), taxMode: DEFAULT_TAX_MODE, date: row.date, validUntil: row.valid_until, amount: row.amount, status: row.status, share: row.share_token || row.share_published_at || row.decision || row.decision_text_version || row.accepted_at || row.accepted_by || row.accepted_email || row.accepted_user_agent ? { token: row.share_token ?? undefined, publishedAt: row.share_published_at ?? undefined, decision: row.decision as NonNullable<Offer['share']>['decision'] | undefined, decisionTextVersion: row.decision_text_version ?? undefined, acceptedAt: row.accepted_at ?? undefined, acceptedBy: row.accepted_by ?? undefined, acceptedEmail: row.accepted_email ?? undefined, acceptedUserAgent: row.accepted_user_agent ?? undefined } : undefined, items: (itemsByOffer.get(row.id) ?? []).map((item) => ({ description: item.description, quantity: item.quantity, price: item.price, total: item.total, articleId: item.article_id ?? undefined, category: item.category ?? undefined, taxRate: item.tax_rate ?? undefined })), history: [], createdAt: row.created_at, updatedAt: row.updated_at }));
+  return rows.map((row) => ({ kind: 'offer', id: row.id, tenantId, clientId: row.client_id ?? undefined, clientNumber: row.client_number ?? undefined, projectId: row.project_id ?? undefined, number: row.number, client: row.client, clientEmail: row.client_email, clientAddress: row.client_address ?? undefined, billingAddress: parseJson(row.billing_address_json, undefined), shippingAddress: parseJson(row.shipping_address_json, undefined), taxMode: row.tax_mode ?? DEFAULT_TAX_MODE, taxMeta: parseJson(row.tax_meta_json ?? null, undefined), taxSnapshot: parseJson(row.tax_snapshot_json ?? null, undefined), date: row.date, validUntil: row.valid_until, amount: row.amount, status: row.status, share: row.share_token || row.share_published_at || row.decision || row.decision_text_version || row.accepted_at || row.accepted_by || row.accepted_email || row.accepted_user_agent ? { token: row.share_token ?? undefined, publishedAt: row.share_published_at ?? undefined, decision: row.decision as NonNullable<Offer['share']>['decision'] | undefined, decisionTextVersion: row.decision_text_version ?? undefined, acceptedAt: row.accepted_at ?? undefined, acceptedBy: row.accepted_by ?? undefined, acceptedEmail: row.accepted_email ?? undefined, acceptedUserAgent: row.accepted_user_agent ?? undefined } : undefined, items: (itemsByOffer.get(row.id) ?? []).map((item) => billingLineItemSchema.parse({ description: item.description, quantity: item.quantity, price: item.price, total: item.total, articleId: item.article_id ?? undefined, category: item.category ?? undefined, taxRate: item.tax_rate ?? undefined, ...parseJson(item.line_meta_json ?? null, {}) })), history: [], createdAt: row.created_at, updatedAt: row.updated_at }));
 };
 
 const loadRecurringProfiles = (db: SqliteDatabaseType, tenantId: string): RecurringProfile[] => {
   if (!tableExists(db, 'recurring_profiles')) return [];
-  return (db.prepare('SELECT * FROM recurring_profiles ORDER BY next_run ASC, id ASC').all() as SqliteRecurringRow[]).map((row) => ({ id: row.id, tenantId, clientId: row.client_id, active: Boolean(row.active), name: row.name, interval: row.interval, nextRun: row.next_run, lastRun: row.last_run ?? undefined, endDate: row.end_date ?? undefined, amount: row.amount, items: parseJson(row.items_json, []) }));
+  return (db.prepare('SELECT * FROM recurring_profiles ORDER BY next_run ASC, id ASC').all() as SqliteRecurringRow[]).map((row) => ({ id: row.id, tenantId, clientId: row.client_id, active: Boolean(row.active), name: row.name, interval: row.interval, nextRun: row.next_run, lastRun: row.last_run ?? undefined, endDate: row.end_date ?? undefined, amount: row.amount, taxMode: row.tax_mode ?? DEFAULT_TAX_MODE, taxMeta: parseJson(row.tax_meta_json ?? null, undefined), items: parseJson(row.items_json, []) }));
 };
 
 const loadEmailLog = (db: SqliteDatabaseType): SqliteEmailLogRow[] => tableExists(db, 'email_log') ? (db.prepare('SELECT * FROM email_log ORDER BY created_at ASC').all() as SqliteEmailLogRow[]) : [];
 const loadDunningHistory = (db: SqliteDatabaseType): SqliteDunningHistoryRow[] => tableExists(db, 'dunning_history') ? (db.prepare('SELECT * FROM dunning_history ORDER BY created_at ASC').all() as SqliteDunningHistoryRow[]) : [];
 const loadAuditLog = (db: SqliteDatabaseType): SqliteAuditRow[] => tableExists(db, 'audit_log') ? (db.prepare('SELECT sequence, ts, entity_type, entity_id, action, reason, before_json, after_json, prev_hash, hash, actor FROM audit_log ORDER BY sequence ASC').all() as SqliteAuditRow[]) : [];
+type AuditHeadRow = Pick<SqliteAuditRow, 'sequence' | 'hash'>;
+export const maxAuditHead = (rows: readonly AuditHeadRow[]): AuditHeadRow | undefined => rows.reduce<AuditHeadRow | undefined>((head, row) => !head || row.sequence > head.sequence ? row : head, undefined);
 const loadSettingsJson = (db: SqliteDatabaseType): string | null => tableExists(db, 'settings') ? ((db.prepare('SELECT settings_json FROM settings ORDER BY id ASC LIMIT 1').get() as { settings_json?: string } | undefined)?.settings_json ?? null) : null;
 const loadNumberReservations = (db: SqliteDatabaseType, tenantId: string) => tableExists(db, 'number_reservations') ? ((db.prepare('SELECT id, kind, number, counter_value, status, document_id, created_at, updated_at FROM number_reservations ORDER BY created_at ASC').all() as Array<{ id: string; kind: 'invoice' | 'offer' | 'customer'; number: string; counter_value: number; status: 'reserved' | 'released' | 'finalized'; document_id: string | null; created_at: string; updated_at: string }>).map((row) => ({ id: row.id, tenantId, kind: row.kind, number: row.number, counterValue: row.counter_value, status: row.status, documentId: row.document_id, createdAt: row.created_at, updatedAt: row.updated_at }))) : [];
 const loadArticles = (db: SqliteDatabaseType, tenantId: string): ServerArticleRecord[] => tableExists(db, 'articles') ? (db.prepare('SELECT * FROM articles ORDER BY title ASC, id ASC').all() as SqliteArticleRow[]).map((row) => ({ id: row.id, tenantId, sku: row.sku ?? undefined, title: row.title, description: row.description, price: row.price, unit: row.unit, category: row.category, taxRate: row.tax_rate })) : [];
@@ -294,24 +600,218 @@ const loadLedgerAccounts = (db: SqliteDatabaseType): SqliteLedgerAccountRow[] =>
 const loadProWorkflowEntries = (db: SqliteDatabaseType, tenantId: string): ServerProWorkflowRecord[] => tableExists(db, 'pro_workflow_entries') ? (db.prepare('SELECT transaction_id, transaction_json, draft_json, updated_at FROM pro_workflow_entries ORDER BY updated_at DESC, transaction_id ASC').all() as SqliteProWorkflowEntryRow[]).map((row) => ({ tenantId, transactionId: row.transaction_id, transactionJson: row.transaction_json, draftJson: row.draft_json, updatedAt: row.updated_at })) : [];
 const loadBankTransactions = (db: SqliteDatabaseType, tenantId: string): ServerBankTransactionRecord[] => tableExists(db, 'bank_transactions') ? (db.prepare('SELECT id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, source_transaction_id, created_at, updated_at FROM bank_transactions ORDER BY date DESC, id ASC').all() as SqliteBankTransactionRow[]).map((row) => ({ id: row.id, tenantId, accountId: row.account_id, date: row.date, amount: row.amount, type: row.type, counterparty: row.counterparty, purpose: row.purpose, linkedInvoiceId: row.linked_invoice_id ?? undefined, status: row.status, sourceTransactionId: row.source_transaction_id ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at })) : [];
 const loadBookingDrafts = (db: SqliteDatabaseType, tenantId: string): ServerBookingDraftRecord[] => tableExists(db, 'booking_drafts') ? (db.prepare('SELECT id, transaction_id, workflow_status, draft_json, updated_at FROM booking_drafts ORDER BY updated_at DESC, id ASC').all() as SqliteBookingDraftRow[]).map((row) => ({ id: row.id, tenantId, transactionId: row.transaction_id, workflowStatus: row.workflow_status, draftJson: row.draft_json, updatedAt: row.updated_at })) : [];
-const loadBookingDraftLines = (db: SqliteDatabaseType, tenantId: string): ServerBookingDraftLineRecord[] => tableExists(db, 'booking_draft_lines') ? (db.prepare('SELECT * FROM booking_draft_lines ORDER BY draft_id ASC, line_no ASC').all() as SqliteBookingDraftLineRow[]).map((row) => ({ id: row.id, tenantId, draftId: row.draft_id, lineNo: row.line_no, accountNumber: row.account_number, debitAmount: row.debit_amount, creditAmount: row.credit_amount, taxCode: row.tax_code ?? undefined, taxCaseKey: row.tax_case_key ?? undefined, taxRate: row.tax_rate ?? undefined, netAmount: row.net_amount ?? undefined, taxAmount: row.tax_amount ?? undefined, grossAmount: row.gross_amount ?? undefined, countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, costCenter: row.cost_center ?? undefined, memo: row.memo ?? undefined })) : [];
+const loadBookingDraftLines = (db: SqliteDatabaseType, tenantId: string): ServerBookingDraftLineRecord[] => tableExists(db, 'booking_draft_lines') ? (db.prepare('SELECT * FROM booking_draft_lines ORDER BY draft_id ASC, line_no ASC').all() as SqliteBookingDraftLineRow[]).map((row) => ({ id: row.id, tenantId, draftId: row.draft_id, lineNo: row.line_no, accountNumber: row.account_number, debitAmount: row.debit_amount, creditAmount: row.credit_amount, taxCode: row.tax_code ?? undefined, taxCaseKey: row.tax_case_key ?? undefined, taxRate: row.tax_rate ?? undefined, netAmount: row.net_amount ?? undefined, taxAmount: row.tax_amount ?? undefined, grossAmount: row.gross_amount ?? undefined, countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, datevSachverhaltLl: row.datev_sachverhalt_ll ?? undefined, costCenter: row.cost_center ?? undefined, memo: row.memo ?? undefined })) : [];
 const loadDraftValidationIssues = (db: SqliteDatabaseType, tenantId: string): ServerDraftValidationIssueRecord[] => tableExists(db, 'draft_validation_issues') ? (db.prepare('SELECT * FROM draft_validation_issues ORDER BY created_at ASC, id ASC').all() as SqliteDraftValidationIssueRow[]).map((row) => ({ id: row.id, tenantId, draftId: row.draft_id, code: row.code, severity: row.severity, message: row.message, fieldPath: row.field_path ?? undefined, blocking: Boolean(row.blocking), source: row.source, issueJson: row.issue_json, createdAt: row.created_at })) : [];
 const loadAccountingPeriods = (db: SqliteDatabaseType, tenantId: string): ServerAccountingPeriodRecord[] => tableExists(db, 'accounting_periods') ? (db.prepare('SELECT * FROM accounting_periods ORDER BY fiscal_year ASC, period ASC').all() as SqliteAccountingPeriodRow[]).map((row) => ({ id: row.id, tenantId, period: row.period, fiscalYear: row.fiscal_year, status: row.status, startsAt: row.starts_at, endsAt: row.ends_at, createdAt: row.created_at, updatedAt: row.updated_at })) : [];
-const loadJournalEntries = (db: SqliteDatabaseType, tenantId: string): ServerJournalEntryRecord[] => tableExists(db, 'journal_entries') ? (db.prepare('SELECT * FROM journal_entries ORDER BY posting_date DESC, entry_number DESC').all() as SqliteJournalEntryRow[]).map((row) => ({ id: row.id, tenantId, entryNumber: row.entry_number, postingDate: row.posting_date, documentDate: row.document_date ?? undefined, bookingText: row.booking_text, reference: row.reference ?? undefined, period: row.period, fiscalYear: row.fiscal_year, status: row.status, sourceDraftId: row.source_draft_id ?? undefined, reversedEntryId: row.reversed_entry_id ?? undefined, createdAt: row.created_at })) : [];
-const loadJournalLines = (db: SqliteDatabaseType, tenantId: string): ServerJournalLineRecord[] => tableExists(db, 'journal_lines') ? (db.prepare('SELECT * FROM journal_lines ORDER BY entry_id ASC, line_no ASC').all() as SqliteJournalLineRow[]).map((row) => ({ id: row.id, tenantId, entryId: row.entry_id, lineNo: row.line_no, accountNumber: row.account_number, debitAmount: row.debit_amount, creditAmount: row.credit_amount, taxCode: row.tax_code ?? undefined, taxCaseKey: row.tax_case_key ?? undefined, taxRate: row.tax_rate ?? undefined, netAmount: row.net_amount ?? undefined, taxAmount: row.tax_amount ?? undefined, grossAmount: row.gross_amount ?? undefined, countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, costCenter: row.cost_center ?? undefined, memo: row.memo ?? undefined })) : [];
+const loadJournalEntries = (db: SqliteDatabaseType, tenantId: string): ServerJournalEntryRecord[] => tableExists(db, 'journal_entries') ? (db.prepare('SELECT * FROM journal_entries ORDER BY posting_date DESC, entry_number DESC').all() as SqliteJournalEntryRow[]).map((row) => ({ id: row.id, tenantId, entryNumber: row.entry_number, postingDate: row.posting_date, documentDate: row.document_date ?? undefined, bookingText: row.booking_text, reference: row.reference ?? undefined, period: row.period, fiscalYear: row.fiscal_year, status: row.status, sourceDraftId: row.source_draft_id ?? undefined, sourceType: row.source_type ?? undefined, sourceKey: row.source_key ?? undefined, reversedEntryId: row.reversed_entry_id ?? undefined, createdAt: row.created_at })) : [];
+const loadJournalLines = (db: SqliteDatabaseType, tenantId: string): ServerJournalLineRecord[] => tableExists(db, 'journal_lines') ? (db.prepare('SELECT * FROM journal_lines ORDER BY entry_id ASC, line_no ASC').all() as SqliteJournalLineRow[]).map((row) => ({ id: row.id, tenantId, entryId: row.entry_id, lineNo: row.line_no, accountNumber: row.account_number, debitAmount: row.debit_amount, creditAmount: row.credit_amount, taxCode: row.tax_code ?? undefined, taxCaseKey: row.tax_case_key ?? undefined, taxRate: row.tax_rate ?? undefined, netAmount: row.net_amount ?? undefined, taxAmount: row.tax_amount ?? undefined, grossAmount: row.gross_amount ?? undefined, countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, datevSachverhaltLl: row.datev_sachverhalt_ll ?? undefined, costCenter: row.cost_center ?? undefined, memo: row.memo ?? undefined })) : [];
 const loadAssets = (db: SqliteDatabaseType): SqliteAssetRow[] => tableExists(db, 'assets') ? db.prepare('SELECT * FROM assets ORDER BY asset_number ASC').all() as SqliteAssetRow[] : [];
 const loadAssetSchedule = (db: SqliteDatabaseType): SqliteAssetScheduleRow[] => tableExists(db, 'asset_depreciation_schedule') ? db.prepare('SELECT * FROM asset_depreciation_schedule ORDER BY asset_id, year').all() as SqliteAssetScheduleRow[] : [];
 const loadAssetMovements = (db: SqliteDatabaseType): SqliteAssetMovementRow[] => tableExists(db, 'asset_movements') ? db.prepare('SELECT * FROM asset_movements ORDER BY movement_date, id').all() as SqliteAssetMovementRow[] : [];
-const loadAccountMappingsHgb = (db: SqliteDatabaseType, tenantId: string): ServerAccountMappingHgbRecord[] => tableExists(db, 'account_mappings_hgb') ? (db.prepare('SELECT * FROM account_mappings_hgb ORDER BY chart ASC, account_number ASC').all() as SqliteAccountMappingHgbRow[]).map((row) => ({ id: row.id, tenantId, chart: row.chart, accountNumber: row.account_number, statementType: row.statement_type, positionKey: row.position_key, positionLabel: row.position_label, balanceSide: row.balance_side ?? undefined, updatedAt: row.updated_at })) : [];
+const importedReportTypes = new Set<ServerReportAccountMappingRecord['reportType']>(['bwa01', 'management-guv', 'hgb-guv', 'hgb-bilanz']);
+const legacyReportTypeAliases: Record<string, ServerReportAccountMappingRecord['reportType']> = {
+  'hgb-gkv': 'hgb-guv',
+  'hgb-balance': 'hgb-bilanz',
+};
+const legacyReportTypes = new Set(['guv', 'bilanz']);
+const normalizeImportedReportType = (value: string): ServerReportAccountMappingRecord['reportType'] => {
+  const normalized = value.trim().toLowerCase();
+  const reportType = importedReportTypes.has(normalized as ServerReportAccountMappingRecord['reportType'])
+    ? normalized as ServerReportAccountMappingRecord['reportType']
+    : legacyReportTypeAliases[normalized];
+  if (!reportType) throw new Error(`REPORT_MAPPING_TYPE_UNSUPPORTED:${value}`);
+  return reportType;
+};
+const normalizeImportedEffectiveDate = (value: string | null | undefined): string | undefined => {
+  if (!value) return undefined;
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(value.trim());
+  if (!match) throw new Error(`REPORT_MAPPING_DATE_INVALID:${value}`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const daysInMonth = month >= 1 && month <= 12 ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 0;
+  if (year < 1 || day < 1 || day > daysInMonth) throw new Error(`REPORT_MAPPING_DATE_INVALID:${value}`);
+  return `${match[1]}-${match[2]}-${match[3]}`;
+};
+const importedMappingVersion = (validFrom: string | undefined): number => validFrom ? Number(validFrom.replaceAll('-', '')) : 1;
+const loadAccountMappingRows = (db: SqliteDatabaseType): SqliteAccountMappingHgbRow[] => {
+  if (!tableExists(db, 'account_mappings_hgb')) return [];
+  const columns = tableColumns(db, 'account_mappings_hgb');
+  const validFrom = columns.has('valid_from') ? 'valid_from' : 'NULL AS valid_from';
+  const validTo = columns.has('valid_to') ? 'valid_to' : 'NULL AS valid_to';
+  const orderValidFrom = columns.has('valid_from') ? 'valid_from' : 'NULL';
+  return db.prepare(`SELECT id,chart,account_number,statement_type,position_key,position_label,balance_side,${validFrom},${validTo},updated_at FROM account_mappings_hgb ORDER BY chart ASC, account_number ASC, statement_type ASC, ${orderValidFrom} ASC, id ASC`).all() as SqliteAccountMappingHgbRow[];
+};
+const validateAccountMappingRow = (row: SqliteAccountMappingHgbRow): { chart: 'SKR03' | 'SKR04'; accountNumber: string; positionKey: string; positionLabel: string } => {
+  const chart = row.chart.trim().toUpperCase();
+  if (chart !== 'SKR03' && chart !== 'SKR04') throw new Error(`REPORT_MAPPING_CHART_UNSUPPORTED:${row.chart}`);
+  const accountNumber = row.account_number.trim();
+  const positionKey = row.position_key.trim();
+  const positionLabel = row.position_label.trim();
+  if (!accountNumber || !positionKey || !positionLabel) throw new Error(`REPORT_MAPPING_REQUIRED:${row.id}`);
+  return { chart, accountNumber, positionKey, positionLabel };
+};
+export const loadAccountMappingsHgb = (db: SqliteDatabaseType, tenantId: string): ServerReportAccountMappingRecord[] => {
+  const rows = loadAccountMappingRows(db);
+  const seen = new Set<string>();
+  return rows.flatMap((row) => {
+    const statementType = row.statement_type.trim().toLowerCase();
+    if (legacyReportTypes.has(statementType)) return [];
+    const { chart, accountNumber, positionKey, positionLabel } = validateAccountMappingRow(row);
+    const reportType = normalizeImportedReportType(statementType);
+    const validFrom = normalizeImportedEffectiveDate(row.valid_from);
+    const identity = `${tenantId}:${reportType}:${chart}:${accountNumber}:${validFrom ?? 'baseline'}`;
+    if (seen.has(identity)) throw new Error(`REPORT_MAPPING_COLLISION:${identity}`);
+    seen.add(identity);
+    const validTo = normalizeImportedEffectiveDate(row.valid_to);
+    if (validFrom && validTo && validFrom > validTo) throw new Error(`REPORT_MAPPING_INVALID_VALIDITY:${row.id}`);
+    const source = { tenantId, chart, reportType, accountNumber, positionKey, positionLabel, balanceSide: row.balance_side ?? null, validFrom, validTo };
+    const sourceHash = createHash('sha256').update(JSON.stringify(source)).digest('hex');
+    return {
+      id: `report-import:${sourceHash}`,
+      tenantId,
+      reportType,
+      chart,
+      accountNumber,
+      positionKey: row.balance_side ? `${row.balance_side}:${positionKey}` : positionKey,
+      positionLabel,
+      validFrom,
+      validTo,
+      version: importedMappingVersion(validFrom),
+      source: 'desktop-import',
+      sourceHash,
+      createdAt: row.updated_at,
+    };
+  });
+};
+export const loadLegacyAccountMappingsHgb = (db: SqliteDatabaseType, tenantId: string): ServerAccountMappingHgbRecord[] => loadAccountMappingRows(db)
+  .filter((row) => legacyReportTypes.has(row.statement_type.trim().toLowerCase()))
+  .map((row) => {
+    const { chart, accountNumber, positionKey, positionLabel } = validateAccountMappingRow(row);
+    return {
+      id: row.id,
+      tenantId,
+      chart,
+      accountNumber,
+      statementType: row.statement_type.trim().toLowerCase(),
+      positionKey,
+      positionLabel,
+      balanceSide: row.balance_side ?? undefined,
+      updatedAt: row.updated_at,
+    };
+  });
 const loadReportSnapshots = (db: SqliteDatabaseType, tenantId: string): ServerReportSnapshotRecord[] => tableExists(db, 'report_snapshots') ? (db.prepare('SELECT * FROM report_snapshots ORDER BY created_at ASC, id ASC').all() as SqliteReportSnapshotRow[]).map((row) => ({ id: row.id, tenantId, reportType: row.report_type, argsJson: row.args_json, payloadJson: row.payload_json, createdAt: row.created_at })) : [];
+const loadEurCashFacts = (db: SqliteDatabaseType): Array<Record<string, unknown>> => tableExists(db, 'eur_cash_facts') ? db.prepare('SELECT * FROM eur_cash_facts ORDER BY tax_year ASC, source_type ASC, source_id ASC, id ASC').all() as SqliteEurCashFactRow[] as Array<Record<string, unknown>> : [];
+const loadEurAnnexFacts = (db: SqliteDatabaseType): Array<Record<string, unknown>> => tableExists(db, 'eur_annex_facts') ? db.prepare('SELECT * FROM eur_annex_facts ORDER BY tax_year ASC, annex ASC, created_at ASC, id ASC').all() as SqliteEurAnnexFactRow[] as Array<Record<string, unknown>> : [];
+
+type ServerEurReportSnapshotImportRow = {
+  id: string;
+  tenant_id: string;
+  tax_year: number;
+  from_date: string;
+  to_date: string;
+  payload_json: string;
+  source_hash: string;
+  catalog_id: string;
+  catalog_version: string;
+  catalog_source_hash: string;
+  reason: string;
+  actor_id: string;
+  created_at: string;
+};
+
+const requiredJsonObject = (value: string, code: string): Record<string, unknown> => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // The import must fail closed for malformed immutable snapshot payloads.
+  }
+  throw new Error(code);
+};
+
+const auditFor = (rows: readonly SqliteAuditRow[], entityType: string, entityId: string, action?: string): SqliteAuditRow | undefined => rows
+  .filter((row) => row.entity_type === entityType && row.entity_id === entityId && (!action || row.action === action))
+  .sort((left, right) => right.sequence - left.sequence)[0];
+
+const loadEurReportSnapshots = (db: SqliteDatabaseType, tenantId: string, auditRows: readonly SqliteAuditRow[]): ServerEurReportSnapshotImportRow[] => {
+  if (!tableExists(db, 'report_snapshots')) return [];
+  return (db.prepare("SELECT * FROM report_snapshots WHERE lower(report_type) = 'eur' ORDER BY created_at ASC, id ASC").all() as SqliteReportSnapshotRow[]).map((row) => {
+    const args = requiredJsonObject(row.args_json, `IMPORT_EUR_SNAPSHOT_ARGS_INVALID:${row.id}`);
+    const payload = requiredJsonObject(row.payload_json, `IMPORT_EUR_SNAPSHOT_PAYLOAD_INVALID:${row.id}`);
+    const filing = payload.filing && typeof payload.filing === 'object' ? payload.filing as Record<string, unknown> : undefined;
+    const catalog = (payload.catalog ?? filing?.catalog) as Record<string, unknown> | undefined;
+    const taxYear = Number(payload.taxYear ?? args.taxYear ?? filing?.taxYear);
+    const fromDate = String(payload.from ?? args.from ?? '');
+    const toDate = String(payload.to ?? args.to ?? '');
+    const snapshotAudit = auditFor(auditRows, 'report_snapshot', row.id, 'freeze');
+    const auditAfter = snapshotAudit?.after_json ? parseJson<Record<string, unknown>>(snapshotAudit.after_json, {}) : {};
+    const sourceHash = String(row.source_hash ?? auditAfter.sourceHash ?? createHash('sha256').update(JSON.stringify({ reportType: 'eur', args, payload })).digest('hex')).trim();
+    const catalogId = String(catalog?.id ?? '');
+    const catalogVersion = String(catalog?.version ?? '');
+    const catalogSourceHash = String(catalog?.sourceHash ?? '');
+    if (!Number.isInteger(taxYear) || !/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) throw new Error(`IMPORT_EUR_SNAPSHOT_RANGE_INVALID:${row.id}`);
+    if (!catalogId || !catalogVersion || !catalogSourceHash) throw new Error(`IMPORT_EUR_SNAPSHOT_CATALOG_INVALID:${row.id}`);
+    return {
+      id: row.id,
+      tenant_id: tenantId,
+      tax_year: taxYear,
+      from_date: fromDate,
+      to_date: toDate,
+      payload_json: row.payload_json,
+      source_hash: sourceHash,
+      catalog_id: catalogId,
+      catalog_version: catalogVersion,
+      catalog_source_hash: catalogSourceHash,
+      reason: snapshotAudit?.reason?.trim() || 'Desktop EÜR snapshot import',
+      actor_id: snapshotAudit?.actor?.trim() || 'desktop-import',
+      created_at: row.created_at,
+    };
+  });
+};
+
+/** Match accountingSourceRuns.createRun: hash the canonical source value, not its JSON bytes. */
+export const accountingSourceRunHash = (sourceJson: string, id = 'unknown'): string => {
+  let source: unknown;
+  try {
+    source = JSON.parse(sourceJson);
+  } catch {
+    throw new Error(`IMPORT_ACCOUNTING_SOURCE_JSON_INVALID:${id}`);
+  }
+  return sha256Hex(stableStringify(source));
+};
+
+const loadAccountingSourceRuns = (db: SqliteDatabaseType, tenantId: string, auditRows: readonly SqliteAuditRow[]): Array<Record<string, unknown>> => {
+  if (!tableExists(db, 'accounting_source_runs')) return [];
+  return (db.prepare('SELECT * FROM accounting_source_runs ORDER BY created_at ASC, id ASC').all() as SqliteAccountingSourceRunRow[]).map((row) => {
+    const audit = auditFor(auditRows, 'accounting_source_run', row.id);
+    const defaultReason = row.status === 'rejected' ? 'Accounting source rejected' : row.status === 'noop' ? 'Accounting source noop' : 'Accounting source posted';
+    return {
+      id: row.id,
+      tenant_id: tenantId,
+      source_type: row.source_type,
+      source_id: row.source_id,
+      source_revision: row.source_revision,
+      idempotency_key: row.idempotency_key,
+      status: row.status,
+      source_json: row.fact_json,
+      result_json: row.result_json,
+      journal_entry_id: row.journal_entry_id,
+      source_hash: accountingSourceRunHash(row.fact_json, row.id),
+      created_by: audit?.actor?.trim() || 'desktop-import',
+      reason: audit?.reason?.trim() || defaultReason,
+      created_at: row.created_at,
+    };
+  });
+};
 const loadDatevExports = (db: SqliteDatabaseType, tenantId: string): ServerDatevExportRecord[] => tableExists(db, 'datev_exports') ? (db.prepare('SELECT * FROM datev_exports ORDER BY created_at ASC, id ASC').all() as SqliteDatevExportRow[]).map((row) => ({ id: row.id, tenantId, filePath: row.file_path, recordCount: row.record_count, fromDate: row.from_date ?? undefined, toDate: row.to_date ?? undefined, createdAt: row.created_at, metaJson: row.meta_json })) : [];
 const loadTaxCases = (db: SqliteDatabaseType): ServerTaxCaseRecord[] => tableExists(db, 'tax_cases') ? (db.prepare('SELECT * FROM tax_cases ORDER BY key ASC').all() as SqliteTaxCaseRow[]).map((row) => ({ key: row.key, label: row.label, mechanism: row.mechanism, defaultRate: row.default_rate, requiresCounterpartyVatId: Boolean(row.requires_counterparty_vat_id), requiresCountry: Boolean(row.requires_country), requiresEvidence: Boolean(row.requires_evidence), active: Boolean(row.active), updatedAt: row.updated_at })) : [];
 const loadTaxCaseAccountMappings = (db: SqliteDatabaseType) => tableExists(db, 'tax_case_account_mappings') ? (db.prepare('SELECT * FROM tax_case_account_mappings ORDER BY chart ASC, tax_case_key ASC, role ASC').all() as SqliteTaxCaseAccountMappingRow[]).map((row) => ({ id: row.id, chart: row.chart, taxCaseKey: row.tax_case_key, role: row.role, accountNumber: row.account_number, datevBuKey: row.datev_bu_key ?? undefined, validFrom: row.valid_from ?? undefined, validTo: row.valid_to ?? undefined, updatedAt: row.updated_at })) : [];
 const loadVatEvidence = (db: SqliteDatabaseType, tenantId: string): ServerVatEvidenceRecord[] => tableExists(db, 'vat_evidence') ? (db.prepare('SELECT * FROM vat_evidence ORDER BY captured_at ASC, id ASC').all() as SqliteVatEvidenceRow[]).map((row) => ({ id: row.id, tenantId, draftId: row.draft_id ?? undefined, entryId: row.entry_id ?? undefined, lineId: row.line_id ?? undefined, taxCaseKey: row.tax_case_key, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, capturedAt: row.captured_at })) : [];
 const loadJournalPostingPairs = (db: SqliteDatabaseType, tenantId: string): ServerJournalPostingPairRecord[] => tableExists(db, 'journal_posting_pairs') ? (db.prepare('SELECT * FROM journal_posting_pairs ORDER BY created_at ASC, id ASC').all() as SqliteJournalPostingPairRow[]).map((row) => ({ id: row.id, tenantId, entryId: row.entry_id, debitLineId: row.debit_line_id, creditLineId: row.credit_line_id, amount: row.amount, taxCaseKey: row.tax_case_key ?? undefined, datevBuKey: row.datev_bu_key ?? undefined, createdAt: row.created_at })) : [];
 const loadTransactions = (db: SqliteDatabaseType, tenantId: string): ServerImportedTransactionRecord[] => tableExists(db, 'transactions') ? (db.prepare('SELECT * FROM transactions ORDER BY date DESC, id ASC').all() as SqliteImportedTransactionRow[]).map((row) => ({ id: row.id, tenantId, accountId: row.account_id, date: row.date, amount: row.amount, type: row.type, counterparty: row.counterparty, purpose: row.purpose, linkedInvoiceId: row.linked_invoice_id ?? undefined, status: row.status, dedupHash: row.dedup_hash ?? undefined, importBatchId: row.import_batch_id ?? undefined, deletedAt: row.deleted_at ?? undefined })) : [];
-const loadEurLines = (db: SqliteDatabaseType): ServerEurLineRecord[] => tableExists(db, 'eur_lines') ? (db.prepare('SELECT * FROM eur_lines ORDER BY tax_year ASC, sort_order ASC, id ASC').all() as SqliteEurLineRow[]).map((row) => ({ id: row.id, taxYear: row.tax_year, kennziffer: row.kennziffer ?? undefined, label: row.label, kind: row.kind, exportable: Boolean(row.exportable), sortOrder: row.sort_order, computedFromJson: row.computed_from_json ?? undefined, sourceVersion: row.source_version, createdAt: row.created_at, updatedAt: row.updated_at })) : [];
-const loadEurClassifications = (db: SqliteDatabaseType, tenantId: string): ServerEurClassificationRecord[] => tableExists(db, 'eur_classifications') ? (db.prepare('SELECT * FROM eur_classifications ORDER BY tax_year ASC, source_type ASC, source_id ASC').all() as SqliteEurClassificationRow[]).map((row) => ({ id: row.id, tenantId, sourceType: row.source_type, sourceId: row.source_id, taxYear: row.tax_year, eurLineId: row.eur_line_id ?? undefined, excluded: Boolean(row.excluded), vatMode: row.vat_mode, note: row.note ?? undefined, updatedAt: row.updated_at })) : [];
+const loadEurLines = (db: SqliteDatabaseType): ServerEurLineRecord[] => tableExists(db, 'eur_lines') ? (db.prepare('SELECT * FROM eur_lines ORDER BY tax_year ASC, sort_order ASC, id ASC').all() as SqliteEurLineRow[]).map((row) => ({ id: row.id, taxYear: row.tax_year, kennziffer: row.kennziffer ?? undefined, providerPath: row.provider_path ?? undefined, label: row.label, kind: row.kind, exportable: Boolean(row.exportable), sortOrder: row.sort_order, computedFromJson: row.computed_from_json ?? undefined, computedTermsJson: row.computed_terms_json ?? undefined, sourceVersion: row.source_version, createdAt: row.created_at, updatedAt: row.updated_at })) : [];
+const loadEurClassifications = (db: SqliteDatabaseType, tenantId: string): ServerEurClassificationRecord[] => tableExists(db, 'eur_classifications') ? (db.prepare('SELECT * FROM eur_classifications ORDER BY tax_year ASC, source_type ASC, source_id ASC').all() as SqliteEurClassificationRow[]).map((row) => ({ id: row.id, tenantId, sourceType: row.source_type, sourceId: row.source_id, taxYear: row.tax_year, eurLineId: row.eur_line_id ?? undefined, excluded: Boolean(row.excluded), vatMode: row.vat_mode, vatRate: row.vat_rate ?? undefined, note: row.note ?? undefined, updatedAt: row.updated_at })) : [];
 const loadEurRules = (db: SqliteDatabaseType, tenantId: string): ServerEurRuleRecord[] => tableExists(db, 'eur_rules') ? (db.prepare('SELECT * FROM eur_rules ORDER BY tax_year ASC, priority ASC, id ASC').all() as SqliteEurRuleRow[]).map((row) => ({ id: row.id, tenantId, taxYear: row.tax_year, priority: row.priority, field: row.field, operator: row.operator, value: row.value, targetEurLineId: row.target_eur_line_id, active: Boolean(row.active), createdAt: row.created_at, updatedAt: row.updated_at })) : [];
 const loadAccountKeywords = (db: SqliteDatabaseType, tenantId: string): ServerAccountKeywordRecord[] => tableExists(db, 'account_keywords') ? (db.prepare('SELECT * FROM account_keywords ORDER BY chart ASC, account_number ASC, keyword ASC').all() as SqliteAccountKeywordRow[]).map((row) => ({ id: row.id, tenantId, chart: row.chart, accountNumber: row.account_number, keyword: row.keyword, source: row.source, active: Boolean(row.active), createdAt: row.created_at, updatedAt: row.updated_at })) : [];
 const loadAccountSuggestionRules = (db: SqliteDatabaseType, tenantId: string) => tableExists(db, 'account_suggestion_rules') ? (db.prepare('SELECT * FROM account_suggestion_rules ORDER BY chart ASC, priority ASC, created_at ASC').all() as SqliteAccountSuggestionRuleRow[]).map((row) => ({ id: row.id, tenantId, chart: row.chart, priority: row.priority, field: row.field as 'counterparty' | 'purpose' | 'any', operator: row.operator, value: row.value, targetAccountNumber: row.target_account_number, flowType: row.flow_type, active: Boolean(row.active), createdAt: row.created_at, updatedAt: row.updated_at })) : [];
@@ -322,6 +822,94 @@ const loadActiveTemplates = (db: SqliteDatabaseType, tenantId: string): ServerAc
   const row = db.prepare('SELECT * FROM active_templates ORDER BY id ASC LIMIT 1').get() as SqliteActiveTemplateRow | undefined;
   if (!row) return null;
   return { tenantId, id: row.id, invoiceTemplateId: row.invoice_template_id ?? undefined, offerTemplateId: row.offer_template_id ?? undefined };
+};
+
+const canonicalEurCatalog = getCatalogForYear(2025);
+const canonicalEurLines = new Map<string, EurLineDef>(canonicalEurCatalog.map((line) => [line.id, line]));
+
+export const validateCanonicalEurLines = (rows: ServerEurLineRecord[]): void => {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (seen.has(row.id)) throw new Error(`EÜR catalog contains duplicate line: ${row.id}`);
+    seen.add(row.id);
+    const canonical = canonicalEurLines.get(row.id);
+    const matches = canonical
+      && row.taxYear === canonical.year
+      && (row.kennziffer ?? '') === (canonical.kennziffer ?? '')
+      && (row.providerPath ?? 'main') === (canonical.providerPath ?? 'main')
+      && row.label === canonical.label
+      && row.kind === canonical.kind
+      && row.exportable === canonical.exportable
+      && row.sortOrder === canonicalEurCatalog.findIndex((line) => line.id === canonical.id)
+      && (row.computedFromJson ?? '[]') === JSON.stringify(canonical.computedFromIds ?? [])
+      && (row.computedTermsJson ?? '[]') === JSON.stringify(canonical.computedTerms ?? [])
+      && row.sourceVersion === EUR_SOURCE_VERSION_2025;
+    if (!matches) throw new Error(`EÜR catalog row does not match canonical 2025 catalog: ${row.id}`);
+  }
+};
+
+const validateCanonicalGlobalCatalog = async (
+  client: ImportQueryable,
+  sqliteDb: SqliteDatabaseType,
+): Promise<void> => {
+  const drizzle = requireImportDrizzle(client);
+
+  const canonicalLedgerByKey = new Map(CANONICAL_LEDGER_ACCOUNTS.map((row) => [`${row.chart}:${row.accountNumber}`, row]));
+  const persistedLedger = (await drizzle.execute(sql`SELECT chart, account_number, name FROM ledger_accounts`)).rows as Array<{ chart: string; account_number: string; name: string }>;
+  const persistedLedgerByKey = new Map(persistedLedger.map((row) => [`${row.chart}:${row.account_number}`, row]));
+  for (const [key] of canonicalLedgerByKey) {
+    if (!persistedLedgerByKey.has(key)) throw new Error(`IMPORT_GLOBAL_LEDGER_CANONICAL_MISSING:${key}`);
+  }
+  for (const row of persistedLedger) {
+    const canonical = canonicalLedgerByKey.get(`${row.chart}:${row.account_number}`);
+    if (canonical && canonical.name !== row.name) throw new Error(`IMPORT_GLOBAL_LEDGER_CANONICAL_MISMATCH:${row.chart}:${row.account_number}`);
+  }
+  const canonicalTaxByKey = new Map<string, (typeof CANONICAL_TAX_CASES)[number]>(CANONICAL_TAX_CASES.map((row) => [row.key, row]));
+  const persistedTaxCases = (await drizzle.execute(sql`SELECT key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active FROM tax_cases`)).rows as Array<{
+    key: string; label: string; mechanism: string; default_rate: string | number;
+    requires_counterparty_vat_id: boolean; requires_country: boolean; requires_evidence: boolean; active: boolean;
+  }>;
+  for (const [key] of canonicalTaxByKey) {
+    if (!persistedTaxCases.some((row) => row.key === key)) throw new Error(`IMPORT_GLOBAL_TAX_CANONICAL_MISSING:${key}`);
+  }
+  for (const row of persistedTaxCases) {
+    const canonical = canonicalTaxByKey.get(row.key);
+    if (canonical && (canonical.label !== row.label || canonical.mechanism !== row.mechanism
+      || canonical.defaultRate !== Number(row.default_rate)
+      || canonical.requiresCounterpartyVatId !== Boolean(row.requires_counterparty_vat_id)
+      || canonical.requiresCountry !== Boolean(row.requires_country)
+      || canonical.requiresEvidence !== Boolean(row.requires_evidence)
+      || canonical.active !== Boolean(row.active))) {
+      throw new Error(`IMPORT_GLOBAL_TAX_CANONICAL_MISMATCH:${row.key}`);
+    }
+  }
+  const sourceLedgerAccounts = loadLedgerAccounts(sqliteDb);
+  if (sourceLedgerAccounts.length > 0) {
+    for (const source of sourceLedgerAccounts) {
+      const key = `${source.chart}:${source.account_number}`;
+      const canonical = canonicalLedgerByKey.get(key);
+      if (!canonical || canonical.name !== source.name) {
+        throw new Error(`IMPORT_GLOBAL_LEDGER_CATALOG_MISMATCH:${key}`);
+      }
+    }
+  }
+
+  const sourceTaxCases = loadTaxCases(sqliteDb);
+  if (sourceTaxCases.length > 0) {
+    for (const source of sourceTaxCases) {
+      const canonical = canonicalTaxByKey.get(source.key);
+      if (!canonical
+        || canonical.label !== source.label
+        || canonical.mechanism !== source.mechanism
+        || canonical.defaultRate !== source.defaultRate
+        || canonical.requiresCounterpartyVatId !== source.requiresCounterpartyVatId
+        || canonical.requiresCountry !== source.requiresCountry
+        || canonical.requiresEvidence !== source.requiresEvidence
+        || canonical.active !== source.active) {
+        throw new Error(`IMPORT_GLOBAL_TAX_CATALOG_MISMATCH:${source.key}`);
+      }
+    }
+  }
 };
 
 const emptyCounts = (): DesktopSqliteImportCounts => ({
@@ -347,6 +935,7 @@ const emptyCounts = (): DesktopSqliteImportCounts => ({
   assetMovements: 0,
   accountMappingsHgb: 0,
   reportSnapshots: 0,
+  eurReportSnapshots: 0,
   datevExports: 0,
   taxCases: 0,
   taxCaseAccountMappings: 0,
@@ -356,6 +945,8 @@ const emptyCounts = (): DesktopSqliteImportCounts => ({
   eurLines: 0,
   eurClassifications: 0,
   eurRules: 0,
+  eurCashFacts: 0,
+  eurAnnexFacts: 0,
   accountKeywords: 0,
   accountSuggestionRules: 0,
   importBatches: 0,
@@ -363,13 +954,25 @@ const emptyCounts = (): DesktopSqliteImportCounts => ({
   dunningHistory: 0,
   auditLog: 0,
   numberReservations: 0,
+  accountingPolicies: 0,
+  accountingAccountMappings: 0,
+  vendors: 0,
+  incomingInvoices: 0,
+  incomingInvoiceLines: 0,
+  openItems: 0,
+  openItemPayments: 0,
+  openItemAllocations: 0,
+  accountingBackfillRuns: 0,
+  accountingSourceRuns: 0,
 });
 
-export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImportOptions): Promise<DesktopSqliteImportResult> => {
+export const importDesktopSqliteToServerDatabase = async (options: DesktopSqliteImportOptions): Promise<DesktopSqliteImportResult> => {
+  const target = requireImportTarget(options);
   const Database = await loadSqliteModule();
   const sqliteDb = new Database(options.sqlitePath, { readonly: true, fileMustExist: true });
   try {
-    await runPostgresMigrations(options.pool);
+    if (isServerDatabase(target)) await target.migrate();
+    else await runPostgresMigrations(target);
     const allTables = listTables(sqliteDb);
     const unsupportedTables = detectUnsupportedSqliteTables(allTables, (table) => countTable(sqliteDb, table));
     if (unsupportedTables.length > 0 && options.failOnUnsupportedData !== false) {
@@ -384,91 +987,146 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
       throw new Error(`SQLite audit log verification failed: ${sourceAuditVerification.errors.map((entry) => `#${entry.sequence} ${entry.message}`).join(', ')}`);
     }
     const importRunId = randomUUID();
-    await options.pool.query(`INSERT INTO sqlite_import_runs (id, tenant_id, source_path, source_product, source_sha256, status, details_json, started_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [importRunId, tenantId, options.sqlitePath, options.product, await sha256File(options.sqlitePath), 'started', JSON.stringify({ unsupportedTables }), new Date().toISOString()]);
+    const sourceSha256 = await sha256File(options.sqlitePath);
+    const importRunStartedAt = new Date().toISOString();
+    const drizzle = requireImportDrizzle(target);
+    const dependencies = createPostgresBillingDependencies(target as unknown as Parameters<typeof createPostgresBillingDependencies>[0]);
+    const existingTenant = await dependencies.tenantRepo.getById(tenantId);
+    if (existingTenant) {
+      if (existingTenant.slug !== options.tenant.slug || existingTenant.displayName !== options.tenant.displayName || existingTenant.product !== options.product || existingTenant.deploymentMode !== 'single-tenant') {
+        throw new Error(`Target tenant ${tenantId} metadata does not match the import target`);
+      }
+    } else {
+      await dependencies.tenantRepo.save({ id: tenantId, slug: options.tenant.slug, displayName: options.tenant.displayName, product: options.product, deploymentMode: 'single-tenant', status: 'active', createdAt: importRunStartedAt, updatedAt: importRunStartedAt });
+    }
+    await drizzle.insert(schema.sqliteImportRuns).values({ id: importRunId, tenantId, sourcePath: options.sqlitePath,
+      sourceProduct: options.product, sourceSha256, status: 'started',
+      detailsJson: JSON.stringify({ unsupportedTables }), startedAt: importRunStartedAt, completedAt: null });
     try {
-      await withPostgresTransaction(options.pool, async (client) => {
+      const runTransaction = (work: (client: ImportQueryable) => Promise<void>): Promise<void> =>
+        isServerDatabase(target)
+          ? target.transaction({}, async (session) => work(session))
+          : withPostgresTransaction(target, async (client) => work(client));
+      await runTransaction(async (client) => {
+        await lockDesktopImportTenant(client, tenantId);
+        const transactionDependencies = createPostgresBillingDependencies(client);
+        const rawClient = client as Parameters<typeof importRawTenantRows>[0];
+        // Legacy repository contracts predate ServerDatabaseSession. Their
+        // runtime surface is query-only, so keep this explicit adapter cast
+        // local to the importer while the shared contracts converge.
+        const repositoryClient = client as unknown as PostgresTransactionClient;
         if ((await countTenantCoreRows(client, tenantId)) > 0) throw new Error(`Target tenant ${tenantId} already contains server billing data`);
-        if (Number((await client.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM audit_log WHERE tenant_id = $1', [tenantId])).rows[0]?.count ?? 0) > 0) throw new Error(`Target tenant ${tenantId} already contains audit log rows`);
-        const dependencies = createPostgresBillingDependencies(client);
-        await dependencies.tenantRepo.save({ id: tenantId, slug: options.tenant.slug, displayName: options.tenant.displayName, product: options.product, deploymentMode: 'single-tenant', status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        const auditCount = await requireImportDrizzle(client).select({ count: count() }).from(schema.auditLog)
+          .where(eq(schema.auditLog.tenantId, tenantId));
+        if (Number(auditCount[0]?.count ?? 0) > 0) throw new Error(`Target tenant ${tenantId} already contains audit log rows`);
+        await assertNoCrossTenantIdentityCollisions(client, sqliteDb, tenantId);
+        await validateCanonicalGlobalCatalog(client, sqliteDb);
         const settingsJson = loadSettingsJson(sqliteDb);
-        if (settingsJson) await saveServerSettings(client, { tenantId, settingsJson, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-        for (const reservation of loadNumberReservations(sqliteDb, tenantId)) { await saveServerNumberReservation(client, reservation); counts.numberReservations += 1; }
-        for (const article of loadArticles(sqliteDb, tenantId)) { await saveServerArticle(client, article); counts.articles += 1; }
-        for (const account of loadAccounts(sqliteDb, tenantId)) { await saveServerBankAccount(client, account); counts.accounts += 1; }
-        for (const template of loadTemplates(sqliteDb, tenantId)) { await saveServerTemplate(client, template); counts.templates += 1; }
+        if (settingsJson) await saveServerSettings(repositoryClient, { tenantId, settingsJson, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        for (const reservation of loadNumberReservations(sqliteDb, tenantId)) { await saveServerNumberReservation(repositoryClient, reservation); counts.numberReservations += 1; }
+        for (const article of loadArticles(sqliteDb, tenantId)) { await saveServerArticle(repositoryClient, article); counts.articles += 1; }
+        for (const account of loadAccounts(sqliteDb, tenantId)) { await saveServerBankAccount(repositoryClient, account); counts.accounts += 1; }
+        for (const template of loadTemplates(sqliteDb, tenantId)) { await saveServerTemplate(repositoryClient, template); counts.templates += 1; }
         const activeTemplates = loadActiveTemplates(sqliteDb, tenantId);
-        if (activeTemplates) { await saveServerActiveTemplates(client, activeTemplates); counts.activeTemplates += 1; }
-        for (const clientRecord of loadClients(sqliteDb, tenantId)) { await dependencies.clientRepo.save(scope, clientRecord); counts.clients += 1; }
-        for (const invoice of loadInvoices(sqliteDb, tenantId)) { await dependencies.invoiceRepo.save(scope, invoice); counts.invoices += 1; }
-        for (const offer of loadOffers(sqliteDb, tenantId)) { await dependencies.offerRepo.save(scope, offer); counts.offers += 1; }
-        for (const profile of loadRecurringProfiles(sqliteDb, tenantId)) { await dependencies.recurringProfileRepo.save(scope, profile); counts.recurringProfiles += 1; }
-        for (const ledgerAccount of loadLedgerAccounts(sqliteDb)) { await saveServerLedgerAccount(client, { id: ledgerAccount.id, chart: ledgerAccount.chart, accountNumber: ledgerAccount.account_number, name: ledgerAccount.name, source: ledgerAccount.source, createdAt: ledgerAccount.created_at, updatedAt: ledgerAccount.updated_at }); counts.ledgerAccounts += 1; }
-        for (const taxCase of loadTaxCases(sqliteDb)) { await saveServerTaxCase(client, taxCase); counts.taxCases += 1; }
-        for (const mapping of loadTaxCaseAccountMappings(sqliteDb)) { await saveServerTaxCaseAccountMapping(client, mapping); counts.taxCaseAccountMappings += 1; }
-        for (const eurLine of loadEurLines(sqliteDb)) { await saveServerEurLine(client, eurLine); counts.eurLines += 1; }
-        for (const eurRule of loadEurRules(sqliteDb, tenantId)) { await saveServerEurRule(client, eurRule); counts.eurRules += 1; }
-        for (const keyword of loadAccountKeywords(sqliteDb, tenantId)) { await saveServerAccountKeyword(client, keyword); counts.accountKeywords += 1; }
-        for (const rule of loadAccountSuggestionRules(sqliteDb, tenantId)) { await saveServerAccountSuggestionRule(client, rule); counts.accountSuggestionRules += 1; }
-        for (const workflowEntry of loadProWorkflowEntries(sqliteDb, tenantId)) { await saveServerProWorkflowEntry(client, workflowEntry); counts.proWorkflowEntries += 1; }
-        for (const row of loadBankTransactions(sqliteDb, tenantId)) { await saveServerBankTransaction(client, row); counts.bankTransactions += 1; }
-        for (const row of loadBookingDrafts(sqliteDb, tenantId)) { await saveServerBookingDraft(client, row); counts.bookingDrafts += 1; }
-        for (const row of loadBookingDraftLines(sqliteDb, tenantId)) { await saveServerBookingDraftLine(client, row); counts.bookingDraftLines += 1; }
-        for (const row of loadDraftValidationIssues(sqliteDb, tenantId)) { await saveServerDraftValidationIssue(client, row); counts.draftValidationIssues += 1; }
-        for (const row of loadAccountingPeriods(sqliteDb, tenantId)) { await saveServerAccountingPeriod(client, row); counts.accountingPeriods += 1; }
-        for (const row of loadJournalEntries(sqliteDb, tenantId)) { await saveServerJournalEntry(client, row); counts.journalEntries += 1; }
-        for (const row of loadJournalLines(sqliteDb, tenantId)) { await saveServerJournalLine(client, row); counts.journalLines += 1; }
+        if (activeTemplates) { await saveServerActiveTemplates(repositoryClient, activeTemplates); counts.activeTemplates += 1; }
+        for (const clientRecord of loadClients(sqliteDb, tenantId)) { await transactionDependencies.clientRepo.save(scope, clientRecord); counts.clients += 1; }
+        counts.invoices += await importOutgoingInvoices(rawClient, loadInvoices(sqliteDb, tenantId), tenantId);
+        for (const offer of loadOffers(sqliteDb, tenantId)) { await transactionDependencies.offerRepo.save(scope, offer); counts.offers += 1; }
+        for (const profile of loadRecurringProfiles(sqliteDb, tenantId)) { await transactionDependencies.recurringProfileRepo.save(scope, profile); counts.recurringProfiles += 1; }
+        for (const mapping of loadTaxCaseAccountMappings(sqliteDb)) { await saveServerTaxCaseAccountMappingForTenant(repositoryClient, mapping, tenantId); counts.taxCaseAccountMappings += 1; }
+        if (tableExists(sqliteDb, 'accounting_policies')) counts.accountingPolicies += await importRawTenantRows(rawClient, 'accounting_policies', sqliteDb.prepare('SELECT * FROM accounting_policies').all() as Array<Record<string, unknown>>, tenantId, ['tenant_id', 'active_chart', 'vat_method', 'period_policy', 'updated_at']);
+        if (tableExists(sqliteDb, 'accounting_account_mappings')) counts.accountingAccountMappings += await importRawTenantRows(rawClient, 'accounting_account_mappings', sqliteDb.prepare('SELECT * FROM accounting_account_mappings').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'chart', 'role', 'account_number', 'updated_at']);
+        if (tableExists(sqliteDb, 'vendors')) counts.vendors += await importRawTenantRows(rawClient, 'vendors', sqliteDb.prepare('SELECT * FROM vendors').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'vendor_number', 'name', 'email', 'address', 'vat_id', 'iban', 'default_expense_account', 'created_at', 'updated_at']);
+        const incomingInvoiceRows = tableExists(sqliteDb, 'incoming_invoices') ? sqliteDb.prepare('SELECT * FROM incoming_invoices').all() as Array<Record<string, unknown>> : [];
+        const incomingImport = incomingInvoiceRows.length ? await importIncomingInvoices(rawClient, incomingInvoiceRows, tenantId) : { count: 0, insertedIds: [] };
+        counts.incomingInvoices += incomingImport.count;
+        if (tableExists(sqliteDb, 'incoming_invoice_lines')) counts.incomingInvoiceLines += await importRawTenantRows(rawClient, 'incoming_invoice_lines', sqliteDb.prepare('SELECT * FROM incoming_invoice_lines').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'incoming_invoice_id', 'position', 'description', 'quantity', 'unit_price', 'net_amount', 'tax_rate', 'tax_amount', 'gross_amount', 'account_number', 'asset_account_number']);
+        if (incomingImport.insertedIds.length) await restoreIncomingInvoiceAccountingRows(rawClient, incomingInvoiceRows.filter((row) => incomingImport.insertedIds.includes(String(row.id))), tenantId);
+        if (tableExists(sqliteDb, 'accounting_backfill_runs')) counts.accountingBackfillRuns += await importRawTenantRows(rawClient, 'accounting_backfill_runs', sqliteDb.prepare('SELECT * FROM accounting_backfill_runs').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'status', 'candidates_json', 'confirmation_hash', 'result_json', 'confirmed_at', 'completed_at', 'created_at', 'config_json']);
+        const eurLines = loadEurLines(sqliteDb);
+        validateCanonicalEurLines(eurLines);
+        counts.eurLines += eurLines.length;
+        for (const eurRule of loadEurRules(sqliteDb, tenantId)) { await saveServerEurRule(repositoryClient, eurRule); counts.eurRules += 1; }
+        for (const keyword of loadAccountKeywords(sqliteDb, tenantId)) { await saveServerAccountKeyword(repositoryClient, keyword); counts.accountKeywords += 1; }
+        for (const rule of loadAccountSuggestionRules(sqliteDb, tenantId)) { await saveServerAccountSuggestionRule(repositoryClient, rule); counts.accountSuggestionRules += 1; }
+        for (const workflowEntry of loadProWorkflowEntries(sqliteDb, tenantId)) { await saveServerProWorkflowEntry(repositoryClient, workflowEntry); counts.proWorkflowEntries += 1; }
+        for (const row of loadBankTransactions(sqliteDb, tenantId)) { await saveServerBankTransaction(repositoryClient, row); counts.bankTransactions += 1; }
+        for (const row of loadBookingDrafts(sqliteDb, tenantId)) { await saveServerBookingDraft(repositoryClient, row); counts.bookingDrafts += 1; }
+        for (const row of loadBookingDraftLines(sqliteDb, tenantId)) { await saveServerBookingDraftLine(repositoryClient, row); counts.bookingDraftLines += 1; }
+        for (const row of loadDraftValidationIssues(sqliteDb, tenantId)) { await saveServerDraftValidationIssue(repositoryClient, row); counts.draftValidationIssues += 1; }
+        for (const row of loadAccountingPeriods(sqliteDb, tenantId)) { await saveServerAccountingPeriod(repositoryClient, row); counts.accountingPeriods += 1; }
+        for (const row of loadJournalEntries(sqliteDb, tenantId)) { await saveServerJournalEntry(repositoryClient, row); counts.journalEntries += 1; }
+        for (const row of loadJournalLines(sqliteDb, tenantId)) { await saveServerJournalLine(repositoryClient, row); counts.journalLines += 1; }
+        const accountingSourceRuns = loadAccountingSourceRuns(sqliteDb, tenantId, sourceAuditRows);
+        if (accountingSourceRuns.length) counts.accountingSourceRuns += await importRawTenantRows(rawClient, 'accounting_source_runs', accountingSourceRuns, tenantId, ['id', 'tenant_id', 'source_type', 'source_id', 'source_revision', 'idempotency_key', 'status', 'source_json', 'result_json', 'journal_entry_id', 'source_hash', 'created_by', 'reason', 'created_at']);
+        if (tableExists(sqliteDb, 'open_items')) counts.openItems += await importRawTenantRows(rawClient, 'open_items', sqliteDb.prepare('SELECT * FROM open_items').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'party_type', 'party_id', 'source_type', 'source_id', 'document_number', 'document_date', 'due_date', 'original_amount', 'allocated_amount', 'residual_amount', 'status', 'journal_entry_id', 'created_at', 'updated_at']);
+        if (tableExists(sqliteDb, 'open_item_payments')) counts.openItemPayments += await importRawTenantRows(rawClient, 'open_item_payments', sqliteDb.prepare('SELECT * FROM open_item_payments').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'party_type', 'party_id', 'payment_date', 'amount', 'bank_account_number', 'method', 'source_type', 'source_id', 'allocated_amount', 'residual_amount', 'status', 'journal_entry_id', 'created_at']);
+        if (tableExists(sqliteDb, 'open_item_allocations')) counts.openItemAllocations += await importRawTenantRows(rawClient, 'open_item_allocations', sqliteDb.prepare('SELECT * FROM open_item_allocations').all() as Array<Record<string, unknown>>, tenantId, ['id', 'tenant_id', 'payment_id', 'open_item_id', 'amount', 'created_at', 'event_key']);
         for (const row of loadAssets(sqliteDb)) {
-          await client.query(
-            `INSERT INTO assets (
-              id, tenant_id, asset_number, name, asset_class, status, activation_date, acquisition_cost,
-              useful_life_years, depreciation_method, cost_center, location, receipt_linked, supplier,
-              invoice_ref, asset_account_number, disposal_date, disposal_proceeds, created_at, updated_at
-            ) VALUES (
-              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
-            )`,
-            [row.id, tenantId, row.asset_number, row.name, row.asset_class, row.status, row.activation_date,
-              row.acquisition_cost, row.useful_life_years, row.depreciation_method, row.cost_center,
-              row.location, Boolean(row.receipt_linked), row.supplier, row.invoice_ref, row.asset_account_number,
-              row.disposal_date, row.disposal_proceeds, row.created_at, row.updated_at],
-          );
+          await requireImportDrizzle(client).insert(schema.assets).values({ id: row.id, tenantId, assetNumber: row.asset_number, name: row.name,
+            assetClass: row.asset_class, status: row.status, activationDate: row.activation_date, acquisitionCost: row.acquisition_cost,
+            usefulLifeYears: row.useful_life_years, depreciationMethod: row.depreciation_method, costCenter: row.cost_center,
+            location: row.location, receiptLinked: Boolean(row.receipt_linked), supplier: row.supplier, invoiceRef: row.invoice_ref,
+            assetAccountNumber: row.asset_account_number, disposalDate: row.disposal_date, disposalProceeds: row.disposal_proceeds,
+            acquisitionOffsetAccountNumber: row.acquisition_offset_account_number ?? null,
+            sourceIncomingInvoiceId: row.source_incoming_invoice_id ?? null,
+            activationJournalEntryId: row.activation_journal_entry_id ?? null,
+            accountingRepairRequired: Boolean(row.accounting_repair_required),
+            accountingRepairReason: row.accounting_repair_reason ?? null,
+            createdAt: row.created_at, updatedAt: row.updated_at } as any);
           counts.assets += 1;
         }
         for (const row of loadAssetSchedule(sqliteDb)) {
-          await client.query(
-            `INSERT INTO asset_depreciation_schedule
-              (id, tenant_id, asset_id, year, amount, months, status, journal_entry_id, posted_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-            [row.id, tenantId, row.asset_id, row.year, row.amount, row.months, row.status, row.journal_entry_id, row.posted_at],
-          );
+          await requireImportDrizzle(client).insert(schema.assetDepreciationSchedule).values({ id: row.id, tenantId, assetId: row.asset_id,
+            year: row.year, amount: row.amount, months: row.months, status: row.status, journalEntryId: row.journal_entry_id,
+            sourceType: row.source_type ?? null, sourceKey: row.source_key ?? null, postedAt: row.posted_at } as any);
           counts.assetDepreciationSchedule += 1;
         }
         for (const row of loadAssetMovements(sqliteDb)) {
-          await client.query(
-            `INSERT INTO asset_movements
-              (id, tenant_id, asset_id, type, movement_date, amount, proceeds, gain_loss, reason, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [row.id, tenantId, row.asset_id, row.type, row.movement_date, row.amount, row.proceeds, row.gain_loss, row.reason, row.created_at],
-          );
+          await requireImportDrizzle(client).insert(schema.assetMovements).values({ id: row.id, tenantId, assetId: row.asset_id, type: row.type,
+            movementDate: row.movement_date, amount: row.amount, proceeds: row.proceeds, gainLoss: row.gain_loss,
+            journalEntryId: row.journal_entry_id ?? null, sourceType: row.source_type ?? null, sourceKey: row.source_key ?? null,
+            reason: row.reason, createdAt: row.created_at } as any);
           counts.assetMovements += 1;
         }
-        for (const row of loadAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerAccountMappingHgb(client, row); counts.accountMappingsHgb += 1; }
-        for (const row of loadReportSnapshots(sqliteDb, tenantId)) { await saveServerReportSnapshot(client, row); counts.reportSnapshots += 1; }
-        for (const row of loadDatevExports(sqliteDb, tenantId)) { await saveServerDatevExport(client, row); counts.datevExports += 1; }
-        for (const row of loadVatEvidence(sqliteDb, tenantId)) { await saveServerVatEvidence(client, row); counts.vatEvidence += 1; }
-        for (const row of loadJournalPostingPairs(sqliteDb, tenantId)) { await saveServerJournalPostingPair(client, row); counts.journalPostingPairs += 1; }
-        for (const row of loadImportBatches(sqliteDb, tenantId)) { await saveServerImportBatch(client, row); counts.importBatches += 1; }
-        for (const row of loadTransactions(sqliteDb, tenantId)) { await saveServerImportedTransaction(client, row); counts.transactions += 1; }
-        for (const row of loadEurClassifications(sqliteDb, tenantId)) { await saveServerEurClassification(client, row); counts.eurClassifications += 1; }
-        for (const row of loadEmailLog(sqliteDb)) { await insertEmailLogRow(client, tenantId, { id: row.id, documentType: row.document_type, documentId: row.document_id, documentNumber: row.document_number, recipientEmail: row.recipient_email, recipientName: row.recipient_name, subject: row.subject, bodyText: row.body_text, provider: row.provider, status: row.status, errorMessage: row.error_message, sentAt: row.sent_at, createdAt: row.created_at }); counts.emailLog += 1; }
-        for (const row of loadDunningHistory(sqliteDb)) { await client.query(`INSERT INTO dunning_history (id, tenant_id, invoice_id, invoice_number, dunning_level, days_overdue, fee_applied, email_sent, email_log_id, processed_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, [row.id, tenantId, row.invoice_id, row.invoice_number, row.dunning_level, row.days_overdue, row.fee_applied, Boolean(row.email_sent), row.email_log_id, row.processed_at, row.created_at]); counts.dunningHistory += 1; }
-        for (const row of sourceAuditRows) { await insertAuditRow(client, tenantId, { sequence: row.sequence, ts: row.ts, entityType: row.entity_type, entityId: row.entity_id, action: row.action, reason: row.reason, beforeJson: row.before_json, afterJson: row.after_json, prevHash: row.prev_hash, hash: row.hash, actor: row.actor }); counts.auditLog += 1; }
+        for (const row of loadAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerReportAccountMapping(repositoryClient, row); counts.accountMappingsHgb += 1; }
+        for (const row of loadLegacyAccountMappingsHgb(sqliteDb, tenantId)) { await saveServerAccountMappingHgb(repositoryClient, row); counts.accountMappingsHgb += 1; }
+        for (const row of loadReportSnapshots(sqliteDb, tenantId)) { await saveServerReportSnapshot(repositoryClient, row); counts.reportSnapshots += 1; }
+        const eurReportSnapshots = loadEurReportSnapshots(sqliteDb, tenantId, sourceAuditRows);
+        if (eurReportSnapshots.length) counts.eurReportSnapshots += await importRawTenantRows(rawClient, 'eur_report_snapshots', eurReportSnapshots, tenantId, ['id', 'tenant_id', 'tax_year', 'from_date', 'to_date', 'payload_json', 'source_hash', 'catalog_id', 'catalog_version', 'catalog_source_hash', 'reason', 'actor_id', 'created_at']);
+        for (const row of loadDatevExports(sqliteDb, tenantId)) { await saveServerDatevExport(repositoryClient, row); counts.datevExports += 1; }
+        for (const row of loadVatEvidence(sqliteDb, tenantId)) { await saveServerVatEvidence(repositoryClient, row); counts.vatEvidence += 1; }
+        for (const row of loadJournalPostingPairs(sqliteDb, tenantId)) { await saveServerJournalPostingPair(repositoryClient, row); counts.journalPostingPairs += 1; }
+        for (const row of loadImportBatches(sqliteDb, tenantId)) { await saveServerImportBatch(repositoryClient, row); counts.importBatches += 1; }
+        for (const row of loadTransactions(sqliteDb, tenantId)) { await saveServerImportedTransaction(repositoryClient, row); counts.transactions += 1; }
+        const eurCashFacts = loadEurCashFacts(sqliteDb);
+        if (eurCashFacts.length) counts.eurCashFacts += await importRawTenantRows(rawClient, 'eur_cash_facts', eurCashFacts, tenantId, ['id', 'tenant_id', 'source_type', 'source_id', 'tax_year', 'kind', 'amount_net', 'flow_type', 'eur_line_id', 'splits_json', 'reason', 'actor_id', 'actor_name', 'idempotency_key', 'provenance_json', 'created_at', 'updated_at']);
+        const eurAnnexFacts = loadEurAnnexFacts(sqliteDb);
+        if (eurAnnexFacts.length) counts.eurAnnexFacts += await importRawTenantRows(rawClient, 'eur_annex_facts', eurAnnexFacts, tenantId, ['id', 'tenant_id', 'tax_year', 'annex', 'line_id', 'amount', 'source_id', 'fact_date', 'reason', 'actor_id', 'actor_name', 'idempotency_key', 'provenance_json', 'created_at']);
+        for (const row of loadEurClassifications(sqliteDb, tenantId)) { await saveServerEurClassification(repositoryClient, row); counts.eurClassifications += 1; }
+        for (const row of loadEmailLog(sqliteDb)) { await insertEmailLogRow(repositoryClient, tenantId, { id: row.id, documentType: row.document_type, documentId: row.document_id, documentNumber: row.document_number, recipientEmail: row.recipient_email, recipientName: row.recipient_name, subject: row.subject, bodyText: row.body_text, provider: row.provider, status: row.status, errorMessage: row.error_message, sentAt: row.sent_at, createdAt: row.created_at }); counts.emailLog += 1; }
+        for (const row of loadDunningHistory(sqliteDb)) { await requireImportDrizzle(client).insert(schema.dunningHistory).values({ id: row.id, tenantId, invoiceId: row.invoice_id, invoiceNumber: row.invoice_number, dunningLevel: row.dunning_level, daysOverdue: row.days_overdue, feeApplied: row.fee_applied, emailSent: Boolean(row.email_sent), emailLogId: row.email_log_id, processedAt: row.processed_at, createdAt: row.created_at } as any); counts.dunningHistory += 1; }
+        for (const row of sourceAuditRows) { await insertAuditRow(repositoryClient, tenantId, { sequence: row.sequence, ts: row.ts, entityType: row.entity_type, entityId: row.entity_id, action: row.action, reason: row.reason, beforeJson: row.before_json, afterJson: row.after_json, prevHash: row.prev_hash, hash: row.hash, actor: row.actor }); counts.auditLog += 1; }
+        const importedAuditHead = maxAuditHead(sourceAuditRows);
+        await requireImportDrizzle(client).insert(schema.auditHeads).values({
+          tenantId,
+          sequence: importedAuditHead?.sequence ?? 0,
+          hash: importedAuditHead?.hash ?? null,
+        }).onConflictDoUpdate({
+          target: schema.auditHeads.tenantId,
+          set: {
+            sequence: importedAuditHead?.sequence ?? 0,
+            hash: importedAuditHead?.hash ?? null,
+          },
+        });
         const importedVerification = await verifyPostgresAuditChain(client, tenantId);
         if (!importedVerification.ok) throw new Error(`Imported audit log verification failed: ${importedVerification.errors.map((entry) => `#${entry.sequence} ${entry.message}`).join(', ')}`);
+        await assertNoCrossTenantTenantReferences(client, tenantId);
       });
-      await options.pool.query(`UPDATE sqlite_import_runs SET status = $2, details_json = $3, completed_at = $4 WHERE id = $1`, [importRunId, 'completed', JSON.stringify({ counts, unsupportedTables }), new Date().toISOString()]);
+      await drizzle.update(schema.sqliteImportRuns).set({ status: 'completed', detailsJson: JSON.stringify({ counts, unsupportedTables }), completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
     } catch (error) {
-      await options.pool.query(`UPDATE sqlite_import_runs SET status = $2, details_json = $3, completed_at = $4 WHERE id = $1`, [importRunId, 'failed', JSON.stringify({ counts, unsupportedTables, error: error instanceof Error ? error.message : String(error) }), new Date().toISOString()]);
+      const detailsJson = JSON.stringify({ counts, unsupportedTables, error: error instanceof Error ? error.message : String(error) });
+      await drizzle.update(schema.sqliteImportRuns).set({ status: 'failed', detailsJson, completedAt: new Date().toISOString() }).where(eq(schema.sqliteImportRuns.id, importRunId));
       throw error;
     }
     return { importRunId, counts, unsupportedTables };
@@ -476,3 +1134,7 @@ export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImport
     sqliteDb.close();
   }
 };
+
+/** Backwards-compatible PostgreSQL entry point used by the server CLI. */
+export const importDesktopSqliteToPostgres = async (options: DesktopSqliteImportOptions & { pool: Pool }): Promise<DesktopSqliteImportResult> =>
+  importDesktopSqliteToServerDatabase(options);

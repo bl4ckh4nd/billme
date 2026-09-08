@@ -7,7 +7,9 @@ import {
 import type { Article } from '@billme/desktop-core/types';
 import { v4 as uuidv4 } from 'uuid';
 import { useArticlesQuery, useDeleteArticleMutation, useUpsertArticleMutation } from '../hooks/useArticles';
+import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useSettingsQuery } from '../hooks/useSettings';
+import { useRouterState } from '@tanstack/react-router';
 
 const normalizeCategoryName = (value: string): string => value.trim();
 
@@ -56,8 +58,13 @@ export const ArticlesView: React.FC = () => {
   const { data: settings } = useSettingsQuery();
   const upsertArticle = useUpsertArticleMutation();
   const deleteArticle = useDeleteArticleMutation();
+  const { pendingIds, requestDelete } = useDeferredDelete({
+    scope: 'articles',
+    commit: (id) => deleteArticle.mutateAsync(id),
+    label: (count) => count === 1 ? 'Artikel gelöscht' : `${count} Artikel gelöscht`,
+  });
   const [searchTerm, setSearchTerm] = useState('');
-  const locationSearch = window.location.search;
+  const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
   const [selectedCategory, setSelectedCategory] = useState<string>('Alle');
   const [isNetPrice, setIsNetPrice] = useState(true); // Toggle Net/Gross
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -82,7 +89,6 @@ export const ArticlesView: React.FC = () => {
   });
   const [formErrors, setFormErrors] = useState<Partial<Record<'title' | 'price' | 'unit' | 'category' | 'taxRate' | 'sku', string>>>({});
   const [isSaving, setIsSaving] = useState(false);
-  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   const configuredCategories = useMemo(
     () => buildConfiguredCategories(settings?.catalog?.categories),
@@ -94,7 +100,8 @@ export const ArticlesView: React.FC = () => {
     [configuredCategories],
   );
 
-  const filteredArticles = articles.filter(a => {
+  const visibleArticles = articles.filter((article) => !pendingIds.has(article.id));
+  const filteredArticles = visibleArticles.filter(a => {
       const matchesSearch = a.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                             a.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
                             (a.sku && a.sku.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -103,8 +110,7 @@ export const ArticlesView: React.FC = () => {
   });
 
   React.useEffect(() => {
-    const params = new URLSearchParams(locationSearch);
-    const query = params.get('query')?.trim() ?? '';
+    const query = typeof locationSearch.query === 'string' ? locationSearch.query.trim() : '';
     setSearchTerm(query);
   }, [locationSearch]);
 
@@ -160,51 +166,29 @@ export const ArticlesView: React.FC = () => {
       }
   };
 
-  const handleDelete = async (id: string) => {
-      if (confirm('Artikel wirklich löschen?')) {
-          try {
-            await deleteArticle.mutateAsync(id);
-            if (selectedArticles.has(id)) {
-                const newSelected = new Set(selectedArticles);
-                newSelected.delete(id);
-                setSelectedArticles(newSelected);
-            }
-            setOperationTone('success');
-            setOperationMessage('Artikel gelöscht.');
-          } catch (error) {
-            setOperationTone('error');
-            setOperationMessage(`Löschen fehlgeschlagen: ${String(error)}`);
-          }
+  const handleDelete = (id: string) => {
+      requestDelete([id]);
+      setSelectedArticles((current) => {
+          if (!current.has(id)) return current;
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+      });
+      if (editingArticle?.id === id) {
+          setIsFormOpen(false);
+          setEditingArticle(null);
       }
   };
 
-  const handleBulkDelete = async () => {
-      if (selectedArticles.size === 0) return;
-      if (!confirm(`${selectedArticles.size} Artikel löschen?`)) return;
-      setIsBulkDeleting(true);
-      const ids = Array.from(selectedArticles);
-      let deleted = 0;
-      const failedIds: string[] = [];
-      for (const id of ids) {
-        try {
-          await deleteArticle.mutateAsync(id);
-          deleted++;
-        } catch {
-          failedIds.push(id);
-        }
-      }
-
-      setSelectedArticles(new Set(failedIds));
-      if (failedIds.length === 0) {
-        setOperationTone('success');
-        setOperationMessage(`${deleted} Artikel erfolgreich gelöscht.`);
-      } else {
-        setOperationTone('error');
-        setOperationMessage(
-          `${deleted} gelöscht, ${failedIds.length} fehlgeschlagen. Fehlgeschlagene Auswahl bleibt markiert.`,
-        );
-      }
-      setIsBulkDeleting(false);
+  const handleBulkDelete = () => {
+      const ids = Array.from(selectedArticles).filter((id) => !pendingIds.has(id));
+      if (ids.length === 0) return;
+      requestDelete(ids);
+      setSelectedArticles((current) => {
+          const next = new Set(current);
+          ids.forEach((id) => next.delete(id));
+          return next;
+      });
   };
 
   const handleToggleSelect = (id: string) => {
@@ -377,10 +361,9 @@ export const ArticlesView: React.FC = () => {
                         <div className="h-4 w-px bg-white/20"></div>
                         <button
                           onClick={() => void handleBulkDelete()}
-                          disabled={isBulkDeleting}
                           className="flex items-center gap-2 hover:text-error/70 transition-colors text-xs font-bold disabled:opacity-50"
                         >
-                            <Trash2 size={14} /> {isBulkDeleting ? 'Lösche...' : 'Löschen'}
+                            <Trash2 size={14} /> Löschen
                         </button>
                         <button onClick={() => setSelectedArticles(new Set())} className="ml-2 hover:text-gray-400 transition-colors">
                             <X size={16} />
@@ -404,7 +387,17 @@ export const ArticlesView: React.FC = () => {
             {/* List Content */}
             {viewMode === 'grid' ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4 overflow-y-auto pr-2 pb-4 scrollbar-hide">
-                    {filteredArticles.map((article, idx) => (
+                    {filteredArticles.length === 0 ? (
+                        <div className="col-span-full flex flex-col items-center justify-center h-64 text-gray-400">
+                            <Package size={48} className="mb-4 opacity-20" />
+                            <p className="font-bold text-gray-500">
+                                {searchTerm.trim() || selectedCategory !== 'Alle' ? 'Keine Treffer für die aktuelle Suche oder Filterung' : 'Noch keine Artikel vorhanden'}
+                            </p>
+                            {!searchTerm.trim() && selectedCategory === 'Alle' && (
+                                <p className="text-sm mt-1">Klicke auf das + oben rechts, um einen Artikel zu erstellen.</p>
+                            )}
+                        </div>
+                    ) : filteredArticles.map((article, idx) => (
                         <div
                             key={article.id}
                             className="group bg-gray-50 rounded-[2rem] p-6 border border-gray-100 hover:border-border hover:bg-white hover:-translate-y-1 transition-all relative flex flex-col animate-scale-in"
@@ -475,7 +468,17 @@ export const ArticlesView: React.FC = () => {
                         <div className="col-span-2 text-right">Preis ({isNetPrice ? 'Netto' : 'Brutto'})</div>
                         <div className="col-span-2 text-right">Aktionen</div>
                     </div>
-                    {filteredArticles.map((article, idx) => (
+                    {filteredArticles.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                            <Package size={48} className="mb-4 opacity-20" />
+                            <p className="font-bold text-gray-500">
+                                {searchTerm.trim() || selectedCategory !== 'Alle' ? 'Keine Treffer für die aktuelle Suche oder Filterung' : 'Noch keine Artikel vorhanden'}
+                            </p>
+                            {!searchTerm.trim() && selectedCategory === 'Alle' && (
+                                <p className="text-sm mt-1">Klicke auf das + oben rechts, um einen Artikel zu erstellen.</p>
+                            )}
+                        </div>
+                    ) : filteredArticles.map((article, idx) => (
                         <div
                             key={article.id}
                             className={`group rounded-2xl p-4 border transition-all grid grid-cols-12 gap-4 items-center animate-enter ${

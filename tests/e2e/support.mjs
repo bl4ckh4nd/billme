@@ -30,6 +30,8 @@ export const appUrl = (baseUrl, route = '/') => {
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
+let proImportSequence = 0;
+
 const mergeRecord = (target, source) => {
   const output = { ...target };
   for (const [key, value] of Object.entries(source ?? {})) {
@@ -216,7 +218,7 @@ const BASE_INVOICES = [
     amount: 1250,
     status: 'paid',
     dunningLevel: 0,
-    items: [{ description: 'Webdesign Entwurf', quantity: 1, price: 1250, total: 1250 }],
+    items: [{ kind: 'item', description: 'Webdesign Entwurf', quantity: 1, price: 1250, total: 1250 }],
     payments: [{ id: 'pay-1', date: '2026-01-20', amount: 1250, method: 'Bankueberweisung' }],
     history: [{ date: '2026-01-15', action: 'Rechnung erstellt' }],
   },
@@ -235,9 +237,9 @@ const BASE_INVOICES = [
     status: 'open',
     dunningLevel: 0,
     items: [
-      { description: 'Consulting Workshop', quantity: 1, price: 1200, total: 1200 },
-      { description: 'Strategiepapier', quantity: 1, price: 1500, total: 1500 },
-      { description: 'Projektbegleitung', quantity: 5, price: 150.1, total: 750.5 },
+      { kind: 'item', description: 'Consulting Workshop', quantity: 1, price: 1200, total: 1200 },
+      { kind: 'item', description: 'Strategiepapier', quantity: 1, price: 1500, total: 1500 },
+      { kind: 'item', description: 'Projektbegleitung', quantity: 5, price: 150.1, total: 750.5 },
     ],
     payments: [],
     history: [{ date: '2026-02-01', action: 'Rechnung erstellt' }],
@@ -256,7 +258,7 @@ const BASE_OFFER = {
   servicePeriod: '2026-03',
   amount: 990,
   status: 'open',
-  items: [{ description: 'UX Audit', quantity: 1, price: 990, total: 990 }],
+  items: [{ kind: 'item', description: 'UX Audit', quantity: 1, price: 990, total: 990 }],
   payments: [],
   history: [{ date: '2026-03-01', action: 'Angebot erstellt' }],
   shareDecision: 'accepted',
@@ -418,7 +420,6 @@ export async function launchDesktopApp(options = {}) {
   const userDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), `billme-${app}-e2e-`));
   const cacheDir = path.join(userDataDir, 'cache');
   await fs.promises.mkdir(cacheDir, { recursive: true });
-
   const launchedApp = await electron.launch({
     executablePath: electronBinary,
     cwd,
@@ -516,4 +517,69 @@ export async function seedDesktopData(page, options = {}) {
       await invokeDesktopIpc(page, 'pro:importSkr', { preferredSource: 'auto' });
     }
   }
+}
+
+export async function importPendingProTransaction(page, label, options = {}) {
+  const nonce = `${process.pid}-${Date.now()}-${proImportSequence++}`;
+  const externalId = `e2e-pro-${label}-${nonce}`;
+  const csvPath = path.join(os.tmpdir(), `${externalId}.csv`);
+  const date = options.date ?? '2026-04-01';
+  const amount = options.amount ?? -120;
+  const counterparty = options.counterparty ?? `E2E ${label}`;
+  const purpose = options.purpose ?? `E2E ${label}`;
+  await fs.promises.writeFile(
+    csvPath,
+    `date,amount,counterparty,purpose,status,externalId\n${date},${amount},${counterparty},${purpose},pending,${externalId}\n`,
+    'utf8',
+  );
+  try {
+    const imported = await invokeDesktopIpc(page, 'finance:importCommit', {
+      path: csvPath,
+      accountId: 'acc1',
+      profile: 'generic',
+      mapping: {
+        dateColumn: 'date',
+        amountColumn: 'amount',
+        counterpartyColumn: 'counterparty',
+        purposeColumn: 'purpose',
+        statusColumn: 'status',
+        externalIdColumn: 'externalId',
+      },
+    });
+    if (imported.imported !== 1) throw new Error(`Expected one imported Pro transaction, got ${imported.imported}`);
+  } finally {
+    await fs.promises.unlink(csvPath).catch(() => undefined);
+  }
+
+  const transaction = (await invokeDesktopIpc(page, 'pro:listBankTransactions')).find((row) => row.id === externalId || row.purpose === purpose);
+  if (!transaction) throw new Error(`Imported Pro transaction not found: ${purpose}`);
+  const draft = await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: transaction.id });
+  if (!draft?.id) throw new Error(`Imported Pro draft not found: ${transaction.id}`);
+  return { transaction, draft };
+}
+
+export async function setProAccountingPeriodStatus(desktop, period, status = 'soft_locked') {
+  return desktop.app.evaluate(({ app }, args) => {
+    const pathModule = process.getBuiltinModule('node:path');
+    const { createRequire } = process.getBuiltinModule('node:module');
+    const Database = createRequire(pathModule.join(app.getAppPath(), 'package.json'))('better-sqlite3');
+    const dbPath = pathModule.join(app.getPath('userData'), 'billme-pro-v2.sqlite');
+    const db = new Database(dbPath);
+    try {
+      const periodRow = db.prepare('SELECT period, status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get('default', args.period);
+      if (!periodRow) {
+        const [year, month] = args.period.split('-').map(Number);
+        const startsAt = `${args.period}-01`;
+        const endsAt = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+        const now = new Date().toISOString();
+        db.prepare(`INSERT OR IGNORE INTO accounting_periods
+          (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at)
+          VALUES (?, 'default', ?, ?, 'open', ?, ?, ?, ?)`).run(`e2e-period-${args.period}`, args.period, year, startsAt, endsAt, now, now);
+      }
+      db.prepare('UPDATE accounting_periods SET status = ?, updated_at = ? WHERE tenant_id = ? AND period = ?').run(args.status, new Date().toISOString(), 'default', args.period);
+      return db.prepare('SELECT period, status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get('default', args.period);
+    } finally {
+      db.close();
+    }
+  }, { period, status });
 }

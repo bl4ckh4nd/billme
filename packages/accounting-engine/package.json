@@ -7,11 +7,13 @@
     "test": "node --import tsx --test src/*.test.ts"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./datev-export": "./src/datev-export.ts"
   },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",
-    "@billme/server-core": "workspace:*"
+    "@billme/server-core": "workspace:*",
+    "iconv-lite": "^0.6.3"
   },
   "types": "./src/index.ts"
 }

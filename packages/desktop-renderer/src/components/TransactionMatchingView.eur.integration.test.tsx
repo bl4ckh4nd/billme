@@ -3,8 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { FeedbackProvider } from '@billme/ui';
 
-const { mockIpc } = vi.hoisted(() => ({
+const { mockIpc, mockProduct } = vi.hoisted(() => ({
+  mockProduct: vi.fn(() => 'pro' as 'lite' | 'pro'),
   mockIpc: {
   transactions: {
     list: vi.fn<(...args: any[]) => Promise<any[]>>(async () => []),
@@ -31,6 +33,13 @@ const { mockIpc } = vi.hoisted(() => ({
       summary: { incomeTotal: 0, expenseTotal: 0, surplus: 0 },
       unclassifiedCount: 0,
       warnings: [],
+      catalog: {
+        id: 'anlage-euer-2025',
+        version: 'BMF-2025-2025-08-29',
+        sourceHash: 'b'.repeat(64),
+        delivery: 'print-form-only',
+        elsterReady: false,
+      },
     })),
     listItems: vi.fn<(...args: any[]) => Promise<any[]>>(async () => []),
     upsertClassification: vi.fn(async (payload: any) => ({
@@ -49,6 +58,7 @@ const { mockIpc } = vi.hoisted(() => ({
 
 vi.mock('../runtime-api', () => ({
   ipc: mockIpc,
+  getRendererProduct: mockProduct,
 }));
 
 import { TransactionMatchingView } from './TransactionMatchingView';
@@ -63,7 +73,9 @@ const renderView = (initialTab: 'matching' | 'eur' = 'eur') => {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <TransactionMatchingView onBack={() => {}} initialTab={initialTab} />
+      <FeedbackProvider>
+        <TransactionMatchingView onBack={() => {}} initialTab={initialTab} />
+      </FeedbackProvider>
     </QueryClientProvider>,
   );
 };
@@ -71,6 +83,7 @@ const renderView = (initialTab: 'matching' | 'eur' = 'eur') => {
 describe('TransactionMatchingView EÜR integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProduct.mockReturnValue('pro');
   });
 
   it('saves single inline EÜR classification from transaction tab', async () => {
@@ -93,9 +106,14 @@ describe('TransactionMatchingView EÜR integration', () => {
 
     renderView('eur');
 
+    expect(screen.queryByText(/Manuelle steuerliche Korrekturen/)).toBeNull();
+    expect(screen.queryByText(/AVEÜR|SZ/)).toBeNull();
+    expect(screen.queryByPlaceholderText(/AVEÜR|SZ/)).toBeNull();
+
     const rowBtn = await screen.findByRole('button', { name: /Hosting GmbH/i });
     await userEvent.click(rowBtn);
 
+    await userEvent.type(screen.getAllByLabelText('Begründung für EÜR-Änderung').at(-1)!, 'Beleg geprüft');
     const saveBtn = await screen.findByRole('button', { name: /Klassifizierung speichern/i });
     await userEvent.click(saveBtn);
 
@@ -146,6 +164,7 @@ describe('TransactionMatchingView EÜR integration', () => {
     const selectAllBtn = await screen.findByRole('button', { name: /Alle wählen/i });
     await userEvent.click(selectAllBtn);
 
+    await userEvent.type(await screen.findByLabelText('Begründung für EÜR-Änderung'), 'Sammelprüfung abgeschlossen');
     const bulkBtn = await screen.findByRole('button', { name: /Vorschlag anwenden/i });
     await userEvent.click(bulkBtn);
 
@@ -159,5 +178,38 @@ describe('TransactionMatchingView EÜR integration', () => {
     expect(mockIpc.eur.upsertClassification).toHaveBeenCalledWith(
       expect.objectContaining({ sourceId: 'tx-2', eurLineId: 'E2025_KZ280', excluded: false }),
     );
+  });
+
+  it('persists Pro VAT rate but keeps the rate control out of Lite', async () => {
+    mockIpc.eur.listItems.mockResolvedValueOnce([{
+      sourceType: 'transaction',
+      sourceId: 'tx-vat',
+      date: '2025-01-05',
+      amountGross: 119,
+      amountNet: 100,
+      flowType: 'expense',
+      counterparty: 'Vendor',
+      purpose: 'Service',
+      classification: {
+        excluded: false, vatMode: 'default', vatRate: 19, updatedAt: '2025-01-01T00:00:00.000Z',
+      },
+    }]);
+    const rendered = renderView('eur');
+    await userEvent.click(await screen.findByRole('button', { name: /Vendor/i }));
+    await userEvent.type(screen.getAllByLabelText('Begründung für EÜR-Änderung').at(-1)!, 'USt-Beleg geprüft');
+    expect(screen.getByText('USt.-Satz (%)')).toBeTruthy();
+    await userEvent.click(await screen.findByRole('button', { name: /Klassifizierung speichern/i }));
+    await waitFor(() => expect(mockIpc.eur.upsertClassification).toHaveBeenCalledWith(expect.objectContaining({ vatRate: 19 })));
+
+    rendered.unmount();
+    mockProduct.mockReturnValue('lite');
+    mockIpc.eur.listItems.mockResolvedValueOnce([{
+      sourceType: 'transaction', sourceId: 'tx-lite', date: '2025-01-05', amountGross: 119, amountNet: 100,
+      flowType: 'expense', counterparty: 'Lite Vendor', purpose: 'Service',
+      classification: { excluded: false, vatMode: 'default', vatRate: 19, updatedAt: '2025-01-01T00:00:00.000Z' },
+    }]);
+    renderView('eur');
+    await userEvent.click(await screen.findByRole('button', { name: /Lite Vendor/i }));
+    expect(screen.queryByText('USt.-Satz (%)')).toBeNull();
   });
 });

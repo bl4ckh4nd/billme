@@ -51,8 +51,34 @@ export interface JournalEntry {
   period: string;
   fiscalYear: number;
   status: 'posted' | 'reversed';
+  sourceType?: JournalSourceType;
+  sourceKey?: string;
   lines: JournalLine[];
 }
+
+export type JournalSourceType =
+  | 'booking_draft'
+  | 'reversal'
+  | 'depreciation'
+  | 'manual'
+  | 'outgoing_invoice'
+  | 'incoming_invoice'
+  | 'payment'
+  | 'payment_vat'
+  | 'legacy_transaction'
+  | 'asset_activation'
+  | 'asset_depreciation'
+  | 'asset_disposal'
+  | 'standalone_source'
+  | 'fiscal_close'
+  | 'carry_forward'
+  | 'provision'
+  | 'accrual'
+  | 'inventory_closing'
+  | 'fx_valuation'
+  | 'loan_schedule'
+  | 'payroll_batch'
+  | 'shareholder_flow';
 
 export interface LedgerBalance {
   accountNumber: string;
@@ -60,6 +86,23 @@ export interface LedgerBalance {
   debitTurnover: number;
   creditTurnover: number;
   closingBalance: number;
+}
+
+export interface ReportUnmappedAccount {
+  accountNumber: string;
+  amount: number;
+}
+
+/**
+ * Stable source identity used by report drilldowns.  A journal entry is not a
+ * bank transaction: callers must use journalEntryId for the former and only
+ * route transactionId for the latter.
+ */
+export type ReportDrilldownSourceType = 'bank_transaction' | 'invoice' | 'incoming_invoice' | 'receipt' | 'payment' | 'journal_entry';
+
+export interface ReportDrilldownSource {
+  sourceType: ReportDrilldownSourceType;
+  sourceId: string;
 }
 
 export interface ReportGenerationContext {
@@ -84,6 +127,7 @@ export interface BookingDraftLineEntity {
   counterpartyVatId?: string;
   evidenceType?: string;
   evidenceReference?: string;
+  datevSachverhaltLl?: string;
   costCenter?: string;
   memo?: string;
 }
@@ -102,6 +146,7 @@ export interface BookingDraftEntity {
   lines: BookingDraftLineEntity[];
   validationIssues: ValidationIssue[];
   updatedAt: string;
+  isVirtualProjection?: boolean;
 }
 
 export interface JournalLineEntity {
@@ -119,6 +164,7 @@ export interface JournalLineEntity {
   counterpartyVatId?: string;
   evidenceType?: string;
   evidenceReference?: string;
+  datevSachverhaltLl?: string;
   costCenter?: string;
   memo?: string;
 }
@@ -135,9 +181,19 @@ export interface JournalEntryEntity {
   fiscalYear: number;
   status: 'posted' | 'reversed';
   sourceDraftId?: string;
+  sourceType?: JournalSourceType;
+  sourceKey?: string;
   reversedEntryId?: string;
   createdAt: string;
   lines: JournalLineEntity[];
+}
+
+export interface AccountingPolicy {
+  tenantId: string;
+  activeChart: LedgerChart;
+  vatMethod: 'soll' | 'ist';
+  periodPolicy: 'calendar_month';
+  updatedAt: string;
 }
 
 export interface AccountingPeriod {
@@ -152,6 +208,18 @@ export interface AccountingPeriod {
   updatedAt: string;
 }
 
+export interface DatevExportSourceSnapshot {
+  from?: string;
+  to?: string;
+  recordCount: number;
+  consultantNumber?: string;
+  clientNumber?: string;
+  fiscalYearStart?: string;
+  accountLength?: number;
+  encoding?: 'cp1252' | 'utf8-bom';
+  chart?: LedgerChart;
+}
+
 export interface DatevExportResult {
   id: string;
   filePath: string;
@@ -159,6 +227,22 @@ export interface DatevExportResult {
   fromDate?: string;
   toDate?: string;
   createdAt: string;
+  sha256?: string;
+  byteSize?: number;
+  encoding?: 'cp1252' | 'utf8-bom';
+  headerVersion?: number;
+  formatVersion?: number;
+  chart?: LedgerChart;
+  sourceSnapshotHash?: string;
+  manifestJson?: string;
+  status?: string;
+  validationJson?: string;
+  contentSha256?: string;
+}
+
+export interface DatevExportContent extends DatevExportResult {
+  contentSha256: string;
+  content: Uint8Array;
 }
 
 export interface ProWorkflowEntry {

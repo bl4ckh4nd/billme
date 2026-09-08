@@ -5,6 +5,7 @@ vi.mock('uuid', () => ({
   v4: () => 'invoice-uuid',
 }));
 import { bootstrapSql } from '../db/bootstrap';
+import { runMigrations } from '../db/migrate';
 import { getClient, upsertClient } from '../db/clientsRepo';
 import { getInvoice } from '../db/invoicesRepo';
 import { listRecurringProfiles, upsertRecurringProfile } from '../db/recurringRepo';
@@ -26,7 +27,12 @@ const canRunNativeSqlite = (() => {
 const createDb = (): Database.Database => {
   const db = new Database(':memory:');
   db.exec(bootstrapSql);
+  runMigrations(db);
   setSettings(db, structuredClone(MOCK_SETTINGS));
+  db.exec(`INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at) VALUES
+    ('rec-ar', 'SKR03', '1400', 'Debitoren', 'test', datetime('now'), datetime('now')),
+    ('rec-revenue', 'SKR03', '8400', 'Erlöse', 'test', datetime('now'), datetime('now')),
+    ('rec-vat', 'SKR03', '1776', 'USt', 'test', datetime('now'), datetime('now'))`);
   return db;
 };
 
@@ -112,7 +118,7 @@ describe.skipIf(!canRunNativeSqlite)('recurringService sqlite adapters', () => {
         clientId: client.id,
         clientEmail: 'billing@acme.example',
         projectId: expect.any(String),
-        status: 'draft',
+        status: 'open',
       }),
     );
     expect(storedInvoice?.number).toBe('RE-2026-104');
@@ -132,9 +138,10 @@ describe.skipIf(!canRunNativeSqlite)('recurringService sqlite adapters', () => {
     settings.automation.recurringEnabled = true;
     settings.automation.recurringRunTime = '09:00';
 
-    expect(shouldRunScheduledRecurring(settings, new Date('2026-05-10T09:05:00.000Z'))).toBe(true);
+    const scheduledNow = new Date(2026, 4, 10, 9, 5);
+    expect(shouldRunScheduledRecurring(settings, scheduledNow)).toBe(true);
 
-    settings.automation.lastRecurringRun = '2026-05-10T08:00:00.000Z';
-    expect(shouldRunScheduledRecurring(settings, new Date('2026-05-10T09:05:00.000Z'))).toBe(false);
+    settings.automation.lastRecurringRun = new Date(2026, 4, 10, 8, 0).toISOString();
+    expect(shouldRunScheduledRecurring(settings, scheduledNow)).toBe(false);
   });
 });

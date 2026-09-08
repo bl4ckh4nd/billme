@@ -8,8 +8,8 @@ surface owns its bootstrap and persistence adapters.
 
 | Surface | Responsibility |
 |---|---|
-| `apps/desktop` | Billme Lite: Electron main/preload, React renderer, and local SQLite wiring |
-| `apps/pro-desktop` | Billme Pro: separate Electron application with Pro IPC, schema, and accounting integration |
+| `apps/desktop` | Billme Lite: Electron main/preload, React renderer, and embedded PGlite server wiring |
+| `apps/pro-desktop` | Billme Pro: separate Electron application with Pro IPC, embedded PGlite server, and accounting integration |
 | `apps/web` | Authenticated Lite server-mode shell that mounts the Lite desktop renderer over an HTTP adapter |
 | `apps/web-pro` | Standalone Pro server-mode UI; embeds `ProAccountingWorkspace` instead of mounting the desktop renderer |
 | `apps/server-api` | Fastify API for Lite and Pro, backed by Postgres in server mode |
@@ -26,7 +26,7 @@ The split is selected at build time. It is not a license-key upgrade or a runtim
 |---|---|---|
 | Application | `apps/desktop` | `apps/pro-desktop` |
 | IPC package | `@billme/desktop-contracts` (82 routes) | `@billme/desktop-contracts-pro` (110 routes) |
-| SQLite file | `billme.sqlite` | `billme-pro-v2.sqlite` |
+| PGlite directory | `billme-pglite/` | `billme-pro-pglite/` |
 | Electron `appId` | `com.billme.desktop` | `com.billme.pro` |
 
 The route counts come from the `ipcRoutes` objects in
@@ -40,10 +40,11 @@ superset of the Lite UI.
 
 ## Desktop persistence and IPC
 
-Both Electron applications use SQLite through `better-sqlite3`. `@billme/desktop-data` owns the shared
-connection lifecycle, repositories, transaction matching, and EÜR classification/report logic.
-`apps/*/db/connection.ts` supplies the product bootstrap and migration functions; compatibility changes
-must remain in `apps/*/db/migrate.ts`.
+Both Electron applications use the shared embedded server runtime with PGlite as their only local
+database. `@billme/desktop-data` remains available for legacy SQLite compatibility tests and the
+standalone migration path; it is not a desktop production dependency. The `billme-pglite-migrate`
+command imports an existing `billme.sqlite` or `billme-pro-v2.sqlite` into a new PGlite directory,
+keeps the source and a consistent backup, verifies import counts, and writes an activation manifest.
 
 Invoices and offers persist document-time fields such as `billingAddressJson`,
 `shippingAddressJson`, `taxMeta`, and `taxSnapshot`. These snapshots preserve what was issued; sent or
@@ -53,7 +54,7 @@ The renderer/main boundary is contract-first:
 
 - `packages/desktop-contracts/src/{contract,schemas,api}.ts` for Lite
 - `packages/desktop-contracts-pro/src/{contract,schemas,api}.ts` for Pro
-- `apps/*/electron/ipcHandlers.ts` for main-process adapters
+- `apps/*/electron/nativeIpcHandlers.ts` for native main-process adapters
 - `apps/*/electron/preload.ts` and `apps/*/ipc/window.d.ts` for the exposed window bridge
 
 The app-local `apps/*/ipc/{contract,schemas,api}.ts` files re-export the appropriate shared package.
@@ -90,9 +91,15 @@ and embeds `ProAccountingWorkspace`; it does not call `mountDesktopRendererApp`.
 ## Server mode
 
 `apps/server-api/src/app.ts` creates the Fastify API. When `DATABASE_URL` is available it creates the
-Postgres pool and runs `runPostgresMigrations` before registering the pool. Lite and Pro auth and
+Postgres pool and verifies the Drizzle journal through `assertDrizzleSchemaCurrent` before registering the pool. Schema changes are applied by the one-shot `packages/server-data/src/cli/migrate.ts` command. Lite and Pro auth and
 billing routes live under `/api/v1/lite` and `/api/v1/pro`. `requireSession` rejects a token whose
 product does not match the route with `403`.
+
+`packages/server-core/src/orpc/contract.ts` is the shared contract-first seam for the stable product
+boundaries. `apps/server-api` mounts its Lite/Pro auth and VAT procedures through the Fastify oRPC
+adapter while leaving the generic query-auth compatibility routes, `/health`, and billing/download
+exceptions on direct Fastify handlers. The deterministic generated document is available at
+`GET /api/v1/openapi.json`; shared clients use the oRPC OpenAPI link for supported JSON procedures.
 
 Authentication uses bearer tokens implemented in `apps/server-api/src/auth.ts`: a base64url payload
 plus an HMAC-SHA256 signature, not a standard JWT. Passwords are derived with scrypt in
@@ -127,13 +134,11 @@ declares `pro:getSusaReport`, `pro:getGuvReport`, and `pro:getBilanzReport`, and
 
 ## Offer portal
 
-`apps/offer-portal` uses Hono with separate entrypoints for Node (`src/node.ts`) and Cloudflare Workers
-(`src/worker.ts`). Its storage ports have adapters for memory, SQLite plus filesystem on Node, and D1
-plus R2 on Workers.
+`apps/offer-portal` uses Hono with a Node entrypoint (`src/node.ts`). Its production storage adapter is
+SQLite plus filesystem PDF storage; an in-memory adapter remains available for tests and development.
 
-The current tree has no `apps/offer-portal/src/documentPolicy.ts`. Publish authentication, origin
-checks, rate limits, sensitive response headers, and request schemas are currently centralized in
-`apps/offer-portal/src/app.ts`.
+Publish authentication, origin checks, rate limits, sensitive response headers, and request schemas are
+centralized in `apps/offer-portal/src/app.ts`.
 
 The portal stores published document snapshots and customer decisions. Desktop SQLite and server
 Postgres remain the accounting sources of truth; portal state must never become accounting truth.

@@ -10,6 +10,7 @@ import {
   recurringProfileSchema,
   dunningLevelSchema,
   appSettingsSchema,
+  businessReportingProfileSchema,
   upsertPayloadSchema,
   deleteByIdSchema,
   csvProfileSchema,
@@ -27,10 +28,51 @@ import {
   eurExportPdfResultSchema,
   templateSchema,
   templateKindSchema,
+  invoiceTaxMetaSchema,
 } from './schemas';
 import { ipcRoutes } from './contract';
+import { createBillmeApi } from './api';
+
+describe('Pro tax filing IPC contract', () => {
+  it('exposes the shared routes through the renderer API', async () => {
+    const keys = [
+      'taxFiling:getStatus',
+      'taxFiling:listRecords',
+      'taxFiling:installCertificate',
+      'taxFiling:removeCertificate',
+      'taxFiling:validate',
+      'taxFiling:export',
+      'taxFiling:submit',
+    ] as const;
+    for (const key of keys) expect(ipcRoutes[key].channel).toBe(key);
+
+    const calls: string[] = [];
+    const api = createBillmeApi(async (key) => {
+      calls.push(key);
+      return key === 'taxFiling:listRecords' ? [] : key === 'taxFiling:removeCertificate' ? true : {};
+    });
+    expect(typeof api.taxFiling.getStatus).toBe('function');
+    expect(typeof api.taxFiling.listRecords).toBe('function');
+    await api.taxFiling.getStatus();
+    await api.taxFiling.listRecords();
+    expect(calls).toEqual(['taxFiling:getStatus', 'taxFiling:listRecords']);
+  });
+});
 
 describe('Pro IPC route schemas', () => {
+  it('exposes the authoritative accounting policy route', () => {
+    expect(ipcRoutes['pro:getAccountingPolicy'].args.parse(undefined)).toBeUndefined();
+    expect(
+      ipcRoutes['pro:getAccountingPolicy'].result.parse({
+        tenantId: 'default',
+        activeChart: 'SKR04',
+        vatMethod: 'soll',
+        periodPolicy: 'calendar_month',
+        updatedAt: '2026-08-12T00:00:00.000Z',
+      }),
+    ).toMatchObject({ tenantId: 'default', activeChart: 'SKR04' });
+  });
+
   it('validates journal entry account filters', () => {
     expect(
       ipcRoutes['pro:listJournalEntries'].args.parse({
@@ -43,6 +85,21 @@ describe('Pro IPC route schemas', () => {
     ).toThrow();
   });
 
+  it('supports direct journal entry lookup with nullable not-found result', () => {
+    expect(ipcRoutes['pro:getJournalEntryById'].args.parse({ entryId: 'journal-1' })).toEqual({ entryId: 'journal-1' });
+    expect(ipcRoutes['pro:getJournalEntryById'].result.parse(null)).toBeNull();
+  });
+
+  it('preserves report ranges, active chart and GuV drilldown refs in IPC contracts', () => {
+    expect(ipcRoutes['pro:getSusaReport'].args.parse({ from: '2026-01-01', to: '2026-03-31', asOfDate: '2026-03-31' }))
+      .toMatchObject({ from: '2026-01-01', to: '2026-03-31' });
+    expect(ipcRoutes['pro:getGuvReport'].result.parse({
+      from: '2026-01-01', to: '2026-03-31', chart: 'SKR03',
+      rows: [{ positionKey: 'revenue', positionLabel: 'Umsatz', amount: 100, accountRefs: ['8400'] }],
+      netResult: 100,
+    }).rows[0]?.accountRefs).toEqual(['8400']);
+  });
+
   it('requires roles and audit reasons for asset mutations', () => {
     expect(() =>
       ipcRoutes['pro:runDepreciation'].args.parse({
@@ -50,18 +107,52 @@ describe('Pro IPC route schemas', () => {
         year: 2026,
         postingDate: '2026-12-31',
         reason: '',
-        actorRole: 'accountant',
       }),
     ).toThrow();
+    expect(() =>
+      ipcRoutes['pro:runDepreciation'].args.parse({
+        assetId: 'asset-1',
+        year: 2026,
+        postingDate: '2026-12-31',
+        reason: 'AfA',
+        softLockOverride: true,
+      }),
+    ).toThrow();
+    expect(
+      ipcRoutes['pro:runDepreciation'].args.parse({
+        assetId: 'asset-1',
+        year: 2026,
+        postingDate: '2026-12-31',
+        reason: 'AfA',
+        softLockOverride: true,
+        overrideReason: 'Owner approval',
+      }),
+    ).toMatchObject({ softLockOverride: true, overrideReason: 'Owner approval' });
     expect(() =>
       ipcRoutes['pro:disposeAsset'].args.parse({
         assetId: 'asset-1',
         disposalDate: '2026-12-31',
         proceeds: 0,
         reason: 'Scrapped',
-        actorRole: 'bookkeeper',
       }),
     ).not.toThrow();
+  });
+
+  it('accepts the Ist-USt deferred output VAT mapping role', () => {
+    expect(ipcRoutes['pro:upsertAccountingAccountMapping'].args.parse({ chart: 'SKR03', role: 'output_vat_deferred', accountNumber: '1780' })).toMatchObject({ role: 'output_vat_deferred', accountNumber: '1780' });
+  });
+
+  it('preserves DATEV EU evidence fields at the IPC contract boundary', () => {
+    expect(invoiceTaxMetaSchema.parse({
+      buyerCountryCode: 'AT', buyerVatId: 'ATU12345678', destinationVatRate: 19,
+      datevSachverhaltLl: '13', datevEvidenceType: 'reverse_charge', datevEvidenceReference: '13',
+    })).toMatchObject({ destinationVatRate: 19, datevSachverhaltLl: '13', datevEvidenceReference: '13' });
+  });
+
+  it('requires an audited reason for document soft-lock overrides', () => {
+    expect(() => ipcRoutes['pro:postOutgoingInvoiceAccounting'].args.parse({ invoiceId: 'inv-1', reservationId: 'res-1', softLockOverride: true })).toThrow();
+    expect(() => ipcRoutes['pro:postOutgoingInvoiceAccounting'].args.parse({ invoiceId: 'inv-1', softLockOverride: true, overrideReason: 'Owner approval' })).toThrow();
+    expect(ipcRoutes['pro:postOutgoingInvoiceAccounting'].args.parse({ invoiceId: 'inv-1', reservationId: 'res-1', softLockOverride: true, overrideReason: 'Owner approval' })).toMatchObject({ softLockOverride: true, reservationId: 'res-1' });
   });
 });
 
@@ -690,6 +781,30 @@ describe('Settings Schema', () => {
         },
       };
       expect(() => appSettingsSchema.parse(settings)).not.toThrow();
+      const parsed = appSettingsSchema.parse(settings);
+      expect(parsed.businessReportingProfile).toEqual({
+        jurisdiction: 'DE',
+        legalForm: 'sole_proprietor',
+        profitDetermination: 'eur',
+        fiscalYearStart: '01-01',
+        vatMethod: 'soll',
+      });
+    });
+
+    it('validates canonical GmbH reporting and projects its VAT method', () => {
+      const settings = {
+        company: { name: 'GmbH', owner: 'Owner', street: 'Street', zip: '12345', city: 'City', email: 'a@b.test', phone: '', website: '' },
+        finance: { bankName: '', iban: '', bic: '', taxId: '', vatId: '', registerCourt: 'HRB 1' },
+        numbers: { invoicePrefix: 'INV', nextInvoiceNumber: 1, numberLength: 5, offerPrefix: 'OFF', nextOfferNumber: 1 },
+        dunning: { levels: [] },
+        legal: { smallBusinessRule: false, defaultVatRate: 19, taxAccountingMethod: 'soll' as const, paymentTermsDays: 14, defaultIntroText: '', defaultFooterText: '' },
+        businessReportingProfile: { jurisdiction: 'DE' as const, legalForm: 'gmbh' as const, profitDetermination: 'double_entry' as const, hgbSizeClass: 'small' as const, fiscalYearStart: '04-01', chart: 'SKR04' as const, vatMethod: 'ist' as const },
+      };
+      const parsed = appSettingsSchema.parse(settings);
+      expect(parsed.businessReportingProfile?.chart).toBe('SKR04');
+      expect(parsed.legal.taxAccountingMethod).toBe('ist');
+      expect(() => businessReportingProfileSchema.parse({ ...settings.businessReportingProfile, profitDetermination: 'eur', fiscalYearStart: '04-01' })).toThrow();
+      expect(() => businessReportingProfileSchema.parse({ ...settings.businessReportingProfile, fiscalYearStart: '02-31' })).toThrow();
     });
 
     it('should apply defaults for optional sections', () => {
@@ -938,6 +1053,13 @@ describe('EÜR Schemas', () => {
         },
         unclassifiedCount: 0,
         warnings: [],
+        catalog: {
+          id: 'anlage-euer-2025',
+          version: 'BMF-2025-2025-08-29',
+          sourceHash: 'b'.repeat(64),
+          delivery: 'print-form-only',
+          elsterReady: false,
+        },
       }),
     ).not.toThrow();
   });
@@ -979,10 +1101,15 @@ describe('EÜR Schemas', () => {
         sourceType: 'invoice',
         sourceId: 'inv-1',
         taxYear: 2025,
+        reason: 'Beleg geprüft',
         eurLineId: 'E2025_KZ111',
         vatMode: 'default',
       }),
     ).not.toThrow();
+
+    expect(() => eurUpsertClassificationArgsSchema.parse({
+      sourceType: 'invoice', sourceId: 'inv-1', taxYear: 2025, reason: '   ',
+    })).toThrow();
 
     expect(() =>
       eurClassificationSchema.parse({

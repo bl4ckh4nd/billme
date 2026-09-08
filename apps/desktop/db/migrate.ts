@@ -64,8 +64,14 @@ export const runMigrations = (db: Database.Database): void => {
     tryAddColumn(db, 'invoices', 'project_id', 'TEXT');
     tryAddColumn(db, 'offers', 'project_id', 'TEXT');
     tryAddColumn(db, 'invoices', 'client_number', 'TEXT');
+    tryAddColumn(db, 'invoices', 'document_kind', "TEXT NOT NULL DEFAULT 'invoice'");
+    tryAddColumn(db, 'invoices', 'source_document_id', 'TEXT');
+    tryAddColumn(db, 'invoices', 'root_document_id', 'TEXT');
+    tryAddColumn(db, 'invoices', 'revision_of_id', 'TEXT');
+    tryAddColumn(db, 'invoices', 'revision_number', 'INTEGER NOT NULL DEFAULT 0');
     tryAddColumn(db, 'offers', 'client_number', 'TEXT');
     tryAddColumn(db, 'clients', 'customer_number', 'TEXT');
+    tryAddColumn(db, 'clients', 'tax_profile_json', 'TEXT');
 
     // Projects: code + archive metadata
   tryAddColumn(db, 'client_projects', 'code', 'TEXT');
@@ -79,6 +85,10 @@ export const runMigrations = (db: Database.Database): void => {
   addColumnIfMissing(db, 'invoices', 'tax_mode', 'TEXT');
   addColumnIfMissing(db, 'invoices', 'tax_meta_json', 'TEXT');
   addColumnIfMissing(db, 'invoices', 'tax_snapshot_json', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'accounting_status', "TEXT NOT NULL DEFAULT 'unposted'");
+  addColumnIfMissing(db, 'invoices', 'accounting_snapshot_json', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'accounting_journal_entry_id', 'TEXT');
+  addColumnIfMissing(db, 'invoices', 'accounting_posted_at', 'TEXT');
 
   // Offers: structured address snapshots
   addColumnIfMissing(db, 'offers', 'billing_address_json', 'TEXT');
@@ -86,6 +96,10 @@ export const runMigrations = (db: Database.Database): void => {
   addColumnIfMissing(db, 'offers', 'tax_mode', 'TEXT');
   addColumnIfMissing(db, 'offers', 'tax_meta_json', 'TEXT');
   addColumnIfMissing(db, 'offers', 'tax_snapshot_json', 'TEXT');
+
+  // Recurring profiles: preserve the confirmed tax rule.
+  addColumnIfMissing(db, 'recurring_profiles', 'tax_mode', 'TEXT');
+  addColumnIfMissing(db, 'recurring_profiles', 'tax_meta_json', 'TEXT');
 
   // Offers: portal publication + decision fields
   addColumnIfMissing(db, 'offers', 'share_token', 'TEXT');
@@ -103,15 +117,18 @@ export const runMigrations = (db: Database.Database): void => {
   addColumnIfMissing(db, 'invoice_items', 'unit', 'TEXT');
   addColumnIfMissing(db, 'invoice_items', 'discount_percent', 'REAL');
   addColumnIfMissing(db, 'invoice_items', 'tax_rate', 'REAL');
+  addColumnIfMissing(db, 'invoice_items', 'line_meta_json', 'TEXT');
   addColumnIfMissing(db, 'offer_items', 'article_id', 'TEXT');
   addColumnIfMissing(db, 'offer_items', 'category', 'TEXT');
   addColumnIfMissing(db, 'offer_items', 'unit', 'TEXT');
   addColumnIfMissing(db, 'offer_items', 'discount_percent', 'REAL');
   addColumnIfMissing(db, 'offer_items', 'tax_rate', 'REAL');
+  addColumnIfMissing(db, 'offer_items', 'line_meta_json', 'TEXT');
 
   // Finance: transaction import support (non-audit-locked)
   tryAddColumn(db, 'transactions', 'dedup_hash', 'TEXT');
   tryAddColumn(db, 'transactions', 'import_batch_id', 'TEXT');
+  tryAddColumn(db, 'transactions', 'linked_payment_id', 'TEXT');
   tryAddColumn(db, 'transactions', 'deleted_at', 'TEXT');
 
   const transactionCols = getColumns(db, 'transactions');
@@ -488,17 +505,22 @@ export const runMigrations = (db: Database.Database): void => {
   // Import batches: rollback support
   tryAddColumn(db, 'import_batches', 'rolled_back_at', 'TEXT');
   tryAddColumn(db, 'import_batches', 'rollback_reason', 'TEXT');
+  tryAddColumn(db, 'eur_classifications', 'vat_rate', 'REAL');
+  tryAddColumn(db, 'eur_lines', 'provider_path', "TEXT NOT NULL DEFAULT 'main'");
+  tryAddColumn(db, 'eur_lines', 'computed_terms_json', 'TEXT');
 
   db.exec(`
       CREATE TABLE IF NOT EXISTS eur_lines (
         id TEXT PRIMARY KEY,
         tax_year INTEGER NOT NULL,
+        provider_path TEXT NOT NULL DEFAULT 'main',
         kennziffer TEXT,
         label TEXT NOT NULL,
         kind TEXT NOT NULL CHECK (kind IN ('income', 'expense', 'computed')),
         exportable INTEGER NOT NULL DEFAULT 1 CHECK (exportable IN (0, 1)),
         sort_order INTEGER NOT NULL,
         computed_from_json TEXT,
+        computed_terms_json TEXT,
         source_version TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -507,8 +529,8 @@ export const runMigrations = (db: Database.Database): void => {
       CREATE INDEX IF NOT EXISTS idx_eur_lines_year_sort
         ON eur_lines(tax_year, sort_order);
 
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_kennziffer
-        ON eur_lines(tax_year, kennziffer)
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_provider_kennziffer
+        ON eur_lines(tax_year, provider_path, kennziffer)
         WHERE kennziffer IS NOT NULL AND TRIM(kennziffer) <> '';
 
       CREATE TABLE IF NOT EXISTS eur_classifications (
@@ -519,6 +541,7 @@ export const runMigrations = (db: Database.Database): void => {
         eur_line_id TEXT REFERENCES eur_lines(id) ON DELETE SET NULL,
         excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0, 1)),
         vat_mode TEXT NOT NULL DEFAULT 'none' CHECK (vat_mode IN ('none', 'default')),
+        vat_rate REAL,
         note TEXT,
         updated_at TEXT NOT NULL,
         CHECK (NOT (excluded = 1 AND eur_line_id IS NOT NULL))
@@ -529,6 +552,13 @@ export const runMigrations = (db: Database.Database): void => {
 
       CREATE INDEX IF NOT EXISTS idx_eur_classifications_year
         ON eur_classifications(tax_year);
+    `);
+
+  db.exec(`
+      DROP INDEX IF EXISTS idx_eur_lines_year_kennziffer;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_provider_kennziffer
+        ON eur_lines(tax_year, provider_path, kennziffer)
+        WHERE kennziffer IS NOT NULL AND TRIM(kennziffer) <> '';
     `);
 
   db.exec(`

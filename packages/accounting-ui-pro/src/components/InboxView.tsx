@@ -1,15 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Filter,
-  FileText,
   Inbox,
   CheckSquare,
   PanelRightClose,
   PanelRightOpen,
-  Upload,
-  Wand2,
 } from 'lucide-react';
-import { getQueueCounts, getStatusPresentation, InboxQueueKey, txMatchesQueue } from '../domain/selectors';
+import { bookingActionLabels, getQueueCounts, getStatusPresentation, InboxQueueKey, txMatchesQueue } from '../domain/selectors';
 import { normalizeTaxCaseKey, TAX_CASE_OPTIONS, toLegacyTaxCode } from '../domain/taxCases';
 import { getAllowedActions } from '../domain/workflow';
 import { mockAccounts } from '../mocks/accounts';
@@ -18,15 +14,20 @@ import {
   dispatchBookingAction,
   getBookingDraftByTransactionId,
   saveDraft,
-  setTransactionReceiptStatus,
+  type ProAccountingDataAdapter,
 } from '../services/mockBookingStore';
 import AccountCombobox from './AccountCombobox';
-import { BookingAction, Transaction, UserRole } from '../types';
+import { getConfiguredBankAccountNumber } from './ReconciliationWorkbench';
+import { Account, BookingAction, BookingDraft, LinkedInvoiceSummary, OpenRouterVlmConfig, Transaction, TransactionDocumentAnalysis, UserRole } from '../types';
 import InboxQueueTabs from './InboxQueueTabs';
 import IssueBadges from './IssueBadges';
 
 interface InboxViewProps {
   role: UserRole;
+  dataAdapter?: ProAccountingDataAdapter;
+  accounts?: Account[];
+  bankAccountNumber?: string;
+  bankAccountNumberByTransactionId?: Record<string, string>;
   transactions: Transaction[];
   onOpenTransaction: (transactionId: string) => void;
   onRefresh: () => void;
@@ -38,25 +39,21 @@ function formatCurrency(amount: number, currency: string) {
 }
 
 function nextActionLabel(action: BookingAction | undefined) {
-  switch (action) {
-    case 'approve':
-      return 'Freigeben';
-    case 'post':
-      return 'Buchen';
-    case 'submit_for_review':
-      return 'Einreichen';
-    default:
-      return 'Buchen';
-  }
+  return action ? bookingActionLabels[action] : bookingActionLabels.post;
 }
 
 export default function InboxView({
   role,
+  dataAdapter,
+  accounts,
+  bankAccountNumber: configuredBankAccountNumber,
+  bankAccountNumberByTransactionId,
   transactions,
   onOpenTransaction,
   onRefresh,
   forcedPreviewTransactionId,
 }: InboxViewProps) {
+  const accountOptions = accounts ?? mockAccounts;
   const [activeQueue, setActiveQueue] = useState<InboxQueueKey>('all');
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -65,8 +62,18 @@ export default function InboxView({
   const [bookingTextEdits, setBookingTextEdits] = useState<Record<string, string>>({});
   const [notesEdits, setNotesEdits] = useState<Record<string, string>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [linkedInvoice, setLinkedInvoice] = useState<LinkedInvoiceSummary | null>(null);
+  const [vlmConfig, setVlmConfig] = useState<OpenRouterVlmConfig | null>(null);
+  const [vlmModel, setVlmModel] = useState('');
+  const [vlmDocument, setVlmDocument] = useState<{ mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; fileName?: string } | null>(null);
+  const [vlmAnalysis, setVlmAnalysis] = useState<TransactionDocumentAnalysis | null>(null);
+  const [vlmBusy, setVlmBusy] = useState(false);
+  const [vlmError, setVlmError] = useState<string | null>(null);
 
   const permissionCtx = permissionContextForRole(role);
+  const canMutate = permissionCtx.canMutate;
+  const bankAccountNumberForTransaction = (transactionId: string) =>
+    bankAccountNumberByTransactionId?.[transactionId] ?? configuredBankAccountNumber;
   const queueCounts = useMemo(() => getQueueCounts(transactions), [transactions]);
   const filtered = useMemo(
     () => transactions.filter((tx) => txMatchesQueue(tx, activeQueue)),
@@ -75,7 +82,17 @@ export default function InboxView({
 
   const previewTx = previewId ? filtered.find((tx) => tx.id === previewId) ?? null : null;
   const previewDraft = previewTx ? getBookingDraftByTransactionId(previewTx.id) : undefined;
-  const previewCounterLine = previewDraft?.lines.find((line) => line.accountId !== '1200') ?? previewDraft?.lines[0];
+  const previewBankAccountNumber = previewDraft
+    ? getConfiguredBankAccountNumber(
+        previewDraft,
+        accounts ?? [],
+        bankAccountNumberForTransaction(previewDraft.transactionId),
+        accounts === undefined,
+      )
+    : undefined;
+  const previewCounterLine = previewDraft && previewBankAccountNumber
+    ? previewDraft.lines.find((line) => line.accountId !== previewBankAccountNumber)
+    : undefined;
   const previewAccountEditable = !!previewDraft && !['posted', 'reversed'].includes(previewDraft.workflowStatus);
 
   const selectedSet = new Set(selectedIds);
@@ -85,6 +102,34 @@ export default function InboxView({
     if (!forcedPreviewTransactionId) return;
     setPreviewId(forcedPreviewTransactionId);
   }, [forcedPreviewTransactionId]);
+
+  useEffect(() => {
+    setLinkedInvoice(null);
+    setVlmAnalysis(null);
+    setVlmDocument(null);
+    setVlmError(null);
+    let cancelled = false;
+    const selectedTransaction = previewTx;
+    if (!selectedTransaction || !dataAdapter?.getLinkedInvoice) return () => { cancelled = true; };
+    void Promise.resolve(dataAdapter.getLinkedInvoice(selectedTransaction.id)).then((invoice) => {
+      if (!cancelled) setLinkedInvoice(invoice);
+    }).catch((error: unknown) => {
+      if (!cancelled) setVlmError(error instanceof Error ? error.message : 'Verknüpfte Rechnung konnte nicht geladen werden.');
+    });
+    return () => { cancelled = true; };
+  }, [dataAdapter, previewTx?.id]);
+
+  useEffect(() => {
+    if (!dataAdapter?.getOpenRouterVlmConfig) return;
+    let cancelled = false;
+    void dataAdapter.getOpenRouterVlmConfig().then((config) => {
+      if (!cancelled) {
+        setVlmConfig(config);
+        setVlmModel(config.model);
+      }
+    }).catch(() => { if (!cancelled) setVlmConfig(null); });
+    return () => { cancelled = true; };
+  }, [dataAdapter]);
 
   const toggleRowSelection = (txId: string) => {
     setSelectedIds((prev) => (prev.includes(txId) ? prev.filter((id) => id !== txId) : [...prev, txId]));
@@ -102,18 +147,7 @@ export default function InboxView({
     });
   };
 
-  const selectSimilarToPreview = () => {
-    if (!previewTx) return;
-    const similar = filtered.filter(
-      (tx) =>
-        tx.id !== previewTx.id &&
-        tx.amount * previewTx.amount > 0 &&
-        (tx.payee === previewTx.payee || tx.suggestion === previewTx.suggestion),
-    );
-    setSelectedIds([previewTx.id, ...similar.map((tx) => tx.id)]);
-  };
-
-  const handleInlineAction = (tx: Transaction) => {
+  const handleInlineAction = async (tx: Transaction) => {
     const draft = getBookingDraftByTransactionId(tx.id);
     if (!draft) return;
     const allowed = getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues);
@@ -123,39 +157,40 @@ export default function InboxView({
       return;
     }
     try {
-      dispatchBookingAction(tx.id, primary, { role, actorName: role });
+      await dispatchBookingAction(tx.id, primary, { role, actorName: role });
       onRefresh();
-    } catch {
-      onOpenTransaction(tx.id);
+    } catch (error) {
+      setBatchMessage(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
     }
   };
 
-  const runBatchAction = (preferredAction: BookingAction) => {
+  const runBatchAction = async (preferredAction: BookingAction) => {
     const ids = filtered.filter((tx) => selectedSet.has(tx.id)).map((tx) => tx.id);
     if (ids.length === 0) return;
 
     let success = 0;
     let skipped = 0;
 
-    ids.forEach((id) => {
+    for (const id of ids) {
       const draft = getBookingDraftByTransactionId(id);
-      if (!draft) { skipped += 1; return; }
+      if (!draft) { skipped += 1; continue; }
       const allowed = getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues);
-      if (!allowed.includes(preferredAction)) { skipped += 1; return; }
+      if (!allowed.includes(preferredAction)) { skipped += 1; continue; }
       try {
-        dispatchBookingAction(id, preferredAction, { role, actorName: role });
+        await dispatchBookingAction(id, preferredAction, { role, actorName: role });
         success += 1;
       } catch {
         skipped += 1;
       }
-    });
+    }
 
     setBatchMessage(`Sammelaktion '${preferredAction}': ${success} erfolgreich, ${skipped} übersprungen.`);
     setSelectedIds((prev) => prev.filter((id) => !ids.includes(id)));
     onRefresh();
   };
 
-  const assignBatchAccount = () => {
+  const assignBatchAccount = async () => {
+    if (!canMutate) return;
     if (!batchAccountSelection) {
       setBatchMessage('Bitte wählen Sie zuerst ein Konto für die Sammelzuweisung.');
       return;
@@ -164,20 +199,27 @@ export default function InboxView({
     const ids = filtered.filter((tx) => selectedSet.has(tx.id)).map((tx) => tx.id);
     if (ids.length === 0) return;
 
-    const account = mockAccounts.find((acc) => acc.number === batchAccountSelection.id);
+    const account = accountOptions.find((acc) => acc.number === batchAccountSelection.id);
     if (!account) { setBatchMessage('Gewähltes Konto wurde nicht gefunden.'); return; }
 
     let success = 0;
     let skipped = 0;
-    ids.forEach((id) => {
+    for (const id of ids) {
       const draft = getBookingDraftByTransactionId(id);
-      if (!draft || ['posted', 'reversed'].includes(draft.workflowStatus)) { skipped += 1; return; }
+      if (!draft || ['posted', 'reversed'].includes(draft.workflowStatus)) { skipped += 1; continue; }
       try {
         const nextLines = [...draft.lines];
-        const targetIndex = nextLines.findIndex((line) => line.accountId !== '1200');
+        const bankAccountNumber = getConfiguredBankAccountNumber(
+          draft,
+          accounts ?? [],
+          bankAccountNumberForTransaction(draft.transactionId),
+          accounts === undefined,
+        );
+        if (!bankAccountNumber) { skipped += 1; continue; }
+        const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
         const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
         const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
-        if (index < 0) { skipped += 1; return; }
+        if (index < 0) { skipped += 1; continue; }
         nextLines[index] = {
           ...nextLines[index],
           accountId: account.number,
@@ -189,22 +231,49 @@ export default function InboxView({
             ?? account.defaultTaxCode
             ?? '',
         };
-        saveDraft({ ...draft, lines: nextLines }, role);
+        await saveDraft({ ...draft, lines: nextLines }, role);
         success += 1;
       } catch {
         skipped += 1;
       }
-    });
+    }
 
     setBatchMessage(`Sammel-Kontozuweisung (${account.number}): ${success} aktualisiert, ${skipped} übersprungen.`);
     onRefresh();
   };
 
-  const updateInboxAccount = (txId: string, accountNumber: string, accountName: string, defaultTaxCode?: string) => {
+  const saveInboxDraft = async (nextDraft: BookingDraft) => {
+    if (!canMutate) {
+      setBatchMessage('Diese Rolle darf Buchungen nur lesen.');
+      return;
+    }
+    if (['posted', 'reversed'].includes(nextDraft.workflowStatus)) {
+      setBatchMessage('POSTED_DRAFT_IMMUTABLE: Storno oder Korrektur erforderlich.');
+      return;
+    }
+    try {
+      await saveDraft(nextDraft, role);
+      onRefresh();
+    } catch (error) {
+      setBatchMessage(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+    }
+  };
+
+  const updateInboxAccount = async (txId: string, accountNumber: string, accountName: string, defaultTaxCode?: string) => {
     const draft = getBookingDraftByTransactionId(txId);
     if (!draft) return;
     const nextLines = [...draft.lines];
-    const targetIndex = nextLines.findIndex((line) => line.accountId !== '1200');
+    const bankAccountNumber = getConfiguredBankAccountNumber(
+      draft,
+      accounts ?? [],
+      bankAccountNumberForTransaction(draft.transactionId),
+      accounts === undefined,
+    );
+    if (!bankAccountNumber) {
+      setBatchMessage('Bankkonto ist nicht konfiguriert.');
+      return;
+    }
+    const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
     const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
     if (index < 0) return;
@@ -219,15 +288,24 @@ export default function InboxView({
         ?? defaultTaxCode
         ?? '',
     };
-    saveDraft({ ...draft, lines: nextLines }, role);
-    onRefresh();
+    await saveInboxDraft({ ...draft, lines: nextLines });
   };
 
-  const updateInboxTaxCase = (txId: string, taxCaseValue: string) => {
+  const updateInboxTaxCase = async (txId: string, taxCaseValue: string) => {
     const draft = getBookingDraftByTransactionId(txId);
     if (!draft) return;
     const nextLines = [...draft.lines];
-    const targetIndex = nextLines.findIndex((line) => line.accountId !== '1200');
+    const bankAccountNumber = getConfiguredBankAccountNumber(
+      draft,
+      accounts ?? [],
+      bankAccountNumberForTransaction(draft.transactionId),
+      accounts === undefined,
+    );
+    if (!bankAccountNumber) {
+      setBatchMessage('Bankkonto ist nicht konfiguriert.');
+      return;
+    }
+    const targetIndex = nextLines.findIndex((line) => line.accountId !== bankAccountNumber);
     const fallbackIndex = nextLines.findIndex((line) => line.accountId === '');
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex >= 0 ? fallbackIndex : 0;
     if (index < 0) return;
@@ -237,29 +315,118 @@ export default function InboxView({
       taxCaseKey,
       taxCode: toLegacyTaxCode(taxCaseKey) ?? (taxCaseKey ?? ''),
     };
-    saveDraft({ ...draft, lines: nextLines }, role);
-    onRefresh();
+    await saveInboxDraft({ ...draft, lines: nextLines });
   };
 
-  const commitInboxBookingText = (txId: string) => {
+  const commitInboxBookingText = async (txId: string) => {
     const draft = getBookingDraftByTransactionId(txId);
     if (!draft) return;
     const edited = bookingTextEdits[txId];
     if (edited === undefined || edited === draft.bookingText) return;
-    saveDraft({ ...draft, bookingText: edited }, role);
-    onRefresh();
+    await saveInboxDraft({ ...draft, bookingText: edited });
   };
 
-  const updateReceiptInline = (txId: string, hasReceipt: boolean) => {
-    setTransactionReceiptStatus(txId, hasReceipt, role);
-    onRefresh();
+  const readVlmDocument = async (file: File) => {
+    const mimeType = file.type as 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp';
+    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
+      setVlmError('Bitte wählen Sie eine PDF-, JPEG-, PNG- oder WebP-Datei.');
+      return;
+    }
+    if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
+      setVlmError('Das Dokument darf höchstens 10 MiB groß sein.');
+      return;
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    }
+    setVlmDocument({ mimeType, data: btoa(binary), fileName: file.name });
+    setVlmAnalysis(null);
+    setVlmError(null);
+  };
+
+  const analyzePreviewDocument = async () => {
+    if (!previewTx || !vlmDocument || !dataAdapter?.analyzeTransactionDocument) return;
+    setVlmBusy(true);
+    setVlmError(null);
+    try {
+      const result = await dataAdapter.analyzeTransactionDocument({
+        model: vlmModel || undefined,
+        transaction: {
+          id: previewTx.id,
+          date: previewTx.date,
+          amount: previewTx.amount,
+          currency: previewTx.currency,
+          type: previewTx.amount >= 0 ? 'income' : 'expense',
+          counterparty: previewTx.payee,
+          purpose: previewTx.description,
+          linkedInvoiceId: linkedInvoice?.id,
+          suggestedAccountNumber: previewDraft?.lines.find((line) => line.accountId)?.accountId,
+        },
+        document: vlmDocument,
+      });
+      setVlmAnalysis(result);
+    } catch (error) {
+      setVlmError(error instanceof Error ? error.message : 'Dokument konnte nicht analysiert werden.');
+    } finally {
+      setVlmBusy(false);
+    }
+  };
+
+  const applyVlmToDraft = async () => {
+    if (!previewTx || !previewDraft || !vlmAnalysis || !previewAccountEditable || !canMutate) return;
+    const extraction = vlmAnalysis.extraction;
+    const nextLines = [...previewDraft.lines];
+    const bankAccountNumber = getConfiguredBankAccountNumber(
+      previewDraft,
+      accounts ?? [],
+      bankAccountNumberForTransaction(previewDraft.transactionId),
+      accounts === undefined,
+    );
+    const targetIndex = bankAccountNumber
+      ? nextLines.findIndex((line) => line.accountId !== bankAccountNumber)
+      : -1;
+    const lineIndex = targetIndex >= 0
+      ? targetIndex
+      : bankAccountNumber
+        ? nextLines.findIndex((line) => line.accountId === '')
+        : -1;
+    const account = extraction.suggestedAccountNumber
+      ? accountOptions.find((candidate) => candidate.number === extraction.suggestedAccountNumber)
+      : undefined;
+    const taxCase = extraction.suggestedTaxCase && TAX_CASE_OPTIONS.some((option) => option.key === extraction.suggestedTaxCase)
+      ? normalizeTaxCaseKey(extraction.suggestedTaxCase)
+      : undefined;
+    if (lineIndex >= 0) {
+      const current = nextLines[lineIndex];
+      nextLines[lineIndex] = {
+        ...current,
+        ...(account ? { accountId: account.number, accountName: account.name } : {}),
+        ...(taxCase ? { taxCaseKey: taxCase, taxCode: toLegacyTaxCode(taxCase) ?? current.taxCode } : {}),
+        evidenceType: 'openrouter_vlm',
+        evidenceReference: `model=${vlmAnalysis.metadata.model};documentSha256=${vlmAnalysis.metadata.documentSha256}`,
+      };
+    }
+    const bookingText = previewDraft.bookingText.trim() ? undefined : extraction.paymentReference ?? extraction.invoiceNumber;
+    const externalReference = previewDraft.externalReference?.trim() ? undefined : extraction.invoiceNumber;
+    await saveInboxDraft({
+      ...previewDraft,
+      ...(bookingText ? { bookingText } : {}),
+      ...(externalReference ? { externalReference } : {}),
+      lines: nextLines,
+    });
+    setBatchMessage('VLM-Vorschlag in den Entwurf übernommen; Validierung bleibt maßgeblich.');
   };
 
   // Derive primary action for previewTx
   const previewAllowedActions = useMemo(() => {
     if (!previewDraft) return [];
-    return getAllowedActions(previewDraft.workflowStatus, permissionCtx, previewDraft.validationIssues);
-  }, [previewDraft, permissionCtx]);
+    const actions = getAllowedActions(previewDraft.workflowStatus, permissionCtx, previewDraft.validationIssues);
+    return previewTx?.isVirtualPosted
+      ? actions.filter((action) => !['save_draft', 'reverse', 'create_correction'].includes(action))
+      : actions.filter((action) => action !== 'save_draft');
+  }, [previewDraft, previewTx, permissionCtx]);
   const previewPrimaryAction = previewAllowedActions.find((a) => ['approve', 'post', 'submit_for_review'].includes(a));
 
   return (
@@ -267,26 +434,17 @@ export default function InboxView({
       {/* ── LEFT: table area ── */}
       <div className="flex flex-col h-full flex-1 min-w-0">
         {/* Header — compact two-row layout */}
-        <div className="px-6 pt-3 pb-0 border-b border-gray-100 shrink-0">
-          {/* Row 1: icon + title + Filter + Bankabgleich */}
+        <div className="px-6 pt-3 pb-0 border-b border-subtle shrink-0">
+          {/* Row 1: icon + title */}
           <div className="flex items-center gap-3 pb-3">
-            <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-[#ccff00] shrink-0">
+            <div className="w-8 h-8 bg-dark-base rounded-lg flex items-center justify-center text-accent shrink-0">
               <Inbox size={15} />
             </div>
             <div className="flex-1 min-w-0">
-              <h1 className="text-sm font-black text-gray-900 leading-tight">Buchungs-Inbox</h1>
-              <p className="text-xs text-gray-400 font-medium leading-tight">
+              <h1 className="text-sm font-black text-foreground leading-tight">Buchungs-Inbox</h1>
+              <p className="text-xs text-muted font-medium leading-tight">
                 Workflow-Queues, Validierungen und Freigaben.
               </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button className="h-8 flex items-center gap-1.5 px-3 bg-white border border-gray-200 rounded-full text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors">
-                <Filter size={13} />
-                Filter
-              </button>
-              <button className="h-8 px-4 bg-black rounded-full text-xs font-bold text-white hover:bg-gray-900 transition-colors">
-                Bankabgleich (n/a)
-              </button>
             </div>
           </div>
 
@@ -296,31 +454,23 @@ export default function InboxView({
             <div className="ml-auto flex items-center gap-1.5 shrink-0">
               <button
                 onClick={toggleSelectAllVisible}
-                className="h-7 px-2.5 rounded-full border border-gray-200 bg-white text-[11px] font-bold text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1 transition-colors"
+                className="h-7 px-2.5 rounded-full border border-border bg-surface text-[11px] font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1 transition-colors"
               >
                 <CheckSquare size={11} />
                 {allVisibleSelected ? 'Auswahl aufheben' : 'Sichtbare markieren'}
-              </button>
-              <button
-                onClick={selectSimilarToPreview}
-                disabled={!previewTx}
-                className="h-7 px-2.5 rounded-full border border-gray-200 bg-white text-[11px] font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40 inline-flex items-center gap-1 transition-colors"
-              >
-                <Wand2 size={11} />
-                Ähnliche markieren
               </button>
             </div>
           </div>
 
           {selectedIds.length > 0 && (
-            <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3 mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-sm font-medium text-gray-700">
+            <div className="rounded-xl border border-border bg-surface-muted/60 p-3 mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-medium text-foreground">
                 <span className="font-bold">{selectedIds.length}</span> Vorgänge markiert für Sammelverarbeitung
               </div>
               <div className="flex flex-wrap gap-2">
-                <div className="min-w-[16rem] max-w-[18rem]">
+                <div className="min-w-64 max-w-72">
                   <AccountCombobox
-                    accounts={mockAccounts}
+                    accounts={accountOptions}
                     valueAccountId={batchAccountSelection?.id ?? ''}
                     valueAccountName={batchAccountSelection?.name ?? ''}
                     placeholder="Sammel-Konto wählen..."
@@ -329,31 +479,36 @@ export default function InboxView({
                 </div>
                 <button
                   onClick={assignBatchAccount}
-                  className="h-9 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                  disabled={!canMutate}
+                  className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Konto zuweisen
                 </button>
                 <button
                   onClick={() => runBatchAction('request_receipt')}
-                  className="h-9 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                  disabled={!canMutate}
+                  className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Beleg anfordern
                 </button>
                 <button
                   onClick={() => runBatchAction('submit_for_review')}
-                  className="h-9 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                  disabled={!canMutate}
+                  className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
-                  Zur Prüfung
+                  {bookingActionLabels.submit_for_review}
                 </button>
                 <button
                   onClick={() => runBatchAction('approve')}
-                  className="h-9 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+                  disabled={!canMutate}
+                  className="h-9 px-3 rounded-full border border-border text-xs font-bold text-foreground hover:bg-surface-muted transition-colors"
                 >
                   Freigeben
                 </button>
                 <button
                   onClick={() => runBatchAction('post')}
-                  className="h-9 px-3 rounded-full bg-black text-white text-xs font-bold hover:bg-gray-900 transition-colors"
+                  disabled={!canMutate}
+                  className="h-9 px-3 rounded-full bg-dark-base text-background text-xs font-bold hover:bg-dark-2 transition-colors"
                 >
                   Sammel-Buchen
                 </button>
@@ -362,20 +517,20 @@ export default function InboxView({
           )}
 
           {batchMessage && (
-            <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-700">
+            <div className="rounded-xl border border-border bg-surface-muted px-4 py-2 text-sm text-foreground" aria-live="polite">
               {batchMessage}
             </div>
           )}
         </div>
 
         {/* Toolbar row with count + Einklappen */}
-        <div className="flex items-center justify-between px-6 py-2.5 border-b border-gray-100 bg-gray-50/40 shrink-0">
-          <span className="text-xs font-bold text-gray-400 uppercase tracking-wide">
+        <div className="flex items-center justify-between px-6 py-2.5 border-b border-subtle bg-surface-muted/40 shrink-0">
+          <span className="text-xs font-bold text-muted uppercase tracking-wide">
             {filtered.length} Vorgänge
           </span>
           <button
             onClick={() => setSidebarCollapsed((v) => !v)}
-            className="h-8 px-3 rounded-full border border-gray-200 bg-white text-xs font-bold text-gray-600 hover:bg-gray-50 inline-flex items-center gap-1.5 transition-colors"
+            className="h-8 px-3 rounded-full border border-border bg-surface text-xs font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1.5 transition-colors"
           >
             {sidebarCollapsed ? <PanelRightOpen size={13} /> : <PanelRightClose size={13} />}
             {sidebarCollapsed ? 'Einblenden' : 'Einklappen'}
@@ -386,30 +541,30 @@ export default function InboxView({
         <div className="flex-1 overflow-auto p-6">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="text-xs uppercase tracking-wider text-gray-400 font-bold border-b border-gray-100">
+              <tr className="text-xs uppercase tracking-wider text-muted font-bold border-b border-subtle">
                 <th scope="col" className="px-3 py-3 w-10">
                   <input
                     type="checkbox"
                     aria-label="Alle sichtbaren Vorgänge markieren"
                     checked={allVisibleSelected}
                     onChange={toggleSelectAllVisible}
-                    className="rounded border-gray-300"
+                    className="rounded border-border"
                   />
                 </th>
-                <th scope="col" className="px-3 py-3 w-[128px]">STATUS</th>
-                <th scope="col" className="px-3 py-3 w-[90px]">DATUM</th>
+                <th scope="col" className="px-3 py-3 w-32">STATUS</th>
+                <th scope="col" className="px-3 py-3 w-24">DATUM</th>
                 <th scope="col" className="px-3 py-3">EMPFÄNGER / ZWECK</th>
-                <th scope="col" className="px-3 py-3 text-right w-[180px]">ISSUES</th>
-                <th scope="col" className="px-3 py-3 text-right w-[130px]">BETRAG</th>
+                <th scope="col" className="px-3 py-3 text-right w-44">ISSUES</th>
+                <th scope="col" className="px-3 py-3 text-right w-32">BETRAG</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-border-subtle">
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-12">
-                    <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-8 text-center">
-                      <div className="text-sm font-bold text-gray-700">Keine Vorgänge in dieser Queue</div>
-                      <div className="mt-1 text-sm text-gray-500">Passe Filter oder Queue an, um Vorgänge anzuzeigen.</div>
+                    <div className="rounded-2xl border border-dashed border-border bg-surface-muted p-8 text-center">
+                      <div className="text-sm font-bold text-foreground">Keine Vorgänge in dieser Queue</div>
+                      <div className="mt-1 text-sm text-muted">Passe Filter oder Queue an, um Vorgänge anzuzeigen.</div>
                     </div>
                   </td>
                 </tr>
@@ -423,10 +578,9 @@ export default function InboxView({
                 return (
                   <tr
                     key={tx.id}
-                    onClick={() => setPreviewId((current) => (current === tx.id ? null : tx.id))}
-                    className={`hover:bg-gray-50/60 transition-colors cursor-pointer ${
-                      isSelectedPreview ? 'bg-gray-50/90 shadow-[inset_3px_0_0_0_#111827]' : ''
-                    } ${blockerCount > 0 ? 'shadow-[inset_1px_0_0_0_#fecaca]' : ''}`}
+                    className={`hover:bg-surface-muted/60 transition-colors ${
+                      isSelectedPreview ? 'bg-surface-muted/90 border-l-2 border-dark-1' : ''
+                    } ${blockerCount > 0 ? 'border-l-2 border-error-border' : ''}`}
                   >
                     <td className="px-3 py-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                       <input
@@ -434,7 +588,7 @@ export default function InboxView({
                         aria-label={`${tx.payee} markieren`}
                         checked={selectedSet.has(tx.id)}
                         onChange={() => toggleRowSelection(tx.id)}
-                        className="rounded border-gray-300"
+                        className="rounded border-border"
                       />
                     </td>
                     <td className="px-3 py-4 whitespace-nowrap align-top">
@@ -442,19 +596,27 @@ export default function InboxView({
                         {status.label}
                       </span>
                     </td>
-                    <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-500 font-medium align-top">
+                    <td className="px-3 py-4 whitespace-nowrap text-sm text-muted font-medium align-top">
                       {new Date(tx.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
                     </td>
                     <td className="px-3 py-4 align-top">
-                      <div className="font-bold text-gray-900 text-sm">{tx.payee}</div>
-                      <div className="text-xs text-gray-500 mt-0.5 line-clamp-1">{tx.description}</div>
+                      <button
+                        type="button"
+                        onClick={() => setPreviewId((current) => (current === tx.id ? null : tx.id))}
+                        aria-label={`${tx.payee} öffnen`}
+                        aria-pressed={isSelectedPreview}
+                        className="w-full text-left rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
+                      >
+                        <div className="font-bold text-foreground text-sm">{tx.payee}</div>
+                        <div className="text-xs text-muted mt-0.5 line-clamp-1">{tx.description}</div>
+                      </button>
                     </td>
                     <td className="px-3 py-4 text-right align-top">
                       <div className="flex flex-col items-end gap-1">
                         <IssueBadges transaction={tx} />
                       </div>
                     </td>
-                    <td className={`px-3 py-4 whitespace-nowrap text-sm font-bold text-right align-top ${tx.amount < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                    <td className={`px-3 py-4 whitespace-nowrap text-sm font-bold text-right align-top ${tx.amount < 0 ? 'text-error' : 'text-success'}`}>
                       {formatCurrency(tx.amount, tx.currency)}
                     </td>
                   </tr>
@@ -467,29 +629,29 @@ export default function InboxView({
 
       {/* ── RIGHT: editing sidebar ── */}
       <aside
-        className={`shrink-0 flex flex-col h-full border-l border-gray-100 transition-all duration-300 overflow-hidden ${
-          !sidebarCollapsed ? 'w-80 xl:w-[22rem] opacity-100' : 'w-0 opacity-0 pointer-events-none'
+        className={`shrink-0 flex flex-col h-full border-l border-subtle transition-all duration-300 overflow-hidden ${
+          !sidebarCollapsed ? 'w-80 xl:w-80 opacity-100' : 'w-0 opacity-0 pointer-events-none'
         }`}
         aria-hidden={sidebarCollapsed}
       >
         {!previewTx || !previewDraft ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400 text-sm p-6 text-center gap-3">
-            <Inbox size={28} className="text-gray-300" />
+          <div className="flex flex-col items-center justify-center h-full text-muted text-sm p-6 text-center gap-3">
+            <Inbox size={28} className="text-muted" />
             <span>Transaktion auswählen um die Schnellbuchung zu starten</span>
           </div>
         ) : (
           <>
             {/* Header card */}
-            <div className="p-4 border-b border-gray-100 shrink-0">
+            <div className="p-4 border-b border-subtle shrink-0">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="font-bold text-gray-900 leading-tight truncate">{previewTx.payee}</div>
-                  <div className="text-xs text-gray-400 mt-0.5">
+                  <div className="font-bold text-foreground leading-tight truncate">{previewTx.payee}</div>
+                  <div className="text-xs text-muted mt-0.5">
                     {new Date(previewTx.date).toLocaleDateString('de-DE')}
                     {previewDraft.externalReference ? ` · ${previewDraft.externalReference}` : ''}
                   </div>
                 </div>
-                <div className={`text-base font-bold shrink-0 ${previewTx.amount < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                <div className={`text-base font-bold shrink-0 ${previewTx.amount < 0 ? 'text-error' : 'text-success'}`}>
                   {formatCurrency(previewTx.amount, previewTx.currency)}
                 </div>
               </div>
@@ -498,7 +660,7 @@ export default function InboxView({
                   {getStatusPresentation(previewTx.workflowStatus).label}
                 </span>
                 {!previewTx.hasReceipt && (
-                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-gray-100 text-gray-600">
+                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-border-subtle text-muted">
                     Ohne Beleg
                   </span>
                 )}
@@ -509,44 +671,115 @@ export default function InboxView({
             <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5">
               {/* TRANSAKTIONSDETAILS */}
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-muted mb-2">
                   Transaktionsdetails
                 </div>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between gap-3">
-                    <span className="text-gray-500 shrink-0">Verwendungszweck</span>
-                    <span className="font-medium text-gray-800 text-right line-clamp-2">
+                    <span className="text-muted shrink-0">Verwendungszweck</span>
+                    <span className="font-medium text-foreground text-right line-clamp-2">
                       {previewTx.description ?? '—'}
                     </span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="text-gray-500 shrink-0">Buchungstext</span>
-                    <span className="font-medium text-gray-800 text-right">
+                    <span className="text-muted shrink-0">Buchungstext</span>
+                    <span className="font-medium text-foreground text-right">
                       {previewDraft.bookingText || '—'}
                     </span>
                   </div>
                   {previewTx.suggestion && (
                     <div className="flex justify-between gap-3">
-                      <span className="text-gray-500 shrink-0">Kategorie</span>
-                      <span className="font-medium text-gray-800 text-right">{previewTx.suggestion}</span>
+                      <span className="text-muted shrink-0">Kategorie</span>
+                      <span className="font-medium text-foreground text-right">{previewTx.suggestion}</span>
                     </div>
                   )}
                 </div>
               </div>
 
+              {/* LINKED EVIDENCE + CURRENT JOURNAL */}
+              <div className="space-y-3">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted mb-2">Verknüpfte Rechnung</div>
+                  {linkedInvoice ? (
+                    <div className="rounded-xl border border-border bg-surface-muted p-3 text-sm">
+                      <div className="flex items-center justify-between gap-2 font-bold text-foreground">
+                        <span>{linkedInvoice.number}</span>
+                        <span>{formatCurrency(linkedInvoice.amount, previewTx.currency)}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-muted">{linkedInvoice.client} · {new Date(linkedInvoice.date).toLocaleDateString('de-DE')} · {linkedInvoice.status}</div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-border p-3 text-xs text-muted">Keine Rechnung verknüpft.</div>
+                  )}
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted mb-2">Aktuelle Buchungszeilen</div>
+                  <div className="rounded-xl border border-border divide-y divide-border-subtle">
+                    {previewDraft.lines.map((line) => (
+                      <div key={line.id} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                        <span className="min-w-0 truncate text-foreground">{line.accountId} · {line.accountName}</span>
+                        <span className="shrink-0 font-semibold text-foreground">{line.type} {formatCurrency(Number(line.amount), previewTx.currency)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* VLM DOCUMENT EVIDENCE */}
+              {dataAdapter?.analyzeTransactionDocument ? (
+                <div className="space-y-3 rounded-2xl border border-border bg-surface-muted/50 p-3">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-muted">Beleg mit VLM prüfen</div>
+                    <p className="mt-1 text-xs text-muted">OpenRouter erstellt nur einen Vorschlag. Buchen und Validieren bleiben deterministisch.</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex h-9 cursor-pointer items-center rounded-full border border-border bg-surface px-3 text-xs font-bold text-foreground hover:bg-surface-muted">
+                      Beleg auswählen
+                      <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readVlmDocument(file); }} />
+                    </label>
+                    {vlmDocument ? <span className="max-w-full truncate text-xs text-muted">{vlmDocument.fileName}</span> : null}
+                  </div>
+                  {vlmConfig?.configured ? (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-bold text-muted" htmlFor="pro-vlm-model">Modell</label>
+                      <select id="pro-vlm-model" value={vlmModel} onChange={(event) => setVlmModel(event.target.value)} className="h-9 w-full rounded-xl border border-border bg-surface px-2 text-xs text-foreground">
+                        {vlmConfig.models.map((model) => <option key={model} value={model}>{model}</option>)}
+                      </select>
+                    </div>
+                  ) : <p className="text-xs text-muted">OpenRouter ist auf dieser Verbindung nicht konfiguriert.</p>}
+                  <button type="button" onClick={() => void analyzePreviewDocument()} disabled={!vlmConfig?.configured || !vlmDocument || vlmBusy} className="h-9 rounded-full bg-dark-base px-3 text-xs font-bold text-background transition-colors hover:bg-dark-2 disabled:cursor-not-allowed disabled:opacity-40" aria-busy={vlmBusy}>
+                    {vlmBusy ? 'Prüfung läuft…' : 'Analysieren'}
+                  </button>
+                  {vlmError ? <p className="text-xs text-error" role="alert">{vlmError}</p> : null}
+                  {vlmAnalysis ? (
+                    <div className="space-y-2 rounded-xl border border-border bg-surface p-3 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2 font-bold text-foreground"><span>{vlmAnalysis.extraction.documentType} · {vlmAnalysis.extraction.invoiceNumber ?? 'ohne Nummer'}</span><span>{vlmAnalysis.metadata.model}</span></div>
+                      <div className="grid grid-cols-2 gap-1 text-muted"><span>Betrag: {vlmAnalysis.deterministicChecks.amountMatches ? '✓ passend' : '⚠ prüfen'}</span><span>Währung: {vlmAnalysis.deterministicChecks.currencyMatches ? '✓ passend' : '⚠ prüfen'}</span><span>Provider: {vlmAnalysis.metadata.provider ?? '—'}</span><span>Evidence: {vlmAnalysis.extraction.evidence.length}</span></div>
+                      {vlmAnalysis.extraction.warnings.length > 0 ? <p className="text-warning">{vlmAnalysis.extraction.warnings.join(' ')}</p> : null}
+                      {previewAccountEditable && canMutate ? <button type="button" onClick={() => void applyVlmToDraft()} className="h-8 rounded-full border border-border px-3 text-xs font-bold text-foreground hover:bg-surface-muted">Auf Entwurf anwenden</button> : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               {/* SCHNELLBUCHUNG */}
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-3">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-muted mb-3">
                   Schnellbuchung
                 </div>
                 <div className="space-y-3">
+                  {!previewBankAccountNumber && (
+                    <p className="text-xs text-error" role="alert">
+                      Bankkonto ist nicht konfiguriert. Schnellbuchung ist deaktiviert.
+                    </p>
+                  )}
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Konto</label>
+                    <label className="block text-xs font-bold text-muted mb-1">Konto</label>
                     <AccountCombobox
-                      accounts={mockAccounts}
+                      accounts={accountOptions}
                       valueAccountId={previewCounterLine?.accountId ?? ''}
                       valueAccountName={previewCounterLine?.accountName ?? ''}
-                      disabled={!previewAccountEditable}
+                      disabled={!previewAccountEditable || !previewBankAccountNumber || !canMutate}
                       onSelect={(account) =>
                         updateInboxAccount(previewTx.id, account.number, account.name, account.defaultTaxCode)
                       }
@@ -554,12 +787,12 @@ export default function InboxView({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Steuerfall</label>
+                    <label className="block text-xs font-bold text-muted mb-1">Steuerfall</label>
                     <select
                       value={normalizeTaxCaseKey(previewCounterLine?.taxCaseKey ?? previewCounterLine?.taxCode) ?? ''}
-                      disabled={!previewAccountEditable}
+                      disabled={!previewAccountEditable || !previewBankAccountNumber || !canMutate}
                       onChange={(e) => updateInboxTaxCase(previewTx.id, e.target.value)}
-                      className="h-10 w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white disabled:bg-gray-50"
+                      className="h-10 w-full border border-border rounded-xl px-3 py-2 text-sm bg-surface disabled:bg-surface-muted"
                     >
                       <option value="">Keine</option>
                       {TAX_CASE_OPTIONS.map((option) => (
@@ -571,45 +804,25 @@ export default function InboxView({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Beleg</label>
-                    {previewTx.hasReceipt ? (
-                      <button
-                        onClick={() => updateReceiptInline(previewTx.id, false)}
-                        disabled={!previewAccountEditable}
-                        className="w-full h-10 px-3 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-bold hover:bg-emerald-100 disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                      >
-                        <FileText size={14} /> Beleg vorhanden
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => updateReceiptInline(previewTx.id, true)}
-                        disabled={!previewAccountEditable}
-                        className="w-full h-10 px-3 rounded-xl border border-dashed border-gray-300 bg-white text-gray-500 text-sm font-bold hover:bg-gray-50 disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                      >
-                        <Upload size={14} /> + Beleg hinzufügen
-                      </button>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Notiz</label>
+                    <label className="block text-xs font-bold text-muted mb-1">Notiz</label>
                     <textarea
                       value={notesEdits[previewTx.id] ?? ''}
                       onChange={(e) =>
                         setNotesEdits((prev) => ({ ...prev, [previewTx.id]: e.target.value }))
                       }
+                      disabled={!previewAccountEditable || !canMutate}
                       placeholder="Optionale Notiz..."
                       rows={3}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none"
+                      className="w-full border border-border rounded-xl px-3 py-2 text-sm resize-none"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 mb-1">Buchungstext bearbeiten</label>
+                    <label className="block text-xs font-bold text-muted mb-1">Buchungstext bearbeiten</label>
                     <input
                       type="text"
                       value={bookingTextEdits[previewTx.id] ?? previewDraft.bookingText ?? ''}
-                      disabled={!previewAccountEditable}
+                      disabled={!previewAccountEditable || !canMutate}
                       onChange={(e) =>
                         setBookingTextEdits((prev) => ({ ...prev, [previewTx.id]: e.target.value }))
                       }
@@ -618,7 +831,7 @@ export default function InboxView({
                         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
                       }}
                       placeholder="Buchungstext eingeben"
-                      className="h-10 w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white disabled:bg-gray-50"
+                      className="h-10 w-full border border-border rounded-xl px-3 py-2 text-sm bg-surface disabled:bg-surface-muted"
                     />
                   </div>
                 </div>
@@ -626,16 +839,17 @@ export default function InboxView({
             </div>
 
             {/* Action bar */}
-            <div className="p-4 border-t border-gray-100 flex gap-2 shrink-0">
+            <div className="p-4 border-t border-subtle flex gap-2 shrink-0">
               <button
                 onClick={() => handleInlineAction(previewTx)}
-                className="flex-1 py-3 rounded-xl bg-black text-white font-bold text-sm hover:bg-gray-900 transition-colors"
+                disabled={!previewPrimaryAction}
+                className="flex-1 py-3 rounded-xl bg-dark-base text-background font-bold text-sm hover:bg-dark-2 transition-colors disabled:opacity-40"
               >
-                {nextActionLabel(previewPrimaryAction)}
+                {previewPrimaryAction ? nextActionLabel(previewPrimaryAction) : 'Keine Aktion'}
               </button>
               <button
                 onClick={() => onOpenTransaction(previewTx.id)}
-                className="px-5 py-3 rounded-xl border border-gray-200 font-bold text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                className="px-5 py-3 rounded-xl border border-border font-bold text-sm text-foreground hover:bg-surface-muted transition-colors"
               >
                 Erweitern
               </button>

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createSingleTenantScope, type AuditEntry, type Invoice, type Offer } from '../../../packages/server-core/src';
+import {
+  billingLineItemSchema,
+  createSingleTenantScope,
+  type AuditEntry,
+  type Invoice,
+  type Offer,
+} from '../../../packages/server-core/src';
 import {
   applyOfferDecision,
   createInvoiceFromOffer,
@@ -80,14 +86,14 @@ const baseOffer: Offer = {
   amount: 119,
   status: 'draft',
   items: [
-    {
+    billingLineItemSchema.parse({
       description: 'Consulting',
       quantity: 1,
       price: 100,
       total: 100,
       articleId: 'article-1',
       category: 'Services',
-    },
+    }),
   ],
   history: [],
 };

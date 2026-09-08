@@ -2,7 +2,7 @@
   "name": "billme-workspace",
   "private": true,
   "license": "FSL-1.1-ALv2",
-  "packageManager": "pnpm@10.0.0",
+  "packageManager": "pnpm@10.1.0",
   "scripts": {
     "dev": "pnpm -C apps/desktop dev",
     "dev:pro": "pnpm -C apps/pro-desktop dev",
@@ -13,6 +13,7 @@
     "dev:web": "pnpm -C apps/web dev",
     "dev:web-pro": "pnpm -C apps/web-pro dev",
     "dev:renderer": "pnpm -C apps/desktop dev:renderer",
+    "dev:editor": "vite --config packages/desktop-designer/playground/vite.config.ts --host 127.0.0.1 --port 4177",
     "build": "pnpm -C apps/desktop build",
     "build:demo": "pnpm -C apps/demo build",
     "build:landing": "pnpm -C apps/landing-page build",
@@ -25,6 +26,10 @@
     "preview:landing": "pnpm -C apps/landing-page preview",
     "db:generate": "pnpm -C apps/desktop db:generate",
     "db:studio": "pnpm -C apps/desktop db:studio",
+    "pglite:migrate": "node packages/pglite-migration-cli/bin/billme-pglite-migrate.mjs",
+    "check:raw-sql": "node scripts/raw-sql-guard.mjs",
+    "ci:prepare-sqlite-tests": "node scripts/prepare-better-sqlite3.mjs",
+    "ci:prepare-electron": "node scripts/prepare-electron.mjs",
     "dist": "pnpm -C apps/desktop dist",
     "docker:server-mode": "pnpm docker:server-mode:up",
     "docker:server-mode:down": "docker compose --env-file .env.server-mode -f docker-compose.server-mode.yml down",
@@ -45,14 +50,9 @@
     "test:e2e:server:smoke:pro": "node tests/e2e/server/run-suite.mjs smoke pro",
     "test:e2e:server:full": "node tests/e2e/server/run-suite.mjs full",
     "test:e2e:server:full:lite": "node tests/e2e/server/run-suite.mjs full lite",
-    "test:e2e:server:full:pro": "node tests/e2e/server/run-suite.mjs full pro"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "better-sqlite3",
-      "keytar"
-    ]
+    "test:e2e:server:full:pro": "node tests/e2e/server/run-suite.mjs full pro",
+    "test:e2e:server:full:pro:nonhappy": "node tests/e2e/server/run-suite.mjs full pro-nonhappy",
+    "test:e2e:artifact-hygiene": "node tests/e2e/server/artifact-hygiene.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2"

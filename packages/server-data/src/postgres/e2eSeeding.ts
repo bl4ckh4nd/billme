@@ -3,12 +3,13 @@ import type {
   LedgerAccount,
   TaxCaseAccountMapping,
 } from '@billme/accounting-shared';
-import { createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile } from '@billme/server-core';
+import { billingLineItemSchema, createSingleTenantScope, type Client, type Invoice, type Offer, type RecurringProfile } from '@billme/server-core';
 import {
   createPostgresClientRepository,
   createPostgresInvoiceRepository,
   createPostgresOfferRepository,
   createPostgresRecurringProfileRepository,
+  createPostgresTenantRepository,
   saveServerSettings,
 } from './billing.js';
 import type { PostgresQueryable } from './connection.js';
@@ -125,6 +126,7 @@ export interface ServerModeSeedOptions {
   tenantId: string;
   namespace?: string;
   now?: string;
+  includeEurCashFixtures?: boolean;
 }
 
 export interface ServerModeBillingSeed {
@@ -389,7 +391,7 @@ const buildBillingSeed = (
       amount: 1250,
       status: 'paid',
       dunningLevel: 0,
-      items: [{ description: 'Implementierung Sprint 1', quantity: 10, price: 125, total: 1250 }],
+      items: [billingLineItemSchema.parse({ description: 'Implementierung Sprint 1', quantity: 10, price: 125, total: 1250 })],
       payments: [{ id: seedId(namespace, 'payment', 'paid'), date: '2026-01-20', amount: 1250, method: 'Bank' }],
       history: [{ date: '2026-01-15', action: 'Rechnung erstellt' }],
       createdAt: now,
@@ -412,7 +414,7 @@ const buildBillingSeed = (
       amount: 1890,
       status: 'open',
       dunningLevel: 0,
-      items: [{ description: 'Monatliche Betreuung', quantity: 1, price: 1890, total: 1890 }],
+      items: [billingLineItemSchema.parse({ description: 'Monatliche Betreuung', quantity: 1, price: 1890, total: 1890 })],
       payments: [],
       history: [{ date: '2026-02-10', action: 'Rechnung erstellt' }],
       createdAt: now,
@@ -436,7 +438,7 @@ const buildBillingSeed = (
       validUntil: '2026-03-15',
       amount: 990,
       status: 'open',
-      items: [{ description: 'UX Audit', quantity: 1, price: 990, total: 990 }],
+      items: [billingLineItemSchema.parse({ description: 'UX Audit', quantity: 1, price: 990, total: 990 })],
       history: [{ date: '2026-03-01', action: 'Angebot erstellt' }],
       createdAt: now,
       updatedAt: now,
@@ -453,7 +455,8 @@ const buildBillingSeed = (
       interval: 'monthly',
       nextRun: '2026-04-01',
       amount: 150,
-      items: [{ description: 'Monatliche Wartung', quantity: 1, price: 150, total: 150 }],
+      taxMode: 'standard_vat',
+      items: [billingLineItemSchema.parse({ description: 'Monatliche Wartung', quantity: 1, price: 150, total: 150 })],
       createdAt: now,
       updatedAt: now,
     },
@@ -516,6 +519,24 @@ export const buildServerModeProTenantSeed = (options: ServerModeSeedOptions): Se
         createdAt: now,
         updatedAt: now,
       },
+      {
+        id: seedId(namespace, 'ledger', '1776'),
+        chart: 'SKR03',
+        accountNumber: '1776',
+        name: 'Umsatzsteuer 19% USt',
+        source: 'server-mode-e2e',
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: seedId(namespace, 'ledger', '1576'),
+        chart: 'SKR03',
+        accountNumber: '1576',
+        name: 'Vorsteuer 19% USt',
+        source: 'server-mode-e2e',
+        createdAt: now,
+        updatedAt: now,
+      },
     ],
     taxCases: [
       {
@@ -537,6 +558,17 @@ export const buildServerModeProTenantSeed = (options: ServerModeSeedOptions): Se
         requiresCounterpartyVatId: false,
         requiresCountry: false,
         requiresEvidence: false,
+        active: true,
+        updatedAt: now,
+      },
+      {
+        key: 'EU_B2B_SERVICE_RC',
+        label: 'EU-Dienstleistung Reverse Charge',
+        mechanism: 'reverse_charge',
+        defaultRate: 0,
+        requiresCounterpartyVatId: true,
+        requiresCountry: true,
+        requiresEvidence: true,
         active: true,
         updatedAt: now,
       },
@@ -618,6 +650,34 @@ export const buildServerModeProTenantSeed = (options: ServerModeSeedOptions): Se
         createdAt: now,
         updatedAt: now,
       },
+      ...(options.includeEurCashFixtures ? [
+        {
+          id: seedId(namespace, 'transaction', 'eur-income'),
+          tenantId: options.tenantId,
+          accountId: bankAccountId,
+          date: '2025-03-01',
+          amount: 119,
+          type: 'income' as const,
+          counterparty: 'EÜR Testkunde',
+          purpose: 'EÜR Testzahlung Umsatz',
+          status: 'booked' as const,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: seedId(namespace, 'transaction', 'eur-expense'),
+          tenantId: options.tenantId,
+          accountId: bankAccountId,
+          date: '2025-03-02',
+          amount: -59.5,
+          type: 'expense' as const,
+          counterparty: 'EÜR Hostinganbieter',
+          purpose: 'EÜR Testzahlung Aufwand',
+          status: 'booked' as const,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ] : []),
     ],
     templates: [
       {
@@ -735,6 +795,15 @@ export const buildServerModeProTenantSeed = (options: ServerModeSeedOptions): Se
         datevBuKey: '81',
         updatedAt: now,
       },
+      {
+        id: seedId(namespace, 'tax-mapping', 'eu-service-datev'),
+        chart: 'SKR03',
+        taxCaseKey: 'EU_B2B_SERVICE_RC',
+        role: 'datev_bu',
+        accountNumber: '8400',
+        datevBuKey: '94',
+        updatedAt: now,
+      },
     ],
     accountSuggestionRules: [
       {
@@ -766,6 +835,17 @@ const applyServerModeBillingSeed = async (
   const offerRepo = createPostgresOfferRepository(db);
   const recurringProfileRepo = createPostgresRecurringProfileRepository(db);
   const now = seed.clients[0]?.createdAt ?? DEFAULT_TIMESTAMP;
+  const tenantRepo = createPostgresTenantRepository(db);
+  await tenantRepo.save({
+    id: seed.tenantId,
+    slug: seed.namespace,
+    displayName: `${product === 'pro' ? 'Pro' : 'Lite'} E2E ${seed.namespace}`,
+    product,
+    deploymentMode: 'single-tenant',
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  });
   await saveServerSettings(db, {
     tenantId: seed.tenantId,
     settingsJson: JSON.stringify(seed.settings),

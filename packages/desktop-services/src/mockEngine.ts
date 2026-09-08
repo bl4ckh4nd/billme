@@ -21,12 +21,18 @@ import {
   calculateInvoiceTaxSnapshot,
   chooseDefaultBillingAddress,
   chooseDefaultBillingEmail,
+  createCorrectionDocument,
+  createDeliveryNoteFromOrder,
+  createInvoiceRevision,
+  createOrderConfirmationFromOffer,
+  createSettlementInvoice,
   ensureDefaultProjectForClient as ensureDefaultProjectForClientDomain,
   finalizeDocumentNumber,
   prepareClientForUpsert,
   releaseDocumentNumber,
   reserveDocumentNumber,
   resolveInvoiceTaxMode,
+  listDocumentChain,
 } from '@billme/server-core/services';
 import type {
   DocumentNumberKind,
@@ -1370,6 +1376,56 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       finalizeNumber(reservation.reservationId, invoice.id);
       return structuredClone(invoice) as IpcResult<K>;
     }
+    case 'documents:chainCreate': {
+      const input = args as IpcArgs<'documents:chainCreate'>;
+      const scope = { tenantId: 'default', product, deploymentMode: 'single-tenant' as const };
+      const dependencies = {
+        invoiceRepo: {
+          list: () => invoices,
+          getById: (_scope: typeof scope, id: string) => invoices.find((invoice) => invoice.id === id) ?? null,
+          save: (_scope: typeof scope, document: unknown) => {
+            const invoice = document as Invoice;
+            invoices.unshift(invoice);
+            return invoice;
+          },
+          remove: (_scope: typeof scope, id: string) => {
+            const index = invoices.findIndex((invoice) => invoice.id === id);
+            if (index >= 0) invoices.splice(index, 1);
+          },
+        },
+        offerRepo: {
+          getById: (_scope: typeof scope, id: string) => offers.find((offer) => offer.id === id) ?? null,
+        },
+        auditLog: { append: () => undefined },
+      };
+      const chainDependencies = dependencies as unknown as Parameters<typeof createOrderConfirmationFromOffer>[1];
+      const document = input.operation === 'order_confirmation'
+        ? createOrderConfirmationFromOffer(scope, chainDependencies, input as Parameters<typeof createOrderConfirmationFromOffer>[2])
+        : input.operation === 'delivery_note'
+          ? createDeliveryNoteFromOrder(scope, chainDependencies, input as unknown as Parameters<typeof createDeliveryNoteFromOrder>[2])
+          : input.operation === 'settlement_invoice'
+            ? createSettlementInvoice(scope, chainDependencies, input as unknown as Parameters<typeof createSettlementInvoice>[2])
+            : input.operation === 'correction'
+              ? createCorrectionDocument(scope, chainDependencies, input as unknown as Parameters<typeof createCorrectionDocument>[2])
+              : createInvoiceRevision(scope, chainDependencies, input as Parameters<typeof createInvoiceRevision>[2]);
+      return structuredClone(document) as IpcResult<K>;
+    }
+    case 'documents:chainList': {
+      const { rootDocumentId } = args as IpcArgs<'documents:chainList'>;
+      const scope = { tenantId: 'default', product, deploymentMode: 'single-tenant' as const };
+      const dependencies = {
+        invoiceRepo: {
+          list: () => invoices,
+          getById: (_scope: typeof scope, id: string) => invoices.find((invoice) => invoice.id === id) ?? null,
+          save: (_scope: typeof scope, document: unknown) => document as Invoice,
+          remove: () => undefined,
+        },
+        offerRepo: { getById: () => null },
+        auditLog: { append: () => undefined },
+      };
+      const chainDependencies = dependencies as unknown as Parameters<typeof listDocumentChain>[1];
+      return structuredClone(listDocumentChain(scope, chainDependencies, rootDocumentId)) as IpcResult<K>;
+    }
 
     case 'templates:list': {
       const { kind } = args as IpcArgs<'templates:list'>;
@@ -2073,6 +2129,11 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       return rows.slice(offset, offset + limit) as IpcResult<K>;
     }
 
+    case 'pro:getJournalEntryById': {
+      const { entryId } = args as IpcArgs<'pro:getJournalEntryById'>;
+      return (mockJournalEntries.find((row) => row.id === entryId) ?? null) as IpcResult<K>;
+    }
+
     case 'pro:getLedgerBalances': {
       const { asOfDate } = args as IpcArgs<'pro:getLedgerBalances'>;
       const rows = mockJournalEntries
@@ -2191,7 +2252,7 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       asset.status = proceeds > 0 ? 'verkauft' : 'stillgelegt';
       asset.disposalDate = disposalDate;
       asset.disposalProceeds = proceeds;
-      return { asset, residualBookValue: asset.residualValue, gainLoss: proceeds - asset.residualValue } as IpcResult<K>;
+      return { asset, residualBookValue: asset.residualValue, gainLoss: proceeds - asset.residualValue, journalEntryId: `mock-disposal:${assetId}` } as IpcResult<K>;
     }
 
     case 'pro:exportDatevBuchungsstapel': {

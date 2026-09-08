@@ -1,0 +1,523 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  calculateBwa01,
+  calculateHgbBilanz,
+  calculateHgbGuv,
+  calculateManagementGuv,
+  calculateSusa,
+  reconcileEurToLedger,
+} from './reporting.js';
+import { fiscalYearForDate, fiscalYearRange } from '@billme/accounting-shared';
+import type { ReportRequest } from '@billme/accounting-shared';
+import { getPublicReportCatalogs } from './catalogs/publicReportCatalogs.js';
+
+const mappings = [
+  { accountNumber: '1000', statement: 'hgb-bilanz' as const, position: 'assets.current.cash', side: 'asset' as const, label: 'Bank' },
+  { accountNumber: '3000', statement: 'hgb-bilanz' as const, position: 'equity', side: 'liability' as const, label: 'Eigenkapital' },
+  { accountNumber: '4000', statement: 'bwa01' as const, position: 'material-expense', label: 'Materialaufwand' },
+  { accountNumber: '4000', statement: 'management-guv' as const, position: 'variable-costs', label: 'Variable Kosten' },
+  { accountNumber: '4000', statement: 'hgb-guv' as const, position: 'material', label: 'Materialaufwand' },
+  { accountNumber: '4000', statement: 'eur' as const, position: 'expense', label: 'Betriebsausgaben' },
+  { accountNumber: '8000', statement: 'bwa01' as const, position: 'revenue', label: 'Umsatzerlöse' },
+  { accountNumber: '8000', statement: 'management-guv' as const, position: 'revenue', label: 'Betriebliche Erlöse' },
+  { accountNumber: '8000', statement: 'hgb-guv' as const, position: 'revenue', label: 'Umsatzerlöse' },
+  { accountNumber: '8000', statement: 'eur' as const, position: 'income', label: 'Betriebseinnahmen' },
+];
+
+const request = (overrides: Partial<ReportRequest> = {}): ReportRequest => ({
+  profile: { size: 'small', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
+  from: '2025-07-01',
+  to: '2025-07-31',
+  ledger: {
+    entries: [
+      { postingDate: '2025-06-30', lines: [{ accountNumber: '1000', debit: 1000, credit: 0 }, { accountNumber: '3000', debit: 0, credit: 1000 }] },
+      { postingDate: '2025-07-10', lines: [{ accountNumber: '1000', debit: 1000, credit: 0 }, { accountNumber: '8000', debit: 0, credit: 1000 }] },
+      { postingDate: '2025-07-11', lines: [{ accountNumber: '4000', debit: 400, credit: 0 }, { accountNumber: '1000', debit: 0, credit: 400 }] },
+    ],
+  },
+  mappings,
+  ...overrides,
+});
+
+test('fiscal-year helper uses the start year for non-calendar years', () => {
+  assert.equal(fiscalYearForDate('2025-06-30', '07-01'), 2024);
+  assert.equal(fiscalYearForDate('2025-07-01', '07-01'), 2025);
+  assert.equal(fiscalYearForDate('2025-04-14', '04-15'), 2024);
+  assert.equal(fiscalYearForDate('2025-04-15', '04-15'), 2025);
+  assert.deepEqual(fiscalYearRange(2025, '07-01'), {
+    fiscalYear: 2025,
+    start: '2025-07-01',
+    end: '2026-06-30',
+    label: '2025/2026',
+  });
+  assert.deepEqual(fiscalYearRange(2025, '04-15'), {
+    fiscalYear: 2025,
+    start: '2025-04-15',
+    end: '2026-04-14',
+    label: '2025/2026',
+  });
+  assert.equal(fiscalYearRange(2023, '03-01').end, '2024-02-29');
+  assert.equal(fiscalYearRange(2024, '03-01').end, '2025-02-28');
+});
+
+test('SuSa carries opening balances and cent-exact turnover', () => {
+  const report = calculateSusa(request());
+  assert.deepEqual(report.rows.find((row) => row.accountNumber === '1000'), {
+    accountNumber: '1000', openingBalance: 1000, debitTurnover: 1000, creditTurnover: 400,
+    closingBalance: 1600, mappedTo: 'assets.current.cash', label: 'Bank',
+  });
+  assert.deepEqual(report.totals, { debit: 1400, credit: 1400, balance: 0 });
+  assert.equal(report.snapshot.fiscalYear, 2025);
+});
+
+test('SuSa does not require report-category mappings', () => {
+  const report = calculateSusa(request({ mappings: [] }));
+  assert.equal(report.mappingHealth.blocking, false);
+  assert.deepEqual(report.mappingHealth.unmappedAccounts, []);
+  assert.equal(report.rows.length, 4);
+});
+
+test('BWA01, HGB GKV and HGB Bilanz are derived from the same neutral ledger', () => {
+  const input = request();
+  assert.equal(calculateBwa01(input).totals.operatingResult, 600);
+  assert.equal(calculateHgbGuv(input).rows.find((row) => row.position === 'revenue')?.amount, 1000);
+  assert.equal(calculateHgbGuv(input).netResult, 600);
+  const balance = calculateHgbBilanz(input);
+  assert.deepEqual(balance.totals, { assets: 1600, liabilities: 1600, delta: 0 });
+  assert.equal(balance.liabilities.find((row) => row.position === 'equity.result')?.amount, 600);
+});
+
+test('EÜR reconciliation is calendar-year-only and compares cash with ledger', () => {
+  assert.throws(() => reconcileEurToLedger(request()), /calendar fiscal year/);
+  const report = reconcileEurToLedger(request({
+    profile: { size: 'micro', fiscalYearStart: '01-01' },
+    from: '2025-01-01', to: '2025-12-31',
+    cash: { entries: [
+      { id: 'income', date: '2025-07-10', amount: 1000, kind: 'income', accountNumber: '8000' },
+      { id: 'expense', date: '2025-07-11', amount: 400, kind: 'expense', accountNumber: '4000' },
+    ] },
+  }));
+  assert.deepEqual(report.differences, { income: 0, expenses: 0, result: 0 });
+  assert.deepEqual(report.unmatchedCashEntries, []);
+});
+
+test('missing licensed mappings block categorized reports instead of prefix-inference', () => {
+  const unmapped = request({
+    profile: { size: 'small', fiscalYearStart: '01-01' },
+    from: '2025-01-01',
+    to: '2025-12-31',
+    ledger: { entries: [{ postingDate: '2025-05-01', lines: [
+      { accountNumber: '8400', debit: 0, credit: 500 },
+      { accountNumber: '1000', debit: 500, credit: 0 },
+    ] }] },
+    mappings: [],
+  });
+  const bwa = calculateBwa01(unmapped);
+  assert.deepEqual(bwa.mappingHealth.unmappedAccounts, ['1000', '8400']);
+  assert.equal(bwa.mappingHealth.inferredAccounts, 0);
+  assert.equal(bwa.mappingHealth.blocking, true);
+  assert.deepEqual(bwa.rows, []);
+  assert.equal(calculateManagementGuv(unmapped).mappingHealth.blocking, true);
+  assert.equal(calculateHgbGuv(unmapped).mappingHealth.blocking, true);
+  assert.equal(calculateHgbBilanz(unmapped).mappingHealth.blocking, true);
+});
+
+test('report families require their own statement mapping while balance-only accounts remain irrelevant', () => {
+  const revenueOnlyHgb = request({
+    ledger: { entries: [{ postingDate: '2025-07-10', lines: [{ accountNumber: '8000', debit: 0, credit: 1000 }] }] },
+    mappings: [{ accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' }],
+  });
+  assert.equal(calculateBwa01(revenueOnlyHgb).mappingHealth.blocking, true);
+  assert.deepEqual(calculateBwa01(revenueOnlyHgb).rows, []);
+
+  const balanceOnly = request({
+    ledger: { entries: [{ postingDate: '2025-07-10', lines: [{ accountNumber: '1576', debit: 1000, credit: 0 }] }] },
+    mappings: [{ accountNumber: '1576', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' }],
+  });
+  assert.deepEqual(calculateBwa01(balanceOnly).mappingHealth.unmappedAccounts, []);
+  assert.equal(calculateBwa01(balanceOnly).mappingHealth.blocking, false);
+  assert.deepEqual(calculateHgbGuv(balanceOnly).mappingHealth.unmappedAccounts, []);
+  assert.deepEqual(calculateHgbBilanz(balanceOnly).mappingHealth.unmappedAccounts, []);
+});
+
+test('catalog-driven reports emit complete ordered positions and formulas', () => {
+  const bwa = calculateBwa01(request());
+  const bwaCatalog = getPublicReportCatalogs(2025).find((catalog) => catalog.kind === 'bwa01' && catalog.scope === 'small')!;
+  assert.deepEqual(bwa.rows.map((row) => row.position), bwaCatalog.positions.map((position) => position.key));
+  assert.equal(bwa.rows.find((row) => row.position === 'gross-profit')?.formula, 'total-output + material-expense');
+  assert.equal(bwa.mappingHealth.blocking, false);
+
+  const hgb = calculateHgbGuv(request());
+  const hgbCatalog = getPublicReportCatalogs(2025).find((catalog) => catalog.kind === 'gkv' && catalog.scope === 'small')!;
+  assert.deepEqual(hgb.rows.map((row) => row.position), hgbCatalog.positions.map((position) => position.key));
+  assert.equal(hgb.rows.find((row) => row.position === 'annual-result')?.formula, 'result-after-tax + other-tax');
+});
+
+test('2026 reports select 2026 catalogs and unsupported years fail closed', () => {
+  const input = request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: '2026-01-01',
+    to: '2026-12-31',
+    ledger: { entries: [
+      { postingDate: '2026-07-10', lines: [
+        { accountNumber: '1000', debit: 1000, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 1000 },
+      ] },
+      { postingDate: '2026-07-11', lines: [
+        { accountNumber: '4000', debit: 400, credit: 0 },
+        { accountNumber: '1000', debit: 0, credit: 400 },
+      ] },
+    ] },
+  });
+  for (const report of [calculateBwa01(input), calculateManagementGuv(input), calculateHgbGuv(input), calculateHgbBilanz(input)]) {
+    assert.equal(report.snapshot.fiscalYear, 2026);
+  }
+  assert.equal(calculateBwa01(input).totals.operatingResult, 600);
+  assert.equal(calculateManagementGuv(input).netResult, 600);
+  assert.equal(calculateHgbGuv(input).netResult, 600);
+
+  const unsupported = request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: '2027-01-01',
+    to: '2027-12-31',
+  });
+  for (const calculate of [calculateBwa01, calculateManagementGuv, calculateHgbGuv, calculateHgbBilanz]) {
+    assert.throws(() => calculate(unsupported), /PUBLIC_REPORT_CATALOG_UNAVAILABLE:2027/);
+  }
+});
+
+test('balance sheet derives open result from the current calendar fiscal year only', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: undefined,
+    to: undefined,
+    asOfDate: '2026-12-31',
+    ledger: { entries: [
+      { postingDate: '2025-12-31', lines: [
+        { accountNumber: '1000', debit: 100, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 100 },
+      ] },
+      { postingDate: '2026-12-31', lines: [
+        { accountNumber: '1000', debit: 50, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 50 },
+      ] },
+    ] },
+  }));
+  assert.equal(report.snapshot.fiscalYear, 2026);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 50);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.profit-loss-forward')?.amount, 100);
+  assert.deepEqual(report.totals, { assets: 150, liabilities: 150, delta: 0 });
+});
+
+test('balance sheet carries cumulative pre-FY P&L into the 2026 profit forward', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: undefined,
+    to: undefined,
+    asOfDate: '2026-12-31',
+    ledger: { entries: [
+      { postingDate: '2024-12-31', lines: [
+        { accountNumber: '1000', debit: 100, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 100 },
+      ] },
+      { postingDate: '2025-12-31', lines: [
+        { accountNumber: '1000', debit: 100, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 100 },
+      ] },
+      { postingDate: '2026-12-31', lines: [
+        { accountNumber: '1000', debit: 50, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 50 },
+      ] },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 50);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.profit-loss-forward')?.amount, 200);
+  assert.deepEqual(report.totals, { assets: 250, liabilities: 250, delta: 0 });
+  assert.equal(report.mappingHealth.blocking, false);
+});
+
+test('balance snapshots use opening P&L as forward and turnover as current result', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: '2026-01-01',
+    to: '2026-12-31',
+    asOfDate: '2026-12-31',
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 150, creditTurnover: 0 },
+      { accountNumber: '8000', openingBalance: -100, debitTurnover: 0, creditTurnover: 50 },
+    ] },
+  }));
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 50);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.profit-loss-forward')?.amount, 100);
+  assert.deepEqual(report.totals, { assets: 150, liabilities: 150, delta: 0 });
+  assert.equal(report.mappingHealth.blocking, false);
+});
+
+test('unsplit balance snapshots fail closed instead of pretending an all-time result is current', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    asOfDate: '2026-12-31',
+    from: undefined,
+    to: undefined,
+    ledger: { balances: [{ accountNumber: '8000', openingBalance: -100, debitTurnover: 0, creditTurnover: 50 }] },
+  }));
+  assert.equal(report.mappingHealth.blocking, true);
+  assert.ok(report.mappingHealth.warnings.some((warning) => warning.includes('expliziten Geschäftsjahres-Split')));
+  assert.deepEqual(report.assets, []);
+  assert.deepEqual(report.liabilities, []);
+});
+
+test('balance snapshots honor a non-calendar fiscal-year split', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '04-15', hgbGuvMethod: 'gkv' },
+    from: '2026-04-15',
+    to: '2026-06-30',
+    asOfDate: '2026-06-30',
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 150, creditTurnover: 0 },
+      { accountNumber: '8000', openingBalance: -100, debitTurnover: 0, creditTurnover: 50 },
+    ] },
+  }));
+  assert.equal(report.snapshot.fiscalYear, 2026);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 50);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.profit-loss-forward')?.amount, 100);
+  assert.deepEqual(report.totals, { assets: 150, liabilities: 150, delta: 0 });
+});
+
+test('balance sheet derives open result from a non-calendar fiscal year only', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
+    from: undefined,
+    to: undefined,
+    asOfDate: '2026-06-30',
+    ledger: { entries: [
+      { postingDate: '2025-06-30', lines: [
+        { accountNumber: '1000', debit: 200, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 200 },
+      ] },
+      { postingDate: '2025-08-01', lines: [
+        { accountNumber: '1000', debit: 100, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 100 },
+      ] },
+      { postingDate: '2026-01-01', lines: [
+        { accountNumber: '1000', debit: 50, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 50 },
+      ] },
+    ] },
+  }));
+  assert.equal(report.snapshot.fiscalYear, 2025);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 150);
+});
+
+test('explicit closed profit forward is authoritative and not doubled', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: undefined,
+    to: undefined,
+    asOfDate: '2026-12-31',
+    ledger: { entries: [
+      { postingDate: '2025-12-31', lines: [
+        { accountNumber: '1000', debit: 100, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 100 },
+      ] },
+      { postingDate: '2026-12-31', lines: [
+        { accountNumber: '1000', debit: 50, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 50 },
+      ] },
+    ], balances: [{ accountNumber: '3200', openingBalance: -100 }] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' },
+      { accountNumber: '3200', statement: 'hgb-bilanz', position: 'equity.profit-loss-forward', side: 'liability' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.profit-loss-forward')?.amount, 100);
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 50);
+  assert.deepEqual(report.totals, { assets: 150, liabilities: 150, delta: 0 });
+});
+
+test('micro balance folds prior open result into its statutory equity heading', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'micro', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: undefined,
+    to: undefined,
+    asOfDate: '2026-12-31',
+    ledger: { entries: [
+      { postingDate: '2025-12-31', lines: [
+        { accountNumber: '1000', debit: 100, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 100 },
+      ] },
+      { postingDate: '2026-12-31', lines: [
+        { accountNumber: '1000', debit: 50, credit: 0 },
+        { accountNumber: '8000', debit: 0, credit: 50 },
+      ] },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.liabilities.find((row) => row.position === 'equity')?.amount, 150);
+  assert.deepEqual(report.totals, { assets: 150, liabilities: 150, delta: 0 });
+});
+
+test('micro aggregate equity with prior open P&L fails closed as ambiguous', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'micro', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: undefined,
+    to: undefined,
+    asOfDate: '2026-12-31',
+    ledger: {
+      entries: [
+        { postingDate: '2025-12-31', lines: [
+          { accountNumber: '1000', debit: 100, credit: 0 },
+          { accountNumber: '8000', debit: 0, credit: 100 },
+        ] },
+        { postingDate: '2026-12-31', lines: [
+          { accountNumber: '1000', debit: 50, credit: 0 },
+          { accountNumber: '8000', debit: 0, credit: 50 },
+        ] },
+      ],
+      balances: [{ accountNumber: '3000', openingBalance: -25 }],
+    },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' },
+      { accountNumber: '3000', statement: 'hgb-bilanz', position: 'equity', side: 'liability' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.mappingHealth.blocking, true);
+  assert.ok(report.mappingHealth.warnings.some((warning) => warning.includes('aggregiertes Kleinstkapitalgesellschafts-Eigenkapital')));
+  assert.deepEqual(report.assets, []);
+  assert.deepEqual(report.liabilities, []);
+  assert.deepEqual(report.totals, { assets: 0, liabilities: 0, delta: 0 });
+});
+
+test('materially unbalanced HGB balance payloads fail closed', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: '2025-01-01',
+    to: '2025-12-31',
+    asOfDate: '2025-12-31',
+    ledger: { balances: [{ accountNumber: '1000', openingBalance: 0, debitTurnover: 100, creditTurnover: 0 }] },
+    mappings: [{ accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' }],
+  }));
+  assert.equal(report.mappingHealth.blocking, true);
+  assert.ok(report.mappingHealth.warnings.some((warning) => warning.includes('nicht ausgeglichen')));
+  assert.deepEqual(report.assets, []);
+  assert.deepEqual(report.liabilities, []);
+});
+
+test('micro and small balance output follows the committed statutory hierarchy', () => {
+  const make = (size: 'micro' | 'small') => calculateHgbBilanz(request({
+    profile: { size, fiscalYearStart: '01-01', hgbGuvMethod: 'gkv' },
+    from: '2025-01-01',
+    to: '2025-12-31',
+    asOfDate: '2025-12-31',
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 100, creditTurnover: 0 },
+      { accountNumber: '3000', openingBalance: -100, debitTurnover: 0, creditTurnover: 0 },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' },
+      { accountNumber: '3000', statement: 'hgb-bilanz', position: 'equity', side: 'liability' },
+    ],
+  }));
+  for (const size of ['micro', 'small'] as const) {
+    const catalog = getPublicReportCatalogs(2025).find((entry) => entry.kind === 'bilanz' && entry.scope === size)!;
+    const report = make(size);
+    assert.deepEqual(
+      [...report.assets, ...report.liabilities].map((row) => row.position),
+      catalog.positions.map((position) => position.key),
+    );
+    assert.equal(report.assets.find((row) => row.position === 'assets.current')?.amount, 100);
+  }
+});
+
+test('closed equity result is authoritative and is not double-counted', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'small', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 1600, creditTurnover: 0 },
+      { accountNumber: '3000', openingBalance: -1000, debitTurnover: 0, creditTurnover: 0 },
+      { accountNumber: '3100', openingBalance: -600, debitTurnover: 0, creditTurnover: 0 },
+      { accountNumber: '4000', openingBalance: 0, debitTurnover: 400, creditTurnover: 0 },
+      { accountNumber: '8000', openingBalance: 0, debitTurnover: 0, creditTurnover: 1000 },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' },
+      { accountNumber: '3000', statement: 'hgb-bilanz', position: 'equity', side: 'liability' },
+      { accountNumber: '3100', statement: 'hgb-bilanz', position: 'equity.result', side: 'liability' },
+      { accountNumber: '4000', statement: 'hgb-guv', position: 'material' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.mappingHealth.blocking, false);
+  assert.deepEqual(report.totals, { assets: 1600, liabilities: 1600, delta: 0 });
+  assert.equal(report.liabilities.find((row) => row.position === 'equity.result')?.amount, 600);
+});
+
+test('HGB balance blocks when the current HGB GuV mapping is missing', () => {
+  const report = calculateHgbBilanz(request({
+    ledger: { entries: [{ postingDate: '2025-07-10', lines: [
+      { accountNumber: '1000', debit: 1000, credit: 0 },
+      { accountNumber: '8000', debit: 0, credit: 1000 },
+    ] }] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current.cash', side: 'asset' },
+      { accountNumber: '8000', statement: 'bwa01', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.mappingHealth.blocking, true);
+  assert.deepEqual(report.assets, []);
+  assert.ok(report.mappingHealth.warnings.some((warning) => warning.includes('HGB-GuV')));
+});
+
+test('micro balance folds an open HGB result into the statutory equity heading', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'micro', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 1600, creditTurnover: 0 },
+      { accountNumber: '3000', openingBalance: -1000, debitTurnover: 0, creditTurnover: 0 },
+      { accountNumber: '4000', openingBalance: 0, debitTurnover: 400, creditTurnover: 0 },
+      { accountNumber: '8000', openingBalance: 0, debitTurnover: 0, creditTurnover: 1000 },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' },
+      { accountNumber: '3000', statement: 'hgb-bilanz', position: 'equity', side: 'liability' },
+      { accountNumber: '4000', statement: 'hgb-guv', position: 'material' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.mappingHealth.blocking, false);
+  assert.deepEqual(report.totals, { assets: 1600, liabilities: 1600, delta: 0 });
+  assert.equal(report.liabilities.find((row) => row.position === 'equity')?.amount, 1600);
+});
+
+test('micro closed equity.result evidence is folded once and is idempotent', () => {
+  const report = calculateHgbBilanz(request({
+    profile: { size: 'micro', fiscalYearStart: '07-01', hgbGuvMethod: 'gkv' },
+    ledger: { balances: [
+      { accountNumber: '1000', openingBalance: 0, debitTurnover: 1600, creditTurnover: 0 },
+      { accountNumber: '3000', openingBalance: -1000, debitTurnover: 0, creditTurnover: 0 },
+      { accountNumber: '3100', openingBalance: -600, debitTurnover: 0, creditTurnover: 0 },
+      { accountNumber: '4000', openingBalance: 0, debitTurnover: 400, creditTurnover: 0 },
+      { accountNumber: '8000', openingBalance: 0, debitTurnover: 0, creditTurnover: 1000 },
+    ] },
+    mappings: [
+      { accountNumber: '1000', statement: 'hgb-bilanz', position: 'assets.current', side: 'asset' },
+      { accountNumber: '3000', statement: 'hgb-bilanz', position: 'equity', side: 'liability' },
+      { accountNumber: '3100', statement: 'hgb-bilanz', position: 'equity.result', side: 'liability' },
+      { accountNumber: '4000', statement: 'hgb-guv', position: 'material' },
+      { accountNumber: '8000', statement: 'hgb-guv', position: 'revenue' },
+    ],
+  }));
+  assert.equal(report.mappingHealth.blocking, false);
+  assert.deepEqual(report.totals, { assets: 1600, liabilities: 1600, delta: 0 });
+  assert.equal(report.liabilities.find((row) => row.position === 'equity')?.amount, 1600);
+});

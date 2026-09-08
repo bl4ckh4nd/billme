@@ -1,12 +1,14 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { createTaxFilingRecord, transitionTaxFiling } from '@billme/accounting-engine';
 import { SettingsSchema } from '@billme/desktop-data/validation-schemas';
 import { sendEmail } from '@billme/desktop-core/services/emailService';
 import { isRetryableEmailError } from '@billme/desktop-core/utils/retry';
 import { portalClient } from '@billme/desktop-services/portalClient';
 import {
   createPostgresAuditLogPort,
+  applyServerOfferPortalDecision,
   createPostgresClientRepository,
   createPostgresDunningHistoryRepository,
   createPostgresEmailOutboxRepository,
@@ -14,45 +16,40 @@ import {
   createPostgresMaintenanceRepository,
   createPostgresOfferRepository,
   createPostgresPool,
-  createPostgresRecurringProfileRepository,
+  createPostgresServerDatabase,
+  createServerRecurringDependencies,
+  createPostgresTaxFilingRepository,
+  claimTaxSubmissionJob,
+  completeTaxSubmissionJob,
+  failTaxSubmissionJob,
+  getReportSnapshot,
   createPostgresTenantRepository,
   createDefaultTenantScope,
   getServerSettings,
   insertEmailLogRow,
-  listServerNumberReservations,
-  runPostgresMigrations,
-  saveServerNumberReservation,
+  assertDrizzleSchemaCurrent,
   saveServerSettings,
   withPostgresTransaction,
   type PostgresTransactionClient,
 } from '@billme/server-data';
 import {
-  ensureDefaultProjectForClient,
-  finalizeDocumentNumber,
-  listOffersPendingPortalSync,
   processDunningRun,
   runMaintenanceSweep,
-  processRecurringRun,
-  releaseDocumentNumber,
-  reserveDocumentNumber,
+  runRecurringInvoiceRun,
   shouldRunScheduledDunning,
   shouldRunScheduledRecurring,
-  syncPublishedOfferDecisionFromPortal,
+  createTaxFilingService,
+  type RecurringResult,
   type AuditActor,
-  type AuditEntry,
-  type AuditEntryDraft,
-  type ClientProject,
-  type DefaultProjectPorts,
-  type DocumentNumberingPorts,
   type EmailOutboxEntry,
-  type Offer,
-  type OfferDomainDependencies,
-  type RecurringDomainDependencies,
   type Tenant,
   type TenantScope,
 } from '@billme/server-core';
 import type { WorkerLogger } from './logger.js';
 import { dispatchQueuedEmailBatch } from './emailQueue.js';
+import { submitQueuedTaxFilings } from './taxFilingSubmission.js';
+
+const taxFilingStateMachine = { create: createTaxFilingRecord, transition: transitionTaxFiling };
 
 type WorkerSettings = z.infer<typeof SettingsSchema>;
 
@@ -69,6 +66,16 @@ export interface WorkerTaskResult {
   details?: Record<string, unknown>;
 }
 
+export const toRecurringWorkerTaskResult = (result: RecurringResult): WorkerTaskResult => ({
+  status: 'completed',
+  message: 'Recurring run finished',
+  details: {
+    generated: result.generated,
+    deactivated: result.deactivated,
+    errors: result.errors.length,
+  },
+});
+
 type ScopeResolution = {
   scope: TenantScope;
   tenant: Tenant;
@@ -80,71 +87,11 @@ const workerActor: AuditActor = {
   displayName: 'billme-server-worker',
 };
 
-const isActiveDefaultProject = (project: ClientProject) => {
-  return project.name === 'Allgemein' && !project.archivedAt && project.status === 'active';
-};
-
-const stripOfferHistory = (offer: Offer): Offer => {
-  const { history: _history, ...rest } = offer;
-  return {
-    ...rest,
-    history: [],
-  };
-};
-
-const createBufferedAuditLog = () => {
-  const entries: AuditEntryDraft[] = [];
-
-  const toAuditEntry = (entry: AuditEntryDraft, index: number): AuditEntry => ({
-    sequence: index + 1,
-    ...entry,
-    prevHash: null,
-    hash: `buffered-${index + 1}`,
-  });
-
-  return {
-    entries,
-    port: {
-      append(_scope: TenantScope, entry: AuditEntryDraft) {
-        entries.push(entry);
-        return toAuditEntry(entry, entries.length - 1);
-      },
-      listBySubject(_scope: TenantScope, subject: { entityType: string; entityId: string }) {
-        return entries
-          .filter((entry) => entry.subject.entityType === subject.entityType && entry.subject.entityId === subject.entityId)
-          .map((entry, index) => toAuditEntry(entry, index));
-      },
-    },
-  };
-};
-
-const createBufferedOfferRepository = (offer: Offer) => {
-  let current = offer;
-
-  return {
-    port: {
-      list() {
-        return [current];
-      },
-      getById(_scope: TenantScope, id: string) {
-        return id === current.id ? current : null;
-      },
-      save(_scope: TenantScope, nextOffer: Offer) {
-        current = nextOffer;
-        return nextOffer;
-      },
-      remove() {
-        return;
-      },
-    },
-    current: () => current,
-  };
-};
-
 export class ServerWorkerRuntime {
   private readonly logger: WorkerLogger;
   private readonly queryContext = new AsyncLocalStorage<PostgresTransactionClient>();
   private readonly pool: ReturnType<typeof createPostgresPool>;
+  private readonly database: ReturnType<typeof createPostgresServerDatabase>;
   private readonly workerId = `billme-server-worker:${process.pid}`;
 
   constructor(
@@ -153,14 +100,15 @@ export class ServerWorkerRuntime {
   ) {
     this.logger = logger.child({ component: 'runtime' });
     this.pool = createPostgresPool(this.env.databaseUrl);
+    this.database = createPostgresServerDatabase(this.pool);
   }
 
   async init(): Promise<void> {
-    await runPostgresMigrations(this.pool);
+    await assertDrizzleSchemaCurrent(this.pool);
   }
 
   async close(): Promise<void> {
-    await this.pool.end();
+    await this.database.close();
   }
 
   async runRecurringJob(): Promise<WorkerTaskResult> {
@@ -187,24 +135,38 @@ export class ServerWorkerRuntime {
       };
     }
 
-    const result = await processRecurringRun(resolved.scope, this.createRecurringDependencies(resolved.scope));
-    await this.saveSettings(resolved.scope, {
-      ...settingsSnapshot.settings,
-      automation: {
-        ...settingsSnapshot.settings.automation,
-        lastRecurringRun: new Date().toISOString(),
-      },
-    }, settingsSnapshot.createdAt);
+    const runAt = new Date().toISOString();
+    let result: Awaited<ReturnType<typeof runRecurringInvoiceRun>>;
+    try {
+      result = await runRecurringInvoiceRun(
+        resolved.scope,
+        createServerRecurringDependencies(this.database, resolved.scope, { actor: workerActor }),
+        {
+          auditLog: createPostgresAuditLogPort(this.database),
+          actor: workerActor,
+          reason: 'scheduled',
+          action: 'recurring.scheduled_run',
+          afterProcess: async () => {
+            await saveServerSettings(this.database, {
+              tenantId: resolved.scope.tenantId,
+              settingsJson: JSON.stringify({
+                ...settingsSnapshot.settings,
+                automation: {
+                  ...settingsSnapshot.settings.automation,
+                  lastRecurringRun: runAt,
+                },
+              }),
+              createdAt: settingsSnapshot.createdAt,
+              updatedAt: runAt,
+            });
+          },
+        },
+      );
+    } catch (error) {
+      return this.blockedJob(error instanceof Error ? error.message : String(error));
+    }
 
-    return {
-      status: 'completed',
-      message: 'Recurring run finished',
-      details: {
-        generated: result.generated,
-        deactivated: result.deactivated,
-        errors: result.errors.length,
-      },
-    };
+    return toRecurringWorkerTaskResult(result);
   }
 
   async runDunningJob(): Promise<WorkerTaskResult> {
@@ -406,6 +368,39 @@ export class ServerWorkerRuntime {
     };
   }
 
+  async runTaxFilingSubmissionJob(): Promise<WorkerTaskResult> {
+    const resolved = await this.resolveScope();
+    if (!resolved) {
+      return { status: 'skipped', message: 'No primary tenant is bootstrapped yet' };
+    }
+
+    const result = await submitQueuedTaxFilings({
+      scope: resolved.scope,
+      service: createTaxFilingService({
+        repository: createPostgresTaxFilingRepository(this.currentQueryable()),
+        stateMachine: taxFilingStateMachine,
+        auditLog: createPostgresAuditLogPort(this.currentQueryable()),
+        reportSnapshot: { get: async (scope, id) => {
+          const snapshot = await getReportSnapshot(this.currentQueryable(), scope, id);
+          return snapshot ? { id: snapshot.id, tenantId: snapshot.tenantId, sourceHash: snapshot.sourceHash } : null;
+        } },
+      }),
+      jobs: {
+        claim: async (scope) => {
+          const job = await claimTaxSubmissionJob(this.currentQueryable(), scope, 'tax-filing');
+          return job ? { id: job.id, submissionId: job.submissionId } : null;
+        },
+        complete: (scope, id) => completeTaxSubmissionJob(this.currentQueryable(), scope, id),
+        fail: (scope, id, error) => failTaxSubmissionJob(this.currentQueryable(), scope, id, error),
+      },
+    });
+    return {
+      status: result.retryableFailed > 0 && result.accepted === 0 && result.rejected === 0 ? 'blocked' : 'completed',
+      message: 'Tax filing submission run finished',
+      details: { ...result },
+    };
+  }
+
   async runPortalSyncJob(): Promise<WorkerTaskResult> {
     const resolved = await this.resolveScope();
     if (!resolved) {
@@ -431,62 +426,21 @@ export class ServerWorkerRuntime {
       };
     }
 
-    const offerRepository = createPostgresOfferRepository(this.currentQueryable());
-    const auditLog = createPostgresAuditLogPort(this.currentQueryable());
-    const offers = await offerRepository.list(resolved.scope);
-    const pendingOffers = listOffersPendingPortalSync(resolved.scope, {
-      offerRepo: {
-        list: () => offers,
-        getById: (_scope, id) => offers.find((offer) => offer.id === id) ?? null,
-        save: (_scope, offer) => offer,
-        remove: () => undefined,
-      },
-    });
-
+    const offers = await createPostgresOfferRepository(this.database).list(resolved.scope);
+    const pendingOffers = offers.filter((offer) => offer.share?.token && !offer.share.decision && !offer.share.acceptedAt);
     let updated = 0;
-
-    for (const pendingOffer of pendingOffers) {
-      const currentOffer = offers.find((offer) => offer.id === pendingOffer.id);
-      if (!currentOffer) {
-        continue;
-      }
-
-      const bufferedOffers = createBufferedOfferRepository(currentOffer);
-      const bufferedAuditLog = createBufferedAuditLog();
-
+    for (const offer of pendingOffers) {
       try {
-        const result = await syncPublishedOfferDecisionFromPortal(
-          resolved.scope,
-          {
-            offerRepo: bufferedOffers.port,
-            auditLog: bufferedAuditLog.port,
-            portalGateway: {
-              getOfferStatus: (shareToken) => portalClient.getOfferStatus(baseUrl, shareToken),
-            },
-          } satisfies OfferDomainDependencies & {
-            portalGateway: {
-              getOfferStatus: (shareToken: string) => Promise<{ decision?: unknown }>;
-            };
-          },
-          {
-            offerId: pendingOffer.id,
-            actor: workerActor,
-          },
-        );
-
-        if (!result.updated) {
-          continue;
-        }
-
-        await offerRepository.save(resolved.scope, stripOfferHistory(bufferedOffers.current()));
-        for (const entry of bufferedAuditLog.entries) {
-          await auditLog.append(resolved.scope, entry);
-        }
-
-        updated += 1;
+        const shareToken = offer.share!.token!;
+        const { decision } = await portalClient.getOfferStatus(baseUrl, shareToken);
+        if (!decision) continue;
+        const result = await applyServerOfferPortalDecision(this.database, resolved.scope, {
+          offerId: offer.id, shareToken, decision, actor: workerActor,
+        });
+        if (result.updated) updated += 1;
       } catch (error) {
         this.logger.warn('Portal sync offer failed', {
-          offerId: pendingOffer.id,
+          offerId: offer.id,
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -668,170 +622,6 @@ export class ServerWorkerRuntime {
     });
   }
 
-  private createRecurringDependencies(scope: TenantScope): RecurringDomainDependencies {
-    const createNumberingPorts = (): DocumentNumberingPorts<WorkerSettings> => ({
-      tx: {
-        inTransaction: (work) => this.inTransaction(work),
-      },
-      getSettings: async () => (await this.readSettings(scope))?.settings ?? null,
-      saveSettings: async (settings) => {
-        const current = await this.readSettings(scope);
-        await this.saveSettings(scope, settings, current?.createdAt);
-      },
-      createReservation: async (reservation) => {
-        const now = new Date().toISOString();
-        await saveServerNumberReservation(this.currentQueryable(), {
-          tenantId: scope.tenantId,
-          ...reservation,
-          createdAt: now,
-          updatedAt: now,
-        });
-      },
-      getReservationById: async (reservationId) => {
-        const reservation = (await listServerNumberReservations(this.currentQueryable(), scope.tenantId))
-          .find((entry) => entry.id === reservationId);
-
-        if (!reservation) {
-          return null;
-        }
-
-        return {
-          id: reservation.id,
-          kind: reservation.kind,
-          number: reservation.number,
-          counterValue: reservation.counterValue,
-          status: reservation.status,
-          documentId: reservation.documentId,
-        };
-      },
-      updateReservation: async (reservation) => {
-        const existing = (await listServerNumberReservations(this.currentQueryable(), scope.tenantId))
-          .find((entry) => entry.id === reservation.id);
-        const now = new Date().toISOString();
-
-        await saveServerNumberReservation(this.currentQueryable(), {
-          tenantId: scope.tenantId,
-          ...reservation,
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        });
-      },
-      isNumberTaken: async (kind, number) => {
-        if (kind === 'customer') {
-          const clients = await createPostgresClientRepository(this.currentQueryable()).list(scope);
-          return clients.some((client) => client.customerNumber === number);
-        }
-        const documents = kind === 'invoice'
-          ? await createPostgresInvoiceRepository(this.currentQueryable()).list(scope)
-          : await createPostgresOfferRepository(this.currentQueryable()).list(scope);
-        if (documents.some((document) => document.number === number)) {
-          return true;
-        }
-        const reservations = await listServerNumberReservations(this.currentQueryable(), scope.tenantId);
-        return reservations.some((reservation) =>
-          reservation.kind === kind &&
-          reservation.number === number &&
-          reservation.status !== 'released'
-        );
-      },
-      generateReservationId: async () => randomUUID(),
-    });
-
-    const createProjectPorts = (): DefaultProjectPorts<ClientProject> => ({
-      tx: {
-        inTransaction: (work) => this.inTransaction(work),
-      },
-      getActiveDefaultProjectForClient: async (clientId) => {
-        const client = await createPostgresClientRepository(this.currentQueryable()).getById(scope, clientId);
-        return client?.projects.find(isActiveDefaultProject) ?? null;
-      },
-      listProjectCodesByPrefix: async (prefix) => {
-        const clients = await createPostgresClientRepository(this.currentQueryable()).list(scope);
-        return clients.flatMap((client) =>
-          client.projects
-            .filter((project) => typeof project.code !== 'string' || project.code.startsWith(prefix))
-            .map((project) => project.code),
-        );
-      },
-      saveProject: async (project) => {
-        const clientRepository = createPostgresClientRepository(this.currentQueryable());
-        const client = await clientRepository.getById(scope, project.clientId);
-        if (!client) {
-          throw new Error(`Client ${project.clientId} not found`);
-        }
-
-        const nextProject = {
-          ...project,
-          createdAt: project.createdAt ?? new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        await clientRepository.save(scope, {
-          ...client,
-          projects: [
-            ...client.projects.filter((entry) => entry.id !== nextProject.id),
-            nextProject,
-          ],
-          updatedAt: nextProject.updatedAt,
-        });
-
-        return nextProject;
-      },
-    });
-
-    return {
-      tx: {
-        inTransaction: (work) => this.inTransaction(work),
-      },
-      recurringProfileStore: {
-        list: (innerScope) => createPostgresRecurringProfileRepository(this.currentQueryable()).list(innerScope),
-        getById: (innerScope, id) => createPostgresRecurringProfileRepository(this.currentQueryable()).getById(innerScope, id),
-        save: (innerScope, profile) => createPostgresRecurringProfileRepository(this.currentQueryable()).save(innerScope, profile),
-        remove: (innerScope, id) => createPostgresRecurringProfileRepository(this.currentQueryable()).remove(innerScope, id),
-      },
-      clientPort: {
-        getById: (innerScope, id) => createPostgresClientRepository(this.currentQueryable()).getById(innerScope, id),
-      },
-      invoicePort: {
-        save: (innerScope, params) => createPostgresInvoiceRepository(this.currentQueryable()).save(innerScope, params.invoice),
-      },
-      numberingPort: {
-        getSettings: async () => (await this.readSettings(scope))?.settings ?? null,
-        reserve: async (kind, now) => reserveDocumentNumber(createNumberingPorts(), kind, now),
-        release: async (reservationId) => releaseDocumentNumber(createNumberingPorts(), reservationId),
-        finalize: async (reservationId, documentId) => finalizeDocumentNumber(createNumberingPorts(), reservationId, documentId),
-      },
-      projectPort: {
-        ensureDefaultProject: async (clientId) => {
-          const result = await ensureDefaultProjectForClient(createProjectPorts(), {
-            clientId,
-            createProjectId: () => randomUUID(),
-          });
-
-          if (result.created) {
-            await createPostgresAuditLogPort(this.currentQueryable()).append(scope, {
-              occurredAt: new Date().toISOString(),
-              action: 'project.create',
-              reason: 'auto:default',
-              actor: workerActor,
-              subject: {
-                entityType: 'project',
-                entityId: result.project.id,
-                tenantId: scope.tenantId,
-              },
-              change: {
-                before: null,
-                after: result.project,
-              },
-            });
-          }
-
-          return result.project;
-        },
-      },
-      createInvoiceId: () => randomUUID(),
-    };
-  }
 }
 
 const send = (

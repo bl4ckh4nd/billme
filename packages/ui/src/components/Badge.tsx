@@ -32,9 +32,9 @@ const statusConfig = {
     label: 'Entwurf',
   },
   cancelled: {
-    bg: 'bg-gray-100',
-    text: 'text-gray-600',
-    border: 'border-gray-300',
+    bg: 'bg-surface-muted',
+    text: 'text-muted',
+    border: 'border-border',
     label: 'Storniert',
   },
 };

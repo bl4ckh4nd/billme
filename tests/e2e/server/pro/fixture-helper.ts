@@ -1,8 +1,10 @@
 import fs from 'node:fs/promises';
+import { randomUUID, scryptSync } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { getCatalogForYear, getCatalogManifestForYear } from '@billme/desktop-services/eurCatalog';
 import { createServerApiClient, type ServerProduct } from '@billme/server-core';
-import { createPostgresPool, seedServerModeProTenant } from '@billme/server-data';
+import { createPostgresPool, saveServerEurLine, seedServerModeProTenant } from '@billme/server-data';
 
 type HarnessState = {
   env?: Record<string, string>;
@@ -110,10 +112,55 @@ export const ensureHarnessSession = async (options: {
   });
 };
 
+export const createHarnessProTenant = async (options: {
+  stateFile: string;
+  email: string;
+  password: string;
+  fullName: string;
+}) => {
+  const state = await readHarnessState(options.stateFile);
+  const env = await readHarnessEnv(state);
+  const pool = createPostgresPool(buildDatabaseUrl(state, env));
+  const tenantId = randomUUID();
+  const userId = randomUUID();
+  const membershipId = randomUUID();
+  const salt = randomUUID().replaceAll('-', '');
+  const now = new Date().toISOString();
+  try {
+    await pool.query('BEGIN');
+    await pool.query(
+      `INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at)
+       VALUES ($1,$2,$3,'pro','single-tenant','active',$4,$4)`,
+      [tenantId, `pro-e2e-${tenantId}`, 'Billme Pro isolated E2E tenant', now],
+    );
+    await pool.query(
+      `INSERT INTO user_accounts (id,email,full_name,status,created_at,updated_at) VALUES ($1,$2,$3,'active',$4,$4)`,
+      [userId, options.email, options.fullName, now],
+    );
+    await pool.query(
+      `INSERT INTO tenant_memberships (id,tenant_id,user_id,role,created_at,updated_at) VALUES ($1,$2,$3,'owner',$4,$4)`,
+      [membershipId, tenantId, userId, now],
+    );
+    await pool.query(
+      `INSERT INTO user_password_credentials (user_id,password_salt,password_hash,password_algorithm,created_at,updated_at) VALUES ($1,$2,$3,'scrypt-64',$4,$4)`,
+      [userId, salt, scryptSync(options.password, salt, 64).toString('hex'), now],
+    );
+    await pool.query('COMMIT');
+    return { tenantId, userId };
+  } catch (error) {
+    await pool.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    await pool.end();
+  }
+};
+
 export const applyHarnessProSeed = async (options: {
   stateFile: string;
   tenantId: string;
   namespace: string;
+  includeEurCashFixtures?: boolean;
+  includeEurCatalog2026?: boolean;
 }) => {
   const state = await readHarnessState(options.stateFile);
   const env = await readHarnessEnv(state);
@@ -123,7 +170,29 @@ export const applyHarnessProSeed = async (options: {
     const seed = await seedServerModeProTenant(pool, {
       tenantId: options.tenantId,
       namespace: options.namespace,
+      includeEurCashFixtures: options.includeEurCashFixtures,
     });
+    if (options.includeEurCatalog2026) {
+      const manifest = getCatalogManifestForYear(2026);
+      const createdAt = new Date().toISOString();
+      for (const [sortOrder, line] of getCatalogForYear(2026).entries()) {
+        await saveServerEurLine(pool, {
+          id: line.id,
+          taxYear: 2026,
+          kennziffer: line.kennziffer || undefined,
+          providerPath: line.providerPath,
+          label: line.label,
+          kind: line.kind,
+          exportable: line.exportable,
+          sortOrder,
+          computedFromJson: line.computedFromIds?.length ? JSON.stringify(line.computedFromIds) : undefined,
+          computedTermsJson: line.computedTerms?.length ? JSON.stringify(line.computedTerms) : undefined,
+          sourceVersion: manifest.version,
+          createdAt,
+          updatedAt: createdAt,
+        });
+      }
+    }
 
     return {
       namespace: seed.namespace,
@@ -147,6 +216,56 @@ export const applyHarnessProSeed = async (options: {
   }
 };
 
+export const setHarnessProPeriodStatus = async (options: {
+  stateFile: string;
+  tenantId: string;
+  period: string;
+  status: 'open' | 'soft_locked' | 'closed';
+}) => {
+  const state = await readHarnessState(options.stateFile);
+  const env = await readHarnessEnv(state);
+  const pool = createPostgresPool(buildDatabaseUrl(state, env));
+  try {
+    const timestamp = new Date().toISOString();
+    const start = `${options.period}-01`;
+    const end = new Date(Date.UTC(Number(options.period.slice(0, 4)), Number(options.period.slice(5, 7)), 0))
+      .toISOString().slice(0, 10);
+    await pool.query(
+      `INSERT INTO accounting_periods (id,tenant_id,period,fiscal_year,status,starts_at,ends_at,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+       ON CONFLICT (tenant_id,period) DO UPDATE SET status=EXCLUDED.status,updated_at=EXCLUDED.updated_at`,
+      [randomUUID(), options.tenantId, options.period, Number(options.period.slice(0, 4)), options.status, start, end, timestamp],
+    );
+    return { tenantId: options.tenantId, period: options.period, status: options.status };
+  } finally {
+    await pool.end();
+  }
+};
+
+export const setHarnessProBankTransactionStatus = async (options: {
+  stateFile: string;
+  tenantId: string;
+  transactionId: string;
+  status: 'pending' | 'booked';
+}) => {
+  const state = await readHarnessState(options.stateFile);
+  const env = await readHarnessEnv(state);
+  const pool = createPostgresPool(buildDatabaseUrl(state, env));
+  try {
+    const result = await pool.query(
+      `UPDATE bank_transactions
+       SET status=$1,linked_invoice_id=NULL,updated_at=$2
+       WHERE tenant_id=$3 AND id=$4
+       RETURNING id,status,linked_invoice_id`,
+      [options.status, new Date().toISOString(), options.tenantId, options.transactionId],
+    );
+    if (!result.rows[0]) throw new Error(`Bank transaction not found: ${options.transactionId}`);
+    return result.rows[0];
+  } finally {
+    await pool.end();
+  }
+};
+
 const runCli = async () => {
   const { action, flags } = parseArgs(process.argv.slice(2));
   const stateFile = requireFlag(flags, 'state-file');
@@ -164,13 +283,48 @@ const runCli = async () => {
     return;
   }
 
+  if (action === 'create-pro-tenant') {
+    const created = await createHarnessProTenant({
+      stateFile,
+      email: requireFlag(flags, 'email'),
+      password: requireFlag(flags, 'password'),
+      fullName: requireFlag(flags, 'full-name'),
+    });
+    process.stdout.write(`${JSON.stringify(created)}\n`);
+    return;
+  }
+
   if (action === 'seed-pro') {
     const seed = await applyHarnessProSeed({
       stateFile,
       tenantId: requireFlag(flags, 'tenant-id'),
       namespace: requireFlag(flags, 'namespace'),
+      includeEurCashFixtures: flags.get('include-eur-cash-fixtures') === 'true',
+      includeEurCatalog2026: flags.get('include-eur-catalog-2026') === 'true',
     });
     process.stdout.write(`${JSON.stringify(seed)}\n`);
+    return;
+  }
+
+  if (action === 'set-pro-period-status') {
+    const result = await setHarnessProPeriodStatus({
+      stateFile,
+      tenantId: requireFlag(flags, 'tenant-id'),
+      period: requireFlag(flags, 'period'),
+      status: requireFlag(flags, 'status') as 'open' | 'soft_locked' | 'closed',
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+
+  if (action === 'set-pro-bank-transaction-status') {
+    const result = await setHarnessProBankTransactionStatus({
+      stateFile,
+      tenantId: requireFlag(flags, 'tenant-id'),
+      transactionId: requireFlag(flags, 'transaction-id'),
+      status: requireFlag(flags, 'status') as 'pending' | 'booked',
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
 

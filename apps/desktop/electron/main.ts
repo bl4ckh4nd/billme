@@ -1,40 +1,13 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type {
-  Invoice,
-  InvoiceElement,
-} from '../types';
-import { initDb } from '../db/connection';
-import { upsertInvoice } from '../db/invoicesRepo';
-import {
-  MOCK_ACCOUNTS,
-  MOCK_ARTICLES,
-  MOCK_CLIENTS,
-  MOCK_INVOICES,
-  MOCK_RECURRING_PROFILES,
-  MOCK_SETTINGS,
-} from '../data/mockData';
-import { upsertClient } from '../db/clientsRepo';
-import { upsertArticle } from '../db/articlesRepo';
-import { upsertAccount } from '../db/accountsRepo';
-import { upsertRecurringProfile } from '../db/recurringRepo';
-import { setSettings } from '../db/settingsRepo';
-import {
-  getActiveTemplate,
-  listTemplates,
-  setActiveTemplateId,
-  upsertTemplate,
-} from '../db/templatesRepo';
-import { INITIAL_INVOICE_TEMPLATE, INITIAL_OFFER_TEMPLATE } from '../constants';
-import { registerIpcHandlers } from './ipcHandlers';
-import { startPortalDecisionPolling } from './portalDecisionPolling';
-import { startDunningScheduler, stopDunningScheduler } from './dunningScheduler';
-import { startRecurringScheduler, stopRecurringScheduler } from './recurringScheduler';
+import { registerNativeIpcHandlers } from './nativeIpcHandlers';
 import { initAutoUpdater } from './updater';
 import { initNotificationPush } from './notifications';
 import { logger } from '../utils/logger';
 import { PRODUCT_PROFILE } from '../productProfile';
+import { registerEmbeddedConnectionHandler } from '@billme/desktop-core/electron/embeddedConnection';
+import { createLocalBackend, type LocalBackendHandle } from './localBackend';
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL);
@@ -42,8 +15,10 @@ const isDev = Boolean(process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RE
 app.setName(PRODUCT_PROFILE.appName);
 
 let userDataPath: string | null = null;
-let portalSyncStop: (() => void) | null = null;
 let mainWindow: BrowserWindow | null = null;
+let localBackend: LocalBackendHandle | null = null;
+let shutdownPromise: Promise<void> | null = null;
+let shutdownComplete = false;
 
 initNotificationPush(() => mainWindow);
 
@@ -124,18 +99,31 @@ const createWindow = async () => {
   await win.loadFile(path.join(appDir, '../renderer/index.html'), { hash: '/' });
 };
 
-const requireDb = () => {
-  if (!userDataPath) throw new Error('userDataPath not initialized');
-  return initDb(userDataPath, { dbFileName: PRODUCT_PROFILE.dbFileName });
-};
+const unregisterEmbeddedConnection = registerEmbeddedConnectionHandler(ipcMain, {
+  resolveConnection: () => localBackend?.embeddedConnection() ?? null,
+  isTrustedSender: (sender) => mainWindow?.webContents === sender,
+});
 
-registerIpcHandlers(ipcMain, {
-  requireDb,
+registerNativeIpcHandlers(ipcMain, {
   getUserDataPath: () => {
     if (!userDataPath) throw new Error('userDataPath not initialized');
     return userDataPath;
   },
+  getBackupPrefix: () => PRODUCT_PROFILE.backupPrefix,
+  dumpDataDir: () => {
+    if (!localBackend) throw new Error('Lokales PGlite-Backend ist noch nicht initialisiert.');
+    return localBackend.dumpDataDir();
+  },
+  restoreDataDir: (archivePath) => {
+    if (!localBackend) throw new Error('Lokales PGlite-Backend ist noch nicht initialisiert.');
+    return localBackend.restoreDataDir(archivePath);
+  },
+  relaunch: () => {
+    app.relaunch();
+    app.exit(0);
+  },
   getMainWindow: () => mainWindow,
+  isTrustedSender: (sender) => mainWindow?.webContents === sender,
 });
 
 // Global error handlers
@@ -171,129 +159,12 @@ app.whenReady().then(async () => {
   }
 
   userDataPath = app.getPath('userData');
-  const db = initDb(userDataPath, { dbFileName: PRODUCT_PROFILE.dbFileName });
-
-  if (isDev) {
-    // Dev convenience: seed initial data if DB is empty.
-    const invoiceCountRow = db.prepare('SELECT COUNT(*) as c FROM invoices').get() as { c: number };
-    if (invoiceCountRow.c === 0) {
-      for (const inv of MOCK_INVOICES) {
-        try {
-          upsertInvoice(db, inv, 'seed');
-        } catch (error) {
-          logger.debug('Seed', 'Failed to seed invoice', { invoiceId: inv.id, error: String(error) });
-        }
-      }
-    }
-
-    const clientCountRow = db.prepare('SELECT COUNT(*) as c FROM clients').get() as { c: number };
-    if (clientCountRow.c === 0) {
-      for (const c of MOCK_CLIENTS) {
-        try {
-          upsertClient(db, c);
-        } catch (error) {
-          logger.debug('Seed', 'Failed to seed client', { clientId: c.id, error: String(error) });
-        }
-      }
-    }
-
-    const articleCountRow = db.prepare('SELECT COUNT(*) as c FROM articles').get() as { c: number };
-    if (articleCountRow.c === 0) {
-      for (const a of MOCK_ARTICLES) {
-        try {
-          upsertArticle(db, a);
-        } catch (error) {
-          logger.debug('Seed', 'Failed to seed article', { articleId: a.id, error: String(error) });
-        }
-      }
-    }
-
-    const accountCountRow = db.prepare('SELECT COUNT(*) as c FROM accounts').get() as { c: number };
-    if (accountCountRow.c === 0) {
-      for (const acc of MOCK_ACCOUNTS) {
-        try {
-          upsertAccount(db, acc);
-        } catch (error) {
-          logger.debug('Seed', 'Failed to seed account', { accountId: acc.id, error: String(error) });
-        }
-      }
-    }
-
-    const recurringCountRow = db.prepare('SELECT COUNT(*) as c FROM recurring_profiles').get() as {
-      c: number;
-    };
-    if (recurringCountRow.c === 0) {
-      for (const p of MOCK_RECURRING_PROFILES) {
-        try {
-          upsertRecurringProfile(db, p);
-        } catch (error) {
-          logger.debug('Seed', 'Failed to seed recurring profile', { profileId: p.id, error: String(error) });
-        }
-      }
-    }
-
-    const settingsRow = db.prepare('SELECT 1 FROM settings WHERE id = 1').get() as { 1: 1 } | undefined;
-    if (!settingsRow) {
-      try {
-        setSettings(db, MOCK_SETTINGS);
-      } catch (error) {
-        logger.debug('Seed', 'Failed to seed settings', { error: String(error) });
-      }
-    }
-  }
-
-  const templateCountRow = db.prepare('SELECT COUNT(*) as c FROM templates').get() as { c: number };
-  if (templateCountRow.c === 0) {
-    try {
-      const invoiceTemplate = upsertTemplate(db, {
-        id: 'default-invoice',
-        kind: 'invoice',
-        name: 'Standard Rechnung',
-        elements: INITIAL_INVOICE_TEMPLATE as unknown as InvoiceElement[],
-      });
-      const offerTemplate = upsertTemplate(db, {
-        id: 'default-offer',
-        kind: 'offer',
-        name: 'Standard Angebot',
-        elements: INITIAL_OFFER_TEMPLATE as unknown as InvoiceElement[],
-      });
-      setActiveTemplateId(db, 'invoice', invoiceTemplate.id);
-      setActiveTemplateId(db, 'offer', offerTemplate.id);
-    } catch (error) {
-      logger.debug('Seed', 'Failed to seed templates', { error: String(error) });
-    }
-  }
+  localBackend = await createLocalBackend({
+    userDataPath,
+    profile: PRODUCT_PROFILE,
+  });
 
   await createWindow();
-
-  // Background portal decision sync (polling).
-  // First decision wins; desktop remains source-of-truth and logs audit entries on sync.
-  try {
-    const poller = startPortalDecisionPolling({
-      requireDb,
-      intervalMs: 60_000,
-      logger,
-    });
-    portalSyncStop = poller.stop;
-  } catch (e) {
-    logger.warn('Startup', 'Portal sync failed to start', { error: String(e) });
-  }
-
-  // Start dunning scheduler for automatic reminder emails
-  try {
-    startDunningScheduler();
-    logger.info('Startup', 'Dunning scheduler started');
-  } catch (e) {
-    logger.warn('Startup', 'Dunning scheduler failed to start', { error: String(e) });
-  }
-
-  // Start recurring invoice scheduler
-  try {
-    startRecurringScheduler();
-    logger.info('Startup', 'Recurring invoice scheduler started');
-  } catch (e) {
-    logger.warn('Startup', 'Recurring scheduler failed to start', { error: String(e) });
-  }
 
   // Auto-updater (only in packaged builds)
   if (!isDev) {
@@ -324,26 +195,42 @@ app.whenReady().then(async () => {
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
+}).catch(async (error: unknown) => {
+  const startupError = error instanceof Error ? error : new Error(String(error));
+  logger.error('Startup', 'Lokales Backend konnte nicht gestartet werden', startupError);
+  try {
+    await localBackend?.close();
+  } catch (closeError) {
+    logger.error(
+      'Startup',
+      'Lokales Backend konnte nach einem Startfehler nicht geschlossen werden',
+      closeError instanceof Error ? closeError : new Error(String(closeError)),
+    );
+  }
+  app.exit(1);
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
-  try {
-    portalSyncStop?.();
-  } catch (error) {
-    logger.warn('Shutdown', 'Failed to stop portal sync', { error: String(error) });
-  }
-  try {
-    stopDunningScheduler();
-  } catch (error) {
-    logger.warn('Shutdown', 'Failed to stop dunning scheduler', { error: String(error) });
-  }
-  try {
-    stopRecurringScheduler();
-  } catch (error) {
-    logger.warn('Shutdown', 'Failed to stop recurring scheduler', { error: String(error) });
-  }
+app.on('before-quit', (event) => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  shutdownPromise ??= (async () => {
+    unregisterEmbeddedConnection();
+    await localBackend?.close();
+  })();
+
+  void shutdownPromise.then(
+    () => {
+      shutdownComplete = true;
+      app.quit();
+    },
+    (error) => {
+      logger.error('Shutdown', 'Failed to close local backend', error instanceof Error ? error : new Error(String(error)));
+      shutdownComplete = true;
+      app.exit(1);
+    },
+  );
 });

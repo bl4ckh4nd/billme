@@ -43,10 +43,22 @@ export const buildZugferdXml = (doc: NormalizedEinvoice): string => {
     )
     .join('\n');
 
-  const exemptionXml = doc.lines[0]?.taxExemptionReason
-    ? `
-          <ram:ExemptionReason>${xmlEscape(doc.lines[0].taxExemptionReason)}</ram:ExemptionReason>`
-    : '';
+  const taxGroupsByKey = new Map<string, NormalizedEinvoice['lines'][number]>();
+  doc.lines.forEach((line) => {
+    const key = `${line.taxCategoryCode}:${line.taxRate}`;
+    const current = taxGroupsByKey.get(key) ?? { ...line, netLineTotal: 0 };
+    current.netLineTotal += line.netLineTotal;
+    taxGroupsByKey.set(key, current);
+  });
+  const taxGroups = [...taxGroupsByKey.values()];
+  const taxGroupsXml = taxGroups.map((group) => `
+      <ram:ApplicableTradeTax>
+        <ram:CalculatedAmount>${formatAmount(group.taxCategoryCode === 'S' ? group.netLineTotal * group.taxRate / 100 : 0)}</ram:CalculatedAmount>
+        <ram:TypeCode>VAT</ram:TypeCode>
+        <ram:BasisAmount>${formatAmount(group.netLineTotal)}</ram:BasisAmount>
+        <ram:CategoryCode>${group.taxCategoryCode}</ram:CategoryCode>
+        <ram:RateApplicablePercent>${formatAmount(group.taxRate)}</ram:RateApplicablePercent>${group.taxExemptionReason ? `<ram:ExemptionReason>${xmlEscape(group.taxExemptionReason)}</ram:ExemptionReason>` : ''}
+      </ram:ApplicableTradeTax>`).join('');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rsm:CrossIndustryInvoice
@@ -88,6 +100,7 @@ ${linesXml}
           <ram:CityName>${xmlEscape(doc.buyer.city)}</ram:CityName>
           <ram:CountryID>${xmlEscape(doc.buyer.countryCode)}</ram:CountryID>
         </ram:PostalTradeAddress>
+        ${doc.buyerVatId ? `<ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">${xmlEscape(doc.buyerVatId)}</ram:ID></ram:SpecifiedTaxRegistration>` : ''}
       </ram:BuyerTradeParty>
     </ram:ApplicableHeaderTradeAgreement>
     <ram:ApplicableHeaderTradeDelivery/>
@@ -96,13 +109,7 @@ ${linesXml}
       <ram:SpecifiedTradeSettlementPaymentMeans>
         <ram:TypeCode>58</ram:TypeCode>
       </ram:SpecifiedTradeSettlementPaymentMeans>
-      <ram:ApplicableTradeTax>
-        <ram:CalculatedAmount>${formatAmount(doc.totals.taxTotal)}</ram:CalculatedAmount>
-        <ram:TypeCode>VAT</ram:TypeCode>
-        <ram:BasisAmount>${formatAmount(doc.totals.lineNetTotal)}</ram:BasisAmount>
-        <ram:CategoryCode>${doc.lines[0]?.taxCategoryCode ?? 'S'}</ram:CategoryCode>
-        <ram:RateApplicablePercent>${formatAmount(doc.lines[0]?.taxRate ?? 0)}</ram:RateApplicablePercent>${exemptionXml}
-      </ram:ApplicableTradeTax>
+${taxGroupsXml}
       <ram:SpecifiedTradePaymentTerms>
         <ram:DueDateDateTime>
           <udt:DateTimeString format="102">${doc.dueDate.replaceAll('-', '')}</udt:DateTimeString>

@@ -1,4 +1,4 @@
-import { Button } from '@billme/ui';
+import { Button, Portal } from '@billme/ui';
 import React from 'react';
 import { Archive, Edit3, Plus, Search, X } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
@@ -222,7 +222,8 @@ export const ProjectsView: React.FC = () => {
       </div>
 
       {isEditorOpen && draft && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <Portal>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm p-4">
           <div className="w-full max-w-2xl rounded-3xl bg-white shadow-xl overflow-hidden">
             <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
               <div>
@@ -374,10 +375,12 @@ export const ProjectsView: React.FC = () => {
             </div>
           </div>
         </div>
+        </Portal>
       )}
 
       {archiveTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <Portal>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm p-4">
           <div className="w-full max-w-lg rounded-3xl bg-white shadow-xl p-6">
             <h3 className="text-lg font-black text-gray-900 mb-1">Projekt archivieren</h3>
             <p className="text-sm text-gray-500 mb-4">
@@ -415,6 +418,7 @@ export const ProjectsView: React.FC = () => {
             </div>
           </div>
         </div>
+        </Portal>
       )}
     </div>
   );

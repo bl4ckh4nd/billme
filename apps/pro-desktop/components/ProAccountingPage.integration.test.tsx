@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ProAccountingPage } from './ProAccountingPage';
 
@@ -9,6 +9,7 @@ const {
   workspaceState,
   mockUseProLedgerStatsQuery,
   mockUseProLedgerAccountsQuery,
+  mockUseAccountsQuery,
   mockUseImportSkrMutation,
   mockImportSkrMutateAsync,
   mockIpc,
@@ -19,6 +20,7 @@ const {
   },
   mockUseProLedgerStatsQuery: vi.fn(),
   mockUseProLedgerAccountsQuery: vi.fn(),
+  mockUseAccountsQuery: vi.fn(),
   mockImportSkrMutateAsync: vi.fn(async () => ({ imported: 1 })),
   mockUseImportSkrMutation: vi.fn(),
   mockOnRulesChangedTrigger: vi.fn(),
@@ -32,6 +34,7 @@ const {
       getGuvReport: vi.fn(async () => ({ netResult: 0 })),
       getBilanzReport: vi.fn(async () => ({ totals: { delta: 0 } })),
       getAccountingHealth: vi.fn(async () => ({ postedCount: 0, draftCount: 0 })),
+      getAccountingPolicy: vi.fn(async () => ({ activeChart: 'SKR03' })),
       saveDraft: vi.fn(async () => ({ ok: true })),
       dispatchDraftAction: vi.fn(async () => ({
         id: 'draft-1',
@@ -49,6 +52,21 @@ const {
       postDraft: vi.fn(async () => ({ issues: [] })),
       listJournalEntries: vi.fn(async () => []),
       reverseJournalEntry: vi.fn(async () => ({ ok: true })),
+      listDatevExports: vi.fn(async () => []),
+      exportDatevBuchungsstapel: vi.fn(async (args: any) => ({
+        id: 'datev-1',
+        filePath: '/exports/datev-1.CSV',
+        recordCount: 0,
+        fromDate: args.from,
+        toDate: args.to,
+        createdAt: new Date().toISOString(),
+        sha256: 'hash',
+      })),
+    },
+    eur: {
+      getReport: vi.fn(async () => ({ rows: [], summary: { incomeTotal: 0, expenseTotal: 0, surplus: 0 }, unclassifiedCount: 0, warnings: [], taxYear: 2025, from: '2025-01-01', to: '2025-12-31', catalog: { id: 'eur-2025', version: '2025', sourceHash: 'a'.repeat(64), delivery: 'print-form-only', elsterReady: false } })),
+      listItems: vi.fn(async (): Promise<any[]> => []),
+      upsertClassification: vi.fn(async () => ({ id: 'classification-1', sourceType: 'transaction', sourceId: 'tx-eur-1', taxYear: 2025, excluded: false, vatMode: 'none', updatedAt: new Date().toISOString() })),
     },
   },
 }));
@@ -67,11 +85,27 @@ vi.mock('../hooks/useProLedger', () => ({
   useImportSkrMutation: mockUseImportSkrMutation,
 }));
 
+vi.mock('../hooks/useAccounts', () => ({
+  useAccountsQuery: mockUseAccountsQuery,
+}));
+
 vi.mock('@billme/accounting-ui-pro', () => ({
+  NATIVE_EUR_2025_RANGE: { from: '2025-01-01', to: '2025-12-31' },
   ProAccountingWorkspace: (props: any) => {
     workspaceState.lastProps = props;
     return (
       <div data-testid="pro-accounting-workspace">
+        <button
+          onClick={async () => {
+            try {
+              await props.dataAdapter.dispatchBookingAction('tx-1', 'submit_for_review', { role: 'admin' });
+            } catch {
+              // The page renders the adapter error for the user.
+            }
+          }}
+        >
+          failing-action
+        </button>
         <button
           onClick={async () => {
             await props.onPersistEntry({
@@ -158,6 +192,8 @@ describe('ProAccountingPage integration', () => {
         { accountNumber: '1200', name: 'Bank', keywords: [] },
       ],
     });
+    mockUseAccountsQuery.mockReturnValue({ data: [] });
+    mockIpc.pro.getAccountingPolicy.mockResolvedValue({ activeChart: 'SKR03' });
     mockUseImportSkrMutation.mockReturnValue({
       mutateAsync: mockImportSkrMutateAsync,
       isPending: false,
@@ -176,6 +212,19 @@ describe('ProAccountingPage integration', () => {
     await waitFor(() => {
       expect(mockImportSkrMutateAsync).toHaveBeenCalledWith({ preferredSource: 'auto' });
     });
+  });
+
+  it('exposes a failed SKR import without leaving a pending action', async () => {
+    mockUseProLedgerStatsQuery.mockReturnValue({
+      data: { total: 0, byChart: { SKR03: 0, SKR04: 0 } },
+    });
+    mockImportSkrMutateAsync.mockRejectedValueOnce(new Error('Kontenrahmen-Backend nicht erreichbar'));
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+
+    await userEvent.click(await screen.findByRole('button', { name: /SKR03\/04 importieren/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Kontenrahmen-Backend nicht erreichbar');
+    expect(screen.getByRole('button', { name: /SKR03\/04 importieren/i })).not.toHaveAttribute('aria-busy', 'true');
   });
 
   it('maps pro bookkeeping data into workspace seed and persists entries via IPC', async () => {
@@ -209,7 +258,7 @@ describe('ProAccountingPage integration', () => {
         id: 'draft-1',
         tenantId: 'default',
         transactionId: 'tx-1',
-        workflowStatus: 'suggested',
+        workflowStatus: 'posted',
         postingDate: '2026-01-10',
         documentDate: '2026-01-10',
         bookingText: 'Telefonkosten',
@@ -238,7 +287,8 @@ describe('ProAccountingPage integration', () => {
       expect(workspaceState.lastProps?.seed?.transactions?.length).toBe(2);
     });
 
-    expect(workspaceState.lastProps.seed.transactions[0].workflowStatus).toBe('suggested');
+    expect(workspaceState.lastProps.seed.transactions[0].workflowStatus).toBe('posted');
+    expect(workspaceState.lastProps.seed.transactions[0].isVirtualPosted).toBe(false);
     expect(workspaceState.lastProps.seed.transactions[1].workflowStatus).toBe('posted');
     expect(workspaceState.lastProps.seed.accounts[0]).toEqual(
       expect.objectContaining({ id: '8400', type: 'Revenue' }),
@@ -247,6 +297,7 @@ describe('ProAccountingPage integration', () => {
       expect.objectContaining({ id: '1200', keywords: ['Bank'] }),
     );
     expect(workspaceState.lastProps.seed.drafts).toHaveLength(1);
+    expect(workspaceState.lastProps.seed.drafts[0].workflowStatus).toBe('posted');
 
     await userEvent.click(screen.getByRole('button', { name: 'persist-entry' }));
     await waitFor(() => {
@@ -266,6 +317,95 @@ describe('ProAccountingPage integration', () => {
     });
   });
 
+  it('carries the explicit virtual projection marker only for an unpersisted booked transaction', async () => {
+    mockIpc.pro.listBankTransactions.mockResolvedValueOnce([
+      {
+        id: 'tx-virtual',
+        date: '2026-01-10',
+        counterparty: 'Kunde',
+        purpose: 'OPOS Zahlung',
+        amount: 119,
+        status: 'booked',
+        linkedInvoiceId: null,
+      },
+    ]);
+    mockIpc.pro.getDraftByTransactionId.mockResolvedValueOnce({
+      id: 'draft-tx-virtual',
+      tenantId: 'default',
+      transactionId: 'tx-virtual',
+      workflowStatus: 'posted',
+      postingDate: '2026-01-10',
+      documentDate: '2026-01-10',
+      bookingText: 'OPOS Zahlung',
+      reference: 'tx-virtual',
+      lines: [],
+      validationIssues: [],
+      updatedAt: new Date().toISOString(),
+      isVirtualProjection: true,
+    });
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await waitFor(() => expect(workspaceState.lastProps?.seed?.transactions).toHaveLength(1));
+    expect(workspaceState.lastProps.seed.transactions[0]).toEqual(
+      expect.objectContaining({ workflowStatus: 'posted', isVirtualPosted: true }),
+    );
+    expect(workspaceState.lastProps.seed.drafts[0]).toEqual(
+      expect.objectContaining({ workflowStatus: 'posted', isVirtualProjection: true }),
+    );
+  });
+
+  it('loads the active SKR04 catalog and carries a configured custom bank GL into the workspace', async () => {
+    mockUseProLedgerStatsQuery.mockReturnValue({
+      data: { total: 1, byChart: { SKR03: 0, SKR04: 1 } },
+    });
+    mockIpc.pro.getAccountingPolicy.mockResolvedValue({ activeChart: 'SKR04' });
+    mockUseProLedgerAccountsQuery.mockReturnValue({
+      data: [
+        { id: 'skr04-1999', chart: 'SKR04', accountNumber: '1999', name: 'Geldtransit', keywords: ['Bankkonto'] },
+        { id: 'skr04-7000', chart: 'SKR04', accountNumber: '7000', name: 'Erlöse custom', keywords: [] },
+      ],
+    });
+    mockUseAccountsQuery.mockReturnValue({
+      data: [{ id: 'bank-1', defaultSkrAccountNumber: '1999' }],
+    });
+    mockIpc.pro.listBankTransactions.mockResolvedValueOnce([
+      {
+        id: 'tx-skr04',
+        accountId: 'bank-1',
+        date: '2026-01-10',
+        counterparty: 'Kunde',
+        purpose: 'Zahlung',
+        amount: 100,
+        status: 'open',
+        linkedInvoiceId: null,
+      },
+    ]);
+    mockIpc.pro.getDraftByTransactionId.mockResolvedValueOnce({
+      id: 'draft-skr04',
+      tenantId: 'default',
+      transactionId: 'tx-skr04',
+      workflowStatus: 'suggested',
+      postingDate: '2026-01-10',
+      documentDate: '2026-01-10',
+      bookingText: 'Zahlung',
+      reference: 'TX-SKR04',
+      lines: [
+        { id: 'bank-line', accountNumber: '1999', debitAmount: 100, creditAmount: 0 },
+        { id: 'counter-line', accountNumber: '7000', debitAmount: 0, creditAmount: 100 },
+      ],
+      validationIssues: [],
+      updatedAt: new Date().toISOString(),
+    });
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await waitFor(() => expect(workspaceState.lastProps?.seed?.chartFramework).toBe('SKR04'));
+    expect(mockUseProLedgerAccountsQuery).toHaveBeenCalledWith(expect.objectContaining({ chart: 'SKR04' }));
+    expect(workspaceState.lastProps.seed.bankAccountNumber).toBe('1999');
+    expect(workspaceState.lastProps.seed.drafts[0].lines[0]).toEqual(
+      expect.objectContaining({ accountId: '1999', accountName: 'Geldtransit' }),
+    );
+  });
+
   it('opens rules modal from pro page and handles rule-change callback flow', async () => {
     render(<ProAccountingPage />, { wrapper: createWrapper() });
 
@@ -275,5 +415,151 @@ describe('ProAccountingPage integration', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'trigger-rules-changed' }));
     expect(mockOnRulesChangedTrigger).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the previous status and exposes failed adapter mutations', async () => {
+    mockIpc.pro.listBankTransactions.mockResolvedValueOnce([
+      {
+        id: 'tx-1',
+        date: '2026-01-10',
+        counterparty: 'Telekom',
+        purpose: 'Telefon',
+        amount: -119,
+        status: 'open',
+        linkedInvoiceId: null,
+      },
+    ]);
+    mockIpc.pro.getDraftByTransactionId.mockResolvedValue({
+      id: 'draft-1',
+      tenantId: 'default',
+      transactionId: 'tx-1',
+      workflowStatus: 'suggested',
+      postingDate: '2026-01-10',
+      documentDate: '2026-01-10',
+      bookingText: 'Telefonkosten',
+      reference: 'TEL-1',
+      lines: [],
+      validationIssues: [],
+      updatedAt: new Date().toISOString(),
+    });
+    mockIpc.pro.dispatchDraftAction.mockRejectedValueOnce(new Error('Backend nicht erreichbar'));
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await screen.findByTestId('pro-accounting-workspace');
+    await userEvent.click(screen.getByRole('button', { name: 'failing-action' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Backend nicht erreichbar');
+    expect(workspaceState.lastProps.dataAdapter.getBookingDraftByTransactionId('tx-1')).toEqual(
+      expect.objectContaining({ workflowStatus: 'suggested' }),
+    );
+  });
+
+  it('wires DATEV export and immutable history through the productive IPC adapter', async () => {
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await screen.findByTestId('pro-accounting-workspace');
+
+    await act(async () => {
+      await workspaceState.lastProps.dataAdapter.listDatevExports(20);
+    });
+    expect(mockIpc.pro.listDatevExports).toHaveBeenCalledWith({ limit: 20 });
+
+    await act(async () => {
+      await workspaceState.lastProps.dataAdapter.exportDatevBuchungsstapel({
+        from: '2026-03-01',
+        to: '2026-03-31',
+        consultantNumber: '1001',
+        clientNumber: '1',
+        fiscalYearStart: '2026-01-01',
+        accountLength: 4,
+        encoding: 'cp1252',
+      });
+    });
+    expect(mockIpc.pro.exportDatevBuchungsstapel).toHaveBeenCalledWith(expect.objectContaining({
+      from: '2026-03-01',
+      accountLength: 4,
+      encoding: 'cp1252',
+    }));
+  });
+
+  it('loads native EÜR cash items and refetches the saved classification through IPC', async () => {
+    const cashItem = {
+      sourceType: 'transaction' as const,
+      sourceId: 'tx-eur-1',
+      date: '2025-02-14',
+      amountGross: 119,
+      amountNet: 119,
+      flowType: 'expense' as const,
+      counterparty: 'Lieferant',
+      purpose: 'Beleg',
+    };
+    const classifiedItem = {
+      ...cashItem,
+      classification: {
+        id: 'classification-1',
+        sourceType: 'transaction' as const,
+        sourceId: 'tx-eur-1',
+        taxYear: 2025,
+        eurLineId: 'E2025_KZ123',
+        excluded: false,
+        vatMode: 'default' as const,
+        vatRate: 19,
+        updatedAt: '2025-02-14T12:00:00.000Z',
+      },
+    };
+    mockIpc.eur.listItems
+      .mockResolvedValueOnce([cashItem])
+      .mockResolvedValueOnce([classifiedItem]);
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await screen.findByTestId('pro-accounting-workspace');
+    const adapter = workspaceState.lastProps.dataAdapter;
+
+    await expect(adapter.listEurCashItems()).resolves.toEqual([cashItem]);
+    await act(async () => {
+      await adapter.upsertEurClassification({
+        ...cashItem,
+        taxYear: 2025,
+        eurLineId: 'E2025_KZ123',
+        excluded: false,
+        vatMode: 'default',
+        vatRate: 19,
+        reason: 'Beleg geprüft',
+      });
+    });
+    expect(mockIpc.eur.listItems).toHaveBeenCalledWith({ taxYear: 2025, from: '2025-01-01', to: '2025-12-31' });
+    expect(mockIpc.eur.upsertClassification).toHaveBeenCalledWith(expect.objectContaining({
+      sourceType: 'transaction',
+      sourceId: 'tx-eur-1',
+      taxYear: 2025,
+      eurLineId: 'E2025_KZ123',
+      reason: 'Beleg geprüft',
+    }));
+    await expect(adapter.listEurCashItems()).resolves.toEqual([classifiedItem]);
+  });
+
+  it('fails closed when native EÜR items contain a non-2025 classification', async () => {
+    mockIpc.eur.listItems.mockResolvedValueOnce([{
+      sourceType: 'transaction',
+      sourceId: 'tx-eur-legacy',
+      date: '2025-02-14',
+      amountGross: 10,
+      amountNet: 10,
+      flowType: 'expense',
+      counterparty: 'Lieferant',
+      purpose: 'Legacy-Klassifikation',
+      classification: {
+        id: 'classification-legacy',
+        sourceType: 'transaction',
+        sourceId: 'tx-eur-legacy',
+        taxYear: 2024,
+        excluded: false,
+        vatMode: 'none',
+        updatedAt: '2025-02-14T12:00:00.000Z',
+      },
+    }]);
+
+    render(<ProAccountingPage />, { wrapper: createWrapper() });
+    await screen.findByTestId('pro-accounting-workspace');
+    await expect(workspaceState.lastProps.dataAdapter.listEurCashItems()).rejects.toThrow('EUR_UNSUPPORTED_TAX_YEAR:2024');
   });
 });

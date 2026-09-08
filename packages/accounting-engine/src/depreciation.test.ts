@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   buildDepreciationSchedule,
   computeAssetDisposal,
+  calculateIabLifecycle,
+  calculateSpecialDepreciationLifecycle,
 } from './depreciation.js';
 
 test('linear AfA is monthly from May and carries the tail into year four', () => {
@@ -83,4 +85,20 @@ test('rounded schedule exactly equals the depreciable base', () => {
     Math.round(schedule.reduce((sum, period) => sum + period.amount, 0) * 100),
     100001,
   );
+});
+
+test('§7g IAB lifecycle reports remaining amount and blocks over-allocation', () => {
+  assert.deepEqual(
+    calculateIabLifecycle({ formedYear: 2026, formedAmount: 1000, usedAmount: 600, repaidAmount: 100, asOfYear: 2027 }),
+    { formedAmount: 1000, usedAmount: 600, repaidAmount: 100, remainingAmount: 300, status: 'partially-used' },
+  );
+  assert.throws(() => calculateIabLifecycle({ formedYear: 2026, formedAmount: 1000, usedAmount: 900, repaidAmount: 200 }));
+});
+
+test('§7g special depreciation is capped at 20 percent of eligible cost', () => {
+  assert.deepEqual(
+    calculateSpecialDepreciationLifecycle({ acquisitionCost: 1000, recognizedAmount: 150, asOfYear: 2026 }),
+    { eligibleAmount: 200, recognizedAmount: 150, remainingAmount: 50 },
+  );
+  assert.throws(() => calculateSpecialDepreciationLifecycle({ acquisitionCost: 1000, recognizedAmount: 201 }));
 });

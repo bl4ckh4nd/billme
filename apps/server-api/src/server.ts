@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { buildServerApi } from './app.js';
+import { buildServerApi } from '@billme/server-runtime';
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(3100),

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, Plus, Trash2, Settings2 } from 'lucide-react';
-import { Button } from '@billme/ui';
+import { Button, Portal } from '@billme/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
 import { ipc } from '../runtime-api';
@@ -119,7 +119,8 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <Portal>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm">
       <div className="bg-white rounded-3xl shadow-2xl w-[700px] max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
@@ -303,5 +304,6 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
         </div>
       </div>
     </div>
+    </Portal>
   );
 };

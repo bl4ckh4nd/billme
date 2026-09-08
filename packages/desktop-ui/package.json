@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
+    "@billme/ui": "workspace:*",
     "lucide-react": "^0.562.0"
   },
   "peerDependencies": {
@@ -18,10 +19,6 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
-    },
-    "./components/Toast": {
-      "types": "./src/components/Toast.tsx",
-      "default": "./src/components/Toast.tsx"
     },
     "./components/Spinner": {
       "types": "./src/components/Spinner.tsx",

@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import Papa from 'papaparse';
+import { createLegacySqliteReadBridge } from './legacySqliteReadBridge';
 import {
   countLedgerAccounts,
   getLedgerAccountStats,
@@ -286,20 +287,21 @@ const parseSqlite = (
   sqlitePath: string,
 ): { rows: UpsertLedgerAccount[]; skipped: number; warnings: string[] } => {
   const sourceDb = new Database(sqlitePath, { readonly: true, fileMustExist: true });
+  const sourceDrizzle = createLegacySqliteReadBridge(sourceDb);
   const warnings: string[] = [];
   let skipped = 0;
   const rows: UpsertLedgerAccount[] = [];
 
   try {
-    const tableRows = sourceDb
-      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
-      .all() as Array<{ name: string }>;
+    const tableRows = sourceDrizzle.all<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    );
 
     for (const tableRow of tableRows) {
       const tableName = tableRow.name;
-      const columns = sourceDb
-        .prepare(`PRAGMA table_info(${quoteIdent(tableName)})`)
-        .all() as Array<{ name: string }>;
+      const columns = sourceDrizzle.all<{ name: string }>(
+        `PRAGMA table_info(${quoteIdent(tableName)})`,
+      );
 
       const normalizedCols = columns.map((col) => ({
         raw: col.name,
@@ -313,15 +315,15 @@ const parseSqlite = (
       const chartCol = normalizedCols.find((col) => CHART_KEY_CANDIDATES.includes(col.normalized as (typeof CHART_KEY_CANDIDATES)[number]))?.raw;
       const inferredChart = chartFromUnknown(tableName) ?? chartFromUnknown(path.basename(sqlitePath));
 
-      const sql = chartCol
+      const querySql = chartCol
         ? `SELECT ${quoteIdent(accountCol)} as account_number, ${quoteIdent(nameCol)} as account_name, ${quoteIdent(chartCol)} as chart_value FROM ${quoteIdent(tableName)}`
         : `SELECT ${quoteIdent(accountCol)} as account_number, ${quoteIdent(nameCol)} as account_name FROM ${quoteIdent(tableName)}`;
 
-      const rawRows = sourceDb.prepare(sql).all() as Array<{
+      const rawRows = sourceDrizzle.all(querySql).map((row) => row as {
         account_number: unknown;
         account_name: unknown;
         chart_value?: unknown;
-      }>;
+      });
 
       for (const rawRow of rawRows) {
         const chart = chartFromUnknown(rawRow.chart_value) ?? inferredChart;

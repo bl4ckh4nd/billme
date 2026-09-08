@@ -122,4 +122,38 @@ describe('normalizeInvoiceForEinvoice', () => {
     expect(normalized.lines[0]?.taxCategoryCode).toBe('AE');
     expect(normalized.lines[0]?.taxExemptionReason).toContain('§13b');
   });
+
+  it('preserves mixed position rates and buyer VAT id for a confirmed EU service rule', () => {
+    const normalized = normalizeInvoiceForEinvoice(
+      {
+        ...makeInvoice(),
+        taxMode: 'intra_eu_service_reverse_charge',
+        taxMeta: { buyerVatId: 'ATU12345678', sellerVatId: 'DE123456789', taxRuleConfirmed: true },
+        items: [
+          { description: 'Standard', quantity: 1, price: 100, total: 100, taxRate: 19 },
+          { description: 'Ermäßigt', quantity: 1, price: 50, total: 50, taxRate: 7 },
+        ],
+      },
+      makeSettings(false),
+    );
+    expect(normalized.lines.map((line) => line.taxRate)).toEqual([0, 0]);
+    expect(normalized.lines[0]?.taxCategoryCode).toBe('AE');
+    expect(normalized.buyerVatId).toBe('ATU12345678');
+    expect(normalized.totals.taxTotal).toBe(0);
+  });
+
+  it('keeps optional rows as zero-value notices and omits structural rows', () => {
+    const normalized = normalizeInvoiceForEinvoice({
+      ...makeInvoice(),
+      items: [
+        { kind: 'group', description: 'Bauabschnitt 1', quantity: 0, price: 0, total: 0 },
+        { kind: 'optional', description: 'Premium Support', optionNote: 'nur bei Beauftragung', quantity: 1, price: 190, total: 190 },
+        { kind: 'text', description: 'Hinweis', quantity: 0, price: 0, total: 0 },
+        { description: 'Leistung B', quantity: 1, price: 25, total: 25 },
+      ],
+    }, makeSettings(false));
+    expect(normalized.lines.map((line) => line.name)).toEqual(['Premium Support (Optional: nur bei Beauftragung)', 'Leistung B']);
+    expect(normalized.lines[0]?.netLineTotal).toBe(0);
+    expect(normalized.totals.lineNetTotal).toBe(25);
+  });
 });

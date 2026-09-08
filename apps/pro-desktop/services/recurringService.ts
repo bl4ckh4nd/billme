@@ -12,23 +12,24 @@ import {
 } from '@billme/desktop-data/recurring';
 import type { AppSettings, Client, Invoice, Project, RecurringProfile } from '../types';
 import { getClient } from '../db/clientsRepo';
-import { listRecurringProfiles, upsertRecurringProfile } from '../db/recurringRepo';
-import { upsertInvoice } from '../db/invoicesRepo';
+import { getRecurringProfile, listRecurringProfiles, upsertRecurringProfile } from '../db/recurringRepo';
+import { finalizeOutgoingInvoice, upsertInvoice } from '../db/invoicesRepo';
 import { ensureDefaultProjectForClient } from '../db/projectsRepo';
-import { finalizeNumber, releaseNumber, reserveNumber } from '../db/numberingRepo';
+import { releaseNumber, reserveNumber } from '../db/numberingRepo';
 import { logger } from '../utils/logger';
 
 const PRODUCT = 'pro' as const;
 
 const runtime: SqliteRecurringRuntime<Client, LegacyRecurringInvoice, Project> = {
   listRecurringProfiles: (db) => listRecurringProfiles(db) as RecurringProfile[],
+  getRecurringProfile: (db, id) => getRecurringProfile(db, id) as RecurringProfile | null,
   saveRecurringProfile: (db, profile) => upsertRecurringProfile(db, profile as RecurringProfile) as RecurringProfile,
   getClient: (db, id) => getClient(db, id) as Client | null,
   saveInvoice: (db, invoice, reason) => upsertInvoice(db, invoice as Invoice, reason) as unknown as LegacyRecurringInvoice,
   ensureDefaultProject: (db, clientId) => ensureDefaultProjectForClient(db, clientId) as Project,
   reserveNumber: (db, kind) => reserveNumber(db, kind),
   releaseNumber: (db, reservationId) => releaseNumber(db, reservationId),
-  finalizeNumber: (db, reservationId, documentId) => finalizeNumber(db, reservationId, documentId),
+  finalizeNumber: (db, reservationId, documentId) => finalizeOutgoingInvoice(db, reservationId, documentId),
   createInvoiceId: () => uuidv4(),
   logger: {
     info: (message, meta) => logger.info('RecurringService', message, meta),

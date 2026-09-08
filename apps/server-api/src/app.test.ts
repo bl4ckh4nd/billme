@@ -136,6 +136,115 @@ test('product tokens cannot cross product boundaries', async () => {
   });
 });
 
+test('canonical Pro accounting routes enforce product scope before the database', async () => {
+  await withServerApi(async (app) => {
+    const lite = await bootstrap(app, 'lite');
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/pro/accounting/transactions',
+      headers: { authorization: `Bearer ${lite.token}` },
+    });
+    assert.equal(response.statusCode, 403);
+    assert.match(response.body, /not authorized for pro/i);
+  });
+});
+
+test('canonical Pro accounting mutations require a reason and an accounting role', async () => {
+  await withServerApi(async (app) => {
+    const pro = await bootstrap(app, 'pro');
+    const invalid = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/pro/accounting/policy',
+      headers: { authorization: `Bearer ${pro.token}` },
+      payload: { activeChart: 'SKR03', vatMethod: 'soll' },
+    });
+    assert.equal(invalid.statusCode, 400);
+
+    const viewerToken = app.tokenService.sign({
+      ...app.tokenService.verify(pro.token)!,
+      role: 'viewer',
+    });
+    const forbidden = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/pro/accounting/policy',
+      headers: { authorization: `Bearer ${viewerToken}` },
+      payload: { reason: 'test', activeChart: 'SKR03', vatMethod: 'soll' },
+    });
+    assert.equal(forbidden.statusCode, 403);
+  });
+});
+
+test('server asset routes enforce Pro auth, mutation role, and reason before touching Postgres', async () => {
+  await withServerApi(async (app) => {
+    const unauthorized = await app.inject({ method: 'GET', url: '/api/v1/pro/accounting/assets' });
+    assert.equal(unauthorized.statusCode, 401);
+    const pro = await bootstrap(app, 'pro');
+    const viewerToken = app.tokenService.sign({ ...app.tokenService.verify(pro.token)!, role: 'viewer' });
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pro/accounting/assets',
+      headers: { authorization: `Bearer ${viewerToken}` },
+      payload: { reason: 'test', asset: { assetNumber: 'A-1', name: 'Test', assetClass: 'IT-Hardware', status: 'entwurf', activationDate: '2026-08-12', acquisitionCost: 100, depreciationMethod: 'linear', costCenter: 'FIN', location: 'Berlin', receiptLinked: false, assetAccountNumber: '0480' } },
+    });
+    assert.equal(forbidden.statusCode, 403);
+    const missingReason = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pro/accounting/assets',
+      headers: { authorization: `Bearer ${pro.token}` },
+      payload: { asset: { assetNumber: 'A-1', name: 'Test', assetClass: 'IT-Hardware', status: 'entwurf', activationDate: '2026-08-12', acquisitionCost: 100, depreciationMethod: 'linear', costCenter: 'FIN', location: 'Berlin', receiptLinked: false, assetAccountNumber: '0480' } },
+    });
+    assert.equal(missingReason.statusCode, 400);
+  });
+});
+
+test('tax mappings and suggestion rules reject viewer mutations and missing reasons', async () => {
+  await withServerApi(async (app) => {
+    const pro = await bootstrap(app, 'pro');
+    const viewerToken = app.tokenService.sign({ ...app.tokenService.verify(pro.token)!, role: 'viewer' });
+    const mapping = {
+      chart: 'SKR03', taxCaseKey: 'DE_STD_19', role: 'output_tax', accountNumber: '1776',
+    };
+    const viewer = await app.inject({ method: 'POST', url: '/api/v1/pro/accounting/tax-case-account-mappings', headers: { authorization: `Bearer ${viewerToken}` }, payload: { ...mapping, reason: 'viewer must not mutate' } });
+    assert.equal(viewer.statusCode, 403);
+    const missingReason = await app.inject({ method: 'POST', url: '/api/v1/pro/accounting/tax-case-account-mappings', headers: { authorization: `Bearer ${pro.token}` }, payload: mapping });
+    assert.equal(missingReason.statusCode, 400);
+    const suggestion = await app.inject({ method: 'POST', url: '/api/v1/pro/accounting/account-suggestion-rules', headers: { authorization: `Bearer ${viewerToken}` }, payload: { chart: 'SKR03', priority: 1, field: 'purpose', operator: 'contains', value: 'test', targetAccountNumber: '4900', reason: 'viewer must not mutate' } });
+    assert.equal(suggestion.statusCode, 403);
+    const deleteMissingReason = await app.inject({ method: 'DELETE', url: '/api/v1/pro/accounting/account-suggestion-rules/rule-1', headers: { authorization: `Bearer ${pro.token}` } });
+    assert.equal(deleteMissingReason.statusCode, 400);
+  });
+});
+
+test('draft saves cannot smuggle an approval or posting workflow status', async () => {
+  await withServerApi(async (app) => {
+    const pro = await bootstrap(app, 'pro');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/pro/accounting/drafts',
+      headers: { authorization: `Bearer ${pro.token}` },
+      payload: {
+        reason: 'test draft status guard',
+        draft: {
+          id: 'draft-status-guard',
+          tenantId: 'attacker-tenant',
+          transactionId: 'transaction-status-guard',
+          workflowStatus: 'posted',
+          postingDate: '2026-08-12',
+          documentDate: '2026-08-12',
+          bookingText: 'status guard',
+          period: '2026-08',
+          fiscalYear: 2026,
+          lines: [],
+          validationIssues: [],
+          updatedAt: '2026-08-12T00:00:00.000Z',
+        },
+      },
+    });
+    assert.equal(response.statusCode, 400);
+    assert.match(response.body, /workflowStatus is server controlled/i);
+  });
+});
+
 test('protected lite and pro billing routes require DATABASE_URL after auth succeeds', async () => {
   await withServerApi(async (app) => {
     const liteBootstrap = await bootstrap(app, 'lite');
@@ -176,5 +285,74 @@ test('typed validation rejects invalid bootstrap payloads', async () => {
     });
     assert.equal(response.statusCode, 400);
     assert.match(response.body, /Invalid email|String must contain at least/i);
+  });
+});
+
+test('VAT validation requires auth and keeps Swiss IDs out of VIES', async () => {
+  await withServerApi(async (app) => {
+    const unauthorized = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/tax/validate-vat-id',
+      payload: { countryCode: 'CH', vatNumber: 'CHE123456789MWST' },
+    });
+    assert.equal(unauthorized.statusCode, 401);
+
+    const session = await bootstrap(app, 'lite');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/tax/validate-vat-id',
+      headers: { authorization: `Bearer ${session.token}` },
+      payload: { countryCode: 'CH', vatNumber: 'CHE 123 456 789 MWST' },
+    });
+    assert.equal(response.statusCode, 200);
+    const body = response.json() as { status: string; normalizedVatId: string; checkedAt: string };
+    assert.deepEqual(body, {
+      status: 'unavailable',
+      normalizedVatId: 'CHE123456789MWST',
+      checkedAt: body.checkedAt,
+    });
+  });
+});
+
+test('oRPC publishes a deterministic OpenAPI document for Lite and Pro', async () => {
+  await withServerApi(async (app) => {
+    const first = await app.inject({ method: 'GET', url: '/api/v1/openapi.json' });
+    const second = await app.inject({ method: 'GET', url: '/api/v1/openapi.json' });
+    assert.equal(first.statusCode, 200);
+    assert.equal(second.statusCode, 200);
+    assert.equal(first.body, second.body);
+    const document = first.json() as {
+      openapi: string;
+      paths: Record<string, unknown>;
+    };
+    assert.equal(document.openapi, '3.1.1');
+    assert.ok(document.paths['/api/v1/lite/auth/login']);
+    assert.ok(document.paths['/api/v1/pro/auth/login']);
+    assert.ok(document.paths['/api/v1/lite/tax/validate-vat-id']);
+    assert.ok(document.paths['/api/v1/pro/tax/validate-vat-id']);
+  });
+});
+
+test('oRPC maps expected authentication failures to stable HTTP errors', async () => {
+  await withServerApi(async (app) => {
+    const payload = {
+      email: 'orpc-errors@example.com',
+      password: 'billme-server-123',
+      fullName: 'oRPC errors',
+    };
+    const first = await app.inject({ method: 'POST', url: '/api/v1/lite/auth/bootstrap', payload });
+    assert.equal(first.statusCode, 200);
+
+    const duplicate = await app.inject({ method: 'POST', url: '/api/v1/lite/auth/bootstrap', payload });
+    assert.equal(duplicate.statusCode, 409);
+    assert.match(duplicate.body, /Bootstrap already completed/i);
+
+    const invalidLogin = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lite/auth/login',
+      payload: { email: payload.email, password: 'wrong-password' },
+    });
+    assert.equal(invalidLogin.statusCode, 401);
+    assert.match(invalidLogin.body, /Invalid email or password/i);
   });
 });

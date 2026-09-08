@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
 import React from 'react';
+import { Portal } from '@billme/ui';
 
 interface DunningLevelPreviewModalProps {
   isOpen: boolean;
@@ -31,7 +32,8 @@ export const DunningLevelPreviewModal = ({
     .replace(/%C/g, 'Mustermann GmbH');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <Portal>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-[95%] max-w-4xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-gray-50">
@@ -155,5 +157,6 @@ export const DunningLevelPreviewModal = ({
         </div>
       </div>
     </div>
+    </Portal>
   );
 };

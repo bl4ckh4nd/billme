@@ -15,23 +15,18 @@ test.afterEach(async () => {
   }
 });
 
-test('resolves and reopens an exception case in pro workspace', async () => {
+test('keeps exception mutations unavailable for the read-only Pro adapter', async () => {
   const { page, baseUrl } = desktop;
 
   await page.goto(appUrl(baseUrl, '/accounting'));
   await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
-  await page.getByRole('button', { name: 'Exceptions' }).click();
-  await expect(page.getByRole('heading', { name: 'Exception Center' })).toBeVisible();
+  await page.getByRole('button', { name: 'Ausnahmen' }).click();
+  await expect(page.getByRole('heading', { name: 'Ausnahmen' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Ohne Beleg' }).click();
   await expect(page.getByText('Keine Einträge für den Filter.')).toHaveCount(0);
 
-  const snapshot = page.locator('div.border').filter({ hasText: 'Workflow Snapshot' }).first();
-  await page.getByPlaceholder('Was wurde geprüft/gelöst?').fill('E2E resolved in exception center');
-  await page.getByRole('button', { name: 'Als gelöst markieren' }).click();
-  await expect(snapshot).toContainText('Exception Status');
-  await expect(snapshot).toContainText('resolved');
-
-  await page.getByRole('button', { name: 'Reopen' }).click();
-  await expect(snapshot).toContainText('open');
+  await expect(page.getByRole('status')).toContainText('Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.');
+  await expect(page.getByPlaceholder('Was wurde geprüft/gelöst?')).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Als gelöst markieren' })).toBeDisabled();
 });

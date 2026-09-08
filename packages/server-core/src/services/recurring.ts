@@ -6,6 +6,7 @@ import type {
   RecurringProfile,
   TenantScope,
 } from '../domain/foundations.js';
+import { getBillingLineAmount, isBillableLine } from '../domain/foundations.js';
 import {
   systemClock,
   type Clock,
@@ -24,6 +25,7 @@ import {
   type SyncTransactionPort,
   type TransactionPort,
 } from '../ports/index.js';
+import { ZodError } from 'zod';
 import { chooseDefaultBillingAddress, chooseDefaultBillingEmail, formatAddressMultiline } from './clientNumbering.js';
 import { catchMaybePromise, chainMaybePromise, isPromiseLike, mapMaybePromise } from './maybePromise.js';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from './taxMode.js';
@@ -33,6 +35,75 @@ export interface RecurringResult {
   deactivated: number;
   errors: Array<{ profileName: string; error: string }>;
 }
+
+/**
+ * A failure caused by one recurring profile's business data. The run can
+ * isolate and report this profile while allowing all other profiles to commit.
+ */
+export class InvalidRecurringProfileError extends Error {
+  readonly code = 'INVALID_RECURRING_PROFILE';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidRecurringProfileError';
+  }
+}
+
+const isRecurringProfileError = (error: unknown): error is InvalidRecurringProfileError =>
+  error instanceof InvalidRecurringProfileError;
+
+const toExpectedRecurringProfileError = (error: unknown): InvalidRecurringProfileError | null => {
+  if (isRecurringProfileError(error)) return error;
+  if (error instanceof ZodError) {
+    return new InvalidRecurringProfileError(
+      `Das Abo-Profil enthält ungültige Rechnungsdaten: ${error.issues[0]?.message ?? 'Validierung fehlgeschlagen.'}`,
+    );
+  }
+  if (!(error instanceof Error)) return null;
+  const code = (error as Error & { code?: unknown }).code;
+  const marker = typeof code === 'string' ? code : error.message;
+  if (/^(INVALID_(?:INVOICE|LINE|TAX)|VALIDATION_(?:INVOICE|LINE|TAX)|TAX_(?:INVOICE|LINE|SNAPSHOT)|INVOICE_(?:INVALID|VALIDATION)|LINE_(?:INVALID|VALIDATION))/.test(marker)) {
+    return new InvalidRecurringProfileError(`Die Rechnungsdaten des Abo-Profils sind ungültig: ${error.message}`);
+  }
+  return null;
+};
+
+/** Validate data at the shared write seam, independently of the UI. */
+export const validateRecurringProfile = (profile: RecurringProfile): void => {
+  if (typeof profile.name !== 'string' || !profile.name.trim()) {
+    throw new InvalidRecurringProfileError('Die Bezeichnung des Abo-Profils ist erforderlich.');
+  }
+  // `amount` is a persisted/cache value in older desktop profiles; the
+  // generated invoice uses normalized line values as the source of truth.
+  if (!Number.isFinite(profile.amount) || profile.amount < 0) {
+    throw new InvalidRecurringProfileError(`Das Abo-Profil ${profile.id} muss einen gültigen Betrag enthalten.`);
+  }
+  if (!['daily', 'weekly', 'monthly', 'quarterly', 'yearly'].includes(profile.interval)) {
+    throw new InvalidRecurringProfileError(`Das Abo-Profil ${profile.id} enthält ein ungültiges Intervall.`);
+  }
+
+  const items = Array.isArray(profile.items) ? profile.items : [];
+  if (items.length === 0) {
+    throw new InvalidRecurringProfileError(`Das Abo-Profil ${profile.id} muss mindestens eine Position enthalten.`);
+  }
+
+  const billableItems = items.filter(isBillableLine);
+  const isValidBillableItem = (item: (typeof items)[number]): boolean => {
+    if (!isBillableLine(item) || typeof item.description !== 'string' || !item.description.trim()) return false;
+    const quantity = Number(item.quantity);
+    const price = Number(item.price);
+    const total = Number(item.total);
+    return Number.isFinite(quantity)
+      && quantity > 0
+      && Number.isFinite(price)
+      && Number.isFinite(total)
+      && total >= 0
+      && getBillingLineAmount(item) > 0;
+  };
+  if (billableItems.length === 0 || !billableItems.every(isValidBillableItem)) {
+    throw new InvalidRecurringProfileError(`Das Abo-Profil ${profile.id} muss mindestens eine abrechenbare Position mit Beschreibung, gültiger Menge und Betrag größer als 0 enthalten.`);
+  }
+};
 
 export interface RecurringDomainDependencies<
   TSettings extends RecurringNumberingSettingsShape = RecurringNumberingSettingsShape,
@@ -213,6 +284,7 @@ const buildInvoiceItems = (profile: RecurringProfile): Invoice['items'] => {
     const quantity = Number(item.quantity) || 0;
     const price = Number(item.price) || 0;
     return {
+      ...item,
       description: item.description,
       quantity,
       price,
@@ -225,10 +297,10 @@ const buildInvoiceItems = (profile: RecurringProfile): Invoice['items'] => {
 
 const requireActiveClient = (client: Client | null, profile: RecurringProfile): Client => {
   if (!client) {
-    throw new Error(`Client ${profile.clientId} not found`);
+    throw new InvalidRecurringProfileError(`Der Kunde ${profile.clientId} wurde nicht gefunden.`);
   }
   if (client.status !== 'active') {
-    throw new Error(`Client ${profile.clientId} is not active (status: ${client.status})`);
+    throw new InvalidRecurringProfileError(`Der Kunde ${profile.clientId} ist nicht aktiv (Status: ${client.status}).`);
   }
   return client;
 };
@@ -261,6 +333,8 @@ const buildInvoiceFromProfile = (
 
     return chainMaybePromise(dependencies.projectPort.ensureDefaultProject(profile.clientId), (project) => ({
       kind: 'invoice',
+      documentKind: 'invoice',
+      revisionNumber: 0,
       tenantId: scope.tenantId,
       id: dependencies.createInvoiceId(),
       clientId: profile.clientId,
@@ -284,6 +358,56 @@ const buildInvoiceFromProfile = (
       payments: [],
       history: [],
     }));
+  });
+};
+
+/** Generate and finalize one invoice without opening a transaction. */
+const generateInvoiceFromProfileWithoutTransaction = (
+  scope: TenantScope,
+  dependencies: RecurringDomainDependencies,
+  profile: RecurringProfile,
+  now: Date,
+): MaybePromise<Invoice> => {
+  validateRecurringProfile(profile);
+  return chainMaybePromise(dependencies.clientPort.getById(scope, profile.clientId), (client) => {
+    const activeClient = requireActiveClient(client, profile);
+    return chainMaybePromise(dependencies.numberingPort.reserve('invoice', now), (numberReservation) => {
+      const releaseReservationAndRethrow = (error: unknown): MaybePromise<never> => {
+        try {
+          const releaseResult = dependencies.numberingPort.release(numberReservation.reservationId);
+          if (isPromiseLike(releaseResult)) {
+            return releaseResult.then(
+              () => Promise.reject(error),
+              () => Promise.reject(error),
+            );
+          }
+        } catch {
+          // Keep the persistence/finalization error as the useful cause.
+        }
+        throw error;
+      };
+      const rethrowGenerationError = (error: unknown): MaybePromise<never> => {
+        const profileError = toExpectedRecurringProfileError(error);
+        return releaseReservationAndRethrow(profileError ?? error);
+      };
+
+      return catchMaybePromise(
+        () => chainMaybePromise(
+          buildInvoiceFromProfile(scope, dependencies, activeClient, profile, now, numberReservation.number),
+          (invoice) => {
+            const reason = `Auto-generated from recurring profile ${profile.id}`;
+            return chainMaybePromise(
+              dependencies.invoicePort.save(scope, { invoice, reason }),
+              (saved) => chainMaybePromise(
+                dependencies.numberingPort.finalize(numberReservation.reservationId, saved.id),
+                () => saved,
+              ),
+            );
+          },
+        ),
+        rethrowGenerationError,
+      );
+    });
   });
 };
 
@@ -335,6 +459,7 @@ export function upsertRecurringProfile(
   dependencies: Pick<RecurringDomainDependencies, 'recurringProfileStore'>,
   profile: RecurringProfile,
 ): MaybePromise<RecurringProfile> {
+  validateRecurringProfile(profile);
   return dependencies.recurringProfileStore.save(scope, profile);
 }
 
@@ -371,50 +496,14 @@ export function generateInvoiceFromProfile(
   dependencies: RecurringDomainDependencies,
   profile: RecurringProfile,
 ): MaybePromise<Invoice> {
-  return dependencies.tx.inTransaction(() => {
-    const now = getClock(dependencies).now();
-    return chainMaybePromise(dependencies.clientPort.getById(scope, profile.clientId), (client) => {
-      const activeClient = requireActiveClient(client, profile);
-      return chainMaybePromise(dependencies.numberingPort.reserve('invoice', now), (numberReservation) => {
-        const releaseReservationAndRethrow = (error: unknown): MaybePromise<never> => {
-          try {
-            const releaseResult = dependencies.numberingPort.release(numberReservation.reservationId);
-            if (isPromiseLike(releaseResult)) {
-              return releaseResult.then(
-                () => Promise.reject(error),
-                () => Promise.reject(error),
-              );
-            }
-          } catch {
-            // ignore release failures and rethrow original persistence error
-          }
-          throw error;
-        };
-
-        return chainMaybePromise(
-          buildInvoiceFromProfile(scope, dependencies, activeClient, profile, now, numberReservation.number),
-          (invoice) => {
-            const reason = `Auto-generated from recurring profile ${profile.id}`;
-            return catchMaybePromise(
-              () =>
-                chainMaybePromise(
-                  dependencies.invoicePort.save(scope, {
-                    invoice,
-                    reason,
-                  }),
-                  (saved) =>
-                    chainMaybePromise(
-                      dependencies.numberingPort.finalize(numberReservation.reservationId, saved.id),
-                      () => saved,
-                    ),
-                ),
-              releaseReservationAndRethrow,
-            );
-          },
-        );
-      });
-    });
-  });
+  return dependencies.tx.inTransaction(() =>
+    generateInvoiceFromProfileWithoutTransaction(
+      scope,
+      dependencies,
+      profile,
+      getClock(dependencies).now(),
+    )
+  );
 }
 
 const isProfileDue = (profile: RecurringProfile, today: string): boolean => {
@@ -426,31 +515,63 @@ export const processRecurringRun = async (
   dependencies: RecurringDomainDependencies,
 ): Promise<RecurringResult> => {
   const result: RecurringResult = { generated: 0, deactivated: 0, errors: [] };
-  const today = getClock(dependencies).now().toISOString().slice(0, 10);
+  const runNow = getClock(dependencies).now();
+  const today = runNow.toISOString().slice(0, 10);
   const profiles = (await dependencies.recurringProfileStore.list(scope)).filter((profile) => isProfileDue(profile, today));
 
   for (const profile of profiles) {
+    let currentProfile = profile;
     try {
-      await generateInvoiceFromProfile(scope, dependencies, profile);
+      // Keep the callback synchronous for better-sqlite3 while preserving the
+      // same single transaction boundary for async Postgres/PGlite ports.
+      const profileResult = await dependencies.tx.inTransaction(() =>
+        chainMaybePromise(
+          dependencies.recurringProfileStore.getByIdForUpdate
+            ? dependencies.recurringProfileStore.getByIdForUpdate(scope, profile.id)
+            : dependencies.recurringProfileStore.getById(scope, profile.id),
+          (freshProfile) => {
+            // A second run can have listed this profile before the first run
+            // committed. The PostgreSQL/PGlite adapter holds a row lock here;
+            // all adapters still re-read and reject a stale list snapshot.
+            if (!freshProfile
+              || freshProfile.nextRun !== profile.nextRun
+              || freshProfile.active !== profile.active
+              || !isProfileDue(freshProfile, today)) {
+              return { processed: false, shouldDeactivate: false };
+            }
+            currentProfile = freshProfile;
+            return chainMaybePromise(
+              generateInvoiceFromProfileWithoutTransaction(scope, dependencies, freshProfile, runNow),
+              () => {
+                const nextRun = calculateNextRun(freshProfile.nextRun, freshProfile.interval);
+                const shouldDeactivate = Boolean(freshProfile.endDate && nextRun > freshProfile.endDate);
+
+                return mapMaybePromise(
+                  dependencies.recurringProfileStore.save(scope, {
+                    ...freshProfile,
+                    lastRun: today,
+                    nextRun: shouldDeactivate ? (freshProfile.endDate ?? nextRun) : nextRun,
+                    active: shouldDeactivate ? false : freshProfile.active,
+                  }),
+                  () => ({ processed: true, shouldDeactivate }),
+                );
+              },
+            );
+          },
+        ),
+      );
+
+      if (!profileResult.processed) continue;
+      // Count only after the profile transaction has committed successfully.
       result.generated += 1;
-
-      const nextRun = calculateNextRun(profile.nextRun, profile.interval);
-      const shouldDeactivate = Boolean(profile.endDate && nextRun > profile.endDate);
-
-      await dependencies.recurringProfileStore.save(scope, {
-        ...profile,
-        lastRun: today,
-        nextRun: shouldDeactivate ? (profile.endDate ?? nextRun) : nextRun,
-        active: shouldDeactivate ? false : profile.active,
-      });
-
-      if (shouldDeactivate) {
+      if (profileResult.shouldDeactivate) {
         result.deactivated += 1;
       }
     } catch (error) {
+      if (!isRecurringProfileError(error)) throw error;
       result.errors.push({
-        profileName: profile.name,
-        error: error instanceof Error ? error.message : String(error),
+        profileName: currentProfile.name,
+        error: error.message,
       });
     }
   }

@@ -170,7 +170,7 @@ export const mockGuvReportBase: GuvReport = {
     {
       id: 'guv-8',
       code: '8',
-      label: 'Jahresergebnis (Preview)',
+      label: 'Jahresergebnis (Beispiel)',
       level: 0,
       amountCurrent: -3510,
       amountCompare: -4510,
@@ -184,7 +184,7 @@ export const mockGuvReportBase: GuvReport = {
     result: -3510,
   },
   quality: {
-    unmappedAccounts: 1,
+    unmappedAccounts: [{ accountNumber: '9999', amount: -125 }],
     warnings: 2,
     generatedAt: new Date().toISOString(),
     source: 'mock',
@@ -203,7 +203,7 @@ export const mockBalanceSheetPreviewBase: BalanceSheetPreview = {
   passiva: [
     { id: 'p-1', code: 'A', label: 'Eigenkapital', amount: 19742.5, level: 0, side: 'passiva', isSubtotal: true },
     { id: 'p-1-1', code: 'A.I', label: 'Gezeichnetes Kapital / EK', amount: 23252.5, level: 1, side: 'passiva' },
-    { id: 'p-1-2', code: 'A.II', label: 'Jahresergebnis (Preview)', amount: -3510, level: 1, side: 'passiva' },
+    { id: 'p-1-2', code: 'A.II', label: 'Jahresergebnis (Beispiel)', amount: -3510, level: 1, side: 'passiva' },
     { id: 'p-2', code: 'C', label: 'Verbindlichkeiten', amount: 29500, level: 0, side: 'passiva', isSubtotal: true },
     { id: 'p-2-1', code: 'C.1', label: 'Verbindlichkeiten aus LuL', amount: 9500, level: 1, side: 'passiva' },
     { id: 'p-2-2', code: 'C.2', label: 'Sonstige Verbindlichkeiten', amount: 20000, level: 1, side: 'passiva' },
@@ -215,7 +215,7 @@ export const mockBalanceSheetPreviewBase: BalanceSheetPreview = {
   },
   quality: {
     status: 'ok',
-    notes: ['Bilanz ist Preview (Mock). 1 Konto ist aktuell noch ungemappt.'],
+    notes: ['Bilanz ist ein Beispiel. 1 Konto ist aktuell noch ungemappt.'],
     generatedAt: new Date().toISOString(),
     source: 'mock',
   },
@@ -223,20 +223,20 @@ export const mockBalanceSheetPreviewBase: BalanceSheetPreview = {
 
 export const mockDrilldownEntriesByAccount: Record<string, ReportDrilldownEntry[]> = {
   '1200': [
-    { id: 'd1', date: '2026-03-01', bookingText: 'Kundenzahlung Projekt A', reference: 'J-2026-0012', transactionId: 'tx-2', accountNumber: '1200', debit: 2500, credit: 0, amount: 2500, source: 'Abgleich' },
-    { id: 'd2', date: '2026-03-02', bookingText: 'Softwarelizenz', reference: 'J-2026-0013', transactionId: 'tx-1', accountNumber: '1200', debit: 0, credit: 119, amount: -119, source: 'Inbox' },
-    { id: 'd3', date: '2026-03-05', bookingText: 'Miete März', reference: 'J-2026-0019', accountNumber: '1200', debit: 0, credit: 2400, amount: -2400, source: 'Manuell' },
+    { id: 'd1', date: '2026-03-01', bookingText: 'Kundenzahlung Projekt A', reference: 'J-2026-0012', journalEntryId: 'j-d1', sourceType: 'bank_transaction', sourceId: 'tx-2', transactionId: 'tx-2', accountNumber: '1200', debit: 2500, credit: 0, amount: 2500, source: 'Abgleich' },
+    { id: 'd2', date: '2026-03-02', bookingText: 'Softwarelizenz', reference: 'J-2026-0013', journalEntryId: 'j-d2', sourceType: 'receipt', sourceId: 'receipt-1', accountNumber: '1200', debit: 0, credit: 119, amount: -119, source: 'Inbox' },
+    { id: 'd3', date: '2026-03-05', bookingText: 'Miete März', reference: 'J-2026-0019', journalEntryId: 'j-d3', sourceType: 'journal_entry', sourceId: 'j-d3', accountNumber: '1200', debit: 0, credit: 2400, amount: -2400, source: 'Manuell' },
   ],
   '4400': [
-    { id: 'd4', date: '2026-03-01', bookingText: 'Erlöse Projekt A', reference: 'J-2026-0012', transactionId: 'tx-2', accountNumber: '4400', debit: 0, credit: 2100.84, amount: -2100.84, source: 'Abgleich' },
+    { id: 'd4', date: '2026-03-01', bookingText: 'Erlöse Projekt A', reference: 'J-2026-0012', journalEntryId: 'j-d4', sourceType: 'invoice', sourceId: 'invoice-1', accountNumber: '4400', debit: 0, credit: 2100.84, amount: -2100.84, source: 'Abgleich' },
   ],
   '4930': [
-    { id: 'd5', date: '2026-03-02', bookingText: 'Bürobedarf Bestellung', reference: 'J-2026-0013', transactionId: 'tx-4', accountNumber: '4930', debit: 100, credit: 0, amount: 100, source: 'Inbox' },
+    { id: 'd5', date: '2026-03-02', bookingText: 'Bürobedarf Bestellung', reference: 'J-2026-0013', journalEntryId: 'j-d5', sourceType: 'receipt', sourceId: 'receipt-2', accountNumber: '4930', debit: 100, credit: 0, amount: 100, source: 'Inbox' },
   ],
   '4530': [
-    { id: 'd6', date: '2026-03-06', bookingText: 'Tanken Firmenwagen', reference: 'J-2026-0024', transactionId: 'tx-3', accountNumber: '4530', debit: 85.5, credit: 0, amount: 85.5, source: 'Inbox' },
+    { id: 'd6', date: '2026-03-06', bookingText: 'Tanken Firmenwagen', reference: 'J-2026-0024', journalEntryId: 'j-d6', sourceType: 'receipt', sourceId: 'receipt-3', accountNumber: '4530', debit: 85.5, credit: 0, amount: 85.5, source: 'Inbox' },
   ],
   '6200': [
-    { id: 'd7', date: '2026-03-31', bookingText: 'Lohnlauf März', reference: 'J-2026-0042', accountNumber: '6200', debit: 18200, credit: 0, amount: 18200, source: 'Manuell' },
+    { id: 'd7', date: '2026-03-31', bookingText: 'Lohnlauf März', reference: 'J-2026-0042', journalEntryId: 'j-d7', sourceType: 'journal_entry', sourceId: 'j-d7', accountNumber: '6200', debit: 18200, credit: 0, amount: 18200, source: 'Manuell' },
   ],
 };

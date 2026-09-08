@@ -4,6 +4,8 @@ import {
   DEFAULT_TAX_MODE,
   INVOICE_TAX_MODE_DEFINITIONS,
   calculateInvoiceTaxSnapshot,
+  getDachVatRates,
+  recommendInvoiceTaxMode,
   getDefaultTaxRate,
   getInvoiceTaxExemptionReason,
   getInvoiceTaxModeDefinition,
@@ -26,9 +28,9 @@ const EXPECTED: Array<{ mode: InvoiceTaxMode; code: string; zeroVat: boolean }> 
   { mode: 'standard_vat', code: 'S', zeroVat: false },
   { mode: 'small_business_19_ustg', code: 'E', zeroVat: true },
   { mode: 'reverse_charge_13b', code: 'AE', zeroVat: true },
-  { mode: 'intra_eu_supply_6a', code: 'E', zeroVat: true },
+  { mode: 'intra_eu_supply_6a', code: 'K', zeroVat: true },
   { mode: 'intra_eu_service_reverse_charge', code: 'AE', zeroVat: true },
-  { mode: 'export_third_country', code: 'E', zeroVat: true },
+  { mode: 'export_third_country', code: 'G', zeroVat: true },
   { mode: 'vat_exempt_4_ustg', code: 'E', zeroVat: true },
   { mode: 'non_taxable_outside_scope', code: 'O', zeroVat: true },
 ];
@@ -172,4 +174,39 @@ test('an explicit exemption reason overrides the legal default', () => {
     getInvoiceTaxExemptionReason('reverse_charge_13b', { exemptionReasonOverride: ' Eigene Begründung ' }),
     'Eigene Begründung',
   );
+});
+
+test('tax notice avoids German statute citations for AT and CH sellers', () => {
+  assert.equal(
+    getInvoiceTaxExemptionReason('reverse_charge_13b', { sellerCountryCode: 'AT' }),
+    'Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)',
+  );
+  assert.match(getInvoiceTaxExemptionReason('reverse_charge_13b', { sellerCountryCode: 'CH' }) ?? '', /Bezugsteuer/);
+});
+
+test('DACH rate catalog exposes country defaults without adding EU automation', () => {
+  assert.deepEqual(getDachVatRates('DE'), [19, 7]);
+  assert.deepEqual(getDachVatRates('AT'), [20, 10, 13, 4.9]);
+  assert.deepEqual(getDachVatRates('CH'), [8.1, 2.6, 3.8]);
+});
+
+test('cross-border recommendation is explicit and never silently applied', () => {
+  const recommendation = recommendInvoiceTaxMode({
+    sellerCountryCode: 'DE',
+    buyerCountryCode: 'AT',
+    buyerType: 'business',
+    sellerVatId: 'DE123456789',
+    buyerVatId: 'ATU12345678',
+  });
+  assert.equal(recommendation.mode, 'intra_eu_service_reverse_charge');
+  assert.equal(recommendation.requiresConfirmation, true);
+});
+
+test('document rate override takes precedence over company default', () => {
+  const snapshot = calculateInvoiceTaxSnapshot({
+    taxMode: 'standard_vat',
+    taxMeta: { defaultVatRate: 20 },
+    items: items(100),
+  }, settings({ defaultVatRate: 19 }));
+  assert.equal(snapshot.vatAmount, 20);
 });

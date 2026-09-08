@@ -6,6 +6,7 @@ let desktop;
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
   await seedDesktopData(desktop.page, { app: 'pro' });
+  await desktop.page.reload();
 });
 
 test.afterEach(async () => {
@@ -25,7 +26,7 @@ test('pro finance hub opens accounting workspace and core tabs', async () => {
 
   await expect(page.getByRole('button', { name: 'Inbox', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Abgleich', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Exceptions', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Ausnahmen', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Anlagen', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Auswertungen', exact: true })).toBeVisible();
 });

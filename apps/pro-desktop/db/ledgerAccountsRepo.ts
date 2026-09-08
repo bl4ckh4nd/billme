@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3';
+import { and, asc, count, eq, like, or } from 'drizzle-orm';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
 import type { LedgerAccount, LedgerAccountStats, LedgerChart, ListLedgerAccountsArgs } from '@billme/accounting-shared';
 import type { TenantScope } from '@billme/server-core';
 import { getTenantId } from '../tenantScope';
@@ -43,52 +45,25 @@ export const listLedgerAccounts = (
   scope: TenantScope,
 ): LedgerAccount[] => {
   const tenantId = getTenantId(scope);
-  const where: string[] = [];
-  const params: Record<string, unknown> = { tenantId };
-
-  if (args.chart) {
-    where.push('chart = @chart');
-    params.chart = args.chart;
-  }
-
-  if (args.search && args.search.trim().length > 0) {
-    where.push('(account_number LIKE @search OR name LIKE @search)');
-    params.search = `%${args.search.trim()}%`;
-  }
-
   const limit = Math.max(1, Math.min(10_000, Math.floor(args.limit ?? 500)));
   const offset = Math.max(0, Math.floor(args.offset ?? 0));
-  params.limit = limit;
-  params.offset = offset;
-
-  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-  const rows = db
-    .prepare(
-      `
-      SELECT
-        la.id,
-        la.chart,
-        la.account_number,
-        la.name,
-        (
-          SELECT GROUP_CONCAT(ak.keyword, '|')
-          FROM account_keywords ak
-          WHERE ak.tenant_id = @tenantId
-            AND ak.chart = la.chart
-            AND ak.account_number = la.account_number
-            AND ak.active = 1
-        ) AS keywords_csv,
-        la.source,
-        la.created_at,
-        la.updated_at
-      FROM ledger_accounts
-      AS la
-      ${whereSql}
-      ORDER BY chart ASC, account_number ASC
-      LIMIT @limit OFFSET @offset
-    `,
-    )
-    .all(params) as Array<{
+  const drizzle = createDrizzle(db);
+  const conditions = [];
+  if (args.chart) conditions.push(eq(schema.ledgerAccounts.chart, args.chart));
+  if (args.search && args.search.trim().length > 0) {
+    const search = `%${args.search.trim()}%`;
+    conditions.push(or(like(schema.ledgerAccounts.accountNumber, search), like(schema.ledgerAccounts.name, search)));
+  }
+  const rows = drizzle.select({
+    id: schema.ledgerAccounts.id,
+    chart: schema.ledgerAccounts.chart,
+    account_number: schema.ledgerAccounts.accountNumber,
+    name: schema.ledgerAccounts.name,
+    source: schema.ledgerAccounts.source,
+    created_at: schema.ledgerAccounts.createdAt,
+    updated_at: schema.ledgerAccounts.updatedAt,
+  }).from(schema.ledgerAccounts).where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(asc(schema.ledgerAccounts.chart), asc(schema.ledgerAccounts.accountNumber)).limit(limit).offset(offset).all() as Array<{
     id: string;
     chart: string;
     account_number: string;
@@ -99,31 +74,20 @@ export const listLedgerAccounts = (
     updated_at: string;
   }>;
 
-  return rows.map(toLedgerAccount);
+  const keywordRows = drizzle.select({ chart: schema.accountKeywords.chart, account_number: schema.accountKeywords.accountNumber, keyword: schema.accountKeywords.keyword })
+    .from(schema.accountKeywords).where(and(eq(schema.accountKeywords.tenantId, tenantId), eq(schema.accountKeywords.active, 1))).all();
+  return rows.map((row) => toLedgerAccount({ ...row, keywords_csv: keywordRows.filter((k) => k.chart === row.chart && k.account_number === row.account_number).map((k) => k.keyword).join('|') || null }));
 };
 
 export const countLedgerAccounts = (db: Database.Database, chart?: LedgerChart): number => {
-  if (chart) {
-    const row = db
-      .prepare('SELECT COUNT(*) as c FROM ledger_accounts WHERE chart = ?')
-      .get(chart) as { c: number };
-    return row.c;
-  }
-
-  const row = db.prepare('SELECT COUNT(*) as c FROM ledger_accounts').get() as { c: number };
-  return row.c;
+  const row = createDrizzle(db).select({ count: count() }).from(schema.ledgerAccounts)
+    .where(chart ? eq(schema.ledgerAccounts.chart, chart) : undefined).get();
+  return Number(row?.count ?? 0);
 };
 
 export const getLedgerAccountStats = (db: Database.Database): LedgerAccountStats => {
-  const rows = db
-    .prepare(
-      `
-      SELECT chart, COUNT(*) as c
-      FROM ledger_accounts
-      GROUP BY chart
-    `,
-    )
-    .all() as Array<{ chart: string; c: number }>;
+  const rows = createDrizzle(db).select({ chart: schema.ledgerAccounts.chart, c: count() })
+    .from(schema.ledgerAccounts).groupBy(schema.ledgerAccounts.chart).all() as Array<{ chart: string; c: number }>;
 
   const byChart: Record<LedgerChart, number> = {
     SKR03: 0,
@@ -150,19 +114,10 @@ export const upsertLedgerAccounts = (
     return { inserted: 0, updated: 0, total: 0 };
   }
 
-  const existingRows = db
-    .prepare('SELECT chart, account_number FROM ledger_accounts')
-    .all() as Array<{ chart: string; account_number: string }>;
+  const drizzle = createDrizzle(db);
+  const existingRows = drizzle.select({ chart: schema.ledgerAccounts.chart, account_number: schema.ledgerAccounts.accountNumber })
+    .from(schema.ledgerAccounts).all() as Array<{ chart: string; account_number: string }>;
   const existingKeys = new Set(existingRows.map((row) => `${row.chart}:${row.account_number}`));
-
-  const upsert = db.prepare(`
-    INSERT INTO ledger_accounts (id, chart, account_number, name, source, created_at, updated_at)
-    VALUES (@id, @chart, @accountNumber, @name, @source, @createdAt, @updatedAt)
-    ON CONFLICT(chart, account_number) DO UPDATE SET
-      name = excluded.name,
-      source = excluded.source,
-      updated_at = excluded.updated_at
-  `);
 
   let inserted = 0;
   let updated = 0;
@@ -178,7 +133,7 @@ export const upsertLedgerAccounts = (
         existingKeys.add(key);
       }
 
-      upsert.run({
+      drizzle.insert(schema.ledgerAccounts).values({
         id: `ledger:${row.chart}:${row.accountNumber}`,
         chart: row.chart,
         accountNumber: row.accountNumber,
@@ -186,7 +141,11 @@ export const upsertLedgerAccounts = (
         source: row.source ?? 'manual',
         createdAt: now,
         updatedAt: now,
-      });
+      }).onConflictDoUpdate({ target: [schema.ledgerAccounts.chart, schema.ledgerAccounts.accountNumber], set: {
+        name: row.name,
+        source: row.source ?? 'manual',
+        updatedAt: now,
+      }}).run();
     }
   });
 

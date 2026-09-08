@@ -1,0 +1,977 @@
+import {
+  boolean,
+  customType,
+  bigint,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
+import { pgSchema } from "drizzle-orm/pg-core";
+
+const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({ dataType: () => "bytea" });
+
+const drizzleSchema = pgSchema("drizzle");
+export const drizzleMigrations = drizzleSchema.table("__drizzle_migrations", {
+  id: integer("id"),
+  hash: text("hash"),
+  createdAt: bigint("created_at", { mode: "number" }),
+});
+
+export const tenants = pgTable("tenants", {
+  id: text("id"),
+  slug: text("slug"),
+  displayName: text("display_name"),
+  product: text("product"),
+  deploymentMode: text("deployment_mode"),
+  status: text("status"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const userAccounts = pgTable("user_accounts", {
+  id: text("id"),
+  email: text("email"),
+  fullName: text("full_name"),
+  status: text("status"),
+  lastLoginAt: text("last_login_at"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const tenantMemberships = pgTable("tenant_memberships", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  userId: text("user_id"),
+  role: text("role"),
+  invitedByUserId: text("invited_by_user_id"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const userPasswordCredentials = pgTable("user_password_credentials", {
+  userId: text("user_id"),
+  passwordSalt: text("password_salt"),
+  passwordHash: text("password_hash"),
+  passwordAlgorithm: text("password_algorithm"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const serverSettings = pgTable("server_settings", {
+  tenantId: text("tenant_id"),
+  settingsJson: text("settings_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const numberReservations = pgTable("number_reservations", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  kind: text("kind"),
+  number: text("number"),
+  counterValue: integer("counter_value"),
+  status: text("status"),
+  documentId: text("document_id"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const clients = pgTable("clients", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  customerNumber: text("customer_number"),
+  company: text("company"),
+  contactPerson: text("contact_person"),
+  email: text("email"),
+  phone: text("phone"),
+  address: text("address"),
+  status: text("status"),
+  avatar: text("avatar"),
+  tagsJson: text("tags_json"),
+  notes: text("notes"),
+  addressesJson: text("addresses_json"),
+  emailsJson: text("emails_json"),
+  projectsJson: text("projects_json"),
+  activitiesJson: text("activities_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+  taxProfileJson: text("tax_profile_json"),
+});
+
+export const invoices = pgTable("invoices", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  clientId: text("client_id"),
+  clientNumber: text("client_number"),
+  projectId: text("project_id"),
+  number: text("number"),
+  documentKind: text("document_kind"),
+  sourceDocumentId: text("source_document_id"),
+  rootDocumentId: text("root_document_id"),
+  revisionOfId: text("revision_of_id"),
+  revisionNumber: integer("revision_number"),
+  client: text("client"),
+  clientEmail: text("client_email"),
+  clientAddress: text("client_address"),
+  billingAddressJson: text("billing_address_json"),
+  shippingAddressJson: text("shipping_address_json"),
+  date: text("date"),
+  dueDate: text("due_date"),
+  servicePeriod: text("service_period"),
+  amount: numeric("amount"),
+  status: text("status"),
+  dunningLevel: integer("dunning_level"),
+  itemsJson: text("items_json"),
+  paymentsJson: text("payments_json"),
+  historyJson: text("history_json"),
+  taxMode: text("tax_mode"),
+  taxMetaJson: text("tax_meta_json"),
+  taxSnapshotJson: text("tax_snapshot_json"),
+  accountingStatus: text("accounting_status"),
+  accountingSnapshotJson: text("accounting_snapshot_json"),
+  accountingJournalEntryId: text("accounting_journal_entry_id"),
+  accountingPostedAt: text("accounting_posted_at"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const offers = pgTable("offers", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  clientId: text("client_id"),
+  clientNumber: text("client_number"),
+  projectId: text("project_id"),
+  number: text("number"),
+  client: text("client"),
+  clientEmail: text("client_email"),
+  clientAddress: text("client_address"),
+  billingAddressJson: text("billing_address_json"),
+  shippingAddressJson: text("shipping_address_json"),
+  date: text("date"),
+  validUntil: text("valid_until"),
+  amount: numeric("amount"),
+  status: text("status"),
+  shareJson: text("share_json"),
+  historyJson: text("history_json"),
+  itemsJson: text("items_json"),
+  taxMode: text("tax_mode"),
+  taxMetaJson: text("tax_meta_json"),
+  taxSnapshotJson: text("tax_snapshot_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const portalPublications = pgTable("portal_publications", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  documentType: text("document_type"),
+  documentId: text("document_id"),
+  token: text("token"),
+  tokenHash: text("token_hash"),
+  customerRef: text("customer_ref"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+  publishedAt: text("published_at"),
+  expiresAt: text("expires_at"),
+}, (table) => ({
+  tenantDocumentUnique: uniqueIndex("portal_publications_tenant_document_unique")
+    .on(table.tenantId, table.documentType, table.documentId),
+  tenantTokenHashUnique: uniqueIndex("portal_publications_tenant_token_hash_unique")
+    .on(table.tenantId, table.tokenHash),
+}));
+
+export const recurringProfiles = pgTable("recurring_profiles", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  clientId: text("client_id"),
+  active: boolean("active"),
+  name: text("name"),
+  interval: text("interval"),
+  nextRun: text("next_run"),
+  lastRun: text("last_run"),
+  endDate: text("end_date"),
+  amount: numeric("amount"),
+  itemsJson: text("items_json"),
+  taxMode: text("tax_mode"),
+  taxMetaJson: text("tax_meta_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const emailLog = pgTable("email_log", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  documentType: text("document_type"),
+  documentId: text("document_id"),
+  documentNumber: text("document_number"),
+  recipientEmail: text("recipient_email"),
+  recipientName: text("recipient_name"),
+  subject: text("subject"),
+  bodyText: text("body_text"),
+  provider: text("provider"),
+  status: text("status"),
+  errorMessage: text("error_message"),
+  sentAt: text("sent_at"),
+  createdAt: text("created_at"),
+});
+
+export const emailOutbox = pgTable("email_outbox", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  dedupeKey: text("dedupe_key"),
+  documentType: text("document_type"),
+  documentId: text("document_id"),
+  documentNumber: text("document_number"),
+  recipientEmail: text("recipient_email"),
+  recipientName: text("recipient_name"),
+  subject: text("subject"),
+  bodyText: text("body_text"),
+  status: text("status"),
+  attemptCount: integer("attempt_count"),
+  maxAttempts: integer("max_attempts"),
+  nextAttemptAt: text("next_attempt_at"),
+  lastAttemptAt: text("last_attempt_at"),
+  lockedAt: text("locked_at"),
+  leaseExpiresAt: text("lease_expires_at"),
+  lockedBy: text("locked_by"),
+  lastError: text("last_error"),
+  provider: text("provider"),
+  providerMessageId: text("provider_message_id"),
+  sentAt: text("sent_at"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const dunningHistory = pgTable("dunning_history", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  invoiceId: text("invoice_id"),
+  invoiceNumber: text("invoice_number"),
+  dunningLevel: integer("dunning_level"),
+  daysOverdue: integer("days_overdue"),
+  feeApplied: numeric("fee_applied"),
+  emailSent: boolean("email_sent"),
+  emailLogId: text("email_log_id"),
+  processedAt: text("processed_at"),
+  createdAt: text("created_at"),
+});
+
+export const auditLog = pgTable("audit_log", {
+  id: bigint("id", { mode: "number" }),
+  tenantId: text("tenant_id"),
+  sequence: bigint("sequence", { mode: "number" }),
+  ts: text("ts"),
+  entityType: text("entity_type"),
+  entityId: text("entity_id"),
+  action: text("action"),
+  reason: text("reason"),
+  beforeJson: text("before_json"),
+  afterJson: text("after_json"),
+  prevHash: text("prev_hash"),
+  hash: text("hash"),
+  actor: text("actor"),
+}, (table) => ({
+  tenantHashUnique: uniqueIndex("audit_log_tenant_hash_unique").on(table.tenantId, table.hash),
+}));
+
+export const sqliteImportRuns = pgTable("sqlite_import_runs", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  sourcePath: text("source_path"),
+  sourceProduct: text("source_product"),
+  sourceSha256: text("source_sha256"),
+  status: text("status"),
+  detailsJson: text("details_json"),
+  startedAt: text("started_at"),
+  completedAt: text("completed_at"),
+});
+
+export const articles = pgTable("articles", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  sku: text("sku"),
+  title: text("title"),
+  description: text("description"),
+  price: numeric("price"),
+  unit: text("unit"),
+  category: text("category"),
+  taxRate: numeric("tax_rate"),
+});
+
+export const accounts = pgTable("accounts", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  name: text("name"),
+  iban: text("iban"),
+  balance: numeric("balance"),
+  defaultSkrAccountNumber: text("default_skr_account_number"),
+  type: text("type"),
+  color: text("color"),
+});
+
+export const ledgerAccounts = pgTable("ledger_accounts", {
+  id: text("id"),
+  chart: text("chart"),
+  accountNumber: text("account_number"),
+  name: text("name"),
+  source: text("source"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const proWorkflowEntries = pgTable("pro_workflow_entries", {
+  tenantId: text("tenant_id"),
+  transactionId: text("transaction_id"),
+  transactionJson: text("transaction_json"),
+  draftJson: text("draft_json"),
+  updatedAt: text("updated_at"),
+});
+
+export const bankTransactions = pgTable("bank_transactions", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  accountId: text("account_id"),
+  date: text("date"),
+  amount: numeric("amount"),
+  type: text("type"),
+  counterparty: text("counterparty"),
+  purpose: text("purpose"),
+  linkedInvoiceId: text("linked_invoice_id"),
+  status: text("status"),
+  sourceTransactionId: text("source_transaction_id"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const bookingDrafts = pgTable("booking_drafts", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  transactionId: text("transaction_id"),
+  workflowStatus: text("workflow_status"),
+  draftJson: text("draft_json"),
+  updatedAt: text("updated_at"),
+});
+
+export const bookingDraftLines = pgTable("booking_draft_lines", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  draftId: text("draft_id"),
+  lineNo: integer("line_no"),
+  accountNumber: text("account_number"),
+  debitAmount: numeric("debit_amount"),
+  creditAmount: numeric("credit_amount"),
+  taxCode: text("tax_code"),
+  taxCaseKey: text("tax_case_key"),
+  taxRate: numeric("tax_rate"),
+  netAmount: numeric("net_amount"),
+  taxAmount: numeric("tax_amount"),
+  grossAmount: numeric("gross_amount"),
+  countryCode: text("country_code"),
+  counterpartyVatId: text("counterparty_vat_id"),
+  evidenceType: text("evidence_type"),
+  evidenceReference: text("evidence_reference"),
+  datevSachverhaltLl: text("datev_sachverhalt_ll"),
+  costCenter: text("cost_center"),
+  memo: text("memo"),
+});
+
+export const draftValidationIssues = pgTable("draft_validation_issues", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  draftId: text("draft_id"),
+  code: text("code"),
+  severity: text("severity"),
+  message: text("message"),
+  fieldPath: text("field_path"),
+  blocking: boolean("blocking"),
+  source: text("source"),
+  issueJson: text("issue_json"),
+  createdAt: text("created_at"),
+});
+
+export const accountingPeriods = pgTable("accounting_periods", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  period: text("period"),
+  fiscalYear: integer("fiscal_year"),
+  status: text("status"),
+  startsAt: text("starts_at"),
+  endsAt: text("ends_at"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const journalEntries = pgTable("journal_entries", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  entryNumber: integer("entry_number"),
+  postingDate: text("posting_date"),
+  documentDate: text("document_date"),
+  bookingText: text("booking_text"),
+  reference: text("reference"),
+  period: text("period"),
+  fiscalYear: integer("fiscal_year"),
+  status: text("status"),
+  sourceDraftId: text("source_draft_id"),
+  sourceType: text("source_type"),
+  sourceKey: text("source_key"),
+  reversedEntryId: text("reversed_entry_id"),
+  createdAt: text("created_at"),
+});
+
+export const accountingPolicies = pgTable("accounting_policies", {
+  tenantId: text("tenant_id"),
+  activeChart: text("active_chart"),
+  vatMethod: text("vat_method"),
+  periodPolicy: text("period_policy"),
+  updatedAt: text("updated_at"),
+});
+
+export const accountingAccountMappings = pgTable("accounting_account_mappings", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  chart: text("chart"),
+  role: text("role"),
+  accountNumber: text("account_number"),
+  updatedAt: text("updated_at"),
+});
+
+export const vendors = pgTable("vendors", {
+  id: text("id"), tenantId: text("tenant_id"), vendorNumber: text("vendor_number"), name: text("name"),
+  email: text("email"), address: text("address"), vatId: text("vat_id"), iban: text("iban"),
+  defaultExpenseAccount: text("default_expense_account"), createdAt: text("created_at"), updatedAt: text("updated_at"),
+});
+
+export const incomingInvoices = pgTable("incoming_invoices", {
+  id: text("id"), tenantId: text("tenant_id"), vendorId: text("vendor_id"), number: text("number"),
+  invoiceDate: text("invoice_date"), dueDate: text("due_date"), servicePeriod: text("service_period"),
+  netAmount: numeric("net_amount"), taxAmount: numeric("tax_amount"), grossAmount: numeric("gross_amount"),
+  status: text("status"), taxRate: numeric("tax_rate"), taxCaseKey: text("tax_case_key"), notes: text("notes"),
+  accountingStatus: text("accounting_status"), accountingSnapshotJson: text("accounting_snapshot_json"),
+  accountingJournalEntryId: text("accounting_journal_entry_id"), accountingPostedAt: text("accounting_posted_at"), createdAt: text("created_at"), updatedAt: text("updated_at"),
+});
+
+export const incomingInvoiceLines = pgTable("incoming_invoice_lines", {
+  id: text("id"), tenantId: text("tenant_id"), incomingInvoiceId: text("incoming_invoice_id"), position: integer("position"),
+  description: text("description"), quantity: numeric("quantity"), unitPrice: numeric("unit_price"), netAmount: numeric("net_amount"),
+  taxRate: numeric("tax_rate"), taxAmount: numeric("tax_amount"), grossAmount: numeric("gross_amount"), accountNumber: text("account_number"), assetAccountNumber: text("asset_account_number"),
+});
+
+export const incomingInvoiceDocuments = pgTable("incoming_invoice_documents", {
+  id: text("id"), tenantId: text("tenant_id"), incomingInvoiceId: text("incoming_invoice_id"),
+  originalFilename: text("original_filename"), mimeType: text("mime_type"), byteLength: integer("byte_length"),
+  sha256: text("sha256"), contentBytes: bytea("content_bytes"), reviewStatus: text("review_status"),
+  createdAt: text("created_at"), updatedAt: text("updated_at"),
+});
+
+export const openItems = pgTable("open_items", {
+  id: text("id"), tenantId: text("tenant_id"), partyType: text("party_type"), partyId: text("party_id"), sourceType: text("source_type"), sourceId: text("source_id"), documentNumber: text("document_number"), documentDate: text("document_date"), dueDate: text("due_date"), originalAmount: numeric("original_amount"), allocatedAmount: numeric("allocated_amount"), residualAmount: numeric("residual_amount"), status: text("status"), journalEntryId: text("journal_entry_id"), createdAt: text("created_at"), updatedAt: text("updated_at"),
+});
+
+export const openItemPayments = pgTable("open_item_payments", {
+  id: text("id"), tenantId: text("tenant_id"), partyType: text("party_type"), partyId: text("party_id"), paymentDate: text("payment_date"), amount: numeric("amount"), bankAccountNumber: text("bank_account_number"), method: text("method"), sourceType: text("source_type"), sourceId: text("source_id"), allocatedAmount: numeric("allocated_amount"), residualAmount: numeric("residual_amount"), status: text("status"), journalEntryId: text("journal_entry_id"), createdAt: text("created_at"),
+});
+
+export const openItemAllocations = pgTable("open_item_allocations", {
+  id: text("id"), tenantId: text("tenant_id"), paymentId: text("payment_id"), openItemId: text("open_item_id"), amount: numeric("amount"), createdAt: text("created_at"), eventKey: text("event_key"),
+});
+
+export const accountingBackfillRuns = pgTable("accounting_backfill_runs", {
+  id: text("id"), tenantId: text("tenant_id"), status: text("status"), candidatesJson: text("candidates_json"), confirmationHash: text("confirmation_hash"), resultJson: text("result_json"), createdAt: text("created_at"), confirmedAt: text("confirmed_at"), completedAt: text("completed_at"), configJson: text("config_json"),
+});
+
+export const journalLines = pgTable("journal_lines", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  entryId: text("entry_id"),
+  lineNo: integer("line_no"),
+  accountNumber: text("account_number"),
+  debitAmount: numeric("debit_amount"),
+  creditAmount: numeric("credit_amount"),
+  taxCode: text("tax_code"),
+  taxCaseKey: text("tax_case_key"),
+  taxRate: numeric("tax_rate"),
+  netAmount: numeric("net_amount"),
+  taxAmount: numeric("tax_amount"),
+  grossAmount: numeric("gross_amount"),
+  countryCode: text("country_code"),
+  counterpartyVatId: text("counterparty_vat_id"),
+  evidenceType: text("evidence_type"),
+  evidenceReference: text("evidence_reference"),
+  datevSachverhaltLl: text("datev_sachverhalt_ll"),
+  costCenter: text("cost_center"),
+  memo: text("memo"),
+});
+
+export const accountMappingsHgb = pgTable("account_mappings_hgb", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  chart: text("chart"),
+  accountNumber: text("account_number"),
+  statementType: text("statement_type"),
+  positionKey: text("position_key"),
+  positionLabel: text("position_label"),
+  balanceSide: text("balance_side"),
+  updatedAt: text("updated_at"),
+});
+
+export const reportSnapshots = pgTable("report_snapshots", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  reportType: text("report_type"),
+  argsJson: text("args_json"),
+  payloadJson: text("payload_json"),
+  sourceHash: text("source_hash"),
+  fromDate: text("from_date"),
+  toDate: text("to_date"),
+  asOfDate: text("as_of_date"),
+  createdAt: text("created_at"),
+});
+
+export const reportSnapshotPositions = pgTable("report_snapshot_positions", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  snapshotId: text("snapshot_id"),
+  positionKey: text("position_key"),
+  positionLabel: text("position_label"),
+  amount: numeric("amount"),
+  debitAmount: numeric("debit_amount"),
+  creditAmount: numeric("credit_amount"),
+  metadataJson: text("metadata_json"),
+  createdAt: text("created_at"),
+});
+
+export const reportAccountMappings = pgTable("report_account_mappings", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  reportType: text("report_type"),
+  chart: text("chart"),
+  accountNumber: text("account_number"),
+  positionKey: text("position_key"),
+  positionLabel: text("position_label"),
+  validFrom: text("valid_from"),
+  validTo: text("valid_to"),
+  version: integer("version"),
+  source: text("source"),
+  sourceHash: text("source_hash"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+export const reportCatalogRefs = pgTable("report_catalog_refs", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  reportType: text("report_type"),
+  catalogKey: text("catalog_key"),
+  catalogVersion: text("catalog_version"),
+  sourceHash: text("source_hash"),
+  payloadJson: text("payload_json"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+export const taxAdjustments = pgTable("tax_adjustments", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  submissionId: text("submission_id"),
+  taxYear: integer("tax_year"),
+  period: text("period"),
+  adjustmentType: text("adjustment_type"),
+  amount: numeric("amount"),
+  taxCode: text("tax_code"),
+  reason: text("reason"),
+  sourceJson: text("source_json"),
+  idempotencyKey: text("idempotency_key"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+export const taxSubmissions = pgTable("tax_submissions", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  submissionType: text("submission_type"),
+  taxYear: integer("tax_year"),
+  period: text("period"),
+  status: text("status"),
+  payloadJson: text("payload_json"),
+  sourceSnapshotId: text("source_snapshot_id"),
+  idempotencyKey: text("idempotency_key"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+  submittedAt: text("submitted_at"),
+});
+
+export const taxSubmissionApprovals = pgTable("tax_submission_approvals", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  submissionId: text("submission_id"),
+  requesterId: text("requester_id"),
+  approverId: text("approver_id"),
+  decision: text("decision"),
+  reason: text("reason"),
+  createdAt: text("created_at"),
+});
+
+export const taxSubmissionReceipts = pgTable("tax_submission_receipts", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  submissionId: text("submission_id"),
+  receiptType: text("receipt_type"),
+  receiptNumber: text("receipt_number"),
+  receiptJson: text("receipt_json"),
+  receivedAt: text("received_at"),
+});
+
+export const taxCredentials = pgTable("tax_credentials", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  provider: text("provider"),
+  credentialKey: text("credential_key"),
+  version: integer("version"),
+  encryptionAlgorithm: text("encryption_algorithm"),
+  keyVersion: text("key_version"),
+  metadataJson: text("metadata_json"),
+  encryptedBlob: bytea("encrypted_blob"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+export const taxSubmissionJobs = pgTable("tax_submission_jobs", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  submissionId: text("submission_id"),
+  jobType: text("job_type"),
+  idempotencyKey: text("idempotency_key"),
+  status: text("status"),
+  attempts: integer("attempts"),
+  availableAt: text("available_at"),
+  lockedAt: text("locked_at"),
+  completedAt: text("completed_at"),
+  lastError: text("last_error"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const datevExports = pgTable("datev_exports", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  filePath: text("file_path"),
+  recordCount: integer("record_count"),
+  fromDate: text("from_date"),
+  toDate: text("to_date"),
+  createdAt: text("created_at"),
+  metaJson: text("meta_json"),
+  contentBytes: bytea("content_bytes"),
+});
+
+export const taxCases = pgTable("tax_cases", {
+  key: text("key"),
+  label: text("label"),
+  mechanism: text("mechanism"),
+  defaultRate: numeric("default_rate"),
+  requiresCounterpartyVatId: boolean("requires_counterparty_vat_id"),
+  requiresCountry: boolean("requires_country"),
+  requiresEvidence: boolean("requires_evidence"),
+  active: boolean("active"),
+  updatedAt: text("updated_at"),
+});
+
+export const taxCaseAccountMappings = pgTable("tax_case_account_mappings", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  chart: text("chart"),
+  taxCaseKey: text("tax_case_key"),
+  role: text("role"),
+  accountNumber: text("account_number"),
+  datevBuKey: text("datev_bu_key"),
+  validFrom: text("valid_from"),
+  validTo: text("valid_to"),
+  updatedAt: text("updated_at"),
+});
+
+export const vatEvidence = pgTable("vat_evidence", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  draftId: text("draft_id"),
+  entryId: text("entry_id"),
+  lineId: text("line_id"),
+  taxCaseKey: text("tax_case_key"),
+  evidenceType: text("evidence_type"),
+  evidenceReference: text("evidence_reference"),
+  countryCode: text("country_code"),
+  counterpartyVatId: text("counterparty_vat_id"),
+  capturedAt: text("captured_at"),
+});
+
+export const journalPostingPairs = pgTable("journal_posting_pairs", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  entryId: text("entry_id"),
+  debitLineId: text("debit_line_id"),
+  creditLineId: text("credit_line_id"),
+  amount: numeric("amount"),
+  taxCaseKey: text("tax_case_key"),
+  datevBuKey: text("datev_bu_key"),
+  createdAt: text("created_at"),
+});
+
+export const transactions = pgTable("transactions", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  accountId: text("account_id"),
+  date: text("date"),
+  amount: numeric("amount"),
+  type: text("type"),
+  counterparty: text("counterparty"),
+  purpose: text("purpose"),
+  linkedInvoiceId: text("linked_invoice_id"),
+  status: text("status"),
+  dedupHash: text("dedup_hash"),
+  importBatchId: text("import_batch_id"),
+  deletedAt: text("deleted_at"),
+});
+
+export const eurLines = pgTable("eur_lines", {
+  id: text("id"),
+  taxYear: integer("tax_year"),
+  kennziffer: text("kennziffer"),
+  providerPath: text("provider_path"),
+  label: text("label"),
+  kind: text("kind"),
+  exportable: boolean("exportable"),
+  sortOrder: integer("sort_order"),
+  computedFromJson: text("computed_from_json"),
+  computedTermsJson: text("computed_terms_json"),
+  sourceVersion: text("source_version"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const eurClassifications = pgTable("eur_classifications", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  sourceType: text("source_type"),
+  sourceId: text("source_id"),
+  taxYear: integer("tax_year"),
+  eurLineId: text("eur_line_id"),
+  excluded: boolean("excluded"),
+  vatMode: text("vat_mode"),
+  vatRate: numeric("vat_rate"),
+  note: text("note"),
+  updatedAt: text("updated_at"),
+});
+
+export const eurCashFacts = pgTable("eur_cash_facts", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  sourceType: text("source_type"),
+  sourceId: text("source_id"),
+  taxYear: integer("tax_year"),
+  kind: text("kind"),
+  amountNet: numeric("amount_net"),
+  flowType: text("flow_type"),
+  eurLineId: text("eur_line_id"),
+  splitsJson: text("splits_json"),
+  reason: text("reason"),
+  actorId: text("actor_id"),
+  actorName: text("actor_name"),
+  idempotencyKey: text("idempotency_key"),
+  provenanceJson: text("provenance_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const eurAnnexFacts = pgTable("eur_annex_facts", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  taxYear: integer("tax_year"),
+  annex: text("annex"),
+  lineId: text("line_id"),
+  amount: numeric("amount"),
+  sourceId: text("source_id"),
+  factDate: text("fact_date"),
+  reason: text("reason"),
+  actorId: text("actor_id"),
+  actorName: text("actor_name"),
+  idempotencyKey: text("idempotency_key"),
+  provenanceJson: text("provenance_json"),
+  createdAt: text("created_at"),
+});
+
+export const eurReportSnapshots = pgTable("eur_report_snapshots", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  taxYear: integer("tax_year"),
+  fromDate: text("from_date"),
+  toDate: text("to_date"),
+  payloadJson: text("payload_json"),
+  sourceHash: text("source_hash"),
+  catalogId: text("catalog_id"),
+  catalogVersion: text("catalog_version"),
+  catalogSourceHash: text("catalog_source_hash"),
+  reason: text("reason"),
+  actorId: text("actor_id"),
+  createdAt: text("created_at"),
+});
+
+export const eurRules = pgTable("eur_rules", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  taxYear: integer("tax_year"),
+  priority: integer("priority"),
+  field: text("field"),
+  operator: text("operator"),
+  value: text("value"),
+  targetEurLineId: text("target_eur_line_id"),
+  active: boolean("active"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const accountKeywords = pgTable("account_keywords", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  chart: text("chart"),
+  accountNumber: text("account_number"),
+  keyword: text("keyword"),
+  source: text("source"),
+  active: boolean("active"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const accountSuggestionRules = pgTable("account_suggestion_rules", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  chart: text("chart"),
+  priority: integer("priority"),
+  field: text("field"),
+  operator: text("operator"),
+  value: text("value"),
+  targetAccountNumber: text("target_account_number"),
+  flowType: text("flow_type"),
+  active: boolean("active"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const importBatches = pgTable("import_batches", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  accountId: text("account_id"),
+  profile: text("profile"),
+  fileName: text("file_name"),
+  fileSha256: text("file_sha256"),
+  mappingJson: text("mapping_json"),
+  importedCount: integer("imported_count"),
+  skippedCount: integer("skipped_count"),
+  errorCount: integer("error_count"),
+  createdAt: text("created_at"),
+  rolledBackAt: text("rolled_back_at"),
+  rollbackReason: text("rollback_reason"),
+});
+
+export const templates = pgTable("templates", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  kind: text("kind"),
+  name: text("name"),
+  elementsJson: text("elements_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const activeTemplates = pgTable("active_templates", {
+  tenantId: text("tenant_id"),
+  id: integer("id"),
+  invoiceTemplateId: text("invoice_template_id"),
+  offerTemplateId: text("offer_template_id"),
+});
+
+export const assets = pgTable("assets", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  assetNumber: text("asset_number"),
+  name: text("name"),
+  assetClass: text("asset_class"),
+  status: text("status"),
+  activationDate: text("activation_date"),
+  acquisitionCost: numeric("acquisition_cost"),
+  usefulLifeYears: integer("useful_life_years"),
+  depreciationMethod: text("depreciation_method"),
+  costCenter: text("cost_center"),
+  location: text("location"),
+  receiptLinked: boolean("receipt_linked"),
+  supplier: text("supplier"),
+  invoiceRef: text("invoice_ref"),
+  assetAccountNumber: text("asset_account_number"),
+  disposalDate: text("disposal_date"),
+  disposalProceeds: numeric("disposal_proceeds"),
+  acquisitionOffsetAccountNumber: text("acquisition_offset_account_number"),
+  sourceIncomingInvoiceId: text("source_incoming_invoice_id"),
+  activationJournalEntryId: text("activation_journal_entry_id"),
+  accountingRepairRequired: boolean("accounting_repair_required"),
+  accountingRepairReason: text("accounting_repair_reason"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const assetDepreciationSchedule = pgTable(
+  "asset_depreciation_schedule",
+  {
+    id: text("id"),
+    tenantId: text("tenant_id"),
+    assetId: text("asset_id"),
+    year: integer("year"),
+    amount: numeric("amount"),
+    months: integer("months"),
+    status: text("status"),
+    journalEntryId: text("journal_entry_id"),
+    sourceType: text("source_type"),
+    sourceKey: text("source_key"),
+    postedAt: text("posted_at"),
+  },
+);
+
+export const assetMovements = pgTable("asset_movements", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  assetId: text("asset_id"),
+  type: text("type"),
+  movementDate: text("movement_date"),
+  amount: numeric("amount"),
+  proceeds: numeric("proceeds"),
+  gainLoss: numeric("gain_loss"),
+  journalEntryId: text("journal_entry_id"),
+  sourceType: text("source_type"),
+  sourceKey: text("source_key"),
+  reason: text("reason"),
+  createdAt: text("created_at"),
+});
+
+export const auditHeads = pgTable("audit_heads", {
+  tenantId: text("tenant_id").primaryKey(),
+  sequence: bigint("sequence", { mode: "number" }).notNull(),
+  hash: text("hash"),
+});
+
+export const accountingSourceRuns = pgTable("accounting_source_runs", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  sourceType: text("source_type"),
+  sourceId: text("source_id"),
+  sourceRevision: text("source_revision"),
+  idempotencyKey: text("idempotency_key"),
+  status: text("status"),
+  sourceJson: text("source_json"),
+  resultJson: text("result_json"),
+  journalEntryId: text("journal_entry_id"),
+  sourceHash: text("source_hash"),
+  createdBy: text("created_by"),
+  reason: text("reason"),
+  createdAt: text("created_at"),
+});

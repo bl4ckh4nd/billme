@@ -52,24 +52,24 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
         ]}
       />
 
-      <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
-        <div className="px-4 h-12 border-b border-gray-100 text-sm font-bold text-gray-900 flex items-center">
-          Summen- und Saldenliste (Preview)
+      <div className="rounded-2xl border border-border bg-surface overflow-hidden">
+        <div className="px-4 h-12 border-b border-subtle text-sm font-bold text-foreground flex items-center">
+          Summen- und Saldenliste
         </div>
         <div className="max-h-[32rem] overflow-auto">
           <table className="w-full text-sm table-fixed">
             <colgroup>
-              <col className="w-[110px]" />
-              <col className="w-[280px]" />
-              <col className="w-[130px]" />
-              <col className="w-[130px]" />
-              <col className="w-[130px]" />
-              <col className="w-[130px]" />
-              <col className="w-[190px]" />
-              <col className="w-[120px]" />
+              <col className="w-28" />
+              <col className="w-72" />
+              <col className="w-32" />
+              <col className="w-32" />
+              <col className="w-32" />
+              <col className="w-32" />
+              <col className="w-48" />
+              <col className="w-32" />
             </colgroup>
-            <thead className="sticky top-0 bg-gray-50 z-10">
-              <tr className="text-xs uppercase tracking-wide text-gray-500">
+            <thead className="sticky top-0 bg-surface-muted z-10">
+              <tr className="text-xs uppercase tracking-wide text-muted">
                 {[
                   ['accountNumber', 'Konto'],
                   ['accountName', 'Bezeichnung'],
@@ -78,54 +78,71 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
                   ['creditTurnover', 'Haben'],
                   ['closingBalance', 'Ende'],
                 ].map(([key, label]) => (
-                  <th key={key} className={`px-3 py-3 font-bold ${key.includes('Balance') || key === 'debitTurnover' || key === 'creditTurnover' ? 'text-right' : 'text-left'}`}>
+                  <th scope="col" key={key} className={`px-3 py-3 font-bold ${key.includes('Balance') || key === 'debitTurnover' || key === 'creditTurnover' ? 'text-right' : 'text-left'}`}>
                     <button
                       onClick={() => toggleSort(key as SortKey)}
-                      className="hover:text-gray-800"
+                      className="hover:text-foreground"
                     >
                       {label}
                     </button>
                   </th>
                 ))}
-                <th className="px-3 py-3 text-left font-bold">Mapping</th>
-                <th className="px-3 py-3 text-left font-bold">Hinweise</th>
+                <th scope="col" className="px-3 py-3 text-left font-bold">Mapping</th>
+                <th scope="col" className="px-3 py-3 text-left font-bold">Hinweise</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-border-subtle">
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-sm text-gray-500">
+                  <td colSpan={8} className="px-6 py-10 text-center text-sm text-muted">
                     Keine SuSa-Daten für die aktuelle Filterkombination.
                   </td>
                 </tr>
               ) : null}
               {rows.map((row) => (
-                <tr key={row.accountNumber} className="hover:bg-gray-50 cursor-pointer" onClick={() => onSelectRow(row)}>
-                  <td className="px-3 py-2.5 font-bold text-gray-800 whitespace-nowrap">{row.accountNumber}</td>
-                  <td className="px-3 py-2.5 text-gray-700">{row.accountName}</td>
-                  <td className="px-3 py-2.5 text-right font-medium text-gray-700">{euro(row.openingBalance)}</td>
-                  <td className="px-3 py-2.5 text-right font-medium text-gray-700">{euro(row.debitTurnover)}</td>
-                  <td className="px-3 py-2.5 text-right font-medium text-gray-700">{euro(row.creditTurnover)}</td>
-                  <td className={`px-3 py-2.5 text-right font-bold ${row.closingBalance < 0 ? 'text-red-700' : 'text-gray-900'}`}>{euro(row.closingBalance)}</td>
+                <tr
+                  key={row.accountNumber}
+                  className="hover:bg-surface-muted"
+                >
+                  <td className="px-3 py-2.5 font-bold text-foreground whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => onSelectRow(row)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          onSelectRow(row);
+                        }
+                      }}
+                      className="rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
+                    >
+                      {row.accountNumber}
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5 text-foreground">{row.accountName}</td>
+                  <td className="px-3 py-2.5 text-right font-medium text-foreground">{euro(row.openingBalance)}</td>
+                  <td className="px-3 py-2.5 text-right font-medium text-foreground">{euro(row.debitTurnover)}</td>
+                  <td className="px-3 py-2.5 text-right font-medium text-foreground">{euro(row.creditTurnover)}</td>
+                  <td className={`px-3 py-2.5 text-right font-bold ${row.closingBalance < 0 ? 'text-error' : 'text-foreground'}`}>{euro(row.closingBalance)}</td>
                   <td className="px-3 py-2.5">
                     {row.mappedTo ? (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-gray-100 text-gray-700">{row.mappedTo}</span>
+                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-border-subtle text-foreground">{row.mappedTo}</span>
                     ) : (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">Ungemappt</span>
+                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-warning-bg text-warning">Ungemappt</span>
                     )}
                   </td>
                   <td className="px-3 py-2.5">
                     {row.hasWarnings ? (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">Prüfen</span>
+                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-warning-bg text-warning">Prüfen</span>
                     ) : (
-                      <span className="text-gray-300">—</span>
+                      <span className="text-muted">—</span>
                     )}
                   </td>
                 </tr>
               ))}
             </tbody>
-            <tfoot className="bg-gray-50 border-t border-gray-200">
-              <tr className="text-xs font-bold text-gray-700">
+            <tfoot className="bg-surface-muted border-t border-border">
+              <tr className="text-xs font-bold text-foreground">
                 <td className="px-3 py-3" colSpan={2}>Summen</td>
                 <td className="px-3 py-3 text-right">{euro(report.totals.openingDebit - report.totals.openingCredit)}</td>
                 <td className="px-3 py-3 text-right">{euro(report.totals.turnoverDebit)}</td>

@@ -6,20 +6,74 @@ import { replaceMockAccounts } from '../mocks/accounts';
 import { mockBookingDrafts } from '../mocks/bookings';
 import { mockTransactions } from '../mocks/transactions';
 import { permissionContextForRole } from '../mocks/users';
-import { Account, BookingAction, BookingDraft, Transaction, UserRole } from '../types';
+import { Account, AccountingActorRole, BookingAction, BookingDraft, LinkedInvoiceSummary, OpenRouterVlmConfig, Transaction, TransactionDocumentAnalysis, UserRole } from '../types';
 import type {
   BalanceSheetPreview,
+  EurCashItem,
+  EurCashClassification,
   GuvReport,
   ReportDrilldownEntry,
   ReportDrilldownSelection,
+  ReportExportRequest,
+  ReportExportResult,
   ReportFilterState,
   SusaReport,
 } from '../domain/reportTypes';
+import type { ReportMappingHealth, ReportMappingPosition, ReportMappingOverrideInput } from '../domain/reportMapping';
 import type {
   AssetDepreciationScheduleEntry,
   AssetItem,
   AssetUpsertInput,
 } from '../domain/assetTypes';
+import type {
+  AccountingPostingPreview,
+  IncomingInvoiceDocumentEntity,
+  IncomingInvoiceEntity,
+  OpenItemEntity,
+  OpenItemPaymentEntity,
+  OpenItemPaymentInput,
+  VendorEntity,
+} from '@billme/accounting-shared';
+import type { ProBankTransaction } from '@billme/accounting-shared';
+import type {
+  AccountingCommandInput,
+  AccountingSourcePostResult,
+  AccountingSourceRun,
+  EurAnnexFact,
+  EurAnnexFactInput,
+  EurCashFact,
+  EurCashFactInput,
+  TaxPreparationArtifact,
+  TaxPreparationInput,
+} from '../sourceRuns';
+import type { JournalEntryEntity } from '@billme/accounting-shared';
+
+// The desktop IPC transaction schema intentionally omits tenantId because the
+// tenant is fixed by the local Pro database. Keep the source identity and
+// imported-bank fields intact while enriching it with the resolved ledger
+// account needed by OPOS posting.
+export type OposBankTransaction = Omit<ProBankTransaction, 'tenantId'> & { bankAccountNumber: string };
+
+export interface DatevExportResult {
+  id: string;
+  filePath: string;
+  recordCount: number;
+  fromDate?: string;
+  toDate?: string;
+  createdAt: string;
+  sha256?: string;
+  byteSize?: number;
+  encoding?: 'cp1252' | 'utf8-bom';
+  headerVersion?: number;
+  formatVersion?: number;
+  chart?: 'SKR03' | 'SKR04';
+  sourceSnapshotHash?: string;
+  manifestJson?: string;
+  status?: string;
+  validationJson?: string;
+}
+
+type MaybePromise<T> = T | Promise<T>;
 
 let drafts = structuredClone(mockBookingDrafts) as BookingDraft[];
 let transactions = structuredClone(mockTransactions) as Transaction[];
@@ -35,28 +89,60 @@ export interface ProAccountingDataAdapter {
   listBookingDrafts?: () => BookingDraft[];
   getTransactionById?: (id: string) => Transaction | undefined;
   getBookingDraftByTransactionId?: (transactionId: string) => BookingDraft | undefined;
-  saveDraft?: (draft: BookingDraft, actorName?: string) => BookingDraft;
+  getLinkedInvoice?: (transactionId: string) => MaybePromise<LinkedInvoiceSummary | null>;
+  getOpenRouterVlmConfig?: () => Promise<OpenRouterVlmConfig>;
+  analyzeTransactionDocument?: (input: { transaction: { id: string; date: string; amount: number; currency: string; type: 'income' | 'expense'; counterparty: string; purpose: string; linkedInvoiceId?: string; suggestedAccountNumber?: string; suggestionReason?: string }; document: { mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; fileName?: string }; model?: string }) => Promise<TransactionDocumentAnalysis>;
+  getJournalEntryById?: (id: string) => MaybePromise<JournalEntryEntity | null>;
+  saveDraft?: (draft: BookingDraft, actorName?: string) => MaybePromise<BookingDraft>;
   dispatchBookingAction?: (
     transactionId: string,
     action: BookingAction,
     options?: { role: UserRole; actorName?: string; rejectReason?: string },
-  ) => BookingDraft;
+  ) => MaybePromise<BookingDraft>;
   listActivity?: (transactionId: string) => BookingDraft['activity'];
   reset?: () => void;
   updateExceptionCase?: (
     transactionId: string,
     patch: Partial<NonNullable<Transaction['exceptionCase']>>,
     actorName: string,
-  ) => Transaction;
-  assignExceptionOwner?: (transactionId: string, owner: string, actorName: string) => Transaction;
-  snoozeException?: (transactionId: string, snoozedUntil: string, actorName: string, note?: string) => Transaction;
-  resolveException?: (transactionId: string, resolutionNote: string, actorName: string) => Transaction;
-  reopenException?: (transactionId: string, actorName: string) => Transaction;
-  setTransactionReceiptStatus?: (transactionId: string, hasReceipt: boolean, actorName: string) => Transaction;
+  ) => MaybePromise<Transaction>;
+  assignExceptionOwner?: (transactionId: string, owner: string, actorName: string) => MaybePromise<Transaction>;
+  snoozeException?: (transactionId: string, snoozedUntil: string, actorName: string, note?: string) => MaybePromise<Transaction>;
+  resolveException?: (transactionId: string, resolutionNote: string, actorName: string) => MaybePromise<Transaction>;
+  reopenException?: (transactionId: string, actorName: string) => MaybePromise<Transaction>;
   getSusaReport?: (filters: ReportFilterState) => Promise<SusaReport>;
   getGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
   getBalanceSheetPreview?: (filters: ReportFilterState) => Promise<BalanceSheetPreview>;
   getReportDrilldownEntries?: (selection: ReportDrilldownSelection) => Promise<ReportDrilldownEntry[]>;
+  getEurReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  listEurCashItems?: (taxYear?: number) => Promise<EurCashItem[]>;
+  upsertEurClassification?: (input: EurCashClassification & { reason: string }) => Promise<unknown>;
+  postAccountingCommand?: (input: AccountingCommandInput) => Promise<AccountingSourcePostResult>;
+  listAccountingSourceRuns?: () => Promise<AccountingSourceRun[]>;
+  getAccountingSourceRun?: (id: string) => Promise<AccountingSourceRun | null>;
+  prepareTaxExport?: (input: TaxPreparationInput) => Promise<{ artifact: TaxPreparationArtifact; run?: AccountingSourceRun; replayed?: boolean }>;
+  exportTaxArtifact?: (kind: TaxPreparationInput['kind'], id: string) => Promise<Blob | Uint8Array | string>;
+  saveEurCashFact?: (input: EurCashFactInput) => Promise<EurCashFact>;
+  listEurCashFacts?: (taxYear: number) => Promise<EurCashFact[]>;
+  saveEurAnnexFact?: (input: EurAnnexFactInput) => Promise<EurAnnexFact>;
+  listEurAnnexFacts?: (taxYear: number, annex?: string) => Promise<EurAnnexFact[]>;
+  getBwaReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  getManagementGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  getHgbGuvReport?: (filters: ReportFilterState) => Promise<GuvReport>;
+  /** Read-only catalog and report-specific missing-account diagnostics. */
+  getReportMappingHealth?: (args?: { chart?: 'SKR03' | 'SKR04'; statement?: ReportMappingHealth['unmapped'][number]['statement']; asOfDate?: string }) => Promise<ReportMappingHealth>;
+  listReportMappingPositions?: (args: { statement: ReportMappingHealth['unmapped'][number]['statement']; asOfDate: string }) => Promise<ReportMappingPosition[]>;
+  upsertReportMappingOverride?: (input: ReportMappingOverrideInput) => Promise<unknown>;
+  listReportSnapshots?: (reportType?: string) => Promise<ReportSnapshotRecord[]>;
+  saveReportSnapshot?: (input: {
+    reportType: string;
+    args: unknown;
+    payload: unknown;
+    reason: string;
+  }) => Promise<ReportSnapshotRecord>;
+  exportReport?: (request: ReportExportRequest) => Promise<ReportExportResult | void>;
+  exportReportPdf?: (request: Omit<ReportExportRequest, 'format'>) => Promise<ReportExportResult | void>;
+  exportReportCsv?: (request: Omit<ReportExportRequest, 'format'>) => Promise<ReportExportResult | void>;
   listAssets?: () => Promise<AssetItem[]>;
   upsertAsset?: (asset: AssetUpsertInput, reason: string) => Promise<AssetItem>;
   getDepreciationSchedule?: (assetId: string) => Promise<AssetDepreciationScheduleEntry[]>;
@@ -65,15 +151,56 @@ export interface ProAccountingDataAdapter {
     year: number;
     postingDate: string;
     reason: string;
-    actorRole: UserRole;
+    actorRole: AccountingActorRole;
   }) => Promise<{ asset: AssetItem; scheduleEntry: AssetDepreciationScheduleEntry; journalEntryId: string }>;
   disposeAsset?: (args: {
     assetId: string;
     disposalDate: string;
     proceeds: number;
+    taxRate: 0 | 7 | 19;
+    proceedsAccountNumber?: string;
     reason: string;
-    actorRole: UserRole;
-  }) => Promise<{ asset: AssetItem; residualBookValue: number; gainLoss: number }>;
+    actorRole: AccountingActorRole;
+  }) => Promise<{ asset: AssetItem; residualBookValue: number; gainLoss: number; journalEntryId?: string }>;
+  exportDatevBuchungsstapel?: (args: {
+    from: string;
+    to: string;
+    consultantNumber: string;
+    clientNumber: string;
+    fiscalYearStart: string;
+    accountLength: number;
+    encoding: 'cp1252' | 'utf8-bom';
+  }) => Promise<DatevExportResult>;
+  listDatevExports?: (limit?: number) => Promise<DatevExportResult[]>;
+  getDatevExportContent?: (exportId: string) => Promise<Blob>;
+  listOpenItems?: () => Promise<OpenItemEntity[]>;
+  listBankTransactions?: () => Promise<OposBankTransaction[]>;
+  allocateOpenItemPayment?: (input: OpenItemPaymentInput) => Promise<OpenItemPaymentEntity>;
+  allocateRemainingOpenItemPayment?: (
+    paymentId: string,
+    allocations: Array<{ openItemId: string; amount: number }>,
+    allocationEventId: string,
+    reason: string,
+  ) => Promise<OpenItemPaymentEntity>;
+  listVendors?: () => Promise<VendorEntity[]>;
+  upsertVendor?: (vendor: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>, reason: string) => Promise<VendorEntity>;
+  listIncomingInvoices?: () => Promise<IncomingInvoiceEntity[]>;
+  upsertIncomingInvoice?: (invoice: IncomingInvoiceEntity, reason: string) => Promise<IncomingInvoiceEntity>;
+  listIncomingInvoiceDocuments?: (invoiceId: string) => Promise<IncomingInvoiceDocumentEntity[]>;
+  uploadIncomingInvoiceDocument?: (input: { invoiceId: string; originalFilename: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; reason: string }) => Promise<IncomingInvoiceDocumentEntity>;
+  downloadIncomingInvoiceDocument?: (documentId: string) => Promise<{ document: IncomingInvoiceDocumentEntity; data: string }>;
+  reviewIncomingInvoiceDocument?: (input: { documentId: string; reviewStatus: 'accepted' | 'rejected'; reason: string }) => Promise<IncomingInvoiceDocumentEntity>;
+  previewIncomingInvoiceAccounting?: (invoiceId: string) => Promise<AccountingPostingPreview>;
+  postIncomingInvoiceAccounting?: (invoiceId: string, options: { reason: string; softLockOverride?: boolean; overrideReason?: string }) => Promise<AccountingPostingPreview>;
+}
+
+export interface ReportSnapshotRecord {
+  id: string;
+  reportType: string;
+  args: unknown;
+  payload: unknown;
+  createdAt: string;
+  sourceHash: string;
 }
 
 let dataAdapter: ProAccountingDataAdapter | null = null;
@@ -90,18 +217,16 @@ function getTxIndexById(id: string) {
   return transactions.findIndex((tx) => tx.id === id);
 }
 
-function persistPair(transactionId: string) {
+async function persistPair(transactionId: string) {
   const tx = transactions.find((item) => item.id === transactionId);
   const draft = drafts.find((item) => item.transactionId === transactionId);
   if (!tx || !draft || !persistenceHooks.onPersistEntry) return;
-  void Promise.resolve(
+  await Promise.resolve(
     persistenceHooks.onPersistEntry({
       transaction: clone(tx),
       draft: clone(draft),
     }),
-  ).catch((error) => {
-    console.warn('[accounting-ui-pro] persist hook failed', error);
-  });
+  );
 }
 
 export function configureStorePersistence(hooks: StorePersistenceHooks) {
@@ -193,33 +318,50 @@ export function getBookingDraftByTransactionId(transactionId: string): BookingDr
   return draft ? clone(draft) : undefined;
 }
 
-export function saveDraft(draft: BookingDraft, actorName = 'Mara Buchhaltung'): BookingDraft {
+export async function saveDraft(draft: BookingDraft, actorName = 'Mara Buchhaltung'): Promise<BookingDraft> {
+  if (dataAdapter && !dataAdapter.saveDraft && !persistenceHooks.onPersistEntry) {
+    throw new Error('READ_ONLY_ACCOUNTING_SOURCE: Entwürfe sind für diesen Adapter schreibgeschützt.');
+  }
   if (dataAdapter?.saveDraft) {
-    return clone(dataAdapter.saveDraft(clone(draft), actorName));
+    return clone(await dataAdapter.saveDraft(clone(draft), actorName));
   }
   const index = getDraftIndexById(draft.id);
   if (index === -1) throw new Error('Draft not found');
-  drafts[index] = clone(draft);
-  drafts[index].activity.unshift({
-    id: `save-${Date.now()}`,
-    at: new Date().toISOString(),
-    actorId: 'local-user',
-    actorName,
-    type: 'field_changed',
-    label: 'Entwurf gespeichert',
-  });
-  revalidateDraftAndSyncTransaction(drafts[index]);
-  persistPair(drafts[index].transactionId);
-  return clone(drafts[index]);
+  const previousDraft = clone(drafts[index]);
+  const previousTransaction = transactions.find((tx) => tx.id === draft.transactionId);
+  try {
+    drafts[index] = clone(draft);
+    drafts[index].activity.unshift({
+      id: `save-${Date.now()}`,
+      at: new Date().toISOString(),
+      actorId: 'local-user',
+      actorName,
+      type: 'field_changed',
+      label: 'Entwurf gespeichert',
+    });
+    revalidateDraftAndSyncTransaction(drafts[index]);
+    await persistPair(drafts[index].transactionId);
+    return clone(drafts[index]);
+  } catch (error) {
+    drafts[index] = previousDraft;
+    if (previousTransaction) {
+      const txIndex = getTxIndexById(previousTransaction.id);
+      if (txIndex !== -1) transactions[txIndex] = previousTransaction;
+    }
+    throw error;
+  }
 }
 
-export function dispatchBookingAction(
+export async function dispatchBookingAction(
   transactionId: string,
   action: BookingAction,
   options: { role: UserRole; actorName?: string; rejectReason?: string } = { role: 'bookkeeper' },
-): BookingDraft {
+): Promise<BookingDraft> {
+  if (dataAdapter && !dataAdapter.dispatchBookingAction && !persistenceHooks.onPersistEntry) {
+    throw new Error('READ_ONLY_ACCOUNTING_SOURCE: Workflow-Aktionen sind für diesen Adapter schreibgeschützt.');
+  }
   if (dataAdapter?.dispatchBookingAction) {
-    return clone(dataAdapter.dispatchBookingAction(transactionId, action, options));
+    return clone(await dataAdapter.dispatchBookingAction(transactionId, action, options));
   }
   const draft = getBookingDraftByTransactionId(transactionId);
   const tx = getTransactionById(transactionId);
@@ -243,10 +385,21 @@ export function dispatchBookingAction(
   });
 
   const draftIndex = getDraftIndexById(transitioned.id);
-  drafts[draftIndex] = transitioned;
-  revalidateDraftAndSyncTransaction(drafts[draftIndex]);
-  persistPair(transactionId);
-  return clone(drafts[draftIndex]);
+  const previousDraft = clone(drafts[draftIndex]);
+  const previousTransaction = transactions.find((item) => item.id === transactionId);
+  try {
+    drafts[draftIndex] = transitioned;
+    revalidateDraftAndSyncTransaction(drafts[draftIndex]);
+    await persistPair(transactionId);
+    return clone(drafts[draftIndex]);
+  } catch (error) {
+    drafts[draftIndex] = previousDraft;
+    if (previousTransaction) {
+      const txIndex = getTxIndexById(previousTransaction.id);
+      if (txIndex !== -1) transactions[txIndex] = previousTransaction;
+    }
+    throw error;
+  }
 }
 
 export function listActivity(transactionId: string) {
@@ -271,6 +424,8 @@ export interface MockStoreSeed {
   drafts?: BookingDraft[];
   accounts?: Account[];
   chartFramework?: 'SKR03' | 'SKR04';
+  bankAccountNumber?: string;
+  bankAccountNumberByTransactionId?: Record<string, string>;
 }
 
 const deriveAccountSuggestion = (tx: Transaction, accounts: Account[]): Account | undefined => {
@@ -291,11 +446,15 @@ const buildSeedDraft = (
   index: number,
   accounts: Account[],
   chartFramework: 'SKR03' | 'SKR04',
+  bankAccountNumber?: string,
+  bankAccountNumberByTransactionId?: Record<string, string>,
 ): BookingDraft => {
   const amount = Math.abs(Number(tx.amount) || 0);
   const suggestedAccount = deriveAccountSuggestion(tx, accounts);
+  const configuredBankAccountNumber = bankAccountNumberByTransactionId?.[tx.id] ?? bankAccountNumber;
   const clearingAccount =
-    accounts.find((account) => account.number === '1200') ??
+    (configuredBankAccountNumber ? accounts.find((account) => account.number === configuredBankAccountNumber) : undefined) ??
+    (configuredBankAccountNumber ? undefined : accounts.find((account) => /bank|giro|konto/i.test(`${account.name} ${account.keywords?.join(' ') ?? ''}`))) ??
     accounts.find((account) => account.type === 'Asset') ??
     accounts[0];
   const fallbackText = tx.amount >= 0 ? 'Einnahme' : 'Ausgabe';
@@ -355,12 +514,10 @@ const buildSeedDraft = (
 };
 
 export function hydrateMockStore(seed: MockStoreSeed) {
+  if (seed.accounts) replaceMockAccounts(seed.accounts);
   if (dataAdapter?.hydrate) {
     dataAdapter.hydrate(seed);
     return;
-  }
-  if (seed.accounts && seed.accounts.length > 0) {
-    replaceMockAccounts(seed.accounts);
   }
 
   if (seed.transactions) {
@@ -377,22 +534,33 @@ export function hydrateMockStore(seed: MockStoreSeed) {
   if (seed.transactions && seed.transactions.length > 0) {
     const chartFramework = seed.chartFramework ?? 'SKR03';
     const currentAccounts = seed.accounts && seed.accounts.length > 0 ? seed.accounts : [];
-    drafts = seed.transactions.map((tx, idx) => buildSeedDraft(tx, idx, currentAccounts, chartFramework));
+    drafts = seed.transactions.map((tx, idx) =>
+      buildSeedDraft(
+        tx,
+        idx,
+        currentAccounts,
+        chartFramework,
+        seed.bankAccountNumber,
+        seed.bankAccountNumberByTransactionId,
+      ),
+    );
     syncAll();
   }
 }
 
-export function updateExceptionCase(
+export async function updateExceptionCase(
   transactionId: string,
   patch: Partial<NonNullable<Transaction['exceptionCase']>>,
   actorName: string,
 ) {
   if (dataAdapter?.updateExceptionCase) {
-    return clone(dataAdapter.updateExceptionCase(transactionId, patch, actorName));
+    return clone(await dataAdapter.updateExceptionCase(transactionId, patch, actorName));
   }
+  if (dataAdapter) throw new Error('Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.');
   const txIndex = getTxIndexById(transactionId);
   if (txIndex === -1) throw new Error('Transaction not found');
   const tx = transactions[txIndex];
+  const previousTransaction = clone(tx);
   const nextCase = {
     state: 'open' as const,
     ...(tx.exceptionCase ?? {}),
@@ -404,6 +572,7 @@ export function updateExceptionCase(
   };
 
   const draftIndex = drafts.findIndex((draft) => draft.transactionId === transactionId);
+  const previousDraft = draftIndex === -1 ? undefined : clone(drafts[draftIndex]);
   if (draftIndex !== -1) {
     drafts[draftIndex].activity.unshift({
       id: `exc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -416,23 +585,26 @@ export function updateExceptionCase(
     });
   }
 
-  if (draftIndex !== -1) {
-    persistPair(transactionId);
+  try {
+    if (draftIndex !== -1) await persistPair(transactionId);
+    return clone(transactions[txIndex]);
+  } catch (error) {
+    transactions[txIndex] = previousTransaction;
+    if (draftIndex !== -1 && previousDraft) drafts[draftIndex] = previousDraft;
+    throw error;
   }
-
-  return clone(transactions[txIndex]);
 }
 
-export function assignExceptionOwner(transactionId: string, owner: string, actorName: string) {
+export async function assignExceptionOwner(transactionId: string, owner: string, actorName: string) {
   if (dataAdapter?.assignExceptionOwner) {
-    return clone(dataAdapter.assignExceptionOwner(transactionId, owner, actorName));
+    return clone(await dataAdapter.assignExceptionOwner(transactionId, owner, actorName));
   }
   return updateExceptionCase(transactionId, { owner, state: 'open' }, actorName);
 }
 
-export function snoozeException(transactionId: string, snoozedUntil: string, actorName: string, note?: string) {
+export async function snoozeException(transactionId: string, snoozedUntil: string, actorName: string, note?: string) {
   if (dataAdapter?.snoozeException) {
-    return clone(dataAdapter.snoozeException(transactionId, snoozedUntil, actorName, note));
+    return clone(await dataAdapter.snoozeException(transactionId, snoozedUntil, actorName, note));
   }
   return updateExceptionCase(
     transactionId,
@@ -441,9 +613,9 @@ export function snoozeException(transactionId: string, snoozedUntil: string, act
   );
 }
 
-export function resolveException(transactionId: string, resolutionNote: string, actorName: string) {
+export async function resolveException(transactionId: string, resolutionNote: string, actorName: string) {
   if (dataAdapter?.resolveException) {
-    return clone(dataAdapter.resolveException(transactionId, resolutionNote, actorName));
+    return clone(await dataAdapter.resolveException(transactionId, resolutionNote, actorName));
   }
   return updateExceptionCase(transactionId, {
     state: 'resolved',
@@ -453,41 +625,13 @@ export function resolveException(transactionId: string, resolutionNote: string, 
   }, actorName);
 }
 
-export function reopenException(transactionId: string, actorName: string) {
+export async function reopenException(transactionId: string, actorName: string) {
   if (dataAdapter?.reopenException) {
-    return clone(dataAdapter.reopenException(transactionId, actorName));
+    return clone(await dataAdapter.reopenException(transactionId, actorName));
   }
   return updateExceptionCase(
     transactionId,
     { state: 'open', snoozedUntil: undefined, resolvedAt: undefined, resolvedBy: undefined },
     actorName,
   );
-}
-
-export function setTransactionReceiptStatus(transactionId: string, hasReceipt: boolean, actorName: string) {
-  if (dataAdapter?.setTransactionReceiptStatus) {
-    return clone(dataAdapter.setTransactionReceiptStatus(transactionId, hasReceipt, actorName));
-  }
-  const txIndex = getTxIndexById(transactionId);
-  if (txIndex === -1) throw new Error('Transaction not found');
-  transactions[txIndex] = {
-    ...transactions[txIndex],
-    hasReceipt,
-  };
-
-  const draftIndex = drafts.findIndex((draft) => draft.transactionId === transactionId);
-  if (draftIndex !== -1) {
-    drafts[draftIndex].activity.unshift({
-      id: `receipt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      at: new Date().toISOString(),
-      actorId: 'local-user',
-      actorName,
-      type: 'field_changed',
-      label: hasReceipt ? 'Beleg hinzugefügt (Inbox)' : 'Beleg entfernt (Inbox)',
-    });
-    revalidateDraftAndSyncTransaction(drafts[draftIndex]);
-    persistPair(transactionId);
-  }
-
-  return clone(transactions[txIndex]);
 }

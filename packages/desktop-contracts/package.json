@@ -27,6 +27,14 @@
     "./schemas": {
       "types": "./src/schemas.ts",
       "default": "./src/schemas.ts"
+    },
+    "./taxFiling": {
+      "types": "./src/taxFiling.ts",
+      "default": "./src/taxFiling.ts"
+    },
+    "./embeddedConnection": {
+      "types": "./src/embeddedConnection.ts",
+      "default": "./src/embeddedConnection.ts"
     }
   }
 }

@@ -1,5 +1,8 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
+import { and, asc, count, eq } from 'drizzle-orm';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
+import { CANONICAL_TAX_CASES } from '@billme/accounting-shared';
 
 export type TaxMechanism = 'standard_vat' | 'reverse_charge' | 'zero_rate' | 'exempt';
 
@@ -47,148 +50,7 @@ export interface TaxCaseAccountMapping {
   updatedAt: string;
 }
 
-const TAX_CASE_DEFINITIONS: TaxCaseDefinition[] = [
-  {
-    key: 'DE_STD_19',
-    label: 'Inland steuerpflichtig 19%',
-    mechanism: 'standard_vat',
-    defaultRate: 19,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: false,
-    active: true,
-  },
-  {
-    key: 'DE_STD_7',
-    label: 'Inland steuerpflichtig 7%',
-    mechanism: 'standard_vat',
-    defaultRate: 7,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: false,
-    active: true,
-  },
-  {
-    key: 'DE_ZERO_EXEMPT',
-    label: 'Inland steuerfrei / nicht steuerbar',
-    mechanism: 'exempt',
-    defaultRate: 0,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'DE_KU19',
-    label: 'Kleinunternehmer §19 UStG',
-    mechanism: 'exempt',
-    defaultRate: 0,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'DE_RC_13B_DOMESTIC',
-    label: 'Reverse Charge §13b Inland',
-    mechanism: 'reverse_charge',
-    defaultRate: 19,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'EU_B2C_OSS',
-    label: 'EU B2C OSS (One-Stop-Shop)',
-    mechanism: 'standard_vat',
-    defaultRate: 19,
-    requiresCounterpartyVatId: false,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'DE_MARGIN_25A',
-    label: 'Differenzbesteuerung §25a UStG',
-    mechanism: 'exempt',
-    defaultRate: 0,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'DE_BAUABZUG_48',
-    label: 'Bauabzugsteuer §48 EStG',
-    mechanism: 'exempt',
-    defaultRate: 0,
-    requiresCounterpartyVatId: false,
-    requiresCountry: false,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'DE_TRIANGULAR_25B',
-    label: 'Innergemeinschaftliches Dreiecksgeschäft §25b',
-    mechanism: 'zero_rate',
-    defaultRate: 0,
-    requiresCounterpartyVatId: true,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'EU_B2B_SERVICE_RC',
-    label: 'EU B2B Dienstleistung RC',
-    mechanism: 'reverse_charge',
-    defaultRate: 19,
-    requiresCounterpartyVatId: true,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'EU_IGL_GOODS_0',
-    label: 'Innergemeinschaftliche Lieferung 0%',
-    mechanism: 'zero_rate',
-    defaultRate: 0,
-    requiresCounterpartyVatId: true,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'EU_IGE_GOODS_RC',
-    label: 'Innergemeinschaftlicher Erwerb RC',
-    mechanism: 'reverse_charge',
-    defaultRate: 19,
-    requiresCounterpartyVatId: true,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'NON_EU_EXPORT_0',
-    label: 'Ausfuhrlieferung Drittland 0%',
-    mechanism: 'zero_rate',
-    defaultRate: 0,
-    requiresCounterpartyVatId: false,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-  {
-    key: 'NON_EU_SERVICE_RC',
-    label: 'Drittland Dienstleistungsbezug RC',
-    mechanism: 'reverse_charge',
-    defaultRate: 19,
-    requiresCounterpartyVatId: false,
-    requiresCountry: true,
-    requiresEvidence: true,
-    active: true,
-  },
-];
+const TAX_CASE_DEFINITIONS: TaxCaseDefinition[] = [...CANONICAL_TAX_CASES];
 
 const DEFAULT_TAX_MAPPINGS: Array<Omit<TaxCaseAccountMapping, 'id' | 'updatedAt'>> = [
   // SKR03 standard VAT
@@ -268,16 +130,17 @@ export const normalizeTaxCaseKey = (value?: string): TaxCaseKey | undefined =>
   normalizeTaxCaseKeyAliases(value);
 
 export const listTaxCases = (db: Database.Database, args: { activeOnly?: boolean } = {}): TaxCaseDefinition[] => {
-  const rows = db
-    .prepare(
-      `
-      SELECT key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active
-      FROM tax_cases
-      ${args.activeOnly ? 'WHERE active = 1' : ''}
-      ORDER BY key ASC
-      `,
-    )
-    .all() as Array<{
+  const rows = createDrizzle(db).select({
+    key: schema.taxCases.key,
+    label: schema.taxCases.label,
+    mechanism: schema.taxCases.mechanism,
+    default_rate: schema.taxCases.defaultRate,
+    requires_counterparty_vat_id: schema.taxCases.requiresCounterpartyVatId,
+    requires_country: schema.taxCases.requiresCountry,
+    requires_evidence: schema.taxCases.requiresEvidence,
+    active: schema.taxCases.active,
+  }).from(schema.taxCases)
+    .where(args.activeOnly ? eq(schema.taxCases.active, 1) : undefined).orderBy(asc(schema.taxCases.key)).all() as Array<{
     key: string;
     label: string;
     mechanism: TaxMechanism;
@@ -302,16 +165,16 @@ export const listTaxCases = (db: Database.Database, args: { activeOnly?: boolean
 export const getTaxCaseByKey = (db: Database.Database, key?: string): TaxCaseDefinition | undefined => {
   const normalized = normalizeTaxCaseKey(key);
   if (!normalized) return undefined;
-  const row = db
-    .prepare(
-      `
-      SELECT key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active
-      FROM tax_cases
-      WHERE key = ?
-      LIMIT 1
-      `,
-    )
-    .get(normalized) as {
+  const row = createDrizzle(db).select({
+    key: schema.taxCases.key,
+    label: schema.taxCases.label,
+    mechanism: schema.taxCases.mechanism,
+    default_rate: schema.taxCases.defaultRate,
+    requires_counterparty_vat_id: schema.taxCases.requiresCounterpartyVatId,
+    requires_country: schema.taxCases.requiresCountry,
+    requires_evidence: schema.taxCases.requiresEvidence,
+    active: schema.taxCases.active,
+  }).from(schema.taxCases).where(eq(schema.taxCases.key, normalized)).limit(1).get() as {
     key: string;
     label: string;
     mechanism: TaxMechanism;
@@ -338,27 +201,21 @@ export const listTaxCaseAccountMappings = (
   db: Database.Database,
   args: { chart?: 'SKR03' | 'SKR04'; taxCaseKey?: TaxCaseKey } = {},
 ): TaxCaseAccountMapping[] => {
-  const where: string[] = [];
-  const params: Record<string, unknown> = {};
-  if (args.chart) {
-    where.push('chart = @chart');
-    params.chart = args.chart;
-  }
-  if (args.taxCaseKey) {
-    where.push('tax_case_key = @taxCaseKey');
-    params.taxCaseKey = args.taxCaseKey;
-  }
-  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-  const rows = db
-    .prepare(
-      `
-      SELECT id, chart, tax_case_key, role, account_number, datev_bu_key, valid_from, valid_to, updated_at
-      FROM tax_case_account_mappings
-      ${whereSql}
-      ORDER BY chart ASC, tax_case_key ASC, role ASC
-      `,
-    )
-    .all(params) as Array<{
+  const conditions = [];
+  if (args.chart) conditions.push(eq(schema.taxCaseAccountMappings.chart, args.chart));
+  if (args.taxCaseKey) conditions.push(eq(schema.taxCaseAccountMappings.taxCaseKey, args.taxCaseKey));
+  const rows = createDrizzle(db).select({
+    id: schema.taxCaseAccountMappings.id,
+    chart: schema.taxCaseAccountMappings.chart,
+    tax_case_key: schema.taxCaseAccountMappings.taxCaseKey,
+    role: schema.taxCaseAccountMappings.role,
+    account_number: schema.taxCaseAccountMappings.accountNumber,
+    datev_bu_key: schema.taxCaseAccountMappings.datevBuKey,
+    valid_from: schema.taxCaseAccountMappings.validFrom,
+    valid_to: schema.taxCaseAccountMappings.validTo,
+    updated_at: schema.taxCaseAccountMappings.updatedAt,
+  }).from(schema.taxCaseAccountMappings).where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(asc(schema.taxCaseAccountMappings.chart), asc(schema.taxCaseAccountMappings.taxCaseKey), asc(schema.taxCaseAccountMappings.role)).all() as Array<{
     id: string;
     chart: 'SKR03' | 'SKR04';
     tax_case_key: TaxCaseKey;
@@ -398,20 +255,8 @@ export const upsertTaxCaseAccountMapping = (
 ): TaxCaseAccountMapping => {
   const now = new Date().toISOString();
   const id = payload.id ?? randomUUID();
-  db.prepare(
-    `
-      INSERT INTO tax_case_account_mappings
-        (id, chart, tax_case_key, role, account_number, datev_bu_key, valid_from, valid_to, updated_at)
-      VALUES
-        (@id, @chart, @taxCaseKey, @role, @accountNumber, @datevBuKey, @validFrom, @validTo, @updatedAt)
-      ON CONFLICT(chart, tax_case_key, role) DO UPDATE SET
-        account_number = excluded.account_number,
-        datev_bu_key = excluded.datev_bu_key,
-        valid_from = excluded.valid_from,
-        valid_to = excluded.valid_to,
-        updated_at = excluded.updated_at
-      `,
-  ).run({
+  const drizzle = createDrizzle(db);
+  drizzle.insert(schema.taxCaseAccountMappings).values({
     id,
     chart: payload.chart,
     taxCaseKey: payload.taxCaseKey,
@@ -421,18 +266,29 @@ export const upsertTaxCaseAccountMapping = (
     validFrom: payload.validFrom ?? null,
     validTo: payload.validTo ?? null,
     updatedAt: now,
-  });
+  }).onConflictDoUpdate({ target: [schema.taxCaseAccountMappings.chart, schema.taxCaseAccountMappings.taxCaseKey, schema.taxCaseAccountMappings.role], set: {
+    accountNumber: payload.accountNumber,
+    datevBuKey: payload.datevBuKey ?? null,
+    validFrom: payload.validFrom ?? null,
+    validTo: payload.validTo ?? null,
+    updatedAt: now,
+  }}).run();
 
-  const row = db
-    .prepare(
-      `
-      SELECT id, chart, tax_case_key, role, account_number, datev_bu_key, valid_from, valid_to, updated_at
-      FROM tax_case_account_mappings
-      WHERE chart = ? AND tax_case_key = ? AND role = ?
-      LIMIT 1
-      `,
-    )
-    .get(payload.chart, payload.taxCaseKey, payload.role) as {
+  const row = drizzle.select({
+    id: schema.taxCaseAccountMappings.id,
+    chart: schema.taxCaseAccountMappings.chart,
+    tax_case_key: schema.taxCaseAccountMappings.taxCaseKey,
+    role: schema.taxCaseAccountMappings.role,
+    account_number: schema.taxCaseAccountMappings.accountNumber,
+    datev_bu_key: schema.taxCaseAccountMappings.datevBuKey,
+    valid_from: schema.taxCaseAccountMappings.validFrom,
+    valid_to: schema.taxCaseAccountMappings.validTo,
+    updated_at: schema.taxCaseAccountMappings.updatedAt,
+  }).from(schema.taxCaseAccountMappings).where(and(
+    eq(schema.taxCaseAccountMappings.chart, payload.chart),
+    eq(schema.taxCaseAccountMappings.taxCaseKey, payload.taxCaseKey),
+    eq(schema.taxCaseAccountMappings.role, payload.role),
+  )).limit(1).get() as {
     id: string;
     chart: 'SKR03' | 'SKR04';
     tax_case_key: TaxCaseKey;
@@ -481,27 +337,11 @@ export const resolveDatevBuKeyForTaxCase = (
 
 export const ensureTaxCaseSeedData = (db: Database.Database): void => {
   const now = new Date().toISOString();
-  const insertCase = db.prepare(
-    `
-      INSERT INTO tax_cases
-        (key, label, mechanism, default_rate, requires_counterparty_vat_id, requires_country, requires_evidence, active, updated_at)
-      VALUES
-        (@key, @label, @mechanism, @defaultRate, @requiresCounterpartyVatId, @requiresCountry, @requiresEvidence, @active, @updatedAt)
-      ON CONFLICT(key) DO UPDATE SET
-        label = excluded.label,
-        mechanism = excluded.mechanism,
-        default_rate = excluded.default_rate,
-        requires_counterparty_vat_id = excluded.requires_counterparty_vat_id,
-        requires_country = excluded.requires_country,
-        requires_evidence = excluded.requires_evidence,
-        active = excluded.active,
-        updated_at = excluded.updated_at
-      `,
-  );
+  const drizzle = createDrizzle(db);
 
   const tx = db.transaction(() => {
     for (const def of TAX_CASE_DEFINITIONS) {
-      insertCase.run({
+      drizzle.insert(schema.taxCases).values({
         key: def.key,
         label: def.label,
         mechanism: def.mechanism,
@@ -511,13 +351,20 @@ export const ensureTaxCaseSeedData = (db: Database.Database): void => {
         requiresEvidence: def.requiresEvidence ? 1 : 0,
         active: def.active ? 1 : 0,
         updatedAt: now,
-      });
+      }).onConflictDoUpdate({ target: schema.taxCases.key, set: {
+        label: def.label,
+        mechanism: def.mechanism,
+        defaultRate: def.defaultRate,
+        requiresCounterpartyVatId: def.requiresCounterpartyVatId ? 1 : 0,
+        requiresCountry: def.requiresCountry ? 1 : 0,
+        requiresEvidence: def.requiresEvidence ? 1 : 0,
+        active: def.active ? 1 : 0,
+        updatedAt: now,
+      }}).run();
     }
 
-    const countRow = db
-      .prepare('SELECT COUNT(*) as c FROM tax_case_account_mappings')
-      .get() as { c: number };
-    if ((countRow.c ?? 0) > 0) return;
+    const countRow = drizzle.select({ c: count() }).from(schema.taxCaseAccountMappings).get();
+    if (Number(countRow?.c ?? 0) > 0) return;
 
     for (const mapping of DEFAULT_TAX_MAPPINGS) {
       upsertTaxCaseAccountMapping(db, mapping);

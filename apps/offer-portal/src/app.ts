@@ -242,22 +242,22 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const authHealth = strictAuth && !hasKey ? 'misconfigured (strict=true, key missing)' : hasKey ? 'enabled' : 'disabled';
     const html = `<!doctype html>
 <html>
-  <head><meta charset="utf-8" /><title>Offer Portal Setup</title></head>
+  <head><meta charset="utf-8" /><title>Einrichtung des Angebotsportals</title></head>
   <body style="font-family: system-ui; max-width: 720px; margin: 40px auto; padding: 0 16px;">
-    ${renderPortalBranding('Offer Portal')}
-    <h1>Setup</h1>
-    <p>This portal supports self-hosting (Node) and Cloudflare Workers.</p>
+    ${renderPortalBranding('Angebotsportal')}
+    <h1>Einrichtung</h1>
+    <p>Dieses Portal läuft als selbst gehosteter Node-Dienst.</p>
     <ul>
       <li><strong>PUBLIC_BASE_URL</strong>: ${baseUrl}</li>
       <li><strong>PUBLISH_API_KEY</strong>: ${hasKey ? 'set' : 'not set'}</li>
       <li><strong>STRICT_PUBLISH_AUTH</strong>: ${strictAuth ? 'enabled' : 'disabled'}</li>
-      <li><strong>Publish Auth Status</strong>: ${authHealth}</li>
+      <li><strong>Status der Veröffentlichungsanmeldung</strong>: ${authHealth}</li>
     </ul>
-    <h2>Next steps</h2>
+    <h2>Nächste Schritte</h2>
     <ol>
-      <li>Set <code>PUBLIC_BASE_URL</code> to your custom domain (e.g. https://offers.example.com).</li>
-      <li>Set <code>PUBLISH_API_KEY</code> and configure the desktop app to use it.</li>
-      <li>Verify: <code>GET /health</code></li>
+      <li>Setze <code>PUBLIC_BASE_URL</code> auf deine Domain, zum Beispiel https://offers.example.com.</li>
+      <li>Setze <code>PUBLISH_API_KEY</code> und hinterlege den Schlüssel in der Desktop-App.</li>
+      <li>Prüfe den Dienst mit <code>GET /health</code>.</li>
     </ol>
   </body>
 </html>`;
@@ -650,7 +650,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
         pdfUrl
           ? `<section style="margin-top:16px; background:#fff; border:1px solid #e5e7eb; border-radius:18px; overflow:hidden;">
   <div style="padding: 12px 14px; border-bottom:1px solid #eee;"><a href="${escapeHtml(pdfUrl)}" style="font-weight:700; color:#111; text-decoration:none;">PDF herunterladen</a></div>
-  <iframe title="Document PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height: 900px; border:0;"></iframe>
+  <iframe title="Dokument-PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height: 900px; border:0;"></iframe>
 </section>`
           : ''
       }
@@ -889,7 +889,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     <div style="font-weight:900;">PDF</div>
     <a href="${escapeHtml(pdfUrl)}" style="text-decoration:none; font-weight:900; color:#111;">PDF herunterladen</a>
   </div>
-  <iframe title="Offer PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height: 900px; border:0;"></iframe>
+  <iframe title="Angebots-PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height: 900px; border:0;"></iframe>
 </section>`
             : `<section style="background:#fff; border:1px solid #e5e7eb; border-radius: 24px; padding: 16px;">
   <div style="font-weight: 900;">PDF</div>
@@ -899,7 +899,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
       </div>
 
       <footer style="margin: 18px 0; color:#666; font-size: 12px;">
-        Offer Portal · Token-basierter Zugriff · ${escapeHtml(statusText)}
+        Angebotsportal · Zugriff per Link · ${escapeHtml(statusText)}
       </footer>
     </main>
   </body>
@@ -1001,7 +1001,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     <div style="font-weight:900;">PDF</div>
     <a href="${escapeHtml(pdfUrl)}" style="text-decoration:none; font-weight:900; color:#111;">PDF herunterladen</a>
   </div>
-  <iframe title="Invoice PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height: 900px; border:0;"></iframe>
+  <iframe title="Rechnungs-PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height: 900px; border:0;"></iframe>
 </section>`
           : ''
       }

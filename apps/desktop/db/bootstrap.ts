@@ -9,6 +9,11 @@ CREATE TABLE IF NOT EXISTS invoices (
   client_number TEXT,
   project_id TEXT,
   number TEXT NOT NULL,
+  document_kind TEXT NOT NULL DEFAULT 'invoice',
+  source_document_id TEXT,
+  root_document_id TEXT,
+  revision_of_id TEXT,
+  revision_number INTEGER NOT NULL DEFAULT 0,
   client TEXT NOT NULL,
   client_email TEXT NOT NULL,
   client_address TEXT,
@@ -22,6 +27,10 @@ CREATE TABLE IF NOT EXISTS invoices (
   tax_snapshot_json TEXT,
   amount REAL NOT NULL,
   status TEXT NOT NULL,
+  accounting_status TEXT NOT NULL DEFAULT 'unposted',
+  accounting_snapshot_json TEXT,
+  accounting_journal_entry_id TEXT,
+  accounting_posted_at TEXT,
   dunning_level INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -32,6 +41,11 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
   description TEXT NOT NULL,
+  line_meta_json TEXT,
+  article_id TEXT,
+  category TEXT,
+  unit TEXT,
+  discount_percent REAL,
   tax_rate REAL,
   quantity REAL NOT NULL,
   price REAL NOT NULL,
@@ -81,6 +95,11 @@ CREATE TABLE IF NOT EXISTS offer_items (
   offer_id TEXT NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
   description TEXT NOT NULL,
+  line_meta_json TEXT,
+  article_id TEXT,
+  category TEXT,
+  unit TEXT,
+  discount_percent REAL,
   tax_rate REAL,
   quantity REAL NOT NULL,
   price REAL NOT NULL,
@@ -98,7 +117,8 @@ CREATE TABLE IF NOT EXISTS clients (
   status TEXT NOT NULL,
   avatar TEXT,
   tags_json TEXT NOT NULL,
-  notes TEXT NOT NULL
+  notes TEXT NOT NULL,
+  tax_profile_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS client_addresses (
@@ -190,26 +210,29 @@ CREATE TABLE IF NOT EXISTS transactions (
   linked_invoice_id TEXT,
   status TEXT NOT NULL,
   dedup_hash TEXT,
-  import_batch_id TEXT
+  import_batch_id TEXT,
+  linked_payment_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS eur_lines (
   id TEXT PRIMARY KEY,
   tax_year INTEGER NOT NULL,
+  provider_path TEXT NOT NULL DEFAULT 'main',
   kennziffer TEXT,
   label TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('income', 'expense', 'computed')),
   exportable INTEGER NOT NULL DEFAULT 1 CHECK (exportable IN (0, 1)),
   sort_order INTEGER NOT NULL,
   computed_from_json TEXT,
+  computed_terms_json TEXT,
   source_version TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_eur_lines_year_sort ON eur_lines(tax_year, sort_order);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_kennziffer
-  ON eur_lines(tax_year, kennziffer)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eur_lines_year_provider_kennziffer
+  ON eur_lines(tax_year, provider_path, kennziffer)
   WHERE kennziffer IS NOT NULL AND TRIM(kennziffer) <> '';
 
 CREATE TABLE IF NOT EXISTS eur_classifications (
@@ -220,6 +243,7 @@ CREATE TABLE IF NOT EXISTS eur_classifications (
   eur_line_id TEXT REFERENCES eur_lines(id) ON DELETE SET NULL,
   excluded INTEGER NOT NULL DEFAULT 0 CHECK (excluded IN (0, 1)),
   vat_mode TEXT NOT NULL DEFAULT 'none' CHECK (vat_mode IN ('none', 'default')),
+  vat_rate REAL,
   note TEXT,
   updated_at TEXT NOT NULL,
   CHECK (NOT (excluded = 1 AND eur_line_id IS NOT NULL))
@@ -255,7 +279,9 @@ CREATE TABLE IF NOT EXISTS recurring_profiles (
   last_run TEXT,
   end_date TEXT,
   amount REAL NOT NULL,
-  items_json TEXT NOT NULL
+  items_json TEXT NOT NULL,
+  tax_mode TEXT NOT NULL DEFAULT 'standard_vat',
+  tax_meta_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (

@@ -1,9 +1,9 @@
 import {
-  calculateInvoiceItemTotal,
   replacePlaceholders,
   type AppSettingsLike,
   type InvoiceLike,
 } from './placeholders';
+import { billingLineItemSchema, resolveBillingDocumentLines } from '@billme/server-core/domain';
 
 type InvoiceForPreview = Omit<InvoiceLike, 'items'> & {
   items: Array<InvoiceLike['items'][number] & {
@@ -25,6 +25,9 @@ type TableColumnLike = {
 type TableRowLike = {
   id: string;
   cells: string[];
+  kind?: 'item' | 'time' | 'optional' | 'text' | 'group' | 'summary';
+  groupId?: string;
+  groupLabel?: string;
 };
 
 type InvoiceElementLike = {
@@ -62,18 +65,46 @@ export const getPreviewElements = (
   template: InvoiceElementLike[],
   settings: AppSettingsLike,
 ): InvoiceElementLike[] => {
-  return template.map((el) => {
+  const hasTaxNotice = Boolean(invoice.taxSnapshot?.taxNotice || invoice.taxMeta?.exemptionReasonOverride || invoice.taxMode && invoice.taxMode !== 'standard_vat');
+  let renderedNotice = false;
+  const elements = template.map((el) => {
     if (el.label === 'items_table' || el.type === 'TABLE') {
-      const rows = invoice.items.map((item, idx) => ({
-        id: idx.toString(),
-        cells: [
-          (idx + 1).toString(),
-          item.description,
-          `${item.quantity}${item.unit ? ` ${item.unit}` : ''}`,
-          formatCurrency(item.price),
-          formatCurrency(calculateInvoiceItemTotal(item)),
-        ],
-      }));
+      const normalizedLines = invoice.items.map((item) => billingLineItemSchema.parse({ ...item, kind: item.kind ?? 'item' }));
+      const resolved = resolveBillingDocumentLines(normalizedLines);
+      const subtotals = new Map(resolved.runningSubtotals.map((subtotal) => [subtotal.index, subtotal]));
+      const rows = normalizedLines.map((item, idx) => {
+        const kind = item.kind;
+        const amount = resolved.lines[idx]?.amount ?? 0;
+        const groupId = resolved.lines[idx]?.groupId;
+        if (kind === 'group') return { id: idx.toString(), kind, groupId, groupLabel: item.description, cells: ['', item.description, '', '', ''] };
+        if (kind === 'text') return { id: idx.toString(), kind, groupId, cells: ['', item.description, '', '', ''] };
+        if (kind === 'summary') return {
+            id: idx.toString(),
+            kind,
+            groupId,
+            cells: ['', item.description || (item.summaryMetric === 'quantity' ? 'Mengen-Zwischensumme' : 'Zwischensumme'), '', '', item.summaryMetric === 'quantity'
+              ? Object.entries(subtotals.get(idx)?.quantities ?? {}).map(([unit, quantity]) => `${quantity} ${unit}`).join(' · ')
+            : formatCurrency(subtotals.get(idx)?.amount ?? 0)],
+        };
+        if (kind === 'optional') return {
+          id: idx.toString(),
+          kind,
+          groupId,
+          cells: [(idx + 1).toString(), `${item.description}${item.optionNote ? ` (${item.optionNote})` : ''} – optional`, `${item.quantity}${item.unit ? ` ${item.unit}` : ''}`, formatCurrency(item.price), formatCurrency(0)],
+        };
+        return {
+          id: idx.toString(),
+          kind: kind as 'item' | 'time',
+          groupId,
+          cells: [
+            (idx + 1).toString(),
+            item.description,
+            `${item.quantity}${item.unit ? ` ${item.unit}` : ''}`,
+            formatCurrency(item.price),
+            formatCurrency(amount),
+          ],
+        };
+      });
       return {
         ...el,
         tableData: {
@@ -90,20 +121,48 @@ export const getPreviewElements = (
     }
 
     if (el.type === 'TEXT' && typeof el.content === 'string') {
-      const content = el.label === 'invoice_meta' ? enrichInvoiceMetaContent(el.content) : el.content;
+      let content = el.label === 'invoice_meta' ? enrichInvoiceMetaContent(el.content) : el.content;
+      // Existing user templates often contain the old literal title. Keep those
+      // templates useful for the order chain while preserving custom wording.
+      if (invoice.documentKind && el.label === 'invoice_title') {
+        content = content.replace(/^(Rechnung|Angebot)\b/u, '{{invoice.documentLabel}}');
+      }
+      if (invoice.documentKind && el.label === 'invoice_meta') {
+        content = content.replace(/^(Rechnungs|Angebots)-Nr:/u, '{{invoice.documentLabel}}-Nr:');
+      }
+      if (hasTaxNotice && content.includes('{{invoice.taxNotice}}')) {
+        renderedNotice = true;
+      }
+      if (hasTaxNotice && !renderedNotice && (el.label === 'totals_block' || el.label === 'payment_terms')) {
+        content = `${content}\n{{invoice.taxNotice}}`;
+        renderedNotice = true;
+      }
       return {
         ...el,
-        style:
-          el.label === 'invoice_meta'
-            ? {
-                ...el.style,
-                height: Math.max(Number(el.style?.height) || 0, 120),
-              }
-            : el.style,
+        style: {
+          ...el.style,
+          ...(el.label === 'invoice_meta' ? { height: Math.max(Number(el.style?.height) || 0, 120) } : {}),
+          ...(hasTaxNotice && (el.label === 'totals_block' || el.label === 'payment_terms')
+            ? { height: (Number(el.style?.height) || 0) + 30 }
+            : {}),
+        },
         content: replacePlaceholders(content, invoice, settings),
       };
     }
 
     return el;
   });
+  if (hasTaxNotice && !renderedNotice) {
+    elements.push({
+      id: 'tax_notice',
+      type: 'TEXT',
+      x: 76,
+      y: 900,
+      zIndex: 20,
+      content: replacePlaceholders('{{invoice.taxNotice}}', invoice, settings),
+      style: { width: 700, height: 40, fontSize: 10, fontWeight: 'bold' },
+      label: 'tax_notice',
+    });
+  }
+  return elements;
 };

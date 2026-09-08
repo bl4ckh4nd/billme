@@ -2,10 +2,10 @@ import { dialog, shell, type BrowserWindow, type IpcMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import type Database from 'better-sqlite3';
-import type { DocumentTemplateKind, Invoice } from '../types';
+import { getInvoiceDocumentLabel, isBillingDocumentKind, type DocumentTemplateKind, type Invoice } from '../types';
 import { logger } from '../utils/logger';
 import { closeDb, getDb, getDbPath, initDb } from '../db/connection';
-import { createInvoiceFromOffer, deleteInvoice, listInvoices, upsertInvoice } from '../db/invoicesRepo';
+import { createInvoiceFromOffer, deleteInvoice, finalizeOutgoingInvoice, listInvoices, upsertInvoice } from '../db/invoicesRepo';
 import {
   deleteOffer,
   getOffer,
@@ -50,6 +50,9 @@ import {
   listImportBatches,
   getImportBatchDetails,
   rollbackImportBatch,
+  commitProImport,
+  getProImportBatchDetails,
+  rollbackProImportBatch,
 } from '../db/financeImportRepo';
 import type { AppSettings } from '../types';
 import { sendEmail, testEmailConfig, type SmtpConfig, type ResendConfig, type EmailOptions } from '../services/emailService';
@@ -77,7 +80,12 @@ import {
   createProAccountingCatalogService,
   createProAccountingService,
   createProWorkflowService,
+  listReportMappingPositions,
 } from '@billme/accounting-engine';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
+import { eq } from 'drizzle-orm';
+import { registerTaxFilingIpcHandlers } from '@billme/desktop-core/electron/tax-filing/ipc';
+import { createProTaxFilingAdapter } from './taxFilingAdapter';
 import { PRODUCT_PROFILE } from '../productProfile';
 import { importSkrCharts } from '../services/skrImport';
 import {
@@ -85,11 +93,25 @@ import {
   createSqliteProAccountingRepository,
   createSqliteProWorkflowRepository,
 } from '../db/proAccountingPorts';
+import { assertReportSnapshotFreezable, getReportSnapshot, listReportSnapshots, saveReportSnapshot } from '../db/proAccountingRepo';
 import { buildDatevBuchungsstapelCsv } from '../services/datevExport';
 import { buildTaxAuditExportPackage } from '../services/auditExportPackage';
 import { seedAccountKeywords } from '../services/accountKeywordSeed';
 import { resolveRuntimeProTenantScope } from '../tenantScope';
-import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import {
+  calculateInvoiceTaxSnapshot,
+  createOpenRouterVlmService,
+  resolveInvoiceTaxMode,
+  createCancellationInvoice,
+  createCreditNote,
+  createDeliveryNoteFromOrder,
+  createInvoiceRevision,
+  createOrderConfirmationFromOffer,
+  createSettlementInvoice,
+  listDocumentChain,
+} from '@billme/server-core/services';
+import { createBillingScope, createSqliteBillingDependencies, toLegacyInvoice } from '@billme/desktop-data/billingDomainCompat';
+import { listEurAnnexFacts, listEurCashFacts, saveEurAnnexFact, saveEurCashFact } from '@billme/desktop-data/eurFacts';
 import {
   disposeAsset,
   getDepreciationSchedule,
@@ -97,7 +119,12 @@ import {
   runDepreciation,
   upsertAsset,
 } from '../db/assetsRepo';
-
+import {
+  getAccountingSourceRun,
+  listAccountingSourceRuns,
+  postAccountingCommand,
+  postAccountingSource,
+} from '../db/accountingSourceRepo';
 /**
  * Resolves the document's tax mode against the business settings and stores the
  * resulting snapshot alongside the gross amount. Pro must use the same shared
@@ -142,10 +169,10 @@ const requireSettings = (db: Database.Database): AppSettings => {
 };
 
 type ProActorRole = 'bookkeeper' | 'reviewer' | 'accountant' | 'admin' | 'auditor';
-
-const assertProRoleAllowed = (action: string, actorRole: ProActorRole, allowed: ProActorRole[]): void => {
-  if (allowed.includes(actorRole)) return;
-  throw new Error(`Unauthorized for ${action}: role "${actorRole}" is not permitted.`);
+// Local Electron has one authenticated owner; renderer role labels are advisory UI state.
+const LOCAL_OWNER_ROLE: ProActorRole = 'admin';
+const assertLocalOwner = (action: string): void => {
+  if (LOCAL_OWNER_ROLE !== 'admin') throw new Error(`Unauthorized for ${action}`);
 };
 
 type DbProvider = () => Database.Database;
@@ -175,6 +202,7 @@ export const registerIpcHandlers = (
   const requireDb = deps.requireDb;
   const getUserDataPath = deps.getUserDataPath;
   const getMainWindow = deps.getMainWindow;
+  registerTaxFilingIpcHandlers(ipcMain, { getUserDataPath, resourcesPath: process.resourcesPath, binaryPath: process.env.BILLME_ERIC_BINARY, adapter: createProTaxFilingAdapter(getUserDataPath, requireDb) });
   const getProScope = () => resolveRuntimeProTenantScope();
   const getProAccountingService = () =>
     bindProAccountingScope(
@@ -328,8 +356,10 @@ export const registerIpcHandlers = (
     return releaseNumber(db, reservationId);
   });
 
-  register(ipcMain, 'numbers:finalize', ({ reservationId, documentId }) => {
+  register(ipcMain, 'numbers:finalize', async ({ reservationId, documentId }) => {
     const db = requireDb();
+    const reservation = db.prepare('SELECT kind FROM number_reservations WHERE id = ?').get(reservationId) as { kind: string } | undefined;
+    if (reservation?.kind === 'invoice') return finalizeOutgoingInvoice(db, reservationId, documentId);
     return finalizeNumber(db, reservationId, documentId);
   });
 
@@ -398,6 +428,30 @@ export const registerIpcHandlers = (
     return createInvoiceFromOffer(db, offerId, newInvoiceId);
   });
 
+  register(ipcMain, 'documents:chainCreate', (args) => {
+    const db = requireDb();
+    const scope = createBillingScope(PRODUCT_PROFILE);
+    const dependencies = createSqliteBillingDependencies(db);
+    const params = { ...args, actor: { type: 'system' as const, displayName: 'local' } };
+    const created = args.operation === 'order_confirmation'
+      ? createOrderConfirmationFromOffer(scope, dependencies, params)
+      : args.operation === 'delivery_note'
+        ? createDeliveryNoteFromOrder(scope, dependencies, params as any)
+        : args.operation === 'settlement_invoice'
+          ? createSettlementInvoice(scope, dependencies, params as any)
+          : args.operation === 'correction'
+            ? (args.kind === 'credit_note'
+              ? createCreditNote(scope, dependencies, params as any)
+              : createCancellationInvoice(scope, dependencies, params as any))
+            : createInvoiceRevision(scope, dependencies, params as any);
+    return toLegacyInvoice(created);
+  });
+
+  register(ipcMain, 'documents:chainList', ({ rootDocumentId }) => {
+    const db = requireDb();
+    return listDocumentChain(createBillingScope(PRODUCT_PROFILE), createSqliteBillingDependencies(db), rootDocumentId).map(toLegacyInvoice);
+  });
+
   register(ipcMain, 'templates:list', ({ kind }) => {
     const db = requireDb();
     const normalized = kind === 'offer' ? 'offer' : kind === 'invoice' ? 'invoice' : undefined;
@@ -443,7 +497,7 @@ export const registerIpcHandlers = (
 
     if (kind === 'offer') {
       const offer = getOffer(db, id);
-      if (!offer) throw new Error('Offer not found');
+      if (!offer) throw new Error('Angebot nicht gefunden.');
       const res = await exportPdf({
         kind: 'offer',
         id,
@@ -454,15 +508,15 @@ export const registerIpcHandlers = (
     }
 
     const invoice = getInvoice(db, id);
-    if (!invoice) throw new Error('Invoice not found');
+    if (!invoice) throw new Error('Rechnung nicht gefunden.');
     const res = await exportPdf({
       kind: 'invoice',
       id,
-      suggestedName: `${invoice.number || 'invoice'}-${invoice.client || id}`,
+      suggestedName: `${getInvoiceDocumentLabel(invoice.documentKind)}-${invoice.number || 'invoice'}-${invoice.client || id}`,
       userDataPath,
     });
     const settings = requireSettings(db);
-    if (settings.eInvoice?.enabled) {
+    if (settings.eInvoice?.enabled && isBillingDocumentKind(invoice.documentKind)) {
       const normalized = normalizeInvoiceForEinvoice(invoice, settings);
       const xml = buildZugferdXml(normalized);
       const finalBytes = await embedZugferdInPdf({
@@ -520,7 +574,7 @@ export const registerIpcHandlers = (
     ];
 
     if (!allowedRoots.some((root) => resolved === root || resolved.startsWith(root + path.sep))) {
-      throw new Error('Refusing to open path outside app userData folders');
+      throw new Error('Dieser Pfad liegt außerhalb der App-Datenordner.');
     }
 
     const result = await shell.openPath(resolved);
@@ -543,10 +597,10 @@ export const registerIpcHandlers = (
     try {
       parsed = new URL(url);
     } catch {
-      throw new Error('Invalid URL');
+      throw new Error('Ungültige URL.');
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error('Only http(s) URLs are allowed');
+      throw new Error('Es sind nur http(s)-Adressen erlaubt.');
     }
     await shell.openExternal(parsed.toString(), { activate: true });
     return { ok: true };
@@ -592,6 +646,7 @@ export const registerIpcHandlers = (
     // FIRST PASS: Validate ALL rows and collect errors
     const errors: Array<{ rowIndex: number; message: string }> = [];
     const toInsert: Array<{
+      rowIndex: number;
       id: string;
       accountId: string;
       date: string;
@@ -616,6 +671,7 @@ export const registerIpcHandlers = (
         continue;
       }
       toInsert.push({
+        rowIndex: r.rowIndex,
         id: crypto.randomUUID(),
         accountId: args.accountId,
         date,
@@ -641,6 +697,30 @@ export const registerIpcHandlers = (
       );
     }
 
+    if (PRODUCT_PROFILE.appId === 'com.billme.pro') {
+      const result = commitProImport(db, {
+        accountId: args.accountId,
+        profile: committed.profile,
+        fileName: committed.fileName,
+        fileSha256: committed.fileSha256,
+        mappingJson: {
+          profile: args.profile ?? 'auto',
+          mapping: args.mapping,
+          encoding: args.encoding,
+          delimiter: args.delimiter,
+        },
+        rows: toInsert.map((row) => ({ ...row, type: row.type as 'income' | 'expense', status: row.status as 'pending' | 'booked' })),
+        errorCount: errors.length,
+      });
+      return {
+        batchId: result.batchId,
+        imported: result.inserted,
+        skipped: result.skipped,
+        errors: [...errors, ...result.conflicts.map((conflict) => ({ rowIndex: conflict.rowIndex ?? 0, message: `${conflict.reason}:${conflict.sourceTransactionId}` }))],
+        fileSha256: committed.fileSha256,
+      };
+    }
+
     // SECOND PASS: Only if error rate is acceptable, commit to database
     const result = db.transaction(() => {
       const batchId = createImportBatch(db, {
@@ -664,13 +744,11 @@ export const registerIpcHandlers = (
         toInsert.map((t) => ({ ...t, importBatchId: batchId, linkedInvoiceId: null })),
       );
 
-      db.prepare(
-        `
-          UPDATE import_batches
-          SET imported_count = @imported, skipped_count = @skipped, error_count = @errors
-          WHERE id = @id
-        `,
-      ).run({ id: batchId, imported: inserted, skipped, errors: errors.length });
+      createDrizzle(db)
+        .update(schema.importBatches)
+        .set({ importedCount: inserted, skippedCount: skipped, errorCount: errors.length })
+        .where(eq(schema.importBatches.id, batchId))
+        .run();
 
       return { batchId, inserted, skipped };
     })();
@@ -692,11 +770,11 @@ export const registerIpcHandlers = (
     const db = requireDb();
 
     const offer = getOffer(db, offerId);
-    if (!offer) throw new Error('Offer not found');
+    if (!offer) throw new Error('Angebot nicht gefunden.');
 
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
 
     const res = await publishOfferToPortal(db, {
       offerId,
@@ -734,7 +812,7 @@ export const registerIpcHandlers = (
 
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
 
     const result = await syncPublishedOfferDecisionFromPortal(db, {
       offerId,
@@ -750,11 +828,11 @@ export const registerIpcHandlers = (
     const db = requireDb();
 
     const invoice = getInvoice(db, invoiceId);
-    if (!invoice) throw new Error('Invoice not found');
+    if (!invoice) throw new Error('Rechnung nicht gefunden.');
 
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
 
     const apiKey = await secrets.get('portal.apiKey');
     const token = crypto.randomBytes(24).toString('base64url');
@@ -782,7 +860,7 @@ export const registerIpcHandlers = (
     const db = requireDb();
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
     const apiKey = await secrets.get('portal.apiKey');
     return portalClient.createCustomerAccessLink({ baseUrl, apiKey, customerRef, customerLabel, expiresInDays });
   });
@@ -791,7 +869,7 @@ export const registerIpcHandlers = (
     const db = requireDb();
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
     const apiKey = await secrets.get('portal.apiKey');
     return portalClient.rotateCustomerAccessLink({ baseUrl, apiKey, customerRef, customerLabel, expiresInDays });
   });
@@ -863,8 +941,8 @@ export const registerIpcHandlers = (
     return { ok: verification.ok, verification };
   });
 
-  register(ipcMain, 'tax:auditExportPackage', ({ from, to, includeDocuments, actorRole }) => {
-    assertProRoleAllowed('tax:auditExportPackage', actorRole, ['accountant', 'admin', 'auditor']);
+  register(ipcMain, 'tax:auditExportPackage', ({ from, to, includeDocuments }) => {
+    assertLocalOwner('tax:auditExportPackage');
     const db = requireDb();
     return buildTaxAuditExportPackage(db, getUserDataPath(), {
       from,
@@ -889,14 +967,14 @@ export const registerIpcHandlers = (
     if (!settings || !settings.email) {
       return {
         success: false,
-        error: 'Email settings not configured',
+        error: 'E-Mail-Einstellungen fehlen.',
       };
     }
 
     if (settings.email.provider === 'none') {
       return {
         success: false,
-        error: 'No email provider configured. Please configure SMTP or Resend in Settings.',
+        error: 'Kein E-Mail-Anbieter eingerichtet. Konfiguriere SMTP oder Resend unter Einstellungen.',
       };
     }
 
@@ -905,7 +983,7 @@ export const registerIpcHandlers = (
     if (!document) {
       return {
         success: false,
-        error: `${documentType === 'invoice' ? 'Invoice' : 'Offer'} not found`,
+        error: `${documentType === 'invoice' ? 'Rechnung' : 'Angebot'} nicht gefunden.`,
       };
     }
 
@@ -917,7 +995,7 @@ export const registerIpcHandlers = (
     } catch (e) {
       return {
         success: false,
-        error: `Failed to generate PDF: ${String(e)}`,
+        error: `PDF konnte nicht erstellt werden: ${String(e)}`,
       };
     }
 
@@ -1098,12 +1176,16 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'finance:getImportBatchDetails', ({ batchId }) => {
     const db = requireDb();
-    return getImportBatchDetails(db, batchId);
+    return PRODUCT_PROFILE.appId === 'com.billme.pro'
+      ? getProImportBatchDetails(db, batchId)
+      : getImportBatchDetails(db, batchId);
   });
 
   register(ipcMain, 'finance:rollbackImportBatch', ({ batchId, reason }) => {
     const db = requireDb();
-    return rollbackImportBatch(db, batchId, reason);
+    return PRODUCT_PROFILE.appId === 'com.billme.pro'
+      ? rollbackProImportBatch(db, batchId, reason)
+      : rollbackImportBatch(db, batchId, reason);
   });
 
   register(ipcMain, 'pro:importSkr', (args) => {
@@ -1134,6 +1216,10 @@ export const registerIpcHandlers = (
   register(ipcMain, 'pro:getLedgerStats', () => {
     return getProAccountingCatalogService().getLedgerStats();
   });
+
+  const openRouterVlm = createOpenRouterVlmService();
+  register(ipcMain, 'pro:getOpenRouterVlmConfig', () => openRouterVlm.getConfig());
+  register(ipcMain, 'pro:analyzeTransactionDocument', (input) => openRouterVlm.analyze(input));
 
   register(ipcMain, 'pro:listBankTransactions', () => {
     return getProAccountingService().listBankTransactions().then((rows) =>
@@ -1179,26 +1265,30 @@ export const registerIpcHandlers = (
     return getProAccountingService().dispatchDraftAction({ transactionId, action, rejectReason });
   });
 
-  register(ipcMain, 'pro:postDraft', ({ draftId, postingDate, actorRole }) => {
-    assertProRoleAllowed('pro:postDraft', actorRole, ['reviewer', 'accountant', 'admin']);
-    return getProAccountingService().postDraft(draftId, { postingDate });
+  register(ipcMain, 'pro:postDraft', ({ draftId, postingDate, idempotencyKey, softLockOverride, overrideReason }) => {
+    assertLocalOwner('pro:postDraft');
+    return getProAccountingService().postDraft(draftId, { postingDate, idempotencyKey, softLockOverride, overrideReason });
   });
 
-  register(ipcMain, 'pro:reverseJournalEntry', ({ entryId, reason, actorRole }) => {
-    assertProRoleAllowed('pro:reverseJournalEntry', actorRole, ['accountant', 'admin']);
-    return getProAccountingService().reverseJournalEntry(entryId, reason);
+  register(ipcMain, 'pro:reverseJournalEntry', ({ entryId, reason, postingDate, softLockOverride, overrideReason }) => {
+    assertLocalOwner('pro:reverseJournalEntry');
+    return getProAccountingService().reverseJournalEntry(entryId, reason, { postingDate, softLockOverride, overrideReason });
   });
 
   register(ipcMain, 'pro:listJournalEntries', ({ from, to, accountNumbers, limit, offset }) => {
     return getProAccountingService().listJournalEntries({ from, to, accountNumbers, limit, offset });
   });
 
-  register(ipcMain, 'pro:getLedgerBalances', ({ asOfDate }) => {
-    return getProAccountingService().getLedgerBalances({ asOfDate });
+  register(ipcMain, 'pro:getJournalEntryById', ({ entryId }) => {
+    return getProAccountingService().getJournalEntryById(entryId);
   });
 
-  register(ipcMain, 'pro:getSusaReport', ({ asOfDate }) => {
-    return getProAccountingService().getSusaReport({ asOfDate });
+  register(ipcMain, 'pro:getLedgerBalances', ({ asOfDate, from, to }) => {
+    return getProAccountingService().getLedgerBalances({ asOfDate, from, to });
+  });
+
+  register(ipcMain, 'pro:getSusaReport', ({ asOfDate, from, to }) => {
+    return getProAccountingService().getSusaReport({ asOfDate, from, to });
   });
 
   register(ipcMain, 'pro:getGuvReport', ({ from, to }) => {
@@ -1207,6 +1297,51 @@ export const registerIpcHandlers = (
 
   register(ipcMain, 'pro:getBilanzReport', ({ asOfDate }) => {
     return getProAccountingService().getBilanzReport({ asOfDate });
+  });
+
+  register(ipcMain, 'pro:getReportingReport', ({ kind, from, to, asOfDate }) => {
+    return getProAccountingService().getReportingReport({ kind, from, to, asOfDate });
+  });
+
+  register(ipcMain, 'pro:listReportSnapshots', ({ reportType }) => {
+    return listReportSnapshots(requireDb(), getProScope(), reportType);
+  });
+
+  register(ipcMain, 'pro:saveReportSnapshot', ({ reportType, args, payload, reason }) => {
+    assertLocalOwner('pro:saveReportSnapshot');
+    assertReportSnapshotFreezable({ reportType, payload });
+    return saveReportSnapshot(requireDb(), { reportType, args, payload, reason }, getProScope());
+  });
+
+  register(ipcMain, 'pro:getReportMappingHealth', ({ chart, statement, asOfDate }) => {
+    const db = requireDb();
+    const health = createSqliteProAccountingRepository(db).getReportMappingHealth(getProScope(), { chart, statement, asOfDate });
+    return getProAccountingService().getAccountingPolicy().then((policy) => ({
+      chart: policy.activeChart,
+      unmapped: health.unmappedAccounts.map((accountNumber) => ({ accountNumber, statement: statement ?? 'management-guv' })),
+    }));
+  });
+
+  register(ipcMain, 'pro:listReportMappingPositions', ({ statement, asOfDate }) => {
+    const size = getSettings(requireDb())?.businessReportingProfile?.hgbSizeClass ?? 'small';
+    return listReportMappingPositions(statement, size, asOfDate);
+  });
+
+  register(ipcMain, 'pro:upsertReportMappingOverride', ({ chart, asOfDate, accountNumber, statement, position, label, side, reason }) => {
+    assertLocalOwner('pro:upsertReportMappingOverride');
+    const db = requireDb();
+    const size = getSettings(db)?.businessReportingProfile?.hgbSizeClass ?? 'small';
+    if (!listReportMappingPositions(statement, size, asOfDate).some((item) => item.key === position)) throw new Error('REPORT_MAPPING_POSITION_NOT_ALLOWED');
+    return createSqliteProAccountingRepository(db).upsertReportMappingOverride(getProScope(), {
+      chart,
+      asOfDate,
+      accountNumber,
+      statement,
+      position,
+      label,
+      side,
+      reason,
+    });
   });
 
   register(ipcMain, 'pro:listAssets', () => {
@@ -1221,32 +1356,87 @@ export const registerIpcHandlers = (
     return getDepreciationSchedule(requireDb(), assetId, getProScope());
   });
 
-  register(ipcMain, 'pro:runDepreciation', ({ actorRole, ...args }) => {
-    assertProRoleAllowed('pro:runDepreciation', actorRole, ['reviewer', 'accountant', 'admin']);
+  register(ipcMain, 'pro:runDepreciation', (args) => {
+    assertLocalOwner('pro:runDepreciation');
     return runDepreciation(requireDb(), args, getProScope());
   });
 
-  register(ipcMain, 'pro:disposeAsset', ({ actorRole, ...args }) => {
-    assertProRoleAllowed('pro:disposeAsset', actorRole, ['reviewer', 'accountant', 'admin']);
+  register(ipcMain, 'pro:disposeAsset', (args) => {
+    assertLocalOwner('pro:disposeAsset');
     return disposeAsset(requireDb(), args, getProScope());
   });
 
-  register(ipcMain, 'pro:exportDatevBuchungsstapel', ({ from, to, actorRole }) => {
-    assertProRoleAllowed('pro:exportDatevBuchungsstapel', actorRole, ['accountant', 'admin']);
-    return getProAccountingService().buildDatevRows({ from, to }).then((rows) => {
-      const userDataPath = getUserDataPath();
-      const exportDir = path.join(userDataPath, 'exports', 'datev');
-      fs.mkdirSync(exportDir, { recursive: true });
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const exportPath = path.join(exportDir, `datev-buchungsstapel-${timestamp}.csv`);
-      const csvBuffer = buildDatevBuchungsstapelCsv(rows);
-      fs.writeFileSync(exportPath, csvBuffer);
-      return getProAccountingService().insertDatevExport({
-        filePath: exportPath,
-        recordCount: rows.length,
-        fromDate: from,
-        toDate: to,
+  register(ipcMain, 'pro:exportDatevBuchungsstapel', (args) => {
+    assertLocalOwner('pro:exportDatevBuchungsstapel');
+    const { from, to } = args;
+    if (!from || !to || args.consultantNumber === undefined || args.clientNumber === undefined || !args.fiscalYearStart || args.accountLength === undefined) {
+      throw new Error('DATEV Export benötigt Beraternummer, Mandantennummer, Wirtschaftsjahresbeginn, Kontenlänge und einen Zeitraum.');
+    }
+    return getProAccountingService().buildDatevRows({ from, to }).then(async (rows) => {
+      const policy = await getProAccountingService().getAccountingPolicy();
+      const createdAt = new Date();
+      const csvBuffer = buildDatevBuchungsstapelCsv(rows, {
+        consultantNumber: args.consultantNumber!,
+        clientNumber: args.clientNumber!,
+        fiscalYearStart: args.fiscalYearStart!,
+        accountLength: args.accountLength!,
+        chart: policy.activeChart,
+        from: from!,
+        to: to!,
+        encoding: args.encoding ?? 'cp1252',
+        createdAt,
+        stackName: `Buchungsstapel ${from!.slice(0, 7)}`,
       });
+      const exportId = crypto.randomUUID();
+      const exportDir = path.join(getUserDataPath(), 'exports', 'datev');
+      const exportPath = path.join(exportDir, `EXTF_Buchungsstapel-${from!.slice(0, 7)}-${exportId}.CSV`);
+      const temporaryPath = path.join(exportDir, `.${exportId}.tmp`);
+      const sourceSnapshotHash = crypto.createHash('sha256').update(JSON.stringify({ from, to, rows })).digest('hex');
+      const manifest = JSON.stringify({
+        id: exportId,
+        sourceSnapshotHash,
+        sha256: crypto.createHash('sha256').update(csvBuffer).digest('hex'),
+        byteSize: csvBuffer.byteLength,
+        encoding: args.encoding ?? 'cp1252',
+        headerVersion: 700,
+        formatVersion: 13,
+        chart: policy.activeChart,
+        from,
+        to,
+        recordCount: rows.length,
+        createdAt: createdAt.toISOString(),
+        status: 'validated',
+      });
+      let finalCreated = false;
+      try {
+        fs.mkdirSync(exportDir, { recursive: true });
+        fs.writeFileSync(temporaryPath, csvBuffer, { flag: 'wx' });
+        const fd = fs.openSync(temporaryPath, 'r');
+        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        fs.renameSync(temporaryPath, exportPath);
+        finalCreated = true;
+        return await getProAccountingService().insertDatevExport({
+          id: exportId,
+          filePath: exportPath,
+          recordCount: rows.length,
+          fromDate: from,
+          toDate: to,
+          sha256: JSON.parse(manifest).sha256,
+          byteSize: csvBuffer.byteLength,
+          encoding: args.encoding ?? 'cp1252',
+          headerVersion: 700,
+          formatVersion: 13,
+          chart: policy.activeChart,
+          sourceSnapshotHash,
+          manifestJson: manifest,
+          status: 'validated',
+          validationJson: JSON.stringify({ ok: true }),
+        });
+      } catch (error) {
+        try { if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath); } catch { /* cleanup is best effort */ }
+        try { if (finalCreated && fs.existsSync(exportPath)) fs.unlinkSync(exportPath); } catch { /* cleanup is best effort */ }
+        throw error;
+      }
     });
   });
 
@@ -1274,6 +1464,51 @@ export const registerIpcHandlers = (
     return getProWorkflowService().upsert({ transactionId, transactionJson, draftJson });
   });
 
+  register(ipcMain, 'pro:getAccountingPolicy', () => getProAccountingService().getAccountingPolicy());
+  register(ipcMain, 'pro:setAccountingPolicy', (input) => getProAccountingService().setAccountingPolicy(input));
+  register(ipcMain, 'pro:listAccountingAccountMappings', ({ chart }) => getProAccountingService().listAccountingAccountMappings(chart));
+  register(ipcMain, 'pro:upsertAccountingAccountMapping', (input) => getProAccountingService().upsertAccountingAccountMapping(input));
+  register(ipcMain, 'pro:listVendors', () => getProAccountingService().listVendors());
+  register(ipcMain, 'pro:upsertVendor', ({ vendor, reason }) => getProAccountingService().upsertVendor({ ...vendor, mutation: { reason } }));
+  register(ipcMain, 'pro:listIncomingInvoices', () => getProAccountingService().listIncomingInvoices());
+  register(ipcMain, 'pro:upsertIncomingInvoice', ({ invoice, reason }) => getProAccountingService().upsertIncomingInvoice({ ...invoice, mutation: { reason } }));
+  register(ipcMain, 'pro:listIncomingInvoiceDocuments', ({ invoiceId }) => getProAccountingService().listIncomingInvoiceDocuments(invoiceId));
+  register(ipcMain, 'pro:uploadIncomingInvoiceDocument', ({ invoiceId, originalFilename, mimeType, data, reason }) => getProAccountingService().uploadIncomingInvoiceDocument({ incomingInvoiceId: invoiceId, originalFilename, mimeType, content: Buffer.from(data, 'base64'), mutation: { reason } }));
+  register(ipcMain, 'pro:downloadIncomingInvoiceDocument', async ({ documentId }) => {
+    const downloaded = await getProAccountingService().downloadIncomingInvoiceDocument(documentId);
+    return { document: downloaded.document, data: Buffer.from(downloaded.content).toString('base64') };
+  });
+  register(ipcMain, 'pro:reviewIncomingInvoiceDocument', ({ documentId, reviewStatus, reason }) => getProAccountingService().reviewIncomingInvoiceDocument({ documentId, reviewStatus, mutation: { reason } }));
+  register(ipcMain, 'pro:previewOutgoingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewOutgoingInvoice(invoiceId));
+  register(ipcMain, 'pro:postOutgoingInvoiceAccounting', ({ invoiceId, reservationId, softLockOverride, overrideReason }) => {
+    if (softLockOverride) assertLocalOwner('pro:postOutgoingInvoiceAccounting');
+    return getProAccountingService().postOutgoingInvoice(invoiceId, { reservationId, requireFinalizedReservation: true, softLockOverride, overrideReason });
+  });
+  register(ipcMain, 'pro:previewIncomingInvoiceAccounting', ({ invoiceId }) => getProAccountingService().previewIncomingInvoice(invoiceId));
+  register(ipcMain, 'pro:postIncomingInvoiceAccounting', ({ invoiceId, reason, softLockOverride, overrideReason }) => {
+    if (softLockOverride) assertLocalOwner('pro:postIncomingInvoiceAccounting');
+    return getProAccountingService().postIncomingInvoice(invoiceId, { softLockOverride, overrideReason, mutation: { reason } });
+  });
+  register(ipcMain, 'pro:listOpenItems', () => getProAccountingService().listOpenItems());
+  register(ipcMain, 'pro:allocateOpenItemPayment', ({ payment }) => getProAccountingService().allocateOpenItemPayment({ ...payment, mutation: { reason: payment.reason } }));
+  register(ipcMain, 'pro:allocateRemainingPayment', ({ paymentId, allocations, reason, allocationEventId }) => getProAccountingService().allocateRemainingOpenItemPayment(paymentId, allocations, allocationEventId, { reason }));
+  register(ipcMain, 'pro:reverseDocumentAccounting', (input) => {
+    if (input.softLockOverride) assertLocalOwner('pro:reverseDocumentAccounting');
+    return getProAccountingService().reverseDocumentAccounting(input);
+  });
+  register(ipcMain, 'pro:previewAccountingBackfill', () => getProAccountingService().previewAccountingBackfill());
+  register(ipcMain, 'pro:confirmAccountingBackfill', (input) => getProAccountingService().confirmAccountingBackfill(input));
+  register(ipcMain, 'pro:postAccountingSource', ({ source, chart, softLockOverride, overrideReason, reason, provenance }) => {
+    if (softLockOverride) assertLocalOwner('pro:postAccountingSource');
+    return postAccountingSource(requireDb(), source, getProScope(), { chart, softLockOverride, overrideReason, reason, provenance });
+  });
+  register(ipcMain, 'pro:postAccountingCommand', ({ kind, source, domainFacts, chart, softLockOverride, overrideReason, reason, provenance }) => {
+    if (softLockOverride) assertLocalOwner('pro:postAccountingCommand');
+    return postAccountingCommand(requireDb(), { kind, source, domainFacts }, getProScope(), { chart, softLockOverride, overrideReason, reason, provenance });
+  });
+  register(ipcMain, 'pro:listAccountingSourceRuns', () => listAccountingSourceRuns(requireDb(), getProScope()));
+  register(ipcMain, 'pro:getAccountingSourceRun', ({ id }) => getAccountingSourceRun(requireDb(), id, getProScope()));
+
   register(ipcMain, 'updater:getStatus', () => {
     return getCurrentUpdateStatus();
   });
@@ -1291,7 +1526,7 @@ export const registerIpcHandlers = (
   register(ipcMain, 'eur:getReport', ({ taxYear, from, to }) => {
     const db = requireDb();
     const settings = requireSettings(db);
-    return getEurReport(db, { taxYear, from, to, settings });
+    return getEurReport(db, { taxYear, from, to, settings, product: 'pro' });
   });
 
   register(ipcMain, 'eur:listItems', ({
@@ -1322,6 +1557,7 @@ export const registerIpcHandlers = (
       accountId,
       limit,
       offset,
+      product: 'pro',
     });
   });
 
@@ -1332,9 +1568,12 @@ export const registerIpcHandlers = (
     eurLineId,
     excluded,
     vatMode,
+    vatRate,
     note,
+    reason,
   }) => {
     const db = requireDb();
+    const settings = requireSettings(db);
     return upsertEurItemClassification(db, {
       sourceType,
       sourceId,
@@ -1342,14 +1581,33 @@ export const registerIpcHandlers = (
       eurLineId,
       excluded,
       vatMode,
+      vatRate,
       note,
+      reason,
+      actor: 'pro',
+      product: 'pro',
+      settings,
     });
   });
+
+  register(ipcMain, 'eur:saveCashFact', (args) => {
+    const scope = getProScope();
+    return saveEurCashFact(requireDb(), { ...args, tenantId: scope.tenantId, actor: { id: scope.tenantId, displayName: 'pro-desktop' } });
+  });
+
+  register(ipcMain, 'eur:listCashFacts', ({ taxYear }) => listEurCashFacts(requireDb(), taxYear, getProScope().tenantId));
+
+  register(ipcMain, 'eur:saveAnnexFact', (args) => {
+    const scope = getProScope();
+    return saveEurAnnexFact(requireDb(), { ...args, tenantId: scope.tenantId, actor: { id: scope.tenantId, displayName: 'pro-desktop' } });
+  });
+
+  register(ipcMain, 'eur:listAnnexFacts', ({ taxYear, annex }) => listEurAnnexFacts(requireDb(), taxYear, annex, getProScope().tenantId));
 
   register(ipcMain, 'eur:exportCsv', ({ taxYear, from, to }) => {
     const db = requireDb();
     const settings = requireSettings(db);
-    const report = getEurReport(db, { taxYear, from, to, settings });
+    const report = getEurReport(db, { taxYear, from, to, settings, product: 'pro' });
     return buildEurCsv(report);
   });
 

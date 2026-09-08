@@ -18,7 +18,7 @@ export const FinanceHubView: React.FC = () => {
         `SKR-Import abgeschlossen: ${result.inserted} neu, ${result.updated} aktualisiert.${warningSuffix}`,
       );
     } catch (error) {
-      setImportNotice(`SKR-Import fehlgeschlagen: ${String(error)}`);
+      setImportNotice(`SKR-Import konnte nicht verarbeitet werden: ${String(error)}`);
     }
   };
 
@@ -60,7 +60,7 @@ export const FinanceHubView: React.FC = () => {
           </div>
           <div className="text-lg font-black text-gray-900">Pro Buchhaltung</div>
           <div className="text-sm text-gray-600 mt-1">
-            Inbox, Buchungssätze, Abgleich, SuSa/GuV/Bilanz und Exceptions.
+            Inbox, Buchungssätze, Abgleich, SuSa/GuV/Bilanz und Ausnahmen.
           </div>
           <div className="mt-3 text-xs font-semibold text-gray-700">
             Kontenrahmen geladen: {ledgerStats?.total ?? 0}

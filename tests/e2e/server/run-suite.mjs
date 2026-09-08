@@ -9,6 +9,7 @@ import {
   runLiteAuthScenario,
   runLiteRegressionScenario,
   runLiteSmokeScenario,
+  runLiteVatPersistenceScenario,
   runLiteWorkflowScenario,
 } from './lite/scenarios.mjs';
 import { runWorkerFlowScenario } from './worker-flows.mjs';
@@ -19,18 +20,26 @@ import {
   runProRouteGuardScenario,
   runProSmokeScenario,
 } from './pro/scenarios.mjs';
+import { runProNonHappyAccountingScenario } from './pro/nonhappy.mjs';
+import { runProSourceRunScenario } from './pro/source-runs.mjs';
+import { runProOutgoingDocumentChainScenario } from './pro/outgoing-document-chain.mjs';
+import { runProIncomingDocumentArchiveScenario } from './pro/incoming-document-archive.mjs';
 
 const level = process.argv[2] === 'full' ? 'full' : 'smoke';
 const scope = process.argv[3] ?? 'all';
 const headless = !(process.env.SERVER_E2E_HEADED === '1' || process.env.PW_HEADLESS === '0');
 
 process.env.E2E_TARGET = 'server';
+process.env.E2E_SCENARIO_IMPORT = '1';
 if (level === 'full') {
   process.env.E2E_FULL = '1';
 }
 
+const { runProIncomingInvoiceUiScenario } = await import('./pro/incoming-invoice-ui.spec.mjs');
+
 const buildScenarioList = () => {
   const scenarios = [];
+  const includeNonHappy = level === 'full' && (scope === 'all' || scope === 'pro' || scope === 'pro-nonhappy');
   const includeStack = scope === 'all' || scope === 'stack' || scope === 'lite' || scope === 'pro';
   const includeLite = scope === 'all' || scope === 'lite';
   const includePro = scope === 'all' || scope === 'pro';
@@ -44,6 +53,7 @@ const buildScenarioList = () => {
     if (level === 'full') {
       scenarios.push({ name: 'lite-auth', kind: 'browser', run: (page) => runLiteAuthScenario(page, 'runner-lite-auth') });
       scenarios.push({ name: 'lite-regressions', kind: 'browser', run: (page) => runLiteRegressionScenario(page, 'runner-lite-regressions') });
+      scenarios.push({ name: 'lite-vat-persistence', kind: 'plain', run: () => runLiteVatPersistenceScenario('runner-lite-vat-persistence') });
       scenarios.push({ name: 'lite-workflow', kind: 'browser', run: (page) => runLiteWorkflowScenario(page, 'runner-lite-workflow') });
       scenarios.push({ name: 'lite-worker-flows', kind: 'plain', run: () => runWorkerFlowScenario('lite') });
     }
@@ -55,9 +65,17 @@ const buildScenarioList = () => {
       scenarios.push({ name: 'pro-auth-restore', kind: 'browser', run: runProAuthRestoreScenario });
       scenarios.push({ name: 'pro-catalog', kind: 'browser', run: runProCatalogScenario });
       scenarios.push({ name: 'pro-accounting', kind: 'browser', run: runProAccountingScenario });
+      scenarios.push({ name: 'pro-incoming-invoice-ui', kind: 'browser', run: runProIncomingInvoiceUiScenario });
+      scenarios.push({ name: 'pro-incoming-document-archive', kind: 'browser', run: runProIncomingDocumentArchiveScenario });
+      scenarios.push({ name: 'pro-outgoing-document-chain', kind: 'browser', run: runProOutgoingDocumentChainScenario });
       scenarios.push({ name: 'pro-route-guard', kind: 'browser', run: runProRouteGuardScenario });
       scenarios.push({ name: 'pro-worker-flows', kind: 'plain', run: () => runWorkerFlowScenario('pro') });
+      scenarios.push({ name: 'pro-source-runs', kind: 'plain', run: runProSourceRunScenario });
     }
+  }
+
+  if (includeNonHappy && level === 'full') {
+    scenarios.push({ name: 'pro-accounting-nonhappy', kind: 'plain', run: runProNonHappyAccountingScenario });
   }
 
   return scenarios;
@@ -90,7 +108,10 @@ const main = async () => {
     await fs.writeFile(stableStateFile, JSON.stringify({ ...state, stateFile: stableStateFile }, null, 2));
     process.env.E2E_SERVER_STATE_FILE = stableStateFile;
     if (scenarios.some((scenario) => scenario.kind === 'browser')) {
-      browser = await chromium.launch({ headless });
+      browser = await chromium.launch({
+        headless,
+        executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
+      });
     }
 
     for (const scenario of scenarios) {

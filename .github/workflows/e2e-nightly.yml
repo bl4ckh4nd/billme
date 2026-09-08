@@ -84,5 +84,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: server-mode-diagnostics-full
-          path: test-results/server-mode
+          path: |
+            test-results/server-mode
+            !test-results/server-mode/**/compose.env
+            !test-results/server-mode/**/runtime-state.json
           if-no-files-found: ignore

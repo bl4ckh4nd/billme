@@ -2,9 +2,10 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { BillmeApi } from '@billme/desktop-contracts/api';
+import type { RendererRuntime } from './runtime-api';
 import '../../../apps/desktop/index.css';
 
-export type DesktopRendererRuntime = {
+export type DesktopRendererRuntime = RendererRuntime & {
   shell?: 'desktop' | 'web';
   product?: 'lite' | 'pro';
   navigation?: string[];

@@ -12,12 +12,50 @@ import {
   type BookingDraft as WorkspaceBookingDraft,
   type ProAccountingSeed,
   type Transaction as WorkspaceTransaction,
+  type UserRole,
+  type ProAccountingDataAdapter,
+  type OposBankTransaction,
+  type EurCashItem,
+  permissionContextForRole,
+  nativeEurRange,
+  reportDateRange,
 } from '@billme/accounting-ui-pro';
+import type {
+  BalanceSheetPreview,
+  GuvReport,
+  ReportDrilldownEntry,
+  ReportDrilldownSelection,
+  ReportFilterState,
+  SusaReport,
+  AccountingCommandInput,
+  AccountingSourceRun,
+  EurCashFact,
+  EurCashFactInput,
+  EurAnnexFact,
+  EurAnnexFactInput,
+} from '@billme/accounting-ui-pro';
+import type { OpenItemPaymentEntity } from '@billme/accounting-shared';
 import { createProWebClient, type ProWebClient } from './api';
+import { mapTransactionBankAccounts } from './accountingSeed';
 
 const DEFAULT_API_URL = (import.meta.env.VITE_SERVER_API_URL as string | undefined) ?? 'http://127.0.0.1:3100';
 const SESSION_STORAGE_KEY = 'billme.web-pro.session.v1';
 const API_URL_STORAGE_KEY = 'billme.web-pro.api-url.v1';
+
+const accountingErrorsFrom = (value: unknown): Array<{ code: string; message: string; field?: string; blocking?: boolean }> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const record = value as Record<string, unknown>;
+  const direct = Array.isArray(record.errors)
+    ? record.errors.flatMap((error) => {
+      if (!error || typeof error !== 'object' || Array.isArray(error)) return [];
+      const issue = error as Record<string, unknown>;
+      return typeof issue.code === 'string' && typeof issue.message === 'string'
+        ? [{ code: issue.code, message: issue.message, ...(typeof issue.field === 'string' ? { field: issue.field } : {}), ...(typeof issue.blocking === 'boolean' ? { blocking: issue.blocking } : {}) }]
+        : [];
+    })
+    : [];
+  return [...direct, ...accountingErrorsFrom(record.result)].filter((issue, index, all) => all.findIndex((candidate) => candidate.code === issue.code && candidate.message === issue.message && candidate.field === issue.field) === index);
+};
 
 type AppRoute = 'overview' | 'documents' | 'clients' | 'catalog' | 'recurring' | 'settings' | 'accounting';
 
@@ -38,6 +76,9 @@ type AppData = {
     offer: Awaited<ReturnType<ProWebClient['getActiveTemplate']>>;
   };
   workflowEntries: Awaited<ReturnType<ProWebClient['listWorkflowEntries']>>;
+  accountingTransactions: Awaited<ReturnType<ProWebClient['listAccountingTransactions']>>;
+  accountingDrafts: Awaited<ReturnType<ProWebClient['listAccountingDrafts']>>;
+  accountingPolicy: Awaited<ReturnType<ProWebClient['getAccountingPolicy']>>;
   ledgerStats: Awaited<ReturnType<ProWebClient['getLedgerStats']>>;
   ledgerAccounts: Awaited<ReturnType<ProWebClient['listLedgerAccounts']>>;
   taxCases: Awaited<ReturnType<ProWebClient['listTaxCases']>>;
@@ -73,7 +114,39 @@ const ROUTES: Array<{ id: AppRoute; label: string; summary: string }> = [
   { id: 'accounting', label: 'Buchhaltung', summary: 'Workflow, Regeln und Ledger' },
 ];
 
+const invoiceDocumentLabels: Record<string, string> = {
+  invoice: 'Rechnung',
+  order_confirmation: 'Auftragsbestätigung',
+  delivery_note: 'Lieferschein',
+  advance_invoice: 'Abschlagsrechnung',
+  partial_invoice: 'Teilrechnung',
+  final_invoice: 'Schlussrechnung',
+  credit_note: 'Gutschrift',
+  cancellation_invoice: 'Stornorechnung',
+};
+
+const invoiceDocumentLabel = (kind: string | undefined) => invoiceDocumentLabels[kind ?? 'invoice'] ?? 'Rechnung';
+const invoiceChainLabel = (invoice: { documentKind?: string; revisionNumber?: number }) =>
+  invoice.revisionNumber && invoice.revisionNumber > 0
+    ? `${invoiceDocumentLabel(invoice.documentKind)} · Revision ${invoice.revisionNumber}`
+    : invoiceDocumentLabel(invoice.documentKind);
+
 const WORKFLOW_ROUTE_TARGET = '#/accounting';
+
+const mapServerRoleToWorkspaceRole = (role: AppData['sessionInfo']['role']): UserRole => {
+  switch (role) {
+    case 'owner':
+      return 'owner';
+    case 'admin':
+      return 'admin';
+    case 'accountant':
+      return 'accountant';
+    case 'sales':
+      return 'sales';
+    case 'viewer':
+      return 'viewer';
+  }
+};
 
 const currencyFormatter = new Intl.NumberFormat('de-DE', {
   style: 'currency',
@@ -88,6 +161,30 @@ const formatDate = (value: string | null | undefined) => {
   if (Number.isNaN(parsed.getTime())) return value;
   return new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium' }).format(parsed);
 };
+
+const taxRoleLabels = {
+  output_tax: 'Umsatzsteuer',
+  input_tax: 'Vorsteuer',
+  datev_bu: 'DATEV-BU',
+} as const;
+
+const suggestionFieldLabels = {
+  counterparty: 'Gegenpartei',
+  purpose: 'Verwendungszweck',
+  any: 'Beliebiges Feld',
+} as const;
+
+const suggestionOperatorLabels = {
+  contains: 'enthält',
+  equals: 'ist gleich',
+  startsWith: 'beginnt mit',
+} as const;
+
+const suggestionFlowLabels = {
+  income: 'Einnahme',
+  expense: 'Ausgabe',
+  any: 'Beliebig',
+} as const;
 
 const getApiUrlFromStorage = () => {
   if (typeof window === 'undefined') {
@@ -259,6 +356,30 @@ const mapLedgerAccountsToWorkspace = (ledgerAccounts: AppData['ledgerAccounts'])
   }));
 };
 
+const reportQuality = (health: { unmappedAccounts: string[]; warnings: string[]; blocking: boolean }): GuvReport['quality'] => ({
+  unmappedAccounts: health.unmappedAccounts.map((accountNumber) => ({ accountNumber, amount: 0 })),
+  warnings: health.warnings.length,
+  generatedAt: new Date().toISOString(),
+  source: 'live',
+  mappingStatus: health.blocking ? 'blocked' : health.warnings.length > 0 ? 'warning' : 'healthy',
+  mappingNotes: health.warnings,
+});
+
+const reportLines = (rows: Array<{ position: string; label: string; amount: number; accountNumbers: string[]; accountRefs?: string[]; kind?: string; parentPosition?: string }>) => rows.map((row) => ({
+  id: row.position,
+  code: row.position,
+  label: row.label,
+  level: row.parentPosition ? 1 : 0,
+  amountCurrent: row.amount,
+  accountRefs: row.accountRefs ?? row.accountNumbers,
+  isSubtotal: row.kind === 'heading' || row.kind === 'subtotal' || row.kind === 'result',
+}));
+
+const mapWebEurCashItem = (item: Awaited<ReturnType<ProWebClient['listEurCashItems']>>[number]): EurCashItem => ({
+  ...item,
+  splits: item.splits?.map((split) => ({ ...split, reason: split.reason ?? '' })),
+});
+
 const mapWorkflowTransactionToWorkspace = (
   row: ReturnType<ProWebClient['parseWorkflowTransaction']>,
 ): WorkspaceTransaction => {
@@ -340,21 +461,6 @@ const mapWorkflowDraftToWorkspace = (
   };
 };
 
-const mapWorkspaceTransactionToEntity = (transaction: WorkspaceTransaction) => {
-  return {
-    id: transaction.id,
-    date: transaction.date,
-    amount: transaction.amount,
-    type: transaction.amount >= 0 ? 'income' : 'expense',
-    counterparty: transaction.payee,
-    purpose: transaction.description,
-    linkedInvoiceId: transaction.hasReceipt ? transaction.id : undefined,
-    status: transaction.workflowStatus === 'posted' ? 'booked' : 'pending',
-    suggestedAccountNumber: transaction.suggestion,
-    suggestionConfidence: transaction.suggestionConfidence,
-  };
-};
-
 const mapWorkspaceDraftToEntity = (
   draft: WorkspaceBookingDraft,
   tenantId: string,
@@ -419,6 +525,61 @@ const readWorkflowSeed = (client: ProWebClient, workflowEntries: AppData['workfl
     transactions,
     drafts,
   };
+};
+
+const readCanonicalSeed = (
+  transactions: AppData['accountingTransactions'],
+  drafts: AppData['accountingDrafts'],
+): ProAccountingSeed => {
+  const draftByTransactionId = new Map(
+    drafts.filter((draft): draft is NonNullable<typeof draft> => draft !== null).map((draft) => [draft.transactionId, draft]),
+  );
+  return {
+    transactions: transactions.map((row) => {
+      const draft = draftByTransactionId.get(row.id);
+      const workflowStatus: WorkspaceTransaction['workflowStatus'] = draft
+        ? draft.workflowStatus
+        : row.status === 'booked'
+          ? 'posted'
+          : 'imported';
+      return {
+        id: row.id,
+        date: row.date,
+        payee: row.counterparty || 'Unbekannt',
+        description: row.purpose || 'Banktransaktion',
+        amount: Number(row.amount || 0),
+        currency: 'EUR',
+        workflowStatus,
+        suggestion: row.suggestedAccountNumber,
+        suggestionConfidence: row.suggestionConfidence,
+        hasReceipt: Boolean(row.linkedInvoiceId),
+        issueCounts: { errors: 0, warnings: row.linkedInvoiceId ? 0 : 1, infos: 0 },
+        flags: row.linkedInvoiceId ? [] : ['missing_receipt'],
+        bookingDraftId: draft?.id ?? `draft-${row.id}`,
+        owner: 'Server accounting',
+      } satisfies WorkspaceTransaction;
+    }),
+    drafts: drafts.filter((draft): draft is NonNullable<typeof draft> => draft !== null).map(mapWorkflowDraftToWorkspace),
+  };
+};
+
+const WORKSPACE_ROLE_VALUES = new Set<UserRole>(['bookkeeper', 'reviewer', 'accountant', 'admin', 'auditor']);
+
+const requireMutationReason = (candidate: string | undefined, operation: string): string => {
+  const supplied = candidate?.trim();
+  // Shared workspace actions historically passed the UI role as actorName. A role
+  // is authorization context, not an audit reason, so never forward it as one.
+  if (supplied && supplied !== 'Web Pro' && !WORKSPACE_ROLE_VALUES.has(supplied.toLowerCase() as UserRole)) {
+    return supplied;
+  }
+  if (typeof window === 'undefined' || typeof window.prompt !== 'function') {
+    throw new Error(`Eine ausdrückliche Begründung ist für ${operation} erforderlich.`);
+  }
+  const entered = window.prompt(`Begründung für ${operation}`)?.trim() ?? '';
+  if (!entered || WORKSPACE_ROLE_VALUES.has(entered.toLowerCase() as UserRole)) {
+    throw new Error(`Eine ausdrückliche Begründung ist für ${operation} erforderlich.`);
+  }
+  return entered;
 };
 
 const triggerBlobDownload = (blob: Blob, fileName: string) => {
@@ -644,6 +805,8 @@ export default function App() {
     setLoading(true);
     setLoadError('');
     try {
+      const accountingPolicy = await client.getAccountingPolicy();
+      const accountingTransactionsPromise = client.listAccountingTransactions();
       const [
         health,
         capabilities,
@@ -659,6 +822,8 @@ export default function App() {
         activeInvoiceTemplate,
         activeOfferTemplate,
         workflowEntries,
+        accountingTransactions,
+        accountingDrafts,
         ledgerStats,
         ledgerAccounts,
         taxCases,
@@ -679,11 +844,13 @@ export default function App() {
         client.getActiveTemplate('invoice'),
         client.getActiveTemplate('offer'),
         client.listWorkflowEntries(),
+        accountingTransactionsPromise,
+        accountingTransactionsPromise.then((rows) => client.listAccountingDrafts(rows.map((row) => row.id))),
         client.getLedgerStats(),
-        client.listLedgerAccounts({ chart: 'SKR03', limit: 5000 }),
+        client.listLedgerAccounts({ chart: accountingPolicy.activeChart, limit: 5000 }),
         client.listTaxCases({ activeOnly: false }),
-        client.listTaxCaseMappings({ chart: 'SKR03' }),
-        client.listAccountSuggestionRules({ chart: 'SKR03', activeOnly: false }),
+        client.listTaxCaseMappings({ chart: accountingPolicy.activeChart }),
+        client.listAccountSuggestionRules({ chart: accountingPolicy.activeChart, activeOnly: false }),
       ]);
 
       setData({
@@ -703,6 +870,9 @@ export default function App() {
           offer: activeOfferTemplate,
         },
         workflowEntries,
+        accountingTransactions,
+        accountingDrafts,
+        accountingPolicy,
         ledgerStats,
         ledgerAccounts,
         taxCases,
@@ -784,14 +954,441 @@ export default function App() {
     if (!data) {
       return undefined;
     }
-    const base = readWorkflowSeed(client, data.workflowEntries);
+    const canonical = readCanonicalSeed(data.accountingTransactions, data.accountingDrafts);
+    const base = data.accountingTransactions.length > 0
+      ? canonical
+      : readWorkflowSeed(client, data.workflowEntries);
+    const bankAccountNumberByTransactionId = mapTransactionBankAccounts(data.accountingTransactions, data.bankAccounts);
+    const bankAccountNumbers = [...new Set(Object.values(bankAccountNumberByTransactionId))];
     return {
       ...base,
       accounts: mapLedgerAccountsToWorkspace(data.ledgerAccounts),
-      chartFramework: data.ledgerStats.byChart.SKR03 > 0 ? 'SKR03' : 'SKR04',
-      seedVersion: `${data.workflowEntries.length}:${data.ledgerAccounts.length}`,
+      bankAccountNumber: bankAccountNumbers.length === 1 ? bankAccountNumbers[0] : undefined,
+      bankAccountNumberByTransactionId,
+      chartFramework: data.accountingPolicy.activeChart,
+      businessReportingProfile: data.settings?.businessReportingProfile,
+      seedVersion: `${data.accountingTransactions.length}:${data.accountingDrafts.length}:${data.workflowEntries.length}:${data.ledgerAccounts.length}:${data.accountingPolicy.updatedAt}`,
     } satisfies ProAccountingSeed;
   }, [client, data]);
+
+  const workspaceRole = data ? mapServerRoleToWorkspaceRole(data.sessionInfo.role) : 'viewer';
+  const canMutateAccountingRules = data ? permissionContextForRole(workspaceRole).canMutate : false;
+
+  const accountingDataAdapter = React.useMemo<ProAccountingDataAdapter | undefined>(() => {
+    if (!accountingSeed || !data) return undefined;
+    let transactions = structuredClone(accountingSeed.transactions ?? []);
+    let drafts = structuredClone(accountingSeed.drafts ?? []);
+    const canonical = data.accountingTransactions.length > 0;
+    const refreshCanonicalSnapshots = async () => {
+      const nextTransactions = await client.listAccountingTransactions();
+      const nextDrafts = await client.listAccountingDrafts(nextTransactions.map((row) => row.id));
+      const nextSeed = readCanonicalSeed(nextTransactions, nextDrafts);
+      transactions = structuredClone(nextSeed.transactions ?? []);
+      drafts = structuredClone(nextSeed.drafts ?? []);
+    };
+    const readOnly = (operation: string): never => {
+      throw new Error(`${operation} ist bei alten Workflow-Snapshots nicht verfügbar. Lade die kanonischen Buchhaltungsdaten neu.`);
+    };
+    const reportFilter = (filters: ReportFilterState) => ({ ...reportDateRange(filters), chart: filters.chart });
+    return {
+      hydrate(seed: ProAccountingSeed) {
+        transactions = structuredClone(seed.transactions ?? []);
+        drafts = structuredClone(seed.drafts ?? []);
+      },
+      listTransactions() {
+        return structuredClone(transactions);
+      },
+      listBookingDrafts() {
+        return structuredClone(drafts);
+      },
+      getTransactionById(id: string) {
+        return structuredClone(transactions.find((row) => row.id === id));
+      },
+      getBookingDraftByTransactionId(transactionId: string) {
+        return structuredClone(drafts.find((row) => row.transactionId === transactionId));
+      },
+      async getJournalEntryById(id: string) {
+        return client.getAccountingJournalEntryById(id);
+      },
+      async saveDraft(draft: WorkspaceBookingDraft, actorName = 'Web Pro') {
+        if (!canonical) return readOnly('Entwurf speichern');
+        const saved = await client.saveAccountingDraft(
+          mapWorkspaceDraftToEntity(draft, data.sessionInfo.tenantId),
+          requireMutationReason(actorName, 'Speichern des Entwurfs'),
+        );
+        await refreshCanonicalSnapshots();
+        await refreshData();
+        return mapWorkflowDraftToWorkspace(saved);
+      },
+      async dispatchBookingAction(transactionId: string, action: string, options?: { actorName?: string; rejectReason?: string }) {
+        if (!canonical) return readOnly('Workflow-Aktion');
+        const saved = await client.dispatchAccountingDraftAction(
+          transactionId,
+          action,
+          requireMutationReason(options?.actorName, `Workflow-Aktion ${action}`),
+          options?.rejectReason,
+        );
+        await refreshCanonicalSnapshots();
+        await refreshData();
+        return mapWorkflowDraftToWorkspace(saved);
+      },
+      listActivity(_transactionId: string) {
+        return [];
+      },
+      reset() {
+        return readOnly('Arbeitsbereich zurücksetzen');
+      },
+      async updateExceptionCase(_transactionId: string, _patch: Partial<NonNullable<WorkspaceTransaction['exceptionCase']>>, _actorName: string) {
+        return readOnly('Ausnahme bearbeiten');
+      },
+      async assignExceptionOwner(_transactionId: string, _owner: string, _actorName: string) {
+        return readOnly('Ausnahme bearbeiten');
+      },
+      async snoozeException(_transactionId: string, _snoozedUntil: string, _actorName: string, _note?: string) {
+        return readOnly('Ausnahme bearbeiten');
+      },
+      async resolveException(_transactionId: string, _resolutionNote: string, _actorName: string) {
+        return readOnly('Ausnahme bearbeiten');
+      },
+      async reopenException(_transactionId: string, _actorName: string) {
+        return readOnly('Ausnahme bearbeiten');
+      },
+      async setTransactionReceiptStatus(_transactionId: string, _hasReceipt: boolean, _actorName: string) {
+        return readOnly('Belegstatus ändern');
+      },
+      listAssets() {
+        return client.listAssets();
+      },
+      async upsertAsset(asset, reason) {
+        return client.upsertAsset(asset, requireMutationReason(reason, 'Anlage speichern'));
+      },
+      getDepreciationSchedule(assetId) {
+        return client.getDepreciationSchedule(assetId).then((rows) => rows.filter((row) => row.status !== 'cancelled'));
+      },
+      async runDepreciation(args) {
+        const { actorRole: _actorRole, ...input } = args;
+        const result = await client.runDepreciation({
+          ...input,
+          reason: requireMutationReason(args.reason, 'AfA buchen'),
+        });
+        if (result.scheduleEntry.status === 'cancelled') {
+          throw new Error('Die Abschreibung wurde storniert und nicht gebucht.');
+        }
+        return result;
+      },
+      async disposeAsset(args) {
+        const { actorRole: _actorRole, ...input } = args;
+        return client.disposeAsset({
+          ...input,
+          reason: requireMutationReason(args.reason, 'Anlage ausbuchen'),
+        });
+      },
+      listDatevExports(limit?: number) {
+        return client.listDatevExports(limit);
+      },
+      async exportDatevBuchungsstapel(args: {
+        from: string;
+        to: string;
+        consultantNumber: string;
+        clientNumber: string;
+        fiscalYearStart: string;
+        accountLength: number;
+        encoding: 'cp1252' | 'utf8-bom';
+      }) {
+        const exported = await client.exportDatevCsv({
+          from: args.from,
+          to: args.to,
+          consultantNumber: args.consultantNumber,
+          clientNumber: args.clientNumber,
+          fiscalYearStart: args.fiscalYearStart,
+          accountLength: args.accountLength,
+          encoding: args.encoding,
+          reason: 'DATEV-Buchungsstapel exportiert',
+        });
+        if (!exported.exportId) throw new Error('DATEV-Export ohne Serverbeleg-ID.');
+        if (typeof document !== 'undefined') triggerBlobDownload(exported.blob, `datev-${args.from}.csv`);
+        const history = await client.listDatevExports();
+        const receipt = history.find((item) => item.id === exported.exportId);
+        if (!receipt) throw new Error('DATEV-Export wurde nicht in der Serverhistorie gefunden.');
+        return receipt;
+      },
+      getDatevExportContent(exportId: string) {
+        return client.downloadDatevExport(exportId);
+      },
+      async listOpenItems() {
+        return client.listOpenItems();
+      },
+      async listBankTransactions(): Promise<OposBankTransaction[]> {
+        const byAccountId = new Map(data.bankAccounts.map((account) => [account.id, account.defaultSkrAccountNumber]));
+        const rows = await client.listAccountingTransactions();
+        return rows.flatMap((row) => {
+          const bankAccountNumber = row.accountId ? byAccountId.get(row.accountId) : undefined;
+          if (!bankAccountNumber || (row.status !== 'pending' && row.status !== 'booked')) return [];
+          const transaction: OposBankTransaction = {
+            ...row,
+            status: row.status as 'pending' | 'booked',
+            accountId: row.accountId ?? '',
+            bankAccountNumber,
+          };
+          return [transaction];
+        });
+      },
+      allocateOpenItemPayment(input): Promise<OpenItemPaymentEntity> {
+        return client.allocateOpenItemPayment(input, requireMutationReason(input.reason, 'Zahlung zuordnen')) as Promise<OpenItemPaymentEntity>;
+      },
+      allocateRemainingOpenItemPayment(paymentId, allocations, allocationEventId, reason): Promise<OpenItemPaymentEntity> {
+        return client.allocateRemainingOpenItemPayment(
+          paymentId,
+          allocations,
+          requireMutationReason(reason, 'Restzahlung zuordnen'),
+          allocationEventId,
+        ) as Promise<OpenItemPaymentEntity>;
+      },
+      listVendors() {
+        return client.listAccountingVendors();
+      },
+      upsertVendor(vendor, reason) {
+        return client.saveAccountingVendor(vendor, requireMutationReason(reason, 'Kreditor speichern'));
+      },
+      listIncomingInvoices() {
+        return client.listIncomingInvoices();
+      },
+      upsertIncomingInvoice(invoice, reason) {
+        return client.saveIncomingInvoice({ ...invoice, tenantId: data.sessionInfo.tenantId }, requireMutationReason(reason, 'Eingangsrechnung speichern'));
+      },
+      listIncomingInvoiceDocuments(invoiceId) {
+        return client.listIncomingInvoiceDocuments(invoiceId);
+      },
+      uploadIncomingInvoiceDocument(input) {
+        return client.uploadIncomingInvoiceDocument({ ...input, reason: requireMutationReason(input.reason, 'Eingangsbeleg archivieren') });
+      },
+      downloadIncomingInvoiceDocument(documentId) {
+        return client.downloadIncomingInvoiceDocument(documentId);
+      },
+      reviewIncomingInvoiceDocument(input) {
+        return client.reviewIncomingInvoiceDocument({ ...input, reason: requireMutationReason(input.reason, 'Eingangsbeleg prüfen') });
+      },
+      previewIncomingInvoiceAccounting(invoiceId) {
+        return client.previewIncomingInvoice(invoiceId, 'Vorschau');
+      },
+      postIncomingInvoiceAccounting(invoiceId, options) {
+        return client.postIncomingInvoice(invoiceId, requireMutationReason(options.reason, 'Eingangsrechnung buchen'), {
+          softLockOverride: options.softLockOverride,
+          overrideReason: options.overrideReason,
+        });
+      },
+      async getReportMappingHealth(args) {
+        const health = await client.getAccountMappingHealth(args?.chart, args?.statement, args?.asOfDate);
+        return {
+          chart: health.chart as 'SKR03' | 'SKR04',
+          unmapped: (health.unmapped ?? []).map((entry: { accountNumber: string; statementType: string }) => ({
+            accountNumber: entry.accountNumber,
+            statement: entry.statementType as 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz',
+          })),
+        };
+      },
+      listReportMappingPositions(args) {
+        return client.listReportMappingPositions(args.statement, args.asOfDate);
+      },
+      upsertReportMappingOverride(input) {
+        return client.saveAccountMappingOverride({
+          chart: input.chart,
+          asOfDate: input.asOfDate,
+          accountNumber: input.accountNumber,
+          statementType: input.statement,
+          positionKey: input.position,
+          positionLabel: input.label,
+          balanceSide: input.side,
+          reason: requireMutationReason(input.reason, 'Report-Mapping speichern'),
+        });
+      },
+      async getSusaReport(filters: ReportFilterState): Promise<SusaReport> {
+        const report = await client.getSusaReport(reportFilter(filters));
+        const names = new Map(data.ledgerAccounts.map((account) => [account.accountNumber, account.name]));
+        const openingDebit = report.rows.reduce((sum, row) => sum + Math.max(0, row.openingBalance), 0);
+        const openingCredit = report.rows.reduce((sum, row) => sum + Math.max(0, -row.openingBalance), 0);
+        const warnings = report.rows.filter((row) => Boolean((row as { hasWarnings?: boolean }).hasWarnings)).length;
+        return {
+          rows: report.rows.map((row) => ({
+            ...row,
+            accountName: names.get(row.accountNumber) ?? row.accountNumber,
+            normalBalance: row.closingBalance >= 0 ? 'debit' : 'credit',
+          })),
+          totals: {
+            openingDebit,
+            openingCredit,
+            turnoverDebit: report.totals.debit,
+            turnoverCredit: report.totals.credit,
+            closingDebit: Math.max(0, report.totals.balance),
+            closingCredit: Math.max(0, -report.totals.balance),
+          },
+          quality: { unmappedAccounts: report.unmappedAccounts?.length ?? 0, warnings, generatedAt: new Date().toISOString(), source: 'live' },
+        };
+      },
+      async getGuvReport(filters: ReportFilterState): Promise<GuvReport> {
+        const report = await client.getGuvReport(reportFilter(filters));
+        return {
+          lines: reportLines(report.rows),
+          totals: {
+            revenue: report.rows.filter((row) => row.position === 'revenue').reduce((sum, row) => sum + row.amount, 0),
+            expenses: report.rows.filter((row) => row.position !== 'revenue' && row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0),
+            result: report.netResult,
+          },
+          quality: reportQuality(report.mappingHealth),
+        };
+      },
+      async getEurReport(filters: ReportFilterState): Promise<GuvReport> {
+        // EÜR is a calendar-year cash report; do not send the double-entry
+        // chart or current fiscal-year filter to its native endpoint.
+        const taxYear = Number(filters.asOfDate.slice(0, 4));
+        const report = await client.getEurReport({ taxYear, ...nativeEurRange(taxYear) });
+        const rows = report.rows.map((row) => ({
+          position: row.id,
+          label: row.kennziffer ? `${row.kennziffer} · ${row.label}` : row.label,
+          amount: row.kind === 'expense' ? -row.total : row.total,
+          accountNumbers: [] as string[],
+          kind: row.kind === 'computed' ? 'subtotal' : 'line',
+        }));
+        return {
+          lines: reportLines(rows),
+          totals: { revenue: report.summary.incomeTotal, expenses: report.summary.expenseTotal, result: report.summary.surplus },
+          quality: {
+            unmappedAccounts: [],
+            warnings: report.warnings.length + (report.unclassifiedCount > 0 ? 1 : 0),
+            generatedAt: new Date().toISOString(),
+            source: 'live',
+            mappingStatus: report.warnings.length || report.unclassifiedCount > 0 ? 'blocked' : 'healthy',
+            mappingNotes: [...report.warnings, ...(report.unclassifiedCount > 0 ? [`Nicht klassifiziert: ${report.unclassifiedCount}`] : [])],
+          },
+          filing: {
+            kind: 'euer',
+            taxYear: report.taxYear,
+            catalog: report.catalog,
+            lineProvenance: report.rows.map((row) => ({ lineId: row.id, kennziffer: row.kennziffer, providerPath: row.providerPath, exportable: row.exportable })),
+          },
+        };
+      },
+      listEurCashItems(taxYear = 2025) {
+        return client.listEurCashItems({ taxYear, ...nativeEurRange(taxYear) }).then((items) => items.map(mapWebEurCashItem));
+      },
+      upsertEurClassification(input) {
+        return client.upsertEurClassification({
+          sourceType: input.sourceType,
+          sourceId: input.sourceId,
+          taxYear: input.taxYear,
+          eurLineId: input.eurLineId,
+          excluded: input.excluded,
+          vatMode: input.vatMode,
+          vatRate: input.vatRate,
+          note: input.note,
+          reason: requireMutationReason(input.reason, 'EÜR-Klassifikation speichern'),
+        });
+      },
+      async postAccountingCommand(input: AccountingCommandInput) {
+        const result = await client.postAccountingCommand(input);
+        return {
+          status: result.replayed ? 'duplicate' as const : result.run.status === 'posted' ? 'posted' as const : result.run.status === 'rejected' ? 'rejected' as const : 'noop' as const,
+          sourceRun: { ...result.run, sourceRevision: result.run.sourceRevision ?? '1' } as AccountingSourceRun,
+          errors: result.run.status === 'rejected'
+            ? [...accountingErrorsFrom(result.result), ...accountingErrorsFrom(result.run.result)].filter((issue, index, all) => all.findIndex((candidate) => candidate.code === issue.code && candidate.message === issue.message && candidate.field === issue.field) === index)
+            : [],
+          idempotencyKey: `${result.run.sourceType}:${result.run.sourceId}:${result.run.sourceRevision ?? '1'}`,
+        };
+      },
+      async listAccountingSourceRuns(): Promise<AccountingSourceRun[]> {
+        return (await client.listAccountingSourceRuns()).map((run) => ({ ...run, sourceRevision: run.sourceRevision ?? '1' } as AccountingSourceRun));
+      },
+      async prepareTaxExport(input) {
+        const result = await client.prepareTaxExport(input);
+        return { artifact: result.artifact as any, run: result.run as any, replayed: result.replayed };
+      },
+      exportTaxArtifact(kind, id) {
+        return client.exportTaxArtifact(kind, id);
+      },
+      async saveEurCashFact(input: EurCashFactInput): Promise<EurCashFact> {
+        return client.saveEurCashFact({ ...input, reason: requireMutationReason(input.reason, 'EÜR-Fakt speichern') }) as Promise<EurCashFact>;
+      },
+      listEurCashFacts(taxYear: number): Promise<EurCashFact[]> {
+        return client.listEurCashFacts(taxYear) as Promise<EurCashFact[]>;
+      },
+      async saveEurAnnexFact(input: EurAnnexFactInput): Promise<EurAnnexFact> {
+        return client.saveEurAnnexFact({ ...input, reason: requireMutationReason(input.reason, 'EÜR-Anlage speichern') }) as Promise<EurAnnexFact>;
+      },
+      listEurAnnexFacts(taxYear: number, annex?: string): Promise<EurAnnexFact[]> {
+        return client.listEurAnnexFacts(taxYear, annex) as Promise<EurAnnexFact[]>;
+      },
+      async getManagementGuvReport(filters: ReportFilterState): Promise<GuvReport> {
+        const report = await client.getManagementGuvReport(reportFilter(filters));
+        return {
+          lines: reportLines(report.rows),
+          totals: { revenue: report.rows.filter((row) => row.position === 'revenue').reduce((sum, row) => sum + row.amount, 0), expenses: report.rows.filter((row) => row.position !== 'revenue' && row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0), result: report.netResult },
+          quality: reportQuality(report.mappingHealth),
+        };
+      },
+      async getHgbGuvReport(filters: ReportFilterState): Promise<GuvReport> {
+        const report = await client.getHgbGuvReport(reportFilter(filters));
+        return {
+          lines: reportLines(report.rows),
+          totals: { revenue: report.rows.filter((row) => row.position === 'revenue').reduce((sum, row) => sum + row.amount, 0), expenses: report.rows.filter((row) => row.position !== 'revenue' && row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0), result: report.netResult },
+          quality: reportQuality(report.mappingHealth),
+        };
+      },
+      async getBwaReport(filters: ReportFilterState): Promise<GuvReport> {
+        const report = await client.getBwa01Report(reportFilter(filters));
+        return {
+          lines: reportLines(report.rows),
+          totals: {
+            revenue: report.totals.revenue,
+            expenses: report.totals.expenses,
+            result: report.totals.operatingResult,
+          },
+          quality: reportQuality(report.mappingHealth),
+        };
+      },
+      async getBalanceSheetPreview(filters: ReportFilterState): Promise<BalanceSheetPreview> {
+        const report = await client.getBilanzReport({ asOfDate: filters.asOfDate, chart: filters.chart });
+        const unmappedNotes = report.mappingHealth.unmappedAccounts.map((accountNumber) => `Konto ${accountNumber} ist nicht zugeordnet.`);
+        const mapping = reportQuality(report.mappingHealth);
+        const mappingBlocked = report.mappingHealth.blocking || mapping.mappingStatus === 'blocked';
+        return {
+          aktiva: report.assets.map((row) => ({ id: row.position, code: row.position, label: row.label, amount: row.amount, level: row.parentPosition ? 1 : 0, side: 'aktiva' as const, accountRefs: row.accountRefs ?? row.accountNumbers, isSubtotal: row.kind === 'heading' || row.kind === 'subtotal' || row.kind === 'result' })),
+          passiva: report.liabilities.map((row) => ({ id: row.position, code: row.position, label: row.label, amount: row.amount, level: row.parentPosition ? 1 : 0, side: 'passiva' as const, accountRefs: row.accountRefs ?? row.accountNumbers, isSubtotal: row.kind === 'heading' || row.kind === 'subtotal' || row.kind === 'result' })),
+          totals: { aktiva: report.totals.assets, passiva: report.totals.liabilities, difference: report.totals.delta },
+          quality: {
+            status: mappingBlocked ? 'error' : Math.abs(report.totals.delta) < 0.01 && unmappedNotes.length === 0 ? 'ok' : 'warning',
+            notes: [...unmappedNotes, ...report.mappingHealth.warnings],
+            generatedAt: mapping.generatedAt,
+            source: mapping.source,
+            mappingStatus: mapping.mappingStatus,
+            mappingNotes: mapping.mappingNotes,
+            unmappedAccounts: mapping.unmappedAccounts,
+          },
+        };
+      },
+      async getReportDrilldownEntries(selection: ReportDrilldownSelection): Promise<ReportDrilldownEntry[]> {
+        const rows = await client.listAccountingJournalEntries({
+          accountNumbers: selection.accountNumbers,
+          from: selection.from,
+          to: selection.to,
+        });
+        return rows.flatMap((entry) => entry.lines.filter((line) => selection.accountNumbers.length === 0 || selection.accountNumbers.includes(line.accountNumber)).map((line) => ({
+          id: line.id,
+          date: entry.postingDate,
+          bookingText: entry.bookingText,
+          reference: entry.reference,
+          journalEntryId: entry.id,
+          sourceType: entry.sourceType === 'outgoing_invoice' ? 'invoice' : entry.sourceType === 'incoming_invoice' ? 'incoming_invoice' : entry.sourceType === 'payment' ? 'payment' : 'journal_entry',
+          sourceId: entry.sourceKey ?? entry.id,
+          transactionId: entry.sourceType === 'legacy_transaction' ? entry.sourceKey : undefined,
+          accountNumber: line.accountNumber,
+          debit: line.debitAmount,
+          credit: line.creditAmount,
+          amount: line.debitAmount || line.creditAmount,
+          source: 'Manuell' as const,
+        })));
+      },
+    };
+  }, [accountingSeed, client, data, refreshData]);
 
   const handleSaveSettings = async () => {
     await runAction(async () => {
@@ -921,6 +1518,7 @@ export default function App() {
         role: taxMappingDraft.role,
         accountNumber: taxMappingDraft.accountNumber,
         datevBuKey: taxMappingDraft.datevBuKey || undefined,
+        reason: 'Steuer-Mapping im Pro-Kontenplan aktualisiert',
       });
     }, 'Steuer-Mapping gespeichert.');
   };
@@ -936,6 +1534,7 @@ export default function App() {
         targetAccountNumber: suggestionRuleDraft.targetAccountNumber,
         flowType: suggestionRuleDraft.flowType,
         active: true,
+        reason: 'Kontierungsvorschlagsregel aktualisiert',
       });
       setSuggestionRuleDraft((current) => ({ ...current, value: '' }));
     }, 'Vorschlagsregel gespeichert.');
@@ -943,7 +1542,7 @@ export default function App() {
 
   const handleDeleteSuggestionRule = async (ruleId: string) => {
     await runAction(async () => {
-      await client.deleteAccountSuggestionRule(ruleId);
+      await client.deleteAccountSuggestionRule(ruleId, 'Kontierungsvorschlagsregel gelöscht');
     }, 'Vorschlagsregel gelöscht.');
   };
 
@@ -962,7 +1561,8 @@ export default function App() {
   };
 
   const handleCreateSampleWorkflow = async () => {
-    if (!data) {
+    if (!data || data.accountingTransactions.length === 0) {
+      setNotice(createNotice('neutral', 'Alte Workflow-Snapshots können im Browser nur angezeigt werden.'));
       return;
     }
     await runAction(async () => {
@@ -973,50 +1573,31 @@ export default function App() {
     }, 'Beispiel-Workflow angelegt.');
   };
 
-  const handlePersistWorkflowEntry = async (entry: { transaction: WorkspaceTransaction; draft: WorkspaceBookingDraft }) => {
-    if (!data) {
-      return;
-    }
-    try {
-      await client.upsertWorkflowEntry({
-        transactionId: entry.transaction.id,
-        transactionJson: JSON.stringify(mapWorkspaceTransactionToEntity(entry.transaction)),
-        draftJson: JSON.stringify(mapWorkspaceDraftToEntity(entry.draft, data.sessionInfo.tenantId)),
-        updatedAt: new Date().toISOString(),
-      });
-      await refreshData();
-      setNotice(createNotice('success', `Workflow ${entry.transaction.id} synchronisiert.`));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotice(createNotice('danger', message));
-    }
-  };
-
   if (!session) {
     return (
       <main className="auth-shell">
         <section className="auth-hero">
-          <p className="hero-kicker">Billme Pro · Browser Shell</p>
-          <h1>Server-Modus für Pro-Buchhaltung, ohne Electron-Annahmen.</h1>
+          <p className="hero-kicker">Billme Pro im Browser</p>
+          <h1>Pro-Buchhaltung im Serverbetrieb.</h1>
           <p className="hero-copy">
-            Dieses Web-Shell spricht direkt mit der neuen Fastify-API, speichert Sitzungen im Browser und nutzt die
-            geteilten Pro-Domänen für Workflow-, Katalog- und Accounting-Oberflächen.
+            Diese Web-App verbindet sich mit der Fastify-API. Sitzungen bleiben im Browser, die Buchhaltungsdaten
+            liegen auf dem Server.
           </p>
           <div className="hero-metrics">
             <StatCard
               label="Produkte"
               value={authMeta.capabilities?.products.join(' / ') ?? '…'}
-              hint="Pro ist als eigener Auth-Scope aktiv."
+              hint="Der Pro-Bereich ist aktiviert."
             />
             <StatCard
               label="Rollen"
               value={String(authMeta.capabilities?.auth.roles.length ?? 0)}
-              hint="Mehrbenutzerbetrieb ab Tag eins."
+              hint="Mehrere Nutzer können sich anmelden."
             />
             <StatCard
               label="Bootstrap"
               value={authMeta.bootstrapStatus?.bootstrapped ? 'aktiv' : 'offen'}
-              hint="Owner-Setup pro Deployment."
+              hint="Ein Owner richtet die Instanz einmalig ein."
             />
           </div>
         </section>
@@ -1033,7 +1614,7 @@ export default function App() {
             }
           >
             <div className="form-grid two-col compact-grid">
-              <Input label="Server API URL" fullWidth value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} />
+              <Input label="Server-API-URL" fullWidth value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} />
               <div className="meta-chip-row">
                 <span className="meta-chip">{authMeta.health?.service ?? 'Kein Healthcheck'}</span>
                 <span className="meta-chip">{authMeta.health?.backend ?? '—'}</span>
@@ -1056,7 +1637,7 @@ export default function App() {
               <span className="helper-copy">
                 {authMeta.bootstrapStatus?.bootstrapped
                   ? `Bereits ${authMeta.bootstrapStatus.userCount} Nutzer im Pro-Scope.`
-                  : 'Noch kein Owner vorhanden – der erste Login bootstrapped die Pro-Instanz.'}
+                  : 'Noch kein Owner vorhanden. Der erste Login richtet die Pro-Instanz ein.'}
               </span>
             </div>
           </SectionCard>
@@ -1068,14 +1649,29 @@ export default function App() {
   const openInvoices = data?.invoices.filter((invoice) => invoice.status !== 'paid').length ?? 0;
   const openOffers = data?.offers.filter((offer) => offer.status !== 'cancelled').length ?? 0;
   const activeClients = data?.clients.filter((clientRecord) => clientRecord.status === 'active').length ?? 0;
+  const documentChains = (() => {
+    const groups = new Map<string, NonNullable<typeof data>['invoices']>();
+    for (const invoice of data?.invoices ?? []) {
+      const rootId = invoice.rootDocumentId ?? invoice.id;
+      const group = groups.get(rootId) ?? [];
+      group.push(invoice);
+      groups.set(rootId, group);
+    }
+    return [...groups.entries()]
+      .map(([rootId, documents]) => ({
+        rootId,
+        documents: documents.slice().sort((left, right) => `${left.date}-${left.number}`.localeCompare(`${right.date}-${right.number}`)),
+      }))
+      .filter(({ documents }) => documents.length > 1);
+  })();
   const showOnboarding = Boolean(data) && !loading && shouldShowBusinessOnboarding(settingsDraft);
 
   return (
     <main className="app-shell">
       <div className="topbar">
         <div>
-          <p className="hero-kicker">Billme Pro Web</p>
-          <h1>Pro-Shell mit HTTP-Transport und Buchhaltungsoberflächen</h1>
+          <p className="hero-kicker">Billme Pro im Browser</p>
+          <h1>Pro-Buchhaltung und Dokumente im Browser</h1>
           <p className="topbar-copy">
             Sitzung: {session.user.fullName} · Scope {data?.sessionInfo.tenantId ?? '—'} · API {apiUrl}
           </p>
@@ -1085,7 +1681,7 @@ export default function App() {
             {loading ? 'Lädt…' : 'Neu laden'}
           </Button>
           <Button variant="ghost" onClick={handleLogout}>
-            Logout
+            Abmelden
           </Button>
         </div>
       </div>
@@ -1093,13 +1689,14 @@ export default function App() {
       <NoticeBanner notice={notice} />
       {loadError ? <NoticeBanner notice={createNotice('danger', loadError)} /> : null}
 
-      <nav className="route-nav" aria-label="Web-Pro Navigation">
+      <nav className="route-nav" aria-label="Pro-Navigation">
         {ROUTES.map((item) => (
           <button
             key={item.id}
             type="button"
             className={`route-button ${route === item.id ? 'route-button-active' : ''}`}
             onClick={() => navigate(item.id)}
+            aria-current={route === item.id ? 'page' : undefined}
           >
             <strong>{item.label}</strong>
             <span>{item.summary}</span>
@@ -1111,12 +1708,12 @@ export default function App() {
         <>
           {route === 'overview' ? (
             <div className="page-grid">
-              <SectionCard eyebrow="Snapshot" title="Mandant, API und Pro-Abdeckung">
+              <SectionCard eyebrow="Übersicht" title="Mandant, API und Pro-Funktionen">
                 <div className="stats-grid">
                   <StatCard label="Kunden" value={String(activeClients)} hint="aktive Kundensätze" />
                   <StatCard label="Dokumente offen" value={String(openInvoices + openOffers)} hint="Rechnungen + Angebote" />
                   <StatCard label="Ledger" value={String(data.ledgerStats.total)} hint="geladene Kontenrahmen" />
-                  <StatCard label="Workflow" value={String(data.workflowEntries.length)} hint="persistierte Snapshots" />
+                  <StatCard label="Workflow" value={String(data.workflowEntries.length)} hint="gespeicherte Einträge" />
                 </div>
               </SectionCard>
 
@@ -1124,18 +1721,18 @@ export default function App() {
                 <div className="info-list">
                   <div><span>Service</span><strong>{data.health.service}</strong></div>
                   <div><span>Backend</span><strong>{data.capabilities.backend}</strong></div>
-                  <div><span>Deployment</span><strong>{data.capabilities.deploymentMode}</strong></div>
+                  <div><span>Bereitstellung</span><strong>{data.capabilities.deploymentMode}</strong></div>
                   <div><span>Rolle</span><strong>{data.sessionInfo.role}</strong></div>
                   <div><span>Produkte</span><strong>{data.capabilities.products.join(', ')}</strong></div>
                   <div><span>Rollenmodell</span><strong>{data.capabilities.auth.roles.join(', ')}</strong></div>
                 </div>
               </SectionCard>
 
-              <SectionCard eyebrow="Arbeitslast" title="Was diese Shell heute abdeckt">
+              <SectionCard eyebrow="Funktionen" title="Im Browser verfügbar">
                 <ul className="bullet-list">
                   <li>HTTP-Auth gegen den Pro-Scope mit Browser-Session anstelle von Electron IPC.</li>
                   <li>Lesen und Pflegen von Artikeln, Bankkonten, Templates, Settings und Accounting-Regeln.</li>
-                  <li>Persistenz von Pro-Workflow-Snapshots über die neue <code>/api/v1/pro/workflow</code>-API.</li>
+                  <li>Workflow-Einträge über die <code>/api/v1/pro/workflow</code>-API speichern.</li>
                   <li>Export von JSON/CSV-Dokumenten direkt aus der API ohne lokale Dateisystemannahmen.</li>
                 </ul>
               </SectionCard>
@@ -1144,6 +1741,21 @@ export default function App() {
 
           {route === 'documents' ? (
             <div className="page-grid wide-grid">
+              {documentChains.length > 0 ? (
+                <SectionCard eyebrow="Vorgang" title="Dokumentkette und Revisionen">
+                  <div className="stacked-list" data-testid="document-chain-overview">
+                    {documentChains.map(({ rootId, documents }) => (
+                      <div className="stacked-list-row" key={rootId} data-testid={`document-chain-row-${rootId}`}>
+                        <div className="stacked-cell">
+                          <strong>{documents[0] ? invoiceChainLabel(documents[0]) : 'Dokument'} · {documents[0]?.number}</strong>
+                          <span>{documents.map((invoice) => `${invoiceChainLabel(invoice)} · ${invoice.number}`).join(' → ')}</span>
+                        </div>
+                        <span className="meta-chip">{documents.length} Dokumente</span>
+                      </div>
+                    ))}
+                  </div>
+                </SectionCard>
+              ) : null}
               <SectionCard
                 eyebrow="Rechnungen"
                 title="Vertrieb und Export"
@@ -1164,6 +1776,7 @@ export default function App() {
                       <thead>
                         <tr>
                           <th>Nummer</th>
+                          <th>Dokument</th>
                           <th>Kunde</th>
                           <th>Status</th>
                           <th>Betrag</th>
@@ -1175,6 +1788,12 @@ export default function App() {
                         {data.invoices.slice(0, 12).map((invoice) => (
                           <tr key={invoice.id}>
                             <td>{invoice.number}</td>
+                            <td>
+                              <div className="stacked-cell">
+                                <strong>{invoiceDocumentLabel(invoice.documentKind)}</strong>
+                                {invoice.revisionOfId ? <span>Revision {invoice.revisionNumber ?? 1}</span> : null}
+                              </div>
+                            </td>
                             <td>{invoice.client}</td>
                             <td>{invoice.status}</td>
                             <td>{formatCurrency(invoice.amount)}</td>
@@ -1256,7 +1875,7 @@ export default function App() {
                 {data.clients.length === 0 ? (
                   <EmptyState
                     title="Keine Kunden vorhanden"
-                    body="Die Pro-Shell zeigt hier denselben Kundenbestand wie Desktop/Server-API – ohne lokale SQLite-Abhängigkeit."
+                    body="Die Liste stammt aus Desktop und Server-API. Der Browser greift nicht auf SQLite zu."
                   />
                 ) : (
                   <DataTable>
@@ -1346,12 +1965,12 @@ export default function App() {
                     <span>Kontoart</span>
                     <select value={accountDraft.type} onChange={(event) => setAccountDraft((current) => ({ ...current, type: event.target.value as typeof current.type }))}>
                       <option value="bank">Bank</option>
-                      <option value="checking">Checking</option>
-                      <option value="savings">Savings</option>
+                      <option value="checking">Girokonto</option>
+                      <option value="savings">Sparkonto</option>
                       <option value="paypal">PayPal</option>
-                      <option value="cash">Cash</option>
-                      <option value="credit">Credit</option>
-                      <option value="other">Other</option>
+                      <option value="cash">Bargeld</option>
+                      <option value="credit">Kreditkarte</option>
+                      <option value="other">Sonstiges</option>
                     </select>
                   </label>
                   <Input label="Farbe" fullWidth value={accountDraft.color} onChange={(event) => setAccountDraft((current) => ({ ...current, color: event.target.value }))} />
@@ -1439,16 +2058,16 @@ export default function App() {
 
           {route === 'recurring' ? (
             <div className="page-grid">
-              <SectionCard eyebrow="Recurring" title="Profile und Automatisierungsfenster">
+              <SectionCard eyebrow="Wiederkehrende Rechnungen" title="Profile und Automatisierungsfenster">
                 <div className="stats-grid">
                   <StatCard label="Profile" value={String(data.recurringProfiles.length)} hint="registrierte Serienläufe" />
                   <StatCard
-                    label="Dunning"
+                    label="Mahnwesen"
                     value={data.settings?.automation.dunningEnabled ? 'aktiv' : 'inaktiv'}
                     hint={`Laufzeit ${data.settings?.automation.dunningRunTime ?? '—'}`}
                   />
                   <StatCard
-                    label="Recurring"
+                    label="Wiederkehrende Rechnungen"
                     value={data.settings?.automation.recurringEnabled ? 'aktiv' : 'inaktiv'}
                     hint={`Laufzeit ${data.settings?.automation.recurringRunTime ?? '—'}`}
                   />
@@ -1456,7 +2075,7 @@ export default function App() {
                 {data.recurringProfiles.length === 0 ? (
                   <EmptyState
                     title="Noch keine Wiederholungen"
-                    body="Die Shell zeigt Serverprofile an, greift aber nicht mehr auf lokale Scheduler im Electron-Mainprozess zu."
+                    body="Die Ansicht zeigt Serverprofile. Lokale Scheduler des Electron-Hauptprozesses laufen hier nicht."
                   />
                 ) : (
                   <DataTable>
@@ -1592,7 +2211,7 @@ export default function App() {
                     }
                   />
                   <Input
-                    label="Portal Base URL"
+                    label="Portal-Basis-URL"
                     fullWidth
                     value={settingsDraft.portal.baseUrl}
                     onChange={(event) =>
@@ -1613,38 +2232,40 @@ export default function App() {
           {route === 'accounting' ? (
             <div className="page-grid accounting-grid">
               <SectionCard
-                eyebrow="Accounting"
+                eyebrow="Buchhaltung"
                 title="Ledger, Regeln und Workflow-Snapshots"
                 actions={
-                  <Button variant="secondary" onClick={() => void handleCreateSampleWorkflow()}>
-                    Beispiel-Workflow anlegen
+                  <Button variant="secondary" onClick={() => void handleCreateSampleWorkflow()} disabled={data.accountingTransactions.length === 0}>
+                    {data.accountingTransactions.length > 0 ? 'Beispiel-Workflow anlegen' : 'Alte Snapshots nur lesen'}
                   </Button>
                 }
               >
                 <div className="stats-grid">
-                  <StatCard label="SKR03" value={String(data.ledgerStats.byChart.SKR03)} hint="Konten im Chart" />
-                  <StatCard label="SKR04" value={String(data.ledgerStats.byChart.SKR04)} hint="Konten im Chart" />
-                  <StatCard label="Steuerfälle" value={String(data.taxCases.length)} hint="aktive Compliance-Definitionen" />
+                  <StatCard label="SKR03" value={String(data.ledgerStats.byChart.SKR03)} hint="Konten im Kontenrahmen" />
+                  <StatCard label="SKR04" value={String(data.ledgerStats.byChart.SKR04)} hint="Konten im Kontenrahmen" />
+                  <StatCard label="Steuerfälle" value={String(data.taxCases.length)} hint="aktive Steuerfälle" />
                   <StatCard label="Regeln" value={String(data.suggestionRules.length)} hint="Kontovorschläge" />
                 </div>
                 <p className="helper-copy">
-                  Diese Webfläche ersetzt lokale Dateisystem-/IPC-Annahmen durch HTTP-Workflow-Persistenz. Für frische
-                  Installationen kann ein Beispieldatensatz angelegt werden, damit die Pro-Workspace-UI sofort nutzbar ist.
+                  {data.accountingTransactions.length > 0
+                    ? 'Die Pro-Oberfläche liest die Buchhaltungsdaten aus Postgres. Entwürfe, Aktionen und Auswertungen werden über die Accounting-API gespeichert.'
+                    : 'Alte Workflow-Snapshots können nur angezeigt werden. Änderungen sind erst möglich, wenn kanonische Accounting-Daten verfügbar sind.'}
                 </p>
               </SectionCard>
 
-              <SectionCard eyebrow="Steuer-Mapping" title="Tax Cases auf Konten abbilden">
+              <SectionCard eyebrow="Steuer-Mapping" title="Steuerfälle Konten zuordnen">
+                {!canMutateAccountingRules ? <p className="helper-copy" role="status">Ihre Rolle darf Steuer-Mappings nur lesen.</p> : null}
                 <div className="form-grid three-col compact-grid">
                   <label className="select-field">
-                    <span>Chart</span>
-                    <select value={taxMappingDraft.chart} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
+                    <span>Kontenrahmen</span>
+                    <select disabled={!canMutateAccountingRules} value={taxMappingDraft.chart} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
                       <option value="SKR03">SKR03</option>
                       <option value="SKR04">SKR04</option>
                     </select>
                   </label>
                   <label className="select-field">
                     <span>Steuerfall</span>
-                    <select value={taxMappingDraft.taxCaseKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, taxCaseKey: event.target.value }))}>
+                    <select disabled={!canMutateAccountingRules} value={taxMappingDraft.taxCaseKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, taxCaseKey: event.target.value }))}>
                       {data.taxCases.map((taxCase) => (
                         <option key={taxCase.key} value={taxCase.key}>
                           {taxCase.key}
@@ -1654,24 +2275,24 @@ export default function App() {
                   </label>
                   <label className="select-field">
                     <span>Rolle</span>
-                    <select value={taxMappingDraft.role} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, role: event.target.value as typeof current.role }))}>
-                      <option value="output_tax">Output tax</option>
-                      <option value="input_tax">Input tax</option>
-                      <option value="datev_bu">DATEV BU</option>
+                    <select disabled={!canMutateAccountingRules} value={taxMappingDraft.role} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, role: event.target.value as typeof current.role }))}>
+                      <option value="output_tax">Umsatzsteuer</option>
+                      <option value="input_tax">Vorsteuer</option>
+                      <option value="datev_bu">DATEV-BU</option>
                     </select>
                   </label>
-                  <Input label="Account" fullWidth value={taxMappingDraft.accountNumber} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, accountNumber: event.target.value }))} />
-                  <Input label="DATEV BU Key" fullWidth value={taxMappingDraft.datevBuKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, datevBuKey: event.target.value }))} />
+                  <Input disabled={!canMutateAccountingRules} label="Konto" fullWidth value={taxMappingDraft.accountNumber} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, accountNumber: event.target.value }))} />
+                  <Input disabled={!canMutateAccountingRules} label="DATEV-BU-Schlüssel" fullWidth value={taxMappingDraft.datevBuKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, datevBuKey: event.target.value }))} />
                 </div>
                 <div className="action-row">
-                  <Button onClick={() => void handleSaveTaxMapping()}>Mapping speichern</Button>
+                  <Button disabled={!canMutateAccountingRules} onClick={() => void handleSaveTaxMapping()}>Mapping speichern</Button>
                 </div>
                 <DataTable>
                   <table>
                     <thead>
                       <tr>
                         <th>Steuerfall</th>
-                        <th>Chart</th>
+                        <th>Kontenrahmen</th>
                         <th>Rolle</th>
                         <th>Konto</th>
                       </tr>
@@ -1681,7 +2302,7 @@ export default function App() {
                         <tr key={mapping.id}>
                           <td>{mapping.taxCaseKey}</td>
                           <td>{mapping.chart}</td>
-                          <td>{mapping.role}</td>
+                          <td>{taxRoleLabels[mapping.role as keyof typeof taxRoleLabels] ?? mapping.role}</td>
                           <td>{mapping.accountNumber}</td>
                         </tr>
                       ))}
@@ -1690,59 +2311,61 @@ export default function App() {
                 </DataTable>
               </SectionCard>
 
-              <SectionCard eyebrow="Kontovorschläge" title="Rule-based Assignment im Browser pflegen">
+              <SectionCard eyebrow="Kontovorschläge" title="Regelbasierte Kontovorschläge im Browser pflegen">
+                {!canMutateAccountingRules ? <p className="helper-copy" role="status">Ihre Rolle darf Vorschlagsregeln nur lesen.</p> : null}
                 <div className="form-grid three-col compact-grid">
                   <label className="select-field">
-                    <span>Chart</span>
-                    <select value={suggestionRuleDraft.chart} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
+                    <span>Kontenrahmen</span>
+                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.chart} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
                       <option value="SKR03">SKR03</option>
                       <option value="SKR04">SKR04</option>
                     </select>
                   </label>
-                  <Input label="Priorität" fullWidth value={suggestionRuleDraft.priority} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, priority: event.target.value }))} />
+                  <Input disabled={!canMutateAccountingRules} label="Priorität" fullWidth value={suggestionRuleDraft.priority} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, priority: event.target.value }))} />
                   <label className="select-field">
                     <span>Feld</span>
-                    <select value={suggestionRuleDraft.field} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, field: event.target.value as typeof current.field }))}>
-                      <option value="counterparty">Counterparty</option>
-                      <option value="purpose">Purpose</option>
-                      <option value="any">Any</option>
+                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.field} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, field: event.target.value as typeof current.field }))}>
+                      <option value="counterparty">Gegenpartei</option>
+                      <option value="purpose">Verwendungszweck</option>
+                      <option value="any">Beliebiges Feld</option>
                     </select>
                   </label>
                   <label className="select-field">
-                    <span>Operator</span>
-                    <select value={suggestionRuleDraft.operator} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, operator: event.target.value as typeof current.operator }))}>
-                      <option value="contains">contains</option>
-                      <option value="equals">equals</option>
-                      <option value="startsWith">startsWith</option>
+                    <span>Vergleich</span>
+                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.operator} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, operator: event.target.value as typeof current.operator }))}>
+                      <option value="contains">enthält</option>
+                      <option value="equals">ist gleich</option>
+                      <option value="startsWith">beginnt mit</option>
                     </select>
                   </label>
-                  <Input label="Suchwert" fullWidth value={suggestionRuleDraft.value} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, value: event.target.value }))} />
+                  <Input disabled={!canMutateAccountingRules} label="Suchwert" fullWidth value={suggestionRuleDraft.value} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, value: event.target.value }))} />
                   <Input
+                    disabled={!canMutateAccountingRules}
                     label="Zielkonto"
                     fullWidth
                     value={suggestionRuleDraft.targetAccountNumber}
                     onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, targetAccountNumber: event.target.value }))}
                   />
                   <label className="select-field">
-                    <span>Flow</span>
-                    <select value={suggestionRuleDraft.flowType} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, flowType: event.target.value as typeof current.flowType }))}>
-                      <option value="income">income</option>
-                      <option value="expense">expense</option>
-                      <option value="any">any</option>
+                    <span>Art</span>
+                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.flowType} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, flowType: event.target.value as typeof current.flowType }))}>
+                      <option value="income">Einnahme</option>
+                      <option value="expense">Ausgabe</option>
+                      <option value="any">Beliebig</option>
                     </select>
                   </label>
                 </div>
                 <div className="action-row">
-                  <Button onClick={() => void handleSaveSuggestionRule()}>Regel speichern</Button>
+                  <Button disabled={!canMutateAccountingRules} onClick={() => void handleSaveSuggestionRule()}>Regel speichern</Button>
                 </div>
                 <DataTable>
                   <table>
                     <thead>
                       <tr>
                         <th>Priorität</th>
-                        <th>Match</th>
+                        <th>Treffer</th>
                         <th>Zielkonto</th>
-                        <th>Flow</th>
+                        <th>Art</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -1750,11 +2373,11 @@ export default function App() {
                       {data.suggestionRules.map((rule) => (
                         <tr key={rule.id}>
                           <td>{rule.priority}</td>
-                          <td>{`${rule.field} ${rule.operator} ${rule.value}`}</td>
+                          <td>{`${suggestionFieldLabels[rule.field as keyof typeof suggestionFieldLabels] ?? rule.field} ${suggestionOperatorLabels[rule.operator as keyof typeof suggestionOperatorLabels] ?? rule.operator} ${rule.value}`}</td>
                           <td>{rule.targetAccountNumber}</td>
-                          <td>{rule.flowType}</td>
+                          <td>{suggestionFlowLabels[rule.flowType as keyof typeof suggestionFlowLabels] ?? rule.flowType}</td>
                           <td>
-                            <button type="button" className="text-button" onClick={() => void handleDeleteSuggestionRule(rule.id)}>
+                            <button type="button" className="text-button" disabled={!canMutateAccountingRules} onClick={() => void handleDeleteSuggestionRule(rule.id)}>
                               Löschen
                             </button>
                           </td>
@@ -1765,13 +2388,18 @@ export default function App() {
                 </DataTable>
               </SectionCard>
 
-              <SectionCard eyebrow="Workspace" title="Geteilte Pro-Accounting-Oberfläche im Browser">
-                {accountingSeed ? (
+              <SectionCard eyebrow="Arbeitsbereich" title="Pro-Buchhaltung im Browser">
+                {accountingSeed && accountingDataAdapter ? (
                   <div className="workspace-frame">
-                    <ProAccountingWorkspace seed={accountingSeed} onPersistEntry={handlePersistWorkflowEntry} />
+                    <ProAccountingWorkspace
+                      seed={accountingSeed}
+                      dataAdapter={accountingDataAdapter}
+                      role={workspaceRole}
+                      assetsAvailable
+                    />
                   </div>
                 ) : (
-                  <EmptyState title="Workspace noch leer" body="Sobald Workflow-Snapshots vorhanden sind, wird die Pro-Workspace-UI hier direkt aus dem Shared Package gemountet." />
+                  <EmptyState title="Arbeitsbereich nicht verfügbar" body="Die Buchhaltungsdaten konnten nicht für den Arbeitsbereich bereitgestellt werden." />
                 )}
               </SectionCard>
             </div>
@@ -1779,7 +2407,7 @@ export default function App() {
         </>
       ) : (
         <SectionCard eyebrow="Ladezustand" title="Pro-Daten werden geladen">
-          <p className="helper-copy">Die Shell verbindet sich mit der Pro-API und hydriert Katalog-, Billing- und Accounting-Surfaces.</p>
+          <p className="helper-copy">Die Pro-API liefert Kataloge, Rechnungen und Buchhaltungsdaten.</p>
         </SectionCard>
       )}
       {showOnboarding ? (
@@ -1788,7 +2416,7 @@ export default function App() {
           onSubmit={handleCompleteOnboarding}
           saving={onboardingSaving}
           productName="Billme Pro"
-          submitLabel="Workspace freischalten"
+          submitLabel="Arbeitsbereich einrichten"
         />
       ) : null}
     </main>

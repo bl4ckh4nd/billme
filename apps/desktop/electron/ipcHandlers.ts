@@ -2,7 +2,7 @@ import { dialog, shell, type BrowserWindow, type IpcMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import type Database from 'better-sqlite3';
-import type { DocumentTemplateKind, Invoice } from '../types';
+import { getInvoiceDocumentLabel, isBillingDocumentKind, type DocumentTemplateKind, type Invoice } from '../types';
 import { logger } from '../utils/logger';
 import { closeDb, getDb, getDbPath, initDb } from '../db/connection';
 import { createInvoiceFromOffer, deleteInvoice, listInvoices, upsertInvoice } from '../db/invoicesRepo';
@@ -71,7 +71,20 @@ import { getInvoiceDunningStatus } from '../services/dunningService';
 import { buildEurCsv, getEurReport, listEurItems, upsertEurItemClassification } from '../services/eurReport';
 import { listAllEurRules, upsertEurRule, deleteEurRule } from '../db/eurRulesRepo';
 import { PRODUCT_PROFILE } from '../productProfile';
-import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import {
+  calculateInvoiceTaxSnapshot,
+  resolveInvoiceTaxMode,
+  createCancellationInvoice,
+  createCreditNote,
+  createDeliveryNoteFromOrder,
+  createInvoiceRevision,
+  createOrderConfirmationFromOffer,
+  createSettlementInvoice,
+  listDocumentChain,
+} from '@billme/server-core/services';
+import { createBillingScope, createSqliteBillingDependencies, toLegacyInvoice } from '@billme/desktop-data/billingDomainCompat';
+import { createDrizzle, schema } from '@billme/desktop-data/drizzle';
+import { eq } from 'drizzle-orm';
 
 const normalizeInvoiceTaxData = (doc: Invoice, settings: AppSettings): Invoice => {
   const taxMode = resolveInvoiceTaxMode(doc.taxMode, settings);
@@ -346,6 +359,30 @@ export const registerIpcHandlers = (
     return createInvoiceFromOffer(db, offerId, newInvoiceId);
   });
 
+  register(ipcMain, 'documents:chainCreate', (args) => {
+    const db = requireDb();
+    const scope = createBillingScope(PRODUCT_PROFILE);
+    const dependencies = createSqliteBillingDependencies(db);
+    const params = { ...args, actor: { type: 'system' as const, displayName: 'local' } };
+    const created = args.operation === 'order_confirmation'
+      ? createOrderConfirmationFromOffer(scope, dependencies, params)
+      : args.operation === 'delivery_note'
+        ? createDeliveryNoteFromOrder(scope, dependencies, params as any)
+        : args.operation === 'settlement_invoice'
+          ? createSettlementInvoice(scope, dependencies, params as any)
+          : args.operation === 'correction'
+            ? (args.kind === 'credit_note'
+              ? createCreditNote(scope, dependencies, params as any)
+              : createCancellationInvoice(scope, dependencies, params as any))
+            : createInvoiceRevision(scope, dependencies, params as any);
+    return toLegacyInvoice(created);
+  });
+
+  register(ipcMain, 'documents:chainList', ({ rootDocumentId }) => {
+    const db = requireDb();
+    return listDocumentChain(createBillingScope(PRODUCT_PROFILE), createSqliteBillingDependencies(db), rootDocumentId).map(toLegacyInvoice);
+  });
+
   register(ipcMain, 'templates:list', ({ kind }) => {
     const db = requireDb();
     const normalized = kind === 'offer' ? 'offer' : kind === 'invoice' ? 'invoice' : undefined;
@@ -391,7 +428,7 @@ export const registerIpcHandlers = (
 
     if (kind === 'offer') {
       const offer = getOffer(db, id);
-      if (!offer) throw new Error('Offer not found');
+      if (!offer) throw new Error('Angebot nicht gefunden.');
       const res = await exportPdf({
         kind: 'offer',
         id,
@@ -402,15 +439,15 @@ export const registerIpcHandlers = (
     }
 
     const invoice = getInvoice(db, id);
-    if (!invoice) throw new Error('Invoice not found');
+    if (!invoice) throw new Error('Rechnung nicht gefunden.');
     const res = await exportPdf({
       kind: 'invoice',
       id,
-      suggestedName: `${invoice.number || 'invoice'}-${invoice.client || id}`,
+      suggestedName: `${getInvoiceDocumentLabel(invoice.documentKind)}-${invoice.number || 'invoice'}-${invoice.client || id}`,
       userDataPath,
     });
     const settings = requireSettings(db);
-    if (settings.eInvoice?.enabled) {
+    if (settings.eInvoice?.enabled && isBillingDocumentKind(invoice.documentKind)) {
       const normalized = normalizeInvoiceForEinvoice(invoice, settings);
       const xml = buildZugferdXml(normalized);
       const finalBytes = await embedZugferdInPdf({
@@ -468,7 +505,7 @@ export const registerIpcHandlers = (
     ];
 
     if (!allowedRoots.some((root) => resolved === root || resolved.startsWith(root + path.sep))) {
-      throw new Error('Refusing to open path outside app userData folders');
+      throw new Error('Dieser Pfad liegt außerhalb der App-Datenordner.');
     }
 
     const result = await shell.openPath(resolved);
@@ -491,10 +528,10 @@ export const registerIpcHandlers = (
     try {
       parsed = new URL(url);
     } catch {
-      throw new Error('Invalid URL');
+      throw new Error('Ungültige URL.');
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error('Only http(s) URLs are allowed');
+      throw new Error('Es sind nur http(s)-Adressen erlaubt.');
     }
     await shell.openExternal(parsed.toString(), { activate: true });
     return { ok: true };
@@ -612,13 +649,11 @@ export const registerIpcHandlers = (
         toInsert.map((t) => ({ ...t, importBatchId: batchId, linkedInvoiceId: null })),
       );
 
-      db.prepare(
-        `
-          UPDATE import_batches
-          SET imported_count = @imported, skipped_count = @skipped, error_count = @errors
-          WHERE id = @id
-        `,
-      ).run({ id: batchId, imported: inserted, skipped, errors: errors.length });
+      createDrizzle(db)
+        .update(schema.importBatches)
+        .set({ importedCount: inserted, skippedCount: skipped, errorCount: errors.length })
+        .where(eq(schema.importBatches.id, batchId))
+        .run();
 
       return { batchId, inserted, skipped };
     })();
@@ -640,11 +675,11 @@ export const registerIpcHandlers = (
     const db = requireDb();
 
     const offer = getOffer(db, offerId);
-    if (!offer) throw new Error('Offer not found');
+    if (!offer) throw new Error('Angebot nicht gefunden.');
 
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
 
     const res = await publishOfferToPortal(db, {
       offerId,
@@ -682,7 +717,7 @@ export const registerIpcHandlers = (
 
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
 
     const result = await syncPublishedOfferDecisionFromPortal(db, {
       offerId,
@@ -698,11 +733,11 @@ export const registerIpcHandlers = (
     const db = requireDb();
 
     const invoice = getInvoice(db, invoiceId);
-    if (!invoice) throw new Error('Invoice not found');
+    if (!invoice) throw new Error('Rechnung nicht gefunden.');
 
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
 
     const apiKey = await secrets.get('portal.apiKey');
     const token = crypto.randomBytes(24).toString('base64url');
@@ -730,7 +765,7 @@ export const registerIpcHandlers = (
     const db = requireDb();
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
     const apiKey = await secrets.get('portal.apiKey');
     return portalClient.createCustomerAccessLink({ baseUrl, apiKey, customerRef, customerLabel, expiresInDays });
   });
@@ -739,7 +774,7 @@ export const registerIpcHandlers = (
     const db = requireDb();
     const settings = getSettings(db);
     const baseUrl = settings?.portal?.baseUrl?.trim();
-    if (!baseUrl) throw new Error('Portal baseUrl not configured (Settings → Portal)');
+    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt. Hinterlege sie unter Einstellungen → Portal.');
     const apiKey = await secrets.get('portal.apiKey');
     return portalClient.rotateCustomerAccessLink({ baseUrl, apiKey, customerRef, customerLabel, expiresInDays });
   });
@@ -827,14 +862,14 @@ export const registerIpcHandlers = (
     if (!settings || !settings.email) {
       return {
         success: false,
-        error: 'Email settings not configured',
+        error: 'E-Mail-Einstellungen fehlen.',
       };
     }
 
     if (settings.email.provider === 'none') {
       return {
         success: false,
-        error: 'No email provider configured. Please configure SMTP or Resend in Settings.',
+        error: 'Kein E-Mail-Anbieter eingerichtet. Konfiguriere SMTP oder Resend unter Einstellungen.',
       };
     }
 
@@ -843,7 +878,7 @@ export const registerIpcHandlers = (
     if (!document) {
       return {
         success: false,
-        error: `${documentType === 'invoice' ? 'Invoice' : 'Offer'} not found`,
+        error: `${documentType === 'invoice' ? 'Rechnung' : 'Angebot'} nicht gefunden.`,
       };
     }
 
@@ -855,7 +890,7 @@ export const registerIpcHandlers = (
     } catch (e) {
       return {
         success: false,
-        error: `Failed to generate PDF: ${String(e)}`,
+        error: `PDF konnte nicht erstellt werden: ${String(e)}`,
       };
     }
 
@@ -1103,8 +1138,10 @@ export const registerIpcHandlers = (
     excluded,
     vatMode,
     note,
+    reason,
   }) => {
     const db = requireDb();
+    const settings = requireSettings(db);
     return upsertEurItemClassification(db, {
       sourceType,
       sourceId,
@@ -1113,6 +1150,10 @@ export const registerIpcHandlers = (
       excluded,
       vatMode,
       note,
+      reason,
+      actor: 'lite',
+      product: 'lite',
+      settings,
     });
   });
 

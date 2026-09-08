@@ -11,8 +11,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@billme/accounting-shared": "workspace:*",
     "@billme/accounting-ui-pro": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
+    "@billme/desktop-services": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/ui": "workspace:*",
     "react": "^19.2.3",

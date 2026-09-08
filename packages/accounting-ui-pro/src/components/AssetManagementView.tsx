@@ -1,17 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
-  Archive,
-  ArrowRightLeft,
-  Building2,
-  CalendarClock,
-  FileText,
-  Filter,
-  Plus,
-  Search,
-  Sparkles,
-} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { Building2, Search } from 'lucide-react';
+import { Button } from '@billme/ui';
 import type { AssetDepreciationScheduleEntry, AssetItem, AssetStatus } from '../domain/assetTypes';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
+import type { AssetUpsertInput } from '../domain/assetTypes';
+import { permissionContextForRole } from '../mocks/users';
+import { toAccountingActorRole, type UserRole } from '../types';
 
 const mockAssets: AssetItem[] = [
   {
@@ -113,27 +107,220 @@ function euro(value: number) {
 
 function statusPill(status: AssetStatus) {
   const map: Record<AssetStatus, { label: string; className: string }> = {
-    entwurf: { label: 'Entwurf', className: 'bg-amber-100 text-amber-700' },
-    aktiv: { label: 'Aktiv', className: 'bg-emerald-100 text-emerald-700' },
-    voll_abgeschrieben: { label: 'Voll abgeschrieben', className: 'bg-gray-100 text-gray-700' },
-    verkauft: { label: 'Verkauft', className: 'bg-blue-100 text-blue-700' },
-    stillgelegt: { label: 'Stillgelegt', className: 'bg-rose-100 text-rose-700' },
+    entwurf: { label: 'Entwurf', className: 'bg-warning-bg text-warning' },
+    aktiv: { label: 'Aktiv', className: 'bg-success-bg text-success' },
+    voll_abgeschrieben: { label: 'Voll abgeschrieben', className: 'bg-border-subtle text-foreground' },
+    verkauft: { label: 'Verkauft', className: 'bg-info-bg text-info' },
+    stillgelegt: { label: 'Stillgelegt', className: 'bg-error-bg text-error' },
   };
   return map[status];
 }
 
-export default function AssetManagementView({ dataAdapter }: { dataAdapter?: ProAccountingDataAdapter }) {
-  const [assets, setAssets] = useState<AssetItem[]>(mockAssets);
+type AssetFormState = {
+  id?: string;
+  assetNumber: string;
+  name: string;
+  assetClass: string;
+  status: AssetStatus;
+  activationDate: string;
+  acquisitionCost: string;
+  usefulLifeYears: string;
+  depreciationMethod: AssetUpsertInput['depreciationMethod'];
+  costCenter: string;
+  location: string;
+  receiptLinked: boolean;
+  supplier: string;
+  invoiceRef: string;
+  assetAccountNumber: string;
+  reason: string;
+};
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formFromAsset(asset?: AssetItem, activate = false): AssetFormState {
+  return {
+    id: asset?.id,
+    assetNumber: asset?.assetNumber ?? '',
+    name: asset?.name ?? '',
+    assetClass: asset?.assetClass ?? '',
+    status: activate ? 'aktiv' : asset?.status ?? 'entwurf',
+    activationDate: asset?.activationDate ?? today(),
+    acquisitionCost: asset ? String(asset.acquisitionCost) : '',
+    usefulLifeYears: asset?.usefulLifeYears ? String(asset.usefulLifeYears) : '',
+    depreciationMethod: asset?.depreciationMethod ?? 'linear',
+    costCenter: asset?.costCenter ?? '',
+    location: asset?.location ?? '',
+    receiptLinked: asset?.receiptLinked ?? false,
+    supplier: asset?.supplier ?? '',
+    invoiceRef: asset?.invoiceRef ?? '',
+    assetAccountNumber: asset?.assetAccountNumber ?? '',
+    reason: '',
+  };
+}
+
+interface AssetEditorProps {
+  form: AssetFormState;
+  busy: boolean;
+  onChange: <K extends keyof AssetFormState>(key: K, value: AssetFormState[K]) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}
+
+function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorProps) {
+  const accountingOwned = Boolean(form.id && form.status !== 'entwurf');
+  const input = (key: keyof AssetFormState) => (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    const value = event.currentTarget.type === 'checkbox'
+      ? (event.currentTarget as HTMLInputElement).checked
+      : event.currentTarget.value;
+    onChange(key, value as AssetFormState[typeof key]);
+  };
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto p-6">
+      <form
+        className="mx-auto max-w-4xl rounded-2xl border border-border bg-surface p-5 space-y-5"
+        noValidate
+        onSubmit={(event) => { event.preventDefault(); onSubmit(); }}
+        aria-busy={busy}
+      >
+        <div>
+          <h2 className="text-base font-black text-foreground">{form.id ? 'Anlage bearbeiten' : 'Neue Anlage'}</h2>
+          <p className="mt-1 text-sm text-muted">Speichern und Aktivieren erzeugen jeweils einen nachvollziehbaren Audit-Eintrag.</p>
+        </div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {([
+            ['assetNumber', 'Anlagennummer', 'z. B. ANL-2026-010'],
+            ['name', 'Bezeichnung', 'z. B. Server'],
+            ['assetClass', 'Anlagenklasse', 'z. B. IT-Hardware'],
+            ['costCenter', 'Kostenstelle', 'z. B. ADM-01'],
+            ['location', 'Standort', 'z. B. Berlin HQ'],
+            ['assetAccountNumber', 'Anlagenkonto', 'z. B. 0440'],
+            ['supplier', 'Lieferant', 'Optional'],
+            ['invoiceRef', 'Rechnungsreferenz', 'Optional'],
+          ] as const).map(([key, label, placeholder]) => (
+            <label key={key} className="space-y-1 text-sm font-semibold text-foreground">
+              <span>{label}{['assetNumber', 'name', 'assetClass', 'costCenter', 'location', 'assetAccountNumber'].includes(key) ? ' *' : ''}</span>
+              <input
+                value={form[key] as string}
+                onChange={input(key)}
+                placeholder={placeholder}
+                required={['assetNumber', 'name', 'assetClass', 'costCenter', 'location', 'assetAccountNumber'].includes(key)}
+                className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm"
+              />
+            </label>
+          ))}
+          <label className="space-y-1 text-sm font-semibold text-foreground">
+            <span>Aktivierungsdatum *</span>
+            <input type="date" value={form.activationDate} onChange={input('activationDate')} required className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm" />
+          </label>
+          <label className="space-y-1 text-sm font-semibold text-foreground">
+            <span>Anschaffungskosten netto *</span>
+            <input type="number" min="0" step="0.01" value={form.acquisitionCost} onChange={input('acquisitionCost')} required className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm" />
+          </label>
+          <label className="space-y-1 text-sm font-semibold text-foreground">
+            <span>Nutzungsdauer in Jahren</span>
+            <input type="number" min="1" step="1" value={form.usefulLifeYears} onChange={input('usefulLifeYears')} className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm" />
+          </label>
+          <label className="space-y-1 text-sm font-semibold text-foreground">
+            <span>Abschreibungsmethode *</span>
+            <select value={form.depreciationMethod} onChange={input('depreciationMethod')} required className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm">
+              <option value="linear">Linear</option>
+              <option value="gwg">GWG</option>
+              <option value="pool">Pool</option>
+            </select>
+          </label>
+          <label htmlFor="asset-status" className="space-y-1 text-sm font-semibold text-foreground">
+            <span>Status *</span>
+            <select id="asset-status" value={form.status} onChange={input('status')} required disabled={accountingOwned} aria-describedby={accountingOwned ? 'asset-status-ownership-note' : undefined} className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60">
+              <option value="entwurf">Entwurf</option>
+              <option value="aktiv">Aktiv</option>
+              <option value="voll_abgeschrieben">Voll abgeschrieben</option>
+              <option value="verkauft">Verkauft</option>
+              <option value="stillgelegt">Stillgelegt</option>
+            </select>
+            {accountingOwned && <span id="asset-status-ownership-note" className="block text-xs font-medium text-muted">Gebuchte Anlagen behalten ihren Accounting-Status. Für eine Korrektur bitte den Anlagen-Korrekturfluss verwenden.</span>}
+          </label>
+        </div>
+        <label className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <input type="checkbox" checked={form.receiptLinked} onChange={input('receiptLinked')} className="h-4 w-4 rounded border-border" />
+          Beleg ist verknüpft
+        </label>
+        <label className="block space-y-1 text-sm font-semibold text-foreground">
+          <span>Audit-Grund *</span>
+          <textarea value={form.reason} onChange={input('reason')} required minLength={1} rows={2} placeholder="Warum wird die Anlage geändert?" className="w-full rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm" />
+        </label>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button type="button" onClick={onCancel} disabled={busy} variant="secondary" size="sm" className="h-9 px-4">Abbrechen</Button>
+          <Button type="submit" disabled={busy} variant="dark" size="sm" className="h-9 px-4">{busy ? 'Speichere…' : 'Anlage speichern'}</Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+export default function AssetManagementView({ dataAdapter, role = 'admin' }: { dataAdapter?: ProAccountingDataAdapter; role?: UserRole }) {
+  const canMutate = permissionContextForRole(role).canMutate;
+  const accountingActorRole = toAccountingActorRole(role);
+  const [assets, setAssets] = useState<AssetItem[]>(() => (dataAdapter ? [] : mockAssets));
+  const [assetsLoading, setAssetsLoading] = useState(Boolean(dataAdapter));
   const [schedule, setSchedule] = useState<AssetDepreciationScheduleEntry[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(Boolean(dataAdapter));
+  const [assetsError, setAssetsError] = useState<string | null>(null);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [editForm, setEditForm] = useState<AssetFormState | null>(null);
+  const [busyAction, setBusyAction] = useState<'save' | 'depreciation' | 'disposal' | null>(null);
+  const [depreciationYear, setDepreciationYear] = useState(String(new Date().getFullYear()));
+  const [postingDate, setPostingDate] = useState(today());
+  const [depreciationReason, setDepreciationReason] = useState('');
+  const [disposalDate, setDisposalDate] = useState(today());
+  const [disposalProceeds, setDisposalProceeds] = useState('0');
+  const [disposalTaxRate, setDisposalTaxRate] = useState<'0' | '7' | '19'>('19');
+  const [proceedsAccountNumber, setProceedsAccountNumber] = useState('');
+  const [disposalReason, setDisposalReason] = useState('');
+  const [disposalConfirmed, setDisposalConfirmed] = useState(false);
+  const mutationInFlightRef = useRef(false);
+  const scheduleRequestRef = useRef(0);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'alle' | AssetStatus>('alle');
   const [selectedId, setSelectedId] = useState<string>(mockAssets[0]?.id ?? '');
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>('Übersicht');
 
+  const loadAssets = useCallback(async () => {
+    if (!dataAdapter) {
+      setAssets(mockAssets);
+      setAssetsError(null);
+      setAssetsLoading(false);
+      return;
+    }
+    const list = dataAdapter.listAssets;
+    if (!list) {
+      setAssets([]);
+      setAssetsError('Anlagen konnten nicht geladen werden.');
+      setAssetsLoading(false);
+      return;
+    }
+    setAssetsError(null);
+    setAssetsLoading(true);
+    try {
+      setAssets(await list());
+    } catch (error) {
+      setAssets([]);
+      setAssetsError(error instanceof Error ? error.message : 'Anlagen konnten nicht geladen werden.');
+    } finally {
+      setAssetsLoading(false);
+    }
+  }, [dataAdapter]);
+
   useEffect(() => {
-    const list = dataAdapter?.listAssets;
-    if (!list) return;
-    void list().then(setAssets).catch(() => setAssets(mockAssets));
+    void loadAssets();
+  }, [loadAssets]);
+
+  useEffect(() => {
+    setEditForm(null);
+    setFeedback(null);
   }, [dataAdapter]);
 
   const filtered = useMemo(() => {
@@ -152,14 +339,208 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
 
   const selected = filtered.find((asset) => asset.id === selectedId) ?? filtered[0] ?? null;
 
-  useEffect(() => {
+  const loadScheduleForAsset = useCallback(async (assetId: string) => {
+    const requestId = ++scheduleRequestRef.current;
     const load = dataAdapter?.getDepreciationSchedule;
-    if (!load || !selected) {
+    if (!load) {
       setSchedule([]);
+      setScheduleError(null);
+      setScheduleLoading(false);
       return;
     }
-    void load(selected.id).then(setSchedule).catch(() => setSchedule([]));
-  }, [dataAdapter, selected?.id]);
+    setScheduleError(null);
+    setScheduleLoading(true);
+    try {
+      const nextSchedule = await load(assetId);
+      if (requestId !== scheduleRequestRef.current) return;
+      setSchedule(nextSchedule);
+    } catch (error) {
+      if (requestId !== scheduleRequestRef.current) return;
+      setSchedule([]);
+      setScheduleError(error instanceof Error ? error.message : 'Abschreibungsplan konnte nicht geladen werden.');
+    } finally {
+      if (requestId === scheduleRequestRef.current) setScheduleLoading(false);
+    }
+  }, [dataAdapter]);
+
+  useEffect(() => {
+    if (!selected) {
+      scheduleRequestRef.current += 1;
+      setSchedule([]);
+      setScheduleError(null);
+      setScheduleLoading(false);
+      return;
+    }
+    void loadScheduleForAsset(selected.id);
+  }, [loadScheduleForAsset, selected?.id]);
+
+  const beginMutation = (action: 'save' | 'depreciation' | 'disposal') => {
+    if (busyAction !== null || mutationInFlightRef.current) return false;
+    mutationInFlightRef.current = true;
+    setBusyAction(action);
+    return true;
+  };
+
+  const endMutation = () => {
+    mutationInFlightRef.current = false;
+    setBusyAction(null);
+  };
+
+  const reloadCanonical = async (assetId: string) => {
+    const list = dataAdapter?.listAssets;
+    if (!list) return;
+    const requestId = ++scheduleRequestRef.current;
+    let nextSelectedId = assetId;
+    try {
+      const nextAssets = await list();
+      setAssets(nextAssets);
+      nextSelectedId = nextAssets.some((asset) => asset.id === assetId) ? assetId : nextAssets[0]?.id ?? '';
+      setSelectedId(nextSelectedId);
+      setAssetsError(null);
+    } catch (error) {
+      setAssetsError(error instanceof Error ? error.message : 'Anlagen konnten nicht aktualisiert werden.');
+      return;
+    }
+    if (requestId !== scheduleRequestRef.current) return;
+    if (nextSelectedId) await loadScheduleForAsset(nextSelectedId);
+    else {
+      setSchedule([]);
+      setScheduleError(null);
+    }
+  };
+
+  const updateEditForm = <K extends keyof AssetFormState>(key: K, value: AssetFormState[K]) => {
+    setEditForm((current) => current ? { ...current, [key]: value } : current);
+  };
+
+  const submitAsset = async () => {
+    if (!canMutate || !editForm || !dataAdapter?.upsertAsset) return;
+    const acquisitionCost = Number(editForm.acquisitionCost.replace(',', '.'));
+    const usefulLifeYears = editForm.usefulLifeYears.trim() ? Number(editForm.usefulLifeYears) : undefined;
+    const missingFields = [
+      ['Anlagennummer', editForm.assetNumber],
+      ['Bezeichnung', editForm.name],
+      ['Anlagenklasse', editForm.assetClass],
+      ['Kostenstelle', editForm.costCenter],
+      ['Standort', editForm.location],
+      ['Anlagenkonto', editForm.assetAccountNumber],
+      ['Aktivierungsdatum', editForm.activationDate],
+      ['Anschaffungskosten netto', editForm.acquisitionCost],
+      ['Abschreibungsmethode', editForm.depreciationMethod],
+      ['Status', editForm.status],
+    ].filter(([, value]) => !value.trim()).map(([label]) => label);
+    if (missingFields.length > 0) {
+      setFeedback({ kind: 'error', text: `Bitte Pflichtfelder ausfüllen: ${missingFields.join(', ')}.` });
+      return;
+    }
+    if (!editForm.reason.trim()) {
+      setFeedback({ kind: 'error', text: 'Bitte einen Audit-Grund angeben.' });
+      return;
+    }
+    if (!Number.isFinite(acquisitionCost) || acquisitionCost < 0 || (usefulLifeYears !== undefined && (!Number.isInteger(usefulLifeYears) || usefulLifeYears < 1))) {
+      setFeedback({ kind: 'error', text: 'Bitte gültige Anschaffungskosten und Nutzungsdauer angeben.' });
+      return;
+    }
+    if (!beginMutation('save')) return;
+    setFeedback(null);
+    try {
+      const saved = await dataAdapter.upsertAsset({
+        id: editForm.id,
+        assetNumber: editForm.assetNumber.trim(),
+        name: editForm.name.trim(),
+        assetClass: editForm.assetClass.trim(),
+        status: editForm.status,
+        activationDate: editForm.activationDate,
+        acquisitionCost,
+        usefulLifeYears,
+        depreciationMethod: editForm.depreciationMethod,
+        costCenter: editForm.costCenter.trim(),
+        location: editForm.location.trim(),
+        receiptLinked: editForm.receiptLinked,
+        supplier: editForm.supplier.trim() || undefined,
+        invoiceRef: editForm.invoiceRef.trim() || undefined,
+        assetAccountNumber: editForm.assetAccountNumber.trim(),
+      }, editForm.reason.trim());
+      await reloadCanonical(saved.id);
+      setSelectedId(saved.id);
+      setEditForm(null);
+      setFeedback({ kind: 'success', text: saved.status === 'aktiv' ? 'Anlage gespeichert und aktiviert.' : 'Anlage gespeichert.' });
+    } catch (error) {
+      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Anlage konnte nicht gespeichert werden.' });
+    } finally {
+      endMutation();
+    }
+  };
+
+  const postDepreciation = async () => {
+    if (!canMutate || !selected || !dataAdapter?.runDepreciation) return;
+    const year = Number(depreciationYear);
+    if (!depreciationReason.trim()) {
+      setFeedback({ kind: 'error', text: 'Bitte einen Audit-Grund für die AfA-Buchung angeben.' });
+      return;
+    }
+    if (!Number.isInteger(year) || year < 2000 || !postingDate) {
+      setFeedback({ kind: 'error', text: 'Bitte ein gültiges AfA-Jahr und Buchungsdatum angeben.' });
+      return;
+    }
+    if (!beginMutation('depreciation')) return;
+    setFeedback(null);
+    try {
+      const result = await dataAdapter.runDepreciation({
+        assetId: selected.id,
+        year,
+        postingDate,
+        reason: depreciationReason.trim(),
+        actorRole: accountingActorRole,
+      });
+      await reloadCanonical(result.asset.id);
+      setFeedback({ kind: 'success', text: `AfA ${year} gebucht${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.` });
+      setDepreciationReason('');
+    } catch (error) {
+      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'AfA konnte nicht gebucht werden.' });
+    } finally {
+      endMutation();
+    }
+  };
+
+  const dispose = async () => {
+    if (!canMutate || !selected || !dataAdapter?.disposeAsset) return;
+    const proceeds = Number(disposalProceeds.replace(',', '.'));
+    const taxRate = Number(disposalTaxRate);
+    if (!disposalConfirmed) {
+      setFeedback({ kind: 'error', text: 'Bitte die Ausbuchung ausdrücklich bestätigen.' });
+      return;
+    }
+    if (!disposalReason.trim()) {
+      setFeedback({ kind: 'error', text: 'Bitte einen Audit-Grund für die Ausbuchung angeben.' });
+      return;
+    }
+    if (!Number.isFinite(proceeds) || proceeds < 0 || !disposalDate || ![0, 7, 19].includes(taxRate)) {
+      setFeedback({ kind: 'error', text: 'Bitte gültige Ausbuchungsdaten angeben.' });
+      return;
+    }
+    if (!beginMutation('disposal')) return;
+    setFeedback(null);
+    try {
+      const result = await dataAdapter.disposeAsset({
+        assetId: selected.id,
+        disposalDate,
+        proceeds,
+        taxRate: taxRate as 0 | 7 | 19,
+        proceedsAccountNumber: proceedsAccountNumber.trim() || undefined,
+        reason: disposalReason.trim(),
+        actorRole: accountingActorRole,
+      });
+      await reloadCanonical(result.asset.id);
+      setFeedback({ kind: 'success', text: `Anlage ${result.asset.status === 'verkauft' ? 'verkauft' : 'stillgelegt'}; Ergebnis ${euro(result.gainLoss)}${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.` });
+      setDisposalReason('');
+      setDisposalConfirmed(false);
+    } catch (error) {
+      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Anlage konnte nicht ausgebucht werden.' });
+    } finally {
+      endMutation();
+    }
+  };
 
   const totals = useMemo(() => {
     const active = assets.filter((a) => a.status === 'aktiv');
@@ -173,51 +554,59 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden xl:flex-row">
-      <div className="flex min-h-0 flex-col border-b border-gray-100 xl:basis-[34rem] xl:min-w-[24rem] xl:max-w-[34rem] xl:border-b-0 xl:border-r">
-        <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
+      <div className="flex min-h-0 flex-col border-b border-subtle xl:w-96 xl:min-w-96 xl:max-w-96 xl:border-b-0 xl:border-r">
+        <div className="px-4 py-3 border-b border-subtle space-y-2.5">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-black text-[#ccff00] flex items-center justify-center shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-dark-base text-accent flex items-center justify-center shrink-0">
               <Building2 size={15} />
             </div>
             <div className="flex-1 min-w-0">
-              <h1 className="text-sm font-black tracking-tight text-gray-900 leading-tight">Anlagenverwaltung</h1>
-              <p className="text-xs text-gray-400 font-medium leading-tight">
-                Übersicht, Aktivierung und Abschreibung.
-              </p>
+              <div className="flex items-center justify-between gap-2">
+                <h1 className="text-sm font-black tracking-tight text-foreground leading-tight">Anlagenverwaltung</h1>
+                {canMutate && dataAdapter?.upsertAsset && (
+                  <Button
+                    type="button"
+                    onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset()); }}
+                    disabled={busyAction !== null}
+                    variant="dark"
+                    size="sm"
+                    className="h-7 px-2.5 text-xs"
+                  >
+                    Neue Anlage
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted font-medium leading-tight">Übersicht, Aktivierung und Abschreibung.</p>
             </div>
-            <button className="h-8 px-3 rounded-full bg-black text-white text-xs font-bold hover:bg-gray-900 inline-flex items-center gap-1 shrink-0">
-              <Plus size={12} />
-              Anlage erfassen
-            </button>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-              <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">Anlagen gesamt</div>
-              <div className="text-sm font-bold text-gray-900 mt-0.5">{totals.totalAssets} <span className="text-xs font-medium text-gray-500">({totals.activeAssets} aktiv)</span></div>
+            <div className="rounded-lg border border-border bg-surface px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide font-bold text-muted">Anlagen gesamt</div>
+              <div className="text-sm font-bold text-foreground mt-0.5">{totals.totalAssets} <span className="text-xs font-medium text-muted">({totals.activeAssets} aktiv)</span></div>
             </div>
-            <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-              <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">Restbuchwert</div>
-              <div className="text-sm font-bold text-gray-900 mt-0.5">{euro(totals.totalResidual)} <span className="text-xs font-medium text-gray-500">AK {euro(totals.totalAcquisition)}</span></div>
+            <div className="rounded-lg border border-border bg-surface px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wide font-bold text-muted">Restbuchwert</div>
+              <div className="text-sm font-bold text-foreground mt-0.5">{euro(totals.totalResidual)} <span className="text-xs font-medium text-muted">AK {euro(totals.totalAcquisition)}</span></div>
             </div>
           </div>
 
-          <div className="grid grid-cols-[1fr_auto] gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={13} />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={13} />
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Anlage suchen (Nr., Name, Klasse, KSt.)"
-                className="w-full h-8 rounded-lg border border-gray-200 pl-8 pr-3 text-xs"
+                className="w-full h-8 rounded-lg border border-border pl-8 pr-3 text-xs"
               />
             </div>
             <div className="flex items-center gap-1.5">
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as 'alle' | AssetStatus)}
-                className="h-8 rounded-lg border border-gray-200 px-2 text-xs font-medium"
+                className="h-8 rounded-lg border border-border px-2 text-xs font-medium"
               >
                 <option value="alle">Alle Status</option>
                 <option value="entwurf">Entwurf</option>
@@ -226,15 +615,13 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
                 <option value="verkauft">Verkauft</option>
                 <option value="stillgelegt">Stillgelegt</option>
               </select>
-              <button className="h-8 px-2.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
-                <Filter size={13} />
-              </button>
             </div>
           </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4 space-y-2">
-          {filtered.map((asset) => {
+          {assetsLoading ? <div className="rounded-xl border border-border bg-surface p-6 text-sm text-muted" role="status" aria-live="polite" aria-busy="true">Anlagen werden geladen…</div> : null}
+          {!assetsLoading && filtered.map((asset) => {
             const pill = statusPill(asset.status);
             const selectedCard = selected?.id === asset.id;
             return (
@@ -242,14 +629,14 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
                 key={asset.id}
                 onClick={() => setSelectedId(asset.id)}
                 className={`w-full text-left rounded-xl border p-4 transition-colors ${
-                  selectedCard ? 'border-black bg-gray-50' : 'border-gray-200 bg-white hover:bg-gray-50'
+                  selectedCard ? 'border-dark-base bg-surface-muted' : 'border-border bg-surface hover:bg-surface-muted'
                 }`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-xs text-gray-400 font-bold">{asset.assetNumber}</div>
-                    <div className="font-bold text-gray-900 truncate">{asset.name}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">
+                    <div className="text-xs text-muted font-bold">{asset.assetNumber}</div>
+                    <div className="font-bold text-foreground truncate">{asset.name}</div>
+                    <div className="text-xs text-muted mt-0.5">
                       {asset.assetClass} • {asset.costCenter} • {asset.location}
                     </div>
                   </div>
@@ -259,23 +646,24 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                   <div>
-                    <div className="text-gray-400 font-bold uppercase tracking-wide">AK</div>
-                    <div className="text-gray-700 font-bold">{euro(asset.acquisitionCost)}</div>
+                    <div className="text-muted font-bold uppercase tracking-wide">AK</div>
+                    <div className="text-foreground font-bold">{euro(asset.acquisitionCost)}</div>
                   </div>
                   <div>
-                    <div className="text-gray-400 font-bold uppercase tracking-wide">RBW</div>
-                    <div className="text-gray-700 font-bold">{euro(asset.residualValue)}</div>
+                    <div className="text-muted font-bold uppercase tracking-wide">RBW</div>
+                    <div className="text-foreground font-bold">{euro(asset.residualValue)}</div>
                   </div>
                   <div>
-                    <div className="text-gray-400 font-bold uppercase tracking-wide">Nächste AfA</div>
-                    <div className="text-gray-700 font-bold">{asset.nextDepreciation}</div>
+                    <div className="text-muted font-bold uppercase tracking-wide">Nächste AfA</div>
+                    <div className="text-foreground font-bold">{asset.nextDepreciation}</div>
                   </div>
                 </div>
               </button>
             );
           })}
-          {filtered.length === 0 && (
-            <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-500">
+          {assetsError && <div className="flex flex-wrap items-center gap-3 rounded-xl border border-error-border bg-error-bg p-4 text-sm text-error" role="alert" aria-live="assertive"><span>{assetsError}</span><Button type="button" size="sm" variant="secondary" onClick={() => void loadAssets()}>Erneut versuchen</Button></div>}
+          {!assetsLoading && filtered.length === 0 && !assetsError && (
+            <div className="rounded-xl border border-border bg-surface p-6 text-sm text-muted">
               Keine Anlagen gefunden.
             </div>
           )}
@@ -283,59 +671,60 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
       </div>
 
       <div className="flex min-h-0 flex-1 min-w-0 flex-col">
-        {!selected ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center p-12 text-gray-500">Keine Anlage ausgewählt.</div>
+        {feedback ? <div data-testid="asset-mutation-feedback" className={`mx-6 mt-4 rounded-xl border p-3 text-sm ${feedback.kind === 'error' ? 'border-error-border bg-error-bg text-error' : 'border-success-border bg-success-bg text-success'}`} role={feedback.kind === 'error' ? 'alert' : 'status'} aria-live={feedback.kind === 'error' ? 'assertive' : 'polite'}>{feedback.text}</div> : null}
+        {editForm ? (
+          <AssetEditor
+            form={editForm}
+            busy={busyAction === 'save'}
+            onChange={updateEditForm}
+            onSubmit={() => { void submitAsset(); }}
+            onCancel={() => setEditForm(null)}
+          />
+        ) : !selected ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center p-12 text-muted">Keine Anlage ausgewählt.</div>
         ) : (
           <>
-            <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
-              <div className="flex items-center justify-between gap-3">
+            <div className="px-4 py-3 border-b border-subtle space-y-2.5">
+              <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-xs font-bold text-gray-400">{selected.assetNumber}</span>
+                    <span className="text-xs font-bold text-muted">{selected.assetNumber}</span>
                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusPill(selected.status).className}`}>
                       {statusPill(selected.status).label}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${selected.receiptLinked ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${selected.receiptLinked ? 'bg-success-bg text-success' : 'bg-warning-bg text-warning'}`}>
                       {selected.receiptLinked ? 'Beleg verknüpft' : 'Beleg fehlt'}
                     </span>
                   </div>
-                  <h2 className="text-base font-black text-gray-900 tracking-tight mt-0.5">{selected.name}</h2>
-                  <p className="text-xs text-gray-400 font-medium">
+                  <h2 className="text-base font-black text-foreground tracking-tight mt-0.5">{selected.name}</h2>
+                  <p className="text-xs text-muted font-medium">
                     {selected.assetClass} • {selected.costCenter} • {selected.location}
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-1.5 justify-end shrink-0">
-                  <button className="h-8 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1">
-                    <ArrowRightLeft size={12} />
-                    Bewegung
-                  </button>
-                  <button className="h-8 px-3 rounded-full border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 inline-flex items-center gap-1">
-                    <CalendarClock size={12} />
-                    AfA-Vorschau
-                  </button>
-                  <button className="h-8 px-3 rounded-full bg-black text-white text-xs font-bold hover:bg-gray-900 inline-flex items-center gap-1">
-                    <Sparkles size={12} />
-                    Bearbeiten
-                  </button>
-                </div>
+                {canMutate && dataAdapter?.upsertAsset && ['entwurf', 'aktiv'].includes(selected.status) && (
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button type="button" onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset(selected)); }} disabled={busyAction !== null} variant="secondary" size="sm" className="h-8 px-3 text-xs">Bearbeiten</Button>
+                    {selected.status === 'entwurf' && <Button type="button" onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset(selected, true)); }} disabled={busyAction !== null} variant="dark" size="sm" className="h-8 px-3 text-xs">Aktivieren</Button>}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
-                <div className="rounded-lg border border-gray-200 px-3 py-2 bg-white">
-                  <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">AK</div>
-                  <div className="text-sm font-bold text-gray-900 mt-0.5">{euro(selected.acquisitionCost)}</div>
+                <div className="rounded-lg border border-border px-3 py-2 bg-surface">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-muted">AK</div>
+                  <div className="text-sm font-bold text-foreground mt-0.5">{euro(selected.acquisitionCost)}</div>
                 </div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2 bg-white">
-                  <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">RBW</div>
-                  <div className="text-sm font-bold text-gray-900 mt-0.5">{euro(selected.residualValue)}</div>
+                <div className="rounded-lg border border-border px-3 py-2 bg-surface">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-muted">RBW</div>
+                  <div className="text-sm font-bold text-foreground mt-0.5">{euro(selected.residualValue)}</div>
                 </div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2 bg-white">
-                  <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">AfA p.a.</div>
-                  <div className="text-sm font-bold text-gray-900 mt-0.5">{euro(selected.annualDepreciation)}</div>
+                <div className="rounded-lg border border-border px-3 py-2 bg-surface">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-muted">AfA p.a.</div>
+                  <div className="text-sm font-bold text-foreground mt-0.5">{euro(selected.annualDepreciation)}</div>
                 </div>
-                <div className="rounded-lg border border-gray-200 px-3 py-2 bg-white">
-                  <div className="text-[10px] uppercase tracking-wide font-bold text-gray-400">Nächste AfA</div>
-                  <div className="text-sm font-bold text-gray-900 mt-0.5">{selected.nextDepreciation}</div>
+                <div className="rounded-lg border border-border px-3 py-2 bg-surface">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-muted">Nächste AfA</div>
+                  <div className="text-sm font-bold text-foreground mt-0.5">{selected.nextDepreciation}</div>
                 </div>
               </div>
 
@@ -346,8 +735,8 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
                     onClick={() => setActiveTab(tab)}
                     className={`h-7 px-3 rounded-full text-xs font-bold border ${
                       activeTab === tab
-                        ? 'bg-black text-white border-black'
-                        : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                        ? 'bg-dark-base text-background border-dark-base'
+                        : 'bg-surface text-muted border-border hover:bg-surface-muted'
                     }`}
                   >
                     {tab}
@@ -356,32 +745,34 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-6 grid grid-cols-1 gap-6 min-[1700px]:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+            <div className="min-h-0 flex-1 overflow-y-auto p-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
               <section className="min-w-0 space-y-4">
-                <div className="rounded-2xl border border-gray-200 bg-white p-5">
-                  <div className="text-sm font-bold text-gray-900 mb-3">{activeTab}</div>
+                <div className="rounded-2xl border border-border bg-surface p-5">
+                  <div className="text-sm font-bold text-foreground mb-3">{activeTab}</div>
 
                   {activeTab === 'Übersicht' && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                       <div className="space-y-2">
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Lieferant</span><span className="font-bold text-gray-800">{selected.supplier ?? '—'}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Rechnung</span><span className="font-bold text-gray-800">{selected.invoiceRef ?? '—'}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Aktivierung</span><span className="font-bold text-gray-800">{selected.activationDate}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Kostenstelle</span><span className="font-bold text-gray-800">{selected.costCenter}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Lieferant</span><span className="font-bold text-foreground">{selected.supplier ?? '—'}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Rechnung</span><span className="font-bold text-foreground">{selected.invoiceRef ?? '—'}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Aktivierung</span><span className="font-bold text-foreground">{selected.activationDate}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Kostenstelle</span><span className="font-bold text-foreground">{selected.costCenter}</span></div>
                       </div>
                       <div className="space-y-2">
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Standort</span><span className="font-bold text-gray-800">{selected.location}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Status</span><span className="font-bold text-gray-800">{statusPill(selected.status).label}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Beleg</span><span className="font-bold text-gray-800">{selected.receiptLinked ? 'Verknüpft' : 'Offen'}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-gray-500">Nächste AfA</span><span className="font-bold text-gray-800">{selected.nextDepreciation}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Standort</span><span className="font-bold text-foreground">{selected.location}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Status</span><span className="font-bold text-foreground">{statusPill(selected.status).label}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Beleg</span><span className="font-bold text-foreground">{selected.receiptLinked ? 'Verknüpft' : 'Offen'}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Nächste AfA</span><span className="font-bold text-foreground">{selected.nextDepreciation}</span></div>
                       </div>
                     </div>
                   )}
 
                   {activeTab === 'Abschreibungsplan' && (
                     <div className="space-y-3">
-                      {(schedule.length ? schedule : [{
-                        id: 'mock',
+                      {scheduleLoading ? <div className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-muted" role="status" aria-live="polite" aria-busy="true">Abschreibungsplan wird geladen…</div> : null}
+                      {scheduleError && <div className="flex flex-wrap items-center gap-3 rounded-lg border border-error-border bg-error-bg p-3 text-sm text-error" role="alert"><span>{scheduleError}</span><Button type="button" size="sm" variant="secondary" onClick={() => { if (selected) void loadScheduleForAsset(selected.id); }}>Erneut versuchen</Button></div>}
+                      {!scheduleLoading && (schedule.length ? schedule : dataAdapter ? [] : [{
+                        id: 'fallback',
                         assetId: selected.id,
                         year: Number(selected.activationDate.slice(0, 4)),
                         amount: selected.annualDepreciation,
@@ -390,11 +781,11 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
                       }]).map((period, index, rows) => {
                         const depreciated = rows.slice(0, index + 1).reduce((sum, row) => sum + row.amount, 0);
                         return (
-                        <div key={period.id} className="grid grid-cols-4 gap-3 rounded-lg border border-gray-100 p-3 text-sm">
-                          <div><div className="text-xs text-gray-400 font-bold">Jahr</div><div className="font-bold text-gray-800">{period.year}</div></div>
-                          <div><div className="text-xs text-gray-400 font-bold">AfA</div><div className="font-bold text-gray-800">{euro(period.amount)}</div></div>
-                          <div><div className="text-xs text-gray-400 font-bold">Status</div><div className="font-bold text-gray-800">{period.status === 'posted' ? 'Gebucht' : 'Geplant'}</div></div>
-                          <div><div className="text-xs text-gray-400 font-bold">RBW danach</div><div className="font-bold text-gray-800">{euro(Math.max(selected.acquisitionCost - depreciated, 0))}</div></div>
+                        <div key={period.id} className="grid grid-cols-4 gap-3 rounded-lg border border-subtle p-3 text-sm">
+                          <div><div className="text-xs text-muted font-bold">Jahr</div><div className="font-bold text-foreground">{period.year}</div></div>
+                          <div><div className="text-xs text-muted font-bold">AfA</div><div className="font-bold text-foreground">{euro(period.amount)}</div></div>
+                          <div><div className="text-xs text-muted font-bold">Status</div><div className="font-bold text-foreground">{period.status === 'posted' ? 'Gebucht' : period.status === 'cancelled' ? 'Storniert' : 'Geplant'}</div></div>
+                          <div><div className="text-xs text-muted font-bold">RBW danach</div><div className="font-bold text-foreground">{euro(Math.max(selected.acquisitionCost - depreciated, 0))}</div></div>
                         </div>
                       );})}
                     </div>
@@ -402,73 +793,62 @@ export default function AssetManagementView({ dataAdapter }: { dataAdapter?: Pro
 
                   {activeTab === 'Bewegungen' && (
                     <div className="space-y-3">
-                      <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4">
-                        <div className="font-bold text-gray-900">Zugang / Aktivierung</div>
-                        <div className="text-sm text-gray-600 mt-1">
+                      {!schedule.length && dataAdapter ? <div className="text-sm text-muted">Kein Abschreibungsplan vorhanden.</div> : null}
+                      <div className="rounded-xl border border-border bg-surface-muted/60 p-4">
+                        <div className="font-bold text-foreground">Zugang / Aktivierung</div>
+                        <div className="text-sm text-muted mt-1">
                           {selected.activationDate} • Anschaffung {euro(selected.acquisitionCost)} • Status {statusPill(selected.status).label}
                         </div>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        {['Teilabgang', 'Umbuchung', 'Stilllegung'].map((action) => (
-                          <button key={action} className="rounded-xl border border-gray-200 p-4 text-left hover:bg-gray-50">
-                            <div className="font-bold text-gray-900">{action}</div>
-                            <div className="text-sm text-gray-500 mt-1">Wizard mit Auswirkungs-Vorschau (Mock)</div>
-                          </button>
-                        ))}
                       </div>
                     </div>
                   )}
 
                   {!['Übersicht', 'Abschreibungsplan', 'Bewegungen'].includes(activeTab) && (
-                    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-sm text-gray-500">
-                      {activeTab} — UI-Skeleton vorbereitet. Hier folgen Details, Tabellen und Workflows für produktive Nutzung.
+                    <div className="rounded-xl border border-dashed border-border p-6 text-sm text-muted">
+                      Für diesen Bereich liegen noch keine Daten vor.
                     </div>
                   )}
                 </div>
               </section>
 
               <section className="min-w-0 space-y-4">
-                <div className="rounded-2xl border border-gray-200 bg-white p-5">
-                  <div className="text-sm font-bold text-gray-900 mb-3">Anlage erfassen (Wizard-Vorschau)</div>
-                  <div className="space-y-2">
-                    {[
-                      ['1', 'Grunddaten', 'Bezeichnung, Anlagenklasse, Lieferant, Beleg'],
-                      ['2', 'Anschaffung', 'Anschaffungs-/Rechnungs-/Aktivierungsdatum, AK netto/brutto'],
-                      ['3', 'Abschreibung', 'Methode, Nutzungsdauer, AfA-Beginn'],
-                      ['4', 'Kontierung', 'Anlagenkonto, AfA-Konto, Gegenkonto, Kostenstelle'],
-                      ['5', 'Prüfen & Aktivieren', 'Validierung, Vorschau, Aktivierung'],
-                    ].map(([step, title, desc]) => (
-                      <div key={step} className="flex gap-3 rounded-lg border border-gray-100 p-3">
-                        <div className="w-7 h-7 rounded-full bg-black text-white text-xs font-bold flex items-center justify-center shrink-0">
-                          {step}
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-gray-800">{title}</div>
-                          <div className="text-xs text-gray-500">{desc}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                {canMutate && dataAdapter?.runDepreciation && selected.status === 'aktiv' && (
+                  <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" noValidate onSubmit={(event) => { event.preventDefault(); void postDepreciation(); }} aria-busy={busyAction === 'depreciation'}>
+                    <div>
+                      <h3 className="text-sm font-bold text-foreground">Abschreibung buchen</h3>
+                      <p className="mt-1 text-xs text-muted">Die Buchung wird erst nach erfolgreicher Antwort in Liste und Plan übernommen.</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Geschäftsjahr *</span><input type="number" min="2000" step="1" value={depreciationYear} onChange={(event) => setDepreciationYear(event.target.value)} required className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Buchungsdatum *</span><input type="date" value={postingDate} onChange={(event) => setPostingDate(event.target.value)} required className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm" /></label>
+                    </div>
+                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={depreciationReason} onChange={(event) => setDepreciationReason(event.target.value)} required rows={2} placeholder="Warum wird die AfA jetzt gebucht?" className="w-full rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm" /></label>
+                    <Button type="submit" disabled={busyAction !== null} variant="dark" size="sm" className="h-9 px-4">{busyAction === 'depreciation' ? 'Buche…' : 'AfA buchen'}</Button>
+                  </form>
+                )}
 
-                <div className="rounded-2xl border border-gray-200 bg-white p-5">
-                  <div className="text-sm font-bold text-gray-900 mb-3">Quick Actions</div>
-                  <div className="space-y-2">
-                    <button className="w-full px-4 py-3 rounded-xl border border-gray-200 text-left hover:bg-gray-50 inline-flex items-center gap-2">
-                      <FileText size={16} className="text-gray-500" />
-                      <span className="font-bold text-gray-800">Beleg anzeigen / verknüpfen</span>
-                    </button>
-                    <button className="w-full px-4 py-3 rounded-xl border border-gray-200 text-left hover:bg-gray-50 inline-flex items-center gap-2">
-                      <Archive size={16} className="text-gray-500" />
-                      <span className="font-bold text-gray-800">AfA-Buchungen prüfen</span>
-                    </button>
-                    <button className="w-full px-4 py-3 rounded-xl border border-gray-200 text-left hover:bg-gray-50 inline-flex items-center gap-2">
-                      <ArrowRightLeft size={16} className="text-gray-500" />
-                      <span className="font-bold text-gray-800">Abgang / Umbuchung erfassen</span>
-                    </button>
-                  </div>
-                </div>
+                {canMutate && dataAdapter?.disposeAsset && !['verkauft', 'stillgelegt'].includes(selected.status) && (
+                  <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" noValidate onSubmit={(event) => { event.preventDefault(); void dispose(); }} aria-busy={busyAction === 'disposal'}>
+                    <div>
+                      <h3 className="text-sm font-bold text-foreground">Anlage ausbuchen</h3>
+                      <p className="mt-1 text-xs text-muted">Verkaufserlös 0,00 € führt zur Stilllegung; ein Erlös führt zum Verkauf.</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Ausbuchungsdatum *</span><input type="date" value={disposalDate} onChange={(event) => setDisposalDate(event.target.value)} required className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Verkaufserlös netto *</span><input type="number" min="0" step="0.01" value={disposalProceeds} onChange={(event) => setDisposalProceeds(event.target.value)} required className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Umsatzsteuersatz *</span><select value={disposalTaxRate} onChange={(event) => setDisposalTaxRate(event.target.value as '0' | '7' | '19')} required className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm"><option value="0">0 %</option><option value="7">7 %</option><option value="19">19 %</option></select></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Erlöskonto / Zahlungskonto</span><input value={proceedsAccountNumber} onChange={(event) => setProceedsAccountNumber(event.target.value)} placeholder="Optional, z. B. 1200" className="h-9 w-full rounded-lg border border-border bg-surface-muted px-3 text-sm" /></label>
+                    </div>
+                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={disposalReason} onChange={(event) => setDisposalReason(event.target.value)} required rows={2} placeholder="Warum wird die Anlage ausgebucht?" className="w-full rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm" /></label>
+                    <label className="flex items-start gap-2 text-sm text-foreground"><input type="checkbox" checked={disposalConfirmed} onChange={(event) => setDisposalConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 rounded border-border" /><span>Ich bestätige die Ausbuchung und die daraus folgende Journalbuchung.</span></label>
+                    <Button type="submit" disabled={busyAction !== null || !disposalConfirmed} variant="dark" size="sm" className="h-9 px-4">{busyAction === 'disposal' ? 'Buche…' : 'Ausbuchung bestätigen'}</Button>
+                  </form>
+                )}
+
+                {!dataAdapter && <div className="rounded-2xl border border-dashed border-border bg-surface-muted p-5 text-sm text-muted">Mutationen sind im Demo-Modus deaktiviert.</div>}
+                {dataAdapter && !dataAdapter.upsertAsset && !dataAdapter.runDepreciation && !dataAdapter.disposeAsset && <div className="rounded-2xl border border-dashed border-border bg-surface-muted p-5 text-sm text-muted">Anlagen-Mutationen sind für diese Verbindung nicht verfügbar.</div>}
               </section>
+
             </div>
           </>
         )}

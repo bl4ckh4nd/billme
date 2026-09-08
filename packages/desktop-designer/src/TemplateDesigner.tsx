@@ -85,6 +85,10 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const clipboardRef = useRef<InvoiceElement[]>([]);
+  const saveInFlight = useRef(false);
+  const retrySaveId = useRef<string | null>(null);
+  const [savePending, setSavePending] = useState(false);
+  const busy = saving || savePending;
 
   const history = useHistory<InvoiceElement[]>(initialTemplate);
   const elements = history.state;
@@ -107,14 +111,18 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
 
   // Load active template (or fall back to the initial template).
   useEffect(() => {
+    retrySaveId.current = null;
     if (activeTemplate) {
       setTemplateId(activeTemplate.id);
       setTemplateName(activeTemplate.name);
       history.reset(activeTemplate.elements as InvoiceElement[]);
     } else {
+      setTemplateId(templateType === 'offer' ? 'default-offer' : 'default-invoice');
+      setTemplateName(templateType === 'offer' ? 'Standard Angebot' : 'Standard Rechnung');
       history.reset(initialTemplate);
     }
     setSelectedIds([]);
+    setEditingId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTemplate, templateType]);
 
@@ -228,18 +236,27 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
   // --- Save / legal / export ---
   const handleSave = useCallback(
     async (mode: 'overwrite' | 'copy') => {
-      const id = mode === 'copy' ? generateId() : templateId;
+      if (saving || saveInFlight.current) return;
+      saveInFlight.current = true;
+      setSavePending(true);
+      const id = retrySaveId.current ?? (mode === 'copy' ? generateId() : templateId);
       const name = templateName.trim() || (templateType === 'offer' ? 'Angebotsvorlage' : 'Rechnungsvorlage');
       try {
         const saved = await onSave({ id, name, elements, mode });
         const nextId = typeof saved === 'string' ? saved : id;
         setTemplateId(nextId);
+        retrySaveId.current = null;
         notify?.('Vorlage gespeichert.', 'success');
       } catch (e) {
+        // Persistence may have succeeded before activation failed. Reuse its id.
+        retrySaveId.current = id;
         notify?.(`Speichern fehlgeschlagen: ${String(e)}`, 'error');
+      } finally {
+        saveInFlight.current = false;
+        setSavePending(false);
       }
     },
-    [templateId, templateName, templateType, elements, onSave, notify],
+    [templateId, templateName, templateType, elements, onSave, notify, saving],
   );
 
   const handleLegalCheck = useCallback(() => {
@@ -255,7 +272,7 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
 
   // Keyboard shortcuts
   useDesignerKeyboard({
-    enabled: editingId === null,
+    enabled: editingId === null && !busy,
     onNudge: nudge,
     onDelete: () => deleteElements(selectedIds),
     onDuplicate: duplicateSelected,
@@ -272,7 +289,7 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
   const cursor = zoomPan.isPanning ? 'grabbing' : zoomPan.spaceDown ? 'grab' : 'default';
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-dark-3 font-sans text-dark-muted">
+    <div inert={busy} aria-busy={busy} className="flex h-screen w-screen flex-col overflow-hidden bg-dark-3 font-sans text-dark-muted">
       <TopBar
         templateName={templateName}
         onRenameTemplate={setTemplateName}
@@ -297,7 +314,7 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
         onToggleSnap={() => setSnapEnabled((s) => !s)}
         onSave={() => void handleSave('overwrite')}
         onSaveCopy={() => void handleSave('copy')}
-        saving={saving}
+        saving={busy}
         onLegalCheck={handleLegalCheck}
         onExport={handleExport}
       />

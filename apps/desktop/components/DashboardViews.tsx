@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -6,7 +5,7 @@ import {
     ArrowUpRight, CheckCircle, CreditCard, MoreHorizontal, ShieldCheck,
     PieChart, ArrowLeft, ArrowDownLeft, Search, Link, X, LayoutTemplate, Settings2
 } from 'lucide-react';
-import { Button } from '@billme/ui';
+import { Button, Portal, useActionFeedback } from '@billme/ui';
 import { Account, Transaction, Invoice, AppSettings } from '../types';
 import { useInvoicesQuery } from '../hooks/useInvoices';
 import { useAccountsQuery, useUpsertAccountMutation } from '../hooks/useAccounts';
@@ -143,7 +142,7 @@ const DashboardSettingsPopover: React.FC<{
 };
 
 interface ViewProps {
-  onNavigate: (page: string) => void;
+  onNavigate: (page: string, search?: Record<string, string>) => void;
 }
 
 export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
@@ -472,7 +471,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
                      )}
                 </div>
                 <button
-                    onClick={() => onNavigate('documents?kind=invoice')}
+                    onClick={() => onNavigate('documents', { kind: 'invoice', status: 'overdue' })}
                     className="bg-accent text-black px-6 py-3 rounded-xl font-bold text-sm hover:bg-accent-hover hover:scale-105 active:scale-95 transition-all shadow-lg shadow-accent/20"
                 >
                     Mahnung senden
@@ -523,7 +522,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
           </div>
 
           <div className="flex-1 flex flex-col justify-end gap-4">
-              <h4 className="font-bold text-sm text-gray-900">Top Einnahmequellen</h4>
+              <h4 className="font-bold text-sm text-gray-900">Wichtigste Einnahmequellen</h4>
               
               <div className="space-y-3">
                   {topCategories.length === 0 ? (
@@ -543,7 +542,7 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
                         <button
                           type="button"
                           key={row.category}
-                          onClick={() => onNavigate(`articles?query=${encodeURIComponent(row.category)}`)}
+                          onClick={() => onNavigate('articles', { query: row.category })}
                           className="flex items-center justify-between p-3 border border-gray-100 rounded-2xl hover:bg-gray-50 transition-colors cursor-pointer"
                         >
                           <div className="flex items-center gap-3 min-w-0">
@@ -567,8 +566,8 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
               <div className="mt-5 p-4 rounded-2xl border border-gray-100 bg-gray-50">
                 <div className="flex items-center justify-between mb-2">
                   <div>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Pipeline (Angebote)</p>
-                    <p className="text-sm font-bold text-gray-900">Potenzial (Netto)</p>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Offene Angebote</p>
+                    <p className="text-sm font-bold text-gray-900">Nettowert</p>
                   </div>
                   <div className="text-lg font-mono font-bold text-gray-900">{formatCurrency(offerPipeline.potentialNet)}</div>
                 </div>
@@ -611,9 +610,9 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
                     key={`${item.invoiceId}:${item.date}:${item.amount}`}
                     className="flex items-center justify-between p-3 bg-white/40 backdrop-blur-sm rounded-2xl border border-white/20 hover:bg-white/60 transition-colors cursor-pointer hover:scale-[1.02]"
                     onClick={() =>
-                      onNavigate(`documents?kind=invoice&id=${encodeURIComponent(item.invoiceId)}`)
+                      onNavigate('documents', { kind: 'invoice', id: item.invoiceId })
                     }
-                    title={`${item.invoiceNumber} — ${item.client}`}
+                    title={`${item.invoiceNumber}, ${item.client}`}
                   >
                       <div className="min-w-0">
                           <p className="text-xs font-bold opacity-60 mb-0.5">{formatDate(item.date)}</p>
@@ -1272,7 +1271,8 @@ export const AccountsView: React.FC = () => {
 
             {/* Add Account Modal */}
             {isAddAccountOpen && (
-              <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center p-4">
+              <Portal>
+              <div className="fixed inset-0 z-50 bg-dark-base/20 backdrop-blur-sm flex items-center justify-center p-4">
                 <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden">
                   <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                     <h3 className="font-bold text-lg">Konto hinzufügen</h3>
@@ -1354,6 +1354,7 @@ export const AccountsView: React.FC = () => {
                   </div>
                 </div>
               </div>
+              </Portal>
             )}
             
              <div className="grid grid-cols-1 gap-4">
@@ -1390,6 +1391,7 @@ export const AccountsView: React.FC = () => {
 
 export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer') => void }> = ({ onOpenEditor }) => {
     const [activeTab, setActiveTab] = useState<'invoice' | 'offer'>('invoice');
+    const { notify } = useActionFeedback('templates');
     const { data: templates = [] } = useTemplatesQuery(activeTab);
     const { data: activeTemplate } = useActiveTemplateQuery(activeTab);
     const setActiveTemplateMutation = useSetActiveTemplateMutation();
@@ -1419,7 +1421,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
             await setActiveTemplateMutation.mutateAsync({ kind: activeTab, templateId: saved.id });
             onOpenEditor(activeTab);
         } catch (e) {
-            alert(`Vorlage anlegen fehlgeschlagen: ${String(e)}`);
+            notify('error', `Vorlage anlegen fehlgeschlagen: ${String(e)}`);
         }
     };
 
@@ -1428,7 +1430,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
             <div className="flex items-center justify-between mb-8">
                 <div>
                     <h3 className="font-bold text-2xl text-gray-900 dark:text-gray-100 mb-1">Vorlagen</h3>
-                    <p className="text-sm text-gray-500">Gestalten Sie Ihre Geschäftsdokumente.</p>
+                    <p className="text-sm text-gray-500">Lege das Layout deiner Geschäftsdokumente fest.</p>
                 </div>
                 <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-full flex items-center">
                     <button 

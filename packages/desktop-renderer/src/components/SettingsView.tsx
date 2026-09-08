@@ -5,8 +5,8 @@ import {
   Building2, Landmark, FileDigit, Scale,
   Save, CheckCircle, HelpCircle, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Repeat
 } from 'lucide-react';
-import { Button } from '@billme/ui';
-import type { AppSettings, DunningLevel } from '@billme/desktop-core/types';
+import { Button, useActionFeedback } from '@billme/ui';
+import type { AppSettings, BusinessReportingProfile, DunningLevel } from '@billme/desktop-core/types';
 import { MOCK_SETTINGS } from '@billme/desktop-services/mockData';
 import { ipc } from '../runtime-api';
 import { useSetSettingsMutation, useSettingsQuery } from '../hooks/useSettings';
@@ -16,6 +16,21 @@ import { DunningResultModal } from '@billme/desktop-ui/components/DunningResultM
 import { DunningLevelPreviewModal } from '@billme/desktop-ui/components/DunningLevelPreviewModal';
 
 const normalizeCategoryName = (value: string): string => value.trim();
+const formatCount = (count: number, singular: string, plural: string): string => `${count} ${count === 1 ? singular : plural}`;
+
+const inferBusinessReportingProfile = (settings: AppSettings): BusinessReportingProfile => {
+  if (settings.businessReportingProfile) return settings.businessReportingProfile;
+  const isGmbh = /(?:GmbH|HRB)/i.test(`${settings.company.name} ${settings.finance.registerCourt}`);
+  return {
+    jurisdiction: 'DE',
+    legalForm: isGmbh ? 'gmbh' : 'sole_proprietor',
+    profitDetermination: isGmbh ? 'double_entry' : 'eur',
+    hgbSizeClass: isGmbh ? 'small' : undefined,
+    fiscalYearStart: '01-01',
+    chart: isGmbh ? 'SKR03' : undefined,
+    vatMethod: settings.legal.taxAccountingMethod ?? 'soll',
+  };
+};
 
 export const SettingsView: React.FC = () => {
   const queryClient = useQueryClient();
@@ -25,8 +40,10 @@ export const SettingsView: React.FC = () => {
   const { data: loadedSettings } = useSettingsQuery();
   const setSettingsMutation = useSetSettingsMutation();
   const [settings, setSettings] = useState<AppSettings>(loadedSettings ?? MOCK_SETTINGS);
-  const [showSaveToast, setShowSaveToast] = useState(false);
+  const [reportingProfile, setReportingProfile] = useState<BusinessReportingProfile>(() => inferBusinessReportingProfile(loadedSettings ?? MOCK_SETTINGS));
   const [backupPath, setBackupPath] = useState('');
+  const [auditStatus, setAuditStatus] = useState<string | null>(null);
+  const [backupStatus, setBackupStatus] = useState<string | null>(null);
   const [portalApiKey, setPortalApiKey] = useState('');
   const [portalApiKeyConfigured, setPortalApiKeyConfigured] = useState(false);
   const [portalApiKeyTouched, setPortalApiKeyTouched] = useState(false);
@@ -49,9 +66,13 @@ export const SettingsView: React.FC = () => {
   const [emailTesting, setEmailTesting] = useState(false);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [previewLevelIndex, setPreviewLevelIndex] = useState<number | null>(null);
+  const { notify } = useActionFeedback('settings');
 
   React.useEffect(() => {
-    if (loadedSettings) setSettings(loadedSettings);
+    if (loadedSettings) {
+      setSettings(loadedSettings);
+      setReportingProfile(inferBusinessReportingProfile(loadedSettings));
+    }
   }, [loadedSettings]);
 
   React.useEffect(() => {
@@ -132,6 +153,11 @@ export const SettingsView: React.FC = () => {
 
     const sanitizedSettings: AppSettings = {
       ...settings,
+      businessReportingProfile: reportingProfile,
+      legal: {
+        ...settings.legal,
+        taxAccountingMethod: reportingProfile.vatMethod,
+      },
       catalog: {
         categories: nextCategories.length > 0
           ? nextCategories
@@ -185,8 +211,7 @@ export const SettingsView: React.FC = () => {
       // ignore secret save errors (OS keychain issues should not block settings save)
     }
 
-    setShowSaveToast(true);
-    setTimeout(() => setShowSaveToast(false), 3000);
+    notify('success', 'Einstellungen gespeichert!');
   };
 
   const updateNested = (section: keyof AppSettings, field: string, value: any) => {
@@ -197,6 +222,19 @@ export const SettingsView: React.FC = () => {
         [field]: value
       }
     }));
+  };
+
+  const updateReportingProfile = <K extends keyof BusinessReportingProfile>(field: K, value: BusinessReportingProfile[K]) => {
+    setReportingProfile((current) => {
+      if (field === 'legalForm' && value === 'gmbh') {
+        return { ...current, legalForm: value, profitDetermination: 'double_entry', hgbSizeClass: current.hgbSizeClass ?? 'micro', chart: current.chart ?? 'SKR03' };
+      }
+      if (field === 'legalForm' && value === 'sole_proprietor') {
+        return { ...current, legalForm: value, profitDetermination: 'eur', hgbSizeClass: undefined };
+      }
+      if (field === 'profitDetermination' && value === 'eur' && current.legalForm === 'gmbh') return current;
+      return { ...current, [field]: value };
+    });
   };
 
   const updateDunningLevel = (index: number, field: keyof DunningLevel, value: any) => {
@@ -247,10 +285,10 @@ export const SettingsView: React.FC = () => {
         setShowDunningResult(true);
       } else {
         // Show error
-        alert('Fehler beim Mahnlauf: ' + (response.error || 'Unbekannter Fehler'));
+        notify('error', 'Fehler beim Mahnlauf: ' + (response.error || 'Unbekannter Fehler'));
       }
     } catch (error) {
-      alert('Fehler beim Mahnlauf: ' + String(error));
+      notify('error', 'Fehler beim Mahnlauf: ' + String(error));
     } finally {
       setDunningRunning(false);
     }
@@ -272,7 +310,7 @@ export const SettingsView: React.FC = () => {
 
       setEmailTestStatus({
         success: result.success,
-        message: result.success ? 'Verbindung erfolgreich!' : (result.error || 'Test fehlgeschlagen'),
+        message: result.success ? 'Verbindung erfolgreich.' : (result.error || 'Verbindungstest fehlgeschlagen.'),
       });
     } catch (error) {
       setEmailTestStatus({
@@ -880,7 +918,7 @@ export const SettingsView: React.FC = () => {
                   placeholder={smtpPasswordConfigured ? '•••••••• (gespeichert)' : '••••••••'}
                     className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none transition-shadow"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Wird sicher im System-Keychain gespeichert</p>
+                  <p className="text-xs text-gray-500 mt-1">Wird sicher im Schlüsselbund des Systems gespeichert.</p>
                 </div>
                 <div>
                   <button
@@ -893,7 +931,7 @@ export const SettingsView: React.FC = () => {
                     }
                     className="px-4 py-2 bg-info text-white rounded-lg hover:bg-info/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
-                    {emailTesting ? 'Teste Verbindung...' : 'Verbindung testen'}
+                    {emailTesting ? 'Verbindung wird geprüft ...' : 'Verbindung testen'}
                   </button>
                   {emailTestStatus && (
                     <div className={`mt-3 p-3 rounded-lg ${emailTestStatus.success ? 'bg-success-bg text-success' : 'bg-error-bg text-error'}`}>
@@ -929,7 +967,7 @@ export const SettingsView: React.FC = () => {
                     placeholder={resendApiKeyConfigured ? 're_*** (gespeichert)' : 're_***'}
                     className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none transition-shadow"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Wird sicher im System-Keychain gespeichert</p>
+                  <p className="text-xs text-gray-500 mt-1">Wird sicher im Schlüsselbund des Systems gespeichert.</p>
                 </div>
                 <div>
                   <button
@@ -937,7 +975,7 @@ export const SettingsView: React.FC = () => {
                     disabled={emailTesting || (!resendApiKey && !resendApiKeyConfigured)}
                     className="px-4 py-2 bg-info text-white rounded-lg hover:bg-info/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
-                    {emailTesting ? 'Teste API-Key...' : 'API-Key testen'}
+                    {emailTesting ? 'API-Schlüssel wird geprüft ...' : 'API-Schlüssel testen'}
                   </button>
                   {emailTestStatus && (
                     <div className={`mt-3 p-3 rounded-lg ${emailTestStatus.success ? 'bg-success-bg text-success' : 'bg-error-bg text-error'}`}>
@@ -1073,7 +1111,7 @@ export const SettingsView: React.FC = () => {
                   className="w-full px-4 py-3 bg-orange-600 text-white rounded-xl hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-bold flex items-center justify-center gap-2"
                 >
                   <Megaphone size={16} />
-                  {dunningRunning ? 'Läuft...' : 'Jetzt manuell ausführen'}
+                  {dunningRunning ? 'Läuft ...' : 'Jetzt manuell ausführen'}
                 </button>
               </div>
             )}
@@ -1339,6 +1377,65 @@ export const SettingsView: React.FC = () => {
               </div>
             </div>
 
+            <div className="bg-white border-2 border-gray-100 rounded-3xl p-6 space-y-5">
+              <div>
+                <h4 className="font-bold text-sm">Berichtsprofil</h4>
+                <p className="text-xs text-gray-500 mt-1">Der aktuelle Berichts- und Steuerumfang unterstützt Deutschland. AT/CH-Berichte sind noch nicht verfügbar.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  Rechtsraum
+                  <select aria-label="Rechtsraum" value={reportingProfile.jurisdiction} onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                    <option value="DE">Deutschland</option>
+                  </select>
+                </label>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  Rechtsform
+                  <select aria-label="Rechtsform" value={reportingProfile.legalForm} onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                    <option value="sole_proprietor">Einzelunternehmen</option>
+                    <option value="gmbh">GmbH</option>
+                  </select>
+                </label>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  Gewinnermittlung
+                  <select aria-label="Gewinnermittlung" value={reportingProfile.profitDetermination} onChange={(event) => updateReportingProfile('profitDetermination', event.target.value as BusinessReportingProfile['profitDetermination'])} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                    <option value="eur" disabled={reportingProfile.legalForm === 'gmbh'}>EÜR</option>
+                    <option value="double_entry">Doppelte Buchführung</option>
+                  </select>
+                </label>
+                {reportingProfile.legalForm === 'gmbh' && (
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                    GmbH-Größe
+                    <select aria-label="GmbH-Größe" value={reportingProfile.hgbSizeClass ?? ''} onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                      <option value="micro">Micro</option>
+                      <option value="small">Small</option>
+                    </select>
+                  </label>
+                )}
+                {reportingProfile.profitDetermination === 'double_entry' && (
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                    Kontenrahmen
+                    <select aria-label="Kontenrahmen" value={reportingProfile.chart ?? ''} onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                      <option value="SKR03">SKR03</option>
+                      <option value="SKR04">SKR04</option>
+                    </select>
+                  </label>
+                )}
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  Wirtschaftsjahresbeginn (MM-TT)
+                  <input aria-label="Wirtschaftsjahresbeginn" value={reportingProfile.fiscalYearStart} onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)} placeholder="01-01" className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900" />
+                </label>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  Umsatzsteuer-Methode
+                  <select aria-label="Umsatzsteuer-Methode" value={reportingProfile.vatMethod} onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])} className="mt-2 w-full bg-gray-50 border-gray-200 rounded-xl p-3 font-bold text-gray-900">
+                    <option value="soll">Soll-Versteuerung</option>
+                    <option value="ist">Ist-Versteuerung</option>
+                  </select>
+                </label>
+              </div>
+              {reportingProfile.legalForm === 'gmbh' && reportingProfile.profitDetermination !== 'double_entry' && <p className="text-xs text-red-600">Eine GmbH muss mit doppelter Buchführung geführt werden.</p>}
+            </div>
+
             <div
               className="bg-white border-2 border-gray-100 rounded-3xl p-6 hover:border-black transition-colors cursor-pointer"
               onClick={() => updateNested('eInvoice', 'enabled', !settings.eInvoice.enabled)}
@@ -1361,6 +1458,18 @@ export const SettingsView: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-2 gap-6">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Sitzland des Verkäufers</label>
+                <select
+                  value={settings.legal.countryCode ?? 'DE'}
+                  onChange={(e) => updateNested('legal', 'countryCode', e.target.value)}
+                  className="w-full bg-gray-50 border-gray-200 rounded-xl p-4 font-bold text-gray-900 focus:ring-2 focus:ring-accent outline-none transition-shadow"
+                >
+                  <option value="DE">Deutschland</option>
+                  <option value="AT">Österreich</option>
+                  <option value="CH">Schweiz</option>
+                </select>
+              </div>
               <div className={settings.legal.smallBusinessRule ? 'opacity-30 pointer-events-none' : ''}>
                 <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Standard Umsatzsteuer (%)</label>
                 <input
@@ -1382,7 +1491,7 @@ export const SettingsView: React.FC = () => {
             </div>
 
             <div className="bg-white border border-gray-100 rounded-3xl p-6">
-              <h4 className="font-bold text-sm mb-2">Umsatzsteuer-Basis (Dashboard)</h4>
+              <h4 className="font-bold text-sm mb-2">Umsatzsteuer-Basis (Übersicht)</h4>
               <p className="text-xs text-gray-500 mb-4">
                 Soll: basiert auf gestellten Rechnungen (Status ≠ Entwurf) nach Rechnungsdatum. Ist: basiert auf erfassten Zahlungen nach Zahlungsdatum.
               </p>
@@ -1431,13 +1540,13 @@ export const SettingsView: React.FC = () => {
         return (
           <div className="max-w-2xl space-y-8 animate-enter">
             <div>
-              <h3 className="text-xl font-bold mb-1">Offer Portal</h3>
+              <h3 className="text-xl font-bold mb-1">Angebotsportal</h3>
               <p className="text-gray-500 text-sm">Angebotslinks veröffentlichen und Status synchronisieren.</p>
             </div>
 
             <div className="bg-white border-2 border-gray-100 rounded-3xl p-6 space-y-6">
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Portal Base URL</label>
+                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Portal-Basis-URL</label>
                 <input
                   type="text"
                   value={settings.portal.baseUrl}
@@ -1445,11 +1554,11 @@ export const SettingsView: React.FC = () => {
                   placeholder="https://offers.example.com"
                   className="w-full bg-gray-50 border-gray-200 rounded-xl p-4 font-bold text-gray-900 focus:ring-2 focus:ring-accent outline-none transition-shadow"
                 />
-                <p className="text-xs text-gray-400 mt-2">Tipp: Setup-Seite im Portal: <span className="font-mono">/admin/setup</span></p>
+                <p className="text-xs text-gray-400 mt-2">Tipp: Einrichtungsseite im Portal: <span className="font-mono">/admin/setup</span></p>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Publish API Key (optional)</label>
+                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Publish-API-Schlüssel (optional)</label>
                 <input
                   type="password"
                   value={portalApiKey}
@@ -1459,8 +1568,8 @@ export const SettingsView: React.FC = () => {
                   }}
                   placeholder={
                     portalApiKeyConfigured
-                      ? '(gespeichert im OS Keychain, zum Ersetzen eingeben)'
-                      : '(im OS Keychain gespeichert)'
+                      ? '(im System-Schlüsselbund gespeichert, zum Ersetzen eingeben)'
+                      : '(im System-Schlüsselbund gespeichert)'
                   }
                   className="w-full bg-gray-50 border-gray-200 rounded-xl p-4 font-bold text-gray-900 focus:ring-2 focus:ring-accent outline-none transition-shadow"
                 />
@@ -1470,9 +1579,9 @@ export const SettingsView: React.FC = () => {
                 <button
                   onClick={async () => {
                     try {
-                      setPortalTestStatus('Prüfe Verbindung...');
+                      setPortalTestStatus('Verbindung wird geprüft ...');
                       const baseUrl = settings.portal.baseUrl.trim();
-                      if (!baseUrl) throw new Error('Base URL fehlt');
+                      if (!baseUrl) throw new Error('Portal-Basis-URL fehlt.');
                       const res = await ipc.portal.health({ baseUrl });
                       setPortalTestStatus(res.ok ? `OK (${res.ts})` : 'Fehler');
                     } catch (e) {
@@ -1498,38 +1607,59 @@ export const SettingsView: React.FC = () => {
               <p className="text-gray-500 text-sm">Audit-Log, Backup und Wiederherstellung.</p>
             </div>
 
-            <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div>
-                <h4 className="text-lg font-bold text-gray-900">Audit</h4>
-                <p className="text-sm text-gray-500">Audit-Log prüfen und als CSV exportieren.</p>
+            <div className="bg-gray-50 rounded-3xl p-6 border border-gray-100 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                  <h4 className="text-lg font-bold text-gray-900">Audit</h4>
+                  <p className="text-sm text-gray-500">Audit-Log prüfen und als CSV exportieren.</p>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={async () => {
+                      setAuditStatus('Audit-Log wird geprüft ...');
+                      try {
+                        const result = await ipc.audit.verify();
+                        const errorCount = result.errors.length;
+                        setAuditStatus(
+                          result.ok && errorCount === 0
+                            ? `Audit-Log ist intakt: ${formatCount(result.count, 'Eintrag', 'Einträge')} geprüft, keine Fehler.`
+                            : `Audit-Log ist nicht intakt: ${formatCount(result.count, 'Eintrag', 'Einträge')} geprüft, ${formatCount(errorCount, 'Fehler', 'Fehler')} gefunden.`,
+                        );
+                      } catch (e) {
+                        setAuditStatus(`Audit-Log-Prüfung fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
+                      }
+                    }}
+                    className="px-5 py-3 rounded-xl font-bold bg-white border border-gray-200 hover:bg-gray-100 transition-colors"
+                  >
+                    Prüfen
+                  </button>
+                  <button
+                    onClick={async () => {
+                      setAuditStatus('Audit-Log wird exportiert ...');
+                      try {
+                        const csv = await ipc.audit.exportCsv();
+                        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                        setAuditStatus('Audit-Log als CSV exportiert.');
+                      } catch (e) {
+                        setAuditStatus(`CSV-Export fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
+                      }
+                    }}
+                    className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
+                  >
+                    CSV exportieren
+                  </button>
+                </div>
               </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={async () => {
-                    const result = await ipc.audit.verify();
-                    alert(JSON.stringify(result, null, 2));
-                  }}
-                  className="px-5 py-3 rounded-xl font-bold bg-white border border-gray-200 hover:bg-gray-100 transition-colors"
-                >
-                  Verify
-                </button>
-                <button
-                  onClick={async () => {
-                    const csv = await ipc.audit.exportCsv();
-                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    URL.revokeObjectURL(url);
-                  }}
-                  className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
-                >
-                  Export CSV
-                </button>
+              <div className="text-sm font-medium text-gray-500 w-full">
+                {auditStatus}
               </div>
             </div>
 
@@ -1544,11 +1674,12 @@ export const SettingsView: React.FC = () => {
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
                   onClick={async () => {
+                    setBackupStatus('Backup wird erstellt ...');
                     try {
                       const res = await ipc.db.backup();
-                      alert(`Backup erstellt:\n${res.path}`);
+                      setBackupStatus(`Backup erstellt. Pfad: ${res.path}`);
                     } catch (e) {
-                      alert(`Backup fehlgeschlagen: ${String(e)}`);
+                      setBackupStatus(`Backup fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
                     }
                   }}
                   className="px-5 py-3 rounded-xl font-bold bg-white border border-gray-200 hover:bg-gray-100 transition-colors"
@@ -1560,23 +1691,31 @@ export const SettingsView: React.FC = () => {
                   <input
                     value={backupPath}
                     onChange={(e) => setBackupPath(e.target.value)}
-                    placeholder="Pfad zur .sqlite Sicherung..."
+                    placeholder="Pfad zur .pglite.tar-Sicherung..."
                     className="flex-1 bg-white border border-gray-200 rounded-xl p-3 text-sm font-medium outline-none focus:ring-2 focus:ring-accent"
                   />
                   <button
                     onClick={async () => {
+                      setBackupStatus('Wiederherstellung wird durchgeführt ...');
                       try {
                         const res = await ipc.db.restore({ path: backupPath.trim() });
-                        alert(`Restore abgeschlossen:\n${JSON.stringify(res, null, 2)}`);
+                        const errorCount = res.verification.errors.length;
+                        const verificationStatus = res.verification.ok && errorCount === 0
+                          ? `Audit-Log geprüft: ${formatCount(res.verification.count, 'Eintrag', 'Einträge')}, keine Fehler.`
+                          : `Audit-Log geprüft: ${formatCount(res.verification.count, 'Eintrag', 'Einträge')}, ${formatCount(errorCount, 'Fehler', 'Fehler')} gefunden.`;
+                        setBackupStatus(`Wiederherstellung abgeschlossen: ${res.ok ? 'erfolgreich.' : 'mit Fehlern.'} ${verificationStatus}`);
                       } catch (e) {
-                        alert(`Restore fehlgeschlagen: ${String(e)}`);
+                        setBackupStatus(`Wiederherstellung fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
                       }
                     }}
                     className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
                   >
-                    Restore
+                    Wiederherstellen
                   </button>
                 </div>
+              </div>
+              <div className="text-sm font-medium text-gray-500 w-full">
+                {backupStatus}
               </div>
             </div>
           </div>
@@ -1588,14 +1727,6 @@ export const SettingsView: React.FC = () => {
 
   return (
     <div className="bg-white rounded-[2.5rem] shadow-sm min-h-full flex overflow-hidden relative animate-enter">
-
-      {/* Toast */}
-      {showSaveToast && (
-        <div className="absolute top-8 right-8 bg-black text-accent px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 z-50 animate-in fade-in slide-in-from-top-4">
-          <CheckCircle size={18} />
-          <span className="font-bold text-sm">Einstellungen gespeichert!</span>
-        </div>
-      )}
 
       {/* Sidebar Navigation */}
       <div className="w-72 bg-gray-50 border-r border-gray-100 p-8 flex flex-col">

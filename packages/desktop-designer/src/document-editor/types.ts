@@ -7,6 +7,7 @@ import type { TaxSettingsShape } from '@billme/server-core/services';
 import type { AppSettingsLike } from '@billme/desktop-utils/placeholders';
 
 export interface DraftItem {
+  kind?: 'item' | 'time' | 'optional' | 'text' | 'group' | 'summary';
   description: string;
   quantity: number;
   price: number;
@@ -16,6 +17,14 @@ export interface DraftItem {
   unit?: string;
   discountPercent?: number;
   taxRate?: number;
+  note?: string;
+  optionNote?: string;
+  date?: string;
+  durationMinutes?: number;
+  groupId?: string;
+  summaryScope?: 'running' | 'group';
+  summaryMetric?: 'amount' | 'quantity';
+  summaryUnit?: string;
 }
 
 export interface DocumentDraft {
@@ -67,6 +76,13 @@ export interface ClientLike {
   address?: string;
   addresses?: ClientAddressLike[];
   emails?: ClientEmailLike[];
+  taxProfile?: {
+    type: 'business' | 'consumer';
+    countryCode?: string;
+    vatId?: string;
+    vatIdValidation?: 'valid' | 'invalid' | 'unavailable' | 'manual_override';
+    vatIdValidationAt?: string;
+  };
 }
 
 export interface ProjectLike {

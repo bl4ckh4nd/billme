@@ -15,8 +15,8 @@ const radiusStyles: Record<CardRadius, string> = {
   md: 'rounded-lg',
   lg: 'rounded-xl',
   xl: 'rounded-2xl',
-  '2xl': 'rounded-[2.5rem]',
-  '3xl': 'rounded-[3rem]',
+  '2xl': 'rounded-2xl',
+  '3xl': 'rounded-3xl',
 };
 
 export const Card: React.FC<CardProps> = ({

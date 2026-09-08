@@ -1,20 +1,18 @@
-
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { InvoiceElement } from '../types';
-import { ElementRenderer } from '../ElementRenderer';
-import { renderTextWithPlaceholders } from '@billme/desktop-utils/placeholders';
-import { A4_WIDTH_PX, A4_HEIGHT_PX } from '../constants';
-import { ArrowLeft, Save, User, FileText, PanelLeftClose, PanelLeftOpen, Redo2, Undo2 } from 'lucide-react';
+import { DocumentCanvasEditor, type DocumentCanvasDocumentFields } from './DocumentCanvasEditor';
+import { ArrowLeft, Eye, Redo2, Save, Undo2 } from 'lucide-react';
 import { getPreviewElements } from '@billme/desktop-utils/documentPreview';
 import { formatAddressMultiline } from '@billme/desktop-utils';
 import {
   calculateInvoiceTaxSnapshot,
+  getDachVatRates,
   getInvoiceTaxModeDefinition,
   INVOICE_TAX_MODE_DEFINITIONS,
+  recommendInvoiceTaxMode,
   resolveInvoiceTaxMode,
 } from '@billme/server-core/services';
-import { Combobox, DatePicker } from '@billme/ui';
-import { ItemsEditor } from './ItemsEditor';
+import { ConfirmDialog, ValidationSummary } from '@billme/ui';
 import { useHistory } from '../hooks/useHistory';
 import type { ArticleLike, ClientLike, DocumentDraft, ProjectLike, SettingsLike } from './types';
 
@@ -27,25 +25,107 @@ export interface DocumentEditorProps {
   projects: ProjectLike[];
   settings: SettingsLike;
   templateElements: unknown[];
-  sidebarCollapsed: boolean;
-  onSidebarCollapsedChange: (value: boolean) => void;
+  /** Existing template persistence seam for inline authored text. */
+  onTemplateElementsChange?: (elements: InvoiceElement[]) => void;
+  onValidateVatId?: (args: { countryCode: string; vatNumber: string }) => Promise<{ status: 'valid' | 'invalid' | 'unavailable'; normalizedVatId: string; checkedAt: string }>;
   onSelectedClientChange?: (clientId: string) => void;
   onSave: (document: DocumentDraft) => void;
   onCancel: () => void;
 }
-
-const formatDate = (dateString: string) => {
-  if (!dateString) return '';
-  return new Date(dateString).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-};
 
 interface FieldErrors {
   number?: string;
   date?: string;
   client?: string;
   buyerVatId?: string;
+  taxRule?: string;
+  destinationVatRate?: string;
+  taxCountry?: string;
+  datevEvidenceType?: string;
+  datevEvidenceReference?: string;
+  datevSachverhaltLl?: string;
   items: Record<number, string>;
 }
+
+interface DocumentValidationError {
+  id: string;
+  message: string;
+  opensDetails: boolean;
+}
+
+const detailFieldIds = new Set([
+  'document-field-tax-rule',
+  'document-field-buyer-vat-id',
+  'document-field-tax-country',
+  'document-field-destination-vat-rate',
+  'document-field-datev-evidence-type',
+  'document-field-datev-evidence-reference',
+  'document-field-datev-sachverhalt-ll',
+]);
+
+const getValidationErrors = (errors: FieldErrors): DocumentValidationError[] => {
+  const fields: Array<[keyof Omit<FieldErrors, 'items'>, string, string]> = [
+    ['number', 'Nummer', 'document-field-number'],
+    ['date', 'Datum', 'document-field-date'],
+    ['client', 'Kunde', 'document-field-client'],
+    ['buyerVatId', 'Käufer-USt-IdNr.', 'document-field-buyer-vat-id'],
+    ['taxRule', 'Umsatzsteuer-Modell', 'document-field-tax-rule'],
+    ['taxCountry', 'DATEV-Land', 'document-field-tax-country'],
+    ['destinationVatRate', 'EU-Steuersatz im Bestimmungsland', 'document-field-destination-vat-rate'],
+    ['datevEvidenceType', 'DATEV-Nachweistyp', 'document-field-datev-evidence-type'],
+    ['datevEvidenceReference', 'DATEV-Nachweisreferenz', 'document-field-datev-evidence-reference'],
+    ['datevSachverhaltLl', 'DATEV-Sachverhalt L+L', 'document-field-datev-sachverhalt-ll'],
+  ];
+  const result = fields.flatMap(([key, label, id]) => errors[key] ? [{ id, message: `${label}: ${errors[key]}`, opensDetails: detailFieldIds.has(id) }] : []);
+  return Object.entries(errors.items)
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .map(([index, message]) => ({
+      id: `document-item-${index}-description`,
+      message: `Position ${Number(index) + 1} Beschreibung: ${message}`,
+      opensDetails: false,
+    }))
+    .reduce((all, item) => [...all, item], result);
+};
+
+const normalizeCountry = (country: string | undefined) => {
+  const normalized = country?.trim();
+  if (!normalized) return '';
+  if (/^(DE|Deutschland)$/i.test(normalized)) return 'DE';
+  if (/^(AT|Österreich)$/i.test(normalized)) return 'AT';
+  if (/^(CH|Schweiz)$/i.test(normalized)) return 'CH';
+  return normalized;
+};
+
+const formatDocumentAddress = (address: NonNullable<ClientLike['addresses']>[number]) => formatAddressMultiline({
+  street: address.street,
+  line2: address.line2,
+  zip: address.zip,
+  city: address.city,
+  country: normalizeCountry(address.country),
+});
+
+const parseAddressText = (value: string, company: string, previous: unknown): Record<string, string> => {
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const base = previous && typeof previous === 'object' ? previous as Record<string, string> : {};
+  const nonAddressLines = new Set([company, base.company, base.contactPerson].map((line) => line?.trim()).filter(Boolean));
+  const addressLines = lines.filter((line) => !nonAddressLines.has(line));
+  const cityIndex = addressLines.findIndex((line) => /\b\d{4,6}\b/.test(line));
+  const cityLine = cityIndex >= 0 ? addressLines[cityIndex] : '';
+  const cityMatch = cityLine.match(/^(?:([A-Za-z-]{2,5})[ -])?(\d{4,6})\s+(.+)$/);
+  const beforeCity = cityIndex >= 0 ? addressLines.slice(0, cityIndex) : addressLines;
+  const afterCity = cityIndex >= 0 ? addressLines.slice(cityIndex + 1) : [];
+  const country = afterCity[afterCity.length - 1] ?? addressLines.find((line) => /^(DE|AT|CH|Deutschland|Österreich|Schweiz)$/i.test(line));
+  const streetLines = beforeCity.filter((line) => line !== country);
+  return {
+    ...base,
+    company: company.trim(),
+    street: streetLines[0] ?? '',
+    line2: streetLines.slice(1).join(' '),
+    zip: cityMatch?.[2] ?? base.zip ?? '',
+    city: cityMatch?.[3] ?? (cityIndex >= 0 ? cityLine : base.city ?? ''),
+    country: normalizeCountry(country ?? base.country),
+  };
+};
 
 export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   document,
@@ -56,139 +136,212 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   projects,
   settings: effectiveSettings,
   templateElements,
-  sidebarCollapsed,
-  onSidebarCollapsedChange,
+  onTemplateElementsChange,
+  onValidateVatId,
   onSelectedClientChange,
   onSave,
   onCancel,
 }) => {
-  const currencyFormatter = useMemo(() => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }), []);
-  const formatCurrency = (amount: number) => currencyFormatter.format(amount);
-  const initialDocument = useRef(document).current;
   const history = useHistory<DocumentDraft>(document);
+  const [baseline, setBaseline] = useState(document);
+  const loadedDocumentId = useRef(document.id);
+  const [selectedClientId, setSelectedClientId] = useState(document.clientId ?? '');
+  const [isNumberLocked, setIsNumberLocked] = useState(mode === 'edit');
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [vatValidationPending, setVatValidationPending] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({ items: {} });
+  const [view, setView] = useState<'edit' | 'preview'>('edit');
+  const [taxDetailsOpen, setTaxDetailsOpen] = useState(false);
+  const [showDiscardConfirmation, setShowDiscardConfirmation] = useState(false);
+  const [showUnlockConfirmation, setShowUnlockConfirmation] = useState(false);
+  const projectTouchedRef = useRef(false);
+  const editorSurfaceRef = useRef<HTMLDivElement>(null);
+
+  // A mounted editor can receive a different document from the router/query. Reset
+  // only for a new identity; ordinary parent rerenders must preserve local edits.
+  useEffect(() => {
+    if (loadedDocumentId.current === document.id) return;
+    loadedDocumentId.current = document.id;
+    history.reset(document);
+    setBaseline(document);
+    setSelectedClientId(document.clientId ?? '');
+    setIsNumberLocked(mode === 'edit');
+    setFieldErrors({ items: {} });
+    setSaveError(null);
+    setView('edit');
+    setTaxDetailsOpen(false);
+    projectTouchedRef.current = false;
+  }, [document, history.reset, mode]);
+
   const formData = history.state;
   const setFormData = history.set;
-  const dirty = formData !== initialDocument;
-  const effectiveTemplate = templateElements as InvoiceElement[];
+  const dirty = formData !== baseline;
+  const [editableTemplate, setEditableTemplate] = useState(templateElements as InvoiceElement[]);
+  useEffect(() => setEditableTemplate(templateElements as InvoiceElement[]), [templateElements]);
+  const effectiveTemplate = editableTemplate;
+  const handleTemplateTextChange = useCallback((id: string, content: string) => {
+    setEditableTemplate((previous) => {
+      const next = previous.map((element) => element.id === id ? { ...element, content } : element);
+      onTemplateElementsChange?.(next);
+      return next;
+    });
+  }, [onTemplateElementsChange]);
   const taxSnapshot = useMemo(
-    () =>
-      calculateInvoiceTaxSnapshot(
-        {
-          items: formData.items,
-          taxMode: formData.taxMode,
-          taxMeta: formData.taxMeta,
-        },
-        effectiveSettings,
-      ),
-    [formData.items, formData.taxMeta, formData.taxMode, effectiveSettings],
+    () => calculateInvoiceTaxSnapshot({ items: formData.items, taxMode: formData.taxMode, taxMeta: formData.taxMeta }, effectiveSettings),
+    [effectiveSettings, formData.items, formData.taxMeta, formData.taxMode],
   );
-  const [selectedClientId, setSelectedClientId] = useState<string>(document.clientId ?? '');
-  const [isNumberLocked, setIsNumberLocked] = useState<boolean>(mode === 'edit');
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({ items: {} });
-  const projectTouchedRef = React.useRef(false);
+  const previewElements = useMemo(
+    () => getPreviewElements({ ...formData, taxSnapshot }, effectiveTemplate as unknown as Parameters<typeof getPreviewElements>[1], effectiveSettings) as unknown as InvoiceElement[],
+    [effectiveSettings, effectiveTemplate, formData, taxSnapshot],
+  );
+  const currencyFormatter = useMemo(() => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }), []);
+  const formatCurrency = (amount: number) => currencyFormatter.format(amount);
+  const selectedProjectLabel = useMemo(() => {
+    const project = projects.find((candidate) => candidate.id === formData.projectId);
+    return project ? `${project.code ? `${project.code} – ` : ''}${project.name}` : '';
+  }, [formData.projectId, projects]);
+  const selectedClientLabel = clients.find((client) => client.id === selectedClientId)?.company ?? formData.client;
+  const resolvedTaxMode = resolveInvoiceTaxMode(formData.taxMode, effectiveSettings);
+  const datevTaxMeta = formData.taxMeta as (typeof formData.taxMeta & { destinationVatRate?: number; datevEvidenceType?: string; datevEvidenceReference?: string; datevSachverhaltLl?: string }) | undefined;
+  // Keep these flags aligned with the canonical DATEV tax-case definitions
+  // used by the posting seam.  UI mode names are the renderer contract, while
+  // the backend resolves them to the corresponding tax-case key.
+  const requiresTaxCountry = ['intra_eu_supply_6a', 'intra_eu_service_reverse_charge', 'export_third_country', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
+  const requiresDestinationRate = ['intra_eu_supply_6a', 'intra_eu_service_reverse_charge'].includes(resolvedTaxMode);
+  const requiresDatevEvidence = ['small_business_19_ustg', 'reverse_charge_13b', 'intra_eu_supply_6a', 'intra_eu_service_reverse_charge', 'export_third_country', 'vat_exempt_4_ustg', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
+  const requiresDatevSachverhaltLl = ['reverse_charge_13b', 'intra_eu_service_reverse_charge', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
+  const requiresBuyerVatId = getInvoiceTaxModeDefinition(resolvedTaxMode).requiresBuyerVatId;
+  const sellerCountryCode = effectiveSettings.legal.countryCode ?? 'DE';
+  const buyerCountryCode = normalizeCountry(
+    formData.taxMeta?.buyerCountryCode ?? (formData.billingAddressJson && typeof formData.billingAddressJson === 'object'
+      ? (formData.billingAddressJson as { country?: string }).country
+      : undefined),
+  );
+  const validateBuyerVatId = useCallback(async () => {
+    const vatNumber = formData.taxMeta?.buyerVatId?.trim();
+    if (!onValidateVatId || !vatNumber || !buyerCountryCode) return;
+    setVatValidationPending(true);
+    try {
+      const result = await onValidateVatId({ countryCode: buyerCountryCode, vatNumber });
+      setFormData((previous) => ({
+        ...previous,
+        taxMeta: {
+          ...previous.taxMeta,
+          buyerVatId: result.normalizedVatId,
+          vatIdValidation: result.status,
+          vatIdValidationAt: result.checkedAt,
+        },
+      }));
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setVatValidationPending(false);
+    }
+  }, [buyerCountryCode, formData.taxMeta?.buyerVatId, onValidateVatId, setFormData]);
+  const taxRateOptions = useMemo(
+    () => getDachVatRates(sellerCountryCode, effectiveSettings.legal.defaultVatRate),
+    [effectiveSettings.legal.defaultVatRate, sellerCountryCode],
+  );
+  const taxRecommendation = useMemo(
+    () => recommendInvoiceTaxMode({
+      sellerCountryCode,
+      buyerCountryCode,
+      buyerType: formData.taxMeta?.buyerType,
+      buyerVatId: formData.taxMeta?.buyerVatId,
+      sellerVatId: formData.taxMeta?.sellerVatId ?? effectiveSettings.finance.vatId,
+      supplyType: 'service',
+    }),
+    [buyerCountryCode, effectiveSettings.finance.vatId, formData.taxMeta?.buyerType, formData.taxMeta?.buyerVatId, formData.taxMeta?.sellerVatId, sellerCountryCode],
+  );
 
-  // Auto-fill dueDate when opening in create mode once settings load.
   useEffect(() => {
     if (mode !== 'create' || formData.dueDate) return;
-    const today = new Date();
-    const days = effectiveSettings.legal?.paymentTermsDays ?? 14;
-    const due = new Date(today);
-    due.setDate(today.getDate() + (templateType === 'invoice' ? days : 0));
+    const due = new Date();
+    due.setDate(due.getDate() + (templateType === 'invoice' ? effectiveSettings.legal?.paymentTermsDays ?? 14 : 0));
     const iso = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`;
-    setFormData(prev => prev.dueDate ? prev : { ...prev, dueDate: iso });
-  }, [effectiveSettings, mode, templateType]);
+    setFormData((previous) => previous.dueDate ? previous : { ...previous, dueDate: iso });
+  }, [effectiveSettings.legal?.paymentTermsDays, formData.dueDate, mode, setFormData, templateType]);
 
-  const previewElements = useMemo(() => {
-      return getPreviewElements(
-        { ...formData, taxSnapshot },
-        effectiveTemplate as unknown as Parameters<typeof getPreviewElements>[1],
-        effectiveSettings,
-      ) as unknown as InvoiceElement[];
-  }, [formData, effectiveSettings, effectiveTemplate, taxSnapshot]);
-
-  const categoryOptions = useMemo(() => {
-      const fromSettings = (effectiveSettings.catalog?.categories ?? []).map((c) => c.name).filter(Boolean);
-      const fromArticles = articles.map((a) => a.category).filter(Boolean);
-      const unique = Array.from(new Set([...fromSettings, ...fromArticles].map((s) => s.trim()).filter(Boolean)));
-      unique.sort((a, b) => a.localeCompare(b, 'de-DE'));
-      return unique;
-  }, [effectiveSettings, articles]);
-
-  const defaultCategory =
-    (effectiveSettings.catalog?.categories?.[0]?.name ?? '').trim() || 'Sonstiges';
-
-  const applyClientToDocument = (client: ClientLike) => {
+  const applyClientToDocument = useCallback((client: ClientLike) => {
     const addresses = client.addresses ?? [];
     const emails = client.emails ?? [];
-
-    const billingAddress =
-      addresses.find((a) => a.isDefaultBilling) ??
-      addresses.find((a) => a.kind === 'billing') ??
-      addresses[0] ??
-      null;
-
-    const shippingAddress =
-      addresses.find((a) => a.isDefaultShipping) ??
-      addresses.find((a) => a.kind === 'shipping') ??
-      billingAddress ??
-      null;
-
-    const billingEmail =
-      emails.find((e) => e.isDefaultBilling) ?? emails.find((e) => e.isDefaultGeneral) ?? emails[0] ?? null;
-
-    setFormData((prev) => ({
-      ...prev,
+    const billingAddress = addresses.find((address) => address.isDefaultBilling) ?? addresses.find((address) => address.kind === 'billing') ?? addresses[0];
+    const shippingAddress = addresses.find((address) => address.isDefaultShipping) ?? addresses.find((address) => address.kind === 'shipping') ?? billingAddress;
+    const billingEmail = emails.find((email) => email.isDefaultBilling) ?? emails.find((email) => email.isDefaultGeneral) ?? emails[0];
+    setFormData((previous) => ({
+      ...previous,
       clientId: client.id,
       clientNumber: client.customerNumber,
       client: client.company,
-      clientEmail: billingEmail?.email ?? client.email ?? prev.clientEmail,
-      clientAddress: billingAddress ? formatAddressMultiline(billingAddress as any) : client.address ?? prev.clientAddress,
-      billingAddressJson: billingAddress ?? prev.billingAddressJson,
-      shippingAddressJson: shippingAddress ?? prev.shippingAddressJson,
+      clientEmail: billingEmail?.email ?? client.email ?? previous.clientEmail,
+      clientAddress: billingAddress ? formatDocumentAddress(billingAddress) : client.address ?? previous.clientAddress,
+      billingAddressJson: billingAddress ?? previous.billingAddressJson,
+      shippingAddressJson: shippingAddress ?? previous.shippingAddressJson,
+      taxMeta: {
+        ...previous.taxMeta,
+        buyerCountryCode: normalizeCountry(billingAddress?.country) || undefined,
+        buyerType: client.taxProfile?.type ?? previous.taxMeta?.buyerType ?? 'business',
+        buyerVatId: client.taxProfile?.vatId ?? previous.taxMeta?.buyerVatId,
+        vatIdValidation: client.taxProfile?.vatIdValidation,
+        vatIdValidationAt: client.taxProfile?.vatIdValidationAt,
+        sellerCountryCode,
+        sellerVatId: previous.taxMeta?.sellerVatId ?? effectiveSettings.finance.vatId,
+        taxRuleConfirmed: false,
+      },
     }));
-  };
-
-  const handleSelectClient = (clientId: string) => {
-    setSelectedClientId(clientId);
-    onSelectedClientChange?.(clientId);
-    const client = clients.find((c) => c.id === clientId);
-    if (!client) return;
-    applyClientToDocument(client);
+    setSelectedClientId(client.id);
+    onSelectedClientChange?.(client.id);
     projectTouchedRef.current = false;
-  };
+  }, [effectiveSettings.finance.vatId, onSelectedClientChange, sellerCountryCode, setFormData]);
+
+  const startManualRecipient = useCallback(() => {
+    setFormData((previous) => {
+      const next = { ...previous };
+      delete next.clientId;
+      delete next.clientNumber;
+      delete next.projectId;
+      delete next.billingAddressJson;
+      delete next.shippingAddressJson;
+      next.client = '';
+      next.clientEmail = '';
+      next.clientAddress = '';
+      if (next.taxMeta) {
+        const taxMeta = { ...next.taxMeta };
+        delete taxMeta.buyerCountryCode;
+        delete taxMeta.buyerType;
+        delete taxMeta.buyerVatId;
+        delete taxMeta.vatIdValidation;
+        delete taxMeta.vatIdValidationAt;
+        taxMeta.taxRuleConfirmed = false;
+        next.taxMeta = taxMeta;
+      }
+      return next;
+    });
+    setSelectedClientId('');
+    onSelectedClientChange?.('');
+    projectTouchedRef.current = false;
+  }, [onSelectedClientChange, setFormData]);
+
+  const updateClientName = useCallback((client: string) => {
+    setFormData((previous) => ({
+      ...previous,
+      client,
+      billingAddressJson: previous.clientAddress
+        ? parseAddressText(previous.clientAddress, client, previous.billingAddressJson)
+        : previous.billingAddressJson,
+    }), { coalesce: true });
+  }, [setFormData]);
 
   useEffect(() => {
-    if (!selectedClientId) {
-      setFormData((prev) => prev.projectId ? { ...prev, projectId: undefined } : prev);
-      return;
-    }
-    if (projects.length === 0) return;
-    if (mode !== 'create') return;
-    if (projectTouchedRef.current) return;
-
-    setFormData((prev) => {
-      if (prev.projectId) return prev;
-      const defaultProject = projects.find((p) => p.name === 'Allgemein' && !p.archivedAt) ?? projects[0];
-      if (!defaultProject) return prev;
-      return { ...prev, projectId: defaultProject.id };
+    if (!selectedClientId || mode !== 'create' || projectTouchedRef.current || projects.length === 0) return;
+    setFormData((previous) => {
+      if (previous.projectId) return previous;
+      const project = projects.find((candidate) => candidate.name === 'Allgemein' && !candidate.archivedAt) ?? projects[0];
+      return project ? { ...previous, projectId: project.id } : previous;
     });
-  }, [projects, selectedClientId]);
+  }, [mode, projects, selectedClientId, setFormData]);
 
-  const totals = {
-    net: taxSnapshot.netAmount,
-    vat: taxSnapshot.vatAmount,
-    gross: taxSnapshot.grossAmount,
-  };
-  const resolvedTaxMode = resolveInvoiceTaxMode(formData.taxMode, effectiveSettings);
-  const requiresBuyerVatId = getInvoiceTaxModeDefinition(resolvedTaxMode).requiresBuyerVatId;
-  const selectedClientLabel = clients.find((client) => client.id === selectedClientId)?.company ?? '';
-  const selectedProject = projects.find((project) => project.id === formData.projectId);
-  const selectedProjectLabel = selectedProject ? `${selectedProject.code ? `${selectedProject.code} – ` : ''}${selectedProject.name}` : '';
-
-  const handleSave = useCallback(() => {
-    const resolvedTaxMode = resolveInvoiceTaxMode(formData.taxMode, effectiveSettings);
-    const definition = getInvoiceTaxModeDefinition(resolvedTaxMode);
+  const validate = useCallback(() => {
     const errors: FieldErrors = { items: {} };
     if (!formData.number.trim()) errors.number = 'Nummer ist erforderlich.';
     if (!formData.date.trim()) errors.date = 'Datum ist erforderlich.';
@@ -196,30 +349,61 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     formData.items.forEach((item, index) => {
       if (!item.description.trim()) errors.items[index] = 'Beschreibung ist erforderlich.';
     });
-    if (definition.requiresBuyerVatId && !formData.taxMeta?.buyerVatId?.trim()) {
+    if (getInvoiceTaxModeDefinition(resolveInvoiceTaxMode(formData.taxMode, effectiveSettings)).requiresBuyerVatId && !formData.taxMeta?.buyerVatId?.trim()) {
       errors.buyerVatId = 'USt-IdNr. des Kunden ist erforderlich.';
     }
-    const hasErrors = Boolean(errors.number || errors.date || errors.client || errors.buyerVatId || Object.keys(errors.items).length);
+    if (buyerCountryCode && buyerCountryCode !== sellerCountryCode && !formData.taxMeta?.taxRuleConfirmed) {
+      errors.taxRule = 'Bitte bestätige das Umsatzsteuer-Modell für diese grenzüberschreitende Rechnung.';
+    }
+    if (requiresBuyerVatId && formData.taxMeta?.vatIdValidation === 'invalid') {
+      errors.buyerVatId = 'Die Käufer-USt-IdNr. wurde als ungültig gemeldet.';
+    }
+    if (requiresTaxCountry && !/^[A-Z]{2}$/.test(datevTaxMeta?.buyerCountryCode ?? buyerCountryCode)) {
+      errors.taxCountry = 'Ländercode des Leistungs-/Bestimmungslandes ist erforderlich.';
+    }
+    if (requiresDestinationRate && (!Number.isFinite(datevTaxMeta?.destinationVatRate) || Number(datevTaxMeta?.destinationVatRate) < 0 || Number(datevTaxMeta?.destinationVatRate) >= 100)) {
+      errors.destinationVatRate = 'EU-Steuersatz im Bestimmungsland ist erforderlich.';
+    }
+    if (requiresDatevEvidence && !datevTaxMeta?.datevEvidenceType?.trim()) errors.datevEvidenceType = 'Nachweistyp ist erforderlich.';
+    if (requiresDatevEvidence && !datevTaxMeta?.datevEvidenceReference?.trim()) errors.datevEvidenceReference = 'Nachweisreferenz ist erforderlich.';
+    if (requiresDatevSachverhaltLl && !/^[1-9]\d{0,2}$/.test(datevTaxMeta?.datevSachverhaltLl ?? '')) errors.datevSachverhaltLl = 'DATEV-Sachverhalt L+L ist erforderlich.';
     setFieldErrors(errors);
-    if (hasErrors) {
+    setTaxDetailsOpen(getValidationErrors(errors).some((error) => error.opensDetails));
+    return errors;
+  }, [buyerCountryCode, datevTaxMeta, effectiveSettings, formData, requiresBuyerVatId, requiresDatevEvidence, requiresDatevSachverhaltLl, requiresDestinationRate, requiresTaxCountry, sellerCountryCode]);
+
+  const focusValidationField = useCallback((fieldId: string) => {
+    if (detailFieldIds.has(fieldId)) setTaxDetailsOpen(true);
+    window.requestAnimationFrame(() => {
+      const block = globalThis.document.getElementById(fieldId);
+      const target = block?.querySelector<HTMLElement>('input, textarea, button, select, [role="combobox"]') ?? block;
+      target?.focus();
+      if (typeof block?.scrollIntoView === 'function') block.scrollIntoView({ block: 'center' });
+    });
+  }, []);
+
+  const focusValidationError = useCallback((errors: FieldErrors) => {
+    const firstError = getValidationErrors(errors)[0];
+    if (firstError) focusValidationField(firstError.id);
+  }, [focusValidationField]);
+
+  const handleSave = useCallback(() => {
+    const errors = validate();
+    if (errors.number || errors.date || errors.client || errors.buyerVatId || errors.taxRule || errors.taxCountry || errors.destinationVatRate || errors.datevEvidenceType || errors.datevEvidenceReference || errors.datevSachverhaltLl || Object.keys(errors.items).length > 0) {
       setSaveError('Bitte korrigiere die markierten Pflichtfelder.');
-      window.requestAnimationFrame(() => {
-        globalThis.document.querySelector<HTMLElement>('[data-field-error="true"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      });
+      setView('edit');
+      focusValidationError(errors);
       return;
     }
-
     setSaveError(null);
-    onSave({
-      ...formData,
-      taxMode: resolvedTaxMode,
-      taxSnapshot,
-      amount: taxSnapshot.grossAmount,
-    });
-  }, [effectiveSettings, formData, onSave, taxSnapshot]);
+    onSave({ ...formData, taxMode: resolvedTaxMode, taxSnapshot, amount: taxSnapshot.grossAmount });
+  }, [focusValidationError, formData, onSave, resolvedTaxMode, taxSnapshot, validate]);
 
   const handleCancel = useCallback(() => {
-    if (dirty && !window.confirm('Ungespeicherte Änderungen verwerfen?')) return;
+    if (dirty) {
+      setShowDiscardConfirmation(true);
+      return;
+    }
     onCancel();
   }, [dirty, onCancel]);
 
@@ -230,14 +414,9 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
       if (key === 's') {
         event.preventDefault();
         handleSave();
-        return;
-      }
-      const active = globalThis.document.activeElement;
-      const editing = active instanceof HTMLElement && (active.matches('input, textarea, select') || active.isContentEditable);
-      if (editing) return;
-      if (key === 'z') {
+      } else if (key === 'z' && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) {
         event.preventDefault();
-        if (event.shiftKey) history.redo(); else history.undo();
+        event.shiftKey ? history.redo() : history.undo();
       } else if (key === 'y') {
         event.preventDefault();
         history.redo();
@@ -249,324 +428,168 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
 
   useEffect(() => {
     if (!dirty) return;
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    const beforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [dirty]);
 
+  const title = templateType === 'offer' ? 'Angebot' : 'Rechnung';
+  const unlockNumber = useCallback(() => {
+    if (isNumberLocked) {
+      setShowUnlockConfirmation(true);
+    } else {
+      setIsNumberLocked(true);
+    }
+  }, [isNumberLocked]);
+  const selectProject = useCallback((project: ProjectLike) => {
+    projectTouchedRef.current = true;
+    setFormData((previous) => ({ ...previous, projectId: project.id }));
+  }, [setFormData]);
+  const validationErrors = useMemo(() => getValidationErrors(fieldErrors), [fieldErrors]);
+  const detailValidationOpen = validationErrors.some((error) => error.opensDetails);
+  const documentFields = useMemo<DocumentCanvasDocumentFields>(() => ({
+    document: formData,
+    templateElements: effectiveTemplate,
+    templateType,
+    clients,
+    projects,
+    selectedClientId,
+    selectedClientLabel,
+    selectedProjectLabel,
+    onChange: setFormData,
+    onClientNameChange: updateClientName,
+    onAddressChange: (value) => setFormData((previous) => ({ ...previous, clientAddress: value, billingAddressJson: parseAddressText(value, previous.client, previous.billingAddressJson) }), { coalesce: true }),
+    onStartManualRecipient: startManualRecipient,
+    onSelectClient: applyClientToDocument,
+    onSelectProject: selectProject,
+    onUnlockNumber: unlockNumber,
+    isNumberLocked,
+    fieldErrors,
+    taxDetailsOpen: taxDetailsOpen || detailValidationOpen,
+    onTaxDetailsOpenChange: setTaxDetailsOpen,
+    taxModeOptions: INVOICE_TAX_MODE_DEFINITIONS.map((definition) => ({ value: definition.mode, label: definition.label })),
+    taxRateOptions,
+    resolvedTaxMode,
+    taxRecommendation,
+    taxRecommendationLabel: getInvoiceTaxModeDefinition(taxRecommendation.mode).label,
+    buyerCountryCode,
+    sellerCountryCode,
+    requiresBuyerVatId,
+    requiresTaxCountry,
+    requiresDestinationVatRate: requiresDestinationRate,
+    requiresDatevEvidence,
+    requiresDatevSachverhaltLl,
+    vatValidationPending,
+    onValidateBuyerVatId: onValidateVatId ? () => void validateBuyerVatId() : undefined,
+    onTemplateTextChange: onTemplateElementsChange ? handleTemplateTextChange : undefined,
+    onTemplateElementsChange,
+  }), [
+    applyClientToDocument,
+    buyerCountryCode,
+    clients,
+    detailValidationOpen,
+    fieldErrors,
+    formData,
+    effectiveTemplate,
+    handleTemplateTextChange,
+    isNumberLocked,
+    onValidateVatId,
+    onTemplateElementsChange,
+    projects,
+    requiresBuyerVatId,
+    requiresDatevEvidence,
+    requiresDatevSachverhaltLl,
+    requiresDestinationRate,
+    requiresTaxCountry,
+    resolvedTaxMode,
+    selectedClientId,
+    selectedClientLabel,
+    selectedProjectLabel,
+    selectProject,
+    sellerCountryCode,
+    startManualRecipient,
+    setFormData,
+    taxDetailsOpen,
+    taxRecommendation,
+    taxRateOptions,
+    templateType,
+    unlockNumber,
+    updateClientName,
+    validateBuyerVatId,
+    vatValidationPending,
+  ]);
+  const firstValidationError = validationErrors[0]?.message;
+
   return (
-    <div className="flex h-full w-full bg-canvas overflow-hidden">
-        {/* Left Sidebar: Form Editor */}
-        <div
-          className={`flex flex-col bg-white border-r border-border h-full shadow-xl z-10 transition-[background-color,border-color,color,box-shadow,opacity,transform,width] duration-200 ease-out ${sidebarCollapsed ? 'w-0 overflow-hidden border-r-0' : 'w-[450px]'}`}
-        >
-            {/* Header */}
-            <div className="p-6 border-b border-border-subtle bg-white">
-                <button
-                    onClick={handleCancel}
-                    className="flex items-center gap-2 text-muted hover:text-foreground transition-colors duration-150 ease-out mb-4 text-xs font-bold uppercase tracking-wider"
-                >
-                    <ArrowLeft size={14} /> Zurück zur Übersicht
-                </button>
-                <h2 className="text-xl font-black text-foreground">
-                  {templateType === 'offer' ? 'Angebot' : 'Rechnung'} {mode === 'create' ? 'erstellen' : 'bearbeiten'}
-                </h2>
-                <p className="text-muted text-sm">{formData.number}</p>
-                {saveError ? (
-                  <div className="mt-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-xs font-medium text-error">
-                    {saveError}
-                  </div>
-                ) : null}
-            </div>
-
-            {/* Scrollable Form Content */}
-            <div className="flex-1 overflow-y-auto p-5 space-y-6 scrollbar-thin scrollbar-thumb-border">
-
-                {/* General Info */}
-                <div className="space-y-4 animate-enter" style={{ animationDelay: '0ms' }}>
-                    <h3 className="flex items-center gap-2 text-sm font-bold text-foreground uppercase tracking-wide">
-                        <FileText size={16} className="text-accent fill-black" />
-                        Basisdaten
-                    </h3>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div data-field-error={fieldErrors.number ? true : undefined}>
-                            <label className="block text-xs font-bold text-muted mb-1">
-                                {templateType === 'offer' ? 'Angebots-Nr.' : 'Rechnungs-Nr.'}
-                            </label>
-                            <div className="relative">
-                                <input
-                                    type="text"
-                                    value={formData.number}
-                                    readOnly={isNumberLocked}
-                                    onChange={e => setFormData({...formData, number: e.target.value}, { coalesce: true })}
-                                    className={`w-full bg-surface-muted border rounded-lg p-2.5 text-sm font-medium outline-none transition-colors duration-150 ease-out ${fieldErrors.number ? 'border-error focus:ring-2 focus:ring-error' : isNumberLocked ? 'border-border text-muted cursor-not-allowed pr-10' : 'border-warning focus:ring-2 focus:ring-warning'}`}
-                                />
-                                {mode === 'edit' && (
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            if (isNumberLocked) {
-                                                const ok = window.confirm(
-                                                    'Achtung: Die manuelle Änderung der Nummer kann die GoBD-konforme Nummerierung gefährden.\n\nNur fortfahren, wenn Sie sicher sind.'
-                                                );
-                                                if (ok) setIsNumberLocked(false);
-                                            } else {
-                                                setIsNumberLocked(true);
-                                            }
-                                        }}
-                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted hover:text-foreground transition-colors duration-150 ease-out"
-                                        title={isNumberLocked ? 'Nummer bearbeiten (GoBD-Warnung)' : 'Nummer sperren'}
-                                        aria-label={isNumberLocked ? 'Nummer entsperren' : 'Nummer sperren'}
-                                    >
-                                        {isNumberLocked ? <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> : <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>}
-                                    </button>
-                                )}
-                            </div>
-                            {fieldErrors.number ? <p className="mt-1 text-xs text-error">{fieldErrors.number}</p> : null}
-                        </div>
-                        <div data-field-error={fieldErrors.date ? true : undefined}>
-                            <label className="block text-xs font-bold text-muted mb-1">Datum</label>
-                            <DatePicker
-                                value={formData.date}
-                                onChange={date => setFormData({...formData, date}, { coalesce: true })}
-                                className={`[&>button]:bg-surface-muted [&>button]:border-border [&>button]:rounded-lg [&>button]:text-foreground ${fieldErrors.date ? '[&>button]:border-error [&>button]:focus:ring-error' : ''}`}
-                            />
-                            {fieldErrors.date ? <p className="mt-1 text-xs text-error">{fieldErrors.date}</p> : null}
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-muted mb-1">Leistungsdatum</label>
-                            <DatePicker
-                                value={formData.servicePeriod || ''}
-                                onChange={servicePeriod => setFormData({...formData, servicePeriod}, { coalesce: true })}
-                                placeholder="Optional"
-                                className="[&>button]:bg-surface-muted [&>button]:border-border [&>button]:rounded-lg [&>button]:text-foreground"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-muted mb-1">Fälligkeit</label>
-                            <DatePicker
-                                value={formData.dueDate ?? ''}
-                                onChange={dueDate => setFormData({...formData, dueDate}, { coalesce: true })}
-                                className="[&>button]:bg-surface-muted [&>button]:border-border [&>button]:rounded-lg [&>button]:text-foreground"
-                            />
-                        </div>
-                    </div>
-                </div>
-
-                {/* Recipient */}
-                <div className="space-y-4 animate-enter" style={{ animationDelay: '100ms' }}>
-                    <h3 className="flex items-center gap-2 text-sm font-bold text-foreground uppercase tracking-wide">
-                        <User size={16} className="text-accent fill-black" />
-                        Empfänger
-                    </h3>
-                    <div>
-                        <label className="block text-xs font-bold text-muted mb-1">Kunde auswählen</label>
-                        <div className="mb-3">
-                          <Combobox
-                            items={clients}
-                            value={selectedClientLabel}
-                            onSelect={(client) => handleSelectClient(client.id)}
-                            getLabel={(client) => client.company}
-                            getSublabel={(client) => client.customerNumber}
-                            getSearchText={(client) => `${client.company} ${client.customerNumber ?? ''}`}
-                            placeholder="Kunde suchen..."
-                            aria-label="Kunde auswählen"
-                            inputClassName="w-full bg-surface-muted border border-border rounded-lg p-2.5 text-sm font-medium outline-none focus:ring-2 focus:ring-accent transition-colors"
-                          />
-                        </div>
-
-                        <label className="block text-xs font-bold text-muted mb-1">Projekt</label>
-                        <div className="mb-3">
-                          <Combobox
-                            items={projects}
-                            value={selectedProjectLabel}
-                            disabled={!selectedClientId}
-                            onSelect={(project) => {
-                              projectTouchedRef.current = true;
-                              setFormData((prev) => ({ ...prev, projectId: project.id }));
-                            }}
-                            getLabel={(project) => `${project.code ? `${project.code} – ` : ''}${project.name}`}
-                            getSearchText={(project) => `${project.code ?? ''} ${project.name}`}
-                            placeholder={selectedClientId ? 'Projekt suchen...' : 'Bitte Kunde auswählen'}
-                            aria-label="Projekt auswählen"
-                            inputClassName="w-full bg-surface-muted border border-border rounded-lg p-2.5 text-sm font-medium outline-none focus:ring-2 focus:ring-accent transition-colors"
-                          />
-                        </div>
-
-                        <div data-field-error={fieldErrors.client ? true : undefined}>
-                          <label className="block text-xs font-bold text-muted mb-1">Firmenname / Kunde</label>
-                          <input
-                              type="text"
-                              value={formData.client}
-                              onChange={e => setFormData({...formData, client: e.target.value}, { coalesce: true })}
-                              className={`w-full bg-surface-muted border rounded-lg p-2.5 text-sm font-medium outline-none focus:ring-2 transition-colors mb-3 ${fieldErrors.client ? 'border-error focus:ring-error' : 'border-border focus:ring-accent'}`}
-                          />
-                          {fieldErrors.client ? <p className="-mt-2 mb-3 text-xs text-error">{fieldErrors.client}</p> : null}
-                        </div>
-                        <label className="block text-xs font-bold text-muted mb-1">E-Mail</label>
-                        <input
-                            type="email"
-                            value={formData.clientEmail}
-                            onChange={e => setFormData({...formData, clientEmail: e.target.value}, { coalesce: true })}
-                            className="w-full bg-surface-muted border border-border rounded-lg p-2.5 text-sm font-medium outline-none focus:ring-2 focus:ring-accent transition-colors mb-3"
-                            placeholder="name@firma.de"
-                        />
-                        <label className="block text-xs font-bold text-muted mb-1">Adresse (Optional)</label>
-                        <textarea
-                            value={formData.clientAddress || ''}
-                            onChange={e => setFormData({...formData, clientAddress: e.target.value}, { coalesce: true })}
-                            rows={3}
-                            placeholder="Straße, PLZ, Stadt..."
-                            className="w-full bg-surface-muted border border-border rounded-lg p-2.5 text-sm font-medium outline-none focus:ring-2 focus:ring-accent transition-colors resize-none"
-                        />
-                        <div className="mt-4 grid grid-cols-1 gap-3">
-                          <div>
-                            <label className="block text-xs font-bold text-muted mb-1">Steuer-Modell</label>
-                            <select
-                              value={formData.taxMode ?? resolveInvoiceTaxMode(undefined, effectiveSettings)}
-                              onChange={(e) =>
-                                setFormData((prev) => ({
-                                  ...prev,
-                                  taxMode: e.target.value as DocumentDraft['taxMode'],
-                                }))
-                              }
-                              className="w-full bg-surface-muted border border-border rounded-lg p-2.5 text-sm font-medium outline-none focus:ring-2 focus:ring-accent transition-colors"
-                            >
-                              {INVOICE_TAX_MODE_DEFINITIONS.map((definition) => (
-                                <option key={definition.mode} value={definition.mode}>
-                                  {definition.label}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          {requiresBuyerVatId ? (
-                            <div data-field-error={fieldErrors.buyerVatId ? true : undefined}>
-                              <label className="block text-xs font-bold text-muted mb-1">USt-IdNr. des Kunden</label>
-                              <input
-                                type="text"
-                                value={formData.taxMeta?.buyerVatId ?? ''}
-                                onChange={(event) => setFormData((prev) => ({
-                                  ...prev,
-                                  taxMeta: { ...prev.taxMeta, buyerVatId: event.target.value },
-                                }), { coalesce: true })}
-                                className={`w-full bg-surface-muted border rounded-lg p-2.5 text-sm font-medium outline-none focus:ring-2 transition-colors ${fieldErrors.buyerVatId ? 'border-error focus:ring-error' : 'border-border focus:ring-accent'}`}
-                              />
-                              {fieldErrors.buyerVatId ? <p className="mt-1 text-xs text-error">{fieldErrors.buyerVatId}</p> : null}
-                            </div>
-                          ) : null}
-                        </div>
-                    </div>
-                </div>
-
-                {/* Items */}
-                <div className="space-y-4 animate-enter" style={{ animationDelay: '200ms' }}>
-                    <ItemsEditor
-                        items={formData.items}
-                        articles={articles}
-                        categoryOptions={categoryOptions}
-                        defaultCategory={defaultCategory}
-                        formatCurrency={formatCurrency}
-                        itemErrors={fieldErrors.items}
-                        onItemsChange={(items, options) => setFormData((prev) => ({ ...prev, items }), options)}
-                    />
-
-                    {/* Totals Summary in Form */}
-                    <div className="bg-surface-muted rounded-xl p-4 space-y-2 border border-border-subtle animate-enter" style={{ animationDelay: '400ms' }}>
-                        <div className="flex justify-between text-sm text-muted">
-                            <span>Netto</span>
-                            <span className="tabular-nums">{formatCurrency(totals.net)}</span>
-                        </div>
-                        {(taxSnapshot.vatBreakdown?.length ? taxSnapshot.vatBreakdown : [{
-                          rate: taxSnapshot.vatRateApplied,
-                          netAmount: taxSnapshot.netAmount,
-                          vatAmount: taxSnapshot.vatAmount,
-                        }]).map((entry) => (
-                          <div key={entry.rate} className="flex justify-between text-sm text-muted">
-                            <span>{taxSnapshot.label ?? 'USt'} ({entry.rate}%)</span>
-                            <span className="tabular-nums">{formatCurrency(entry.vatAmount)}</span>
-                          </div>
-                        ))}
-                        <div className="flex justify-between text-base font-bold text-foreground border-t border-border pt-2 mt-2">
-                            <span>Gesamtbetrag</span>
-                            <span className="tabular-nums">{formatCurrency(totals.gross)}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Actions */}
-            <div className="p-4 border-t border-border bg-white flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={history.undo}
-                  disabled={!history.canUndo}
-                  className="w-9 h-9 rounded-lg border border-border bg-surface text-muted hover:text-foreground hover:bg-surface-muted disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
-                  title="Rückgängig (Strg+Z)"
-                >
-                  <Undo2 size={15} />
-                </button>
-                <button
-                  type="button"
-                  onClick={history.redo}
-                  disabled={!history.canRedo}
-                  className="w-9 h-9 rounded-lg border border-border bg-surface text-muted hover:text-foreground hover:bg-surface-muted disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
-                  title="Wiederholen (Strg+Shift+Z)"
-                >
-                  <Redo2 size={15} />
-                </button>
-                {dirty ? (
-                  <span className="flex items-center gap-1.5 text-xs font-medium text-warning">
-                    <span className="w-1.5 h-1.5 rounded-full bg-warning" />Ungespeichert
-                  </span>
-                ) : null}
-                <button
-                    onClick={handleSave}
-                    className="flex-1 bg-accent text-accent-foreground font-bold py-3 rounded-xl hover:bg-accent-hover transition-colors flex items-center justify-center gap-2 shadow-lg shadow-accent/20 active:scale-95"
-                >
-                    <Save size={18} />
-                    Speichern
-                    <kbd className="hidden xl:inline text-[10px] font-bold opacity-60">Strg+S</kbd>
-                </button>
-            </div>
+    <div className="flex h-full w-full flex-col overflow-hidden bg-canvas">
+      <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-surface px-3 sm:px-5">
+        <button type="button" onClick={handleCancel} className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-muted hover:bg-surface-muted hover:text-foreground" aria-label="Zurück">
+          <ArrowLeft size={16} /> <span className="hidden sm:inline">Zurück</span>
+        </button>
+        <div className="min-w-0 flex-1 border-l border-border pl-3">
+          <h1 className="truncate text-sm font-bold text-foreground">{title} {mode === 'create' ? 'erstellen' : 'bearbeiten'}</h1>
+          <p className="truncate text-xs text-muted">{formData.number || 'Ohne Nummer'}</p>
         </div>
-
-        {/* Right Area: Live Preview */}
-        <div className="flex-1 bg-editor-viewport overflow-auto flex justify-center p-8 relative">
-            {/* Sidebar toggle */}
-            <button
-              onClick={() => onSidebarCollapsedChange(!sidebarCollapsed)}
-              className="absolute top-4 left-4 z-10 w-9 h-9 bg-white/15 hover:bg-white/25 rounded-xl flex items-center justify-center text-white/70 hover:text-white transition-[background-color,border-color,color,box-shadow,opacity,transform,width]"
-              title={sidebarCollapsed ? 'Seitenleiste einblenden' : 'Seitenleiste ausblenden'}
-            >
-              {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-            </button>
-            <div className="flex flex-col items-center">
-                <div className="mb-4 text-white/50 text-xs font-medium uppercase tracking-wider flex items-center gap-2">
-                    Live Vorschau
-                </div>
-
-                {/* A4 Preview - Read Only */}
-                <div
-                    className="bg-white shadow-2xl relative transition-transform origin-top"
-                    style={{
-                        width: `${A4_WIDTH_PX}px`,
-                        height: `${A4_HEIGHT_PX}px`,
-                        minWidth: `${A4_WIDTH_PX}px`,
-                        minHeight: `${A4_HEIGHT_PX}px`,
-                        transform: 'scale(0.9)'
-                    }}
-                >
-                    {previewElements.map((el) => (
-                        <ElementRenderer
-                            key={el.id}
-                            element={el}
-                            renderText={renderTextWithPlaceholders}
-                            readOnly
-                        />
-                    ))}
-                </div>
-            </div>
+        <button type="button" onClick={history.undo} disabled={!history.canUndo} className="rounded-lg p-2 text-muted hover:bg-surface-muted hover:text-foreground disabled:opacity-40" aria-label="Rückgängig"><Undo2 size={16} /></button>
+        <button type="button" onClick={history.redo} disabled={!history.canRedo} className="rounded-lg p-2 text-muted hover:bg-surface-muted hover:text-foreground disabled:opacity-40" aria-label="Wiederholen"><Redo2 size={16} /></button>
+        {dirty ? <span className="hidden items-center gap-1 text-xs font-semibold text-warning md:flex"><span className="h-1.5 w-1.5 rounded-full bg-warning" />Ungespeichert</span> : null}
+        <div className="flex rounded-lg border border-border bg-surface-muted p-0.5" role="group" aria-label="Dokumentansicht">
+          <button type="button" aria-pressed={view === 'edit'} onClick={() => setView('edit')} className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${view === 'edit' ? 'bg-surface text-foreground shadow-sm' : 'text-muted'}`}>Bearbeiten</button>
+          <button type="button" aria-pressed={view === 'preview'} onClick={() => setView('preview')} className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold ${view === 'preview' ? 'bg-surface text-foreground shadow-sm' : 'text-muted'}`}><Eye size={13} /> Vorschau</button>
         </div>
+        {firstValidationError ? <span id="document-save-validation-error" className="max-w-56 text-right text-xs text-error" role="status" aria-live="assertive">{firstValidationError}</span> : null}
+        <button type="button" onClick={handleSave} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground hover:bg-accent-hover" aria-label="Speichern" aria-describedby={firstValidationError ? 'document-save-validation-error' : undefined}><Save size={15} /> <span className="hidden sm:inline">Speichern</span></button>
+      </header>
+
+      {saveError && validationErrors.length === 0 ? <div className="mx-auto mt-3 w-full max-w-[900px] rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm font-medium text-error" role="alert" aria-live="assertive">{saveError}</div> : null}
+      {validationErrors.length > 0 ? <div className="mx-auto mt-3 w-full max-w-[900px]"><ValidationSummary title="Bitte korrigiere die markierten Pflichtfelder." errors={validationErrors.map(({ id, message }) => ({ id, message }))} onJump={focusValidationField} /></div> : null}
+
+      <main className="flex-1 overflow-auto bg-editor-viewport p-4 sm:p-8">
+        {view === 'preview' ? (
+          <div className="mx-auto w-fit min-w-[min(100%,794px)]" data-document-preview data-testid="document-preview">
+            <DocumentCanvasEditor elements={previewElements} />
+          </div>
+        ) : (
+          <div ref={editorSurfaceRef} data-document-editor data-testid="document-editor" className="mx-auto w-fit min-w-[min(100%,794px)]">
+            <DocumentCanvasEditor
+              elements={previewElements}
+              items={formData.items}
+              articles={articles}
+              formatCurrency={formatCurrency}
+              taxRateOptions={taxRateOptions}
+              documentFields={documentFields}
+              onItemsChange={(items, options) => setFormData((previous) => ({ ...previous, items }), options)}
+            />
+          </div>
+        )}
+      </main>
+
+      <ConfirmDialog
+        open={showDiscardConfirmation}
+        title="Ungespeicherte Änderungen verwerfen?"
+        description="Deine bisher eingetragenen Änderungen gehen verloren."
+        confirmLabel="Änderungen verwerfen"
+        cancelLabel="Weiter bearbeiten"
+        destructive
+        onConfirm={() => {
+          setShowDiscardConfirmation(false);
+          onCancel();
+        }}
+        onCancel={() => setShowDiscardConfirmation(false)}
+      />
+      <ConfirmDialog
+        open={showUnlockConfirmation}
+        title="Nummer entsperren?"
+        description="Achtung: Die manuelle Änderung der Nummer kann die GoBD-konforme Nummerierung gefährden. Nur fortfahren, wenn Sie sicher sind."
+        confirmLabel="Nummer entsperren"
+        cancelLabel="Abbrechen"
+        destructive
+        onConfirm={() => {
+          setShowUnlockConfirmation(false);
+          setIsNumberLocked(false);
+        }}
+        onCancel={() => setShowUnlockConfirmation(false)}
+      />
     </div>
   );
 };

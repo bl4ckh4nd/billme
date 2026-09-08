@@ -35,7 +35,7 @@ export interface AssetDepreciationScheduleEntry {
   year: number;
   amount: number;
   months: number;
-  status: 'planned' | 'posted';
+  status: 'planned' | 'posted' | 'cancelled';
   journalEntryId?: string;
   postedAt?: string;
 }

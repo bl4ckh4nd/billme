@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @source "./src/**/*.{ts,tsx}";
+/* Every workspace package renders through this stylesheet, while app-level components are re-exports. Keep this sibling glob. */
+@source "../*/src/**/*.{ts,tsx}";
 @source "../../apps/desktop/**/*.{ts,tsx,html}";
 @source "../../apps/pro-desktop/**/*.{ts,tsx,html}";
 @source "../../apps/web/**/*.{ts,tsx,html}";
@@ -18,6 +20,7 @@
   --color-dark-3: #1c1c1c;
   --color-dark-border: #222222;
   --color-dark-border-subtle: #333333;
+  --color-dark-muted: #9ca3af;
 
   /* Light UI */
   --color-background: #ffffff;
@@ -77,5 +80,6 @@
     background: var(--color-background);
     color: var(--color-foreground);
     font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
 }

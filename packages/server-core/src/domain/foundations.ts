@@ -1,5 +1,16 @@
 import { z } from 'zod';
 import { deploymentModeSchema, serverProductSchema, serverRoleSchema, type ServerProduct } from '../shared/runtime-profile.js';
+import { billingLineItemSchema } from './billing-lines.js';
+
+export {
+  billingLineItemSchema,
+  billingLineKinds,
+  getBillingLineAmount,
+  isBillableLine,
+  isOptionalLine,
+  resolveBillingDocumentLines,
+} from './billing-lines.js';
+export type { BillingDocumentLine, BillingLineItem, BillingLineInput, BillingLineKind, BillingDocumentResolution, BillingLineSummary, BillingDocumentSubtotal } from './billing-lines.js';
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
@@ -113,6 +124,21 @@ export const invoiceTaxMetaSchema = z.object({
   exemptionReasonOverride: z.string().optional(),
   buyerVatId: z.string().optional(),
   sellerVatId: z.string().optional(),
+  /** Optional document-level rate. Position rates remain explicit exceptions. */
+  defaultVatRate: z.number().min(0).max(100).optional(),
+  /** Destination-country rate for DATEV EU booking-batch field #41. */
+  destinationVatRate: z.number().min(0).max(99.99).optional(),
+  buyerCountryCode: z.string().length(2).optional(),
+  sellerCountryCode: z.string().length(2).optional(),
+  buyerType: z.enum(['business', 'consumer']).optional(),
+  /** `valid`/`invalid` are VIES results; unavailable can be overridden with a reason. */
+  vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
+  vatIdValidationAt: isoDateTimeSchema.optional(),
+  taxRuleConfirmed: z.boolean().optional(),
+  /** Persisted DATEV evidence for EU/§13b booking-batch fields. */
+  datevSachverhaltLl: z.string().regex(/^[1-9]\d{0,2}$/).optional(),
+  datevEvidenceType: z.string().min(1).optional(),
+  datevEvidenceReference: z.string().min(1).optional(),
 });
 export type InvoiceTaxMeta = z.infer<typeof invoiceTaxMetaSchema>;
 
@@ -121,13 +147,15 @@ export const invoiceTaxSnapshotSchema = z.object({
   vatAmount: z.number(),
   netAmount: z.number(),
   grossAmount: z.number(),
-  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']),
+  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O', 'K', 'G']),
   label: z.string().optional(),
   vatBreakdown: z.array(z.object({
     rate: z.number(),
     netAmount: z.number(),
     vatAmount: z.number(),
   })).optional(),
+  taxNotice: z.string().optional(),
+  taxRuleConfirmed: z.boolean().optional(),
 });
 export type InvoiceTaxSnapshot = z.infer<typeof invoiceTaxSnapshotSchema>;
 
@@ -136,7 +164,7 @@ export const invoiceTaxModeDefinitionSchema = z.object({
   label: z.string(),
   description: z.string(),
   legalReference: z.string().optional(),
-  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O']),
+  einvoiceCategoryCode: z.enum(['S', 'E', 'AE', 'O', 'K', 'G']),
   requiresBuyerVatId: z.boolean().optional(),
   requiresExemptionReason: z.boolean().optional(),
   forceZeroVat: z.boolean().optional(),
@@ -229,23 +257,17 @@ export const clientSchema = z.object({
   emails: z.array(clientEmailSchema).default([]),
   projects: z.array(clientProjectSchema).default([]),
   activities: z.array(clientActivitySchema).default([]),
+  taxProfile: z.object({
+    type: z.enum(['business', 'consumer']).default('business'),
+    countryCode: z.string().length(2).optional(),
+    vatId: z.string().optional(),
+    vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
+    vatIdValidationAt: isoDateTimeSchema.optional(),
+  }).optional(),
   createdAt: isoDateTimeSchema.optional(),
   updatedAt: isoDateTimeSchema.optional(),
 });
 export type Client = z.infer<typeof clientSchema>;
-
-export const billingLineItemSchema = z.object({
-  description: nonEmptyStringSchema,
-  quantity: z.number(),
-  price: z.number(),
-  total: z.number(),
-  articleId: z.string().optional(),
-  category: z.string().optional(),
-  unit: z.string().optional(),
-  discountPercent: z.number().min(0).max(100).optional(),
-  taxRate: z.number().min(0).optional(),
-});
-export type BillingLineItem = z.infer<typeof billingLineItemSchema>;
 
 export const paymentSchema = z.object({
   id: entityIdSchema,
@@ -303,8 +325,41 @@ export type BillingDocumentBase = z.infer<typeof billingDocumentBaseSchema>;
 export const invoiceStatusSchema = z.enum(['paid', 'open', 'overdue', 'draft', 'cancelled']);
 export type InvoiceStatus = z.infer<typeof invoiceStatusSchema>;
 
+/**
+ * All outgoing order-chain and correction documents deliberately share the
+ * invoice aggregate. `invoice` is the legacy/default kind; the other values
+ * make the business meaning explicit without creating a parallel subsystem.
+ */
+export const invoiceDocumentKindSchema = z.enum([
+  'invoice',
+  'order_confirmation',
+  'delivery_note',
+  'advance_invoice',
+  'partial_invoice',
+  'final_invoice',
+  'credit_note',
+  'cancellation_invoice',
+]);
+export type InvoiceDocumentKind = z.infer<typeof invoiceDocumentKindSchema>;
+
+export const invoiceRelationFieldsSchema = z.object({
+  /** Immediate source document, e.g. an offer, order, or corrected invoice. */
+  sourceDocumentId: entityIdSchema.optional(),
+  /** Stable order/invoice root used to assemble the complete document chain. */
+  rootDocumentId: entityIdSchema.optional(),
+  /** Set when a new immutable draft revises a finalized document. */
+  revisionOfId: entityIdSchema.optional(),
+  revisionNumber: z.number().int().nonnegative().default(0),
+});
+export type InvoiceRelationFields = z.infer<typeof invoiceRelationFieldsSchema>;
+
 export const invoiceSchema = billingDocumentBaseSchema.extend({
   kind: z.literal('invoice'),
+  documentKind: invoiceDocumentKindSchema.optional(),
+  sourceDocumentId: entityIdSchema.optional(),
+  rootDocumentId: entityIdSchema.optional(),
+  revisionOfId: entityIdSchema.optional(),
+  revisionNumber: z.number().int().nonnegative().optional(),
   dueDate: isoDateSchema,
   servicePeriod: z.string().optional(),
   status: invoiceStatusSchema,
@@ -339,6 +394,8 @@ export const recurringProfileSchema = z.object({
   endDate: isoDateSchema.optional(),
   amount: z.number(),
   items: z.array(billingLineItemSchema).default([]),
+  taxMode: invoiceTaxModeSchema.default('standard_vat'),
+  taxMeta: invoiceTaxMetaSchema.optional(),
   createdAt: isoDateTimeSchema.optional(),
   updatedAt: isoDateTimeSchema.optional(),
 });

@@ -4,7 +4,8 @@ export const buildLedgerBalances = (entries: JournalEntry[]): LedgerBalance[] =>
   const byAccount = new Map<string, LedgerBalance>();
 
   for (const entry of entries) {
-    if (entry.status !== 'posted') continue;
+    // Reversed entries stay ledger-effective; their swapped lines net them to zero.
+    if (entry.status !== 'posted' && entry.status !== 'reversed') continue;
 
     for (const line of entry.lines) {
       const current = byAccount.get(line.accountNumber) ?? {

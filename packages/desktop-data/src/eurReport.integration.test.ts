@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
 
 const mockLines = [
   {
@@ -56,6 +57,48 @@ const mockLines = [
     computedFromIds: ['E2025_KZ280', 'E2025_KZ183'],
     sourceVersion: 'BMF-2025-2025-08-29',
   },
+  {
+    id: 'E2025_KZ290',
+    taxYear: 2025,
+    kennziffer: '290',
+    label: 'Korrigierter Gewinn/Verlust',
+    kind: 'computed',
+    exportable: true,
+    sortOrder: 5,
+    computedFromIds: ['E2025_KZ112'],
+    computedTerms: [
+      { id: 'E2025_KZ112', sign: 1 },
+      { id: 'E2025_KZ280', sign: -1 },
+    ],
+    sourceVersion: 'BMF-2025-2025-08-29',
+  },
+  {
+    id: 'E2025_KZ293',
+    taxYear: 2025,
+    kennziffer: '293',
+    label: 'Steuerpflichtiger Gewinn/Verlust vor Anwendung des § 4 Abs. 4a EStG',
+    kind: 'computed',
+    exportable: true,
+    sortOrder: 6,
+    computedFromIds: [],
+    computedTerms: [
+      { id: 'E2025_KZ290', sign: 1 },
+      { id: 'E2025_KZ183', sign: -1 },
+    ],
+    sourceVersion: 'BMF-2025-2025-08-29',
+  },
+  {
+    id: 'E2025_KZ219',
+    taxYear: 2025,
+    kennziffer: '219',
+    label: 'Steuerpflichtiger Gewinn/Verlust',
+    kind: 'computed',
+    exportable: true,
+    sortOrder: 7,
+    computedFromIds: [],
+    computedTerms: [{ id: 'E2025_KZ293', sign: 1 }, { id: 'E2025_KZ280', sign: 1 }],
+    sourceVersion: 'BMF-2025-2025-08-29',
+  },
 ] as const;
 
 let mockClassificationMap = new Map<string, any>();
@@ -69,7 +112,11 @@ vi.mock('./eurClassificationRepo', () => ({
   upsertEurClassification: vi.fn(),
 }));
 
-import { getEurReport, listEurItems } from './eurReport';
+vi.mock('./eurRulesRepo', () => ({
+  listEurRules: vi.fn(() => []),
+}));
+
+import { getEurReport, listEurItems, upsertEurItemClassification } from './eurReport';
 
 const makeSettings = () => ({
   company: { name: '', owner: '', street: '', zip: '', city: '', email: '', phone: '', website: '' },
@@ -135,15 +182,35 @@ const buildFakeDb = () => {
     },
   ];
 
-  return {
-    prepare: (sql: string) => ({
-      all: () => {
-        if (sql.includes('FROM invoice_payments')) return invoiceRows;
-        if (sql.includes('FROM transactions')) return txRows;
-        return [];
-      },
-    }),
-  } as any;
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE invoices (id TEXT PRIMARY KEY, client TEXT NOT NULL, number TEXT NOT NULL);
+    CREATE TABLE invoice_payments (id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL, date TEXT NOT NULL, amount REAL NOT NULL, method TEXT NOT NULL);
+    CREATE TABLE transactions (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, date TEXT NOT NULL, amount REAL NOT NULL, type TEXT NOT NULL, counterparty TEXT NOT NULL, purpose TEXT NOT NULL, linked_invoice_id TEXT, status TEXT NOT NULL, dedup_hash TEXT, import_batch_id TEXT, deleted_at TEXT);
+    CREATE TABLE eur_classifications (id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL, tax_year INTEGER NOT NULL, eur_line_id TEXT, excluded INTEGER NOT NULL, vat_mode TEXT NOT NULL, note TEXT, updated_at TEXT NOT NULL);
+  `);
+  db.prepare('INSERT INTO invoices (id, client, number) VALUES (?, ?, ?)').run('inv-1', invoiceRows[0]!.client, invoiceRows[0]!.number);
+  db.prepare('INSERT INTO invoice_payments (id, invoice_id, date, amount, method) VALUES (?, ?, ?, ?, ?)').run('p-1', 'inv-1', invoiceRows[0]!.date, invoiceRows[0]!.amount, 'wire');
+  const insertTransaction = db.prepare('INSERT INTO transactions (id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  for (const row of txRows) insertTransaction.run(row.id, row.account_id, row.date, row.amount, row.type, row.counterparty, row.purpose, row.linked_invoice_id, 'booked');
+  return db as any;
+};
+
+const buildProFakeDb = () => {
+  const db = buildFakeDb();
+  db.exec(`
+    ALTER TABLE invoices ADD COLUMN amount REAL;
+    ALTER TABLE invoices ADD COLUMN tax_snapshot_json TEXT;
+    CREATE TABLE bank_transactions (
+      id TEXT PRIMARY KEY, account_id TEXT NOT NULL, date TEXT NOT NULL, amount REAL NOT NULL,
+      type TEXT NOT NULL, counterparty TEXT NOT NULL, purpose TEXT NOT NULL,
+      linked_invoice_id TEXT, status TEXT NOT NULL, deleted_at TEXT
+    );
+  `);
+  db.prepare(`INSERT INTO bank_transactions
+    (id, account_id, date, amount, type, counterparty, purpose, status)
+    VALUES ('bank-1', 'acc-1', '2025-01-03', -59.5, 'expense', 'Hosting GmbH', 'Hosting Januar', 'booked')`).run();
+  return db;
 };
 
 describe('eurReport integration (service boundary)', () => {
@@ -201,5 +268,195 @@ describe('eurReport integration (service boundary)', () => {
     expect(income?.total).toBe(100);
     expect(expense?.total).toBe(50);
     expect(report.unclassifiedCount).toBe(0);
+  });
+
+  it('aggregates Lite invoice partial payments into one classified item', () => {
+    const db = buildFakeDb();
+    db.prepare('INSERT INTO invoice_payments (id, invoice_id, date, amount, method) VALUES (?, ?, ?, ?, ?)')
+      .run('p-2', 'inv-1', '2025-01-10', 59.5, 'wire');
+    mockClassificationMap = new Map([
+      ['invoice:inv-1', {
+        id: 'c1', sourceType: 'invoice', sourceId: 'inv-1', taxYear: 2025,
+        eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'default',
+        updatedAt: '2025-01-01T00:00:00.000Z',
+      }],
+    ]);
+
+    const settings = makeSettings() as any;
+    const items = listEurItems(db, {
+      taxYear: 2025,
+      settings,
+      sourceType: 'invoice',
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      sourceId: 'inv-1',
+      date: '2025-01-10',
+      amountGross: 178.5,
+      amountNet: 150,
+    });
+
+    const report = getEurReport(db, { taxYear: 2025, settings });
+    expect(report.rows.find((row) => row.lineId === 'E2025_KZ112')?.total).toBe(150);
+  });
+
+  it.each([
+    { product: 'lite' as const, makeDb: buildFakeDb, sourceType: 'invoice' as const, sourceId: 'inv-1', incomeLine: 'E2025_KZ112', expenseLine: 'E2025_KZ280' },
+    { product: 'pro' as const, makeDb: buildProFakeDb, sourceType: 'transaction' as const, sourceId: 'bank-1', incomeLine: 'E2025_KZ112', expenseLine: 'E2025_KZ280' },
+  ])('rejects invalid $product EÜR classification targets at the shared upsert seam', ({ product, makeDb, sourceType, sourceId, incomeLine, expenseLine }) => {
+    const db = makeDb();
+    const settings = makeSettings() as any;
+    const base = {
+      sourceType,
+      sourceId,
+      taxYear: 2025,
+      reason: 'Boundary geprüft',
+      actor: product,
+      product,
+      settings,
+    };
+
+    expect(() => upsertEurItemClassification(db, { ...base, sourceId: 'ghost-source', eurLineId: expenseLine }))
+      .toThrow('EUR_CLASSIFICATION_SOURCE_NOT_FOUND');
+    expect(() => upsertEurItemClassification(db, { ...base, eurLineId: 'E2025_KZ290' }))
+      .toThrow('EUR_CLASSIFICATION_COMPUTED_LINE_FORBIDDEN');
+    expect(() => upsertEurItemClassification(db, { ...base, eurLineId: sourceType === 'invoice' ? expenseLine : incomeLine }))
+      .toThrow('EUR_CLASSIFICATION_FLOW_MISMATCH');
+
+    expect(() => upsertEurItemClassification(db, { ...base, eurLineId: sourceType === 'invoice' ? incomeLine : expenseLine }))
+      .not.toThrow();
+    expect(() => upsertEurItemClassification(db, { ...base, eurLineId: undefined, excluded: true }))
+      .not.toThrow();
+  });
+
+  it('preserves signed terms in computed report lines', () => {
+    const db = buildFakeDb();
+    mockClassificationMap = new Map([
+      ['invoice:inv-1', { id: 'c1', sourceType: 'invoice', sourceId: 'inv-1', taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z' }],
+      ['transaction:tx-1', { id: 'c2', sourceType: 'transaction', sourceId: 'tx-1', taxYear: 2025, eurLineId: 'E2025_KZ280', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z' }],
+      ['transaction:tx-2', { id: 'c3', sourceType: 'transaction', sourceId: 'tx-2', taxYear: 2025, eurLineId: 'E2025_KZ183', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z' }],
+    ]);
+
+    const report = getEurReport(db, { taxYear: 2025, settings: makeSettings() as any });
+    expect(report.rows.find((row) => row.lineId === 'E2025_KZ290')?.total).toBe(59.5);
+    expect(report.rows.find((row) => row.lineId === 'E2025_KZ293')?.total).toBe(29.5);
+    expect(report.rows.find((row) => row.lineId === 'E2025_KZ219')?.total).toBe(89);
+  });
+
+  it('keeps each OPOS allocation tax snapshot and emits residual separately', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE bank_transactions (
+        id TEXT PRIMARY KEY, account_id TEXT, date TEXT NOT NULL, amount REAL NOT NULL,
+        type TEXT NOT NULL, counterparty TEXT, purpose TEXT, linked_invoice_id TEXT,
+        status TEXT NOT NULL, source_transaction_id TEXT, deleted_at TEXT
+      );
+      CREATE TABLE open_item_payments (
+        id TEXT PRIMARY KEY, payment_date TEXT NOT NULL, amount REAL NOT NULL,
+        party_type TEXT NOT NULL, source_type TEXT NOT NULL, source_id TEXT,
+        status TEXT NOT NULL
+      );
+      CREATE TABLE open_items (id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL);
+      CREATE TABLE open_item_allocations (
+        id TEXT PRIMARY KEY, payment_id TEXT NOT NULL, open_item_id TEXT NOT NULL,
+        amount REAL NOT NULL, created_at TEXT NOT NULL
+      );
+      CREATE TABLE invoices (
+        id TEXT PRIMARY KEY, client TEXT NOT NULL, number TEXT NOT NULL,
+        amount REAL NOT NULL, tax_snapshot_json TEXT
+      );
+      CREATE TABLE transactions (
+        id TEXT PRIMARY KEY, counterparty TEXT NOT NULL, purpose TEXT NOT NULL
+      );
+      CREATE TABLE eur_classifications (
+        id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL,
+        tax_year INTEGER NOT NULL, eur_line_id TEXT, excluded INTEGER NOT NULL,
+        vat_mode TEXT NOT NULL, note TEXT, updated_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(`INSERT INTO bank_transactions
+      (id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, source_transaction_id)
+      VALUES ('bank-payment', 'bank', '2025-01-05', 219, 'income', 'Acme', 'Sammelzahlung', NULL, 'booked', 'legacy-source')`).run();
+    db.prepare(`INSERT INTO open_item_payments
+      (id, payment_date, amount, party_type, source_type, source_id, status)
+      VALUES ('payment-1', '2025-01-05', 219, 'debtor', 'bank_transaction', 'bank-payment', 'allocated')`).run();
+    db.prepare(`INSERT INTO invoices (id, client, number, amount, tax_snapshot_json) VALUES
+      ('invoice-vat', 'Acme', 'RE-19', 119, ?),
+      ('invoice-exempt', 'Acme', 'RE-EXEMPT', 100, ?)`)
+      .run(JSON.stringify({ grossAmount: 119, netAmount: 100, vatAmount: 19 }), JSON.stringify({ grossAmount: 100, netAmount: 100, vatAmount: 0 }));
+    db.prepare(`INSERT INTO open_items (id, source_type, source_id) VALUES
+      ('item-vat', 'outgoing_invoice', 'invoice-vat'),
+      ('item-exempt', 'outgoing_invoice', 'invoice-exempt')`).run();
+    db.prepare(`INSERT INTO open_item_allocations (id, payment_id, open_item_id, amount, created_at) VALUES
+      ('allocation-vat', 'payment-1', 'item-vat', 119, '2025-01-05T09:00:00Z'),
+      ('allocation-exempt', 'payment-1', 'item-exempt', 100, '2025-01-05T09:01:00Z')`).run();
+
+    mockClassificationMap = new Map([
+      ['transaction:payment:payment-1:allocation:allocation-vat', {
+        id: 'classification-vat', sourceType: 'transaction', sourceId: 'payment:payment-1:allocation:allocation-vat',
+        taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z',
+      }],
+      ['transaction:payment:payment-1:allocation:allocation-exempt', {
+        id: 'classification-exempt', sourceType: 'transaction', sourceId: 'payment:payment-1:allocation:allocation-exempt',
+        taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z',
+      }],
+    ]);
+
+    const items = listEurItems(db, { taxYear: 2025, settings: makeSettings() as any, product: 'pro' });
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item.amountGross).sort((a, b) => a - b)).toEqual([100, 119]);
+    expect(items.reduce((sum, item) => sum + item.amountNet, 0)).toBe(200);
+    expect(items.every((item) => item.sourceId.includes(':allocation:'))).toBe(true);
+
+    mockClassificationMap = new Map([['transaction:payment:payment-1', {
+      id: 'legacy-classification', sourceType: 'transaction', sourceId: 'payment:payment-1',
+      taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z',
+    }]]);
+    const migratedItems = listEurItems(db, { taxYear: 2025, settings: makeSettings() as any, product: 'pro' });
+    expect(migratedItems.every((item) => item.classification?.eurLineId === 'E2025_KZ112')).toBe(true);
+
+    mockClassificationMap = new Map([['transaction:legacy-source', {
+      id: 'legacy-source-classification', sourceType: 'transaction', sourceId: 'legacy-source',
+      taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'none', updatedAt: '2025-01-01T00:00:00.000Z',
+    }]]);
+    const sourceFallbackItems = listEurItems(db, { taxYear: 2025, settings: makeSettings() as any, product: 'pro' });
+    expect(sourceFallbackItems.every((item) => item.classification?.eurLineId === 'E2025_KZ112')).toBe(true);
+  });
+
+  it('requires an explicit Pro VAT rate for standalone bank classifications', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE bank_transactions (
+        id TEXT PRIMARY KEY, account_id TEXT, date TEXT NOT NULL, amount REAL NOT NULL,
+        type TEXT NOT NULL, counterparty TEXT, purpose TEXT, linked_invoice_id TEXT,
+        status TEXT NOT NULL, source_transaction_id TEXT, deleted_at TEXT
+      );
+      CREATE TABLE transactions (id TEXT PRIMARY KEY, counterparty TEXT NOT NULL, purpose TEXT NOT NULL);
+      CREATE TABLE invoices (id TEXT PRIMARY KEY, client TEXT NOT NULL, number TEXT NOT NULL);
+      CREATE TABLE eur_classifications (
+        id TEXT PRIMARY KEY, source_type TEXT NOT NULL, source_id TEXT NOT NULL,
+        tax_year INTEGER NOT NULL, eur_line_id TEXT, excluded INTEGER NOT NULL,
+        vat_mode TEXT NOT NULL, note TEXT, updated_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(`INSERT INTO bank_transactions
+      (id, account_id, date, amount, type, counterparty, purpose, status)
+      VALUES ('bank-manual', 'bank',  '2025-01-06', 119, 'income', 'Manual', 'Bank', 'booked')`).run();
+
+    const classification = (vatRate?: number) => ({
+      id: 'classification-manual', sourceType: 'transaction' as const, sourceId: 'bank-manual',
+      taxYear: 2025, eurLineId: 'E2025_KZ112', excluded: false, vatMode: 'default' as const,
+      vatRate, updatedAt: '2025-01-01T00:00:00.000Z',
+    });
+    mockClassificationMap = new Map([['transaction:bank-manual', classification(19)]]);
+    const settings = makeSettings() as any;
+    let items = listEurItems(db, { taxYear: 2025, settings, product: 'pro' });
+    expect(items[0]).toMatchObject({ amountGross: 119, amountNet: 100 });
+    expect(items[0]?.vatWarning).toBeUndefined();
+
+    mockClassificationMap = new Map([['transaction:bank-manual', classification(undefined)]]);
+    items = listEurItems(db, { taxYear: 2025, settings, product: 'pro' });
+    expect(items[0]).toMatchObject({ amountGross: 119, amountNet: 119, vatWarning: 'VAT_RATE_REQUIRED:bank-manual' });
   });
 });

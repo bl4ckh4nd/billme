@@ -23,7 +23,7 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
     const message =
       typeof payload.error === 'string'
         ? payload.error
-        : `IPC route failed with HTTP ${response.status}`;
+        : `IPC-Anfrage fehlgeschlagen (HTTP ${response.status}).`;
     throw new Error(message);
   }
 

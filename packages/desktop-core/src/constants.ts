@@ -71,7 +71,7 @@ export const INITIAL_INVOICE_TEMPLATE: InvoiceElement[] = [
     x: 125 * MM_TO_PX, // Right side block
     y: 50 * MM_TO_PX, // Aligned with address block
     zIndex: 10,
-    content: 'Rechnungs-Nr: {{invoice.number}}\nDatum: {{invoice.date}}\nLeistungsdatum: {{invoice.servicePeriod}}\nKunden-Nr: {{client.number}}',
+    content: '{{invoice.documentLabel}}-Nr: {{invoice.number}}\nDatum: {{invoice.date}}\nLeistungsdatum: {{invoice.servicePeriod}}\nKunden-Nr: {{client.number}}',
     style: { ...DEFAULT_TEXT_STYLE, fontSize: 11, textAlign: 'right', width: 250, height: 100, color: '#333333' },
     label: 'invoice_meta'
   },
@@ -83,7 +83,7 @@ export const INITIAL_INVOICE_TEMPLATE: InvoiceElement[] = [
     x: 20 * MM_TO_PX,
     y: 100 * MM_TO_PX,
     zIndex: 10,
-    content: 'Rechnung {{invoice.number}}',
+    content: '{{invoice.documentLabel}} {{invoice.number}}',
     style: { ...DEFAULT_TEXT_STYLE, fontSize: 20, fontWeight: 'bold', width: 700 },
     label: 'invoice_title'
   },
@@ -93,7 +93,7 @@ export const INITIAL_INVOICE_TEMPLATE: InvoiceElement[] = [
     x: 20 * MM_TO_PX,
     y: 115 * MM_TO_PX,
     zIndex: 10,
-    content: 'Sehr geehrte Damen und Herren,\n\nvielen Dank für Ihren Auftrag. Wir berechnen Ihnen für unsere Leistungen wie folgt:',
+    content: 'Guten Tag,\n\nvielen Dank für Ihren Auftrag. Hier finden Sie die Rechnung für unsere Leistungen:',
     style: { ...DEFAULT_TEXT_STYLE, fontSize: 11, width: 700, height: 50 },
     label: 'intro_text'
   },
@@ -198,7 +198,7 @@ export const INITIAL_OFFER_TEMPLATE: InvoiceElement[] = [
       }
       // Modify Intro
       if (el.label === 'intro_text') {
-          return { ...el, content: 'Sehr geehrte Damen und Herren,\n\ngerne unterbreiten wir Ihnen freibleibend folgendes Angebot:' };
+        return { ...el, content: 'Guten Tag,\n\nhier ist unser freibleibendes Angebot für die angefragten Leistungen:' };
       }
       // Modify Meta Info (Replace Service Period with Valid Until if desired, or just generic date)
       if (el.label === 'invoice_meta') {
@@ -206,7 +206,7 @@ export const INITIAL_OFFER_TEMPLATE: InvoiceElement[] = [
       }
       // Modify Terms
       if (el.label === 'payment_terms') {
-           return { ...el, content: 'Wir freuen uns auf Ihre Auftragserteilung.\nBei Rückfragen stehen wir Ihnen gerne zur Verfügung.' };
+        return { ...el, content: 'Wenn Sie das Angebot annehmen möchten oder Fragen haben, melden Sie sich bitte.' };
       }
       return el;
   })

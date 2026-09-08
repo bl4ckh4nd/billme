@@ -52,7 +52,7 @@ export const createOwnerCredentials = (product) => ({
   email: `${product}-owner@billme-e2e.local`,
   fullName: product === 'pro' ? 'Billme Pro Owner' : 'Billme Lite Owner',
   password: 'billme-server-123',
-});
+  });
 
 export const getProAppUrl = (state, route = 'overview') => {
   if (route.startsWith('#')) {
@@ -78,8 +78,16 @@ export const ensureHarnessSession = async (state, { product, email, password, fu
   ]);
 };
 
-export const seedHarnessProTenant = async (state, { tenantId, namespace }) => {
-  return runFixtureHelper([
+export const createHarnessProTenant = async (state, { email, password, fullName }) => runFixtureHelper([
+  'create-pro-tenant',
+  '--state-file', state.stateFile,
+  '--email', email,
+  '--password', password,
+  '--full-name', fullName,
+]);
+
+export const seedHarnessProTenant = async (state, { tenantId, namespace, includeEurCashFixtures = false, includeEurCatalog2026 = false }) => {
+  const args = [
     'seed-pro',
     '--state-file',
     state.stateFile,
@@ -87,8 +95,29 @@ export const seedHarnessProTenant = async (state, { tenantId, namespace }) => {
     tenantId,
     '--namespace',
     namespace,
-  ]);
+  ];
+  if (includeEurCashFixtures) args.push('--include-eur-cash-fixtures', 'true');
+  if (includeEurCatalog2026) args.push('--include-eur-catalog-2026', 'true');
+  return runFixtureHelper(args);
 };
+
+export const setHarnessProPeriodStatus = async (state, { tenantId, period, status }) =>
+  runFixtureHelper([
+    'set-pro-period-status',
+    '--state-file', state.stateFile,
+    '--tenant-id', tenantId,
+    '--period', period,
+    '--status', status,
+  ]);
+
+export const setHarnessProBankTransactionStatus = async (state, { tenantId, transactionId, status }) =>
+  runFixtureHelper([
+    'set-pro-bank-transaction-status',
+    '--state-file', state.stateFile,
+    '--tenant-id', tenantId,
+    '--transaction-id', transactionId,
+    '--status', status,
+  ]);
 
 export const installProSession = async (page, state, session) => {
   await page.addInitScript(
@@ -116,7 +145,7 @@ export const openProShell = async (page, state, { route = 'overview', session = 
   await page.goto(getProAppUrl(state, route), { waitUntil: 'networkidle' });
 };
 
-export const requestJson = async (state, session, requestPath, query = undefined) => {
+const request = async (state, session, requestPath, query, options = {}) => {
   const url = new URL(requestPath, `${state.urls.api}/`);
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value === undefined || value === null || value === '') {
@@ -125,19 +154,44 @@ export const requestJson = async (state, session, requestPath, query = undefined
     url.searchParams.set(key, String(value));
   }
 
-  const response = await fetch(url, {
-    headers: {
-      accept: 'application/json',
-      authorization: `Bearer ${session.token}`,
-    },
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(
-      payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string'
-        ? payload.message
-        : `Request failed with status ${response.status}`,
-    );
+  const headers = {
+    accept: options.accept ?? 'application/json',
+    authorization: `Bearer ${session.token}`,
+  };
+  if (options.body !== undefined) {
+    headers['content-type'] = 'application/json';
   }
-  return payload;
+
+  const response = await fetch(url, {
+    method: options.method ?? 'GET',
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+
+  if (response.ok) {
+    return response;
+  }
+
+  const payload = await response.json().catch(() => null);
+  throw new Error(
+    payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string'
+      ? payload.message
+      : `Request failed with status ${response.status}`,
+  );
+};
+
+export const requestJson = async (state, session, requestPath, query = undefined, options = {}) => {
+  const response = await request(state, session, requestPath, query, options);
+  return response.json();
+};
+
+export const requestText = async (state, session, requestPath, query = undefined, options = {}) => {
+  const response = await request(state, session, requestPath, query, {
+    ...options,
+    accept: options.accept ?? 'text/csv',
+  });
+  return {
+    body: await response.text(),
+    headers: response.headers,
+  };
 };

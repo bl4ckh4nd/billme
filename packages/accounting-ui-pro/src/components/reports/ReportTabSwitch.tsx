@@ -1,23 +1,24 @@
+import { REPORT_TABS, ReportTabId } from '../../domain/reportTypes';
+
 interface ReportTabSwitchProps {
-  activeTab: 'susa' | 'guv' | 'bilanz';
-  onChange: (tab: 'susa' | 'guv' | 'bilanz') => void;
+  activeTab: ReportTabId;
+  onChange: (tab: ReportTabId) => void;
+  tabs?: ReportTabId[];
 }
 
-const tabs: Array<{ id: 'susa' | 'guv' | 'bilanz'; label: string }> = [
-  { id: 'susa', label: 'SuSa' },
-  { id: 'guv', label: 'GuV' },
-  { id: 'bilanz', label: 'Bilanz (Preview)' },
-];
-
-export default function ReportTabSwitch({ activeTab, onChange }: ReportTabSwitchProps) {
+export default function ReportTabSwitch({ activeTab, onChange, tabs }: ReportTabSwitchProps) {
+  const visibleTabs = REPORT_TABS.filter((tab) => !tabs || tabs.includes(tab.id));
   return (
     <div className="flex flex-wrap gap-1.5">
-      {tabs.map((tab) => (
+      {visibleTabs.map((tab) => (
         <button
           key={tab.id}
+          type="button"
+          title={tab.description}
+          aria-pressed={activeTab === tab.id}
           onClick={() => onChange(tab.id)}
           className={`h-7 px-3 rounded-full text-xs font-bold border ${
-            activeTab === tab.id ? 'bg-black text-white border-black' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+            activeTab === tab.id ? 'bg-dark-base text-background border-dark-base' : 'bg-surface text-muted border-border hover:bg-surface-muted'
           }`}
         >
           {tab.label}
@@ -26,4 +27,3 @@ export default function ReportTabSwitch({ activeTab, onChange }: ReportTabSwitch
     </div>
   );
 }
-

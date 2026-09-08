@@ -1,0 +1,195 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1768900000000,
+      "tag": "0000_server_data",
+      "breakpoints": false
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1768900000001,
+      "tag": "0001_server_data_pro_accounting",
+      "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1768900000002,
+      "tag": "0002_server_data_assets",
+      "breakpoints": false
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1768900000003,
+      "tag": "0003_server_data_offer_items",
+      "breakpoints": false
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1768900000004,
+      "tag": "0004_server_data_tax_rules",
+      "breakpoints": false
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786092000000,
+      "tag": "0005_server_data_audit_heads",
+      "breakpoints": false
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786092000001,
+      "tag": "0006_server_data_opos",
+      "breakpoints": false
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786092000002,
+      "tag": "0007_server_data_opos_hardening",
+      "breakpoints": false
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786527693000,
+      "tag": "0008_server_data_asset_accounting",
+      "breakpoints": false
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786527693001,
+      "tag": "0009_server_data_datev_export_bytes",
+      "breakpoints": false
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786527693002,
+      "tag": "0010_server_data_invoice_accounting_posted_at",
+      "breakpoints": false
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786527693003,
+      "tag": "0011_server_data_tax_case_mapping_tenancy",
+      "breakpoints": false
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786538400000,
+      "tag": "0012_server_data_asset_ownership_guard",
+      "breakpoints": false
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786538400001,
+      "tag": "0013_server_data_asset_ownership_hardening",
+      "breakpoints": false
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786538400002,
+      "tag": "0014_server_data_datev_tax_evidence",
+      "breakpoints": false
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1786538400003,
+      "tag": "0015_server_data_reporting_tax_submissions",
+      "breakpoints": false
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786538400004,
+      "tag": "0016_server_data_eur_native",
+      "breakpoints": false
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786538400005,
+      "tag": "0017_server_data_eur_catalog",
+      "breakpoints": false
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786538400006,
+      "tag": "0018_server_data_canonical_catalog",
+      "breakpoints": false
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786538400007,
+      "tag": "0019_server_data_audit_tenant_hash",
+      "breakpoints": false
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1786538400009,
+      "tag": "0021_server_data_eur_facts",
+      "breakpoints": false
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1786538400010,
+      "tag": "0022_server_data_accounting_source_runs",
+      "breakpoints": false
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1786538400011,
+      "tag": "0023_server_data_import_source_run_rejected",
+      "breakpoints": false
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786538400012,
+      "tag": "0024_server_data_portal_publications",
+      "breakpoints": false
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788528600000,
+      "tag": "0025_server_data_incoming_invoice_documents",
+      "breakpoints": false
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788528600001,
+      "tag": "0026_server_data_invoice_document_chain",
+      "breakpoints": false
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1788528600002,
+      "tag": "0027_server_data_account_skr_optional",
+      "breakpoints": false
+    }
+  ]
+}

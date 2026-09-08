@@ -27,7 +27,31 @@ export interface DunningLevel {
   text: string;
 }
 
+export type BusinessReportingJurisdiction = 'DE';
+export type BusinessLegalForm = 'sole_proprietor' | 'gmbh';
+export type ProfitDetermination = 'eur' | 'double_entry';
+export type HgbSizeClass = 'micro' | 'small';
+export type LedgerChart = 'SKR03' | 'SKR04';
+export type VatMethod = 'soll' | 'ist';
+
+/**
+ * Canonical business reporting configuration. The legacy
+ * `legal.taxAccountingMethod` field is retained as a read-only projection for
+ * older callers and persisted documents.
+ */
+export interface BusinessReportingProfile {
+  jurisdiction: BusinessReportingJurisdiction;
+  legalForm: BusinessLegalForm;
+  profitDetermination: ProfitDetermination;
+  hgbSizeClass?: HgbSizeClass;
+  fiscalYearStart: string; // MM-DD
+  chart?: LedgerChart;
+  vatMethod: VatMethod;
+}
+
 export interface AppSettings {
+  /** Canonical reporting truth; omitted only by legacy in-memory callers. */
+  businessReportingProfile?: BusinessReportingProfile;
   company: {
     name: string;
     owner: string;
@@ -68,6 +92,7 @@ export interface AppSettings {
   legal: {
     smallBusinessRule: boolean; // Kleinunternehmer §19
     defaultVatRate: number;
+    countryCode?: 'DE' | 'AT' | 'CH';
     taxAccountingMethod: 'soll' | 'ist'; // Soll-/Ist-Versteuerung (default: soll)
     paymentTermsDays: number;
     defaultIntroText: string;
@@ -115,7 +140,37 @@ export interface AppSettings {
 
 export type InvoiceStatus = 'paid' | 'open' | 'overdue' | 'draft' | 'cancelled';
 
+export type InvoiceDocumentKind =
+  | 'invoice'
+  | 'order_confirmation'
+  | 'delivery_note'
+  | 'advance_invoice'
+  | 'partial_invoice'
+  | 'final_invoice'
+  | 'credit_note'
+  | 'cancellation_invoice';
+
+/** Human-facing labels shared by list/detail views and the print renderer. */
+export const INVOICE_DOCUMENT_KIND_LABELS: Record<InvoiceDocumentKind, string> = {
+  invoice: 'Rechnung',
+  order_confirmation: 'Auftragsbestätigung',
+  delivery_note: 'Lieferschein',
+  advance_invoice: 'Abschlagsrechnung',
+  partial_invoice: 'Teilrechnung',
+  final_invoice: 'Schlussrechnung',
+  credit_note: 'Gutschrift',
+  cancellation_invoice: 'Stornorechnung',
+};
+
+export const getInvoiceDocumentLabel = (kind?: InvoiceDocumentKind): string =>
+  INVOICE_DOCUMENT_KIND_LABELS[kind ?? 'invoice'];
+
+export const isBillingDocumentKind = (kind?: InvoiceDocumentKind): boolean =>
+  kind !== 'order_confirmation' && kind !== 'delivery_note';
+
 export interface InvoiceItem {
+  /** Missing on legacy rows, which are treated as billable `item` rows. */
+  kind?: 'item' | 'time' | 'optional' | 'text' | 'group' | 'summary';
   description: string;
   quantity: number;
   price: number;
@@ -125,6 +180,14 @@ export interface InvoiceItem {
   unit?: string;
   discountPercent?: number;
   taxRate?: number;
+  note?: string;
+  optionNote?: string;
+  date?: string;
+  durationMinutes?: number;
+  groupId?: string;
+  summaryScope?: 'running' | 'group';
+  summaryMetric?: 'amount' | 'quantity';
+  summaryUnit?: string;
 }
 
 export interface Payment {
@@ -149,6 +212,13 @@ export interface InvoiceTaxMeta {
   exemptionReasonOverride?: string;
   buyerVatId?: string;
   sellerVatId?: string;
+  defaultVatRate?: number;
+  buyerCountryCode?: string;
+  sellerCountryCode?: string;
+  buyerType?: 'business' | 'consumer';
+  vatIdValidation?: 'valid' | 'invalid' | 'unavailable' | 'manual_override';
+  vatIdValidationAt?: string;
+  taxRuleConfirmed?: boolean;
 }
 
 export interface InvoiceTaxSnapshot {
@@ -156,7 +226,9 @@ export interface InvoiceTaxSnapshot {
   vatAmount: number;
   netAmount: number;
   grossAmount: number;
-  einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O';
+  einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O' | 'K' | 'G';
+  taxNotice?: string;
+  taxRuleConfirmed?: boolean;
   label?: string;
   vatBreakdown?: Array<{ rate: number; netAmount: number; vatAmount: number }>;
 }
@@ -166,7 +238,7 @@ export interface InvoiceTaxModeDefinition {
   label: string;
   description: string;
   legalReference?: string;
-  einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O';
+  einvoiceCategoryCode: 'S' | 'E' | 'AE' | 'O' | 'K' | 'G';
   requiresBuyerVatId?: boolean;
   requiresExemptionReason?: boolean;
   forceZeroVat?: boolean;
@@ -179,6 +251,12 @@ export interface Invoice {
   projectId?: string; // Link to Project (client_projects)
   number: string;
   numberReservationId?: string;
+  /** Explicit document kind while retaining the shared Invoice aggregate. */
+  documentKind?: InvoiceDocumentKind;
+  sourceDocumentId?: string;
+  rootDocumentId?: string;
+  revisionOfId?: string;
+  revisionNumber?: number;
   client: string;
   clientEmail: string;
   clientAddress?: string;
@@ -294,6 +372,13 @@ export interface Client {
   activities: Activity[];
   addresses?: ClientAddress[];
   emails?: ClientEmail[];
+  taxProfile?: {
+    type: 'business' | 'consumer';
+    countryCode?: string;
+    vatId?: string;
+    vatIdValidation?: 'valid' | 'invalid' | 'unavailable' | 'manual_override';
+    vatIdValidationAt?: string;
+  };
 }
 
 // --- Article/Product Types ---

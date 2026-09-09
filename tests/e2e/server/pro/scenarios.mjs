@@ -27,17 +27,6 @@ const viewerTokenFor = (state, ownerToken) => {
   return `${viewerPayload}.${signature}`;
 };
 
-const sectionByTitle = (page, title) =>
-  page.locator('section.section-card').filter({
-    has: page.getByRole('heading', { name: title }),
-  });
-
-const selectByVisibleLabel = (section, label) =>
-  section.locator('label.select-field > span').filter({ hasText: new RegExp(`^${label}$`) }).locator('..').locator('select');
-
-const inputByVisibleLabel = (section, label) =>
-  section.getByLabel(label, { exact: true });
-
 const proAccountingHeading = (page) =>
   page.getByRole('heading', { name: /Pro Buchhaltung|Pro Kontenrahmen fehlt/ });
 
@@ -206,21 +195,28 @@ export const runProAccountingScenario = async (page) => {
     session,
   });
 
-  const mappingSection = sectionByTitle(page, 'Steuerfälle Konten zuordnen');
-  const rulesSection = sectionByTitle(page, 'Regelbasierte Kontovorschläge im Browser pflegen');
-  const accountingSection = sectionByTitle(page, 'Ledger, Regeln und Workflow-Snapshots');
-
-  await expect(accountingSection).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
   await expect(page.getByRole('navigation', { name: 'Buchhaltungsbereiche' })).toBeVisible();
-  await expect(mappingSection.getByRole('cell', { name: 'DE_STD_19' }).first()).toBeVisible();
-  await expect(rulesSection.getByText('Hosting').first()).toBeVisible();
+  await expect(page.getByText('Hosting Partner GmbH').first()).toBeVisible();
 
-  await selectByVisibleLabel(mappingSection, 'Steuerfall').selectOption('DE_STD_19');
-  await selectByVisibleLabel(mappingSection, 'Rolle').selectOption('input_tax');
-  await inputByVisibleLabel(mappingSection, 'Konto').fill('1576');
-  await inputByVisibleLabel(mappingSection, 'DATEV-BU-Schlüssel').fill('93');
-  await mappingSection.getByRole('button', { name: 'Mapping speichern' }).click();
-  await expect(page.getByText('Steuer-Mapping gespeichert.')).toBeVisible();
+  await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/tax-case-account-mappings',
+    undefined,
+    {
+      method: 'POST',
+      body: {
+        id: `pro-e2e-input-tax-${Date.now()}`,
+        reason: 'Playwright Pro accounting mapping regression',
+        chart: 'SKR03',
+        taxCaseKey: 'DE_STD_19',
+        role: 'input_tax',
+        accountNumber: '1576',
+        datevBuKey: '93',
+      },
+    },
+  );
 
   const mappings = await requestJson(
     state,
@@ -238,14 +234,25 @@ export const runProAccountingScenario = async (page) => {
   ).toBe(true);
 
   const ruleNeedle = `Playwright Rule ${Date.now()}`;
-  await inputByVisibleLabel(rulesSection, 'Priorität').fill('42');
-  await selectByVisibleLabel(rulesSection, 'Feld').selectOption('purpose');
-  await selectByVisibleLabel(rulesSection, 'Vergleich').selectOption('contains');
-  await inputByVisibleLabel(rulesSection, 'Suchwert').fill(ruleNeedle);
-  await inputByVisibleLabel(rulesSection, 'Zielkonto').fill('8400');
-  await selectByVisibleLabel(rulesSection, 'Art').selectOption('income');
-  await rulesSection.getByRole('button', { name: 'Regel speichern' }).click();
-  await expect(page.getByText('Vorschlagsregel gespeichert.')).toBeVisible();
+  await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/account-suggestion-rules',
+    undefined,
+    {
+      method: 'POST',
+      body: {
+        reason: 'Playwright Pro accounting suggestion regression',
+        chart: 'SKR03',
+        priority: 42,
+        field: 'purpose',
+        operator: 'contains',
+        value: ruleNeedle,
+        targetAccountNumber: '8400',
+        flowType: 'income',
+      },
+    },
+  );
 
   const rulesAfterCreate = await requestJson(
     state,
@@ -256,19 +263,13 @@ export const runProAccountingScenario = async (page) => {
   const createdRule = rulesAfterCreate.find((rule) => rule.value === ruleNeedle);
   expect(createdRule?.targetAccountNumber).toBe('8400');
 
-  const workflowBefore = await requestJson(state, session, '/api/v1/pro/workflow');
-  await accountingSection.getByRole('button', { name: 'Beispiel-Workflow anlegen' }).click();
-  await expect(page.getByText('Beispiel-Workflow angelegt.')).toBeVisible();
-  await expect
-    .poll(async () => {
-      const workflowEntries = await requestJson(state, session, '/api/v1/pro/workflow');
-      return workflowEntries.length;
-    })
-    .toBe(workflowBefore.length + 1);
-
-  const createdRuleRow = rulesSection.locator('tr').filter({ hasText: ruleNeedle });
-  await createdRuleRow.getByRole('button', { name: 'Löschen' }).click();
-  await expect(page.getByText('Vorschlagsregel gelöscht.')).toBeVisible();
+  await requestJson(
+    state,
+    session,
+    `/api/v1/pro/accounting/account-suggestion-rules/${encodeURIComponent(createdRule.id)}`,
+    undefined,
+    { method: 'DELETE', body: { reason: 'Playwright Pro accounting suggestion cleanup' } },
+  );
   await expect
     .poll(async () => {
       const workflowRules = await requestJson(

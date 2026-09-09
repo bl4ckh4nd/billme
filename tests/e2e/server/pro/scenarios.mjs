@@ -67,7 +67,11 @@ const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') 
   await page.getByLabel('Zahlungsziel in Tagen').fill('14');
   await page.getByLabel('Rechnungs-Praefix').fill('RE-%Y-');
   await page.getByLabel('Angebots-Praefix').fill('ANG-%Y-');
+  await page.getByLabel('Rechtsform').selectOption('sole_proprietor');
+  await page.getByLabel('Gewinnermittlung').selectOption('eur');
+  await page.getByLabel('Umsatzsteuer-Methode').selectOption('ist');
   await page.getByRole('button', { name: 'Weiter zu Weitere Angaben' }).click();
+  await expect(page.getByRole('heading', { name: 'Ergänze Zahlungs- und Kontaktdaten' })).toBeVisible();
 
   await page.getByLabel('Bankname').fill('Berliner Testbank');
   await page.getByLabel('IBAN').fill('DE12100500001234567890');

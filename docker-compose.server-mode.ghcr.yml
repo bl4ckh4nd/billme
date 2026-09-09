@@ -1,0 +1,129 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    user: "${BILLME_POSTGRES_RUN_AS:-}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${BILLME_POSTGRES_DB:-billme}
+      POSTGRES_USER: ${BILLME_POSTGRES_USER:-billme}
+      POSTGRES_PASSWORD: ${BILLME_POSTGRES_PASSWORD:-billme}
+    ports:
+      - "${BILLME_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - "${BILLME_POSTGRES_DATA_DIR:-billme-postgres-data}:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  server-migrate:
+    image: ghcr.io/bl4ckh4nd/billme/server-api:${BILLME_IMAGE_TAG:-latest}
+    init: true
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:-billme}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["node", "--import", "tsx", "/app/packages/server-data/src/cli/migrate.ts"]
+
+  server-api:
+    image: ghcr.io/bl4ckh4nd/billme/server-api:${BILLME_IMAGE_TAG:-latest}
+    init: true
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3100
+      SESSION_SECRET: ${BILLME_SESSION_SECRET:?set BILLME_SESSION_SECRET}
+      DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:-billme}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_VLM_MODEL: ${OPENROUTER_VLM_MODEL:-google/gemini-3.7-flash}
+      OPENROUTER_VLM_MODELS: ${OPENROUTER_VLM_MODELS:-google/gemini-3.7-flash}
+      OPENROUTER_VLM_TIMEOUT_MS: ${OPENROUTER_VLM_TIMEOUT_MS:-45000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      server-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${BILLME_API_PORT:-3100}:3100"
+    healthcheck:
+      test: ["CMD", "node", "--input-type=module", "-e", "fetch('http://127.0.0.1:3100/health').then(r => { if (!r.ok) process.exit(1) })"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  server-worker:
+    image: ghcr.io/bl4ckh4nd/billme/server-worker:${BILLME_IMAGE_TAG:-latest}
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:-billme}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
+      WORKER_LOG_LEVEL: ${WORKER_LOG_LEVEL:-info}
+      WORKER_RECURRING_INTERVAL_MS: ${WORKER_RECURRING_INTERVAL_MS:-900000}
+      WORKER_DUNNING_INTERVAL_MS: ${WORKER_DUNNING_INTERVAL_MS:-900000}
+      WORKER_EMAIL_QUEUE_INTERVAL_MS: ${WORKER_EMAIL_QUEUE_INTERVAL_MS:-60000}
+      WORKER_PORTAL_SYNC_INTERVAL_MS: ${WORKER_PORTAL_SYNC_INTERVAL_MS:-60000}
+      WORKER_MAINTENANCE_INTERVAL_MS: ${WORKER_MAINTENANCE_INTERVAL_MS:-86400000}
+      WORKER_RUN_ONCE: ${WORKER_RUN_ONCE:-0}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      server-api:
+        condition: service_healthy
+
+  offer-portal:
+    image: ghcr.io/bl4ckh4nd/billme/offer-portal:${BILLME_IMAGE_TAG:-latest}
+    init: true
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3001
+      DATABASE_PATH: /app/data/offer-portal.sqlite
+      STORAGE_DIR: /app/storage
+      STORAGE_MODE: sqlite
+      PUBLIC_BASE_URL: ${BILLME_PUBLIC_PORTAL_URL:-http://localhost:3001}
+      PUBLISH_API_KEY: ${BILLME_PORTAL_PUBLISH_API_KEY:?set BILLME_PORTAL_PUBLISH_API_KEY}
+      REQUIRE_PUBLISH_API_KEY: "1"
+    volumes:
+      - "${BILLME_PORTAL_DATA_DIR:-billme-offer-portal-data}:/app/data"
+      - "${BILLME_PORTAL_STORAGE_DIR:-billme-offer-portal-storage}:/app/storage"
+    ports:
+      - "${BILLME_PORTAL_PORT:-3001}:3001"
+    healthcheck:
+      test: ["CMD", "node", "--input-type=module", "-e", "fetch('http://127.0.0.1:3001/health').then(r => { if (!r.ok) process.exit(1) })"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    image: ghcr.io/bl4ckh4nd/billme/web:${BILLME_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      server-api:
+        condition: service_healthy
+      offer-portal:
+        condition: service_healthy
+    ports:
+      - "${BILLME_WEB_PORT:-4175}:8080"
+
+  web-pro:
+    image: ghcr.io/bl4ckh4nd/billme/web-pro:${BILLME_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      server-api:
+        condition: service_healthy
+    ports:
+      - "${BILLME_WEB_PRO_PORT:-4176}:8080"
+
+volumes:
+  billme-postgres-data:
+  billme-offer-portal-data:
+  billme-offer-portal-storage:

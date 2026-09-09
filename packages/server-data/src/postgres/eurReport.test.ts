@@ -4,8 +4,19 @@ import { createSingleTenantScope } from '@billme/server-core';
 import { createPostgresPool } from './connection.js';
 import { runDrizzleMigrations } from './migrations.js';
 import { saveServerEurClassification } from './proAccounting.js';
-import { getServerEurReport } from './eurReport.js';
+import { assertServerEurProfile, getServerEurReport } from './eurReport.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
+
+test('missing server settings requires onboarding instead of reporting a missing EÜR catalog', async () => {
+  const database = {
+    query: async () => ({ rows: [] }),
+  } as unknown as Parameters<typeof assertServerEurProfile>[0];
+
+  await assert.rejects(
+    () => assertServerEurProfile(database, createSingleTenantScope('new-pro-tenant', 'pro'), { taxYear: 2026 }),
+    /EUR_PROFILE_REQUIRED/,
+  );
+});
 
 test('real Postgres persists native EÜR provenance/classification and calculates signed VAT cash rows', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);

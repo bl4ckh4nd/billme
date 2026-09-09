@@ -266,8 +266,8 @@ export const runProAccountingScenario = async (page) => {
     state,
     session,
     `/api/v1/pro/accounting/account-suggestion-rules/${encodeURIComponent(createdRule.id)}`,
-    undefined,
-    { method: 'DELETE', body: { reason: 'Playwright Pro accounting suggestion cleanup' } },
+    { reason: 'Playwright Pro accounting suggestion cleanup' },
+    { method: 'DELETE' },
   );
   await expect
     .poll(async () => {

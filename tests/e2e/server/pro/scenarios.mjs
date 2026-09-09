@@ -40,7 +40,7 @@ const inputByVisibleLabel = (section, label) =>
 
 const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') => {
   const heading = page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' });
-  const workspaceHeading = page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' });
+  const workspaceHeading = page.getByRole('heading', { name: 'Pro Buchhaltung' });
 
   // Authentication only starts refreshData. Wait for either the onboarding
   // dialog or the hydrated workspace before deciding that no setup is needed.
@@ -111,11 +111,11 @@ export const runProAuthRestoreScenario = async (page) => {
   await completeProOnboardingIfVisible(page, 'auth-restore');
 
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
 
   await page.reload({ waitUntil: 'networkidle' });
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Abmelden' }).click();
   await expect(page.getByRole('button', { name: 'Anmelden', exact: true })).toBeVisible();
@@ -125,7 +125,7 @@ export const runProAuthRestoreScenario = async (page) => {
   await page.getByRole('button', { name: 'Anmelden', exact: true }).click();
 
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
 };
 
 export const runProCatalogScenario = async (page) => {

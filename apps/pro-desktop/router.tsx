@@ -48,7 +48,7 @@ const RootLayout: React.FC = () => {
   const [showShortcuts, setShowShortcuts] = React.useState(false);
 
   const { data: settings, isSuccess: settingsLoaded } = useSettingsQuery();
-  const onboardingSettings = settings ?? (getRendererRuntime().shell === 'web' ? DEFAULT_SETTINGS : null);
+  const onboardingSettings = settings ?? (getRendererRuntime().onLogout ? DEFAULT_SETTINGS : null);
   const showOnboarding = settingsLoaded && shouldShowBusinessOnboarding(onboardingSettings);
 
   const activePage = (() => {

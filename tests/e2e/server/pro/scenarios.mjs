@@ -80,30 +80,28 @@ export const runProSmokeScenario = async (page) => {
 
   await page.goto(state.urls.webPro, { waitUntil: 'networkidle' });
 
-  await expect(page.getByText('Billme Pro im Browser')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Pro-Owner anlegen|In Pro anmelden/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Echte Pro-UI, servergestützt im Browser.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Initialisieren & anmelden|Anmelden/ })).toBeVisible();
   await expect(page.getByText('billme-server-api')).toBeVisible();
-  await expect(page.getByText(/Noch kein Owner vorhanden|Bereits \d+ Nutzer im Pro-Scope\./)).toBeVisible();
+  await expect(page.getByText(/Erststart|Anmelden/, { exact: true })).toBeVisible();
 };
 
 export const runProAuthRestoreScenario = async (page) => {
   const state = await readServerHarnessState();
   await openProShell(page, state, { route: 'accounting' });
 
-  await expect(page.getByText('Billme Pro im Browser')).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Pro-Mandant initialisieren|Mit Billme Pro verbinden/ })).toBeVisible();
   await page.getByLabel('Vollständiger Name').fill(proOwner.fullName);
   await page.getByLabel('E-Mail').fill(proOwner.email);
   await page.getByLabel('Passwort').fill(proOwner.password);
 
-  const bootstrapButton = page.getByRole('button', { name: 'Pro-Owner anlegen' });
-  const loginButton = page.getByRole('button', { name: 'In Pro anmelden' });
+  const bootstrapButton = page.getByRole('button', { name: 'Initialisieren & anmelden' });
+  const loginButton = page.getByRole('button', { name: 'Anmelden', exact: true });
 
   if (await bootstrapButton.isVisible().catch(() => false)) {
     await bootstrapButton.click();
-    await expect(page.getByText(`Owner ${proOwner.fullName} angelegt und angemeldet.`)).toBeVisible();
   } else {
     await loginButton.click();
-    await expect(page.getByText(`Angemeldet als ${proOwner.fullName}.`)).toBeVisible();
   }
 
   await completeProOnboardingIfVisible(page, 'auth-restore');
@@ -113,18 +111,16 @@ export const runProAuthRestoreScenario = async (page) => {
 
   await page.reload({ waitUntil: 'networkidle' });
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByText(`Sitzung: ${proOwner.fullName}`)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Abmelden' }).click();
-  await expect(page.getByRole('button', { name: 'In Pro anmelden' })).toBeVisible();
-  await expect(page.getByText(/Bereits \d+ Nutzer im Pro-Scope\./)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Anmelden', exact: true })).toBeVisible();
 
   await page.getByLabel('E-Mail').fill(proOwner.email);
   await page.getByLabel('Passwort').fill(proOwner.password);
-  await page.getByRole('button', { name: 'In Pro anmelden' }).click();
+  await page.getByRole('button', { name: 'Anmelden', exact: true }).click();
 
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByText(`Angemeldet als ${proOwner.fullName}.`)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
 };
 

@@ -22,6 +22,7 @@ export type VatValidationClient = (args: {
 export type RendererRuntime = {
   product?: RendererProduct;
   shell?: 'desktop' | 'web';
+  onLogout?: () => void;
   validateVatId?: VatValidationClient;
 };
 

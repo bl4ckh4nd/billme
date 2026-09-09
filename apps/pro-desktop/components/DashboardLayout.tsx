@@ -1,7 +1,7 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Briefcase, Bell, FileText, Package, Search, Settings, Users, X, CheckCheck, Menu } from 'lucide-react';
+import { Briefcase, Bell, FileText, Package, Search, Settings, Users, X, CheckCheck, LogOut, Menu } from 'lucide-react';
 import { ipc } from '../ipc/client';
 import { Titlebar } from './Titlebar';
 import billmeFullLogo from '../assets/billme-full-logo.svg';
@@ -45,7 +45,8 @@ interface DashboardLayoutProps {
 }
 
 export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, activePage, onNavigate, isEditorActive }) => {
-  const isWebShell = getRendererRuntime().shell === 'web';
+  const rendererRuntime = getRendererRuntime();
+  const isWebShell = rendererRuntime.shell === 'web';
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = React.useState('');
   const [searchOpen, setSearchOpen] = React.useState(false);
@@ -280,6 +281,16 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
                         {item.label}
                       </button>
                     ))}
+                    {rendererRuntime.onLogout ? (
+                      <button
+                        type="button"
+                        className="flex items-center gap-2 rounded-xl px-4 py-3 text-left text-sm font-bold text-red-600 hover:bg-red-50"
+                        onClick={rendererRuntime.onLogout}
+                      >
+                        <LogOut size={16} />
+                        Abmelden
+                      </button>
+                    ) : null}
                   </nav>
                 ) : null}
                 <div ref={searchContainerRef} className="relative hidden lg:block">
@@ -473,6 +484,17 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, acti
                         </div>
                       )}
                     </div>
+                    {rendererRuntime.onLogout ? (
+                      <button
+                        type="button"
+                        onClick={rendererRuntime.onLogout}
+                        className="group hidden h-9 w-9 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-gray-300 hover:text-red-600 hover:shadow-md md:flex"
+                        title="Abmelden"
+                        aria-label="Abmelden"
+                      >
+                        <LogOut size={16} />
+                      </button>
+                    ) : null}
                 </div>
             </div>
           </header>

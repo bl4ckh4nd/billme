@@ -195,7 +195,8 @@ export const runProAccountingScenario = async (page) => {
     session,
   });
 
-  await expect(proAccountingHeading(page)).toBeVisible();
+  await expect(page).toHaveURL(/#\/accounting$/);
+  await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
 
   await requestJson(
     state,

@@ -114,11 +114,11 @@ export const runProAuthRestoreScenario = async (page) => {
   await completeProOnboardingIfVisible(page, 'auth-restore');
 
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(proAccountingHeading(page)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
 
   await page.reload({ waitUntil: 'networkidle' });
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(proAccountingHeading(page)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Abmelden' }).click();
   await expect(page.getByRole('button', { name: 'Anmelden', exact: true })).toBeVisible();
@@ -128,7 +128,7 @@ export const runProAuthRestoreScenario = async (page) => {
   await page.getByRole('button', { name: 'Anmelden', exact: true }).click();
 
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(proAccountingHeading(page)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
 };
 
 export const runProCatalogScenario = async (page) => {

@@ -22,6 +22,7 @@ export type VatValidationClient = (args: {
 export type RendererRuntime = {
   product?: RendererProduct;
   shell?: 'desktop' | 'web';
+  onLogout?: () => void;
   validateVatId?: VatValidationClient;
 };
 
@@ -57,6 +58,15 @@ export function getRendererApi(product?: RendererProduct): RendererApi {
     fallbackProduct = product;
   }
   return getExternalApi() ?? getFallbackApi(product ?? fallbackProduct);
+}
+
+export function createRendererApiProxy(product: 'lite'): LiteBillmeApi;
+export function createRendererApiProxy(product: 'pro'): ProBillmeApi;
+export function createRendererApiProxy(product: RendererProduct): RendererApi;
+export function createRendererApiProxy(product: RendererProduct): RendererApi {
+  return new Proxy({} as RendererApi, {
+    get: (_target, property) => Reflect.get(getRendererApi(product), property),
+  });
 }
 
 export const ipc = new Proxy({} as LiteBillmeApi, {

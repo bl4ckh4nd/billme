@@ -40,6 +40,10 @@
       "types": "./src/billingDomainCompat.ts",
       "default": "./src/billingDomainCompat.ts"
     },
+    "./billingDocumentMapping": {
+      "types": "./src/billingDocumentMapping.ts",
+      "default": "./src/billingDocumentMapping.ts"
+    },
     "./dunning": {
       "types": "./src/dunning.ts",
       "default": "./src/dunning.ts"

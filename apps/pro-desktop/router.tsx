@@ -39,15 +39,17 @@ import { EurView } from './components/EurView';
 import { TaxFilingCenter } from './components/TaxFilingCenter';
 import { Portal, shouldShowBusinessOnboarding, useActionFeedback } from '@billme/ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
-import { MOCK_SETTINGS } from './data/mockData';
+import { DEFAULT_SETTINGS, MOCK_SETTINGS } from '@billme/desktop-services/mockData';
+import { getRendererRuntime } from '@billme/desktop-renderer/runtime-api';
 
 const RootLayout: React.FC = () => {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [showShortcuts, setShowShortcuts] = React.useState(false);
 
-  const { data: settings } = useSettingsQuery();
-  const showOnboarding = shouldShowBusinessOnboarding(settings);
+  const { data: settings, isSuccess: settingsLoaded } = useSettingsQuery();
+  const onboardingSettings = settings ?? (getRendererRuntime().onLogout ? DEFAULT_SETTINGS : null);
+  const showOnboarding = settingsLoaded && shouldShowBusinessOnboarding(onboardingSettings);
 
   const activePage = (() => {
     if (
@@ -95,9 +97,9 @@ const RootLayout: React.FC = () => {
       >
         <Outlet />
       </DashboardLayout>
-      {showOnboarding && settings && (
+      {showOnboarding && onboardingSettings && (
         <OnboardingWizard
-          settings={settings}
+          settings={onboardingSettings}
           onComplete={() => {
             // Settings query will auto-refresh; wizard disappears when onboardingCompleted=true
           }}

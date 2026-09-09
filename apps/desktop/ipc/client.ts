@@ -1,3 +1,3 @@
-import { getRendererApi } from '@billme/desktop-renderer/runtime-api';
+import { createRendererApiProxy } from '@billme/desktop-renderer/runtime-api';
 
-export const ipc = getRendererApi('lite');
+export const ipc = createRendererApiProxy('lite');

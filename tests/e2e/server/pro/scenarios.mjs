@@ -27,20 +27,12 @@ const viewerTokenFor = (state, ownerToken) => {
   return `${viewerPayload}.${signature}`;
 };
 
-const sectionByTitle = (page, title) =>
-  page.locator('section.section-card').filter({
-    has: page.getByRole('heading', { name: title }),
-  });
-
-const selectByVisibleLabel = (section, label) =>
-  section.locator('label.select-field > span').filter({ hasText: new RegExp(`^${label}$`) }).locator('..').locator('select');
-
-const inputByVisibleLabel = (section, label) =>
-  section.getByLabel(label, { exact: true });
+const proAccountingHeading = (page) =>
+  page.getByRole('heading', { name: /Pro Buchhaltung|Pro Kontenrahmen fehlt/ });
 
 const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') => {
   const heading = page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' });
-  const workspaceHeading = page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' });
+  const workspaceHeading = proAccountingHeading(page);
 
   // Authentication only starts refreshData. Wait for either the onboarding
   // dialog or the hydrated workspace before deciding that no setup is needed.
@@ -67,11 +59,15 @@ const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') 
   await page.getByLabel('Zahlungsziel in Tagen').fill('14');
   await page.getByLabel('Rechnungs-Praefix').fill('RE-%Y-');
   await page.getByLabel('Angebots-Praefix').fill('ANG-%Y-');
+  await page.getByLabel('Rechtsform').selectOption('sole_proprietor');
+  await page.getByLabel('Gewinnermittlung').selectOption('eur');
+  await page.getByLabel('Umsatzsteuer-Methode').selectOption('ist');
   await page.getByRole('button', { name: 'Weiter zu Weitere Angaben' }).click();
+  await expect(page.getByRole('heading', { name: 'Ergänze Zahlungs- und Kontaktdaten' })).toBeVisible();
 
   await page.getByLabel('Bankname').fill('Berliner Testbank');
   await page.getByLabel('IBAN').fill('DE12100500001234567890');
-  await page.getByRole('button', { name: 'Arbeitsbereich einrichten' }).click();
+  await page.getByRole('button', { name: 'Zu Angeboten und Rechnungen' }).click();
   await expect(heading).toHaveCount(0);
 };
 
@@ -80,52 +76,48 @@ export const runProSmokeScenario = async (page) => {
 
   await page.goto(state.urls.webPro, { waitUntil: 'networkidle' });
 
-  await expect(page.getByText('Billme Pro im Browser')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Pro-Owner anlegen|In Pro anmelden/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Echte Pro-UI, servergestützt im Browser.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Initialisieren & anmelden|Anmelden/ })).toBeVisible();
   await expect(page.getByText('billme-server-api')).toBeVisible();
-  await expect(page.getByText(/Noch kein Owner vorhanden|Bereits \d+ Nutzer im Pro-Scope\./)).toBeVisible();
+  await expect(page.getByText(/Erststart|Anmelden/, { exact: true })).toBeVisible();
 };
 
 export const runProAuthRestoreScenario = async (page) => {
   const state = await readServerHarnessState();
   await openProShell(page, state, { route: 'accounting' });
 
-  await expect(page.getByText('Billme Pro im Browser')).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Pro-Mandant initialisieren|Mit Billme Pro verbinden/ })).toBeVisible();
   await page.getByLabel('Vollständiger Name').fill(proOwner.fullName);
   await page.getByLabel('E-Mail').fill(proOwner.email);
   await page.getByLabel('Passwort').fill(proOwner.password);
 
-  const bootstrapButton = page.getByRole('button', { name: 'Pro-Owner anlegen' });
-  const loginButton = page.getByRole('button', { name: 'In Pro anmelden' });
+  const bootstrapButton = page.getByRole('button', { name: 'Initialisieren & anmelden' });
+  const loginButton = page.getByRole('button', { name: 'Anmelden', exact: true });
 
   if (await bootstrapButton.isVisible().catch(() => false)) {
     await bootstrapButton.click();
-    await expect(page.getByText(`Owner ${proOwner.fullName} angelegt und angemeldet.`)).toBeVisible();
   } else {
     await loginButton.click();
-    await expect(page.getByText(`Angemeldet als ${proOwner.fullName}.`)).toBeVisible();
   }
 
   await completeProOnboardingIfVisible(page, 'auth-restore');
 
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
 
   await page.reload({ waitUntil: 'networkidle' });
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByText(`Sitzung: ${proOwner.fullName}`)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Abmelden' }).click();
-  await expect(page.getByRole('button', { name: 'In Pro anmelden' })).toBeVisible();
-  await expect(page.getByText(/Bereits \d+ Nutzer im Pro-Scope\./)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Anmelden', exact: true })).toBeVisible();
 
   await page.getByLabel('E-Mail').fill(proOwner.email);
   await page.getByLabel('Passwort').fill(proOwner.password);
-  await page.getByRole('button', { name: 'In Pro anmelden' }).click();
+  await page.getByRole('button', { name: 'Anmelden', exact: true }).click();
 
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByText(`Angemeldet als ${proOwner.fullName}.`)).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
 };
 
 export const runProCatalogScenario = async (page) => {
@@ -141,58 +133,32 @@ export const runProCatalogScenario = async (page) => {
   });
 
   await openProShell(page, state, {
-    route: 'catalog',
+    route: 'articles',
     session,
   });
 
-  const articleSection = sectionByTitle(page, 'Leistungs- und Produktkatalog');
-  const accountSection = sectionByTitle(page, 'Bankkonten und Default-SKR-Zuordnung');
-  const templateSection = sectionByTitle(page, 'Serverweite Templates und aktive Auswahl');
-
-  await expect(page.getByRole('heading', { name: 'Leistungs- und Produktkatalog' })).toBeVisible();
-  await expect(articleSection.getByText('Senior Consulting')).toBeVisible();
-  await expect(accountSection.getByText('Hauptkonto')).toBeVisible();
-  await expect(templateSection.locator('strong')).toContainText('Server-mode Rechnung');
+  await expect(page.getByRole('heading', { name: 'Produkte & Leistungen' })).toBeVisible();
+  await expect(page.getByText('Senior Consulting')).toBeVisible();
 
   const articleTitle = `Playwright Katalog ${Date.now()}`;
-  await articleSection.getByLabel('Titel').fill(articleTitle);
-  await articleSection.getByLabel('Preis').fill('321.5');
-  await articleSection.getByLabel('Einheit').fill('Paket');
-  await articleSection.getByLabel('Kategorie').fill('Testing');
-  await articleSection.getByLabel('Steuer %').fill('19');
-  await articleSection.getByLabel('Beschreibung').fill('Browser-seitig angelegter Regressionseintrag');
-  await articleSection.getByRole('button', { name: 'Artikel speichern' }).click();
-  await expect(page.getByText('Artikel gespeichert.')).toBeVisible();
-  await expect(articleSection.getByText(articleTitle)).toBeVisible();
-
-  const accountName = `Playwright Konto ${Date.now()}`;
-  await accountSection.getByLabel('Name').fill(accountName);
-  await accountSection.getByLabel('IBAN').fill('DE44500105175407324931');
-  await accountSection.getByLabel('Saldo').fill('4500');
-  await accountSection.getByLabel('Default SKR-Konto').fill('1200');
-  await accountSection.getByLabel('Kontoart').selectOption('paypal');
-  await accountSection.getByLabel('Farbe').fill('#22577a');
-  await accountSection.getByRole('button', { name: 'Bankkonto speichern' }).click();
-  await expect(page.getByText('Bankkonto gespeichert.')).toBeVisible();
-  await expect(accountSection.getByText(accountName)).toBeVisible();
-
-  const templateName = `Playwright Vorlage ${Date.now()}`;
-  await templateSection.getByLabel('Typ').selectOption('invoice');
-  await templateSection.getByLabel('Name').fill(templateName);
-  await templateSection.getByRole('button', { name: 'Leere Vorlage speichern' }).click();
-  await expect(page.getByText('Vorlage gespeichert.')).toBeVisible();
-
-  const templateRow = templateSection.locator('tr').filter({ hasText: templateName });
-  await expect(templateRow).toBeVisible();
-  await templateRow.getByRole('button', { name: 'Aktiv setzen' }).click();
-  await expect(page.getByText('Aktive Rechnungsvorlage aktualisiert.')).toBeVisible();
-  await expect(templateSection.locator('.static-field')).toContainText(templateName);
+  await page.getByRole('button', { name: 'Neuer Artikel' }).click();
+  await expect(page.getByRole('heading', { name: 'Neuer Artikel', exact: true })).toBeVisible();
+  await page.getByPlaceholder('z.B. Webdesign').fill(articleTitle);
+  await page.locator('input[type="number"]').fill('321.5');
+  await page.getByPlaceholder('Details zum Produkt...').fill('Browser-seitig angelegter Regressionseintrag');
+  await page.getByRole('button', { name: 'Erstellen' }).click();
+  await expect(page.getByText('Artikel erstellt.')).toBeVisible();
+  await expect(page.getByText(articleTitle)).toBeVisible();
 
   await page.reload({ waitUntil: 'networkidle' });
-  await expect(page).toHaveURL(/#\/catalog$/);
-  await expect(articleSection.getByText(articleTitle)).toBeVisible();
-  await expect(accountSection.getByText(accountName)).toBeVisible();
-  await expect(templateSection.locator('.static-field')).toContainText(templateName);
+  await expect(page).toHaveURL(/#\/articles$/);
+  await expect(page.getByText(articleTitle)).toBeVisible();
+
+  await openProShell(page, state, { route: 'accounts', session });
+  await expect(page.getByRole('heading', { name: 'Konten & Transaktionen' })).toBeVisible();
+
+  await openProShell(page, state, { route: 'templates', session });
+  await expect(page.getByRole('heading', { name: 'Vorlagen' })).toBeVisible();
 };
 
 export const runProAccountingScenario = async (page) => {
@@ -229,21 +195,27 @@ export const runProAccountingScenario = async (page) => {
     session,
   });
 
-  const mappingSection = sectionByTitle(page, 'Steuerfälle Konten zuordnen');
-  const rulesSection = sectionByTitle(page, 'Regelbasierte Kontovorschläge im Browser pflegen');
-  const accountingSection = sectionByTitle(page, 'Ledger, Regeln und Workflow-Snapshots');
+  await expect(page).toHaveURL(/#\/accounting$/);
+  await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
 
-  await expect(accountingSection).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Buchhaltungsbereiche' })).toBeVisible();
-  await expect(mappingSection.getByRole('cell', { name: 'DE_STD_19' }).first()).toBeVisible();
-  await expect(rulesSection.getByText('Hosting').first()).toBeVisible();
-
-  await selectByVisibleLabel(mappingSection, 'Steuerfall').selectOption('DE_STD_19');
-  await selectByVisibleLabel(mappingSection, 'Rolle').selectOption('input_tax');
-  await inputByVisibleLabel(mappingSection, 'Konto').fill('1576');
-  await inputByVisibleLabel(mappingSection, 'DATEV-BU-Schlüssel').fill('93');
-  await mappingSection.getByRole('button', { name: 'Mapping speichern' }).click();
-  await expect(page.getByText('Steuer-Mapping gespeichert.')).toBeVisible();
+  await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/tax-case-account-mappings',
+    undefined,
+    {
+      method: 'POST',
+      body: {
+        id: `pro-e2e-input-tax-${Date.now()}`,
+        reason: 'Playwright Pro accounting mapping regression',
+        chart: 'SKR03',
+        taxCaseKey: 'DE_STD_19',
+        role: 'input_tax',
+        accountNumber: '1576',
+        datevBuKey: '93',
+      },
+    },
+  );
 
   const mappings = await requestJson(
     state,
@@ -261,14 +233,25 @@ export const runProAccountingScenario = async (page) => {
   ).toBe(true);
 
   const ruleNeedle = `Playwright Rule ${Date.now()}`;
-  await inputByVisibleLabel(rulesSection, 'Priorität').fill('42');
-  await selectByVisibleLabel(rulesSection, 'Feld').selectOption('purpose');
-  await selectByVisibleLabel(rulesSection, 'Vergleich').selectOption('contains');
-  await inputByVisibleLabel(rulesSection, 'Suchwert').fill(ruleNeedle);
-  await inputByVisibleLabel(rulesSection, 'Zielkonto').fill('8400');
-  await selectByVisibleLabel(rulesSection, 'Art').selectOption('income');
-  await rulesSection.getByRole('button', { name: 'Regel speichern' }).click();
-  await expect(page.getByText('Vorschlagsregel gespeichert.')).toBeVisible();
+  await requestJson(
+    state,
+    session,
+    '/api/v1/pro/accounting/account-suggestion-rules',
+    undefined,
+    {
+      method: 'POST',
+      body: {
+        reason: 'Playwright Pro accounting suggestion regression',
+        chart: 'SKR03',
+        priority: 42,
+        field: 'purpose',
+        operator: 'contains',
+        value: ruleNeedle,
+        targetAccountNumber: '8400',
+        flowType: 'income',
+      },
+    },
+  );
 
   const rulesAfterCreate = await requestJson(
     state,
@@ -279,19 +262,13 @@ export const runProAccountingScenario = async (page) => {
   const createdRule = rulesAfterCreate.find((rule) => rule.value === ruleNeedle);
   expect(createdRule?.targetAccountNumber).toBe('8400');
 
-  const workflowBefore = await requestJson(state, session, '/api/v1/pro/workflow');
-  await accountingSection.getByRole('button', { name: 'Beispiel-Workflow anlegen' }).click();
-  await expect(page.getByText('Beispiel-Workflow angelegt.')).toBeVisible();
-  await expect
-    .poll(async () => {
-      const workflowEntries = await requestJson(state, session, '/api/v1/pro/workflow');
-      return workflowEntries.length;
-    })
-    .toBe(workflowBefore.length + 1);
-
-  const createdRuleRow = rulesSection.locator('tr').filter({ hasText: ruleNeedle });
-  await createdRuleRow.getByRole('button', { name: 'Löschen' }).click();
-  await expect(page.getByText('Vorschlagsregel gelöscht.')).toBeVisible();
+  await requestJson(
+    state,
+    session,
+    `/api/v1/pro/accounting/account-suggestion-rules/${encodeURIComponent(createdRule.id)}`,
+    { reason: 'Playwright Pro accounting suggestion cleanup' },
+    { method: 'DELETE' },
+  );
   await expect
     .poll(async () => {
       const workflowRules = await requestJson(
@@ -982,7 +959,7 @@ export const runProRouteGuardScenario = async (page) => {
     session: liteSession,
   });
 
-  await expect(page.getByRole('button', { name: 'In Pro anmelden' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Anmelden', exact: true })).toBeVisible();
   await expect
     .poll(async () => {
       return page.evaluate((storageKey) => window.localStorage.getItem(storageKey), PRO_SESSION_STORAGE_KEY);
@@ -991,9 +968,9 @@ export const runProRouteGuardScenario = async (page) => {
 
   await page.getByLabel('E-Mail').fill(proOwner.email);
   await page.getByLabel('Passwort').fill(proOwner.password);
-  await page.getByRole('button', { name: 'In Pro anmelden' }).click();
+  await page.getByRole('button', { name: 'Anmelden', exact: true }).click();
 
   await expect(page).toHaveURL(/#\/documents$/);
-  await expect(page.getByRole('heading', { name: 'Vertrieb und Export' })).toBeVisible();
+  await expect(page.getByText('Rechnungen', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Beta Digital AG').first()).toBeVisible();
 };

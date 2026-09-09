@@ -8,15 +8,18 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "test": "vitest --run src/api/createBrowserNativeFallback.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",
     "@billme/accounting-ui-pro": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
+    "@billme/desktop-renderer": "workspace:*",
     "@billme/desktop-services": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/ui": "workspace:*",
+    "@tanstack/react-query": "^5.90.19",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
   },
@@ -24,8 +27,11 @@
     "@tailwindcss/vite": "^4.1.0",
     "@types/react": "^19.2.13",
     "@types/react-dom": "^19.2.3",
+    "@types/node": "^24.9.1",
     "@vitejs/plugin-react": "^5.1.2",
+    "happy-dom": "^20.5.3",
     "typescript": "~5.8.3",
-    "vite": "^6.4.1"
+    "vite": "^6.4.1",
+    "vitest": "^4.0.18"
   }
 }

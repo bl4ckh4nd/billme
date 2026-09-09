@@ -239,7 +239,7 @@ export const assertServerEurProfile = async (db: PostgresQueryable, scope: Tenan
   const settings = (await q<{ settings_json: string }>(db, `SELECT settings_json FROM server_settings WHERE tenant_id=$1 LIMIT 1`, [tenant(scope)]))[0];
   const settingsJson = parseJson(settings?.settings_json);
   const profile = settingsJson?.businessReportingProfile;
-  if (!settingsJson) throw new Error('EUR_SERVER_REPORT_UNAVAILABLE');
+  if (!settingsJson) throw new Error('EUR_PROFILE_REQUIRED');
   if (!profile || typeof profile !== 'object' || (profile as any).jurisdiction !== 'DE' || (profile as any).legalForm !== 'sole_proprietor' || (profile as any).profitDetermination !== 'eur' || ((profile as any).fiscalYearStart !== undefined && (profile as any).fiscalYearStart !== '01-01')) {
     throw new Error('EUR_PROFILE_REQUIRED');
   }

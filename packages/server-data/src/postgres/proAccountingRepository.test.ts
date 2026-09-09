@@ -240,9 +240,9 @@ test('report adapters fail closed when the persisted profile or chart is not com
   assert.equal(calls.length, 1);
 });
 
-test('EÜR server report fails closed until the native 2025 catalog/classification path is available', async () => {
+test('EÜR server report requires a persisted reporting profile before loading catalog data', async () => {
   const repository = createPostgresProAccountingRepository({ query: async () => ({ rows: [] }) } as unknown as PostgresQueryable);
-  await assert.rejects(() => repository.getEurReport(createSingleTenantScope('eur-report-test', 'pro'), { from: '2025-01-01', to: '2025-12-31' }), /EUR_SERVER_REPORT_UNAVAILABLE/);
+  await assert.rejects(() => repository.getEurReport(createSingleTenantScope('eur-report-test', 'pro'), { from: '2025-01-01', to: '2025-12-31' }), /EUR_PROFILE_REQUIRED/);
 });
 
 test('GuV report preserves account references and surfaces unmapped accounts', async () => {

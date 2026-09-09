@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Browser-Shells lösen ihre Lite-/Pro-API nun erst beim Aufruf auf, sodass nach dem Mounten zuverlässig der HTTP-Adapter statt eines beim Modulstart eingefrorenen Mock-Backends verwendet wird.
 - Fixed first-run Pro server workspaces so missing settings open the business onboarding, browser sessions can sign out, and EÜR reports identify the required reporting profile instead of incorrectly blaming the catalog.
 
 - Die Pro-Web-Oberfläche verwendet nun den vollständigen Pro-Desktop-Renderer mit servergestütztem HTTP-Adapter und mobiler Navigation; Browser-Exporte öffnen echte Druckansichten, während nicht verfügbare native Desktop-Funktionen sichtbar und ohne vorgetäuschten Erfolg abbrechen.

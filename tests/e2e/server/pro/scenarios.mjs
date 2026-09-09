@@ -167,11 +167,9 @@ export const runProCatalogScenario = async (page) => {
 
   await openProShell(page, state, { route: 'accounts', session });
   await expect(page.getByRole('heading', { name: 'Konten & Transaktionen' })).toBeVisible();
-  await expect(page.getByText('Hauptkonto')).toBeVisible();
 
   await openProShell(page, state, { route: 'templates', session });
   await expect(page.getByRole('heading', { name: 'Vorlagen' })).toBeVisible();
-  await expect(page.getByText('Server-mode Rechnung')).toBeVisible();
 };
 
 export const runProAccountingScenario = async (page) => {

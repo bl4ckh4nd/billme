@@ -517,6 +517,12 @@ export async function seedDesktopData(page, options = {}) {
       await invokeDesktopIpc(page, 'pro:importSkr', { preferredSource: 'auto' });
     }
   }
+
+  // The renderer may have cached the pre-seed empty settings response while
+  // the harness was writing through Electron IPC. Reload so every scenario
+  // observes the persisted fixture through the same API used by the app.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => Boolean(window.billmeApi));
 }
 
 export async function importPendingProTransaction(page, label, options = {}) {

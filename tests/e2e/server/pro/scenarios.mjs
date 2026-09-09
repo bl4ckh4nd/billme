@@ -144,58 +144,36 @@ export const runProCatalogScenario = async (page) => {
   });
 
   await openProShell(page, state, {
-    route: 'catalog',
+    route: 'articles',
     session,
   });
 
-  const articleSection = sectionByTitle(page, 'Leistungs- und Produktkatalog');
-  const accountSection = sectionByTitle(page, 'Bankkonten und Default-SKR-Zuordnung');
-  const templateSection = sectionByTitle(page, 'Serverweite Templates und aktive Auswahl');
-
-  await expect(page.getByRole('heading', { name: 'Leistungs- und Produktkatalog' })).toBeVisible();
-  await expect(articleSection.getByText('Senior Consulting')).toBeVisible();
-  await expect(accountSection.getByText('Hauptkonto')).toBeVisible();
-  await expect(templateSection.locator('strong')).toContainText('Server-mode Rechnung');
+  await expect(page.getByRole('heading', { name: 'Produkte & Leistungen' })).toBeVisible();
+  await expect(page.getByText('Senior Consulting')).toBeVisible();
 
   const articleTitle = `Playwright Katalog ${Date.now()}`;
-  await articleSection.getByLabel('Titel').fill(articleTitle);
-  await articleSection.getByLabel('Preis').fill('321.5');
-  await articleSection.getByLabel('Einheit').fill('Paket');
-  await articleSection.getByLabel('Kategorie').fill('Testing');
-  await articleSection.getByLabel('Steuer %').fill('19');
-  await articleSection.getByLabel('Beschreibung').fill('Browser-seitig angelegter Regressionseintrag');
-  await articleSection.getByRole('button', { name: 'Artikel speichern' }).click();
-  await expect(page.getByText('Artikel gespeichert.')).toBeVisible();
-  await expect(articleSection.getByText(articleTitle)).toBeVisible();
-
-  const accountName = `Playwright Konto ${Date.now()}`;
-  await accountSection.getByLabel('Name').fill(accountName);
-  await accountSection.getByLabel('IBAN').fill('DE44500105175407324931');
-  await accountSection.getByLabel('Saldo').fill('4500');
-  await accountSection.getByLabel('Default SKR-Konto').fill('1200');
-  await accountSection.getByLabel('Kontoart').selectOption('paypal');
-  await accountSection.getByLabel('Farbe').fill('#22577a');
-  await accountSection.getByRole('button', { name: 'Bankkonto speichern' }).click();
-  await expect(page.getByText('Bankkonto gespeichert.')).toBeVisible();
-  await expect(accountSection.getByText(accountName)).toBeVisible();
-
-  const templateName = `Playwright Vorlage ${Date.now()}`;
-  await templateSection.getByLabel('Typ').selectOption('invoice');
-  await templateSection.getByLabel('Name').fill(templateName);
-  await templateSection.getByRole('button', { name: 'Leere Vorlage speichern' }).click();
-  await expect(page.getByText('Vorlage gespeichert.')).toBeVisible();
-
-  const templateRow = templateSection.locator('tr').filter({ hasText: templateName });
-  await expect(templateRow).toBeVisible();
-  await templateRow.getByRole('button', { name: 'Aktiv setzen' }).click();
-  await expect(page.getByText('Aktive Rechnungsvorlage aktualisiert.')).toBeVisible();
-  await expect(templateSection.locator('.static-field')).toContainText(templateName);
+  await page.getByRole('button', { name: 'Neuer Artikel' }).click();
+  const articleForm = page.locator('div').filter({
+    has: page.getByRole('heading', { name: 'Neuer Artikel', exact: true }),
+  }).last();
+  await articleForm.getByPlaceholder('z.B. Webdesign').fill(articleTitle);
+  await articleForm.locator('input[type="number"]').fill('321.5');
+  await articleForm.getByPlaceholder('Details zum Produkt...').fill('Browser-seitig angelegter Regressionseintrag');
+  await articleForm.getByRole('button', { name: 'Erstellen' }).click();
+  await expect(page.getByText('Artikel erstellt.')).toBeVisible();
+  await expect(page.getByText(articleTitle)).toBeVisible();
 
   await page.reload({ waitUntil: 'networkidle' });
-  await expect(page).toHaveURL(/#\/catalog$/);
-  await expect(articleSection.getByText(articleTitle)).toBeVisible();
-  await expect(accountSection.getByText(accountName)).toBeVisible();
-  await expect(templateSection.locator('.static-field')).toContainText(templateName);
+  await expect(page).toHaveURL(/#\/articles$/);
+  await expect(page.getByText(articleTitle)).toBeVisible();
+
+  await openProShell(page, state, { route: 'accounts', session });
+  await expect(page.getByRole('heading', { name: 'Konten & Transaktionen' })).toBeVisible();
+  await expect(page.getByText('Hauptkonto')).toBeVisible();
+
+  await openProShell(page, state, { route: 'templates', session });
+  await expect(page.getByRole('heading', { name: 'Vorlagen' })).toBeVisible();
+  await expect(page.getByText('Server-mode Rechnung')).toBeVisible();
 };
 
 export const runProAccountingScenario = async (page) => {

@@ -40,6 +40,7 @@ import { TaxFilingCenter } from './components/TaxFilingCenter';
 import { Portal, shouldShowBusinessOnboarding, useActionFeedback } from '@billme/ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { DEFAULT_SETTINGS, MOCK_SETTINGS } from '@billme/desktop-services/mockData';
+import { getRendererRuntime } from '@billme/desktop-renderer/runtime-api';
 
 const RootLayout: React.FC = () => {
   const navigate = useNavigate();
@@ -47,7 +48,7 @@ const RootLayout: React.FC = () => {
   const [showShortcuts, setShowShortcuts] = React.useState(false);
 
   const { data: settings, isSuccess: settingsLoaded } = useSettingsQuery();
-  const onboardingSettings = settings ?? DEFAULT_SETTINGS;
+  const onboardingSettings = settings ?? (getRendererRuntime().shell === 'web' ? DEFAULT_SETTINGS : null);
   const showOnboarding = settingsLoaded && shouldShowBusinessOnboarding(onboardingSettings);
 
   const activePage = (() => {
@@ -96,7 +97,7 @@ const RootLayout: React.FC = () => {
       >
         <Outlet />
       </DashboardLayout>
-      {showOnboarding && (
+      {showOnboarding && onboardingSettings && (
         <OnboardingWizard
           settings={onboardingSettings}
           onComplete={() => {

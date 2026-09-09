@@ -75,7 +75,7 @@ const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') 
 
   await page.getByLabel('Bankname').fill('Berliner Testbank');
   await page.getByLabel('IBAN').fill('DE12100500001234567890');
-  await page.getByRole('button', { name: 'Arbeitsbereich einrichten' }).click();
+  await page.getByRole('button', { name: 'Zu Angeboten und Rechnungen' }).click();
   await expect(heading).toHaveCount(0);
 };
 

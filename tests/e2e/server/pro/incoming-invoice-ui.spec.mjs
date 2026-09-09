@@ -100,7 +100,7 @@ export const runProIncomingInvoiceUiScenario = async (page, testInfo = { workerI
   const invoiceNumber = `ER-UI-${suffix}`;
 
   await openProShell(page, state, { route: 'accounting', session });
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
   await page.getByRole('button', { name: 'OPOS' }).click();
   const incomingHeading = page.getByRole('heading', { name: 'Eingangsrechnungen' });
   await expect(incomingHeading).toBeVisible();

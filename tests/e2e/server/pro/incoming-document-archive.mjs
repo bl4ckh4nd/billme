@@ -115,7 +115,7 @@ const createSavedInvoice = async (state, session) => {
 
 const openOpos = async (page, state, session) => {
   await openProShell(page, state, { route: 'accounting', session });
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
   await page.getByRole('navigation', { name: 'Buchhaltungsbereiche' }).getByRole('button', { name: 'OPOS', exact: true }).click();
   const workspace = page.getByTestId('opos-workspace');
   await expect(workspace).toBeVisible();
@@ -267,7 +267,7 @@ export const runProIncomingDocumentArchiveScenario = async (page) => {
   await fs.rm(pngPath, { force: true });
 
   await page.reload({ waitUntil: 'networkidle' });
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
   await page.getByRole('navigation', { name: 'Buchhaltungsbereiche' }).getByRole('button', { name: 'OPOS', exact: true }).click();
   const reloadedWorkspace = page.getByTestId('opos-workspace');
   await selectInvoice(reloadedWorkspace);

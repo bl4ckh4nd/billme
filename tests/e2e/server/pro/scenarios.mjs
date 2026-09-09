@@ -959,7 +959,7 @@ export const runProRouteGuardScenario = async (page) => {
     session: liteSession,
   });
 
-  await expect(page.getByRole('button', { name: 'In Pro anmelden' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Anmelden', exact: true })).toBeVisible();
   await expect
     .poll(async () => {
       return page.evaluate((storageKey) => window.localStorage.getItem(storageKey), PRO_SESSION_STORAGE_KEY);
@@ -968,9 +968,9 @@ export const runProRouteGuardScenario = async (page) => {
 
   await page.getByLabel('E-Mail').fill(proOwner.email);
   await page.getByLabel('Passwort').fill(proOwner.password);
-  await page.getByRole('button', { name: 'In Pro anmelden' }).click();
+  await page.getByRole('button', { name: 'Anmelden', exact: true }).click();
 
   await expect(page).toHaveURL(/#\/documents$/);
-  await expect(page.getByRole('heading', { name: 'Vertrieb und Export' })).toBeVisible();
+  await expect(page.getByText('Rechnungen', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Beta Digital AG').first()).toBeVisible();
 };

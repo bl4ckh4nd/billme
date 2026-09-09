@@ -100,6 +100,9 @@ export const runProIncomingInvoiceUiScenario = async (page, testInfo = { workerI
   const invoiceNumber = `ER-UI-${suffix}`;
 
   await openProShell(page, state, { route: 'accounting', session });
+  await page.waitForTimeout(1_000);
+  const accountingError = await page.getByRole('alert').textContent().catch(() => null);
+  if (accountingError) throw new Error(`Shared Pro accounting failed to load: ${accountingError}`);
   await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
   await page.getByRole('button', { name: 'OPOS' }).click();
   const incomingHeading = page.getByRole('heading', { name: 'Eingangsrechnungen' });

@@ -37,7 +37,7 @@ import {
   toDomainOffer,
   toLegacyInvoice,
   toLegacyOffer,
-} from '@billme/desktop-data/billingDomainCompat';
+} from '@billme/desktop-data/billingDocumentMapping';
 import { isNativeElectronRoute, isServerOwnedRoute } from './serverRouteClassification';
 
 type ServerClientPayload = z.output<typeof serverClientSchema>;

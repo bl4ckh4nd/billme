@@ -4,6 +4,7 @@ import { createServerApiClient, authUserSchema, serverProductSchema, serverRoleS
 import { mountDesktopRendererApp, type DesktopRendererRuntime } from '@billme/desktop-renderer';
 import { Button, Input } from '@billme/ui';
 import { createLiteWebBillmeApi } from './api/createLiteWebApi';
+import DesktopApp from '../../desktop/App';
 
 const DEFAULT_API_URL = (import.meta.env.VITE_SERVER_API_URL as string | undefined) ?? 'http://127.0.0.1:3100';
 const SESSION_STORAGE_KEY = 'billme.web.lite.session.v1';
@@ -85,7 +86,7 @@ const DesktopShell: React.FC<{
     let cancelled = false;
     let dispose: undefined | (() => void);
 
-    void mountDesktopRendererApp(hostRef.current, { api, runtime })
+    void mountDesktopRendererApp(hostRef.current, { api, runtime, AppComponent: DesktopApp })
       .then((cleanup) => {
         if (cancelled) {
           cleanup();

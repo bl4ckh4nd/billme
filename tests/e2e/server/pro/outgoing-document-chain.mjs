@@ -218,16 +218,18 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
 
   const directory = await captureDirectory();
   await openProShell(page, state, { route: 'documents', session });
-  await expect(page.getByRole('heading', { name: 'Dokumentkette und Revisionen' })).toBeVisible();
-  const chainOverview = page.getByTestId('document-chain-overview');
-  await expect(chainOverview).toContainText('Auftragsbestätigung');
-  await expect(chainOverview).toContainText('Lieferschein');
-  await expect(chainOverview).toContainText('Gutschrift');
-  await expect(chainOverview).toContainText('Revision');
+  await expect(page.getByText('Rechnungen', { exact: true }).first()).toBeVisible();
+  await page.getByText(final.document.number, { exact: true }).click();
+  const chainPanel = page.getByTestId('document-chain-panel');
+  await expect(chainPanel).toContainText('Auftragsbestätigung');
+  await expect(chainPanel).toContainText('Lieferschein');
+  await expect(chainPanel).toContainText('Gutschrift');
+  await expect(chainPanel).toContainText('Revision');
   await capture(page, directory, '01-chain-and-revision');
 
   await page.reload({ waitUntil: 'networkidle' });
-  await expect(page.getByTestId('document-chain-overview')).toContainText('Schlussrechnung');
-  await expect(page.getByTestId('document-chain-overview')).toContainText('Gutschrift');
+  await page.getByText(final.document.number, { exact: true }).click();
+  await expect(page.getByTestId('document-chain-panel')).toContainText('Schlussrechnung');
+  await expect(page.getByTestId('document-chain-panel')).toContainText('Gutschrift');
   await capture(page, directory, '02-chain-after-reload');
 };

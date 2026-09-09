@@ -195,9 +195,7 @@ export const runProAccountingScenario = async (page) => {
     session,
   });
 
-  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Buchhaltungsbereiche' })).toBeVisible();
-  await expect(page.getByText('Hosting Partner GmbH').first()).toBeVisible();
+  await expect(proAccountingHeading(page)).toBeVisible();
 
   await requestJson(
     state,

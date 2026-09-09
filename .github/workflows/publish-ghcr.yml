@@ -45,6 +45,7 @@ jobs:
 
     env:
       REGISTRY_IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+      PUBLIC_API_URL: ${{ vars.BILLME_PUBLIC_API_URL || 'http://localhost:3100' }}
 
     steps:
       - name: Checkout
@@ -82,6 +83,14 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Compute build arguments
+        id: build-args
+        shell: bash
+        run: |
+          if [[ "${{ matrix.service }}" == "web" || "${{ matrix.service }}" == "web-pro" ]]; then
+            echo "value=VITE_SERVER_API_URL=${PUBLIC_API_URL}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v6
         with:
@@ -90,5 +99,6 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.tags.outputs.tags }}
+          build-args: ${{ steps.build-args.outputs.value }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Server-Mode-Installationen ohne Quellcheckout können alle Dienste über eine eigene GHCR-Compose-Datei starten; veröffentlichte Browser-Images übernehmen dabei die konfigurierte öffentliche API-Adresse.
 - Die aktuellen Server-, Worker-, Portal- und Browser-Images werden wieder automatisiert für AMD64 und ARM64 in GHCR veröffentlicht und erhalten sowohl einen unveränderlichen Commit-Tag als auch `latest`.
 - Pro-Korrekturüberbuchungen liefern wieder einen typisierten, auditierten Ablehnungsstatus; die zugehörigen Accounting- und Browser-Abnahmetests folgen den aktuellen Unveränderlichkeits-, Steuer- und Formularverträgen.
 - Die Linux-CI stellt die native Keychain-Laufzeit, das explizit vorbereitete Electron-Binary und Xvfb für Desktop-Abnahmetests bereit und führt root-level Node-Testdateien mit einem Node-20-kompatiblen Muster aus, sodass die vollständigen Server-, Worker-, Demo- und Migrationsprüfungen nicht mehr vorzeitig abbrechen.

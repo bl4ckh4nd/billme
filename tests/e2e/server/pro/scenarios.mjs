@@ -153,13 +153,11 @@ export const runProCatalogScenario = async (page) => {
 
   const articleTitle = `Playwright Katalog ${Date.now()}`;
   await page.getByRole('button', { name: 'Neuer Artikel' }).click();
-  const articleForm = page.locator('div').filter({
-    has: page.getByRole('heading', { name: 'Neuer Artikel', exact: true }),
-  }).last();
-  await articleForm.getByPlaceholder('z.B. Webdesign').fill(articleTitle);
-  await articleForm.locator('input[type="number"]').fill('321.5');
-  await articleForm.getByPlaceholder('Details zum Produkt...').fill('Browser-seitig angelegter Regressionseintrag');
-  await articleForm.getByRole('button', { name: 'Erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Neuer Artikel', exact: true })).toBeVisible();
+  await page.getByPlaceholder('z.B. Webdesign').fill(articleTitle);
+  await page.locator('input[type="number"]').fill('321.5');
+  await page.getByPlaceholder('Details zum Produkt...').fill('Browser-seitig angelegter Regressionseintrag');
+  await page.getByRole('button', { name: 'Erstellen' }).click();
   await expect(page.getByText('Artikel erstellt.')).toBeVisible();
   await expect(page.getByText(articleTitle)).toBeVisible();
 

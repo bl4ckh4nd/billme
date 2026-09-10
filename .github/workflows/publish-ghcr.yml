@@ -34,8 +34,6 @@ jobs:
         include:
           - service: server-api
             dockerfile: apps/server-api/Dockerfile
-          - service: server-worker
-            dockerfile: apps/server-worker/Dockerfile
           - service: offer-portal
             dockerfile: apps/offer-portal/Dockerfile
           - service: web
@@ -102,3 +100,86 @@ jobs:
           build-args: ${{ steps.build-args.outputs.value }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  publish-server-worker-architecture:
+    name: Publish server-worker (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    env:
+      REGISTRY_IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push server-worker (${{ matrix.arch }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/server-worker/Dockerfile
+          push: true
+          platforms: ${{ matrix.platform }}
+          tags: ${{ env.REGISTRY_IMAGE_PREFIX }}/server-worker:sha-${{ github.sha }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=server-worker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=server-worker-${{ matrix.arch }}
+
+  publish-server-worker-manifest:
+    name: Publish server-worker manifest
+    runs-on: ubuntu-latest
+    needs: publish-server-worker-architecture
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/server-worker
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish multi-architecture manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          sources=(
+            "${REGISTRY_IMAGE}:sha-${GITHUB_SHA}-amd64"
+            "${REGISTRY_IMAGE}:sha-${GITHUB_SHA}-arm64"
+          )
+          tags=(--tag "${REGISTRY_IMAGE}:sha-${GITHUB_SHA}")
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            tags+=(--tag "${REGISTRY_IMAGE}:latest")
+          fi
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tags+=(--tag "${REGISTRY_IMAGE}:${GITHUB_REF_NAME}" --tag "${REGISTRY_IMAGE}:latest")
+          fi
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"

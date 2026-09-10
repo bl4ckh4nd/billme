@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Das Worker-Image wird für AMD64 und ARM64 auf nativen GitHub-Runnern gebaut und anschließend als gemeinsames Manifest veröffentlicht, sodass ARM64-Emulationsfehler den GHCR-Release nicht mehr blockieren; Änderungen an dieser Release-Pipeline lösen nun die vollständige CI-Prüfung aus.
 - Browser-Shells lösen ihre Lite-/Pro-API nun erst beim Aufruf auf, sodass nach dem Mounten zuverlässig der HTTP-Adapter statt eines beim Modulstart eingefrorenen Mock-Backends verwendet wird.
 - Fixed first-run Pro server workspaces so missing settings open the business onboarding, browser sessions can sign out, and EÜR reports identify the required reporting profile instead of incorrectly blaming the catalog.
 

@@ -14,6 +14,7 @@ on:
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci.yml'
       - '.github/workflows/e2e-nightly.yml'
+      - '.github/workflows/publish-ghcr.yml'
   pull_request:
     paths:
       - 'apps/**'
@@ -27,6 +28,7 @@ on:
       - 'pnpm-workspace.yaml'
       - '.github/workflows/ci.yml'
       - '.github/workflows/e2e-nightly.yml'
+      - '.github/workflows/publish-ghcr.yml'
 
 jobs:
   validate:

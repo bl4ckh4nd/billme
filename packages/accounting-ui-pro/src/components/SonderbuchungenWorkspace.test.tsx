@@ -36,6 +36,7 @@ const valid = () => {
 };
 
 const fill = () => {
+  fireEvent.change(screen.getByLabelText('Quellbeleg'), { target: { value: 'beleg-1' } });
   fireEvent.change(screen.getByLabelText('Domain-Fakten (JSON)'), { target: { value: JSON.stringify(correctionFacts) } });
   fireEvent.change(screen.getByLabelText('Audit-Grund'), { target: { value: 'Beleg geprüft' } });
 };
@@ -160,6 +161,7 @@ describe('SonderbuchungenWorkspace', () => {
     const adapter = valid();
     render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
     fireEvent.change(screen.getByLabelText('Workflow'), { target: { value: 'fiscal_close' } });
+    fireEvent.change(screen.getByLabelText('Quellbeleg'), { target: { value: 'beleg-1' } });
     fireEvent.change(screen.getByLabelText('Audit-Grund'), { target: { value: 'Abschluss geprüft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Prüfen & verbindlich buchen' }));
     await waitFor(() => expect(adapter.postAccountingCommand).toHaveBeenCalledWith(expect.objectContaining({ kind: 'fiscal_close', domainFacts: expect.any(Object), source: expect.objectContaining({ lines: [] }) })));
@@ -169,6 +171,7 @@ describe('SonderbuchungenWorkspace', () => {
     const adapter = valid();
     render(<SonderbuchungenWorkspace dataAdapter={adapter} />);
     fireEvent.change(screen.getByLabelText('Workflow'), { target: { value: 'shareholder_flow' } });
+    fireEvent.change(screen.getByLabelText('Quellbeleg'), { target: { value: 'beleg-1' } });
     fireEvent.change(screen.getByLabelText('Audit-Grund'), { target: { value: 'Gesellschaftervorgang geprüft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Prüfen & verbindlich buchen' }));
     await waitFor(() => expect(adapter.postAccountingCommand).toHaveBeenCalledWith(expect.objectContaining({
@@ -328,16 +331,16 @@ describe('SonderbuchungenWorkspace', () => {
       .mockResolvedValueOnce([]);
     try {
       render(<SonderbuchungenWorkspace dataAdapter={{ listAccountingSourceRuns }} />);
-      const firstError = await screen.findByText('Buchungshistorie konnte nicht geladen werden: Bitte versuchen Sie es erneut.');
-      expect(firstError.textContent).toContain('Buchungshistorie konnte nicht geladen werden: Bitte versuchen Sie es erneut.');
+      const firstError = await screen.findByText('Buchungshistorie konnte nicht geladen werden: Bitte versuche es erneut.');
+      expect(firstError.textContent).toContain('Buchungshistorie konnte nicht geladen werden: Bitte versuche es erneut.');
       expect(firstError.textContent).not.toContain('ZodError');
       expect(firstError.textContent).not.toContain('invalid_type');
       expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('Buchungshistorie konnte nicht geladen werden'), zodError);
 
       fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }));
-      const secondError = await screen.findByText('Buchungshistorie konnte nicht geladen werden: Bitte versuchen Sie es erneut.');
+      const secondError = await screen.findByText('Buchungshistorie konnte nicht geladen werden: Bitte versuche es erneut.');
       expect(secondError.textContent).not.toContain('invalid_type');
-      expect(secondError.textContent).toContain('Bitte versuchen Sie es erneut.');
+      expect(secondError.textContent).toContain('Bitte versuche es erneut.');
       expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('Buchungshistorie konnte nicht geladen werden'), zodDump);
 
       fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }));

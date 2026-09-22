@@ -5,17 +5,8 @@ import { ipcRoutes } from './contract';
 import { createMockInvoke } from './mockEngine';
 
 describe('mockEngine route coverage', () => {
-  it('contains handlers for all mock-supported IPC routes', () => {
+  it('contains a handler for every contract route', () => {
     const contractRoutes = Object.keys(ipcRoutes).sort();
-    const nativeOnlyRoutes = [
-      'taxFiling:export',
-      'taxFiling:getStatus',
-      'taxFiling:installCertificate',
-      'taxFiling:listRecords',
-      'taxFiling:removeCertificate',
-      'taxFiling:submit',
-      'taxFiling:validate',
-    ].sort();
     const switchCases = [
       ...new Set(
         readFileSync(path.resolve(process.cwd(), '../../packages/desktop-services/src/mockEngine.ts'), 'utf8')
@@ -25,8 +16,7 @@ describe('mockEngine route coverage', () => {
       ),
     ].sort();
 
-    expect(contractRoutes.filter((route) => !nativeOnlyRoutes.includes(route))).toEqual(switchCases);
-    expect(contractRoutes.filter((route) => nativeOnlyRoutes.includes(route))).toEqual(nativeOnlyRoutes);
+    expect(switchCases).toEqual(contractRoutes);
   });
 
   it('supports browser/demo critical routes', async () => {

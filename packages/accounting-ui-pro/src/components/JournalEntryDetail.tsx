@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Portal } from '@billme/ui';
+import { formatEmptyValue, Modal } from '@billme/ui';
 import type { JournalEntryEntity } from '@billme/accounting-shared';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
 
@@ -70,7 +70,7 @@ export default function JournalEntryDetail({ entryId, dataAdapter }: JournalEntr
 
   if (error) {
     return (
-      <div className="rounded-xl border border-error-border bg-error-bg p-4 text-sm text-error" role="alert" aria-live="assertive">
+      <div className="rounded-xl border border-error-border bg-error-bg p-4 text-sm text-error-text" role="alert" aria-live="assertive">
         <div>{error}</div>
         <button type="button" className="mt-3 rounded-lg border border-error-border px-3 py-1.5 font-bold" onClick={() => setRetry((value) => value + 1)}>
           Erneut versuchen
@@ -98,7 +98,7 @@ export default function JournalEntryDetail({ entryId, dataAdapter }: JournalEntr
       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
         <div><dt className="text-muted">Buchungsdatum</dt><dd className="font-semibold text-foreground">{date.format(new Date(entry.postingDate))}</dd></div>
         <div><dt className="text-muted">Periode</dt><dd className="font-semibold text-foreground">{entry.period}</dd></div>
-        <div><dt className="text-muted">Referenz</dt><dd className="font-semibold text-foreground">{entry.reference ?? '—'}</dd></div>
+        <div><dt className="text-muted">Referenz</dt><dd className="font-semibold text-foreground">{formatEmptyValue(entry.reference)}</dd></div>
       </dl>
 
       <div className="mt-4 space-y-2" aria-label="Buchungszeilen">
@@ -121,16 +121,17 @@ export function JournalEntryDetailModal({ entryId, dataAdapter, onClose }: Journ
   if (!entryId) return null;
 
   return (
-    <Portal>
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-dark-base/20 backdrop-blur-sm p-4 sm:p-8" role="presentation">
-      <div className="w-full max-w-3xl rounded-2xl border border-border bg-surface p-4 shadow-xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="journal-entry-dialog-heading">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 id="journal-entry-dialog-heading" className="text-lg font-black text-foreground">Journalbuchung</h2>
-          <button type="button" className="min-h-10 rounded-lg border border-border px-3 py-2 text-sm font-bold text-foreground hover:bg-surface-muted" aria-label="Journalansicht schließen" onClick={onClose}>Schließen</button>
-        </div>
-        <JournalEntryDetail entryId={entryId} dataAdapter={dataAdapter} />
+    <Modal
+      open
+      onClose={onClose}
+      titleId="journal-entry-dialog-heading"
+      className="max-w-3xl rounded-2xl border border-border p-4 sm:p-6"
+    >
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 id="journal-entry-dialog-heading" className="text-lg font-black text-foreground">Journalbuchung</h2>
+        <button type="button" className="min-h-10 rounded-lg border border-control-border px-3 py-2 text-sm font-bold text-foreground hover:bg-surface-muted" aria-label="Journalansicht schließen" onClick={onClose}>Schließen</button>
       </div>
-    </div>
-    </Portal>
+      <JournalEntryDetail entryId={entryId} dataAdapter={dataAdapter} />
+    </Modal>
   );
 }

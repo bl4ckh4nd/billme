@@ -7,7 +7,7 @@ export interface ElementRendererProps {
   element: InvoiceElement;
   /** Renders raw template text ({{placeholders}}) into nodes. */
   renderText: RenderText;
-  /** Read-only (preview/print) — no editor affordances. */
+  /** Read-only (preview/print), no editor affordances. */
   readOnly?: boolean;
   /** Editor: element is the active selection (subtle ring). */
   selected?: boolean;
@@ -23,7 +23,8 @@ export interface ElementRendererProps {
   onDoubleClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
   /** Inline table editor hook. Omitted for preview/print. */
   renderTableRow?: TableRowRenderer;
-  /** Zero-flow footer controls rendered below the table in edit mode. */
+  /** Editor: Enter/Space on the focused canvas element selects it (LayersPanel detour no longer required). */
+  onKeySelect?: (id: string, additive: boolean) => void;
   tableFooter?: React.ReactNode;
   /** Zero-flow controls anchored to the table header in edit mode. */
   tableHeaderOverlay?: React.ReactNode;
@@ -35,11 +36,11 @@ export interface ElementRendererProps {
  * the two stay pixel-identical by construction.
  *
  * Renders a position:absolute box (left/top/size/zIndex + element styling) and
- * the type-specific content. It owns NO drag/selection logic — Moveable/Selecto
+ * the type-specific content. It owns NO drag/selection logic: Moveable/Selecto
  * in the stage operate on this node via the forwarded ref.
  */
 export const ElementRenderer = forwardRef<HTMLDivElement, ElementRendererProps>(function ElementRenderer(
-  { element, renderText, readOnly = false, selected = false, editing = false, onTextCommit, className, style, onPointerDown, onDoubleClick, renderTableRow, tableFooter, tableHeaderOverlay },
+  { element, renderText, readOnly = false, selected = false, editing = false, onTextCommit, className, style, onPointerDown, onDoubleClick, renderTableRow, tableFooter, tableHeaderOverlay, onKeySelect },
   ref,
 ) {
   if (element.hidden) return null;
@@ -87,6 +88,16 @@ export const ElementRenderer = forwardRef<HTMLDivElement, ElementRendererProps>(
       style={{ ...rootStyle, ...style }}
       onPointerDown={onPointerDown}
       onDoubleClick={onDoubleClick}
+      tabIndex={readOnly || editing ? undefined : 0}
+      role={readOnly ? undefined : 'button'}
+      aria-label={readOnly ? undefined : element.label || `Element ${element.id}`}
+      aria-pressed={readOnly ? undefined : selected}
+      onKeyDown={readOnly ? undefined : (event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onKeySelect?.(element.id, event.shiftKey || event.metaKey || event.ctrlKey);
+      }}
     >
       {renderContent(element, renderText, editing, onTextCommit, readOnly, renderTableRow, tableFooter, tableHeaderOverlay)}
     </div>
@@ -125,7 +136,8 @@ function renderContent(
                 }
               }
             }}
-            className="w-full h-full outline-none"
+            // Inset ring: the element box clips to its own bounds, so an outset ring would be swallowed.
+            className="w-full h-full focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus-ring"
             style={{ whiteSpace: 'pre-wrap', cursor: 'text' }}
             onBlur={(e) => {
               const next = e.currentTarget.textContent || '';
@@ -146,7 +158,7 @@ function renderContent(
     case 'IMAGE':
       if (!element.src) {
         return readOnly ? null : (
-          <div className="flex h-full w-full items-center justify-center border border-dashed border-black/20 bg-gray-50 text-[10px] font-medium text-gray-400">
+          <div className="flex h-full w-full items-center justify-center border border-dashed border-control-border bg-surface-muted text-[10px] font-medium text-muted">
             Bild hochladen
           </div>
         );
@@ -187,7 +199,7 @@ function renderContent(
             <div className="bg-black col-span-1 row-start-4 col-start-1"></div>
             <div className="bg-black col-span-2 row-span-2 row-start-3 col-start-3"></div>
           </div>
-          <div className="z-10 bg-white px-2 py-1 text-[8px] font-bold border border-black">GIROCODE</div>
+          <div className="z-10 bg-white px-2 py-1 text-[10px] font-bold border border-black">GIROCODE</div>
         </div>
       );
 
@@ -204,7 +216,7 @@ function renderContent(
                   <th
                     key={col.id}
                     style={{ width: `${col.width}px`, textAlign: col.align || 'left' }}
-                    className="relative border-b-2 border-black/10 p-2 bg-gray-50 text-xs font-bold uppercase tracking-wide text-gray-500 truncate"
+                    className="relative border-b-2 border-border-subtle p-2 bg-surface-muted text-xs font-bold uppercase tracking-wide text-muted truncate"
                   >
                     <span>{col.label}</span>
                     {tableHeaderOverlay && columns.find((candidate) => candidate.visible)?.id === col.id ? (
@@ -220,7 +232,7 @@ function renderContent(
               <tr
                 key={row.id}
                 data-line-kind={row.kind}
-                className={`border-b border-gray-100 ${row.kind === 'group' || row.kind === 'group-continuation' ? 'bg-accent/10 font-bold' : ''} ${row.kind === 'summary' ? 'border-t border-black/10 font-bold' : ''} ${row.kind === 'text' ? 'italic text-gray-500' : ''} ${row.kind === 'optional' ? 'text-gray-500' : ''}`}
+                className={`border-b border-border-subtle ${row.kind === 'group' || row.kind === 'group-continuation' ? 'bg-surface-muted font-bold' : ''} ${row.kind === 'summary' ? 'border-t border-border font-bold' : ''} ${row.kind === 'text' ? 'italic text-muted' : ''} ${row.kind === 'optional' ? 'text-muted' : ''}`}
               >
                 {columns.map((col, i) => {
                   if (!col.visible) return null;

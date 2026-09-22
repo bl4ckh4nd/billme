@@ -16,7 +16,8 @@ const createInvoice = (): Invoice => ({
   date: '2024-01-01',
   dueDate: '2024-01-10',
   amount: 100,
-  status: 'overdue',
+  // Stored as open: the run must derive "overdue" from the due date itself.
+  status: 'open',
   items: [],
   payments: [],
   history: [],
@@ -144,6 +145,8 @@ describe('dunning domain service', () => {
     expect(invoice.amount).toBe(110);
     expect(history).toHaveLength(2);
     expect(history.map((entry) => entry.feeApplied)).toEqual([10, 0]);
+    expect(invoice.dunningLevel).toBe(1);
+    expect(invoice.history?.[0]?.action).toBe('Zahlungserinnerung per E-Mail an billing@acme.test versendet');
     expect(settings.automation.lastDunningRun).toBe('2024-02-10T09:05:00.000Z');
   });
 

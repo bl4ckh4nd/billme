@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Info } from 'lucide-react';
 import InboxView from './components/InboxView';
 import BookingEditor from './components/BookingEditor';
 import ReconciliationWorkbench from './components/ReconciliationWorkbench';
@@ -116,7 +117,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
                 key={view}
                 onClick={() => setCurrentView(view)}
                 aria-current={isActive ? 'page' : undefined}
-                className={`relative min-h-10 rounded-t-lg px-4 py-2 text-sm font-bold transition-colors active:scale-[0.96] ${
+                className={`relative min-h-10 rounded-t-lg px-4 py-2 text-sm font-bold transition-colors ${
                   isActive
                     ? 'text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-dark-base'
                     : 'text-muted hover:text-foreground'
@@ -126,6 +127,16 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
               </button>
             );
           })}
+          {dataAdapter ? null : (
+            <span
+              className="ml-2 inline-flex items-center gap-1 rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs font-bold text-warning-text"
+              role="status"
+              title="Ohne verbundene Datenquelle zeigen Buchungen, Ausnahmen und Auswertungen einen Demo-Datensatz."
+            >
+              <Info size={12} aria-hidden="true" />
+              Beispieldaten
+            </span>
+          )}
         </nav>
       </div>
 

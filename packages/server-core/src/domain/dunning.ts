@@ -82,3 +82,33 @@ export const invoiceDunningStatusSchema = z.object({
   history: z.array(dunningHistoryEntrySchema),
 });
 export type InvoiceDunningStatus = z.infer<typeof invoiceDunningStatusSchema>;
+
+/** Document kinds that create a receivable and can therefore fall overdue. */
+const RECEIVABLE_DOCUMENT_KINDS = new Set(['invoice', 'advance_invoice', 'partial_invoice', 'final_invoice']);
+
+const localIsoDate = (now: Date): string => {
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+};
+
+type OverdueCandidate = { status: string; dueDate: string; documentKind?: string | null };
+
+/**
+ * "Überfällig" is derived from the due date, never trusted from storage: an
+ * open receivable whose due date lies before today (local calendar day) is
+ * overdue, and a stored `overdue` whose due date moved into the future is not.
+ */
+export const isInvoiceOverdue = (invoice: OverdueCandidate, now: Date = new Date()): boolean => {
+  if (invoice.status !== 'open' && invoice.status !== 'overdue') return false;
+  if (!RECEIVABLE_DOCUMENT_KINDS.has(invoice.documentKind ?? 'invoice')) return false;
+  const due = invoice.dueDate?.slice(0, 10);
+  return Boolean(due) && due < localIsoDate(now);
+};
+
+/** Returns the invoice with its status derived via {@link isInvoiceOverdue}. */
+export const withEffectiveInvoiceStatus = <T extends OverdueCandidate>(invoice: T, now: Date = new Date()): T => {
+  if (invoice.status !== 'open' && invoice.status !== 'overdue') return invoice;
+  const status = isInvoiceOverdue(invoice, now) ? 'overdue' : 'open';
+  return status === invoice.status ? invoice : { ...invoice, status };
+};

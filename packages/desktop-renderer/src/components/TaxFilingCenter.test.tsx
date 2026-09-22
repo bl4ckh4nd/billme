@@ -49,8 +49,9 @@ describe('TaxFilingCenter', () => {
 
     render(<TaxFilingCenter />);
 
-    expect((await screen.findByRole('alert')).textContent).toBe(
-      'Steuer-Filing-Center nicht verfügbar: route unavailable',
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Das Steuer-Filing-Center ist in dieser Umgebung nicht verfügbar.',
     );
+    expect(screen.queryByText(/route unavailable/)).toBeNull();
   });
 });

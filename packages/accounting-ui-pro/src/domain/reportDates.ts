@@ -47,7 +47,7 @@ const calendarYearRange = (asOfDate: string): FiscalYearRange => {
  * guidance instead of implementing a second validation rule.
  */
 export const reportFiscalYearRange = (asOfDate: string, profile?: BusinessReportingProfile): FiscalYearRange | undefined => {
-  if (!profile || profile.legalForm !== 'gmbh' || profile.profitDetermination !== 'double_entry') {
+  if (!profile || !['gmbh', 'ug'].includes(profile.legalForm) || profile.profitDetermination !== 'double_entry') {
     return calendarYearRange(asOfDate);
   }
   if (!profile.fiscalYearStart) return undefined;
@@ -67,7 +67,7 @@ export const reportPeriodRangeForPreset = (
   if (!current) return undefined;
   if (periodPreset === 'ytd') return { from: current.start, to: asOfDate };
   if (periodPreset === 'prev_year') {
-    if (profile?.legalForm === 'gmbh' && profile.profitDetermination === 'double_entry' && profile.fiscalYearStart) {
+    if ((profile?.legalForm === 'gmbh' || profile?.legalForm === 'ug') && profile.profitDetermination === 'double_entry' && profile.fiscalYearStart) {
       try {
         const previous = fiscalYearRange(current.fiscalYear - 1, profile.fiscalYearStart);
         return { from: previous.start, to: previous.end };

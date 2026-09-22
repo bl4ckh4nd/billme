@@ -12,16 +12,16 @@ export interface CardProps {
 }
 
 const radiusStyles: Record<CardRadius, string> = {
-  md: 'rounded-lg',
-  lg: 'rounded-xl',
-  xl: 'rounded-2xl',
+  md: 'rounded-md',
+  lg: 'rounded-lg',
+  xl: 'rounded-xl',
   '2xl': 'rounded-2xl',
   '3xl': 'rounded-3xl',
 };
 
 export const Card: React.FC<CardProps> = ({
   children,
-  radius = '2xl',
+  radius = 'xl',
   withBorder = true,
   withShadow = false,
   className
@@ -31,8 +31,9 @@ export const Card: React.FC<CardProps> = ({
       className={cn(
         'bg-surface p-6',
         radiusStyles[radius],
-        withBorder && 'border border-border',
-        withShadow && 'shadow-lg',
+        // ponytail: shadow takes precedence when both flags are true; replace with an explicit elevation mode if both semantics are ever needed.
+        withBorder && !withShadow && 'border border-border',
+        withShadow && 'shadow-sm',
         className
       )}
     >

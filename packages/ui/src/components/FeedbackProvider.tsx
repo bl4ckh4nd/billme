@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, Info, LoaderCircle, XCircle } from 'lucide-react';
 import { Portal } from './Portal';
-import { Toast, type ToastAction } from './Toast';
+import { Toast, toastOverlayPosition, type ToastAction } from './Toast';
 
 export type FeedbackKind = 'success' | 'error' | 'info' | 'progress';
 
@@ -45,7 +45,7 @@ const getDuration = (kind: FeedbackKind, options: FeedbackOptions): number | nul
 const normalizedScope = (scope: string): string => scope.trim() || 'global';
 
 const FeedbackIcon: React.FC<{ kind: FeedbackKind }> = ({ kind }) => {
-  if (kind === 'progress') return <LoaderCircle size={16} className="shrink-0 animate-spin" aria-hidden="true" />;
+  if (kind === 'progress') return <LoaderCircle size={16} className="shrink-0 motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />;
   if (kind === 'error') return <XCircle size={16} aria-hidden="true" />;
   if (kind === 'info') return <Info size={16} aria-hidden="true" />;
   return <CheckCircle2 size={16} aria-hidden="true" />;
@@ -53,8 +53,11 @@ const FeedbackIcon: React.FC<{ kind: FeedbackKind }> = ({ kind }) => {
 
 export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
   const [entries, setEntries] = useState<Record<string, FeedbackEntry>>({});
-  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const [leaving, setLeaving] = useState<Record<string, true>>({});
+  const timers = useRef(new Map<string, number>());
+  const timerMeta = useRef(new Map<string, { id: number; remaining: number; startedAt: number }>());
   const nextId = useRef(0);
+  const exitTimers = useRef(new Map<string, number>());
 
   const clearTimer = useCallback((scope: string) => {
     const timer = timers.current.get(scope);
@@ -62,22 +65,69 @@ export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }
       clearTimeout(timer);
       timers.current.delete(scope);
     }
+    timerMeta.current.delete(scope);
   }, []);
 
-  const clear = useCallback((scope: string) => {
+  // Two-phase removal: flag `leaving` for the 150ms exit, then delete.
+  const removeEntry = useCallback((scope: string) => {
     const key = normalizedScope(scope);
     clearTimer(key);
-    setEntries((current) => {
+    clearTimeout(exitTimers.current.get(key));
+    exitTimers.current.delete(key);
+    const reduceMotion = typeof window !== 'undefined'
+      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion) {
+      setEntries((current) => {
+        if (!current[key]) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      setLeaving((current) => {
+        if (!current[key]) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+    setLeaving((current) => (current[key] ? current : { ...current, [key]: true }));
+    const timer = window.setTimeout(() => {
+      exitTimers.current.delete(key);
+      setEntries((current) => {
+        if (!current[key]) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      setLeaving((current) => {
+        if (!current[key]) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }, 150);
+    exitTimers.current.set(key, timer);
+  }, [clearTimer]);
+
+  const clear = useCallback((scope: string) => {
+    removeEntry(scope);
+  }, [removeEntry]);
+
+  const notify = useCallback((scope: string, kind: FeedbackKind, message: string, options: FeedbackOptions = {}) => {
+    const key = normalizedScope(scope);
+    clearTimer(key);
+    const pendingExit = exitTimers.current.get(key);
+    if (pendingExit !== undefined) {
+      clearTimeout(pendingExit);
+      exitTimers.current.delete(key);
+    }
+    setLeaving((current) => {
       if (!current[key]) return current;
       const next = { ...current };
       delete next[key];
       return next;
     });
-  }, [clearTimer]);
-
-  const notify = useCallback((scope: string, kind: FeedbackKind, message: string, options: FeedbackOptions = {}) => {
-    const key = normalizedScope(scope);
-    clearTimer(key);
     const id = ++nextId.current;
     const entry: FeedbackEntry = { id, kind, message, ...options };
     setEntries((current) => ({ ...current, [key]: entry }));
@@ -85,21 +135,43 @@ export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }
     const duration = getDuration(kind, options);
     if (duration === null || duration <= 0 || !Number.isFinite(duration)) return;
 
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       timers.current.delete(key);
-      setEntries((current) => {
-        if (current[key]?.id !== id) return current;
-        const next = { ...current };
-        delete next[key];
-        return next;
-      });
+      timerMeta.current.delete(key);
+      removeEntry(key);
     }, duration);
     timers.current.set(key, timer);
-  }, [clearTimer]);
+    timerMeta.current.set(key, { id, remaining: duration, startedAt: Date.now() });
+  }, [clearTimer, removeEntry]);
+
+  const pauseTimer = useCallback((scope: string, id: number) => {
+    const metadata = timerMeta.current.get(scope);
+    const timer = timers.current.get(scope);
+    if (!metadata || metadata.id !== id || timer === undefined) return;
+    clearTimeout(timer);
+    timers.current.delete(scope);
+    metadata.remaining = Math.max(0, metadata.remaining - (Date.now() - metadata.startedAt));
+  }, []);
+
+  const resumeTimer = useCallback((scope: string, id: number) => {
+    const metadata = timerMeta.current.get(scope);
+    if (!metadata || metadata.id !== id || timers.current.has(scope)) return;
+
+    const timer = window.setTimeout(() => {
+      timers.current.delete(scope);
+      timerMeta.current.delete(scope);
+      removeEntry(scope);
+    }, metadata.remaining);
+    metadata.startedAt = Date.now();
+    timers.current.set(scope, timer);
+  }, [removeEntry]);
 
   useEffect(() => () => {
     timers.current.forEach((timer) => clearTimeout(timer));
     timers.current.clear();
+    timerMeta.current.clear();
+    exitTimers.current.forEach((timer) => clearTimeout(timer));
+    exitTimers.current.clear();
   }, []);
 
   const contextValue = useMemo(() => ({ notify, clear }), [clear, notify]);
@@ -111,15 +183,18 @@ export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }
       {visibleEntries.length > 0 && (
         <Portal>
           <div
+            role="region"
             aria-label="Aktionsmeldungen"
-            className="pointer-events-none fixed top-14 right-8 z-50 flex max-w-md flex-col items-end gap-3"
+            className={`pointer-events-none ${toastOverlayPosition} flex max-w-md flex-col items-end gap-3`}
           >
-            {visibleEntries.map(([scope, entry]) => (
+            {visibleEntries.map(([scope, entry], index) => (
               <Toast
                 key={`${scope}-${entry.id}`}
                 variant={entry.kind}
                 size="compact"
                 portal={false}
+                leaving={leaving[scope] === true}
+                staggerIndex={index}
                 action={entry.action ? {
                   label: entry.action.label,
                   onClick: () => {
@@ -127,6 +202,9 @@ export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }
                     entry.action?.onClick();
                   },
                 } : undefined}
+                onDismiss={() => removeEntry(scope)}
+                onPause={() => pauseTimer(scope, entry.id)}
+                onResume={() => resumeTimer(scope, entry.id)}
                 className="pointer-events-auto w-full"
               >
                 <FeedbackIcon kind={entry.kind} />

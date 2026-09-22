@@ -3,7 +3,7 @@ export type ReportProfile = 'all' | 'standard' | 'management' | 'tax';
 export type ReportPeriodPreset = 'current' | 'ytd' | 'prev_year';
 
 export interface BusinessReportingProfile {
-  legalForm: 'sole_proprietor' | 'gmbh';
+  legalForm: 'sole_proprietor' | 'gmbh' | 'ug' | 'gbr' | 'ek';
   profitDetermination: 'eur' | 'double_entry';
   fiscalYearStart?: string;
   chart?: 'SKR03' | 'SKR04';
@@ -214,10 +214,10 @@ export const reportTabsForProfile = (profile: ReportProfile): ReportTabId[] => {
 /** Fail closed when onboarding has not supplied the canonical legal/reporting profile. */
 export const reportTabsForBusinessProfile = (profile?: BusinessReportingProfile): ReportTabId[] => {
   if (!profile) return ['susa'];
-  if (profile.legalForm === 'sole_proprietor' && profile.profitDetermination === 'eur') {
+  if (['sole_proprietor', 'gbr', 'ek'].includes(profile.legalForm) && profile.profitDetermination === 'eur') {
     return ['eur', 'susa', 'bwa01', 'management_guv'];
   }
-  if (profile.legalForm === 'gmbh' && profile.profitDetermination === 'double_entry') {
+  if ((profile.legalForm === 'gmbh' || profile.legalForm === 'ug') && profile.profitDetermination === 'double_entry') {
     return ['susa', 'bwa01', 'management_guv', 'hgb_guv', 'bilanz'];
   }
   return ['susa'];

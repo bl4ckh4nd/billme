@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowDownToLine, Copy, LogOut, Minus, RefreshCw, Square, X } from 'lucide-react';
+import { ArrowDownToLine, LogOut, Minus, RefreshCw, Square, X } from 'lucide-react';
 import { ipc } from '../ipc/client';
 import billmeMarkLogo from '../assets/billme-mark.svg';
 import { getBillmeRuntimeConfig } from '../runtime';
@@ -86,7 +86,7 @@ export const Titlebar: React.FC = () => {
 
   return (
     <div
-      className="drag-region h-10 shrink-0 border-b border-black/10 bg-white/95 backdrop-blur-sm flex items-center justify-between pl-3 pr-1 select-none no-print"
+      className="drag-region h-10 shrink-0 border-b border-border bg-surface flex items-center justify-between pl-3 pr-1 select-none no-print"
       onDoubleClick={toggleMaximize}
     >
       <div className="flex items-center gap-2 min-w-0">
@@ -96,7 +96,7 @@ export const Titlebar: React.FC = () => {
           className="w-5 h-5 object-contain"
           draggable={false}
         />
-        <span className="text-xs font-bold tracking-wide text-black/80 truncate">Billme</span>
+        <span className="text-xs font-bold tracking-wide text-foreground truncate">Billme</span>
       </div>
 
       <div className="no-drag flex items-center" onDoubleClick={(e) => e.stopPropagation()}>
@@ -105,9 +105,9 @@ export const Titlebar: React.FC = () => {
             <button
               type="button"
               onClick={handleLogout}
-              className="inline-flex h-8 items-center gap-2 rounded-full px-3 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-100 hover:text-black"
+              className="inline-flex h-8 items-center gap-2 rounded-full px-3 text-xs font-semibold text-foreground transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
-              <LogOut size={14} />
+              <LogOut size={14} aria-hidden="true" />
               Abmelden
             </button>
           ) : null
@@ -118,12 +118,12 @@ export const Titlebar: React.FC = () => {
                 type="button"
                 onClick={handleUpdateClick}
                 disabled={updateStatus.status === 'downloading'}
-                className={`w-11 h-8 inline-flex items-center justify-center transition-colors ${
+                className={`w-11 h-8 inline-flex items-center justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                   updateStatus.status === 'downloaded'
-                    ? 'text-green-600 hover:bg-green-50 hover:text-green-700'
+                    ? 'text-success-text hover:bg-success-bg'
                     : updateStatus.status === 'downloading'
-                      ? 'text-blue-500 cursor-wait'
-                      : 'text-blue-600 hover:bg-blue-50 hover:text-blue-700'
+                      ? 'text-info-text cursor-wait'
+                      : 'text-info-text hover:bg-info-bg'
                 }`}
                 aria-label={
                   updateStatus.status === 'downloaded'
@@ -143,7 +143,7 @@ export const Titlebar: React.FC = () => {
                 {updateStatus.status === 'downloaded' ? (
                   <RefreshCw size={14} />
                 ) : updateStatus.status === 'downloading' ? (
-                  <ArrowDownToLine size={14} className="animate-pulse" />
+                  <ArrowDownToLine size={14} />
                 ) : (
                   <ArrowDownToLine size={14} />
                 )}
@@ -152,29 +152,34 @@ export const Titlebar: React.FC = () => {
             <button
               type="button"
               onClick={minimize}
-              className="w-11 h-8 inline-flex items-center justify-center text-gray-600 hover:bg-gray-100 hover:text-black transition-colors"
+              className="w-11 h-8 inline-flex items-center justify-center text-muted hover:bg-surface-muted hover:text-foreground transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               aria-label="Fenster minimieren"
               title="Minimieren"
             >
-              <Minus size={14} />
+              <Minus size={14} aria-hidden="true" />
             </button>
             <button
               type="button"
               onClick={toggleMaximize}
-              className="w-11 h-8 inline-flex items-center justify-center text-gray-600 hover:bg-gray-100 hover:text-black transition-colors"
+              className="w-11 h-8 inline-flex items-center justify-center text-muted hover:bg-surface-muted hover:text-foreground transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               aria-label={isMaximized ? 'Fenster wiederherstellen' : 'Fenster maximieren'}
               title={isMaximized ? 'Wiederherstellen' : 'Maximieren'}
             >
-              {isMaximized ? <Copy size={12} /> : <Square size={12} />}
+              {isMaximized ? (
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
+                  <rect x="1" y="3" width="7" height="7" rx="1" />
+                  <path d="M4 1h7v7" />
+                </svg>
+              ) : <Square size={12} aria-hidden="true" />}
             </button>
             <button
               type="button"
               onClick={close}
-              className="w-11 h-8 inline-flex items-center justify-center text-gray-700 hover:bg-red-600 hover:text-white transition-colors"
+              className="w-11 h-8 inline-flex items-center justify-center text-foreground hover:bg-error hover:text-background transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               aria-label="Fenster schließen"
               title="Schließen"
             >
-              <X size={14} />
+              <X size={14} aria-hidden="true" />
             </button>
           </>
         )}

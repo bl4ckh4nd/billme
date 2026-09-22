@@ -68,16 +68,16 @@ export function getStatusPresentation(status: BookingWorkflowStatus): {
 } {
   const map: Record<BookingWorkflowStatus, { label: string; className: string }> = {
     imported: { label: 'Neu', className: 'bg-surface-muted text-muted' },
-    suggested: { label: 'Vorschlag', className: 'bg-info-bg text-info' },
-    incomplete: { label: 'Unvollständig', className: 'bg-warning-bg text-warning' },
-    ready_for_review: { label: 'Zur Prüfung', className: 'bg-info-bg text-info' },
-    pending_approval: { label: 'Freigabe offen', className: 'bg-warning-bg text-warning' },
-    approved: { label: 'Freigegeben', className: 'bg-success-bg text-success' },
-    posted: { label: 'Gebucht', className: 'bg-success-bg text-success' },
-    reversed: { label: 'Storniert', className: 'bg-error-bg text-error' },
-    corrected: { label: 'Korrigiert', className: 'bg-info-bg text-info' },
-    period_locked: { label: 'Periode gesperrt', className: 'bg-error-bg text-error' },
-    integration_error: { label: 'Integrationsfehler', className: 'bg-error-bg text-error' },
+    suggested: { label: 'Vorschlag', className: 'bg-info-bg text-info-text' },
+    incomplete: { label: 'Unvollständig', className: 'bg-warning-bg text-warning-text' },
+    ready_for_review: { label: 'Zur Prüfung', className: 'bg-info-bg text-info-text' },
+    pending_approval: { label: 'Freigabe offen', className: 'bg-warning-bg text-warning-text' },
+    approved: { label: 'Freigegeben', className: 'bg-success-bg text-success-text' },
+    posted: { label: 'Gebucht', className: 'bg-success-bg text-success-text' },
+    reversed: { label: 'Storniert', className: 'bg-error-bg text-error-text' },
+    corrected: { label: 'Korrigiert', className: 'bg-info-bg text-info-text' },
+    period_locked: { label: 'Periode gesperrt', className: 'bg-error-bg text-error-text' },
+    integration_error: { label: 'Integrationsfehler', className: 'bg-error-bg text-error-text' },
   };
   return map[status];
 }

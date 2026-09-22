@@ -21,6 +21,12 @@ interface ReportMappingSetupProps {
   asOfDate: string;
   refreshKey?: number;
   onMappingChanged?: () => void;
+  /**
+   * Mapping-Zustand des aktiven Report-Tabs. Der Katalog-Check oben deckt nur die
+   * Positions-Reports ab; ohne diesen Bezug würde er einen Report als vollständig
+   * ausweisen, dessen Mapping der Exportbereich als unvollständig meldet.
+   */
+  activeReportMapping?: { label: string; blocked: boolean };
 }
 
 type PositionMap = Partial<Record<ReportMappingStatement, ReportMappingPosition[]>>;
@@ -35,7 +41,7 @@ const normalizeHealth = (value: ReportMappingHealth): ReportMappingHealth => ({
     .map((entry) => [rowId(entry), entry] as const)).values()],
 });
 
-export default function ReportMappingSetup({ dataAdapter, chart, role, statements = DEFAULT_REPORT_MAPPING_STATEMENTS, asOfDate, refreshKey = 0, onMappingChanged }: ReportMappingSetupProps) {
+export default function ReportMappingSetup({ dataAdapter, chart, role, statements = DEFAULT_REPORT_MAPPING_STATEMENTS, asOfDate, refreshKey = 0, onMappingChanged, activeReportMapping }: ReportMappingSetupProps) {
   const canMutate = permissionContextForRole(role).canMutate;
   const enabled = Boolean(dataAdapter?.getReportMappingHealth && dataAdapter.listReportMappingPositions && dataAdapter.upsertReportMappingOverride);
   const [health, setHealth] = useState<ReportMappingHealth | null>(null);
@@ -150,10 +156,20 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
         </Button>
       </div>
 
-      {health && missingRows.length === 0 ? <p className="mt-3 rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success" role="status">Alle Konten sind report-spezifisch zugeordnet.</p> : null}
+      {activeReportMapping?.blocked ? (
+        <div className="mt-3 rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert">
+          <div className="font-bold">Mapping unvollständig für {activeReportMapping.label}</div>
+          <p className="mt-1">Export und Abschluss dieses Reports bleiben gesperrt, bis alle Konten zugeordnet sind.</p>
+          {health && missingRows.length === 0 ? (
+            <p className="mt-1 text-xs">Die übrigen Report-Kataloge sind vollständig zugeordnet.</p>
+          ) : null}
+        </div>
+      ) : health && missingRows.length === 0 ? (
+        <p className="mt-3 rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text" role="status">Alle Konten sind report-spezifisch zugeordnet.</p>
+      ) : null}
       {loading && !health ? <p className="mt-3 text-sm text-muted" role="status" aria-live="polite">Lade fehlende Report-Konten…</p> : null}
-      {error ? <div className="mt-3 rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">{error}</div> : null}
-      {notice ? <div className="mt-3 rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success" role="status" aria-live="polite">{notice}</div> : null}
+      {error ? <div className="mt-3 rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">{error}</div> : null}
+      {notice ? <div className="mt-3 rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text" role="status" aria-live="polite">{notice}</div> : null}
 
       {missingRows.length > 0 ? (
         <>
@@ -161,7 +177,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
             Audit-Grund für Mapping-Änderungen
             <input
               id="report-mapping-reason"
-              className="mt-1 block w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm font-normal outline-none focus:border-accent focus:ring-2 focus:ring-accent"
+              className="mt-1 block w-full rounded-lg border border-control-border bg-surface px-3 py-2 text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               placeholder="z. B. Kontenabstimmung Monatsabschluss"
@@ -178,7 +194,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
               return (
                 <div key={id} className="grid gap-2 rounded-xl border border-border bg-surface-muted p-3 lg:grid-cols-[auto_12rem_minmax(0,1fr)_auto] lg:items-end">
                   <div className="min-w-24">
-                    <div className="text-[10px] font-bold uppercase tracking-wide text-muted">Konto</div>
+                    <div className="text-xs font-bold text-muted">Konto</div>
                     <div className="font-mono text-sm font-bold text-foreground">{entry.accountNumber}</div>
                   </div>
                   <div className="min-w-36 text-xs font-semibold text-foreground">
@@ -192,12 +208,12 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
                       value={selected.position}
                       disabled={!canMutate || Boolean(saving) || allowedPositions.length === 0}
                       onChange={(event) => setSelections((current) => ({ ...current, [id]: { ...selected, position: event.target.value } }))}
-                      className="mt-1 block w-full rounded-lg border border-border bg-surface px-2 py-2 text-sm font-normal outline-none focus:border-accent focus:ring-2 focus:ring-accent"
+                      className="mt-1 block w-full rounded-lg border border-control-border bg-surface px-2 py-2 text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <option value="">Position auswählen…</option>
                       {allowedPositions.map((position) => <option key={position.key} value={position.key}>{position.label}{position.side ? ` · ${position.side === 'asset' ? 'Aktiva' : 'Passiva'}` : ''}</option>)}
                     </select>
-                    {selectedPosition?.side ? <span className="mt-1 block text-[11px] text-muted">Seite aus Katalog: {selectedPosition.side === 'asset' ? 'Aktiva' : 'Passiva'}</span> : null}
+                    {selectedPosition?.side ? <span className="mt-1 block text-xs text-muted">Seite aus Katalog: {selectedPosition.side === 'asset' ? 'Aktiva' : 'Passiva'}</span> : null}
                   </label>
                   <Button type="button" size="sm" variant="secondary" onClick={() => void save(entry)} disabled={mutationDisabled || !selectedPosition || saving === id} aria-busy={saving === id}>
                     {saving === id ? 'Speichere…' : 'Zuordnen'}

@@ -38,7 +38,10 @@ describe('FeedbackProvider', () => {
       expect(screen.getByText('ersetzte Meldung')).toBeInTheDocument();
       act(() => vi.advanceTimersByTime(2499));
       expect(screen.getByText('ersetzte Meldung')).toBeInTheDocument();
+      // Timer expiry starts the 150ms exit; the toast stays mounted while leaving.
       act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByText('ersetzte Meldung')).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(150));
       expect(screen.queryByText('ersetzte Meldung')).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();

@@ -61,7 +61,7 @@ vi.mock('../runtime-api', () => ({
   getRendererProduct: mockProduct,
 }));
 
-import { TransactionMatchingView } from './TransactionMatchingView';
+import { DEFAULT_EUR_TAX_YEAR, TransactionMatchingView } from './TransactionMatchingView';
 
 const renderView = (initialTab: 'matching' | 'eur' = 'eur') => {
   const queryClient = new QueryClient({
@@ -122,7 +122,7 @@ describe('TransactionMatchingView EÜR integration', () => {
         expect.objectContaining({
           sourceType: 'transaction',
           sourceId: 'tx-1',
-          taxYear: 2025,
+          taxYear: DEFAULT_EUR_TAX_YEAR,
           eurLineId: 'E2025_KZ280',
           excluded: false,
           vatMode: 'none',

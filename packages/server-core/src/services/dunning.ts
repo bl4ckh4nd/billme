@@ -5,6 +5,7 @@ import type {
   DunningSettings,
   InvoiceDunningStatus,
 } from '../domain/dunning.js';
+import { isInvoiceOverdue } from '../domain/dunning.js';
 import type { Invoice, TenantScope } from '../domain/foundations.js';
 import { systemClock, type AuditActor, type AuditLogPort, type Clock, type DunningEmailPort, type DunningHistoryRepository, type DunningSecretPort, type DunningSettingsRepository, type InvoiceRepository } from '../ports/index.js';
 
@@ -191,7 +192,7 @@ export const summarizeInvoiceDunningStatus = (
     throw new Error('Invoice not found');
   }
 
-  const daysOverdue = invoice.status === 'overdue' ? calculateDaysOverdue(invoice.dueDate, now) : 0;
+  const daysOverdue = isInvoiceOverdue(invoice, now) ? calculateDaysOverdue(invoice.dueDate, now) : 0;
   const currentLevel = history.length > 0 ? Math.max(...history.map((entry) => entry.dunningLevel)) : 0;
   const lastReminderSent = history
     .filter((entry) => entry.emailSent)
@@ -232,16 +233,15 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
     throw new Error('No dunning levels are enabled');
   }
 
+  const clock = dependencies.clock ?? systemClock;
   const overdueInvoices = (await dependencies.invoiceRepo.list(scope)).filter((invoice) =>
-    invoice.status === 'overdue' &&
-    !['order_confirmation', 'delivery_note'].includes(invoice.documentKind ?? 'invoice'),
+    isInvoiceOverdue(invoice, clock.now()),
   );
   if (overdueInvoices.length === 0) {
     return result;
   }
 
   const providerConfig = await buildProviderConfig(settings, dependencies.secretStore);
-  const clock = dependencies.clock ?? systemClock;
   const logger = dependencies.logger;
   const actor = dependencies.actor ?? defaultActor;
   const runStartedAt = clock.nowIso();
@@ -297,12 +297,14 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
       );
 
       let feeApplied = 0;
+      let current = invoice;
       if (applicableLevel.fee > 0 && !feeAlreadyApplied) {
         const before = invoice;
         const after = await dependencies.invoiceRepo.save(scope, {
           ...invoice,
           amount: invoice.amount + applicableLevel.fee,
         });
+        current = after;
 
         feeApplied = applicableLevel.fee;
         result.feesApplied += feeApplied;
@@ -350,6 +352,20 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
       });
 
       if (emailResult.success) {
+        // The document itself carries the reached level so lists and the
+        // document timeline show what was actually sent.
+        await dependencies.invoiceRepo.save(scope, {
+          ...current,
+          dunningLevel: applicableLevel.id,
+          history: [
+            {
+              date: runStartedAt.slice(0, 10),
+              action: `${applicableLevel.name || `Mahnstufe ${applicableLevel.id}`} per E-Mail an ${invoice.clientEmail} versendet`,
+            },
+            ...(current.history ?? []),
+          ],
+        });
+
         await dependencies.dunningHistoryRepo.record(scope, {
           invoiceId: invoice.id,
           invoiceNumber: invoice.number,

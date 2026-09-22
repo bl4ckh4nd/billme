@@ -4,7 +4,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../hooks/useSettings', () => ({ useSettingsQuery: () => ({ data: null }) }));
+vi.mock('../hooks/useSettings', () => ({
+  useSettingsQuery: () => ({
+    data: {
+      company: { name: 'Beispiel GmbH', owner: '', street: '', zip: '', city: '', email: '', phone: '', website: '' },
+      finance: { bankName: '', iban: '', bic: '', taxId: '', vatId: '', registerCourt: '' },
+      legal: { smallBusinessRule: false, defaultVatRate: 19 },
+    },
+    isError: false,
+  }),
+}));
 vi.mock('../hooks/useTemplates', () => ({ useActiveTemplateQuery: () => ({ data: { elements: [] } }) }));
 vi.mock('../hooks/useInvoices', () => ({ useInvoicesQuery: () => ({ data: [{ id: 'invoice-1', number: 'RE-1', client: 'Acme', clientEmail: 'billing@acme.example', date: '2026-08-06', dueDate: '2026-08-20', amount: 0, status: 'draft', items: [], payments: [] }] }) }));
 vi.mock('../hooks/useOffers', () => ({ useOffersQuery: () => ({ data: [] }) }));

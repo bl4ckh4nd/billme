@@ -341,7 +341,7 @@ const mapAsset = (
     depreciationMethod: row.depreciation_method,
     costCenter: row.cost_center,
     location: row.location,
-    nextDepreciation: next ? `${next.year}-12-31` : "—",
+    nextDepreciation: next ? `${next.year}-12-31` : '–',
     receiptLinked: Boolean(row.receipt_linked),
     supplier: row.supplier ?? undefined,
     invoiceRef: row.invoice_ref ?? undefined,

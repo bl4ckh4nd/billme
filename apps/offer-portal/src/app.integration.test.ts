@@ -102,6 +102,30 @@ const publishOfferAndGetDocument = async (app: ReturnType<typeof setup>) => {
   return { offerToken, documentUrl: docUrl, customerToken: linkBody.token, customerRef };
 };
 
+/* The document page is the only place that hands out the SameSite=Strict CSRF
+   cookie the decision form echoes back, so both steps belong together. */
+const openDecisionForm = async (app: ReturnType<typeof setup>, documentUrl: string) => {
+  const docId = documentUrl.slice('/d/'.length);
+  const pageRes = await app.request(`/d/${encodeURIComponent(docId)}`, {
+    headers: { accept: 'text/html' },
+  });
+  assert.equal(pageRes.status, 200);
+  const setCookie = pageRes.headers.get('set-cookie');
+  assert.ok(setCookie, 'expected csrf cookie on offer HTML page');
+  const csrfCookieMatch = /csrfToken=([^;]+)/.exec(setCookie ?? '');
+  assert.ok(csrfCookieMatch, 'expected csrfToken cookie');
+  return { docId, pageRes, csrfToken: decodeURIComponent(csrfCookieMatch?.[1] ?? '') };
+};
+
+const decisionFormBody = (csrfToken: string, acceptedName: string, acceptedEmail: string) =>
+  new URLSearchParams({
+    decision: 'accepted',
+    acceptedName,
+    acceptedEmail,
+    decisionTextVersion: 'v1',
+    csrfToken,
+  }).toString();
+
 test('publish routes fail closed when strict auth is enabled and API key is missing', async () => {
   const app = setup({ requirePublishApiKey: true });
   const res = await app.request('/offers', {
@@ -251,6 +275,128 @@ test('decision endpoint accepts valid origin+csrf and syncs to legacy status rou
   assert.ok(statusBody.decision);
   assert.equal(statusBody.decision?.decision, 'accepted');
   assert.equal(statusBody.decision?.acceptedName, 'Alice Approver');
+});
+
+test('decision endpoint accepts Origin: null form posts from its own host and serves same-origin referrer policy', async () => {
+  const app = setup({
+    publishApiKey: API_KEY,
+    publicBaseUrl: 'https://offers.example.test',
+    requirePublishApiKey: true,
+  });
+  const { documentUrl } = await publishOfferAndGetDocument(app);
+  const { docId, pageRes, csrfToken } = await openDecisionForm(app, documentUrl);
+
+  /* The document page carries the decision form, so its referrer policy decides
+     whether the browser sends a usable Origin header on the form post. */
+  assert.equal(pageRes.headers.get('referrer-policy'), 'same-origin');
+
+  /* Regression: under `Referrer-Policy: no-referrer` this form post reached the
+     portal as `Origin: null` and was answered with 403 origin_invalid, although
+     the request went to our own host with the SameSite=Strict CSRF cookie. */
+  const decisionRes = await app.request(`https://offers.example.test/d/${encodeURIComponent(docId)}/decision`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      host: 'offers.example.test',
+      origin: 'null',
+      cookie: `csrfToken=${encodeURIComponent(csrfToken)}`,
+      accept: 'application/json',
+    },
+    body: decisionFormBody(csrfToken, 'Alice Approver', 'alice@example.com'),
+  });
+  assert.equal(decisionRes.status, 200);
+  assert.equal(decisionRes.headers.get('referrer-policy'), 'same-origin');
+  const decisionBody = (await decisionRes.json()) as {
+    ok: true;
+    decision: { decision: string; acceptedName: string };
+  };
+  assert.equal(decisionBody.ok, true);
+  assert.equal(decisionBody.decision.decision, 'accepted');
+  assert.equal(decisionBody.decision.acceptedName, 'Alice Approver');
+
+  /* Accepting a suppressed Origin must not drop the CSRF requirement. */
+  const noCsrfRes = await app.request(`https://offers.example.test/d/${encodeURIComponent(docId)}/decision`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      host: 'offers.example.test',
+      origin: 'null',
+      accept: 'application/json',
+    },
+    body: decisionFormBody(csrfToken, 'Alice Approver', 'alice@example.com'),
+  });
+  assert.equal(noCsrfRes.status, 403);
+  const noCsrfBody = (await noCsrfRes.json()) as { error: string };
+  assert.equal(noCsrfBody.error, 'csrf_invalid');
+});
+
+test('decision endpoint rejects Origin: null form posts from a foreign host', async () => {
+  const app = setup({
+    publishApiKey: API_KEY,
+    publicBaseUrl: 'https://offers.example.test',
+    requirePublishApiKey: true,
+  });
+  const { documentUrl } = await publishOfferAndGetDocument(app);
+  const { docId, csrfToken } = await openDecisionForm(app, documentUrl);
+
+  const decisionRes = await app.request(`/d/${encodeURIComponent(docId)}/decision`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      host: 'evil.example',
+      origin: 'null',
+      cookie: `csrfToken=${encodeURIComponent(csrfToken)}`,
+      accept: 'application/json',
+    },
+    body: decisionFormBody(csrfToken, 'Eve', 'eve@example.com'),
+  });
+  assert.equal(decisionRes.status, 403);
+  const decisionBody = (await decisionRes.json()) as { error: string };
+  assert.equal(decisionBody.error, 'origin_invalid');
+});
+
+test('decision endpoint rejects foreign origins and Origin: null on non-form posts', async () => {
+  const app = setup({
+    publishApiKey: API_KEY,
+    publicBaseUrl: 'https://offers.example.test',
+    requirePublishApiKey: true,
+  });
+  const { documentUrl } = await publishOfferAndGetDocument(app);
+  const { docId, csrfToken } = await openDecisionForm(app, documentUrl);
+
+  const foreignOriginRes = await app.request(`/d/${encodeURIComponent(docId)}/decision`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      host: 'offers.example.test',
+      origin: 'https://evil.example',
+      cookie: `csrfToken=${encodeURIComponent(csrfToken)}`,
+      accept: 'application/json',
+    },
+    body: decisionFormBody(csrfToken, 'Eve', 'eve@example.com'),
+  });
+  assert.equal(foreignOriginRes.status, 403);
+  const foreignOriginBody = (await foreignOriginRes.json()) as { error: string };
+  assert.equal(foreignOriginBody.error, 'origin_invalid');
+
+  const nullOriginJsonRes = await app.request(`/d/${encodeURIComponent(docId)}/decision`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      host: 'offers.example.test',
+      origin: 'null',
+      accept: 'application/json',
+    },
+    body: JSON.stringify({
+      decision: 'accepted',
+      acceptedName: 'Eve',
+      acceptedEmail: 'eve@example.com',
+      decisionTextVersion: 'v1',
+    }),
+  });
+  assert.equal(nullOriginJsonRes.status, 403);
+  const nullOriginJsonBody = (await nullOriginJsonRes.json()) as { error: string };
+  assert.equal(nullOriginJsonBody.error, 'origin_invalid');
 });
 
 test('rotating customer access link revokes old token and keeps new token valid', async () => {

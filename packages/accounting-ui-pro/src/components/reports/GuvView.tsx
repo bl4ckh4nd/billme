@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Button, EmptyState } from '@billme/ui';
 import { GuvLine, GuvReport } from '../../domain/reportTypes';
 import ReportSummaryCards from './ReportSummaryCards';
 
@@ -11,6 +12,7 @@ interface GuvViewProps {
   report: GuvReport | null;
   onSelectLine: (line: GuvLine) => void;
   title?: string;
+  onRetry?: () => void;
 }
 
 interface FlatLine {
@@ -33,7 +35,7 @@ function flattenVisible(lines: GuvLine[], expanded: Set<string>, level = 0): Fla
   });
 }
 
-export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Verlustrechnung' }: GuvViewProps) {
+export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Verlustrechnung', onRetry }: GuvViewProps) {
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
 
   const defaultExpanded = useMemo<string[]>(() => (report ? collectExpandable(report.lines) : []), [report]);
@@ -45,7 +47,21 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
     [report, effectiveExpanded],
   );
 
-  if (!report) return null;
+  const retryAction = onRetry ? (
+    <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
+      Erneut laden
+    </Button>
+  ) : undefined;
+
+  if (!report) {
+    return (
+      <EmptyState
+        title="Keine GuV-Daten geladen"
+        description="Für die aktuelle Periode liegt keine Gewinn- und Verlustrechnung vor. Laden Sie den Report erneut oder prüfen Sie Zeitraum und Konten-Mapping."
+        action={retryAction}
+      />
+    );
+  }
 
   const toggle = (id: string) => {
     setExpandedIds((prev) => {
@@ -60,13 +76,14 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
     <div className="space-y-4">
       <ReportSummaryCards
         cards={[
-          { label: 'Umsätze', value: euro(report.totals.revenue), tone: 'ok' },
-          { label: 'Aufwendungen', value: euro(report.totals.expenses) },
           {
             label: 'Ergebnis',
             value: euro(report.totals.result),
             tone: report.totals.result >= 0 ? 'ok' : 'danger',
+            emphasis: true,
           },
+          { label: 'Umsätze', value: euro(report.totals.revenue) },
+          { label: 'Aufwendungen', value: euro(report.totals.expenses) },
           {
             label: 'Qualität',
             value: `${report.quality.unmappedAccounts.length} ungemappt`,
@@ -74,12 +91,13 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
             tone: report.quality.unmappedAccounts.length > 0 ? 'warning' : 'ok',
           },
         ]}
+        note={report.quality.source === 'live' ? undefined : 'Beispieldaten: Ergebnis, Zeitraum- und Vergleichswerte stammen aus dem Demo-Datensatz.'}
       />
 
       {report.quality.unmappedAccounts.length > 0 ? (
         <div
           data-testid="guv-unmapped-accounts"
-          className="rounded-2xl border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning"
+          className="rounded-2xl border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-text"
         >
           <div className="font-bold">Nicht zugeordnete Konten</div>
           <ul className="mt-1 space-y-0.5 text-xs">
@@ -101,6 +119,15 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
         </div>
 
         <div className="max-h-[32rem] overflow-auto">
+          {visibleLines.length === 0 ? (
+            <div className="p-4">
+              <EmptyState
+                title="Keine GuV-Positionen im Zeitraum"
+                description="Der Report wurde geladen, enthält für die gewählten Filter aber keine Positionen. Prüfen Sie Zeitraum und Konten-Mapping."
+                action={retryAction}
+              />
+            </div>
+          ) : (
           <table className="w-full text-sm table-fixed">
             <thead className="sticky top-0 bg-surface-muted z-10">
               <tr className="text-xs uppercase tracking-wide text-muted">
@@ -142,7 +169,7 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
                               onSelectLine(line);
                             }
                           }}
-                          className="min-w-0 text-left rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
+ className="min-w-0 text-left rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                         >
                           <div className={`font-medium ${line.isSubtotal ? 'font-bold text-foreground' : 'text-foreground'}`}>
                             <span className="text-muted mr-2">{line.code}</span>
@@ -154,7 +181,7 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
                         </button>
                       </div>
                     </td>
-                    <td className={`px-3 py-2.5 text-right font-bold ${line.amountCurrent < 0 ? 'text-error' : 'text-foreground'}`}>
+                    <td className={`px-3 py-2.5 text-right font-bold tabular-nums ${line.amountCurrent < 0 ? 'text-error-text' : 'text-foreground'}`}>
                       {euro(line.amountCurrent)}
                     </td>
                   </tr>
@@ -162,6 +189,7 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
               })}
             </tbody>
           </table>
+          )}
         </div>
       </div>
     </div>

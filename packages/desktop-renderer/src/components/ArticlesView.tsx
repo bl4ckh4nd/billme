@@ -1,14 +1,16 @@
 import React, { useState, useMemo } from 'react';
 import {
-  Search, Plus, Package, Edit3, Trash2, Tag,
+  Search, Plus, Edit3, Trash2, Tag,
   Euro, LayoutGrid, List, Check, X,
-  Copy, Percent, ToggleLeft, ToggleRight, Archive, CheckSquare
+  Copy, ToggleLeft, ToggleRight, Archive, CheckSquare
 } from 'lucide-react';
 import type { Article } from '@billme/desktop-core/types';
 import { v4 as uuidv4 } from 'uuid';
 import { useArticlesQuery, useDeleteArticleMutation, useUpsertArticleMutation } from '../hooks/useArticles';
 import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useSettingsQuery } from '../hooks/useSettings';
+import { EmptyState, ErrorState } from '@billme/ui';
+import { SkeletonLoader } from '@billme/desktop-ui/components/SkeletonLoader';
 import { useRouterState } from '@tanstack/react-router';
 
 const normalizeCategoryName = (value: string): string => value.trim();
@@ -24,20 +26,20 @@ const buildConfiguredCategories = (
   return unique.length > 0 ? unique : ['Allgemein'];
 };
 
-// Category colors - using design system semantic palette + grays
+// Category avatars stay neutral so no semantic hue implies a category meaning.
 const PASTEL_COLORS = [
-    'bg-error-bg text-error',
-    'bg-warning-bg text-warning',
-    'bg-success-bg text-success',
-    'bg-info-bg text-info',
+    'bg-surface-muted text-foreground',
+    'bg-border-subtle text-foreground',
     'bg-surface-muted text-muted',
-    'bg-gray-200 text-gray-600',
-    'bg-error-bg text-error',
-    'bg-warning-bg text-warning',
-    'bg-success-bg text-success',
-    'bg-info-bg text-info',
+    'bg-border-subtle text-muted',
+    'bg-surface-muted text-foreground',
+    'bg-border-subtle text-foreground',
     'bg-surface-muted text-muted',
-    'bg-gray-200 text-gray-600',
+    'bg-border-subtle text-muted',
+    'bg-surface-muted text-foreground',
+    'bg-border-subtle text-foreground',
+    'bg-surface-muted text-muted',
+    'bg-border-subtle text-muted',
 ];
 
 const getAvatarColor = (str: string) => {
@@ -54,8 +56,18 @@ const getInitials = (str: string) => {
 };
 
 export const ArticlesView: React.FC = () => {
-  const { data: articles = [] } = useArticlesQuery();
-  const { data: settings } = useSettingsQuery();
+  const {
+    data: articles = [],
+    isLoading: isLoadingArticles,
+    isError: isArticlesError,
+    refetch: refetchArticles,
+  } = useArticlesQuery();
+  const {
+    data: settings,
+    isLoading: isLoadingSettings,
+    isError: isSettingsError,
+    refetch: refetchSettings,
+  } = useSettingsQuery();
   const upsertArticle = useUpsertArticleMutation();
   const deleteArticle = useDeleteArticleMutation();
   const { pendingIds, requestDelete } = useDeferredDelete({
@@ -113,6 +125,23 @@ export const ArticlesView: React.FC = () => {
     const query = typeof locationSearch.query === 'string' ? locationSearch.query.trim() : '';
     setSearchTerm(query);
   }, [locationSearch]);
+
+  // The category filter is configuration from settings, so a failed settings
+  // query would silently narrow the list to a default category. Both queries
+  // gate the view together.
+  const isLoadingView = isLoadingArticles || isLoadingSettings;
+  const hasQueryError = isArticlesError || isSettingsError;
+  const isFiltered = searchTerm.trim().length > 0 || selectedCategory !== 'Alle';
+
+  const retryQueries = () => {
+    void refetchArticles();
+    void refetchSettings();
+  };
+
+  const resetFilters = () => {
+    setSearchTerm('');
+    setSelectedCategory('Alle');
+  };
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
@@ -272,42 +301,52 @@ export const ArticlesView: React.FC = () => {
   };
 
   return (
-    <div className="flex gap-6 h-full animate-enter">
+    <div className="flex gap-6 h-full">
         {/* Main Content */}
-        <div className="flex-1 bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm flex flex-col overflow-hidden relative">
+        <div className="flex-1 bg-white rounded-2xl p-8 min-h-full shadow-sm flex flex-col overflow-hidden relative">
 
             {/* Header Area */}
             <div className="flex flex-col gap-6 mb-6 shrink-0">
                 <div className="flex items-center justify-between">
                     <div>
-                        <h1 className="text-3xl font-black text-gray-900 mb-1">Produkte & Leistungen</h1>
-                        <p className="text-sm text-gray-500 font-medium">{filteredArticles.length} Einträge</p>
+                        <h1 className="text-3xl font-black text-foreground mb-1">Produkte & Leistungen</h1>
+                        <p className="text-sm text-muted font-medium">
+                            {isLoadingView
+                                ? 'Wird geladen ...'
+                                : hasQueryError
+                                  ? 'Nicht verfügbar'
+                                  : `${filteredArticles.length} Einträge`}
+                        </p>
                     </div>
 
                     <div className="flex items-center gap-3">
                         {/* Net/Gross Switch */}
                         <button
                             onClick={() => setIsNetPrice(!isNetPrice)}
-                            className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors"
+                            className="flex items-center gap-2 px-4 py-2 bg-surface-muted rounded-full hover:bg-border-subtle transition-colors"
                         >
-                            <span className={`text-xs font-bold ${isNetPrice ? 'text-black' : 'text-gray-400'}`}>Netto</span>
+                            <span className={`text-xs font-bold ${isNetPrice ? 'text-black' : 'text-muted'}`}>Netto</span>
                             {isNetPrice ? <ToggleLeft size={24} /> : <ToggleRight size={24} />}
-                            <span className={`text-xs font-bold ${!isNetPrice ? 'text-black' : 'text-gray-400'}`}>Brutto</span>
+                            <span className={`text-xs font-bold ${!isNetPrice ? 'text-black' : 'text-muted'}`}>Brutto</span>
                         </button>
 
-                        <div className="h-8 w-px bg-gray-200 mx-2"></div>
+                        <div className="h-8 w-px bg-border-subtle mx-2"></div>
 
                         {/* View Switcher */}
-                        <div className="bg-gray-100 p-1 rounded-full flex items-center">
+                        <div className="bg-surface-muted p-1 rounded-full flex items-center">
                             <button
                                 onClick={() => setViewMode('grid')}
-                                className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${viewMode === 'grid' ? 'bg-white shadow text-black' : 'text-gray-400 hover:text-gray-600'}`}
+                                aria-label="Rasteransicht"
+                                aria-pressed={viewMode === 'grid'}
+                                className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${viewMode === 'grid' ? 'bg-white shadow text-black' : 'text-muted hover:text-foreground'}`}
                             >
                                 <LayoutGrid size={18} />
                             </button>
                             <button
                                 onClick={() => setViewMode('list')}
-                                className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${viewMode === 'list' ? 'bg-white shadow text-black' : 'text-gray-400 hover:text-gray-600'}`}
+                                aria-label="Listenansicht"
+                                aria-pressed={viewMode === 'list'}
+                                className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${viewMode === 'list' ? 'bg-white shadow text-black' : 'text-muted hover:text-foreground'}`}
                             >
                                 <List size={18} />
                             </button>
@@ -316,7 +355,7 @@ export const ArticlesView: React.FC = () => {
                         <button
                             aria-label="Neuer Artikel"
                             onClick={() => handleOpenForm()}
-                            className="w-12 h-12 bg-black text-white rounded-full flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-sm ml-2"
+                            className="w-12 h-12 bg-black text-white rounded-full flex items-center justify-center motion-safe:transition-transform motion-safe:active:scale-95 motion-reduce:transition-none shadow-sm ml-2"
                         >
                             <Plus size={24} />
                         </button>
@@ -326,13 +365,14 @@ export const ArticlesView: React.FC = () => {
                 <div className="flex items-center justify-between gap-4">
                      {/* Search */}
                     <div className="relative flex-1 max-w-md">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted" size={18} />
                         <input
                             type="text"
+                            aria-label="Artikel durchsuchen"
                             placeholder="Artikel suchen..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full pl-12 pr-6 py-3 bg-gray-50 border-none rounded-full text-sm font-bold outline-none focus:ring-2 focus:ring-accent transition-shadow"
+                            className="w-full pl-12 pr-6 py-3 bg-surface-muted border-none rounded-full text-sm font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
                         />
                     </div>
 
@@ -342,10 +382,11 @@ export const ArticlesView: React.FC = () => {
                             <button
                                 key={cat}
                                 onClick={() => setSelectedCategory(cat)}
-                                className={`whitespace-nowrap px-4 py-2 rounded-full text-xs font-bold transition-all ${
+                                aria-pressed={selectedCategory === cat}
+                                className={`whitespace-nowrap px-4 py-2 rounded-full text-xs font-bold transition-colors ${
                                     selectedCategory === cat
                                     ? 'bg-black text-white'
-                                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                                    : 'bg-surface-muted text-muted hover:bg-border-subtle'
                                 }`}
                             >
                                 {cat}
@@ -356,16 +397,16 @@ export const ArticlesView: React.FC = () => {
 
                 {/* Bulk Actions Bar */}
                 {selectedArticles.size > 0 && (
-                    <div className="absolute top-8 left-1/2 -translate-x-1/2 bg-black text-white px-6 py-3 rounded-full shadow-2xl z-20 flex items-center gap-6 animate-in slide-in-from-top-4">
+                    <div className="absolute top-8 left-1/2 -translate-x-1/2 bg-black text-white px-6 py-3 rounded-full shadow-2xl z-[var(--z-dropdown)] flex items-center gap-6">
                         <span className="text-sm font-bold">{selectedArticles.size} ausgewählt</span>
                         <div className="h-4 w-px bg-white/20"></div>
                         <button
                           onClick={() => void handleBulkDelete()}
-                          className="flex items-center gap-2 hover:text-error/70 transition-colors text-xs font-bold disabled:opacity-50"
+                          className="flex items-center gap-2 hover:text-error transition-colors text-xs font-bold disabled:opacity-50"
                         >
                             <Trash2 size={14} /> Löschen
                         </button>
-                        <button onClick={() => setSelectedArticles(new Set())} className="ml-2 hover:text-gray-400 transition-colors">
+                        <button onClick={() => setSelectedArticles(new Set())} className="ml-2 hover:text-foreground transition-colors">
                             <X size={16} />
                         </button>
                     </div>
@@ -376,8 +417,8 @@ export const ArticlesView: React.FC = () => {
               <div
                 className={`mb-4 rounded-xl border px-4 py-3 text-sm font-medium ${
                   operationTone === 'success'
-                    ? 'border-success/30 bg-success-bg text-success'
-                    : 'border-error/30 bg-error-bg text-error'
+                    ? 'border-success-border bg-success-bg text-success-text'
+                    : 'border-error-border bg-error-bg text-error-text'
                 }`}
               >
                 {operationMessage}
@@ -385,32 +426,49 @@ export const ArticlesView: React.FC = () => {
             )}
 
             {/* List Content */}
-            {viewMode === 'grid' ? (
+            {isLoadingView ? (
+                <SkeletonLoader variant="card" count={6} />
+            ) : hasQueryError ? (
+                <ErrorState
+                    title="Artikel konnten nicht geladen werden"
+                    description="Die Artikel oder die Kategorien aus den Einstellungen sind nicht verfügbar. Es werden bewusst keine Ersatzdaten angezeigt."
+                    onRetry={retryQueries}
+                />
+            ) : viewMode === 'grid' ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4 overflow-y-auto pr-2 pb-4 scrollbar-hide">
                     {filteredArticles.length === 0 ? (
-                        <div className="col-span-full flex flex-col items-center justify-center h-64 text-gray-400">
-                            <Package size={48} className="mb-4 opacity-20" />
-                            <p className="font-bold text-gray-500">
-                                {searchTerm.trim() || selectedCategory !== 'Alle' ? 'Keine Treffer für die aktuelle Suche oder Filterung' : 'Noch keine Artikel vorhanden'}
-                            </p>
-                            {!searchTerm.trim() && selectedCategory === 'Alle' && (
-                                <p className="text-sm mt-1">Klicke auf das + oben rechts, um einen Artikel zu erstellen.</p>
-                            )}
-                        </div>
-                    ) : filteredArticles.map((article, idx) => (
+                        <EmptyState
+                            className="col-span-full"
+                            title={isFiltered ? 'Keine Artikel passen zu dieser Auswahl' : 'Noch keine Artikel angelegt'}
+                            description={
+                                isFiltered
+                                    ? `Suche und Kategorie-Filter schließen alle ${visibleArticles.length} vorhandenen Artikel aus.`
+                                    : 'Artikel sind die Positionen, die du in Rechnungen und Angeboten auswählst. Lege den ersten über das + oben rechts an.'
+                            }
+                            action={
+                                isFiltered ? (
+                                    <button
+                                        onClick={resetFilters}
+                                        className="px-4 py-2 rounded-full bg-surface-muted text-foreground font-bold text-xs hover:bg-border-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                    >
+                                        Filter zurücksetzen
+                                    </button>
+                                ) : undefined
+                            }
+                        />
+                    ) : filteredArticles.map((article) => (
                         <div
                             key={article.id}
-                            className="group bg-gray-50 rounded-[2rem] p-6 border border-gray-100 hover:border-border hover:bg-white hover:-translate-y-1 transition-all relative flex flex-col animate-scale-in"
-                            style={{ animationDelay: `${idx * 50}ms` }}
+                            className="group bg-surface-muted rounded-xl p-6 border border-border-subtle hover:border-border hover:bg-white transition-colors relative flex flex-col"
                         >
                             <div className="flex justify-between items-start mb-4">
-                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-sm font-bold shadow-sm transition-transform group-hover:scale-110 ${getAvatarColor(article.category)}`}>
+                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-sm font-bold shadow-sm ${getAvatarColor(article.category)}`}>
                                     {getInitials(article.title)}
                                 </div>
-                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 motion-safe:transition-opacity motion-reduce:transition-none">
                                     <button
                                         onClick={() => void handleDuplicate(article)}
-                                        className="p-2 bg-white rounded-lg hover:bg-gray-100 text-gray-500 transition-colors"
+                                        className="p-2 bg-white rounded-lg hover:bg-border-subtle text-muted transition-colors"
                                         title="Duplizieren"
                                     >
                                         <Copy size={14}/>
@@ -427,39 +485,39 @@ export const ArticlesView: React.FC = () => {
 
                             <div className="mb-auto">
                                 <div className="flex items-center gap-2 mb-1">
-                                    <span className="text-[10px] font-bold uppercase bg-gray-200 text-gray-600 px-2 py-1 rounded-full line-clamp-1">
+                                    <span className="text-xs font-bold uppercase bg-border-subtle text-muted px-2 py-1 rounded-full line-clamp-1">
                                         {article.category}
                                     </span>
                                     {article.taxRate !== 19 && (
-                                        <span className="text-[10px] font-bold uppercase bg-info-bg text-info px-2 py-1 rounded-full">
+                                        <span className="text-xs font-bold uppercase bg-info-bg text-info-text px-2 py-1 rounded-full">
                                             {article.taxRate}% USt
                                         </span>
                                     )}
                                 </div>
                                 <h3 className="font-bold text-lg leading-tight mb-2 line-clamp-2">{article.title}</h3>
                                 {article.sku && (
-                                    <p className="text-[10px] font-mono text-gray-400 mb-2">#{article.sku}</p>
+                                    <p className="text-xs font-mono text-muted mb-2">#{article.sku}</p>
                                 )}
                             </div>
 
-                            <div className="mt-4 pt-4 border-t border-gray-200/50 flex items-end justify-between">
+                            <div className="mt-4 pt-4 border-t border-border/50 flex items-end justify-between">
                                 <div className="flex flex-col">
-                                    <span className="text-[10px] font-bold text-gray-400 uppercase">Preis ({isNetPrice ? 'Netto' : 'Brutto'})</span>
-                                    <span className="text-2xl font-mono font-bold tracking-tight text-black">
+                                    <span className="text-xs font-bold text-muted uppercase">Preis ({isNetPrice ? 'Netto' : 'Brutto'})</span>
+                                    <span className="text-2xl font-bold tracking-tight text-black tabular-nums">
                                         {formatCurrency(calculateDisplayPrice(article))}
                                     </span>
                                 </div>
-                                <span className="text-xs font-bold text-gray-400 mb-1.5">/ {article.unit}</span>
+                                <span className="text-xs font-bold text-muted mb-1.5">/ {article.unit}</span>
                             </div>
                         </div>
                     ))}
                 </div>
             ) : (
                 <div className="flex-1 overflow-y-auto pr-2 pb-4 space-y-2 scrollbar-hide">
-                     <div className="grid grid-cols-12 gap-4 px-4 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-wider sticky top-0 bg-white z-10 border-b border-gray-100">
+                     <div className="grid grid-cols-12 gap-4 px-4 py-2 text-xs font-bold text-muted uppercase tracking-wider sticky top-0 bg-white z-10 border-b border-border">
                         <div className="col-span-1 flex justify-center">
                             <button onClick={handleSelectAll} className="hover:text-black">
-                                <CheckSquare size={16} className={selectedArticles.size > 0 ? 'text-black fill-black/10' : 'text-gray-300'} />
+                                <CheckSquare size={16} className={selectedArticles.size > 0 ? 'text-black fill-black/10' : 'text-muted'} />
                             </button>
                         </div>
                         <div className="col-span-4">Artikel / Leistung</div>
@@ -469,29 +527,37 @@ export const ArticlesView: React.FC = () => {
                         <div className="col-span-2 text-right">Aktionen</div>
                     </div>
                     {filteredArticles.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-                            <Package size={48} className="mb-4 opacity-20" />
-                            <p className="font-bold text-gray-500">
-                                {searchTerm.trim() || selectedCategory !== 'Alle' ? 'Keine Treffer für die aktuelle Suche oder Filterung' : 'Noch keine Artikel vorhanden'}
-                            </p>
-                            {!searchTerm.trim() && selectedCategory === 'Alle' && (
-                                <p className="text-sm mt-1">Klicke auf das + oben rechts, um einen Artikel zu erstellen.</p>
-                            )}
-                        </div>
-                    ) : filteredArticles.map((article, idx) => (
+                        <EmptyState
+                            title={isFiltered ? 'Keine Artikel passen zu dieser Auswahl' : 'Noch keine Artikel angelegt'}
+                            description={
+                                isFiltered
+                                    ? `Suche und Kategorie-Filter schließen alle ${visibleArticles.length} vorhandenen Artikel aus.`
+                                    : 'Artikel sind die Positionen, die du in Rechnungen und Angeboten auswählst. Lege den ersten über das + oben rechts an.'
+                            }
+                            action={
+                                isFiltered ? (
+                                    <button
+                                        onClick={resetFilters}
+                                        className="px-4 py-2 rounded-full bg-surface-muted text-foreground font-bold text-xs hover:bg-border-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                    >
+                                        Filter zurücksetzen
+                                    </button>
+                                ) : undefined
+                            }
+                        />
+                    ) : filteredArticles.map((article) => (
                         <div
                             key={article.id}
-                            className={`group rounded-2xl p-4 border transition-all grid grid-cols-12 gap-4 items-center animate-enter ${
+                            className={`group rounded-2xl p-4 border transition-colors grid grid-cols-12 gap-4 items-center ${
                                 selectedArticles.has(article.id)
-                                ? 'bg-info-bg/50 border-info'
-                                : 'bg-gray-50 border-gray-100 hover:border-border hover:bg-white'
+                                ? 'bg-info-bg border-info'
+                                : 'bg-surface-muted border-border-subtle hover:border-border hover:bg-white'
                             }`}
-                            style={{ animationDelay: `${idx * 30}ms` }}
                         >
                              <div className="col-span-1 flex justify-center">
-                                 <button onClick={() => handleToggleSelect(article.id)}>
-                                     <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
-                                         selectedArticles.has(article.id) ? 'bg-black border-black text-accent' : 'border-gray-300 bg-white'
+                                 <button onClick={() => handleToggleSelect(article.id)} title={selectedArticles.has(article.id) ? 'Auswahl entfernen' : 'Auswählen'}>
+                                     <div className={`w-5 h-5 rounded-sm border flex items-center justify-center transition-colors ${
+                                         selectedArticles.has(article.id) ? 'bg-black border-black text-white' : 'border-control-border bg-white'
                                      }`}>
                                          {selectedArticles.has(article.id) && <Check size={12} />}
                                      </div>
@@ -502,29 +568,29 @@ export const ArticlesView: React.FC = () => {
                                     {getInitials(article.title)}
                                 </div>
                                 <div className="min-w-0">
-                                    <h3 className="font-bold text-sm text-gray-900 truncate">{article.title}</h3>
-                                    <p className="text-xs text-gray-500 truncate">{article.description || '-'}</p>
+                                    <h3 className="font-bold text-sm text-foreground truncate">{article.title}</h3>
+                                    <p className="text-xs text-muted truncate">{article.description || 'Keine Beschreibung'}</p>
                                 </div>
                              </div>
                              <div className="col-span-2">
                                  <div className="flex flex-col items-start gap-1">
-                                    {article.sku && <span className="font-mono text-[10px] text-gray-500 bg-white px-1.5 rounded border border-gray-200">#{article.sku}</span>}
-                                    <span className="text-[10px] font-bold uppercase bg-gray-200 text-gray-600 px-2 py-1 rounded-full truncate max-w-full">{article.category}</span>
+                                    {article.sku && <span className="font-mono text-xs text-muted bg-white px-1.5 rounded-sm border border-border">#{article.sku}</span>}
+                                    <span className="text-xs font-bold uppercase bg-border-subtle text-muted px-2 py-1 rounded-full truncate max-w-full">{article.category}</span>
                                  </div>
                              </div>
                              <div className="col-span-1 text-center">
-                                 <span className={`text-[10px] font-bold px-2 py-1 rounded ${article.taxRate === 19 ? 'bg-gray-100 text-gray-500' : 'bg-info-bg text-info'}`}>
+                                 <span className={`text-xs font-bold px-2 py-1 rounded-sm tabular-nums ${article.taxRate === 19 ? 'bg-surface-muted text-muted' : 'bg-info-bg text-info-text'}`}>
                                      {article.taxRate}%
                                  </span>
                              </div>
                              <div className="col-span-2 text-right">
-                                 <p className="font-mono font-bold text-sm text-black">{formatCurrency(calculateDisplayPrice(article))}</p>
-                                 <p className="text-[10px] text-gray-400">pro {article.unit}</p>
+                                 <p className="font-bold text-sm text-black tabular-nums">{formatCurrency(calculateDisplayPrice(article))}</p>
+                                 <p className="text-xs text-muted">pro {article.unit}</p>
                              </div>
-                             <div className="col-span-2 flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button onClick={() => void handleDuplicate(article)} className="p-2 bg-white border border-gray-100 rounded-lg hover:bg-gray-100 text-gray-500 transition-colors"><Copy size={14}/></button>
-                                <button onClick={() => handleOpenForm(article)} className="p-2 bg-white border border-gray-100 rounded-lg hover:bg-black hover:text-white transition-colors"><Edit3 size={14}/></button>
-                                <button onClick={() => void handleDelete(article.id)} className="p-2 bg-white border border-gray-100 text-error rounded-lg hover:bg-error hover:text-white transition-colors"><Trash2 size={14}/></button>
+                             <div className="ui-reveal col-span-2 flex items-center justify-end gap-2 focus-within:opacity-100">
+                                <button onClick={() => void handleDuplicate(article)} title="Duplizieren" className="ui-press p-2 bg-white border border-control-border rounded-lg hover:bg-border-subtle text-muted transition-colors"><Copy size={14}/></button>
+                                <button onClick={() => handleOpenForm(article)} title="Bearbeiten" className="ui-press p-2 bg-white border border-control-border rounded-lg hover:bg-black hover:text-white transition-colors"><Edit3 size={14}/></button>
+                                <button onClick={() => void handleDelete(article.id)} title="Löschen" className="ui-press p-2 bg-white border border-control-border text-error-text rounded-lg hover:bg-error hover:text-white transition-colors"><Trash2 size={14}/></button>
                              </div>
                         </div>
                     ))}
@@ -534,15 +600,15 @@ export const ArticlesView: React.FC = () => {
 
         {/* Slide-over Form */}
         {isFormOpen && (
-            <div className="w-[450px] bg-white rounded-[2.5rem] shadow-2xl border-l border-gray-100 flex flex-col animate-in slide-in-from-right duration-300 relative z-20">
-                <div className="p-8 border-b border-gray-100 flex items-center justify-between">
+            <div className="w-[450px] bg-white rounded-2xl shadow-2xl flex flex-col relative">
+                <div className="p-8 border-b border-border flex items-center justify-between">
                     <div>
                         <h2 className="text-xl font-bold">{editingArticle ? 'Artikel bearbeiten' : 'Neuer Artikel'}</h2>
-                        <p className="text-xs text-gray-500">
+                        <p className="text-xs text-muted">
                             {editingArticle ? `ID: ${editingArticle.id.substring(0,8)}` : 'Neuer Eintrag wird erstellt'}
                         </p>
                     </div>
-                    <button onClick={() => setIsFormOpen(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><X size={20} /></button>
+                    <button onClick={() => setIsFormOpen(false)} className="p-2 hover:bg-border-subtle rounded-full transition-colors"><X size={20} /></button>
                 </div>
 
                 <div className="p-8 space-y-6 flex-1 overflow-y-auto">
@@ -551,38 +617,38 @@ export const ArticlesView: React.FC = () => {
                     <div className="space-y-4">
                         <div className="flex gap-4">
                             <div className="flex-1">
-                                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Bezeichnung <span className="text-error">*</span></label>
+                                <label className="block text-xs font-bold text-muted mb-2 uppercase">Bezeichnung <span className="text-error-text">*</span></label>
                                 <input
                                     type="text"
                                     value={formData.title}
                                     onChange={(e) => setFormData({...formData, title: e.target.value})}
-                                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-bold focus:ring-2 focus:ring-accent outline-none transition-shadow"
+                                    className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
                                     placeholder="z.B. Webdesign"
                                     autoFocus
                                 />
-                                {formErrors.title && <p className="mt-1 text-xs font-bold text-error">{formErrors.title}</p>}
+                                {formErrors.title && <p className="mt-1 text-xs font-bold text-error-text">{formErrors.title}</p>}
                             </div>
                              <div className="w-1/3">
-                                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Artikel-Nr.</label>
-                                <input
+                                <label className="block text-xs font-bold text-muted mb-2 uppercase" htmlFor="articlesview-artikel-nr">Artikel-Nr.</label>
+                                <input id="articlesview-artikel-nr"
                                     type="text"
                                     value={formData.sku}
                                     onChange={(e) => setFormData({...formData, sku: e.target.value})}
-                                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-mono focus:ring-2 focus:ring-accent outline-none transition-shadow"
+                                    className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
                                     placeholder="SKU-001"
                                 />
-                                {formErrors.sku && <p className="mt-1 text-xs font-bold text-error">{formErrors.sku}</p>}
+                                {formErrors.sku && <p className="mt-1 text-xs font-bold text-error-text">{formErrors.sku}</p>}
                             </div>
                         </div>
 
                         <div>
-                             <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Kategorie</label>
+                             <label className="block text-xs font-bold text-muted mb-2 uppercase">Kategorie</label>
                              <div className="relative">
-                                <Tag size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+                                <Tag size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"/>
                                 <select
                                     value={formData.category}
                                     onChange={(e) => setFormData({...formData, category: e.target.value})}
-                                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 pl-10 text-sm font-medium focus:ring-2 focus:ring-accent outline-none transition-shadow appearance-none"
+                                    className="w-full bg-surface-muted border border-control-border rounded-xl p-3 pl-10 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow appearance-none"
                                 >
                                     {configuredCategories.map((c) => (
                                       <option key={c} value={c}>
@@ -591,11 +657,11 @@ export const ArticlesView: React.FC = () => {
                                     ))}
                                 </select>
                              </div>
-                             {formErrors.category && <p className="mt-1 text-xs font-bold text-error">{formErrors.category}</p>}
+                             {formErrors.category && <p className="mt-1 text-xs font-bold text-error-text">{formErrors.category}</p>}
                         </div>
                     </div>
 
-                    <hr className="border-gray-100" />
+                    <hr className="border-border" />
 
                     {/* Pricing */}
                     <div className="space-y-4">
@@ -604,25 +670,25 @@ export const ArticlesView: React.FC = () => {
                         </h3>
                         <div className="grid grid-cols-2 gap-4">
                             <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Preis (Netto) <span className="text-error">*</span></label>
+                                <label className="block text-xs font-bold text-muted mb-2 uppercase">Preis (Netto) <span className="text-error-text">*</span></label>
                                 <div className="relative">
                                     <input
                                         type="number"
                                         value={formData.price}
                                         onChange={(e) => setFormData({...formData, price: Number(e.target.value)})}
-                                        className={`w-full bg-gray-50 border rounded-xl p-3 text-sm font-bold focus:ring-2 focus:ring-accent outline-none transition-shadow ${Number(formData.price) < 0 ? 'border-error/30 text-error' : 'border-gray-200'}`}
+                                        className={`w-full bg-surface-muted border rounded-xl p-3 text-sm font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow ${Number(formData.price) < 0 ? 'border-error-border text-error-text' : 'border-control-border'}`}
                                         step="0.01"
                                     />
-                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400">EUR</span>
+                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted">EUR</span>
                                 </div>
-                                {formErrors.price && <p className="mt-1 text-xs font-bold text-error">{formErrors.price}</p>}
+                                {formErrors.price && <p className="mt-1 text-xs font-bold text-error-text">{formErrors.price}</p>}
                             </div>
                             <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Einheit</label>
-                                <select
+                                <label className="block text-xs font-bold text-muted mb-2 uppercase" htmlFor="articlesview-einheit">Einheit</label>
+                                <select id="articlesview-einheit"
                                     value={formData.unit}
                                     onChange={(e) => setFormData({...formData, unit: e.target.value})}
-                                    className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none appearance-none transition-shadow"
+                                    className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring appearance-none transition-shadow"
                                 >
                                     <option value="Std">Stunde</option>
                                     <option value="Stk">Stück</option>
@@ -631,56 +697,57 @@ export const ArticlesView: React.FC = () => {
                                     <option value="Monat">Monat</option>
                                     <option value="km">Kilometer</option>
                                 </select>
-                                {formErrors.unit && <p className="mt-1 text-xs font-bold text-error">{formErrors.unit}</p>}
+                                {formErrors.unit && <p className="mt-1 text-xs font-bold text-error-text">{formErrors.unit}</p>}
                             </div>
                         </div>
 
                         <div>
-                            <label className="block text-xs font-bold text-gray-500 mb-2 uppercase">Umsatzsteuer (USt)</label>
-                            <div className="flex bg-gray-50 rounded-xl p-1 border border-gray-200">
+                            <label className="block text-xs font-bold text-muted mb-2 uppercase">Umsatzsteuer (USt)</label>
+                            <div className="flex bg-surface-muted rounded-xl p-1 border border-border">
                                 {[19, 7, 0].map((rate) => (
                                     <button
                                         key={rate}
                                         onClick={() => setFormData({...formData, taxRate: rate})}
-                                        className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                                        className={`flex-1 py-2 rounded-lg text-xs font-bold transition-colors ${
                                             formData.taxRate === rate
-                                            ? 'bg-black text-accent shadow-sm'
-                                            : 'text-gray-500 hover:bg-gray-200'
+                                            ? 'bg-black text-white'
+                                            : 'text-muted hover:bg-border-subtle'
                                         }`}
                                     >
                                         {rate}%
                                     </button>
                                 ))}
                             </div>
-                            {formErrors.taxRate && <p className="mt-1 text-xs font-bold text-error">{formErrors.taxRate}</p>}
+                            {formErrors.taxRate && <p className="mt-1 text-xs font-bold text-error-text">{formErrors.taxRate}</p>}
                         </div>
                     </div>
 
-                    <hr className="border-gray-100" />
+                    <hr className="border-border" />
 
                     {/* Description */}
                     <div>
                         <div className="flex justify-between items-center mb-2">
-                            <label className="block text-xs font-bold text-gray-500 uppercase">Beschreibung</label>
+                            <label className="block text-xs font-bold text-muted uppercase">Beschreibung</label>
                         </div>
                         <textarea
                             value={formData.description}
                             onChange={(e) => setFormData({...formData, description: e.target.value})}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none h-32 resize-none transition-shadow"
+                            className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring h-32 resize-none transition-shadow"
                             placeholder="Details zum Produkt..."
                         />
-                         <p className="text-[10px] text-gray-400 mt-2 flex items-center gap-1">
-                            <Archive size={10} /> Wird auf der Rechnung unter dem Titel angezeigt.
+                         <p className="text-xs text-muted mt-2 flex items-center gap-1">
+                            <Archive size={12} /> Wird auf der Rechnung unter dem Titel angezeigt.
                         </p>
                     </div>
                 </div>
 
-                <div className="p-8 border-t border-gray-100 bg-gray-50 rounded-b-[2.5rem]">
+                <div className="p-8 border-t border-border bg-surface-muted rounded-b-2xl">
                     <div className="flex gap-4">
                          {editingArticle && (
                             <button
                                 onClick={() => void handleDelete(editingArticle.id)}
-                                className="px-4 py-4 rounded-xl bg-white border border-gray-200 text-error hover:bg-error-bg hover:border-error/30 transition-colors"
+                                title="Artikel löschen"
+                                className="px-4 py-4 rounded-xl bg-white border border-control-border text-error-text hover:bg-error-bg hover:border-error-border transition-colors"
                             >
                                 <Trash2 size={20} />
                             </button>
@@ -688,7 +755,7 @@ export const ArticlesView: React.FC = () => {
                          <button
                             onClick={() => void handleSubmit()}
                             disabled={isSaving}
-                            className="flex-1 bg-black text-accent py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-gray-900 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                            className="flex-1 bg-black text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-dark-1 motion-safe:transition-transform motion-safe:active:scale-95 motion-reduce:transition-none disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <Check size={18} />
                             {isSaving ? 'Speichere...' : editingArticle ? 'Speichern' : 'Erstellen'}

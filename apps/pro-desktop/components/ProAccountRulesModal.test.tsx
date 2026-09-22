@@ -26,8 +26,26 @@ vi.mock('../ipc/client', () => ({
 }));
 
 vi.mock('@billme/ui', () => ({
-  Button: (props: any) => <button {...props}>{props.children}</button>,
-  Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Button: ({
+    children,
+    ...props
+  }: React.ComponentProps<'button'> & { variant?: string; size?: string }) => (
+    <button {...props}>{children}</button>
+  ),
+  Modal: ({ children, open }: { children: React.ReactNode; open: boolean }) =>
+    open ? <>{children}</> : null,
+  EmptyState: ({ title, description }: { title: string; description?: React.ReactNode }) => (
+    <div>
+      <p>{title}</p>
+      {description ? <p>{description}</p> : null}
+    </div>
+  ),
+  ErrorState: ({ title, description }: { title: string; description?: React.ReactNode }) => (
+    <div role="alert">
+      <p>{title}</p>
+      {description ? <p>{description}</p> : null}
+    </div>
+  ),
 }));
 
 const renderModal = (props?: Partial<React.ComponentProps<typeof ProAccountRulesModal>>) => {
@@ -63,7 +81,7 @@ describe('ProAccountRulesModal', () => {
     renderModal();
 
     expect(await screen.findByText(/Keine Regeln vorhanden/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /Schließen/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Schließen' }));
   });
 
   it('creates a new pro account suggestion rule with trimmed values', async () => {

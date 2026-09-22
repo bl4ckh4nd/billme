@@ -39,7 +39,7 @@ export type SessionSecretVerdict =
  * A session token is only as trustworthy as its signing secret. The constructor
  * default keeps `pnpm dev` frictionless, but any deployment that talks to a real
  * database must not silently sign tokens with a secret that is published in this
- * repository — anyone could forge a session.
+ * repository, anyone could forge a session.
  */
 export const checkSessionSecret = (
   env: Record<string, string | undefined> = process.env,

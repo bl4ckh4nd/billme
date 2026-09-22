@@ -140,8 +140,8 @@ const reportProfile = async (db: PostgresQueryable, t: string, activeChart: 'SKR
   const profile = parsed.data;
   if (profile.chart && profile.chart !== activeChart) throw new Error('REPORT_CHART_MISMATCH');
   const hgbReport = reportType === 'hgb-guv' || reportType === 'hgb-bilanz';
-  const supportedProfile = (profile.legalForm === 'gmbh' && profile.profitDetermination === 'double_entry')
-    || (profile.legalForm === 'sole_proprietor' && profile.profitDetermination === 'eur');
+  const supportedProfile = ((profile.legalForm === 'gmbh' || profile.legalForm === 'ug') && profile.profitDetermination === 'double_entry')
+    || ((profile.legalForm === 'sole_proprietor' || profile.legalForm === 'gbr' || profile.legalForm === 'ek') && profile.profitDetermination === 'eur');
   if (!supportedProfile) throw new Error('REPORTING_PROFILE_REQUIRED');
   const fiscalYearStart = profile.profitDetermination === 'eur' ? '01-01' : profile.fiscalYearStart;
   if (hgbReport && !profile.hgbSizeClass) throw new Error('REPORTING_PROFILE_REQUIRED');
@@ -1023,7 +1023,7 @@ const mapAsset = (row: AssetDbRow, schedule: AssetDepreciationScheduleEntry[]): 
     activationDate: row.activation_date, acquisitionCost: round(row.acquisition_cost), residualValue,
     annualDepreciation: Math.max(0, ...schedule.map((entry) => entry.amount)), usefulLifeYears: row.useful_life_years ?? undefined,
     depreciationMethod: row.depreciation_method as any, costCenter: row.cost_center, location: row.location,
-    nextDepreciation: planned ? `${planned.year}-12-31` : '—', receiptLinked: Boolean(row.receipt_linked),
+    nextDepreciation: planned ? `${planned.year}-12-31` : '–', receiptLinked: Boolean(row.receipt_linked),
     supplier: row.supplier ?? undefined, invoiceRef: row.invoice_ref ?? undefined, assetAccountNumber: row.asset_account_number,
     acquisitionOffsetAccountNumber: row.acquisition_offset_account_number ?? undefined, sourceIncomingInvoiceId: row.source_incoming_invoice_id ?? undefined,
     activationJournalEntryId: row.activation_journal_entry_id ?? undefined, accountingRepairRequired: Boolean(row.accounting_repair_required),

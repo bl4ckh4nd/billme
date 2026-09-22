@@ -240,7 +240,7 @@ export const assertServerEurProfile = async (db: PostgresQueryable, scope: Tenan
   const settingsJson = parseJson(settings?.settings_json);
   const profile = settingsJson?.businessReportingProfile;
   if (!settingsJson) throw new Error('EUR_SERVER_REPORT_UNAVAILABLE');
-  if (!profile || typeof profile !== 'object' || (profile as any).jurisdiction !== 'DE' || (profile as any).legalForm !== 'sole_proprietor' || (profile as any).profitDetermination !== 'eur' || ((profile as any).fiscalYearStart !== undefined && (profile as any).fiscalYearStart !== '01-01')) {
+  if (!profile || typeof profile !== 'object' || (profile as any).jurisdiction !== 'DE' || !['sole_proprietor', 'gbr', 'ek'].includes((profile as any).legalForm) || (profile as any).profitDetermination !== 'eur' || ((profile as any).fiscalYearStart !== undefined && (profile as any).fiscalYearStart !== '01-01')) {
     throw new Error('EUR_PROFILE_REQUIRED');
   }
   return { taxYear: year, from, to, smallBusiness: Boolean(settingsJson.legal && typeof settingsJson.legal === 'object' && (settingsJson.legal as any).smallBusinessRule === true) };

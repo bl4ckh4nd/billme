@@ -1,6 +1,6 @@
 import React from 'react';
 import { X, Keyboard } from 'lucide-react';
-import { Portal } from '@billme/ui';
+import { Modal } from '@billme/ui';
 
 interface ShortcutsModalProps {
   onClose: () => void;
@@ -9,71 +9,59 @@ interface ShortcutsModalProps {
 const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC');
 const mod = isMac ? '⌘' : 'Ctrl';
 
+// Lists only shortcuts that are actually bound somewhere in the app.
 const shortcuts = [
-  { keys: ['N'], description: 'Neues Dokument / Neuen Eintrag erstellen' },
-  { keys: ['E'], description: 'Ausgewähltes Dokument bearbeiten' },
-  { keys: [mod, 'S'], description: 'Formular speichern' },
-  { keys: [mod, 'P'], description: 'PDF exportieren' },
   { keys: [mod, 'K'], description: 'Globale Suche öffnen' },
-  { keys: ['Backspace'], description: 'Ausgewähltes Element löschen' },
-  { keys: ['Esc'], description: 'Modal schließen / Zurück' },
+  { keys: [mod, 'S'], description: 'Beleg speichern (im Belegeditor)' },
+  { keys: [mod, 'Z'], description: 'Rückgängig (im Belegeditor)' },
+  { keys: [mod, 'Y'], description: 'Wiederholen (im Belegeditor)' },
+  { keys: ['Esc'], description: 'Dialog schließen' },
   { keys: ['?'], description: 'Diese Übersicht anzeigen' },
 ];
 
 export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ onClose }) => {
-  React.useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
+  const titleId = React.useId();
 
   return (
-    <Portal>
-    <div
-      className="fixed inset-0 z-50 bg-dark-base/20 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-gray-100 rounded-xl flex items-center justify-center">
-                <Keyboard size={16} className="text-gray-700" />
-              </div>
-              <h2 className="text-lg font-black text-gray-900">Tastenkürzel</h2>
+    <Modal open onClose={onClose} titleId={titleId} className="max-w-md overflow-hidden">
+      <div className="p-6">
+        <div className="mb-6 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-border-subtle">
+              <Keyboard size={16} className="text-foreground" aria-hidden="true" />
             </div>
-            <button
-              onClick={onClose}
-              className="w-8 h-8 rounded-xl bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 transition-colors"
+            <h2 id={titleId} className="text-lg font-black text-foreground">Tastenkürzel</h2>
+          </div>
+          <button
+            type="button"
+            aria-label="Dialog schließen"
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-xl bg-border-subtle text-muted transition-colors hover:bg-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="space-y-1">
+          {shortcuts.map(({ keys, description }) => (
+            <div
+              key={keys.join('+')}
+              className="flex items-center justify-between rounded-xl px-3 py-2.5 transition-colors hover:bg-surface-muted"
             >
-              <X size={14} />
-            </button>
-          </div>
-          <div className="space-y-1">
-            {shortcuts.map(({ keys, description }) => (
-              <div
-                key={keys.join('+')}
-                className="flex items-center justify-between py-2.5 px-3 rounded-xl hover:bg-gray-50 transition-colors"
-              >
-                <span className="text-sm text-gray-700">{description}</span>
-                <div className="flex items-center gap-1 shrink-0 ml-4">
-                  {keys.map((k, i) => (
-                    <React.Fragment key={k}>
-                      {i > 0 && <span className="text-gray-300 text-xs">+</span>}
-                      <kbd className="inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-bold text-gray-600 bg-gray-100 border border-gray-200 min-w-[28px] justify-center">
-                        {k}
-                      </kbd>
-                    </React.Fragment>
-                  ))}
-                </div>
+              <span className="text-sm text-foreground">{description}</span>
+              <div className="ml-4 flex shrink-0 items-center gap-1">
+                {keys.map((k, i) => (
+                  <React.Fragment key={k}>
+                    {i > 0 && <span className="text-xs text-muted">+</span>}
+                    <kbd className="inline-flex min-w-[28px] items-center justify-center rounded-lg border border-border bg-border-subtle px-2 py-0.5 text-xs font-bold text-foreground">
+                      {k}
+                    </kbd>
+                  </React.Fragment>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
       </div>
-    </div>
-    </Portal>
+    </Modal>
   );
 };

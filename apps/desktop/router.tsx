@@ -36,8 +36,8 @@ import { useSettingsQuery } from './hooks/useSettings';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { Portal, shouldShowBusinessOnboarding, useActionFeedback } from '@billme/ui';
-import { MOCK_SETTINGS } from './data/mockData';
+import { Button, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
+import { shouldShowBusinessOnboarding } from '@billme/desktop-ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 
 const RootLayout: React.FC = () => {
@@ -72,11 +72,6 @@ const RootLayout: React.FC = () => {
 
   useKeyboardShortcuts({
     onShowShortcuts: () => setShowShortcuts(true),
-    onNew: () => {
-      if (pathname.startsWith('/documents')) navigate({ to: '/documents' });
-      else if (pathname.startsWith('/clients')) navigate({ to: '/clients' });
-      else if (pathname.startsWith('/articles')) navigate({ to: '/articles' });
-    },
   });
 
   return (
@@ -126,17 +121,17 @@ const RecurringPage: React.FC = () => <RecurringView />;
 const NotFoundPage: React.FC = () => {
   const navigate = useNavigate();
   return (
-    <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
-      <h2 className="text-xl font-bold text-gray-900 mb-2">Seite nicht gefunden</h2>
-      <p className="text-sm text-gray-500 mb-6">
-        Die angeforderte Seite konnte nicht gefunden werden.
-      </p>
-      <button
-        onClick={() => navigate({ to: '/' })}
-        className="px-6 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
-      >
-        Zurück zur Übersicht
-      </button>
+    <div className="flex min-h-full items-center justify-center rounded-3xl bg-surface p-8 shadow-sm">
+      <EmptyState
+        className="w-full max-w-md"
+        title="Seite nicht gefunden"
+        description="Die angeforderte Seite konnte nicht gefunden werden."
+        action={
+          <Button variant="dark" onClick={() => navigate({ to: '/' })}>
+            Zurück zur Übersicht
+          </Button>
+        }
+      />
     </div>
   );
 };
@@ -166,8 +161,7 @@ const DocumentsPage: React.FC = () => {
   const navigate = useNavigate();
   const { notify } = useActionFeedback('documents');
   const setEditingInvoice = useUiStore((s) => s.setEditingInvoice);
-  const { data: settingsFromDb } = useSettingsQuery();
-  const settings = settingsFromDb ?? MOCK_SETTINGS;
+  const { data: settings } = useSettingsQuery();
   const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
   const initialDocumentType = locationSearch.kind === 'offer' ? 'offer' : 'invoice';
   const initialSelectedId = typeof locationSearch.id === 'string' ? locationSearch.id : undefined;
@@ -175,6 +169,13 @@ const DocumentsPage: React.FC = () => {
 
   const handleCreateDocument = (type: 'invoice' | 'offer') => {
     void (async () => {
+      // A document cannot be priced without the user's own tax settings, and a
+      // fabricated fallback would put demo values on a real invoice.
+      if (!settings) {
+        notify('error', 'Einstellungen sind noch nicht geladen. Bitte erneut versuchen.');
+        return;
+      }
+
       try {
         const reservation = await ipc.numbers.reserve({ kind: type });
         const newInvoice: Invoice = {
@@ -233,31 +234,26 @@ const DocumentEditorPage: React.FC = () => {
   const [isReasonOpen, setIsReasonOpen] = React.useState(false);
   const [pendingDoc, setPendingDoc] = React.useState<Invoice | null>(null);
   const [reason, setReason] = React.useState('');
-  const [reasonError, setReasonError] = React.useState<string | null>(null);
 
   if (!invoice) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
-        <h2 className="text-xl font-bold text-gray-900 mb-2">Kein Dokument ausgewählt</h2>
-        <p className="text-sm text-gray-500 mb-6">
-          Bitte wähle zuerst ein Dokument aus der Liste aus.
-        </p>
-        <button
-          onClick={() => navigate({ to: '/documents' })}
-          className="px-6 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
-        >
-          Zurück zu Dokumenten
-        </button>
+      <div className="flex min-h-full items-center justify-center rounded-3xl bg-surface p-8 shadow-sm">
+        <EmptyState
+          className="w-full max-w-md"
+          title="Kein Dokument ausgewählt"
+          description="Bitte wähle zuerst ein Dokument aus der Liste aus."
+          action={
+            <Button variant="dark" onClick={() => navigate({ to: '/documents' })}>
+              Zurück zu Dokumenten
+            </Button>
+          }
+        />
       </div>
     );
   }
 
   const submitSave = () => {
     const trimmed = reason.trim();
-    if (!trimmed) {
-      setReasonError('Grund der Änderung ist Pflicht.');
-      return;
-    }
     if (!pendingDoc) return;
 
     const mutation = docType === 'offer' ? upsertOffer : upsertInvoice;
@@ -268,7 +264,6 @@ const DocumentEditorPage: React.FC = () => {
         setIsReasonOpen(false);
         setPendingDoc(null);
         setReason('');
-        setReasonError(null);
         clearEditingInvoice();
         navigate({ to: '/documents' });
       },
@@ -312,7 +307,6 @@ const DocumentEditorPage: React.FC = () => {
 
           setPendingDoc(updated);
           setReason('');
-          setReasonError(null);
           setIsReasonOpen(true);
         }}
         onCancel={() => {
@@ -330,95 +324,40 @@ const DocumentEditorPage: React.FC = () => {
         }}
       />
 
-      {isReasonOpen && (
-        <Portal>
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm p-4"
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              setIsReasonOpen(false);
-              setPendingDoc(null);
-              setReason('');
-              setReasonError(null);
-            }
-          }}
-        >
-          <div className="w-full max-w-lg rounded-3xl bg-white shadow-xl p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">Grund der Änderung</h3>
-            <p className="text-sm text-gray-500 mb-3">
-              Bitte gib einen Grund an. Dieser wird im Audit-Log gespeichert (GoBD).
-            </p>
-
-            <div className="flex flex-wrap gap-2 mb-3">
-              {['Tippfehler korrigiert', 'Adresse aktualisiert', 'Betrag angepasst', 'Kundendaten geändert', 'Sonstiges'].map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  onClick={() => {
-                    setReason(chip);
-                    if (reasonError) setReasonError(null);
-                  }}
-                  className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${reason === chip ? 'bg-black text-white border-black' : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'}`}
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
-
-            <label className="text-xs font-bold text-gray-700">Eigener Grund</label>
-            <textarea
-              autoFocus
-              value={reason}
-              onChange={(e) => {
-                setReason(e.target.value);
-                if (reasonError) setReasonError(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') {
-                  setIsReasonOpen(false);
-                  setPendingDoc(null);
-                  setReason('');
-                  setReasonError(null);
-                  return;
-                }
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                  e.preventDefault();
-                  submitSave();
-                }
-              }}
-              rows={3}
-              className="mt-2 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none focus:border-black"
-              placeholder="Oder eigenen Grund eingeben..."
-            />
-            {reasonError && <div className="mt-2 text-sm font-bold text-red-600">{reasonError}</div>}
-
-            <div className="mt-6 flex items-center justify-between gap-3">
-              <span className="text-[10px] text-gray-400 font-medium">⌘ Enter zum Speichern · Esc zum Abbrechen</span>
-              <div className="flex items-center gap-3">
-                <button
-                  className="px-5 py-2.5 rounded-xl font-bold bg-gray-100 text-gray-900 hover:bg-gray-200 transition-colors"
-                  onClick={() => {
-                    setIsReasonOpen(false);
-                    setPendingDoc(null);
-                    setReason('');
-                    setReasonError(null);
-                  }}
-                >
-                  Abbrechen
-                </button>
-                <button
-                  className="px-5 py-2.5 rounded-xl font-bold bg-black text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  onClick={submitSave}
-                  disabled={!reason.trim()}
-                >
-                  Speichern
-                </button>
-              </div>
-            </div>
+      <ConfirmDialog
+        open={isReasonOpen}
+        title="Grund der Änderung"
+        description="Bitte gib einen Grund an. Dieser wird im Audit-Log gespeichert (GoBD)."
+        confirmLabel="Speichern"
+        cancelLabel="Abbrechen"
+        reason={{
+          label: 'Eigener Grund',
+          placeholder: 'Oder eigenen Grund eingeben…',
+          required: true,
+          value: reason,
+          onChange: setReason,
+        }}
+        details={(
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Vorschläge für den Änderungsgrund">
+            {['Tippfehler korrigiert', 'Adresse aktualisiert', 'Betrag angepasst', 'Kundendaten geändert', 'Sonstiges'].map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                onClick={() => setReason(chip)}
+                className={`rounded-full border px-3 py-1.5 text-xs font-bold transition-colors ${reason === chip ? 'border-dark-base bg-dark-base text-background' : 'border-border bg-surface-muted text-muted hover:bg-surface'}`}
+              >
+                {chip}
+              </button>
+            ))}
           </div>
-        </div>
-        </Portal>
-      )}
+        )}
+        onConfirm={submitSave}
+        onCancel={() => {
+          setIsReasonOpen(false);
+          setPendingDoc(null);
+          setReason('');
+        }}
+      />
     </>
   );
 };

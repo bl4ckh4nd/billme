@@ -91,6 +91,8 @@ describe('useDeferredDelete', () => {
       });
 
       expect(commit).toHaveBeenCalledTimes(1);
+      // Unmount clear starts the 150ms toast exit; advance past it.
+      act(() => vi.advanceTimersByTime(150));
       expect(screen.queryByRole('status')).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Rückgängig' })).not.toBeInTheDocument();
     } finally {

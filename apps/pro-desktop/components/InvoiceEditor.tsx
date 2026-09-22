@@ -1,6 +1,6 @@
 import React from 'react';
-import { TemplateEditor, type TemplateEditorProps } from '@billme/desktop-renderer/components/TemplateEditor';
+import { InvoiceEditor as ShellInvoiceEditor, type InvoiceEditorProps } from '@billme/desktop-ui';
 
-export const InvoiceEditor: React.FC<Omit<TemplateEditorProps, 'product'>> = (props) => (
-  <TemplateEditor {...props} product="pro" />
-);
+type Props = Omit<InvoiceEditorProps, 'product'>;
+
+export const InvoiceEditor: React.FC<Props> = (props) => <ShellInvoiceEditor {...props} product="pro" />;

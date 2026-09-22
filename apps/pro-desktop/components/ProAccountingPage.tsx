@@ -728,7 +728,7 @@ export const ProAccountingPage: React.FC = () => {
 
   if (txQuery.isError || draftQuery.isError || policyQuery.isError || ledgerStatsError || ledgerAccountsError || bankAccountsError) {
     return (
-      <div className="bg-surface rounded-2xl p-8 min-h-full shadow-sm text-sm text-error" role="alert">
+      <div className="bg-surface rounded-2xl p-8 min-h-full shadow-sm text-sm text-error-text" role="alert">
         Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error ?? policyQuery.error ?? ledgerStatsLoadError ?? ledgerAccountsLoadError ?? bankAccountsLoadError)}
       </div>
     );
@@ -741,7 +741,7 @@ export const ProAccountingPage: React.FC = () => {
         <p className="mt-2 text-sm text-muted">
           Bitte laden Sie zuerst den SKR03/04 Kontenrahmen für die Pro-Buchhaltung.
         </p>
-        {importMessage && <div className={`mt-3 text-sm ${importFailed ? 'text-error' : 'text-success'}`} role={importFailed ? 'alert' : 'status'} aria-live={importFailed ? 'assertive' : 'polite'}>{importMessage}</div>}
+        {importMessage && <div className={`mt-3 text-sm ${importFailed ? 'text-error-text' : 'text-success-text'}`} role={importFailed ? 'alert' : 'status'} aria-live={importFailed ? 'assertive' : 'polite'}>{importMessage}</div>}
         <Button
           variant="dark"
           size="md"
@@ -773,7 +773,7 @@ export const ProAccountingPage: React.FC = () => {
 
       {adapterBusy && <div className="px-1 pb-2 text-xs text-muted" aria-live="polite">Speichere Änderung…</div>}
       {adapterError && (
-        <div className="mb-2 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">
+        <div className="mb-2 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">
           {adapterError}
         </div>
       )}

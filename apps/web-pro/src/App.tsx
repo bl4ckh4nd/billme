@@ -1,11 +1,10 @@
 import React from 'react';
+import { AuthScreen, Button, EmptyState, formatEmptyValue, Input, Select, type AuthScreenMode } from '@billme/ui';
 import {
   BusinessOnboarding,
-  Button,
-  Input,
   shouldShowBusinessOnboarding,
   type BusinessOnboardingDraft,
-} from '@billme/ui';
+} from '@billme/desktop-ui';
 import {
   ProAccountingWorkspace,
   type Account as WorkspaceAccount,
@@ -41,6 +40,9 @@ import { mapTransactionBankAccounts } from './accountingSeed';
 const DEFAULT_API_URL = (import.meta.env.VITE_SERVER_API_URL as string | undefined) ?? 'http://127.0.0.1:3100';
 const SESSION_STORAGE_KEY = 'billme.web-pro.session.v1';
 const API_URL_STORAGE_KEY = 'billme.web-pro.api-url.v1';
+const DEV_CREDENTIALS = import.meta.env.DEV
+  ? { email: 'owner@example.com', password: 'billme-server-123', fullName: 'Billme Pro Owner' }
+  : undefined;
 
 const accountingErrorsFrom = (value: unknown): Array<{ code: string; message: string; field?: string; blocking?: boolean }> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
@@ -90,11 +92,6 @@ type StoredSession = Awaited<ReturnType<ProWebClient['login']>> & {
   apiUrl: string;
 };
 
-type AuthMeta = {
-  health: Awaited<ReturnType<ProWebClient['getHealth']>> | null;
-  capabilities: Awaited<ReturnType<ProWebClient['getCapabilities']>> | null;
-  bootstrapStatus: Awaited<ReturnType<ProWebClient['getBootstrapStatus']>> | null;
-};
 type SettingsRecord = NonNullable<Awaited<ReturnType<ProWebClient['getSettings']>>>;
 
 type NoticeTone = 'neutral' | 'success' | 'danger';
@@ -156,7 +153,7 @@ const currencyFormatter = new Intl.NumberFormat('de-DE', {
 
 const formatCurrency = (value: number) => currencyFormatter.format(value ?? 0);
 const formatDate = (value: string | null | undefined) => {
-  if (!value) return '—';
+  if (!value) return formatEmptyValue(value);
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium' }).format(parsed);
@@ -185,6 +182,76 @@ const suggestionFlowLabels = {
   expense: 'Ausgabe',
   any: 'Beliebig',
 } as const;
+
+const invoiceStatusLabels: Record<string, string> = {
+  draft: 'Entwurf',
+  open: 'Offen',
+  paid: 'Bezahlt',
+  overdue: 'Überfällig',
+  cancelled: 'Storniert',
+};
+
+const offerStatusLabels: Record<string, string> = {
+  draft: 'Entwurf',
+  open: 'Offen',
+  accepted: 'Angenommen',
+  declined: 'Abgelehnt',
+  expired: 'Abgelaufen',
+  cancelled: 'Storniert',
+};
+
+const offerDecisionLabels: Record<string, string> = {
+  accepted: 'Angenommen',
+  declined: 'Abgelehnt',
+};
+
+const clientStatusLabels: Record<string, string> = {
+  active: 'Aktiv',
+  inactive: 'Inaktiv',
+};
+
+const recurringIntervalLabels: Record<string, string> = {
+  daily: 'Täglich',
+  weekly: 'Wöchentlich',
+  monthly: 'Monatlich',
+  quarterly: 'Quartalsweise',
+  yearly: 'Jährlich',
+};
+
+const accountTypeLabels: Record<string, string> = {
+  bank: 'Bank',
+  checking: 'Girokonto',
+  savings: 'Sparkonto',
+  paypal: 'PayPal',
+  cash: 'Bargeld',
+  credit: 'Kreditkarte',
+  other: 'Sonstiges',
+};
+
+const templateKindLabels: Record<string, string> = {
+  invoice: 'Rechnung',
+  offer: 'Angebot',
+};
+
+const labelFromMap = (labels: Record<string, string>, value: string | null | undefined): string =>
+  labels[value ?? ''] ?? formatEmptyValue(value);
+
+/**
+ * Belegfelder zeigen nur fachliche Werte. Rohe UUIDs und generierte Vorgangs-IDs
+ * (etwa `sonderbuchung-1789547678430`) gehören in die technischen Details, nicht
+ * in den Belegkopf; solche Werte werden ausgelassen statt angezeigt.
+ */
+const TECHNICAL_ID_PATTERNS = [
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+  /^[0-9a-f]{32,}$/i,
+  /^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*-(?:1[0-9]{12}|[0-9]{13,})$/,
+];
+
+const userFacingReference = (value: string | null | undefined): string | undefined => {
+  const candidate = value?.trim();
+  if (!candidate) return undefined;
+  return TECHNICAL_ID_PATTERNS.some((pattern) => pattern.test(candidate)) ? undefined : candidate;
+};
 
 const getApiUrlFromStorage = () => {
   if (typeof window === 'undefined') {
@@ -420,7 +487,7 @@ const mapWorkflowDraftToWorkspace = (
     postingDate: draft.postingDate,
     serviceDate: draft.documentDate,
     bookingText: draft.bookingText,
-    externalReference: draft.reference,
+    externalReference: userFacingReference(draft.reference),
     chartFramework: 'SKR03',
     lines: draft.lines.map((line) => {
       const hasDebit = Number(line.debitAmount || 0) > 0;
@@ -440,7 +507,7 @@ const mapWorkflowDraftToWorkspace = (
         countryCode: line.countryCode,
         counterpartyVatId: line.counterpartyVatId,
         evidenceType: line.evidenceType,
-        evidenceReference: line.evidenceReference,
+        evidenceReference: userFacingReference(line.evidenceReference),
         costCenter: line.costCenter,
       };
     }),
@@ -650,10 +717,10 @@ const buildSampleWorkflowPayload = (tenantId: string, ledgerAccounts: AppData['l
 };
 
 const StatCard = ({ label, value, hint }: { label: string; value: string; hint: string }) => (
-  <div className="stat-card">
-    <span className="stat-label">{label}</span>
-    <strong className="stat-value">{value}</strong>
-    <span className="stat-hint">{hint}</span>
+  <div className="grid gap-1 rounded-lg border border-border bg-surface p-4">
+    <span className="text-xs font-semibold text-muted">{label}</span>
+    <strong className="text-2xl font-bold tracking-tight tabular-nums text-foreground">{value}</strong>
+    <span className="text-xs text-muted">{hint}</span>
   </div>
 );
 
@@ -662,59 +729,92 @@ const SectionCard = ({
   title,
   actions,
   children,
+  className = '',
 }: {
   eyebrow: string;
   title: string;
   actions?: React.ReactNode;
   children: React.ReactNode;
+  className?: string;
 }) => (
-  <section className="section-card">
-    <header className="section-header">
+  <section className={`rounded-xl border border-border bg-surface p-5 ${className}`}>
+    <header className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
       <div>
-        <p className="section-eyebrow">{eyebrow}</p>
-        <h2 className="section-title">{title}</h2>
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted">{eyebrow}</p>
+        <h2 className="mt-1 text-xl font-bold tracking-tight text-foreground">{title}</h2>
       </div>
-      {actions ? <div className="section-actions">{actions}</div> : null}
+      {actions ? <div className="flex flex-wrap items-center gap-3">{actions}</div> : null}
     </header>
     {children}
   </section>
 );
 
+const TechnicalDetails = ({ apiUrl, data }: { apiUrl: string; data: AppData | null }) => {
+  const rows: Array<[string, string]> = [
+    ['Mandant', formatEmptyValue(data?.sessionInfo.tenantId)],
+    ['API-Adresse', apiUrl],
+    ['Dienst', formatEmptyValue(data?.health.service)],
+    ['Backend', formatEmptyValue(data?.capabilities.backend)],
+    ['Bereitstellung', formatEmptyValue(data?.capabilities.deploymentMode)],
+    ['Rolle', formatEmptyValue(data?.sessionInfo.role)],
+    ['Produkte', formatEmptyValue(data?.capabilities.products.join(', '))],
+    ['Rollenmodell', formatEmptyValue(data?.capabilities.auth.roles.join(', '))],
+  ];
+
+  return (
+    <details className="mt-3 rounded-lg border border-control-border bg-surface px-4 py-2 text-xs text-muted">
+      <summary className="flex min-h-6 cursor-pointer items-center font-semibold uppercase tracking-wider focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">
+        Technische Details
+      </summary>
+      <dl className="mt-2 grid gap-1">
+        {rows.map(([label, value]) => (
+          <div className="flex flex-wrap items-baseline gap-2" key={label}>
+            <dt className="font-semibold">{label}</dt>
+            <dd className="break-all font-mono text-foreground">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-2 leading-relaxed">
+        Anmeldung per HTTP-Session gegen die Pro-API statt Electron-IPC. Workflow-Einträge werden über die Route{' '}
+        <code className="rounded-sm bg-surface-muted px-1 py-0.5 font-mono">/api/v1/pro/workflow</code> übertragen.
+      </p>
+    </details>
+  );
+};
+
+const noticeToneClasses: Record<NoticeTone, string> = {
+  neutral: 'border-border bg-surface-muted text-foreground',
+  success: 'border-success-border bg-success-bg text-success-text',
+  danger: 'border-error-border bg-error-bg text-error-text',
+};
+
 const NoticeBanner = ({ notice }: { notice: Notice }) => {
   if (!notice) {
     return null;
   }
-  return <div className={`notice-banner notice-${notice.tone}`}>{notice.text}</div>;
+  return (
+    <div role="status" className={`mb-4 rounded-xl border px-4 py-3 text-sm ${noticeToneClasses[notice.tone]}`}>
+      {notice.text}
+    </div>
+  );
 };
 
-const EmptyState = ({ title, body, action }: { title: string; body: string; action?: React.ReactNode }) => (
-  <div className="empty-state">
-    <strong>{title}</strong>
-    <p>{body}</p>
-    {action}
+const DataTable = ({ children }: { children: React.ReactNode }) => (
+  <div className="overflow-x-auto rounded-xl border border-border bg-surface [&_table]:w-full [&_table]:border-collapse [&_th]:border-b [&_th]:border-border [&_th]:px-4 [&_th]:py-3 [&_th]:text-left [&_th]:text-xs [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted [&_td]:border-b [&_td]:border-border-subtle [&_td]:px-4 [&_td]:py-3 [&_td]:text-left [&_td]:align-top [&_td]:text-sm [&_td]:text-foreground [&_td]:tabular-nums">
+    {children}
   </div>
 );
-
-const DataTable = ({ children }: { children: React.ReactNode }) => <div className="table-wrap">{children}</div>;
 
 export default function App() {
   const [session, setSession] = React.useState<StoredSession | null>(() => readStoredSession());
   const [apiUrl, setApiUrl] = React.useState(() => readStoredSession()?.apiUrl ?? getApiUrlFromStorage());
   const [route, navigate] = useHashRoute();
-  const [authMeta, setAuthMeta] = React.useState<AuthMeta>({
-    health: null,
-    capabilities: null,
-    bootstrapStatus: null,
-  });
-  const [authPending, setAuthPending] = React.useState(false);
+  const [authMode, setAuthMode] = React.useState<AuthScreenMode>('checking');
   const [data, setData] = React.useState<AppData | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [notice, setNotice] = React.useState<Notice>(null);
   const [loadError, setLoadError] = React.useState<string>('');
   const [onboardingSaving, setOnboardingSaving] = React.useState(false);
-  const [email, setEmail] = React.useState('owner@example.com');
-  const [password, setPassword] = React.useState('billme-server-123');
-  const [fullName, setFullName] = React.useState('Billme Pro Owner');
   const [settingsDraft, setSettingsDraft] = React.useState<SettingsRecord>(createDefaultSettings());
   const [articleDraft, setArticleDraft] = React.useState({
     title: '',
@@ -726,7 +826,7 @@ export default function App() {
   });
   const [accountDraft, setAccountDraft] = React.useState({
     name: '',
-    iban: 'DE00 0000 0000 0000 0000 00',
+    iban: '',
     balance: '0',
     defaultSkrAccountNumber: '1200',
     type: 'bank' as const,
@@ -781,20 +881,12 @@ export default function App() {
   }, [apiUrl]);
 
   const refreshAuthMeta = React.useCallback(async () => {
-    setAuthPending(true);
+    setAuthMode('checking');
     try {
-      const [health, capabilities, bootstrapStatus] = await Promise.all([
-        client.getHealth(),
-        client.getCapabilities(),
-        client.getBootstrapStatus(),
-      ]);
-      setAuthMeta({ health, capabilities, bootstrapStatus });
-      setNotice(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotice(createNotice('danger', message));
-    } finally {
-      setAuthPending(false);
+      const bootstrapStatus = await client.getBootstrapStatus();
+      setAuthMode(bootstrapStatus.bootstrapped ? 'login' : 'setup');
+    } catch {
+      setAuthMode('unreachable');
     }
   }, [client]);
 
@@ -895,44 +987,70 @@ export default function App() {
     }
   }, [client, session]);
 
+  const validatedSessionKey = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (session) {
-      void refreshData();
-      return;
-    }
-    void refreshAuthMeta();
-  }, [refreshAuthMeta, refreshData, session]);
+    let cancelled = false;
+    void (async () => {
+      if (!session) {
+        await refreshAuthMeta();
+        return;
+      }
+      const sessionKey = `${apiUrl}::${session.token}`;
+      if (validatedSessionKey.current !== sessionKey) {
+        validatedSessionKey.current = sessionKey;
+        setAuthMode('checking');
+        try {
+          await client.getSessionInfo();
+        } catch (error) {
+          if (cancelled) return;
+          const message = error instanceof Error ? error.message : String(error);
+          if (/bearer token|expired bearer token|missing bearer token|not authorized/i.test(message)) {
+            setSession(null);
+            persistSession(null);
+            setData(null);
+            setNotice(createNotice('danger', 'Sitzung abgelaufen. Bitte erneut anmelden.'));
+          } else {
+            setSession(null);
+            persistSession(null);
+            setData(null);
+            setNotice(createNotice('danger', 'Sitzung konnte nicht geprüft werden. Bitte erneut anmelden.'));
+          }
+          try {
+            const bootstrapStatus = await createProWebClient({ baseUrl: apiUrl, getToken: () => null }).getBootstrapStatus();
+            if (!cancelled) setAuthMode(bootstrapStatus.bootstrapped ? 'login' : 'setup');
+          } catch {
+            if (!cancelled) setAuthMode('unreachable');
+          }
+          return;
+        }
+      }
+      await refreshData();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiUrl, client, refreshAuthMeta, refreshData, session]);
 
-  const handleAuthenticate = async () => {
-    setAuthPending(true);
-    try {
-      const response = authMeta.bootstrapStatus?.bootstrapped
-        ? await client.login({ email, password })
-        : await client.bootstrap({ email, password, fullName });
-      const nextSession = { ...response, apiUrl };
-      setSession(nextSession);
-      persistSession(nextSession);
-      setNotice(
-        createNotice(
-          'success',
-          authMeta.bootstrapStatus?.bootstrapped
-            ? `Angemeldet als ${response.user.fullName}.`
-            : `Owner ${response.user.fullName} angelegt und angemeldet.`,
-        ),
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotice(createNotice('danger', message));
-    } finally {
-      setAuthPending(false);
-    }
+  const handleAuthenticate = async ({ email, password, fullName }: { email: string; password: string; fullName: string }) => {
+    const response = authMode === 'setup'
+      ? await client.bootstrap({ email, password, fullName })
+      : await client.login({ email, password });
+    const nextSession = { ...response, apiUrl };
+    setNotice(null);
+    setSession(nextSession);
+    persistSession(nextSession);
+  };
+
+  const handleServerUrlChange = async (nextUrl: string) => {
+    await createProWebClient({ baseUrl: nextUrl, getToken: () => null }).getBootstrapStatus();
+    setApiUrl(nextUrl);
   };
 
   const handleLogout = React.useCallback(() => {
     setSession(null);
     setData(null);
     persistSession(null);
-    setNotice(createNotice('neutral', 'Abgemeldet.'));
+    setNotice(createNotice('neutral', 'Du wurdest abgemeldet.'));
   }, []);
 
   const runAction = React.useCallback(
@@ -1424,6 +1542,15 @@ export default function App() {
       invoicePrefix: settingsDraft.numbers.invoicePrefix,
       offerPrefix: settingsDraft.numbers.offerPrefix,
     },
+    businessReportingProfile: settingsDraft.businessReportingProfile ?? {
+      jurisdiction: 'DE',
+      legalForm: 'gmbh',
+      profitDetermination: 'double_entry',
+      hgbSizeClass: 'small',
+      fiscalYearStart: '01-01',
+      chart: 'SKR03',
+      vatMethod: settingsDraft.legal.taxAccountingMethod ?? 'soll',
+    },
   }), [settingsDraft]);
 
   const handleCompleteOnboarding = async (draft: BusinessOnboardingDraft) => {
@@ -1431,9 +1558,16 @@ export default function App() {
       ...settingsDraft,
       company: { ...settingsDraft.company, ...draft.company },
       finance: { ...settingsDraft.finance, ...draft.finance },
-      legal: { ...settingsDraft.legal, ...draft.legal },
+      legal: {
+        ...settingsDraft.legal,
+        ...draft.legal,
+        defaultVatRate: draft.legal.defaultVatRate ?? settingsDraft.legal.defaultVatRate,
+        paymentTermsDays: draft.legal.paymentTermsDays ?? settingsDraft.legal.paymentTermsDays,
+      },
       numbers: { ...settingsDraft.numbers, ...draft.numbers },
+      businessReportingProfile: draft.businessReportingProfile,
       onboardingCompleted: true,
+      onboardingDraftSaved: false,
     };
 
     setOnboardingSaving(true);
@@ -1445,6 +1579,38 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setNotice(createNotice('danger', message));
+    } finally {
+      setOnboardingSaving(false);
+    }
+  };
+
+  const handleSaveOnboardingDraft = async (draft: BusinessOnboardingDraft) => {
+    const updatedSettings: SettingsRecord = {
+      ...settingsDraft,
+      company: { ...settingsDraft.company, ...draft.company },
+      finance: { ...settingsDraft.finance, ...draft.finance },
+      legal: {
+        ...settingsDraft.legal,
+        ...draft.legal,
+        defaultVatRate: draft.legal.defaultVatRate ?? settingsDraft.legal.defaultVatRate,
+        paymentTermsDays: draft.legal.paymentTermsDays ?? settingsDraft.legal.paymentTermsDays,
+      },
+      numbers: { ...settingsDraft.numbers, ...draft.numbers },
+      businessReportingProfile: draft.businessReportingProfile,
+      onboardingCompleted: false,
+      onboardingDraftSaved: true,
+    };
+
+    setOnboardingSaving(true);
+    try {
+      await client.saveSettings(updatedSettings);
+      setSettingsDraft(updatedSettings);
+      await refreshData();
+      setNotice(createNotice('success', 'Entwurf gespeichert. Du kannst später weitermachen.'));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNotice(createNotice('danger', message));
+      throw error;
     } finally {
       setOnboardingSaving(false);
     }
@@ -1467,6 +1633,10 @@ export default function App() {
   };
 
   const handleCreateAccount = async () => {
+    if (!accountDraft.name.trim() || !accountDraft.iban.trim()) {
+      setNotice(createNotice('danger', 'Name und IBAN sind erforderlich. Bitte echte Kontodaten eingeben, kein Beispielformat.'));
+      return;
+    }
     await runAction(async () => {
       await client.saveAccount({
         id: crypto.randomUUID(),
@@ -1480,7 +1650,7 @@ export default function App() {
       });
       setAccountDraft({
         name: '',
-        iban: 'DE00 0000 0000 0000 0000 00',
+        iban: '',
         balance: '0',
         defaultSkrAccountNumber: '1200',
         type: 'bank',
@@ -1575,74 +1745,17 @@ export default function App() {
 
   if (!session) {
     return (
-      <main className="auth-shell">
-        <section className="auth-hero">
-          <p className="hero-kicker">Billme Pro im Browser</p>
-          <h1>Pro-Buchhaltung im Serverbetrieb.</h1>
-          <p className="hero-copy">
-            Diese Web-App verbindet sich mit der Fastify-API. Sitzungen bleiben im Browser, die Buchhaltungsdaten
-            liegen auf dem Server.
-          </p>
-          <div className="hero-metrics">
-            <StatCard
-              label="Produkte"
-              value={authMeta.capabilities?.products.join(' / ') ?? '…'}
-              hint="Der Pro-Bereich ist aktiviert."
-            />
-            <StatCard
-              label="Rollen"
-              value={String(authMeta.capabilities?.auth.roles.length ?? 0)}
-              hint="Mehrere Nutzer können sich anmelden."
-            />
-            <StatCard
-              label="Bootstrap"
-              value={authMeta.bootstrapStatus?.bootstrapped ? 'aktiv' : 'offen'}
-              hint="Ein Owner richtet die Instanz einmalig ein."
-            />
-          </div>
-        </section>
-
-        <section className="auth-panel">
-          <NoticeBanner notice={notice} />
-          <SectionCard
-            eyebrow="Verbindung"
-            title="API prüfen und anmelden"
-            actions={
-              <Button variant="secondary" onClick={() => void refreshAuthMeta()} disabled={authPending}>
-                Status laden
-              </Button>
-            }
-          >
-            <div className="form-grid two-col compact-grid">
-              <Input label="Server-API-URL" fullWidth value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} />
-              <div className="meta-chip-row">
-                <span className="meta-chip">{authMeta.health?.service ?? 'Kein Healthcheck'}</span>
-                <span className="meta-chip">{authMeta.health?.backend ?? '—'}</span>
-                <span className="meta-chip">{authMeta.capabilities?.database.production ?? '—'}</span>
-              </div>
-              <Input label="Vollständiger Name" fullWidth value={fullName} onChange={(event) => setFullName(event.target.value)} />
-              <Input label="E-Mail" fullWidth value={email} onChange={(event) => setEmail(event.target.value)} />
-              <Input
-                label="Passwort"
-                fullWidth
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </div>
-            <div className="action-row">
-              <Button onClick={() => void handleAuthenticate()} disabled={authPending}>
-                {authMeta.bootstrapStatus?.bootstrapped ? 'In Pro anmelden' : 'Pro-Owner anlegen'}
-              </Button>
-              <span className="helper-copy">
-                {authMeta.bootstrapStatus?.bootstrapped
-                  ? `Bereits ${authMeta.bootstrapStatus.userCount} Nutzer im Pro-Scope.`
-                  : 'Noch kein Owner vorhanden. Der erste Login richtet die Pro-Instanz ein.'}
-              </span>
-            </div>
-          </SectionCard>
-        </section>
-      </main>
+      <AuthScreen
+        product="pro"
+        mode={authMode}
+        serverUrl={apiUrl}
+        defaultServerUrl={DEFAULT_API_URL}
+        notice={notice && notice.tone !== 'success' ? notice.text : null}
+        initialCredentials={DEV_CREDENTIALS}
+        onSubmit={handleAuthenticate}
+        onRetry={() => void refreshAuthMeta()}
+        onServerUrlChange={handleServerUrlChange}
+      />
     );
   }
 
@@ -1667,16 +1780,17 @@ export default function App() {
   const showOnboarding = Boolean(data) && !loading && shouldShowBusinessOnboarding(settingsDraft);
 
   return (
-    <main className="app-shell">
-      <div className="topbar">
+    <main className="mx-auto min-h-screen w-full max-w-[90rem] px-4 py-6 sm:px-6 sm:py-8">
+      <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <p className="hero-kicker">Billme Pro im Browser</p>
-          <h1>Pro-Buchhaltung und Dokumente im Browser</h1>
-          <p className="topbar-copy">
-            Sitzung: {session.user.fullName} · Scope {data?.sessionInfo.tenantId ?? '—'} · API {apiUrl}
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted">Billme Pro im Browser</p>
+          <h1 className="mt-1 text-3xl font-bold tracking-tight text-foreground">Pro-Buchhaltung und Dokumente im Browser</h1>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            Angemeldet als {formatEmptyValue(session.user.fullName)}
           </p>
+          <TechnicalDetails apiUrl={apiUrl} data={data} />
         </div>
-        <div className="topbar-actions">
+        <div className="flex flex-wrap items-center gap-3">
           <Button variant="secondary" onClick={() => void refreshData()} disabled={loading}>
             {loading ? 'Lädt…' : 'Neu laden'}
           </Button>
@@ -1689,17 +1803,24 @@ export default function App() {
       <NoticeBanner notice={notice} />
       {loadError ? <NoticeBanner notice={createNotice('danger', loadError)} /> : null}
 
-      <nav className="route-nav" aria-label="Pro-Navigation">
+      <nav
+        className="mb-5 grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-3"
+        aria-label="Pro-Navigation"
+      >
         {ROUTES.map((item) => (
           <button
             key={item.id}
             type="button"
-            className={`route-button ${route === item.id ? 'route-button-active' : ''}`}
+            className={`rounded-lg border p-4 text-left transition-colors motion-reduce:transition-none ${
+              route === item.id
+                ? 'border-foreground bg-foreground text-background'
+                : 'border-control-border bg-surface hover:bg-surface-muted'
+            }`}
             onClick={() => navigate(item.id)}
             aria-current={route === item.id ? 'page' : undefined}
           >
-            <strong>{item.label}</strong>
-            <span>{item.summary}</span>
+            <strong className="block text-sm font-semibold">{item.label}</strong>
+            <span className={`mt-1 block text-xs ${route === item.id ? 'text-background' : 'text-muted'}`}>{item.summary}</span>
           </button>
         ))}
       </nav>
@@ -1707,50 +1828,38 @@ export default function App() {
       {data ? (
         <>
           {route === 'overview' ? (
-            <div className="page-grid">
-              <SectionCard eyebrow="Übersicht" title="Mandant, API und Pro-Funktionen">
-                <div className="stats-grid">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(20rem,1fr))] gap-4">
+              <SectionCard eyebrow="Übersicht" title="Mandant und Nutzung">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3">
                   <StatCard label="Kunden" value={String(activeClients)} hint="aktive Kundensätze" />
                   <StatCard label="Dokumente offen" value={String(openInvoices + openOffers)} hint="Rechnungen + Angebote" />
-                  <StatCard label="Ledger" value={String(data.ledgerStats.total)} hint="geladene Kontenrahmen" />
+                  <StatCard label="Kontenrahmen" value={String(data.ledgerStats.total)} hint="geladene Konten" />
                   <StatCard label="Workflow" value={String(data.workflowEntries.length)} hint="gespeicherte Einträge" />
                 </div>
               </SectionCard>
 
-              <SectionCard eyebrow="Betriebszustand" title="Server und Rechte">
-                <div className="info-list">
-                  <div><span>Service</span><strong>{data.health.service}</strong></div>
-                  <div><span>Backend</span><strong>{data.capabilities.backend}</strong></div>
-                  <div><span>Bereitstellung</span><strong>{data.capabilities.deploymentMode}</strong></div>
-                  <div><span>Rolle</span><strong>{data.sessionInfo.role}</strong></div>
-                  <div><span>Produkte</span><strong>{data.capabilities.products.join(', ')}</strong></div>
-                  <div><span>Rollenmodell</span><strong>{data.capabilities.auth.roles.join(', ')}</strong></div>
-                </div>
-              </SectionCard>
-
               <SectionCard eyebrow="Funktionen" title="Im Browser verfügbar">
-                <ul className="bullet-list">
-                  <li>HTTP-Auth gegen den Pro-Scope mit Browser-Session anstelle von Electron IPC.</li>
-                  <li>Lesen und Pflegen von Artikeln, Bankkonten, Templates, Settings und Accounting-Regeln.</li>
-                  <li>Workflow-Einträge über die <code>/api/v1/pro/workflow</code>-API speichern.</li>
-                  <li>Export von JSON/CSV-Dokumenten direkt aus der API ohne lokale Dateisystemannahmen.</li>
+                <ul className="grid list-disc gap-2 pl-5 text-sm leading-relaxed text-foreground">
+                  <li>Kunden, Artikel, Bankkonten und Vorlagen pflegen.</li>
+                  <li>Rechnungen, Angebote und Buchhaltungsdaten einsehen und exportieren.</li>
+                  <li>Workflow-Einträge und Buchhaltungsregeln direkt im Browser bearbeiten.</li>
                 </ul>
               </SectionCard>
             </div>
           ) : null}
 
           {route === 'documents' ? (
-            <div className="page-grid wide-grid">
+            <div className="grid gap-4 lg:grid-cols-2">
               {documentChains.length > 0 ? (
                 <SectionCard eyebrow="Vorgang" title="Dokumentkette und Revisionen">
-                  <div className="stacked-list" data-testid="document-chain-overview">
+                  <div className="divide-y divide-border-subtle" data-testid="document-chain-overview">
                     {documentChains.map(({ rootId, documents }) => (
-                      <div className="stacked-list-row" key={rootId} data-testid={`document-chain-row-${rootId}`}>
-                        <div className="stacked-cell">
-                          <strong>{documents[0] ? invoiceChainLabel(documents[0]) : 'Dokument'} · {documents[0]?.number}</strong>
-                          <span>{documents.map((invoice) => `${invoiceChainLabel(invoice)} · ${invoice.number}`).join(' → ')}</span>
+                      <div className="flex flex-wrap items-start justify-between gap-4 py-3" key={rootId} data-testid={`document-chain-row-${rootId}`}>
+                        <div className="grid gap-0.5">
+                          <strong className="text-sm font-semibold text-foreground">{documents[0] ? invoiceChainLabel(documents[0]) : 'Dokument'} · {documents[0]?.number}</strong>
+                          <span className="text-xs text-muted">{documents.map((invoice) => `${invoiceChainLabel(invoice)} · ${invoice.number}`).join(' → ')}</span>
                         </div>
-                        <span className="meta-chip">{documents.length} Dokumente</span>
+                        <span className="rounded-full bg-surface-muted px-3 py-1 text-xs font-semibold text-foreground">{documents.length} Dokumente</span>
                       </div>
                     ))}
                   </div>
@@ -1768,7 +1877,7 @@ export default function App() {
                 {data.invoices.length === 0 ? (
                   <EmptyState
                     title="Noch keine Rechnungen"
-                    body="Sobald der Server Rechnungen enthält, werden sie hier mit History und Export angezeigt."
+                    description="Sobald der Server Rechnungen enthält, werden sie hier mit History und Export angezeigt."
                   />
                 ) : (
                   <DataTable>
@@ -1789,22 +1898,22 @@ export default function App() {
                           <tr key={invoice.id}>
                             <td>{invoice.number}</td>
                             <td>
-                              <div className="stacked-cell">
+                              <div className="grid gap-0.5">
                                 <strong>{invoiceDocumentLabel(invoice.documentKind)}</strong>
                                 {invoice.revisionOfId ? <span>Revision {invoice.revisionNumber ?? 1}</span> : null}
                               </div>
                             </td>
                             <td>{invoice.client}</td>
-                            <td>{invoice.status}</td>
+                            <td>{labelFromMap(invoiceStatusLabels, invoice.status)}</td>
                             <td>{formatCurrency(invoice.amount)}</td>
                             <td>{formatDate(invoice.date)}</td>
                             <td>
                               <button
                                 type="button"
-                                className="text-button"
+                                className="inline-flex min-h-6 items-center text-sm font-semibold text-foreground underline decoration-control-border underline-offset-4 transition-colors motion-reduce:transition-none hover:decoration-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:text-disabled-foreground disabled:no-underline"
                                 onClick={() => void handleDownloadDocument('invoice', invoice.id, invoice.number)}
                               >
-                                JSON
+                                JSON exportieren
                               </button>
                             </td>
                           </tr>
@@ -1827,7 +1936,7 @@ export default function App() {
                 {data.offers.length === 0 ? (
                   <EmptyState
                     title="Noch keine Angebote"
-                    body="Hier erscheinen geteilte Angebote inklusive Entscheidung und Export-Status."
+                    description="Hier erscheinen geteilte Angebote inklusive Entscheidung und Export-Status."
                   />
                 ) : (
                   <DataTable>
@@ -1847,16 +1956,16 @@ export default function App() {
                           <tr key={offer.id}>
                             <td>{offer.number}</td>
                             <td>{offer.client}</td>
-                            <td>{offer.status}</td>
-                            <td>{offer.share?.decision ?? 'offen'}</td>
+                            <td>{labelFromMap(offerStatusLabels, offer.status)}</td>
+                            <td>{offer.share?.decision ? labelFromMap(offerDecisionLabels, offer.share.decision) : 'Offen'}</td>
                             <td>{formatCurrency(offer.amount)}</td>
                             <td>
                               <button
                                 type="button"
-                                className="text-button"
+                                className="inline-flex min-h-6 items-center text-sm font-semibold text-foreground underline decoration-control-border underline-offset-4 transition-colors motion-reduce:transition-none hover:decoration-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:text-disabled-foreground disabled:no-underline"
                                 onClick={() => void handleDownloadDocument('offer', offer.id, offer.number)}
                               >
-                                JSON
+                                JSON exportieren
                               </button>
                             </td>
                           </tr>
@@ -1870,12 +1979,12 @@ export default function App() {
           ) : null}
 
           {route === 'clients' ? (
-            <div className="page-grid">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(20rem,1fr))] gap-4">
               <SectionCard eyebrow="Kundenstamm" title="Mandanten und Projekte">
                 {data.clients.length === 0 ? (
                   <EmptyState
                     title="Keine Kunden vorhanden"
-                    body="Die Liste stammt aus Desktop und Server-API. Der Browser greift nicht auf SQLite zu."
+                    description="Die Liste stammt aus Desktop und Server-API. Der Browser greift nicht auf SQLite zu."
                   />
                 ) : (
                   <DataTable>
@@ -1893,14 +2002,14 @@ export default function App() {
                         {data.clients.map((clientRecord) => (
                           <tr key={clientRecord.id}>
                             <td>
-                              <div className="stacked-cell">
+                              <div className="grid gap-0.5">
                                 <strong>{clientRecord.company}</strong>
                                 <span>{clientRecord.email}</span>
                               </div>
                             </td>
-                            <td>{clientRecord.contactPerson || '—'}</td>
-                            <td>{clientRecord.status}</td>
-                            <td>{clientRecord.customerNumber ?? '—'}</td>
+                            <td>{formatEmptyValue(clientRecord.contactPerson)}</td>
+                            <td>{labelFromMap(clientStatusLabels, clientRecord.status)}</td>
+                            <td>{formatEmptyValue(clientRecord.customerNumber)}</td>
                             <td>{clientRecord.projects.length}</td>
                           </tr>
                         ))}
@@ -1913,9 +2022,9 @@ export default function App() {
           ) : null}
 
           {route === 'catalog' ? (
-            <div className="page-grid wide-grid">
+            <div className="grid gap-4 lg:grid-cols-2">
               <SectionCard eyebrow="Artikel" title="Leistungs- und Produktkatalog">
-                <div className="form-grid three-col">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <Input label="Titel" fullWidth value={articleDraft.title} onChange={(event) => setArticleDraft((current) => ({ ...current, title: event.target.value }))} />
                   <Input label="Preis" fullWidth value={articleDraft.price} onChange={(event) => setArticleDraft((current) => ({ ...current, price: event.target.value }))} />
                   <Input label="Einheit" fullWidth value={articleDraft.unit} onChange={(event) => setArticleDraft((current) => ({ ...current, unit: event.target.value }))} />
@@ -1923,7 +2032,7 @@ export default function App() {
                   <Input label="Steuer %" fullWidth value={articleDraft.taxRate} onChange={(event) => setArticleDraft((current) => ({ ...current, taxRate: event.target.value }))} />
                   <Input label="Beschreibung" fullWidth value={articleDraft.description} onChange={(event) => setArticleDraft((current) => ({ ...current, description: event.target.value }))} />
                 </div>
-                <div className="action-row">
+                <div className="my-4 flex flex-wrap items-center gap-3">
                   <Button onClick={() => void handleCreateArticle()}>Artikel speichern</Button>
                 </div>
                 <DataTable>
@@ -1951,9 +2060,9 @@ export default function App() {
               </SectionCard>
 
               <SectionCard eyebrow="Konten" title="Bankkonten und Default-SKR-Zuordnung">
-                <div className="form-grid three-col">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <Input label="Name" fullWidth value={accountDraft.name} onChange={(event) => setAccountDraft((current) => ({ ...current, name: event.target.value }))} />
-                  <Input label="IBAN" fullWidth value={accountDraft.iban} onChange={(event) => setAccountDraft((current) => ({ ...current, iban: event.target.value }))} />
+                  <Input label="IBAN" fullWidth value={accountDraft.iban} placeholder="DE00 0000 0000 0000 0000 00 (Beispielformat, hier echte IBAN eingeben)" onChange={(event) => setAccountDraft((current) => ({ ...current, iban: event.target.value }))} />
                   <Input label="Saldo" fullWidth value={accountDraft.balance} onChange={(event) => setAccountDraft((current) => ({ ...current, balance: event.target.value }))} />
                   <Input
                     label="Default SKR-Konto"
@@ -1961,21 +2070,16 @@ export default function App() {
                     value={accountDraft.defaultSkrAccountNumber}
                     onChange={(event) => setAccountDraft((current) => ({ ...current, defaultSkrAccountNumber: event.target.value }))}
                   />
-                  <label className="select-field">
-                    <span>Kontoart</span>
-                    <select value={accountDraft.type} onChange={(event) => setAccountDraft((current) => ({ ...current, type: event.target.value as typeof current.type }))}>
-                      <option value="bank">Bank</option>
-                      <option value="checking">Girokonto</option>
-                      <option value="savings">Sparkonto</option>
-                      <option value="paypal">PayPal</option>
-                      <option value="cash">Bargeld</option>
-                      <option value="credit">Kreditkarte</option>
-                      <option value="other">Sonstiges</option>
-                    </select>
-                  </label>
+                  <Select label="Kontoart" fullWidth value={accountDraft.type} onChange={(event) => setAccountDraft((current) => ({ ...current, type: event.target.value as typeof current.type }))}>
+                    {Object.entries(accountTypeLabels).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </Select>
                   <Input label="Farbe" fullWidth value={accountDraft.color} onChange={(event) => setAccountDraft((current) => ({ ...current, color: event.target.value }))} />
                 </div>
-                <div className="action-row">
+                <div className="my-4 flex flex-wrap items-center gap-3">
                   <Button onClick={() => void handleCreateAccount()}>Bankkonto speichern</Button>
                 </div>
                 <DataTable>
@@ -1994,7 +2098,7 @@ export default function App() {
                         <tr key={account.id}>
                           <td>{account.name}</td>
                           <td>{account.iban}</td>
-                          <td>{account.type}</td>
+                          <td>{labelFromMap(accountTypeLabels, account.type)}</td>
                           <td>{account.defaultSkrAccountNumber}</td>
                           <td>{formatCurrency(account.balance)}</td>
                         </tr>
@@ -2005,21 +2109,23 @@ export default function App() {
               </SectionCard>
 
               <SectionCard eyebrow="Vorlagen" title="Serverweite Templates und aktive Auswahl">
-                <div className="form-grid three-col compact-grid">
-                  <label className="select-field">
-                    <span>Typ</span>
-                    <select value={templateDraft.kind} onChange={(event) => setTemplateDraft({ kind: event.target.value as 'invoice' | 'offer', name: templateDraft.name })}>
-                      <option value="invoice">Rechnung</option>
-                      <option value="offer">Angebot</option>
-                    </select>
-                  </label>
+                <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <Select label="Typ" fullWidth value={templateDraft.kind} onChange={(event) => setTemplateDraft({ kind: event.target.value as 'invoice' | 'offer', name: templateDraft.name })}>
+                    {Object.entries(templateKindLabels).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </Select>
                   <Input label="Name" fullWidth value={templateDraft.name} onChange={(event) => setTemplateDraft((current) => ({ ...current, name: event.target.value }))} />
-                  <div className="select-field static-field">
+                  <div className="grid gap-2 text-sm font-medium text-foreground">
                     <span>Aktiv</span>
-                    <strong>{data.activeTemplates[templateDraft.kind]?.name ?? 'keine aktive Vorlage'}</strong>
+                    <strong className="flex min-h-12 items-center rounded-xl border border-control-border bg-surface-muted px-4 text-sm font-semibold text-foreground">
+                      {data.activeTemplates[templateDraft.kind]?.name ?? 'keine aktive Vorlage'}
+                    </strong>
                   </div>
                 </div>
-                <div className="action-row">
+                <div className="my-4 flex flex-wrap items-center gap-3">
                   <Button onClick={() => void handleCreateTemplate()}>Leere Vorlage speichern</Button>
                 </div>
                 <DataTable>
@@ -2036,12 +2142,12 @@ export default function App() {
                       {data.templates.map((template) => (
                         <tr key={template.id}>
                           <td>{template.name}</td>
-                          <td>{template.kind}</td>
+                          <td>{labelFromMap(templateKindLabels, template.kind)}</td>
                           <td>{formatDate(template.updatedAt)}</td>
                           <td>
                             <button
                               type="button"
-                              className="text-button"
+                              className="inline-flex min-h-6 items-center text-sm font-semibold text-foreground underline decoration-control-border underline-offset-4 transition-colors motion-reduce:transition-none hover:decoration-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:text-disabled-foreground disabled:no-underline"
                               onClick={() => void handleSetActiveTemplate(template.kind, template.id)}
                             >
                               Aktiv setzen
@@ -2057,25 +2163,25 @@ export default function App() {
           ) : null}
 
           {route === 'recurring' ? (
-            <div className="page-grid">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(20rem,1fr))] gap-4">
               <SectionCard eyebrow="Wiederkehrende Rechnungen" title="Profile und Automatisierungsfenster">
-                <div className="stats-grid">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3">
                   <StatCard label="Profile" value={String(data.recurringProfiles.length)} hint="registrierte Serienläufe" />
                   <StatCard
                     label="Mahnwesen"
                     value={data.settings?.automation.dunningEnabled ? 'aktiv' : 'inaktiv'}
-                    hint={`Laufzeit ${data.settings?.automation.dunningRunTime ?? '—'}`}
+                    hint={`Laufzeit ${formatEmptyValue(data.settings?.automation.dunningRunTime)}`}
                   />
                   <StatCard
                     label="Wiederkehrende Rechnungen"
                     value={data.settings?.automation.recurringEnabled ? 'aktiv' : 'inaktiv'}
-                    hint={`Laufzeit ${data.settings?.automation.recurringRunTime ?? '—'}`}
+                    hint={`Laufzeit ${formatEmptyValue(data.settings?.automation.recurringRunTime)}`}
                   />
                 </div>
                 {data.recurringProfiles.length === 0 ? (
                   <EmptyState
                     title="Noch keine Wiederholungen"
-                    body="Die Ansicht zeigt Serverprofile. Lokale Scheduler des Electron-Hauptprozesses laufen hier nicht."
+                    description="Die Ansicht zeigt Serverprofile. Lokale Scheduler des Electron-Hauptprozesses laufen hier nicht."
                   />
                 ) : (
                   <DataTable>
@@ -2093,7 +2199,7 @@ export default function App() {
                         {data.recurringProfiles.map((profile) => (
                           <tr key={profile.id}>
                             <td>{profile.name}</td>
-                            <td>{profile.interval}</td>
+                            <td>{labelFromMap(recurringIntervalLabels, profile.interval)}</td>
                             <td>{formatDate(profile.nextRun)}</td>
                             <td>{profile.active ? 'aktiv' : 'pausiert'}</td>
                             <td>{formatCurrency(profile.amount)}</td>
@@ -2108,9 +2214,9 @@ export default function App() {
           ) : null}
 
           {route === 'settings' ? (
-            <div className="page-grid">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(20rem,1fr))] gap-4">
               <SectionCard eyebrow="Einstellungen" title="Firmenkopf und Nummernkreise">
-                <div className="form-grid two-col">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <Input
                     label="Firmenname"
                     fullWidth
@@ -2222,7 +2328,7 @@ export default function App() {
                     }
                   />
                 </div>
-                <div className="action-row">
+                <div className="my-4 flex flex-wrap items-center gap-3">
                   <Button onClick={() => void handleSaveSettings()}>Einstellungen speichern</Button>
                 </div>
               </SectionCard>
@@ -2230,7 +2336,7 @@ export default function App() {
           ) : null}
 
           {route === 'accounting' ? (
-            <div className="page-grid accounting-grid">
+            <div className="grid gap-4 lg:grid-cols-2">
               <SectionCard
                 eyebrow="Buchhaltung"
                 title="Ledger, Regeln und Workflow-Snapshots"
@@ -2240,51 +2346,42 @@ export default function App() {
                   </Button>
                 }
               >
-                <div className="stats-grid">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3">
                   <StatCard label="SKR03" value={String(data.ledgerStats.byChart.SKR03)} hint="Konten im Kontenrahmen" />
                   <StatCard label="SKR04" value={String(data.ledgerStats.byChart.SKR04)} hint="Konten im Kontenrahmen" />
                   <StatCard label="Steuerfälle" value={String(data.taxCases.length)} hint="aktive Steuerfälle" />
                   <StatCard label="Regeln" value={String(data.suggestionRules.length)} hint="Kontovorschläge" />
                 </div>
-                <p className="helper-copy">
+                <p className="text-sm leading-relaxed text-muted">
                   {data.accountingTransactions.length > 0
-                    ? 'Die Pro-Oberfläche liest die Buchhaltungsdaten aus Postgres. Entwürfe, Aktionen und Auswertungen werden über die Accounting-API gespeichert.'
-                    : 'Alte Workflow-Snapshots können nur angezeigt werden. Änderungen sind erst möglich, wenn kanonische Accounting-Daten verfügbar sind.'}
+                    ? 'Entwürfe, Buchungen und Auswertungen werden direkt auf dem Server gespeichert.'
+                    : 'Gespeicherte Workflow-Einträge können nur angezeigt werden. Änderungen sind erst möglich, wenn Buchhaltungsdaten vorliegen.'}
                 </p>
               </SectionCard>
 
               <SectionCard eyebrow="Steuer-Mapping" title="Steuerfälle Konten zuordnen">
-                {!canMutateAccountingRules ? <p className="helper-copy" role="status">Ihre Rolle darf Steuer-Mappings nur lesen.</p> : null}
-                <div className="form-grid three-col compact-grid">
-                  <label className="select-field">
-                    <span>Kontenrahmen</span>
-                    <select disabled={!canMutateAccountingRules} value={taxMappingDraft.chart} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
-                      <option value="SKR03">SKR03</option>
-                      <option value="SKR04">SKR04</option>
-                    </select>
-                  </label>
-                  <label className="select-field">
-                    <span>Steuerfall</span>
-                    <select disabled={!canMutateAccountingRules} value={taxMappingDraft.taxCaseKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, taxCaseKey: event.target.value }))}>
-                      {data.taxCases.map((taxCase) => (
-                        <option key={taxCase.key} value={taxCase.key}>
-                          {taxCase.key}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="select-field">
-                    <span>Rolle</span>
-                    <select disabled={!canMutateAccountingRules} value={taxMappingDraft.role} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, role: event.target.value as typeof current.role }))}>
-                      <option value="output_tax">Umsatzsteuer</option>
-                      <option value="input_tax">Vorsteuer</option>
-                      <option value="datev_bu">DATEV-BU</option>
-                    </select>
-                  </label>
+                {!canMutateAccountingRules ? <p className="text-sm leading-relaxed text-muted" role="status">Ihre Rolle darf Steuer-Mappings nur lesen.</p> : null}
+                <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <Select label="Kontenrahmen" fullWidth disabled={!canMutateAccountingRules} value={taxMappingDraft.chart} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
+                    <option value="SKR03">SKR03</option>
+                    <option value="SKR04">SKR04</option>
+                  </Select>
+                  <Select label="Steuerfall" fullWidth disabled={!canMutateAccountingRules} value={taxMappingDraft.taxCaseKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, taxCaseKey: event.target.value }))}>
+                    {data.taxCases.map((taxCase) => (
+                      <option key={taxCase.key} value={taxCase.key}>
+                        {taxCase.key}
+                      </option>
+                    ))}
+                  </Select>
+                  <Select label="Rolle" fullWidth disabled={!canMutateAccountingRules} value={taxMappingDraft.role} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, role: event.target.value as typeof current.role }))}>
+                    <option value="output_tax">Umsatzsteuer</option>
+                    <option value="input_tax">Vorsteuer</option>
+                    <option value="datev_bu">DATEV-BU</option>
+                  </Select>
                   <Input disabled={!canMutateAccountingRules} label="Konto" fullWidth value={taxMappingDraft.accountNumber} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, accountNumber: event.target.value }))} />
                   <Input disabled={!canMutateAccountingRules} label="DATEV-BU-Schlüssel" fullWidth value={taxMappingDraft.datevBuKey} onChange={(event) => setTaxMappingDraft((current) => ({ ...current, datevBuKey: event.target.value }))} />
                 </div>
-                <div className="action-row">
+                <div className="my-4 flex flex-wrap items-center gap-3">
                   <Button disabled={!canMutateAccountingRules} onClick={() => void handleSaveTaxMapping()}>Mapping speichern</Button>
                 </div>
                 <DataTable>
@@ -2312,32 +2409,23 @@ export default function App() {
               </SectionCard>
 
               <SectionCard eyebrow="Kontovorschläge" title="Regelbasierte Kontovorschläge im Browser pflegen">
-                {!canMutateAccountingRules ? <p className="helper-copy" role="status">Ihre Rolle darf Vorschlagsregeln nur lesen.</p> : null}
-                <div className="form-grid three-col compact-grid">
-                  <label className="select-field">
-                    <span>Kontenrahmen</span>
-                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.chart} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
-                      <option value="SKR03">SKR03</option>
-                      <option value="SKR04">SKR04</option>
-                    </select>
-                  </label>
+                {!canMutateAccountingRules ? <p className="text-sm leading-relaxed text-muted" role="status">Ihre Rolle darf Vorschlagsregeln nur lesen.</p> : null}
+                <div className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <Select label="Kontenrahmen" fullWidth disabled={!canMutateAccountingRules} value={suggestionRuleDraft.chart} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, chart: event.target.value as 'SKR03' | 'SKR04' }))}>
+                    <option value="SKR03">SKR03</option>
+                    <option value="SKR04">SKR04</option>
+                  </Select>
                   <Input disabled={!canMutateAccountingRules} label="Priorität" fullWidth value={suggestionRuleDraft.priority} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, priority: event.target.value }))} />
-                  <label className="select-field">
-                    <span>Feld</span>
-                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.field} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, field: event.target.value as typeof current.field }))}>
-                      <option value="counterparty">Gegenpartei</option>
-                      <option value="purpose">Verwendungszweck</option>
-                      <option value="any">Beliebiges Feld</option>
-                    </select>
-                  </label>
-                  <label className="select-field">
-                    <span>Vergleich</span>
-                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.operator} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, operator: event.target.value as typeof current.operator }))}>
-                      <option value="contains">enthält</option>
-                      <option value="equals">ist gleich</option>
-                      <option value="startsWith">beginnt mit</option>
-                    </select>
-                  </label>
+                  <Select label="Feld" fullWidth disabled={!canMutateAccountingRules} value={suggestionRuleDraft.field} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, field: event.target.value as typeof current.field }))}>
+                    <option value="counterparty">Gegenpartei</option>
+                    <option value="purpose">Verwendungszweck</option>
+                    <option value="any">Beliebiges Feld</option>
+                  </Select>
+                  <Select label="Vergleich" fullWidth disabled={!canMutateAccountingRules} value={suggestionRuleDraft.operator} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, operator: event.target.value as typeof current.operator }))}>
+                    <option value="contains">enthält</option>
+                    <option value="equals">ist gleich</option>
+                    <option value="startsWith">beginnt mit</option>
+                  </Select>
                   <Input disabled={!canMutateAccountingRules} label="Suchwert" fullWidth value={suggestionRuleDraft.value} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, value: event.target.value }))} />
                   <Input
                     disabled={!canMutateAccountingRules}
@@ -2346,16 +2434,13 @@ export default function App() {
                     value={suggestionRuleDraft.targetAccountNumber}
                     onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, targetAccountNumber: event.target.value }))}
                   />
-                  <label className="select-field">
-                    <span>Art</span>
-                    <select disabled={!canMutateAccountingRules} value={suggestionRuleDraft.flowType} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, flowType: event.target.value as typeof current.flowType }))}>
-                      <option value="income">Einnahme</option>
-                      <option value="expense">Ausgabe</option>
-                      <option value="any">Beliebig</option>
-                    </select>
-                  </label>
+                  <Select label="Art" fullWidth disabled={!canMutateAccountingRules} value={suggestionRuleDraft.flowType} onChange={(event) => setSuggestionRuleDraft((current) => ({ ...current, flowType: event.target.value as typeof current.flowType }))}>
+                    <option value="income">Einnahme</option>
+                    <option value="expense">Ausgabe</option>
+                    <option value="any">Beliebig</option>
+                  </Select>
                 </div>
-                <div className="action-row">
+                <div className="my-4 flex flex-wrap items-center gap-3">
                   <Button disabled={!canMutateAccountingRules} onClick={() => void handleSaveSuggestionRule()}>Regel speichern</Button>
                 </div>
                 <DataTable>
@@ -2377,7 +2462,7 @@ export default function App() {
                           <td>{rule.targetAccountNumber}</td>
                           <td>{suggestionFlowLabels[rule.flowType as keyof typeof suggestionFlowLabels] ?? rule.flowType}</td>
                           <td>
-                            <button type="button" className="text-button" disabled={!canMutateAccountingRules} onClick={() => void handleDeleteSuggestionRule(rule.id)}>
+                            <button type="button" className="inline-flex min-h-6 items-center text-sm font-semibold text-foreground underline decoration-control-border underline-offset-4 transition-colors motion-reduce:transition-none hover:decoration-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:text-disabled-foreground disabled:no-underline" disabled={!canMutateAccountingRules} onClick={() => void handleDeleteSuggestionRule(rule.id)}>
                               Löschen
                             </button>
                           </td>
@@ -2388,9 +2473,9 @@ export default function App() {
                 </DataTable>
               </SectionCard>
 
-              <SectionCard eyebrow="Arbeitsbereich" title="Pro-Buchhaltung im Browser">
+              <SectionCard eyebrow="Arbeitsbereich" title="Pro-Buchhaltung im Browser" className="lg:col-span-2">
                 {accountingSeed && accountingDataAdapter ? (
-                  <div className="workspace-frame">
+                  <div className="overflow-hidden rounded-xl border border-border bg-surface">
                     <ProAccountingWorkspace
                       seed={accountingSeed}
                       dataAdapter={accountingDataAdapter}
@@ -2399,7 +2484,7 @@ export default function App() {
                     />
                   </div>
                 ) : (
-                  <EmptyState title="Arbeitsbereich nicht verfügbar" body="Die Buchhaltungsdaten konnten nicht für den Arbeitsbereich bereitgestellt werden." />
+                  <EmptyState title="Arbeitsbereich nicht verfügbar" description="Die Buchhaltungsdaten konnten nicht für den Arbeitsbereich bereitgestellt werden." />
                 )}
               </SectionCard>
             </div>
@@ -2407,16 +2492,18 @@ export default function App() {
         </>
       ) : (
         <SectionCard eyebrow="Ladezustand" title="Pro-Daten werden geladen">
-          <p className="helper-copy">Die Pro-API liefert Kataloge, Rechnungen und Buchhaltungsdaten.</p>
+          <p className="text-sm leading-relaxed text-muted">Die Pro-API liefert Kataloge, Rechnungen und Buchhaltungsdaten.</p>
         </SectionCard>
       )}
       {showOnboarding ? (
         <BusinessOnboarding
           initialData={onboardingInitialData}
           onSubmit={handleCompleteOnboarding}
+          onSaveAndExit={handleSaveOnboardingDraft}
           saving={onboardingSaving}
           productName="Billme Pro"
           submitLabel="Arbeitsbereich einrichten"
+          edition="pro"
         />
       ) : null}
     </main>

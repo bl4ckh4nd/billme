@@ -1,2 +1,12 @@
-@import "tailwindcss";
-@source "./**/*.{ts,tsx,html}";
+/*
+ * This package renders inside a host shell that already loads the design tokens
+ * and generates the utilities for every workspace package
+ * (`@billme/ui/styles.css` scans `packages/*\/src/**`), so it must NOT start a
+ * second Tailwind build here.
+ *
+ * A second build emits a duplicate utility sheet after the first one, and an
+ * unconditional utility from the later sheet wins over a responsive variant from
+ * the earlier sheet (cascade order beats the media query scope). That silently
+ * disabled `@media` variants in the Pro shell, so this file intentionally
+ * declares nothing.
+ */

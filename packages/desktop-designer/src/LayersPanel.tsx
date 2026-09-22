@@ -57,6 +57,12 @@ const labelFor = (el: InvoiceElement): string => {
   return String(el.type);
 };
 
+/** 24x24 minimum hit area; the focus ring follows the row, which flips to black when selected. */
+const rowControl = (selected: boolean) =>
+  `inline-flex min-h-6 min-w-6 items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 ${
+    selected ? 'focus-visible:outline-focus-ring-dark' : 'focus-visible:outline-focus-ring'
+  }`;
+
 export const LayersPanel: React.FC<LayersPanelProps> = ({
   elements,
   selectedIds,
@@ -72,7 +78,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   return (
     <div className="flex flex-col h-full bg-white">
       <div className="p-6 border-b border-border-subtle flex items-center gap-2">
-        <Layers size={20} className="text-accent fill-black" />
+        <Layers size={20} className="text-muted" />
         <h3 className="font-bold text-xl text-black">Ebenen</h3>
       </div>
 
@@ -82,20 +88,29 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
           return (
             <div
               key={el.id}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selected}
               onClick={(e) => onSelect(el.id, e.shiftKey || e.metaKey || e.ctrlKey)}
-              className={`group flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer ${
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                onSelect(el.id, event.shiftKey || event.metaKey || event.ctrlKey);
+              }}
+              className={`group flex items-center justify-between p-3 rounded-xl border motion-safe:transition-colors motion-reduce:transition-none cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                 selected
-                  ? 'bg-black border-black text-white shadow-lg'
-                  : 'bg-white border-border-subtle hover:border-border text-foreground hover:shadow-sm'
+                  ? 'bg-black border-black text-white'
+                  : 'bg-white border-border-subtle hover:border-border text-foreground'
               } ${el.hidden ? 'opacity-50' : ''}`}
             >
               <div className="flex items-center gap-3 overflow-hidden">
-                <div className={`p-2 rounded-lg ${selected ? 'bg-dark-border-subtle text-accent' : 'bg-surface-muted text-muted'}`}>
+                <div className={`p-2 rounded-sm ${selected ? 'bg-dark-border-subtle text-background' : 'bg-surface-muted text-muted'}`}>
                   {iconFor(el.type)}
                 </div>
                 <div className="flex flex-col min-w-0">
                   <span className="text-xs font-bold truncate">{labelFor(el)}</span>
-                  <span className="text-[10px] opacity-60 font-mono tabular-nums">z: {el.zIndex}</span>
+                  <span className={`text-xs tabular-nums ${selected ? 'text-dark-muted' : 'text-muted'}`}>z: {el.zIndex}</span>
                 </div>
               </div>
 
@@ -106,7 +121,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     onToggleHidden(el.id);
                   }}
                   title={el.hidden ? 'Einblenden' : 'Ausblenden'}
-                  className={`p-1.5 rounded ${selected ? 'text-muted hover:text-white' : 'text-muted hover:text-foreground'}`}
+                  className={`${rowControl(selected)} p-1.5 ${selected ? 'text-muted hover:text-white' : 'text-muted hover:text-foreground'}`}
                 >
                   {el.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
                 </button>
@@ -116,18 +131,18 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     onToggleLock(el.id);
                   }}
                   title={el.locked ? 'Entsperren' : 'Sperren'}
-                  className={`p-1.5 rounded ${selected ? 'text-muted hover:text-white' : 'text-muted hover:text-foreground'}`}
+                  className={`${rowControl(selected)} p-1.5 ${selected ? 'text-muted hover:text-white' : 'text-muted hover:text-foreground'}`}
                 >
                   {el.locked ? <Lock size={13} /> : <Unlock size={13} />}
                 </button>
-                <div className="flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="ui-reveal flex flex-col gap-0.5 group-focus-within:opacity-100">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       onReorder(el.id, 'up');
                     }}
                     title="Eine Ebene nach vorne"
-                    className={`p-0.5 rounded ${selected ? 'text-white hover:bg-white/20' : 'text-muted hover:bg-canvas'}`}
+                    className={`${rowControl(selected)} p-0.5 ${selected ? 'text-white hover:bg-white/20' : 'text-muted hover:bg-surface-muted'}`}
                   >
                     <ChevronUp size={12} />
                   </button>
@@ -137,7 +152,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                       onReorder(el.id, 'down');
                     }}
                     title="Eine Ebene nach hinten"
-                    className={`p-0.5 rounded ${selected ? 'text-white hover:bg-white/20' : 'text-muted hover:bg-canvas'}`}
+                    className={`${rowControl(selected)} p-0.5 ${selected ? 'text-white hover:bg-white/20' : 'text-muted hover:bg-surface-muted'}`}
                   >
                     <ChevronDown size={12} />
                   </button>
@@ -148,7 +163,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     onDelete([el.id]);
                   }}
                   title="Löschen"
-                  className={`p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:text-error ${selected ? 'text-muted' : 'text-muted'}`}
+                  className={`ui-reveal ${rowControl(selected)} p-1.5 text-muted group-focus-within:opacity-100 ${selected ? 'hover:text-error' : 'hover:text-error-text'}`}
                 >
                   <Trash2 size={13} />
                 </button>
@@ -164,14 +179,14 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         <div className="p-4 bg-surface-muted border-t border-border grid grid-cols-2 gap-2">
           <button
             onClick={() => onReorder(primary, 'front')}
-            className="flex items-center justify-center gap-2 bg-white border border-border py-2 rounded-lg text-xs font-bold hover:bg-black hover:text-accent hover:border-black transition-colors"
+            className="flex items-center justify-center gap-2 bg-white border border-border py-2 rounded-lg text-xs font-bold hover:bg-black hover:text-accent hover:border-black motion-safe:transition-colors motion-reduce:transition-none"
           >
             <ArrowUp size={14} />
             Ganz nach vorne
           </button>
           <button
             onClick={() => onReorder(primary, 'back')}
-            className="flex items-center justify-center gap-2 bg-white border border-border py-2 rounded-lg text-xs font-bold hover:bg-black hover:text-accent hover:border-black transition-colors"
+            className="flex items-center justify-center gap-2 bg-white border border-border py-2 rounded-lg text-xs font-bold hover:bg-black hover:text-accent hover:border-black motion-safe:transition-colors motion-reduce:transition-none"
           >
             <ArrowDown size={14} />
             Ganz nach hinten

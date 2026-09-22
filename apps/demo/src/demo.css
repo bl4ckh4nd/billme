@@ -1,0 +1,6 @@
+/* The demo label sits above the app, so the desktop shell (which hard-codes
+   100vh) has to fill the remaining viewport instead of pushing the label off
+   screen. #root holds exactly one element: the shell. */
+#root > * {
+  height: 100%;
+}

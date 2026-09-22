@@ -2,7 +2,8 @@ import React from 'react';
 import { TemplateDesigner, type DocumentTemplate, type LegalRule } from '@billme/desktop-designer';
 import { INITIAL_INVOICE_TEMPLATE, INITIAL_OFFER_TEMPLATE } from '@billme/desktop-core/constants';
 import { VARIABLE_GROUPS, renderTextWithPlaceholders } from '@billme/desktop-utils/placeholders';
-import { Button, useActionFeedback } from '@billme/ui';
+import { Button, ErrorState, useActionFeedback } from '@billme/ui';
+import { Spinner } from '@billme/desktop-ui/components/Spinner';
 import { useActiveTemplateQuery, useSetActiveTemplateMutation, useUpsertTemplateMutation } from '../hooks/useTemplates';
 
 const commonRules: LegalRule = (elements) => {
@@ -29,10 +30,21 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ product, onBack,
   const active = useActiveTemplateQuery(templateType);
   const upsert = useUpsertTemplateMutation();
   const activate = useSetActiveTemplateMutation();
-  if (active.isPending || active.isError) return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 bg-background text-foreground">
-      <p role={active.isError ? 'alert' : 'status'}>{active.isError ? 'Vorlage konnte nicht geladen werden.' : 'Vorlage wird geladen …'}</p>
-      {active.isError && <Button onClick={() => void active.refetch()}>Erneut versuchen</Button>}
+  if (active.isError) return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 bg-background p-8">
+      <ErrorState
+        title="Vorlage konnte nicht geladen werden."
+        description="Für diesen Dokumenttyp ist gerade keine Vorlage abrufbar. Ohne sie kann der Designer nichts speichern."
+        onRetry={() => void active.refetch()}
+      />
+      <Button variant="ghost" onClick={onBack}>Zurück</Button>
+    </div>
+  );
+
+  if (active.isPending) return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-background text-muted">
+      <Spinner size="md" />
+      <p role="status" className="text-sm font-medium">Vorlage wird geladen …</p>
       <Button variant="ghost" onClick={onBack}>Zurück</Button>
     </div>
   );

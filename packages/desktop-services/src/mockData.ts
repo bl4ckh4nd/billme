@@ -12,6 +12,17 @@ import type {
 } from '@billme/desktop-core/types';
 
 export const MOCK_SETTINGS: AppSettings = {
+  // Mustermann GmbH is a capital company, so the demo workspace reports under
+  // double-entry bookkeeping and unlocks every report tab the accounting UI has.
+  businessReportingProfile: {
+    jurisdiction: 'DE',
+    legalForm: 'gmbh',
+    profitDetermination: 'double_entry',
+    hgbSizeClass: 'small',
+    fiscalYearStart: '01-01',
+    chart: 'SKR03',
+    vatMethod: 'soll',
+  },
   portal: {
     baseUrl: '',
   },
@@ -459,16 +470,16 @@ export const MOCK_ACCOUNTS: Account[] = [
     color: 'bg-white',
     transactions: [
       { id: 't9', date: '2025-01-08', amount: 2200.00, type: 'income', counterparty: 'Musterfirma GmbH', purpose: 'Abschlagszahlung Website-Relaunch', status: 'booked' },
-      { id: 't10', date: '2025-01-12', amount: -189.00, type: 'expense', counterparty: 'Telekom Deutschland', purpose: 'Internet & Telefon Januar', status: 'booked' },
-      { id: 't11', date: '2025-01-19', amount: -460.00, type: 'expense', counterparty: 'Büro Center Berlin', purpose: 'Büromaterial Q1', status: 'booked' },
+      { id: 't10', date: '2025-01-12', amount: -189.00, type: 'expense', counterparty: 'Muster Telekom GmbH', purpose: 'Internet & Telefon Januar', status: 'booked' },
+      { id: 't11', date: '2025-01-19', amount: -460.00, type: 'expense', counterparty: 'Muster Bürobedarf GmbH', purpose: 'Büromaterial Q1', status: 'booked' },
       { id: 't12', date: '2025-02-03', amount: 1450.00, type: 'income', counterparty: 'StartUp Berlin AG', purpose: 'Teilzahlung Strategieprojekt', status: 'booked' },
-      { id: 't13', date: '2025-02-11', amount: -74.99, type: 'expense', counterparty: 'Notion Labs', purpose: 'Team-Abo Februar', status: 'booked' },
-      { id: 't14', date: '2025-02-17', amount: -990.00, type: 'expense', counterparty: 'Finanzamt Berlin', purpose: 'Umsatzsteuervorauszahlung Jan 2025', status: 'booked' },
+      { id: 't13', date: '2025-02-11', amount: -74.99, type: 'expense', counterparty: 'Muster Software GmbH', purpose: 'Team-Abo Februar', status: 'booked' },
+      { id: 't14', date: '2025-02-17', amount: -990.00, type: 'expense', counterparty: 'Musterfinanzamt Musterstadt', purpose: 'Umsatzsteuervorauszahlung Jan 2025', status: 'booked' },
       { id: 't1', date: '2023-10-28', amount: 1250.00, type: 'income', counterparty: 'Musterfirma GmbH', purpose: 'Rechnung RE-2023-001', linkedInvoiceId: '1', status: 'booked' },
-      { id: 't2', date: '2023-10-27', amount: -49.90, type: 'expense', counterparty: 'Adobe Systems', purpose: 'Creative Cloud Abo', status: 'booked' },
+      { id: 't2', date: '2023-10-27', amount: -49.90, type: 'expense', counterparty: 'Muster Design Software GmbH', purpose: 'Grafiksoftware-Abo', status: 'booked' },
       { id: 't3', date: '2023-10-25', amount: 3450.50, type: 'income', counterparty: 'StartUp Berlin AG', purpose: 'Gutschrift', status: 'booked' }, // Unlinked
-      { id: 't4', date: '2023-10-24', amount: -250.00, type: 'expense', counterparty: 'DB Vertrieb GmbH', purpose: 'BahnCard 50 Business', status: 'booked' },
-      { id: 't5', date: '2023-10-20', amount: -12.99, type: 'expense', counterparty: 'Google Workspace', purpose: 'Monatliche Gebühr', status: 'booked' },
+      { id: 't4', date: '2023-10-24', amount: -250.00, type: 'expense', counterparty: 'Muster Reise GmbH', purpose: 'Bahnticket Business', status: 'booked' },
+      { id: 't5', date: '2023-10-20', amount: -12.99, type: 'expense', counterparty: 'Muster Cloud GmbH', purpose: 'Cloud-Speicher monatlich', status: 'booked' },
     ]
   },
   {
@@ -477,7 +488,7 @@ export const MOCK_ACCOUNTS: Account[] = [
     iban: 'DE99 8877 6655 4433 2211 00',
     balance: 45000.00,
     type: 'bank',
-    color: 'bg-gray-50',
+    color: 'bg-surface-muted',
     transactions: [
         { id: 't6', date: '2023-10-01', amount: 5000.00, type: 'income', counterparty: 'Umbuchung Hauptkonto', purpose: 'Rücklage Q3', status: 'booked' }
     ]
@@ -491,7 +502,7 @@ export const MOCK_ACCOUNTS: Account[] = [
     color: 'bg-blue-50',
     transactions: [
         { id: 't15', date: '2025-01-22', amount: 680.00, type: 'income', counterparty: 'Kunde Shop #1143', purpose: 'PayPal Checkout', status: 'booked' },
-        { id: 't16', date: '2025-02-05', amount: -145.00, type: 'expense', counterparty: 'Meta Ads', purpose: 'Kampagne Leadgen Februar', status: 'booked' },
+        { id: 't16', date: '2025-02-05', amount: -145.00, type: 'expense', counterparty: 'Muster Werbenetzwerk GmbH', purpose: 'Kampagne Leadgen Februar', status: 'booked' },
         { id: 't7', date: '2023-10-23', amount: 850.00, type: 'income', counterparty: 'Online Shop Kunde', purpose: 'Bestellung #992', status: 'booked' },
         { id: 't8', date: '2023-10-22', amount: -120.00, type: 'expense', counterparty: 'Hosting Provider', purpose: 'Server Miete', status: 'booked' }
     ]

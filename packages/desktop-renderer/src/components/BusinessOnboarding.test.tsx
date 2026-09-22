@@ -3,7 +3,7 @@ import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { BusinessOnboarding, type BusinessOnboardingDraft } from '@billme/ui';
+import { BusinessOnboarding, type BusinessOnboardingDraft } from '@billme/desktop-ui';
 
 type DraftOverrides = {
   company?: Partial<BusinessOnboardingDraft['company']>;
@@ -58,7 +58,7 @@ const draft = (overrides: DraftOverrides = {}): BusinessOnboardingDraft => ({
 describe('BusinessOnboarding validation feedback', () => {
   it('exposes required field errors through the summary and jumps to the selected field', async () => {
     const onSubmit = vi.fn(async () => {});
-    render(<BusinessOnboarding initialData={draft()} onSubmit={onSubmit} />);
+    render(<BusinessOnboarding initialData={draft()} onSubmit={onSubmit} edition="pro" />);
 
     fireEvent.click(screen.getByRole('button', { name: /Weiter zu Abrechnung/ }));
 
@@ -99,6 +99,7 @@ describe('BusinessOnboarding validation feedback', () => {
           finance: { taxId: '' },
         })}
         onSubmit={vi.fn(async () => {})}
+        edition="pro"
       />,
     );
 

@@ -1,5 +1,5 @@
 
-// Designer element model — canonical definitions live in @billme/desktop-designer.
+// Designer element model: canonical definitions live in @billme/desktop-designer.
 export { ElementType } from '@billme/desktop-designer/types';
 export type {
   ElementStyle,
@@ -28,7 +28,7 @@ export interface DunningLevel {
 }
 
 export type BusinessReportingJurisdiction = 'DE';
-export type BusinessLegalForm = 'sole_proprietor' | 'gmbh';
+export type BusinessLegalForm = 'sole_proprietor' | 'gmbh' | 'ug' | 'gbr' | 'ek';
 export type ProfitDetermination = 'eur' | 'double_entry';
 export type HgbSizeClass = 'micro' | 'small';
 export type LedgerChart = 'SKR03' | 'SKR04';
@@ -134,6 +134,7 @@ export interface AppSettings {
     topClientsLimit: number;
   };
   onboardingCompleted?: boolean;
+  onboardingDraftSaved?: boolean;
 }
 
 // --- Invoice Data Types ---

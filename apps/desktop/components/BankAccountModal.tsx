@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { X, Building2 } from 'lucide-react';
-import { Portal } from '@billme/ui';
+import { Modal } from '@billme/ui';
 import { ipc } from '../ipc/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
@@ -12,6 +12,8 @@ interface BankAccountModalProps {
 
 export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => {
   const queryClient = useQueryClient();
+  const titleId = useId();
+  const descriptionId = useId();
   const [formData, setFormData] = useState({
     name: '',
     iban: '',
@@ -19,10 +21,17 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
   });
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showNameError, setShowNameError] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = async () => {
     if (!formData.name.trim()) {
-      setError('Kontoname ist erforderlich');
+      // The submit stays enabled so this is reachable: a muted button that
+      // explains nothing is the worse failure (see the projects/recurring forms,
+      // which validate on submit).
+      setError('Kontoname ist erforderlich.');
+      setShowNameError(true);
+      nameInputRef.current?.focus();
       return;
     }
 
@@ -51,102 +60,116 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <Portal>
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm">
-      <div className="bg-white rounded-3xl shadow-2xl w-[500px] max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gray-900 text-accent flex items-center justify-center">
-              <Building2 size={20} />
-            </div>
-            <div>
-              <h2 className="text-xl font-black text-gray-900">Neues Bankkonto</h2>
-              <p className="text-sm text-gray-500 mt-0.5">
-                Fügen Sie ein neues Konto hinzu
-              </p>
-            </div>
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      titleId={titleId}
+      descriptionId={descriptionId}
+      className="max-h-[90vh] flex flex-col"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between p-6 border-b border-border">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-md bg-dark-base text-accent flex items-center justify-center">
+            <Building2 size={20} aria-hidden="true" />
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <X size={20} className="text-gray-500" />
-          </button>
+          <div>
+            <h2 id={titleId} className="text-xl font-black text-foreground">Neues Bankkonto</h2>
+            <p id={descriptionId} className="text-sm text-muted mt-0.5">
+              Fügen Sie ein neues Konto hinzu
+            </p>
+          </div>
         </div>
+        <button
+          type="button"
+          aria-label="Dialog schließen"
+          onClick={onClose}
+          className="p-2 rounded-lg text-muted hover:bg-surface-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          <X size={20} aria-hidden="true" />
+        </button>
+      </div>
 
-        {/* Form */}
-        <div className="p-6 space-y-4 overflow-y-auto">
-          {error && (
-            <div className="bg-error-bg border border-error/30 rounded-xl p-3 text-sm text-error">
-              {error}
-            </div>
+      {/* Form */}
+      <div className="p-6 space-y-4 overflow-y-auto">
+        {error && (
+          <div role="alert" className="bg-error-bg border border-error-border rounded-xl p-3 text-sm text-error-text">
+            {error}
+          </div>
+        )}
+
+        <div>
+          <label htmlFor="bank-account-name" className="block text-sm font-medium text-foreground mb-2">
+            Kontoname *
+          </label>
+          <input
+            id="bank-account-name"
+            ref={nameInputRef}
+            type="text"
+            value={formData.name}
+            aria-invalid={showNameError && !formData.name.trim() ? true : undefined}
+            aria-describedby={showNameError && !formData.name.trim() ? 'bank-account-name-error' : undefined}
+            onChange={(e) => {
+              setFormData({ ...formData, name: e.target.value });
+              setError(null);
+              setShowNameError(false);
+            }}
+            placeholder="z.B. Geschäftskonto"
+            className={`w-full bg-surface-muted border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${showNameError && !formData.name.trim() ? 'border-error' : 'border-control-border'}`}
+          />
+          {showNameError && !formData.name.trim() && (
+            <p id="bank-account-name-error" className="mt-1 text-xs text-error-text">Kontoname ist erforderlich.</p>
           )}
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Kontoname *
-            </label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={(e) => {
-                setFormData({ ...formData, name: e.target.value });
-                setError(null);
-              }}
-              placeholder="z.B. Geschäftskonto"
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              IBAN (optional)
-            </label>
-            <input
-              type="text"
-              value={formData.iban}
-              onChange={(e) => setFormData({ ...formData, iban: e.target.value })}
-              placeholder="DE89 3704 0044 0532 0130 00"
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-mono focus:ring-2 focus:ring-accent outline-none"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Anfangssaldo
-            </label>
-            <input
-              type="number"
-              step="0.01"
-              value={formData.balance}
-              onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-accent outline-none"
-            />
-          </div>
         </div>
 
-        {/* Footer */}
-        <div className="p-6 border-t border-gray-200 flex justify-end gap-3">
-          <button
-            onClick={onClose}
-            className="px-5 py-2.5 rounded-xl font-bold text-gray-600 hover:bg-gray-100 transition-colors"
-          >
-            Abbrechen
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={!formData.name.trim() || isSaving}
-            className="px-5 py-2.5 rounded-xl font-bold bg-accent text-accent-foreground hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {isSaving ? 'Speichern...' : 'Speichern'}
-          </button>
+        <div>
+          <label htmlFor="bank-account-iban" className="block text-sm font-medium text-foreground mb-2">
+            IBAN (optional)
+          </label>
+          <input
+            id="bank-account-iban"
+            type="text"
+            value={formData.iban}
+            onChange={(e) => setFormData({ ...formData, iban: e.target.value })}
+            placeholder="DE89 3704 0044 0532 0130 00"
+            className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="bank-account-balance" className="block text-sm font-medium text-foreground mb-2">
+            Anfangssaldo
+          </label>
+          <input
+            id="bank-account-balance"
+            type="number"
+            step="0.01"
+            value={formData.balance}
+            onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
+            className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          />
         </div>
       </div>
-    </div>
-    </Portal>
+
+      {/* Footer */}
+      <div className="p-6 border-t border-border flex justify-end gap-3">
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-5 py-2.5 rounded-xl font-bold text-muted hover:bg-surface-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          Abbrechen
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={isSaving}
+          className="px-5 py-2.5 rounded-xl font-bold bg-accent text-accent-foreground hover:bg-accent-hover disabled:bg-disabled-surface disabled:text-disabled-foreground disabled:cursor-not-allowed transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          {isSaving ? 'Speichern...' : 'Speichern'}
+        </button>
+      </div>
+    </Modal>
   );
 };

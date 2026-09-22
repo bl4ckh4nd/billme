@@ -1,12 +1,18 @@
 import React from 'react';
 import { z } from 'zod';
-import { createServerApiClient, authUserSchema, serverProductSchema, serverRoleSchema, supportedServerRoles } from '@billme/server-core';
+import { createServerApiClient, authUserSchema, serverProductSchema, serverRoleSchema } from '@billme/server-core';
 import { mountDesktopRendererApp, type DesktopRendererRuntime } from '@billme/desktop-renderer';
-import { Button, Input } from '@billme/ui';
+import { AuthScreen, ErrorState, type AuthScreenMode } from '@billme/ui';
 import { createLiteWebBillmeApi } from './api/createLiteWebApi';
 
 const DEFAULT_API_URL = (import.meta.env.VITE_SERVER_API_URL as string | undefined) ?? 'http://127.0.0.1:3100';
 const SESSION_STORAGE_KEY = 'billme.web.lite.session.v1';
+const API_URL_STORAGE_KEY = 'billme.web.lite.api-url.v1';
+const DEV_CREDENTIALS = import.meta.env.DEV
+  ? { email: 'owner@example.com', password: 'billme-server-123', fullName: 'Billme Lite Owner' }
+  : undefined;
+
+const readStoredApiUrl = () => globalThis.localStorage?.getItem(API_URL_STORAGE_KEY) ?? DEFAULT_API_URL;
 
 const sessionInfoSchema = z.object({
   user: authUserSchema,
@@ -107,13 +113,14 @@ const DesktopShell: React.FC<{
 
   if (mountError) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 py-10 text-slate-50">
-        <div className="w-full max-w-xl rounded-3xl border border-red-500/30 bg-slate-900/90 p-6 shadow-2xl shadow-black/30">
-          <h1 className="text-xl font-semibold">Billme Lite konnte im Browser nicht gestartet werden</h1>
-          <p className="mt-3 text-sm text-slate-300">{mountError}</p>
-          <Button className="mt-5" onClick={onLogout}>
-            Zur Anmeldung
-          </Button>
+      <main className="flex min-h-screen items-center justify-center bg-surface-sunken px-6 py-10">
+        <div className="w-full max-w-xl">
+          <ErrorState
+            title="Billme Lite konnte im Browser nicht gestartet werden"
+            description={mountError}
+            onRetry={onLogout}
+            retryLabel="Zur Anmeldung"
+          />
         </div>
       </main>
     );
@@ -123,14 +130,11 @@ const DesktopShell: React.FC<{
 };
 
 export default function App() {
-  const authClient = React.useMemo(() => createServerApiClient(DEFAULT_API_URL), []);
-  const [health, setHealth] = React.useState<string>('Server wird geprüft ...');
-  const [capabilities, setCapabilities] = React.useState<string[]>([]);
-  const [bootstrapReady, setBootstrapReady] = React.useState(false);
+  const [apiUrl, setApiUrl] = React.useState(readStoredApiUrl);
+  const authClient = React.useMemo(() => createServerApiClient(apiUrl), [apiUrl]);
+  const [authMode, setAuthMode] = React.useState<AuthScreenMode>('checking');
+  const [checkRun, setCheckRun] = React.useState(0);
   const [loadingSession, setLoadingSession] = React.useState(true);
-  const [email, setEmail] = React.useState('owner@example.com');
-  const [password, setPassword] = React.useState('billme-server-123');
-  const [fullName, setFullName] = React.useState('Billme Lite Owner');
   const [message, setMessage] = React.useState('');
   const [session, setSession] = React.useState<StoredSession | null>(null);
 
@@ -142,33 +146,30 @@ export default function App() {
 
   React.useEffect(() => {
     let cancelled = false;
+    setAuthMode('checking');
 
     void (async () => {
       try {
         const storedSession = readStoredSession();
-        const [healthResponse, capabilitiesResponse, bootstrapStatus, validatedSession] = await Promise.all([
-          authClient.getHealth(),
-          authClient.getCapabilities(),
+        const [bootstrapStatus, validatedSession] = await Promise.all([
           authClient.getBootstrapStatus(),
-          storedSession ? fetchLiteSession(DEFAULT_API_URL, storedSession.token).catch(() => null) : Promise.resolve(null),
+          storedSession ? fetchLiteSession(apiUrl, storedSession.token).catch(() => null) : Promise.resolve(null),
         ]);
 
         if (cancelled) {
           return;
         }
 
-        setHealth(`${healthResponse.service} (${healthResponse.backend})`);
-        setCapabilities(capabilitiesResponse.auth.roles);
-        setBootstrapReady(!bootstrapStatus.bootstrapped);
+        setAuthMode(bootstrapStatus.bootstrapped ? 'login' : 'setup');
 
         if (storedSession && validatedSession) {
           setSession({ token: storedSession.token, user: validatedSession.user });
         } else if (storedSession) {
           clearStoredSession();
         }
-      } catch (error: unknown) {
+      } catch {
         if (!cancelled) {
-          setHealth(error instanceof Error ? error.message : String(error));
+          setAuthMode('unreachable');
         }
       } finally {
         if (!cancelled) {
@@ -180,83 +181,40 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authClient]);
+  }, [apiUrl, authClient, checkRun]);
 
-  const finishAuth = React.useCallback((nextSession: StoredSession) => {
+  const handleSubmit = async ({ email, password, fullName }: { email: string; password: string; fullName: string }) => {
+    const response = authMode === 'setup'
+      ? await authClient.bootstrap({ email, password, fullName })
+      : await authClient.login({ email, password });
+    const nextSession = { token: response.token, user: response.user };
     persistSession(nextSession);
     setSession(nextSession);
-    setBootstrapReady(false);
+    setAuthMode('login');
     setMessage('');
-  }, []);
-
-  const handleBootstrap = async () => {
-    try {
-      const response = await authClient.bootstrap({ email, password, fullName });
-      finishAuth({ token: response.token, user: response.user });
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }
   };
 
-  const handleLogin = async () => {
-    try {
-      const response = await authClient.login({ email, password });
-      finishAuth({ token: response.token, user: response.user });
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }
+  const handleServerUrlChange = async (nextUrl: string) => {
+    await createServerApiClient(nextUrl).getBootstrapStatus();
+    globalThis.localStorage?.setItem(API_URL_STORAGE_KEY, nextUrl);
+    setApiUrl(nextUrl);
   };
 
   if (!loadingSession && session) {
-    return <DesktopShell apiUrl={DEFAULT_API_URL} token={session.token} onLogout={handleLogout} />;
+    return <DesktopShell apiUrl={apiUrl} token={session.token} onLogout={handleLogout} />;
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-10 text-slate-50">
-      <div className="mx-auto flex max-w-5xl flex-col gap-6">
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-8 shadow-2xl shadow-black/25">
-          <p className="mb-3 text-sm font-semibold uppercase tracking-[0.25em] text-emerald-300">Billme Lite Web</p>
-          <h1 className="text-4xl font-semibold">Billme Lite im Browser</h1>
-          <p className="mt-3 max-w-2xl text-sm text-slate-300">
-            Arbeite mit dem Lite-Arbeitsbereich über eine Anmeldung und die Server-API.
-          </p>
-        </section>
-
-        <section className="grid gap-6 md:grid-cols-2">
-          <div className="rounded-3xl border border-white/10 bg-slate-900/80 p-6">
-            <h2 className="text-lg font-semibold">Serverstatus</h2>
-            <p className="mt-3 text-sm text-slate-300">API URL: {DEFAULT_API_URL}</p>
-            <p className="mt-2 text-sm text-slate-200">{health}</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {(capabilities.length > 0 ? capabilities : supportedServerRoles).map((role) => (
-                <span key={role} className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs text-emerald-300">
-                  {role}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-white/10 bg-slate-900/80 p-6">
-            <h2 className="text-lg font-semibold">{bootstrapReady ? 'Lite-Konto einrichten' : 'Anmelden'}</h2>
-            <div className="mt-4 grid gap-3">
-              {bootstrapReady ? (
-                <Input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Vollständiger Name" />
-              ) : null}
-              <Input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="E-Mail" />
-              <Input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Passwort"
-              />
-              <Button onClick={bootstrapReady ? handleBootstrap : handleLogin}>
-                {bootstrapReady ? 'Konto anlegen' : 'Lite-Arbeitsbereich öffnen'}
-              </Button>
-              {message ? <p className="text-sm text-slate-300">{message}</p> : null}
-            </div>
-          </div>
-        </section>
-      </div>
-    </main>
+    <AuthScreen
+      product="lite"
+      mode={loadingSession ? 'checking' : authMode}
+      serverUrl={apiUrl}
+      defaultServerUrl={DEFAULT_API_URL}
+      notice={message}
+      initialCredentials={DEV_CREDENTIALS}
+      onSubmit={handleSubmit}
+      onRetry={() => setCheckRun((run) => run + 1)}
+      onServerUrlChange={handleServerUrlChange}
+    />
   );
 }

@@ -37,7 +37,7 @@ describe('ReportDrilldownPanel', () => {
     );
 
     const source = screen.getByTestId('drilldown-source-invoice-invoice-42');
-    expect(source).toHaveTextContent('invoice · invoice-42');
+    expect(source).toHaveTextContent('Rechnung · invoice-42');
     expect(source).toHaveTextContent('journal-1');
     expect(screen.queryByRole('button', { name: /öffnen/i })).toBeNull();
   });
@@ -51,7 +51,7 @@ describe('ReportDrilldownPanel', () => {
       />,
     );
 
-    expect(screen.getByTestId('drilldown-source-incoming_invoice-incoming-42')).toHaveTextContent('incoming_invoice · incoming-42');
+    expect(screen.getByTestId('drilldown-source-incoming_invoice-incoming-42')).toHaveTextContent('Eingangsrechnung · incoming-42');
     expect(screen.queryByRole('button', { name: /Transaktion öffnen|Beleg öffnen|Eingangsrechnung öffnen/i })).toBeNull();
   });
 

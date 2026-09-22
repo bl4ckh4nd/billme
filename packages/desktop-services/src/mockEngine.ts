@@ -4,7 +4,6 @@ import type {
   Article,
   Client,
   DocumentTemplate,
-  DocumentTemplateKind,
   Invoice,
   InvoiceElement,
   Project,
@@ -49,7 +48,7 @@ import {
   PRO_MOCK_ACCOUNTS,
   PRO_MOCK_INVOICES,
 } from './mockData';
-import { getCatalogForYear } from './eurCatalog';
+import { getCatalogForYear, getCatalogManifestForYear } from './eurCatalog';
 import {
   INITIAL_INVOICE_TEMPLATE,
   INITIAL_OFFER_TEMPLATE,
@@ -456,6 +455,511 @@ const mockDunningHistory = new Map<string, Array<{
   createdAt: string;
 }>>();
 
+const MOCK_TENANT_ID = 'default';
+
+/**
+ * The mock also serves the browser fallback runtime, so it must stay free of
+ * Node crypto. The digest only has to be deterministic and 64 hex characters
+ * long, which is what the contract's hash fields are checked against.
+ */
+const mockDigest = (value: unknown): string => {
+  const text = typeof value === 'string' ? value : JSON.stringify(value) ?? '';
+  let state = 0x9e3779b9;
+  let digest = '';
+  for (let block = 0; block < 8; block += 1) {
+    for (let index = 0; index < text.length; index += 1) {
+      state = (Math.imul(state ^ text.charCodeAt(index), 0x01000193) + block * 0x7feb352d) >>> 0;
+    }
+    state = Math.imul(state ^ (state >>> 15), 0x2c1b3c6d) >>> 0;
+    digest += state.toString(16).padStart(8, '0');
+  }
+  return digest;
+};
+
+const mockBase64 = (content: string): string => globalThis.btoa(content);
+const mockBase64ByteLength = (data: string): number => {
+  const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
+  return Math.max(1, Math.floor((data.length * 3) / 4) - padding);
+};
+const mockUtf8ByteLength = (value: string): number => new TextEncoder().encode(value).length;
+
+type MockAccountingPolicy = IpcResult<'pro:getAccountingPolicy'>;
+type MockAccountingAccountMapping = IpcResult<'pro:listAccountingAccountMappings'>[number];
+type MockVendor = IpcResult<'pro:listVendors'>[number];
+type MockIncomingInvoice = IpcResult<'pro:listIncomingInvoices'>[number];
+type MockIncomingInvoiceDocument = IpcResult<'pro:listIncomingInvoiceDocuments'>[number];
+type MockOpenItem = IpcResult<'pro:listOpenItems'>[number];
+type MockOpenItemPayment = IpcResult<'pro:allocateOpenItemPayment'>;
+type MockAccountingSourceRun = IpcResult<'pro:listAccountingSourceRuns'>[number];
+type MockReportSnapshot = IpcResult<'pro:listReportSnapshots'>[number];
+type MockEurCashFact = IpcResult<'eur:listCashFacts'>[number];
+type MockEurAnnexFact = IpcResult<'eur:listAnnexFacts'>[number];
+type MockAuditExportPackage = IpcResult<'tax:saveAuditExportPackage'>;
+type MockDocumentType = 'outgoing_invoice' | 'incoming_invoice';
+
+let mockAccountingPolicyChart: 'SKR03' | 'SKR04' | undefined;
+let mockAccountingVatMethod: 'soll' | 'ist' = 'soll';
+let mockAccountingPolicyUpdatedAt = now;
+const mockAccountingRoleDefaults: Record<'SKR03' | 'SKR04', Record<MockAccountingAccountMapping['role'], string>> = {
+  SKR03: {
+    accounts_receivable: '1400', accounts_payable: '1600', bank: '1200', revenue: '8400',
+    expense: '4900', asset: '0480', output_vat: '1776', output_vat_deferred: '1780', input_vat: '1576',
+  },
+  SKR04: {
+    accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400',
+    expense: '6300', asset: '0670', output_vat: '3806', output_vat_deferred: '3810', input_vat: '1406',
+  },
+};
+const mockAccountingAccountMappings: MockAccountingAccountMapping[] = [];
+
+const mockVendors: MockVendor[] = [
+  {
+    id: 'vendor-1',
+    tenantId: MOCK_TENANT_ID,
+    vendorNumber: '70001',
+    name: 'Muster Bürobedarf GmbH',
+    email: 'rechnung@muster-buero.example',
+    address: 'Musterstraße 12\n10115 Berlin',
+    vatId: 'DE123456789',
+    iban: 'DE02120300000000202051',
+    defaultExpenseAccount: '4930',
+    createdAt: now,
+    updatedAt: now,
+  },
+  {
+    id: 'vendor-2',
+    tenantId: MOCK_TENANT_ID,
+    vendorNumber: '70002',
+    name: 'Muster Telekom GmbH',
+    email: 'rechnung@muster-telekom.example',
+    address: 'Musterring 4\n50667 Köln',
+    vatId: 'DE987654321',
+    iban: 'DE02500105170137075030',
+    defaultExpenseAccount: '4920',
+    createdAt: now,
+    updatedAt: now,
+  },
+];
+
+const mockIncomingInvoices: MockIncomingInvoice[] = [
+  {
+    id: 'incoming-1',
+    tenantId: MOCK_TENANT_ID,
+    vendorId: 'vendor-1',
+    number: 'RE-2025-0147',
+    invoiceDate: '2025-03-04',
+    dueDate: '2025-03-18',
+    servicePeriod: '2025-03',
+    netAmount: 200,
+    taxAmount: 38,
+    grossAmount: 238,
+    status: 'open',
+    taxRate: 19,
+    taxCaseKey: 'DE_STD_19',
+    notes: 'Büromaterial Quartal 1',
+    lines: [
+      { id: 'incoming-1-line-1', incomingInvoiceId: 'incoming-1', position: 1, description: 'Kopierpapier A4', quantity: 20, unitPrice: 6, netAmount: 120, taxRate: 19, taxAmount: 22.8, grossAmount: 142.8, accountNumber: '4930' },
+      { id: 'incoming-1-line-2', incomingInvoiceId: 'incoming-1', position: 2, description: 'Ordner und Register', quantity: 10, unitPrice: 8, netAmount: 80, taxRate: 19, taxAmount: 15.2, grossAmount: 95.2, accountNumber: '4930' },
+    ],
+    accountingStatus: 'unposted',
+    createdAt: '2025-03-04T10:15:00.000Z',
+    updatedAt: '2025-03-04T10:15:00.000Z',
+  },
+  {
+    id: 'incoming-2',
+    tenantId: MOCK_TENANT_ID,
+    vendorId: 'vendor-2',
+    number: 'TK-2025-0312',
+    invoiceDate: '2025-03-12',
+    dueDate: '2025-04-02',
+    servicePeriod: '2025-03',
+    netAmount: 100,
+    taxAmount: 19,
+    grossAmount: 119,
+    status: 'open',
+    taxRate: 19,
+    taxCaseKey: 'DE_STD_19',
+    notes: 'Internet und Telefon März',
+    lines: [
+      { id: 'incoming-2-line-1', incomingInvoiceId: 'incoming-2', position: 1, description: 'Internetanschluss März', quantity: 1, unitPrice: 50, netAmount: 50, taxRate: 19, taxAmount: 9.5, grossAmount: 59.5, accountNumber: '4920' },
+      { id: 'incoming-2-line-2', incomingInvoiceId: 'incoming-2', position: 2, description: 'Telefonie März', quantity: 1, unitPrice: 50, netAmount: 50, taxRate: 19, taxAmount: 9.5, grossAmount: 59.5, accountNumber: '4920' },
+    ],
+    accountingStatus: 'unposted',
+    createdAt: '2025-03-12T08:05:00.000Z',
+    updatedAt: '2025-03-12T08:05:00.000Z',
+  },
+];
+
+const mockIncomingInvoiceDocumentData = new Map<string, string>();
+const mockIncomingDocumentSeed = (input: {
+  id: string;
+  incomingInvoiceId: string;
+  originalFilename: string;
+  mimeType: MockIncomingInvoiceDocument['mimeType'];
+  content: string;
+  reviewStatus: MockIncomingInvoiceDocument['reviewStatus'];
+  createdAt: string;
+}): MockIncomingInvoiceDocument => {
+  const data = mockBase64(input.content);
+  mockIncomingInvoiceDocumentData.set(input.id, data);
+  return {
+    id: input.id,
+    tenantId: MOCK_TENANT_ID,
+    incomingInvoiceId: input.incomingInvoiceId,
+    originalFilename: input.originalFilename,
+    mimeType: input.mimeType,
+    byteLength: mockBase64ByteLength(data),
+    sha256: mockDigest(data),
+    reviewStatus: input.reviewStatus,
+    createdAt: input.createdAt,
+    updatedAt: input.createdAt,
+  };
+};
+const mockIncomingInvoiceDocuments: MockIncomingInvoiceDocument[] = [
+  mockIncomingDocumentSeed({
+    id: 'incoming-document-1',
+    incomingInvoiceId: 'incoming-1',
+    originalFilename: 'RE-2025-0147.pdf',
+    mimeType: 'application/pdf',
+    content: '%PDF-1.4 mock Eingangsrechnung RE-2025-0147',
+    reviewStatus: 'accepted',
+    createdAt: '2025-03-04T10:20:00.000Z',
+  }),
+  mockIncomingDocumentSeed({
+    id: 'incoming-document-2',
+    incomingInvoiceId: 'incoming-2',
+    originalFilename: 'TK-2025-0312.png',
+    mimeType: 'image/png',
+    content: 'mock-scan-telekom-maerz',
+    reviewStatus: 'pending',
+    createdAt: '2025-03-12T08:10:00.000Z',
+  }),
+];
+
+const mockOpenItems: MockOpenItem[] = [
+  {
+    id: 'open-item-1',
+    tenantId: MOCK_TENANT_ID,
+    partyType: 'debtor',
+    partyId: 'c1',
+    sourceType: 'outgoing_invoice',
+    sourceId: '2',
+    documentNumber: 'RE-2023-002',
+    documentDate: '2023-10-20',
+    dueDate: '2023-11-03',
+    originalAmount: 2400,
+    allocatedAmount: 0,
+    residualAmount: 2400,
+    status: 'open',
+    createdAt: '2023-10-20T09:00:00.000Z',
+    updatedAt: '2023-10-20T09:00:00.000Z',
+  },
+  {
+    id: 'open-item-2',
+    tenantId: MOCK_TENANT_ID,
+    partyType: 'debtor',
+    partyId: 'c2',
+    sourceType: 'outgoing_invoice',
+    sourceId: '3',
+    documentNumber: 'RE-2023-003',
+    documentDate: '2023-12-18',
+    dueDate: '2024-01-15',
+    originalAmount: 890.5,
+    allocatedAmount: 300,
+    residualAmount: 590.5,
+    status: 'partially_paid',
+    createdAt: '2023-12-18T11:30:00.000Z',
+    updatedAt: '2024-01-08T09:12:00.000Z',
+  },
+  {
+    id: 'open-item-3',
+    tenantId: MOCK_TENANT_ID,
+    partyType: 'creditor',
+    partyId: 'vendor-1',
+    sourceType: 'incoming_invoice',
+    sourceId: 'incoming-1',
+    documentNumber: 'RE-2025-0147',
+    documentDate: '2025-03-04',
+    dueDate: '2025-03-18',
+    originalAmount: 238,
+    allocatedAmount: 0,
+    residualAmount: 238,
+    status: 'open',
+    createdAt: '2025-03-04T10:15:00.000Z',
+    updatedAt: '2025-03-04T10:15:00.000Z',
+  },
+  {
+    id: 'open-item-4',
+    tenantId: MOCK_TENANT_ID,
+    partyType: 'creditor',
+    partyId: 'vendor-2',
+    sourceType: 'incoming_invoice',
+    sourceId: 'incoming-2',
+    documentNumber: 'TK-2025-0312',
+    documentDate: '2025-03-12',
+    dueDate: '2025-04-02',
+    originalAmount: 119,
+    allocatedAmount: 0,
+    residualAmount: 119,
+    status: 'open',
+    createdAt: '2025-03-12T08:05:00.000Z',
+    updatedAt: '2025-03-12T08:05:00.000Z',
+  },
+];
+
+const mockOpenItemPayments: MockOpenItemPayment[] = [];
+const mockOpenItemAllocationEvents = new Set<string>();
+const mockOutgoingAccountingStatus = new Map<string, 'unposted' | 'posted' | 'reversed'>();
+const mockPostedDocumentEntries = new Map<string, string>();
+
+mockJournalEntries.push({
+  id: 'je-mock-sonderbuchung-1',
+  tenantId: MOCK_TENANT_ID,
+  entryNumber: 1,
+  postingDate: '2025-03-31',
+  documentDate: '2025-03-31',
+  bookingText: 'Sonderbuchung Bank an Erlöse 19%',
+  reference: 'sonderbuchung-1',
+  period: '2025-03',
+  fiscalYear: 2025,
+  status: 'posted' as const,
+  createdAt: '2025-03-31T09:00:00.000Z',
+  lines: [
+    { id: 'je-mock-sonderbuchung-1-line-1', accountNumber: '1200', debitAmount: 1190, creditAmount: 0, memo: 'Zahlungseingang' },
+    { id: 'je-mock-sonderbuchung-1-line-2', accountNumber: '8400', debitAmount: 0, creditAmount: 1000, taxCode: 'USt19', taxCaseKey: 'DE_STD_19' as const, taxRate: 19, netAmount: 1000, taxAmount: 190, grossAmount: 1190 },
+    { id: 'je-mock-sonderbuchung-1-line-3', accountNumber: '1776', debitAmount: 0, creditAmount: 190, taxCode: 'USt19', taxCaseKey: 'DE_STD_19' as const, taxRate: 19, taxAmount: 190 },
+  ],
+});
+
+const mockAccountingSourceRuns: MockAccountingSourceRun[] = [
+  {
+    id: 'source-run-1',
+    tenantId: MOCK_TENANT_ID,
+    sourceType: 'standalone_source',
+    sourceId: 'sonderbuchung-1',
+    sourceRevision: '1',
+    idempotencyKey: 'standalone_source:sonderbuchung-1:1',
+    source: { sourceType: 'standalone_source', sourceId: 'sonderbuchung-1', sourceRevision: '1', bookingText: 'Sonderbuchung Bank an Erlöse 19%' },
+    fact: {
+      sourceType: 'standalone_source',
+      sourceId: 'sonderbuchung-1',
+      sourceRevision: '1',
+      effectiveDate: '2025-03-31',
+      postingDate: '2025-03-31',
+      period: '2025-03',
+      fiscalYear: 2025,
+      currency: 'EUR',
+      bookingText: 'Sonderbuchung Bank an Erlöse 19%',
+      reference: 'sonderbuchung-1',
+      lines: [
+        { accountNumber: '1200', debitAmount: 1190, creditAmount: 0, memo: 'Zahlungseingang' },
+        { accountNumber: '8400', debitAmount: 0, creditAmount: 1000, memo: 'Erlös' },
+        { accountNumber: '1776', debitAmount: 0, creditAmount: 190, memo: 'Umsatzsteuer 19%' },
+      ],
+    },
+    result: { status: 'posted' },
+    status: 'posted',
+    journalEntryId: 'je-mock-sonderbuchung-1',
+    createdAt: '2025-03-31T09:00:00.000Z',
+  },
+  {
+    id: 'source-run-2',
+    tenantId: MOCK_TENANT_ID,
+    sourceType: 'payroll_batch',
+    sourceId: 'payroll-2025-03',
+    sourceRevision: '1',
+    idempotencyKey: 'payroll_batch:payroll-2025-03:1',
+    source: { sourceType: 'payroll_batch', sourceId: 'payroll-2025-03', sourceRevision: '1', bookingText: 'Lohnlauf März 2025' },
+    result: { status: 'valid', lineCount: 1 },
+    status: 'noop',
+    createdAt: '2025-03-31T09:05:00.000Z',
+  },
+];
+
+const mockReportSnapshots: MockReportSnapshot[] = [
+  {
+    id: 'report-snapshot-1',
+    reportType: 'eur',
+    args: { taxYear: 2025, from: '2025-01-01', to: '2025-12-31' },
+    payload: { kind: 'euer', taxYear: 2025, frozenBy: 'Pro Workspace' },
+    createdAt: '2025-12-31T18:00:00.000Z',
+    sourceHash: mockDigest('report-snapshot-1'),
+  },
+];
+
+const mockReportMappingOverrides: Array<{
+  chart: 'SKR03' | 'SKR04';
+  asOfDate: string;
+  accountNumber: string;
+  statement: MockReportStatement;
+  position: string;
+  label: string;
+  side?: 'asset' | 'liability';
+  updatedAt: string;
+}> = [];
+
+const mockBackfillRuns = new Map<string, {
+  confirmationHash: string;
+  status: 'preview' | 'completed';
+  candidates: Array<{
+    sourceType: 'outgoing_invoice' | 'incoming_invoice' | 'legacy_transaction' | 'correction';
+    sourceId: string;
+    status: 'ready' | 'unresolved';
+    reason?: string;
+    sourceVersion: string;
+  }>;
+  result?: IpcResult<'pro:confirmAccountingBackfill'>;
+}>();
+
+const mockAuditExportPackages: MockAuditExportPackage[] = [
+  {
+    bundleDir: 'mock://exports/tax-audit/2025-03-31T09-00-00-000Z',
+    manifestPath: 'mock://exports/tax-audit/2025-03-31T09-00-00-000Z/manifest.json',
+    createdAt: '2025-03-31T09:00:00.000Z',
+    fileCount: 2,
+    files: [
+      { name: 'audit-log.csv', path: 'mock://exports/tax-audit/2025-03-31T09-00-00-000Z/audit-log.csv', sha256: mockDigest('audit-log'), sizeBytes: 256, rowCount: 1 },
+      { name: 'journal-entries.jsonl', path: 'mock://exports/tax-audit/2025-03-31T09-00-00-000Z/journal-entries.jsonl', sha256: mockDigest('journal-entries'), sizeBytes: 512, rowCount: 1 },
+    ],
+  },
+  {
+    bundleDir: 'mock://exports/tax-audit/2025-06-30T17-30-00-000Z',
+    manifestPath: 'mock://exports/tax-audit/2025-06-30T17-30-00-000Z/manifest.json',
+    createdAt: '2025-06-30T17:30:00.000Z',
+    fileCount: 2,
+    files: [
+      { name: 'audit-log.csv', path: 'mock://exports/tax-audit/2025-06-30T17-30-00-000Z/audit-log.csv', sha256: mockDigest('audit-log-2'), sizeBytes: 384, rowCount: 2 },
+      { name: 'journal-entries.jsonl', path: 'mock://exports/tax-audit/2025-06-30T17-30-00-000Z/journal-entries.jsonl', sha256: mockDigest('journal-entries-2'), sizeBytes: 768, rowCount: 2 },
+    ],
+  },
+];
+
+type MockTaxFilingCertificate = IpcResult<'taxFiling:installCertificate'>;
+type MockTaxFilingRecord = IpcResult<'taxFiling:listRecords'>[number];
+type MockTaxFilingProvider = IpcResult<'taxFiling:getStatus'>['provider'];
+
+/** Colon-separated SHA-256 style fingerprint of a certificate blob. */
+const mockFingerprint = (value: string): string =>
+  mockDigest(value).toUpperCase().replace(/../g, '$&:').slice(0, -1);
+
+const mockTaxFilingProvider: MockTaxFilingProvider = {
+  available: true,
+  provider: 'eric',
+  version: '1.4.2',
+  binaryPath: 'mock://elster/eric-1.4.2/bin/eric',
+};
+
+const mockTaxFilingCertificates: MockTaxFilingCertificate[] = [
+  {
+    id: 'cert-organisation',
+    fingerprint: mockFingerprint('mock-elster-organisationszertifikat'),
+    expiresAt: '2027-12-31T23:59:59.000Z',
+    subject: 'CN=Mustermann GmbH, O=ELSTER, OU=Organisation, role=Uebermittlungsberechtigter',
+  },
+  {
+    id: 'cert-berater',
+    fingerprint: mockFingerprint('mock-elster-beraterzertifikat'),
+    expiresAt: '2026-06-30T23:59:59.000Z',
+    subject: 'CN=Max Mustermann, O=ELSTER, OU=Berater, role=Signaturberechtigter',
+  },
+];
+
+const mockTaxFilingRecords: MockTaxFilingRecord[] = [
+  {
+    id: 'tax-filing-euer-2025',
+    kind: 'euer',
+    periodStart: '2025-01-01',
+    periodEnd: '2025-12-31',
+    sourceHash: mockDigest('tax-filing-euer-2025'),
+    status: 'frozen',
+  },
+  {
+    id: 'tax-filing-ebilanz-2025',
+    kind: 'e_bilanz',
+    periodStart: '2025-01-01',
+    periodEnd: '2025-12-31',
+    sourceHash: mockDigest('tax-filing-ebilanz-2025'),
+    status: 'approved',
+  },
+  {
+    id: 'tax-filing-unternehmensregister-2024',
+    kind: 'unternehmensregister',
+    periodStart: '2024-01-01',
+    periodEnd: '2024-12-31',
+    sourceHash: mockDigest('tax-filing-unternehmensregister-2024'),
+    status: 'queued',
+  },
+];
+
+const upsertMockTaxFilingRecord = (
+  record: MockTaxFilingRecord,
+  status: MockTaxFilingRecord['status'] = record.status,
+): MockTaxFilingRecord => {
+  const next: MockTaxFilingRecord = { ...record, status };
+  const existing = mockTaxFilingRecords.findIndex((entry) => entry.id === record.id);
+  if (existing >= 0) mockTaxFilingRecords[existing] = next;
+  else mockTaxFilingRecords.push(next);
+  return next;
+};
+
+const mockEurCashFacts: MockEurCashFact[] = [
+  {
+    id: 'eur-cash-fact-1',
+    tenantId: MOCK_TENANT_ID,
+    sourceType: 'transaction',
+    sourceId: 't9',
+    taxYear: 2025,
+    kind: 'income',
+    amountNet: 2200,
+    flowType: 'income',
+    eurLineId: 'E2025_KZ112',
+    reason: 'Betriebseinnahme aus Bankimport zugeordnet',
+    actorId: 'mock-pro-actor',
+    actorName: 'Pro Workspace',
+    idempotencyKey: 'eur-cash:transaction:t9:2025',
+    provenance: { catalogId: 'anlage-euer-2025', catalogVersion: '2025.1', catalogSourceHash: 'b69b5cf0a982d28cbce20644e67677a36be0bc494bed4fae2310dc08230a1599' },
+    createdAt: '2025-01-08T12:00:00.000Z',
+    updatedAt: '2025-01-08T12:00:00.000Z',
+  },
+  {
+    id: 'eur-cash-fact-2',
+    tenantId: MOCK_TENANT_ID,
+    sourceType: 'transaction',
+    sourceId: 't10',
+    taxYear: 2025,
+    kind: 'expense',
+    amountNet: 189,
+    flowType: 'expense',
+    eurLineId: 'E2025_KZ100',
+    reason: 'Betriebsausgabe Internet und Telefon',
+    actorId: 'mock-pro-actor',
+    actorName: 'Pro Workspace',
+    idempotencyKey: 'eur-cash:transaction:t10:2025',
+    provenance: { catalogId: 'anlage-euer-2025', catalogVersion: '2025.1', catalogSourceHash: 'b69b5cf0a982d28cbce20644e67677a36be0bc494bed4fae2310dc08230a1599' },
+    createdAt: '2025-01-12T12:00:00.000Z',
+    updatedAt: '2025-01-12T12:00:00.000Z',
+  },
+];
+
+const mockEurAnnexFacts: MockEurAnnexFact[] = [
+  {
+    id: 'eur-annex-fact-1',
+    tenantId: MOCK_TENANT_ID,
+    taxYear: 2025,
+    annex: 'IAB',
+    lineId: 'formed',
+    amount: 1200,
+    sourceId: 'sonderbuchung-1',
+    date: '2025-12-31',
+    reason: 'Investitionsabzugsbetrag gebildet',
+    actorId: 'mock-pro-actor',
+    actorName: 'Pro Workspace',
+    idempotencyKey: 'eur-annex:2025:IAB:formed:2025-12-31:1200',
+    provenance: { catalogId: 'anlage-euer-2025', catalogVersion: '2025.1', catalogSourceHash: 'b69b5cf0a982d28cbce20644e67677a36be0bc494bed4fae2310dc08230a1599' },
+    createdAt: '2025-12-31T12:00:00.000Z',
+  },
+];
+
 const getAllTransactions = (): Transaction[] => {
   const rows: Transaction[] = [];
   for (const account of accounts) {
@@ -683,9 +1187,728 @@ const getMockTaxCaseByKey = (taxCaseKey?: string) => {
 };
 
 const getMockActiveChart = (): 'SKR03' | 'SKR04' => {
+  if (mockAccountingPolicyChart) return mockAccountingPolicyChart;
   const stats = getMockLedgerStats();
-  return stats.byChart.SKR03 > 0 ? 'SKR03' : 'SKR04';
+  return stats.byChart.SKR04 > 0 && stats.byChart.SKR03 === 0 ? 'SKR04' : 'SKR03';
 };
+
+const getMockAccountingPolicy = (): MockAccountingPolicy => ({
+  tenantId: MOCK_TENANT_ID,
+  activeChart: getMockActiveChart(),
+  vatMethod: mockAccountingVatMethod,
+  periodPolicy: 'calendar_month',
+  updatedAt: mockAccountingPolicyUpdatedAt,
+});
+
+const ensureMockAccountingMappings = (): void => {
+  if (mockAccountingAccountMappings.length > 0) return;
+  const updatedAt = new Date().toISOString();
+  for (const chart of ['SKR03', 'SKR04'] as const) {
+    for (const [role, accountNumber] of Object.entries(mockAccountingRoleDefaults[chart]) as Array<[MockAccountingAccountMapping['role'], string]>) {
+      mockAccountingAccountMappings.push({
+        id: `${MOCK_TENANT_ID}-${chart}-${role}`,
+        tenantId: MOCK_TENANT_ID,
+        chart,
+        role,
+        accountNumber,
+        updatedAt,
+      });
+    }
+  }
+};
+
+const getMockAccountingMappings = (chart: 'SKR03' | 'SKR04'): Record<MockAccountingAccountMapping['role'], string> => {
+  ensureMockAccountingMappings();
+  const mappings = { ...mockAccountingRoleDefaults[chart] };
+  for (const row of mockAccountingAccountMappings) {
+    if (row.chart === chart) mappings[row.role] = row.accountNumber;
+  }
+  return mappings;
+};
+
+const getMockIncomingInvoice = (invoiceId: string): MockIncomingInvoice | undefined =>
+  mockIncomingInvoices.find((row) => row.id === invoiceId);
+
+const getMockOpenItem = (openItemId: string): MockOpenItem | undefined =>
+  mockOpenItems.find((row) => row.id === openItemId);
+
+const getMockOutgoingAccountingStatus = (invoiceId: string): 'unposted' | 'posted' | 'reversed' =>
+  mockOutgoingAccountingStatus.get(invoiceId) ?? 'unposted';
+
+type MockSourceLine = { accountNumber: string; debitAmount: number; creditAmount: number; memo?: string };
+
+const mockCreateJournalEntry = (input: {
+  id?: string;
+  postingDate: string;
+  documentDate?: string;
+  bookingText: string;
+  reference?: string;
+  lines: MockSourceLine[];
+}) => {
+  const entry = {
+    id: input.id ?? `je-mock-${mockJournalEntries.length + 1}-${Math.random().toString(36).slice(2)}`,
+    tenantId: MOCK_TENANT_ID,
+    entryNumber: mockJournalEntries.length + 1,
+    postingDate: input.postingDate,
+    documentDate: input.documentDate ?? input.postingDate,
+    bookingText: input.bookingText,
+    reference: input.reference,
+    period: input.postingDate.slice(0, 7),
+    fiscalYear: Number(input.postingDate.slice(0, 4)),
+    status: 'posted' as const,
+    createdAt: new Date().toISOString(),
+    lines: input.lines.map((line, index) => ({
+      id: `je-mock-line-${index + 1}-${Math.random().toString(36).slice(2)}`,
+      accountNumber: line.accountNumber,
+      debitAmount: line.debitAmount,
+      creditAmount: line.creditAmount,
+      memo: line.memo,
+    })),
+  };
+  mockJournalEntries.unshift(entry);
+  return entry;
+};
+
+const mockRecordSourceRun = (input: {
+  idempotencyKey: string;
+  sourceType: string;
+  sourceId: string;
+  sourceRevision: string;
+  status: 'posted' | 'rejected' | 'noop';
+  result: unknown;
+  source?: unknown;
+  fact?: MockAccountingSourceRun['fact'];
+  journalEntryId?: string;
+}): MockAccountingSourceRun => {
+  const run: MockAccountingSourceRun = {
+    id: `source-run-${mockAccountingSourceRuns.length + 1}-${Math.random().toString(36).slice(2)}`,
+    tenantId: MOCK_TENANT_ID,
+    sourceType: input.sourceType as MockAccountingSourceRun['sourceType'],
+    sourceId: input.sourceId,
+    sourceRevision: input.sourceRevision,
+    idempotencyKey: input.idempotencyKey,
+    source: input.source as Record<string, unknown> | undefined,
+    fact: input.fact,
+    result: input.result,
+    status: input.status,
+    journalEntryId: input.journalEntryId,
+    createdAt: new Date().toISOString(),
+  };
+  mockAccountingSourceRuns.unshift(run);
+  return run;
+};
+
+const mockUpsertOpenItem = (input: {
+  documentType: MockDocumentType;
+  documentId: string;
+  documentNumber: string;
+  documentDate: string;
+  dueDate: string;
+  partyType: 'debtor' | 'creditor';
+  partyId: string;
+  amount: number;
+  journalEntryId?: string;
+}): MockOpenItem => {
+  const timestamp = new Date().toISOString();
+  const existing = mockOpenItems.find((row) => row.sourceType === input.documentType && row.sourceId === input.documentId);
+  if (existing) {
+    existing.journalEntryId = input.journalEntryId ?? existing.journalEntryId;
+    existing.updatedAt = timestamp;
+    return existing;
+  }
+  const item: MockOpenItem = {
+    id: `open-item-${mockOpenItems.length + 1}-${Math.random().toString(36).slice(2)}`,
+    tenantId: MOCK_TENANT_ID,
+    partyType: input.partyType,
+    partyId: input.partyId,
+    sourceType: input.documentType,
+    sourceId: input.documentId,
+    documentNumber: input.documentNumber,
+    documentDate: input.documentDate,
+    dueDate: input.dueDate,
+    originalAmount: input.amount,
+    allocatedAmount: 0,
+    residualAmount: input.amount,
+    status: 'open',
+    journalEntryId: input.journalEntryId,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  mockOpenItems.push(item);
+  return item;
+};
+
+const buildMockAccountingSnapshot = (input: {
+  documentType: MockDocumentType;
+  documentId: string;
+  amounts: { netAmount: number; taxAmount: number; grossAmount: number };
+  documentNumber: string;
+}): NonNullable<MockIncomingInvoice['accountingSnapshot']> => {
+  const chart = getMockActiveChart();
+  const policy = getMockAccountingPolicy();
+  const mapping = getMockAccountingMappings(chart);
+  const { netAmount, taxAmount, grossAmount } = input.amounts;
+  const lines = input.documentType === 'outgoing_invoice'
+    ? [
+      { accountNumber: mapping.accounts_receivable, debitAmount: grossAmount, creditAmount: 0, memo: `Forderung ${input.documentNumber}` },
+      { accountNumber: mapping.revenue, debitAmount: 0, creditAmount: netAmount, netAmount, taxRate: 19, taxAmount, grossAmount, memo: `Erlös ${input.documentNumber}` },
+      { accountNumber: mapping.output_vat, debitAmount: 0, creditAmount: taxAmount, taxRate: 19, taxAmount, memo: 'Umsatzsteuer 19%' },
+    ]
+    : [
+      { accountNumber: mapping.expense, debitAmount: netAmount, creditAmount: 0, netAmount, taxRate: 19, taxAmount, grossAmount, memo: `Aufwand ${input.documentNumber}` },
+      { accountNumber: mapping.input_vat, debitAmount: taxAmount, creditAmount: 0, taxRate: 19, taxAmount, memo: 'Vorsteuer 19%' },
+      { accountNumber: mapping.accounts_payable, debitAmount: 0, creditAmount: grossAmount, memo: `Verbindlichkeit ${input.documentNumber}` },
+    ];
+  return {
+    sourceType: input.documentType,
+    sourceId: input.documentId,
+    sourceVersion: mockDigest({ documentType: input.documentType, documentId: input.documentId, ...input.amounts }),
+    chart,
+    vatMethod: policy.vatMethod,
+    netAmount,
+    taxAmount,
+    grossAmount,
+    lines,
+    capturedAt: new Date().toISOString(),
+  };
+};
+
+const postMockDocumentAccounting = (input: {
+  documentType: MockDocumentType;
+  documentId: string;
+  documentNumber: string;
+  documentDate: string;
+  dueDate: string;
+  partyType: 'debtor' | 'creditor';
+  partyId: string;
+  amounts: { netAmount: number; taxAmount: number; grossAmount: number };
+}): NonNullable<MockIncomingInvoice['accountingSnapshot']> => {
+  const snapshot = buildMockAccountingSnapshot(input);
+  const entry = mockCreateJournalEntry({
+    postingDate: input.documentDate,
+    documentDate: input.documentDate,
+    bookingText: `${input.documentType === 'outgoing_invoice' ? 'Ausgangsrechnung' : 'Eingangsrechnung'} ${input.documentNumber}`,
+    reference: input.documentNumber,
+    lines: snapshot.lines,
+  });
+  mockPostedDocumentEntries.set(`${input.documentType}:${input.documentId}`, entry.id);
+  mockUpsertOpenItem({
+    documentType: input.documentType,
+    documentId: input.documentId,
+    documentNumber: input.documentNumber,
+    documentDate: input.documentDate,
+    dueDate: input.dueDate,
+    partyType: input.partyType,
+    partyId: input.partyId,
+    amount: input.amounts.grossAmount,
+    journalEntryId: entry.id,
+  });
+  return snapshot;
+};
+
+const getMockInvoiceAccountingPreview = (
+  documentType: MockDocumentType,
+  documentId: string,
+): IpcResult<'pro:previewOutgoingInvoiceAccounting'> => {
+  if (documentType === 'incoming_invoice') {
+    const invoice = getMockIncomingInvoice(documentId);
+    if (!invoice) throw new Error('Incoming invoice not found');
+    const mapping = getMockAccountingMappings(getMockActiveChart());
+    const issues: IpcResult<'pro:previewIncomingInvoiceAccounting'>['issues'] = [];
+    if (!invoice.lines.length) issues.push({ code: 'AMBIGUOUS_INVOICE_LINES', message: 'Eingangsrechnung benötigt mindestens eine Position.', blocking: true });
+    if (Math.abs(invoice.grossAmount - invoice.netAmount - invoice.taxAmount) > 0.01) issues.push({ code: 'INVALID_INCOMING_TOTALS', message: 'Eingangsrechnung ist nicht ausgeglichen.', blocking: true });
+    if (invoice.status === 'draft' || invoice.status === 'cancelled') issues.push({ code: 'DOCUMENT_NOT_FINALIZED', message: 'Nur freigegebene Eingangsrechnungen können gebucht werden.', blocking: true });
+    if (invoice.accountingStatus === 'posted') {
+      return {
+        sourceType: 'incoming_invoice',
+        sourceId: documentId,
+        status: 'ready',
+        snapshot: invoice.accountingSnapshot,
+        issues: [],
+      };
+    }
+    return {
+      sourceType: 'incoming_invoice',
+      sourceId: documentId,
+      status: issues.some((issue) => issue.blocking) ? 'unresolved' : 'ready',
+      reason: issues[0]?.message,
+      snapshot: issues.some((issue) => issue.blocking)
+        ? undefined
+        : buildMockAccountingSnapshot({
+          documentType: 'incoming_invoice',
+          documentId,
+          documentNumber: invoice.number,
+          amounts: { netAmount: invoice.netAmount, taxAmount: invoice.taxAmount, grossAmount: invoice.grossAmount },
+        }),
+      issues: [...issues, { code: 'MAPPING_ACCOUNTS', message: `Kontenrahmen ${getMockActiveChart()}: Kreditor ${mapping.accounts_payable}, Vorsteuer ${mapping.input_vat}.`, blocking: false }],
+    };
+  }
+  const invoice = getMockInvoiceById(documentId);
+  if (!invoice) throw new Error('Invoice not found');
+  const grossAmount = round2(Number(invoice.amount) || 0);
+  const netAmount = round2(grossAmount / 1.19);
+  const amounts = { netAmount, taxAmount: round2(grossAmount - netAmount), grossAmount };
+  const issues: IpcResult<'pro:previewOutgoingInvoiceAccounting'>['issues'] = [];
+  if (!invoice.items?.length) issues.push({ code: 'AMBIGUOUS_INVOICE_LINES', message: 'Rechnung benötigt mindestens eine Position.', blocking: true });
+  if (invoice.status === 'draft' || invoice.status === 'cancelled') issues.push({ code: 'DOCUMENT_NOT_FINALIZED', message: 'Nur finalisierte Rechnungen können gebucht werden.', blocking: true });
+  if (getMockOutgoingAccountingStatus(documentId) === 'posted') {
+    return { sourceType: 'outgoing_invoice', sourceId: documentId, status: 'ready', issues: [] };
+  }
+  return {
+    sourceType: 'outgoing_invoice',
+    sourceId: documentId,
+    status: issues.some((issue) => issue.blocking) ? 'unresolved' : 'ready',
+    reason: issues[0]?.message,
+    snapshot: issues.some((issue) => issue.blocking)
+      ? undefined
+      : buildMockAccountingSnapshot({ documentType: 'outgoing_invoice', documentId, documentNumber: invoice.number, amounts }),
+    issues,
+  };
+};
+
+const applyMockPaymentAllocations = (
+  payment: MockOpenItemPayment,
+  allocations: Array<{ openItemId: string; amount: number }>,
+): void => {
+  const timestamp = new Date().toISOString();
+  for (const allocation of allocations) {
+    const item = getMockOpenItem(allocation.openItemId);
+    if (!item) throw new Error(`PAYMENT_OPEN_ITEM_NOT_FOUND:${allocation.openItemId}`);
+    if (item.partyType !== payment.partyType || (payment.partyId && item.partyId !== payment.partyId)) {
+      throw new Error('PAYMENT_PARTY_MISMATCH: Zahlung und offener Posten gehören zu unterschiedlichen Parteien.');
+    }
+    if (allocation.amount > item.residualAmount + 0.01) throw new Error('PAYMENT_ALLOCATION_EXCEEDS_RESIDUAL: Zuordnung übersteigt den Restbetrag.');
+    item.allocatedAmount = round2(item.allocatedAmount + allocation.amount);
+    item.residualAmount = round2(Math.max(0, item.originalAmount - item.allocatedAmount));
+    item.status = item.residualAmount <= 0.01 ? 'paid' : 'partially_paid';
+    item.updatedAt = timestamp;
+    payment.allocatedAmount = round2(payment.allocatedAmount + allocation.amount);
+    payment.residualAmount = round2(Math.max(0, payment.amount - payment.allocatedAmount));
+    payment.status = payment.residualAmount <= 0.01 ? 'allocated' : 'overpaid';
+  }
+};
+
+type MockReportStatement = 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz';
+type MockReportMappingPosition = IpcResult<'pro:listReportMappingPositions'>[number];
+type MockReportPositionDefinition = MockReportMappingPosition & {
+  /**
+   * Mock-only account assignment. The real reports resolve positions from
+   * persisted account mappings; the mock derives them from account ranges so
+   * every catalog position renders with an amount.
+   */
+  prefixes: string[];
+  parentPosition?: string;
+  amountSign: 1 | -1;
+};
+
+const mockReportCatalog: Record<MockReportStatement, MockReportPositionDefinition[]> = {
+  bwa01: [
+    { key: 'umsatzerloese', label: 'Umsatzerlöse', kind: 'line', prefixes: ['8', '9'], amountSign: -1 },
+    { key: 'bestandsveraenderungen', label: 'Bestandsveränderungen', kind: 'line', prefixes: [], amountSign: -1 },
+    { key: 'materialaufwand', label: 'Materialaufwand', kind: 'line', prefixes: ['5'], amountSign: -1 },
+    { key: 'personalaufwand', label: 'Personalaufwand', kind: 'line', prefixes: ['6'], amountSign: -1 },
+    { key: 'sonstige_aufwendungen', label: 'Sonstige betriebliche Aufwendungen', kind: 'line', prefixes: ['4', '7'], amountSign: -1 },
+    { key: 'betriebsergebnis', label: 'Betriebsergebnis', kind: 'result', prefixes: [], amountSign: 1 },
+  ],
+  'management-guv': [
+    { key: 'umsatzerloese', label: 'Umsatzerlöse', kind: 'line', prefixes: ['8', '9'], amountSign: -1 },
+    { key: 'bestandsveraenderungen', label: 'Bestandsveränderungen', kind: 'line', prefixes: ['7'], amountSign: -1 },
+    { key: 'materialaufwand', label: 'Materialaufwand', kind: 'line', prefixes: ['5'], amountSign: -1 },
+    { key: 'personalaufwand', label: 'Personalaufwand', kind: 'line', prefixes: ['6'], amountSign: -1 },
+    { key: 'sonstige_aufwendungen', label: 'Sonstige betriebliche Aufwendungen', kind: 'line', prefixes: ['4'], amountSign: -1 },
+    { key: 'ergebnis', label: 'Ergebnis', kind: 'result', prefixes: [], amountSign: 1 },
+  ],
+  'hgb-guv': [
+    { key: 'umsatzerloese', label: 'Umsatzerlöse', kind: 'line', prefixes: ['8', '9'], amountSign: -1 },
+    { key: 'bestandsveraenderungen', label: 'Bestandsveränderungen', kind: 'line', prefixes: ['7'], amountSign: -1 },
+    { key: 'materialaufwand', label: 'Materialaufwand', kind: 'line', prefixes: ['5'], amountSign: -1 },
+    { key: 'personalaufwand', label: 'Personalaufwand', kind: 'line', prefixes: ['6'], amountSign: -1 },
+    { key: 'abschreibungen', label: 'Abschreibungen', kind: 'line', prefixes: ['48'], amountSign: -1 },
+    { key: 'sonstige_aufwendungen', label: 'Sonstige betriebliche Aufwendungen', kind: 'line', prefixes: ['4'], amountSign: -1 },
+    { key: 'ergebnis', label: 'Ergebnis', kind: 'result', prefixes: [], amountSign: 1 },
+  ],
+  'hgb-bilanz': [
+    { key: 'anlagevermoegen', label: 'Anlagevermögen', kind: 'heading', side: 'asset', prefixes: [], amountSign: 1 },
+    { key: 'anlagevermoegen.sachanlagen', label: 'Sachanlagen', kind: 'line', side: 'asset', prefixes: ['0'], parentPosition: 'anlagevermoegen', amountSign: 1 },
+    { key: 'umlaufvermoegen', label: 'Umlaufvermögen', kind: 'heading', side: 'asset', prefixes: [], amountSign: 1 },
+    { key: 'umlaufvermoegen.vorraete', label: 'Vorräte', kind: 'line', side: 'asset', prefixes: ['10', '11', '13'], parentPosition: 'umlaufvermoegen', amountSign: 1 },
+    { key: 'umlaufvermoegen.forderungen', label: 'Forderungen aus Lieferungen und Leistungen', kind: 'line', side: 'asset', prefixes: ['12', '14'], parentPosition: 'umlaufvermoegen', amountSign: 1 },
+    { key: 'umlaufvermoegen.sonstige', label: 'Sonstige Vermögensgegenstände', kind: 'line', side: 'asset', prefixes: ['15'], parentPosition: 'umlaufvermoegen', amountSign: 1 },
+    { key: 'umlaufvermoegen.kasse_bank', label: 'Kasse und Bank', kind: 'line', side: 'asset', prefixes: ['1'], parentPosition: 'umlaufvermoegen', amountSign: 1 },
+    { key: 'summe_aktiva', label: 'Summe Aktiva', kind: 'subtotal', side: 'asset', prefixes: [], amountSign: 1 },
+    { key: 'eigenkapital', label: 'Eigenkapital', kind: 'heading', side: 'liability', prefixes: [], amountSign: -1 },
+    { key: 'eigenkapital.gezeichnetes', label: 'Gezeichnetes Kapital', kind: 'line', side: 'liability', prefixes: ['08'], parentPosition: 'eigenkapital', amountSign: -1 },
+    { key: 'eigenkapital.jahresueberschuss', label: 'Jahresüberschuss', kind: 'line', side: 'liability', prefixes: ['4', '5', '6', '7', '8', '9'], parentPosition: 'eigenkapital', amountSign: -1 },
+    { key: 'verbindlichkeiten', label: 'Verbindlichkeiten', kind: 'heading', side: 'liability', prefixes: [], amountSign: -1 },
+    { key: 'verbindlichkeiten.lieferanten', label: 'Verbindlichkeiten aus Lieferungen und Leistungen', kind: 'line', side: 'liability', prefixes: ['16', '33'], parentPosition: 'verbindlichkeiten', amountSign: -1 },
+    { key: 'verbindlichkeiten.sonstige', label: 'Sonstige Verbindlichkeiten', kind: 'line', side: 'liability', prefixes: ['17', '18', '2', '3'], parentPosition: 'verbindlichkeiten', amountSign: -1 },
+    { key: 'summe_passiva', label: 'Summe Passiva', kind: 'subtotal', side: 'liability', prefixes: [], amountSign: -1 },
+  ],
+};
+
+const mockReportPositionForAccount = (
+  statement: MockReportStatement,
+  accountNumber: string,
+): MockReportPositionDefinition | undefined => {
+  const override = mockReportMappingOverrides.find(
+    (row) => row.statement === statement && row.accountNumber === accountNumber,
+  );
+  if (override) {
+    const position = mockReportCatalog[statement].find((entry) => entry.key === override.position);
+    if (position) return position;
+  }
+  const matches = mockReportCatalog[statement]
+    .map((entry) => ({
+      entry,
+      length: Math.max(0, ...entry.prefixes.filter((prefix) => accountNumber.startsWith(prefix)).map((prefix) => prefix.length)),
+    }))
+    .filter((candidate) => candidate.length > 0);
+  return matches.sort((left, right) => right.length - left.length)[0]?.entry;
+};
+
+const mockReportAccountIsCovered = (accountNumber: string): boolean =>
+  (Object.keys(mockReportCatalog) as MockReportStatement[])
+    .some((statement) => Boolean(mockReportPositionForAccount(statement, accountNumber)));
+
+const buildMockReportingReport = async (
+  statement: MockReportStatement,
+  payload: IpcArgs<'pro:getReportingReport'>,
+): Promise<IpcResult<'pro:getReportingReport'>> => {
+  const chart = getMockActiveChart();
+  const balances = await invoke('pro:getLedgerBalances', {} as IpcArgs<'pro:getLedgerBalances'>);
+  const catalog = mockReportCatalog[statement];
+  const accounted = new Map<string, { amount: number; accountNumbers: string[] }>();
+  const unmappedAccounts = new Set<string>();
+  for (const balance of balances) {
+    const position = mockReportPositionForAccount(statement, balance.accountNumber);
+    if (!position) {
+      if (!mockReportAccountIsCovered(balance.accountNumber)) unmappedAccounts.add(balance.accountNumber);
+      continue;
+    }
+    const current = accounted.get(position.key) ?? { amount: 0, accountNumbers: [] };
+    current.amount = round2(current.amount + balance.closingBalance * position.amountSign);
+    current.accountNumbers.push(balance.accountNumber);
+    accounted.set(position.key, current);
+  }
+  const childrenOf = (entry: MockReportPositionDefinition): MockReportPositionDefinition[] =>
+    entry.kind === 'heading'
+      ? catalog.filter((child) => child.kind === 'line' && child.parentPosition === entry.key)
+      : entry.kind === 'subtotal'
+        ? catalog.filter((child) => child.kind === 'line' && child.side === entry.side)
+        : entry.kind === 'result'
+          ? catalog.filter((child) => child.kind === 'line')
+          : [entry];
+  const rowAmount = (entry: MockReportPositionDefinition): number =>
+    round2(childrenOf(entry).reduce((sum, child) => sum + (accounted.get(child.key)?.amount ?? 0), 0));
+  const rowAccounts = (entry: MockReportPositionDefinition): string[] => [
+    ...new Set(childrenOf(entry).flatMap((child) => accounted.get(child.key)?.accountNumbers ?? [])),
+  ];
+  const snapshot = {
+    fiscalYear: Number((payload.to ?? payload.asOfDate ?? payload.from ?? new Date().toISOString()).slice(0, 4)),
+    fiscalYearStart: `${Number((payload.to ?? payload.asOfDate ?? payload.from ?? new Date().toISOString()).slice(0, 4))}-01-01`,
+    businessSize: 'micro',
+    ledgerEntryCount: mockJournalEntries.filter((entry) => entry.status === 'posted').length,
+    ledgerAccountCount: mockLedgerAccounts.filter((account) => account.chart === chart).length,
+    cashEntryCount: mockEurCashFacts.length,
+    ...(payload.from ? { from: payload.from } : {}),
+    ...(payload.to ? { to: payload.to } : {}),
+    ...(payload.asOfDate ? { asOfDate: payload.asOfDate } : {}),
+  };
+  const mappingHealth = {
+    mappedAccounts: new Set([...accounted.values()].flatMap((value) => value.accountNumbers)).size,
+    inferredAccounts: 0,
+    unmappedAccounts: [...unmappedAccounts].sort(),
+    warnings: [...unmappedAccounts].sort().map((accountNumber) => `Konto ${accountNumber} ist keinem Report zugeordnet.`),
+    blocking: unmappedAccounts.size > 0,
+  };
+  if (statement === 'hgb-bilanz') {
+    const toLine = (entry: MockReportPositionDefinition) => ({
+      position: entry.key,
+      label: entry.label,
+      amount: rowAmount(entry),
+      accountNumbers: rowAccounts(entry),
+      kind: entry.kind,
+      ...(entry.parentPosition ? { parentPosition: entry.parentPosition } : {}),
+    });
+    const assets = catalog.filter((entry) => entry.side === 'asset' && entry.kind !== 'subtotal').map(toLine);
+    const liabilities = catalog.filter((entry) => entry.side === 'liability' && entry.kind !== 'subtotal').map(toLine);
+    const assetTotal = round2(catalog.filter((entry) => entry.kind === 'line' && entry.side === 'asset').reduce((sum, entry) => sum + (accounted.get(entry.key)?.amount ?? 0), 0));
+    const liabilityTotal = round2(catalog.filter((entry) => entry.kind === 'line' && entry.side === 'liability').reduce((sum, entry) => sum + (accounted.get(entry.key)?.amount ?? 0), 0));
+    return {
+      kind: statement,
+      snapshot,
+      mappingHealth,
+      assets,
+      liabilities,
+      totals: { assets: assetTotal, liabilities: liabilityTotal, delta: round2(assetTotal - liabilityTotal) },
+    };
+  }
+  const rows = catalog
+    .filter((entry) => entry.kind === 'line' || entry.kind === 'result')
+    .map((entry) => ({
+      position: entry.key,
+      label: entry.label,
+      amount: rowAmount(entry),
+      accountNumbers: rowAccounts(entry),
+      kind: entry.kind,
+    }));
+  const lines = catalog.filter((entry) => entry.kind === 'line');
+  const revenue = round2(lines.reduce((sum, entry) => sum + Math.max(0, accounted.get(entry.key)?.amount ?? 0), 0));
+  const expenses = round2(lines.reduce((sum, entry) => sum + Math.abs(Math.min(0, accounted.get(entry.key)?.amount ?? 0)), 0));
+  return {
+    kind: statement,
+    snapshot,
+    mappingHealth,
+    rows,
+    netResult: round2(revenue - expenses),
+    totals: { revenue, expenses, operatingResult: round2(revenue - expenses) },
+    ...(statement === 'hgb-guv' ? { method: 'gkv' as const } : {}),
+  };
+};
+
+const mockTaxSplit = (gross: number, rate: number): { net: number; tax: number } => {
+  const net = round2(gross / (1 + rate / 100));
+  return { net, tax: round2(gross - net) };
+};
+
+type MockCommandOutcome =
+  | { status: 'posted'; lines: MockSourceLine[]; result: Record<string, unknown> }
+  | { status: 'noop'; result: Record<string, unknown> }
+  | { status: 'rejected'; result: Record<string, unknown>; errors: IpcResult<'pro:postAccountingCommand'>['errors'] };
+
+const mockClosingLines = (
+  balances: unknown,
+  counterpartAccount: string,
+  memo: string,
+): MockSourceLine[] => (Array.isArray(balances) ? balances as Array<Record<string, unknown>> : []).flatMap((balance) => {
+  const closing = typeof balance.closingBalance === 'number' && Number.isFinite(balance.closingBalance) ? round2(balance.closingBalance) : 0;
+  const accountNumber = typeof balance.accountNumber === 'string' ? balance.accountNumber.trim() : '';
+  if (!accountNumber || closing === 0) return [];
+  const amount = Math.abs(closing);
+  return closing > 0
+    ? [{ accountNumber: counterpartAccount, debitAmount: amount, creditAmount: 0, memo }, { accountNumber, debitAmount: 0, creditAmount: amount, memo }]
+    : [{ accountNumber, debitAmount: amount, creditAmount: 0, memo }, { accountNumber: counterpartAccount, debitAmount: 0, creditAmount: amount, memo }];
+});
+
+/**
+ * Mirrors the desktop command registry: settlement and closing workflows derive
+ * their own journal lines, while validation-only workflows never post.
+ */
+const mockCommandOutcome = (kind: string, facts: Record<string, unknown>): MockCommandOutcome => {
+  const chart = getMockActiveChart();
+  const mapping = getMockAccountingMappings(chart);
+  const numeric = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? round2(value) : 0);
+  const account = (value: unknown, fallback: string): string => (typeof value === 'string' && value.trim() ? value.trim() : fallback);
+  const nested = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {});
+  const breakdown = Array.isArray(facts.taxBreakdown) ? facts.taxBreakdown as Array<Record<string, unknown>> : [];
+  const breakdownTax = round2(breakdown.reduce((sum, line) => sum + numeric(line.taxAmount), 0));
+  const breakdownNet = round2(breakdown.reduce((sum, line) => sum + numeric(line.netAmount), 0));
+  const rate = breakdownTax > 0 && breakdownNet > 0 ? round2((breakdownTax / breakdownNet) * 100) : 19;
+  const reject = (code: string, message: string, field?: string): MockCommandOutcome => ({
+    status: 'rejected',
+    result: { code, message },
+    errors: [{ code, message, ...(field ? { field } : {}), blocking: true }],
+  });
+
+  switch (kind) {
+    case 'correction':
+    case 'credit':
+    case 'skonto': {
+      const deltaGross = kind === 'skonto'
+        ? numeric(facts.skontoAmount)
+        : round2((Array.isArray(facts.deltas) ? facts.deltas as Array<Record<string, unknown>> : []).reduce((sum, delta) => sum + numeric(delta.grossAmount), 0));
+      if (deltaGross === 0) return { status: 'noop', result: { correctionGrossAmount: 0 } };
+      const sign = deltaGross < 0 ? -1 : 1;
+      const { net, tax } = mockTaxSplit(Math.abs(deltaGross), rate);
+      const documentType = nested(facts.original).documentType ?? facts.documentType;
+      const correctionGrossAmount = round2(sign * (net + tax));
+      return documentType === 'incoming_invoice'
+        ? {
+          status: 'posted',
+          result: { correctionGrossAmount, documentType: 'incoming_invoice' },
+          lines: [
+            { accountNumber: mapping.accounts_payable, debitAmount: correctionGrossAmount, creditAmount: 0, memo: 'Korrektur Verbindlichkeit' },
+            { accountNumber: mapping.expense, debitAmount: 0, creditAmount: round2(sign * net), memo: 'Korrektur Aufwand' },
+            { accountNumber: mapping.input_vat, debitAmount: 0, creditAmount: round2(sign * tax), memo: 'Korrektur Vorsteuer' },
+          ],
+        }
+        : {
+          status: 'posted',
+          result: { correctionGrossAmount, documentType: 'outgoing_invoice' },
+          lines: [
+            { accountNumber: mapping.revenue, debitAmount: round2(sign * net), creditAmount: 0, memo: 'Korrektur Erlös' },
+            { accountNumber: mapping.output_vat, debitAmount: round2(sign * tax), creditAmount: 0, memo: 'Korrektur Umsatzsteuer' },
+            { accountNumber: mapping.accounts_receivable, debitAmount: 0, creditAmount: correctionGrossAmount, memo: 'Korrektur Forderung' },
+          ],
+        };
+    }
+    case 'bad_debt':
+    case 'ustg17': {
+      const amount = numeric(facts.writeOffGrossAmount);
+      if (amount <= 0) return reject('INVALID_AMOUNT', 'Für den Forderungsausfall wird ein Bruttobetrag benötigt.', 'writeOffGrossAmount');
+      const { net, tax } = mockTaxSplit(amount, rate);
+      return {
+        status: 'posted',
+        result: { writeOffGrossAmount: amount },
+        lines: [
+          { accountNumber: account(facts.badDebtExpenseAccount, mapping.expense), debitAmount: net, creditAmount: 0, memo: 'Forderungsausfall' },
+          { accountNumber: mapping.output_vat, debitAmount: tax, creditAmount: 0, memo: 'Umsatzsteuerkorrektur §17 UStG' },
+          { accountNumber: mapping.accounts_receivable, debitAmount: 0, creditAmount: amount, memo: 'Ausbuchung Forderung' },
+        ],
+      };
+    }
+    case 'advance_settlement': {
+      const finalInvoice = nested(facts.finalInvoice);
+      const finalGross = numeric(finalInvoice.grossAmount);
+      const advanceGross = round2((Array.isArray(facts.advances) ? facts.advances as Array<Record<string, unknown>> : []).reduce((sum, advance) => sum + numeric(advance.grossAmount), 0));
+      if (finalGross <= 0 || advanceGross <= 0) return reject('SETTLEMENT_DOCUMENT_REQUIRED', 'Schlussrechnung und Anzahlungen werden für die Verrechnung benötigt.', 'finalInvoice');
+      const { net, tax } = mockTaxSplit(finalGross, rate);
+      const remainder = round2(finalGross - advanceGross);
+      return {
+        status: 'posted',
+        result: { settledGrossAmount: finalGross, advanceGrossAmount: advanceGross },
+        lines: [
+          { accountNumber: account(facts.advanceClearingReceivable, mapping.accounts_receivable), debitAmount: advanceGross, creditAmount: 0, memo: 'Verrechnung Anzahlungen' },
+          ...(remainder > 0 ? [{ accountNumber: mapping.accounts_receivable, debitAmount: remainder, creditAmount: 0, memo: 'Restforderung' }] : []),
+          { accountNumber: mapping.revenue, debitAmount: 0, creditAmount: net, memo: 'Schlussrechnung' },
+          { accountNumber: mapping.output_vat, debitAmount: 0, creditAmount: tax, memo: 'Umsatzsteuer' },
+        ],
+      };
+    }
+    case 'fiscal_close': {
+      const lines = mockClosingLines(facts.balances, account(facts.retainedEarningsAccount, '9000'), 'Erfolgskonten abschließen');
+      if (!lines.length) return { status: 'noop', result: { closedAccounts: 0 } };
+      return { status: 'posted', result: { closedAccounts: lines.length / 2 }, lines };
+    }
+    case 'carry_forward': {
+      const lines = mockClosingLines(facts.balances, account(facts.openingBalanceAccount, '9000'), 'Saldenvortrag');
+      if (!lines.length) return { status: 'noop', result: { carriedAccounts: 0 } };
+      return { status: 'posted', result: { carriedAccounts: lines.length / 2 }, lines };
+    }
+    case 'provision': {
+      const previousAmount = numeric(facts.previousAmount);
+      const targetAmount = numeric(facts.targetAmount);
+      const delta = round2(targetAmount - previousAmount);
+      if (delta === 0) return { status: 'noop', result: { previousAmount, targetAmount } };
+      const expenseAccount = account(facts.expenseAccount, mapping.expense);
+      const provisionAccount = account(facts.provisionAccount, '0970');
+      return delta > 0
+        ? {
+          status: 'posted',
+          result: { previousAmount, targetAmount, delta },
+          lines: [
+            { accountNumber: expenseAccount, debitAmount: delta, creditAmount: 0, memo: 'Rückstellung bilden' },
+            { accountNumber: provisionAccount, debitAmount: 0, creditAmount: delta, memo: 'Rückstellung bilden' },
+          ],
+        }
+        : {
+          status: 'posted',
+          result: { previousAmount, targetAmount, delta },
+          lines: [
+            { accountNumber: provisionAccount, debitAmount: Math.abs(delta), creditAmount: 0, memo: 'Rückstellung auflösen' },
+            { accountNumber: expenseAccount, debitAmount: 0, creditAmount: Math.abs(delta), memo: 'Rückstellung auflösen' },
+          ],
+        };
+    }
+    case 'accrual': {
+      const startDate = typeof facts.startDate === 'string' ? facts.startDate : '';
+      const endDate = typeof facts.endDate === 'string' ? facts.endDate : '';
+      const totalAmount = numeric(facts.totalAmount);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || totalAmount === 0) {
+        return reject('ACCRUAL_PERIOD_REQUIRED', 'Abgrenzung benötigt Start, Ende und Betrag.', 'startDate');
+      }
+      const months = Math.max(1, (Number(endDate.slice(0, 4)) - Number(startDate.slice(0, 4))) * 12 + (Number(endDate.slice(5, 7)) - Number(startDate.slice(5, 7))) + 1);
+      const monthly = round2(totalAmount / months);
+      if (monthly === 0) return { status: 'noop', result: { months, monthlyAmount: 0 } };
+      return {
+        status: 'posted',
+        result: { months, monthlyAmount: monthly, totalAmount },
+        lines: [
+          { accountNumber: account(facts.expenseAccount, mapping.expense), debitAmount: monthly, creditAmount: 0, memo: 'Abgrenzung Aufwand' },
+          { accountNumber: account(facts.deferralAccount, '2900'), debitAmount: 0, creditAmount: monthly, memo: 'Abgrenzung Rechnungsabgrenzung' },
+        ],
+      };
+    }
+    case 'inventory_closing': {
+      const items = (Array.isArray(facts.items) ? facts.items as Array<Record<string, unknown>> : [])
+        .map((item) => {
+          const quantity = numeric(item.quantity);
+          const unitCost = numeric(item.unitCost);
+          const unitMarketValue = numeric(item.unitMarketValue);
+          const value = round2(quantity * Math.min(unitCost, unitMarketValue));
+          return {
+            accountNumber: account(item.inventoryAccount, '1140'),
+            expenseAccount: account(item.expenseAccount, mapping.expense),
+            value,
+          };
+        })
+        .filter((item) => item.value > 0);
+      const total = round2(items.reduce((sum, item) => sum + item.value, 0));
+      if (total <= 0) return { status: 'noop', result: { inventoryValue: 0 } };
+      return {
+        status: 'posted',
+        result: { inventoryValue: total, itemCount: items.length },
+        lines: items.flatMap((item) => [
+          { accountNumber: item.accountNumber, debitAmount: item.value, creditAmount: 0, memo: 'Inventurbestand' },
+          { accountNumber: item.expenseAccount, debitAmount: 0, creditAmount: item.value, memo: 'Bestandsveränderung' },
+        ]),
+      };
+    }
+    case 'fx_valuation': {
+      const foreignAmount = numeric(facts.foreignAmount);
+      const closingRate = numeric(facts.closingRate);
+      const carryingAmount = numeric(facts.carryingAmount);
+      const positionAccount = account(facts.positionAccount, mapping.asset);
+      const gainAccount = account(facts.gainAccount, '2660');
+      const lossAccount = account(facts.lossAccount, '6880');
+      const balance = round2(foreignAmount * closingRate - carryingAmount);
+      if (foreignAmount === 0 || closingRate === 0 || balance === 0) return { status: 'noop', result: { valuationDifference: 0 } };
+      const isLiability = facts.position === 'liability';
+      const amount = Math.abs(balance);
+      const gains = isLiability ? balance < 0 : balance > 0;
+      return {
+        status: 'posted',
+        result: { valuationDifference: balance, position: facts.position ?? 'asset' },
+        lines: gains
+          ? [
+            { accountNumber: positionAccount, debitAmount: amount, creditAmount: 0, memo: 'Fremdwährungsbewertung' },
+            { accountNumber: gainAccount, debitAmount: 0, creditAmount: amount, memo: 'Währungsgewinn' },
+          ]
+          : [
+            { accountNumber: lossAccount, debitAmount: amount, creditAmount: 0, memo: 'Währungsverlust' },
+            { accountNumber: positionAccount, debitAmount: 0, creditAmount: amount, memo: 'Fremdwährungsbewertung' },
+          ],
+      };
+    }
+    case 'loan_schedule': {
+      const principal = numeric(facts.principal);
+      const termMonths = numeric(facts.termMonths);
+      const annualInterestRate = numeric(facts.annualInterestRate);
+      if (principal <= 0 || termMonths <= 0) return reject('LOAN_FACTS_REQUIRED', 'Darlehen benötigt Nominalbetrag und Laufzeit.', 'principal');
+      const repayment = round2(principal / termMonths);
+      const interest = round2((principal * annualInterestRate) / 100 / 12);
+      return {
+        status: 'posted',
+        result: { repayment, interest, termMonths },
+        lines: [
+          { accountNumber: account(facts.liabilityAccount, '1700'), debitAmount: repayment, creditAmount: 0, memo: 'Tilgung' },
+          { accountNumber: account(facts.interestAccount, '2100'), debitAmount: interest, creditAmount: 0, memo: 'Zinsanteil' },
+          { accountNumber: account(facts.cashAccount, mapping.bank), debitAmount: 0, creditAmount: round2(repayment + interest), memo: 'Darlehensrate' },
+        ],
+      };
+    }
+    case 'payroll_batch':
+      return { status: 'noop', result: { status: 'valid', lineCount: Array.isArray(facts.lines) ? facts.lines.length : 0 } };
+    case 'shareholder_flow':
+      return { status: 'noop', result: { status: 'valid', flowType: facts.flowType ?? 'unspecified' } };
+    case 'standalone':
+      return reject('INVALID_AMOUNT', 'Standalone-Buchungen liefern ihre Journalzeilen über den Quellbeleg.', 'source.lines');
+    default:
+      return reject('MOCK_COMMAND_UNSUPPORTED', `Für ${kind} kann der Mock keine Journalzeilen ableiten.`, 'kind');
+  }
+};
+
+const getMockInvoiceById = (id: string): Invoice | undefined => invoices.find((inv) => inv.id === id);
 
 const getMockTaxMapping = (
   chart: 'SKR03' | 'SKR04',
@@ -1530,6 +2753,86 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       return value as IpcResult<K>;
     }
 
+    case 'eur:saveCashFact': {
+      const payload = args as IpcArgs<'eur:saveCashFact'>;
+      const manifest = getCatalogManifestForYear(payload.taxYear);
+      const timestamp = new Date().toISOString();
+      const idempotencyKey = payload.idempotencyKey ?? `eur-cash:${payload.sourceType}:${payload.sourceId}:${payload.taxYear}`;
+      const existing = mockEurCashFacts.find((fact) => fact.idempotencyKey === idempotencyKey);
+      const fact: MockEurCashFact = {
+        id: existing?.id ?? `eur-cash-fact-${mockEurCashFacts.length + 1}-${Math.random().toString(36).slice(2)}`,
+        tenantId: MOCK_TENANT_ID,
+        sourceType: payload.sourceType,
+        sourceId: payload.sourceId,
+        taxYear: payload.taxYear,
+        kind: payload.kind,
+        amountNet: payload.amountNet,
+        flowType: payload.flowType,
+        eurLineId: payload.eurLineId,
+        splits: payload.splits,
+        reason: payload.reason,
+        actorId: 'mock-pro-actor',
+        actorName: 'Pro Workspace',
+        idempotencyKey,
+        provenance: {
+          catalogId: manifest.id,
+          catalogVersion: manifest.version,
+          catalogSourceHash: manifest.sha256,
+        },
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+      if (existing) mockEurCashFacts.splice(mockEurCashFacts.indexOf(existing), 1, fact);
+      else mockEurCashFacts.push(fact);
+      return fact as IpcResult<K>;
+    }
+
+    case 'eur:listCashFacts': {
+      const { taxYear } = args as IpcArgs<'eur:listCashFacts'>;
+      return mockEurCashFacts
+        .filter((fact) => fact.taxYear === taxYear)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)) as IpcResult<K>;
+    }
+
+    case 'eur:saveAnnexFact': {
+      const payload = args as IpcArgs<'eur:saveAnnexFact'>;
+      const manifest = getCatalogManifestForYear(payload.taxYear);
+      const timestamp = new Date().toISOString();
+      const idempotencyKey = payload.idempotencyKey ?? `eur-annex:${payload.taxYear}:${payload.annex}:${payload.lineId}`;
+      const existing = mockEurAnnexFacts.find((fact) => fact.idempotencyKey === idempotencyKey);
+      const fact: MockEurAnnexFact = {
+        id: existing?.id ?? `eur-annex-fact-${mockEurAnnexFacts.length + 1}-${Math.random().toString(36).slice(2)}`,
+        tenantId: MOCK_TENANT_ID,
+        taxYear: payload.taxYear,
+        annex: payload.annex,
+        lineId: payload.lineId,
+        amount: payload.amount,
+        sourceId: payload.sourceId,
+        date: payload.date,
+        reason: payload.reason,
+        actorId: 'mock-pro-actor',
+        actorName: 'Pro Workspace',
+        idempotencyKey,
+        provenance: {
+          catalogId: manifest.id,
+          catalogVersion: manifest.version,
+          catalogSourceHash: manifest.sha256,
+        },
+        createdAt: existing?.createdAt ?? timestamp,
+      };
+      if (existing) mockEurAnnexFacts.splice(mockEurAnnexFacts.indexOf(existing), 1, fact);
+      else mockEurAnnexFacts.push(fact);
+      return fact as IpcResult<K>;
+    }
+
+    case 'eur:listAnnexFacts': {
+      const { taxYear, annex } = args as IpcArgs<'eur:listAnnexFacts'>;
+      return mockEurAnnexFacts
+        .filter((fact) => fact.taxYear === taxYear)
+        .filter((fact) => (annex ? fact.annex === annex : true))
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)) as IpcResult<K>;
+    }
+
     case 'eur:exportCsv': {
       const payload = args as IpcArgs<'eur:exportCsv'>;
       const report = getMockEurReport(payload);
@@ -1617,6 +2920,132 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
         createdAt: now,
         fileCount: files.length,
         files,
+      } as IpcResult<K>;
+    }
+
+    case 'tax:saveAuditExportPackage': {
+      const artifact = args as IpcArgs<'tax:saveAuditExportPackage'>;
+      const stamp = artifact.createdAt.replace(/[^A-Za-z0-9_-]/g, '-');
+      const bundleDir = `mock://exports/tax-audit/${stamp}`;
+      const seenNames = new Set<string>();
+      const files = artifact.files.map((entry) => {
+        if (entry.name !== entry.name.split(/[\\/]/).pop() || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(entry.name) || seenNames.has(entry.name)) {
+          throw new Error('Ungültiger Dateiname im Steuerprüfungsexport.');
+        }
+        seenNames.add(entry.name);
+        const sizeBytes = mockUtf8ByteLength(entry.content);
+        if (sizeBytes !== entry.sizeBytes) {
+          throw new Error(`Integritätsprüfung für ${entry.name} fehlgeschlagen.`);
+        }
+        return {
+          name: entry.name,
+          path: `${bundleDir}/${entry.name}`,
+          sha256: entry.sha256,
+          sizeBytes,
+          ...(entry.rowCount === undefined ? {} : { rowCount: entry.rowCount }),
+        };
+      });
+      const result: MockAuditExportPackage = {
+        bundleDir,
+        manifestPath: `${bundleDir}/manifest.json`,
+        createdAt: artifact.createdAt,
+        fileCount: files.length,
+        files,
+      };
+      mockAuditExportPackages.push(result);
+      return result as IpcResult<K>;
+    }
+
+    case 'taxFiling:getStatus':
+      return {
+        provider: mockTaxFilingProvider,
+        certificates: structuredClone(mockTaxFilingCertificates),
+      } as IpcResult<K>;
+
+    case 'taxFiling:listRecords':
+      return structuredClone(mockTaxFilingRecords) as IpcResult<K>;
+
+    case 'taxFiling:installCertificate': {
+      const payload = args as IpcArgs<'taxFiling:installCertificate'>;
+      const pem = payload.pem.trim();
+      if (!/^-----BEGIN [A-Z ]*CERTIFICATE-----[\s\S]+-----END [A-Z ]*CERTIFICATE-----$/.test(pem)) {
+        throw new Error('INVALID_CERTIFICATE_PEM: Das Zertifikat muss ein PEM-Block mit BEGIN/END CERTIFICATE sein.');
+      }
+      const certificate: MockTaxFilingCertificate = {
+        id: payload.id,
+        fingerprint: mockFingerprint(pem),
+        expiresAt: payload.expiresAt,
+        ...(payload.subject === undefined ? {} : { subject: payload.subject }),
+      };
+      const existing = mockTaxFilingCertificates.findIndex((entry) => entry.id === certificate.id);
+      if (existing >= 0) mockTaxFilingCertificates[existing] = certificate;
+      else mockTaxFilingCertificates.push(certificate);
+      return structuredClone(certificate) as IpcResult<K>;
+    }
+
+    case 'taxFiling:removeCertificate': {
+      const { id } = args as IpcArgs<'taxFiling:removeCertificate'>;
+      const existing = mockTaxFilingCertificates.findIndex((entry) => entry.id === id);
+      if (existing < 0) return false as IpcResult<K>;
+      mockTaxFilingCertificates.splice(existing, 1);
+      return true as IpcResult<K>;
+    }
+
+    case 'taxFiling:validate': {
+      const { record } = args as IpcArgs<'taxFiling:validate'>;
+      if (record.status !== 'frozen') {
+        return {
+          operation: 'validate',
+          status: 'failed',
+          sourceHash: record.sourceHash,
+          issues: [{ code: 'RECORD_NOT_FROZEN', message: 'Nur eingefrorene Steuerberichte können validiert werden.' }],
+        } as IpcResult<K>;
+      }
+      upsertMockTaxFilingRecord(record);
+      return {
+        operation: 'validate',
+        status: 'validated',
+        sourceHash: record.sourceHash,
+        issues: [],
+      } as IpcResult<K>;
+    }
+
+    case 'taxFiling:export': {
+      const { record } = args as IpcArgs<'taxFiling:export'>;
+      if (record.status !== 'frozen') {
+        return {
+          operation: 'export',
+          status: 'failed',
+          sourceHash: record.sourceHash,
+          issues: [{ code: 'RECORD_NOT_FROZEN', message: 'Nur eingefrorene Steuerberichte können exportiert werden.' }],
+        } as IpcResult<K>;
+      }
+      upsertMockTaxFilingRecord(record);
+      return {
+        operation: 'export',
+        status: 'exported',
+        sourceHash: record.sourceHash,
+        outputPath: `mock://tax-filing/exports/${record.id}.${record.kind === 'e_bilanz' ? 'xml' : 'json'}`,
+        issues: [],
+      } as IpcResult<K>;
+    }
+
+    case 'taxFiling:submit': {
+      const { record } = args as IpcArgs<'taxFiling:submit'>;
+      if (record.status === 'queued') {
+        return {
+          operation: 'submit',
+          status: 'failed',
+          sourceHash: record.sourceHash,
+          issues: [{ code: 'RECORD_ALREADY_QUEUED', message: 'Der Steuerbericht ist bereits zur Übermittlung eingereiht.' }],
+        } as IpcResult<K>;
+      }
+      upsertMockTaxFilingRecord(record, 'queued');
+      return {
+        operation: 'submit',
+        status: 'submitted',
+        sourceHash: record.sourceHash,
+        issues: [],
       } as IpcResult<K>;
     }
 
@@ -1801,12 +3230,24 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
 
       seed('SKR03', '1200', 'Bank');
       seed('SKR03', '1000', 'Kasse');
+      seed('SKR03', '1400', 'Forderungen aus Lieferungen und Leistungen');
+      seed('SKR03', '1600', 'Verbindlichkeiten aus Lieferungen und Leistungen');
+      seed('SKR03', '1776', 'Umsatzsteuer 19%');
+      seed('SKR03', '1780', 'Umsatzsteuer nicht fällig 19%');
       seed('SKR03', '8400', 'Erlöse 19% USt');
       seed('SKR03', '1576', 'Vorsteuer 19%');
+      seed('SKR03', '4900', 'Sonstige betriebliche Aufwendungen');
+      seed('SKR03', '0480', 'Geringwertige Wirtschaftsgüter');
       seed('SKR04', '1800', 'Bank');
       seed('SKR04', '1600', 'Kasse');
+      seed('SKR04', '1200', 'Forderungen aus Lieferungen und Leistungen');
+      seed('SKR04', '3300', 'Verbindlichkeiten aus Lieferungen und Leistungen');
+      seed('SKR04', '3806', 'Umsatzsteuer 19%');
+      seed('SKR04', '3810', 'Umsatzsteuer nicht fällig 19%');
       seed('SKR04', '4400', 'Erlöse 19% USt');
       seed('SKR04', '1406', 'Vorsteuer 19%');
+      seed('SKR04', '6300', 'Sonstige betriebliche Aufwendungen');
+      seed('SKR04', '0670', 'Geringwertige Wirtschaftsgüter');
 
       const stats = getMockLedgerStats();
       return {
@@ -2287,6 +3728,715 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
         unbalancedDraftCount: unbalanced,
         unmappedAccountCount: 0,
         lastDatevExportAt: mockDatevExports[0]?.createdAt,
+      } as IpcResult<K>;
+    }
+
+    case 'pro:getAccountingPolicy':
+      return getMockAccountingPolicy() as IpcResult<K>;
+
+    case 'pro:setAccountingPolicy': {
+      const payload = args as IpcArgs<'pro:setAccountingPolicy'>;
+      if (payload.activeChart !== getMockActiveChart() && mockJournalEntries.some((entry) => entry.status === 'posted')) {
+        throw new Error('ACCOUNTING_CHART_LOCKED: Der Kontenrahmen kann nach einer gebuchten Journalbuchung nicht mehr geändert werden.');
+      }
+      mockAccountingPolicyChart = payload.activeChart;
+      mockAccountingVatMethod = payload.vatMethod;
+      mockAccountingPolicyUpdatedAt = new Date().toISOString();
+      ensureMockAccountingMappings();
+      return getMockAccountingPolicy() as IpcResult<K>;
+    }
+
+    case 'pro:listAccountingAccountMappings': {
+      const { chart } = args as IpcArgs<'pro:listAccountingAccountMappings'>;
+      ensureMockAccountingMappings();
+      return mockAccountingAccountMappings
+        .filter((row) => (chart ? row.chart === chart : true))
+        .sort((a, b) => (a.chart === b.chart ? a.role.localeCompare(b.role) : a.chart.localeCompare(b.chart))) as IpcResult<K>;
+    }
+
+    case 'pro:upsertAccountingAccountMapping': {
+      const payload = args as IpcArgs<'pro:upsertAccountingAccountMapping'>;
+      ensureMockAccountingMappings();
+      const chartHasAccounts = mockLedgerAccounts.some((row) => row.chart === payload.chart);
+      if (chartHasAccounts && !mockLedgerAccounts.some((row) => row.chart === payload.chart && row.accountNumber === payload.accountNumber)) {
+        throw new Error(`UNKNOWN_ACCOUNT:${payload.accountNumber}`);
+      }
+      const index = mockAccountingAccountMappings.findIndex((row) => row.chart === payload.chart && row.role === payload.role);
+      const next: MockAccountingAccountMapping = {
+        id: payload.id ?? (index >= 0 ? mockAccountingAccountMappings[index]!.id : `${MOCK_TENANT_ID}-${payload.chart}-${payload.role}`),
+        tenantId: MOCK_TENANT_ID,
+        chart: payload.chart,
+        role: payload.role,
+        accountNumber: payload.accountNumber,
+        updatedAt: new Date().toISOString(),
+      };
+      if (index >= 0) mockAccountingAccountMappings[index] = next;
+      else mockAccountingAccountMappings.push(next);
+      return next as IpcResult<K>;
+    }
+
+    case 'pro:listVendors':
+      return [...mockVendors].sort((a, b) => a.name.localeCompare(b.name)) as IpcResult<K>;
+
+    case 'pro:upsertVendor': {
+      const payload = args as IpcArgs<'pro:upsertVendor'>;
+      const timestamp = new Date().toISOString();
+      const index = mockVendors.findIndex((row) => row.id === payload.vendor.id);
+      const next: MockVendor = {
+        ...(index >= 0 ? mockVendors[index]! : { tenantId: MOCK_TENANT_ID, createdAt: timestamp }),
+        ...payload.vendor,
+        tenantId: MOCK_TENANT_ID,
+        updatedAt: timestamp,
+      };
+      if (index >= 0) mockVendors[index] = next;
+      else mockVendors.push(next);
+      return next as IpcResult<K>;
+    }
+
+    case 'pro:listIncomingInvoices':
+      return [...mockIncomingInvoices].sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate)) as IpcResult<K>;
+
+    case 'pro:upsertIncomingInvoice': {
+      const payload = args as IpcArgs<'pro:upsertIncomingInvoice'>;
+      const invoice = payload.invoice;
+      if (Math.abs(invoice.grossAmount - invoice.netAmount - invoice.taxAmount) > 0.01 || invoice.grossAmount < 0 || invoice.netAmount < 0 || invoice.taxAmount < 0) {
+        throw new Error('INVALID_INCOMING_TOTALS: Brutto muss Netto plus Steuer entsprechen.');
+      }
+      if (!mockVendors.some((vendor) => vendor.id === invoice.vendorId)) {
+        throw new Error('VENDOR_TENANT_MISMATCH: Der Kreditor ist nicht bekannt.');
+      }
+      const index = mockIncomingInvoices.findIndex((row) => row.id === invoice.id);
+      const existing = index >= 0 ? mockIncomingInvoices[index]! : undefined;
+      if (existing?.accountingStatus === 'posted') {
+        throw new Error('POSTED_DOCUMENT_IMMUTABLE: Gebuchte Eingangsrechnungen können nicht mehr geändert werden.');
+      }
+      const timestamp = new Date().toISOString();
+      const next: MockIncomingInvoice = {
+        ...invoice,
+        tenantId: MOCK_TENANT_ID,
+        lines: invoice.lines.map((line, position) => ({ ...line, incomingInvoiceId: invoice.id, position })),
+        accountingStatus: invoice.accountingStatus ?? existing?.accountingStatus ?? 'unposted',
+        accountingSnapshot: existing?.accountingSnapshot,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+      if (index >= 0) mockIncomingInvoices[index] = next;
+      else mockIncomingInvoices.push(next);
+      return next as IpcResult<K>;
+    }
+
+    case 'pro:listIncomingInvoiceDocuments': {
+      const { invoiceId } = args as IpcArgs<'pro:listIncomingInvoiceDocuments'>;
+      return mockIncomingInvoiceDocuments
+        .filter((document) => document.incomingInvoiceId === invoiceId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)) as IpcResult<K>;
+    }
+
+    case 'pro:uploadIncomingInvoiceDocument': {
+      const payload = args as IpcArgs<'pro:uploadIncomingInvoiceDocument'>;
+      if (!getMockIncomingInvoice(payload.invoiceId)) throw new Error('Incoming invoice not found');
+      const timestamp = new Date().toISOString();
+      const document: MockIncomingInvoiceDocument = {
+        id: `incoming-document-${mockIncomingInvoiceDocuments.length + 1}-${Math.random().toString(36).slice(2)}`,
+        tenantId: MOCK_TENANT_ID,
+        incomingInvoiceId: payload.invoiceId,
+        originalFilename: payload.originalFilename,
+        mimeType: payload.mimeType,
+        byteLength: mockBase64ByteLength(payload.data),
+        sha256: mockDigest(payload.data),
+        reviewStatus: 'pending',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      mockIncomingInvoiceDocumentData.set(document.id, payload.data);
+      mockIncomingInvoiceDocuments.push(document);
+      return document as IpcResult<K>;
+    }
+
+    case 'pro:downloadIncomingInvoiceDocument': {
+      const { documentId } = args as IpcArgs<'pro:downloadIncomingInvoiceDocument'>;
+      const document = mockIncomingInvoiceDocuments.find((row) => row.id === documentId);
+      if (!document) throw new Error('Incoming invoice document not found');
+      return {
+        document,
+        data: mockIncomingInvoiceDocumentData.get(documentId) ?? mockBase64('mock-dokument'),
+      } as IpcResult<K>;
+    }
+
+    case 'pro:reviewIncomingInvoiceDocument': {
+      const payload = args as IpcArgs<'pro:reviewIncomingInvoiceDocument'>;
+      const document = mockIncomingInvoiceDocuments.find((row) => row.id === payload.documentId);
+      if (!document) throw new Error('Incoming invoice document not found');
+      document.reviewStatus = payload.reviewStatus;
+      document.updatedAt = new Date().toISOString();
+      return document as IpcResult<K>;
+    }
+
+    case 'pro:previewIncomingInvoiceAccounting': {
+      const { invoiceId } = args as IpcArgs<'pro:previewIncomingInvoiceAccounting'>;
+      return getMockInvoiceAccountingPreview('incoming_invoice', invoiceId) as IpcResult<K>;
+    }
+
+    case 'pro:postIncomingInvoiceAccounting': {
+      const payload = args as IpcArgs<'pro:postIncomingInvoiceAccounting'>;
+      const preview = getMockInvoiceAccountingPreview('incoming_invoice', payload.invoiceId);
+      if (preview.status === 'unresolved') return preview as IpcResult<K>;
+      const invoice = getMockIncomingInvoice(payload.invoiceId)!;
+      const snapshot = postMockDocumentAccounting({
+        documentType: 'incoming_invoice',
+        documentId: invoice.id,
+        documentNumber: invoice.number,
+        documentDate: invoice.invoiceDate,
+        dueDate: invoice.dueDate,
+        partyType: 'creditor',
+        partyId: invoice.vendorId,
+        amounts: { netAmount: invoice.netAmount, taxAmount: invoice.taxAmount, grossAmount: invoice.grossAmount },
+      });
+      invoice.accountingStatus = 'posted';
+      invoice.accountingSnapshot = snapshot;
+      invoice.updatedAt = new Date().toISOString();
+      return { ...preview, status: 'ready' as const, snapshot, issues: [] } as IpcResult<K>;
+    }
+
+    case 'pro:previewOutgoingInvoiceAccounting': {
+      const { invoiceId } = args as IpcArgs<'pro:previewOutgoingInvoiceAccounting'>;
+      return getMockInvoiceAccountingPreview('outgoing_invoice', invoiceId) as IpcResult<K>;
+    }
+
+    case 'pro:postOutgoingInvoiceAccounting': {
+      const payload = args as IpcArgs<'pro:postOutgoingInvoiceAccounting'>;
+      const preview = getMockInvoiceAccountingPreview('outgoing_invoice', payload.invoiceId);
+      if (preview.status === 'unresolved') return preview as IpcResult<K>;
+      const invoice = getMockInvoiceById(payload.invoiceId)!;
+      const grossAmount = round2(Number(invoice.amount) || 0);
+      const netAmount = round2(grossAmount / 1.19);
+      const snapshot = postMockDocumentAccounting({
+        documentType: 'outgoing_invoice',
+        documentId: invoice.id,
+        documentNumber: invoice.number,
+        documentDate: invoice.date,
+        dueDate: invoice.dueDate,
+        partyType: 'debtor',
+        partyId: invoice.clientId ?? invoice.id,
+        amounts: { netAmount, taxAmount: round2(grossAmount - netAmount), grossAmount },
+      });
+      mockOutgoingAccountingStatus.set(invoice.id, 'posted');
+      return { ...preview, status: 'ready' as const, snapshot, issues: [] } as IpcResult<K>;
+    }
+
+    case 'pro:listOpenItems':
+      return [...mockOpenItems].sort((a, b) => a.dueDate.localeCompare(b.dueDate)) as IpcResult<K>;
+
+    case 'pro:allocateOpenItemPayment': {
+      const { payment: input } = args as IpcArgs<'pro:allocateOpenItemPayment'>;
+      const payment = input.paymentId
+        ? mockOpenItemPayments.find((row) => row.id === input.paymentId)
+        : mockOpenItemPayments.find((row) => row.sourceType === input.sourceType && row.sourceId === input.sourceId);
+      if (input.paymentId && !payment) throw new Error('PAYMENT_NOT_FOUND: Die Zahlung ist nicht vorhanden.');
+      if (payment && !input.paymentId) {
+        const matching = payment.partyType === input.partyType
+          && payment.amount === round2(input.amount)
+          && payment.paymentDate === input.paymentDate
+          && payment.bankAccountNumber === input.bankAccountNumber;
+        if (!matching) throw new Error('PAYMENT_SOURCE_MISMATCH: Zur Quelle existiert bereits eine abweichende Zahlung.');
+        return payment as IpcResult<K>;
+      }
+      const next: MockOpenItemPayment = payment ?? {
+        id: `open-item-payment-${mockOpenItemPayments.length + 1}-${Math.random().toString(36).slice(2)}`,
+        tenantId: MOCK_TENANT_ID,
+        partyType: input.partyType,
+        partyId: input.partyId,
+        paymentDate: input.paymentDate,
+        amount: round2(input.amount),
+        bankAccountNumber: input.bankAccountNumber,
+        method: input.method,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+        allocatedAmount: 0,
+        residualAmount: round2(input.amount),
+        status: 'open',
+        createdAt: new Date().toISOString(),
+      };
+      const requested = round2(input.allocations.reduce((sum, allocation) => sum + allocation.amount, 0));
+      if (requested > next.residualAmount + 0.01) {
+        throw new Error('PAYMENT_ALLOCATION_EXCEEDS_RESIDUAL: Die Zuordnung übersteigt den offenen Betrag der Zahlung.');
+      }
+      mockOpenItemAllocationEvents.add(input.allocationEventId);
+      applyMockPaymentAllocations(next, input.allocations);
+      if (!payment) {
+        const mapping = getMockAccountingMappings(getMockActiveChart());
+        const entry = mockCreateJournalEntry({
+          postingDate: input.paymentDate,
+          bookingText: `Zahlung ${input.partyType === 'debtor' ? 'Debitor' : 'Kreditor'}`,
+          reference: `${input.sourceType}:${input.sourceId}`,
+          lines: input.partyType === 'debtor'
+            ? [
+              { accountNumber: input.bankAccountNumber, debitAmount: next.amount, creditAmount: 0, memo: 'Zahlungseingang' },
+              { accountNumber: mapping.accounts_receivable, debitAmount: 0, creditAmount: next.amount, memo: 'Forderungsausgleich' },
+            ]
+            : [
+              { accountNumber: mapping.accounts_payable, debitAmount: next.amount, creditAmount: 0, memo: 'Verbindlichkeitsausgleich' },
+              { accountNumber: input.bankAccountNumber, debitAmount: 0, creditAmount: next.amount, memo: 'Zahlungsausgang' },
+            ],
+        });
+        next.journalEntryId = entry.id;
+        mockOpenItemPayments.unshift(next);
+        if (input.sourceType === 'bank_transaction') {
+          const openItem = input.allocations.map((allocation) => getMockOpenItem(allocation.openItemId)).find(Boolean);
+          for (const account of accounts) {
+            const transaction = account.transactions.find((row) => row.id === input.sourceId);
+            if (!transaction) continue;
+            transaction.status = 'booked';
+            if (openItem && openItem.sourceType === 'outgoing_invoice') transaction.linkedInvoiceId = openItem.sourceId;
+            break;
+          }
+        }
+      }
+      return next as IpcResult<K>;
+    }
+
+    case 'pro:allocateRemainingPayment': {
+      const payload = args as IpcArgs<'pro:allocateRemainingPayment'>;
+      const payment = mockOpenItemPayments.find((row) => row.id === payload.paymentId);
+      if (!payment) throw new Error('PAYMENT_NOT_FOUND: Die Zahlung ist nicht vorhanden.');
+      if (mockOpenItemAllocationEvents.has(payload.allocationEventId)) return payment as IpcResult<K>;
+      const requested = round2(payload.allocations.reduce((sum, allocation) => sum + allocation.amount, 0));
+      if (requested > payment.residualAmount + 0.01) {
+        throw new Error('PAYMENT_ALLOCATION_EXCEEDS_RESIDUAL: Die Zuordnung übersteigt den Restbetrag der Zahlung.');
+      }
+      mockOpenItemAllocationEvents.add(payload.allocationEventId);
+      applyMockPaymentAllocations(payment, payload.allocations);
+      return payment as IpcResult<K>;
+    }
+
+    case 'pro:reverseDocumentAccounting': {
+      const payload = args as IpcArgs<'pro:reverseDocumentAccounting'>;
+      const status = payload.documentType === 'incoming_invoice'
+        ? getMockIncomingInvoice(payload.documentId)?.accountingStatus
+        : getMockOutgoingAccountingStatus(payload.documentId);
+      if (status !== 'posted') throw new Error('DOCUMENT_NOT_POSTED: Nur gebuchte Belege können storniert werden.');
+      const entryId = mockPostedDocumentEntries.get(`${payload.documentType}:${payload.documentId}`);
+      const entry = entryId ? mockJournalEntries.find((row) => row.id === entryId) : undefined;
+      if (!entry) throw new Error('DOCUMENT_NOT_POSTED: Zum Beleg liegt keine Journalbuchung vor.');
+      if (entry.status === 'reversed') throw new Error('DOCUMENT_ALREADY_REVERSED: Der Beleg wurde bereits storniert.');
+      const reversal = mockCreateJournalEntry({
+        postingDate: payload.postingDate ?? new Date().toISOString().slice(0, 10),
+        documentDate: entry.documentDate,
+        bookingText: `Storno: ${entry.bookingText}`,
+        reference: payload.reason,
+        lines: entry.lines.map((line) => ({
+          accountNumber: line.accountNumber,
+          debitAmount: line.creditAmount,
+          creditAmount: line.debitAmount,
+          memo: line.memo,
+        })),
+      });
+      entry.status = 'reversed';
+      entry.reversedEntryId = reversal.id;
+      if (payload.documentType === 'incoming_invoice') {
+        const invoice = getMockIncomingInvoice(payload.documentId);
+        if (invoice) {
+          invoice.accountingStatus = 'reversed';
+          invoice.status = 'cancelled';
+          invoice.updatedAt = new Date().toISOString();
+        }
+      } else {
+        mockOutgoingAccountingStatus.set(payload.documentId, 'reversed');
+      }
+      for (const item of mockOpenItems) {
+        if (item.sourceType !== payload.documentType || item.sourceId !== payload.documentId) continue;
+        item.status = 'unresolved';
+        item.residualAmount = 0;
+        item.updatedAt = new Date().toISOString();
+      }
+      return { ok: true, reversalEntryId: reversal.id } as IpcResult<K>;
+    }
+
+    case 'pro:previewAccountingBackfill': {
+      const chart = getMockActiveChart();
+      const policy = getMockAccountingPolicy();
+      const candidates: IpcResult<'pro:previewAccountingBackfill'>['candidates'] = [];
+      for (const invoice of invoices) {
+        if (invoice.status === 'draft' || invoice.status === 'cancelled') continue;
+        if (getMockOutgoingAccountingStatus(invoice.id) !== 'unposted') continue;
+        const grossAmount = round2(Number(invoice.amount) || 0);
+        const preview = getMockInvoiceAccountingPreview('outgoing_invoice', invoice.id);
+        candidates.push({
+          sourceType: 'outgoing_invoice',
+          sourceId: invoice.id,
+          status: preview.status,
+          reason: preview.reason,
+          sourceVersion: mockDigest({ documentId: invoice.id, number: invoice.number, grossAmount }),
+          snapshot: preview.snapshot,
+        });
+      }
+      for (const invoice of mockIncomingInvoices) {
+        if (invoice.status === 'draft' || invoice.status === 'cancelled') continue;
+        if (invoice.accountingStatus !== 'unposted') continue;
+        const preview = getMockInvoiceAccountingPreview('incoming_invoice', invoice.id);
+        candidates.push({
+          sourceType: 'incoming_invoice',
+          sourceId: invoice.id,
+          status: preview.status,
+          reason: preview.reason,
+          sourceVersion: mockDigest({ documentId: invoice.id, number: invoice.number, grossAmount: invoice.grossAmount }),
+          snapshot: preview.snapshot,
+        });
+      }
+      for (const transaction of getAllTransactions()) {
+        candidates.push({
+          sourceType: 'legacy_transaction',
+          sourceId: transaction.id,
+          status: 'unresolved',
+          reason: 'Bankumsatz erfordert eine explizite Konten- und Nachweisprüfung.',
+          sourceVersion: mockDigest({ transactionId: transaction.id, date: transaction.date, amount: transaction.amount }),
+          snapshot: { id: transaction.id, counterparty: transaction.counterparty, amount: transaction.amount },
+        });
+      }
+      const confirmationHash = mockDigest({ chart, vatMethod: policy.vatMethod, candidates });
+      const runId = `backfill-run-${mockBackfillRuns.size + 1}-${Math.random().toString(36).slice(2)}`;
+      mockBackfillRuns.set(runId, { confirmationHash, status: 'preview', candidates });
+      return {
+        runId,
+        status: 'preview',
+        candidates,
+        readyCount: candidates.filter((candidate) => candidate.status === 'ready').length,
+        unresolvedCount: candidates.filter((candidate) => candidate.status === 'unresolved').length,
+        confirmationHash,
+      } as IpcResult<K>;
+    }
+
+    case 'pro:confirmAccountingBackfill': {
+      const payload = args as IpcArgs<'pro:confirmAccountingBackfill'>;
+      const run = mockBackfillRuns.get(payload.runId);
+      if (!run) throw new Error('BACKFILL_RUN_NOT_FOUND: Der Nachbuchungslauf ist nicht vorhanden.');
+      if (run.status === 'completed' && run.result) return run.result as IpcResult<K>;
+      if (run.confirmationHash !== payload.confirmationHash) {
+        throw new Error('BACKFILL_CONFIRMATION_HASH_MISMATCH: Der Bestätigungshash passt nicht zum Vorschau-Lauf.');
+      }
+      let postedCount = 0;
+      let unresolvedCount = 0;
+      for (const candidate of run.candidates) {
+        if (candidate.status !== 'ready') {
+          unresolvedCount += 1;
+          continue;
+        }
+        if (candidate.sourceType === 'incoming_invoice') {
+          const invoice = getMockIncomingInvoice(candidate.sourceId);
+          if (!invoice) {
+            unresolvedCount += 1;
+            continue;
+          }
+          const snapshot = postMockDocumentAccounting({
+            documentType: 'incoming_invoice',
+            documentId: invoice.id,
+            documentNumber: invoice.number,
+            documentDate: invoice.invoiceDate,
+            dueDate: invoice.dueDate,
+            partyType: 'creditor',
+            partyId: invoice.vendorId,
+            amounts: { netAmount: invoice.netAmount, taxAmount: invoice.taxAmount, grossAmount: invoice.grossAmount },
+          });
+          invoice.accountingStatus = 'posted';
+          invoice.accountingSnapshot = snapshot;
+          invoice.updatedAt = new Date().toISOString();
+          postedCount += 1;
+          continue;
+        }
+        const invoice = getMockInvoiceById(candidate.sourceId);
+        if (!invoice) {
+          unresolvedCount += 1;
+          continue;
+        }
+        const grossAmount = round2(Number(invoice.amount) || 0);
+        const netAmount = round2(grossAmount / 1.19);
+        postMockDocumentAccounting({
+          documentType: 'outgoing_invoice',
+          documentId: invoice.id,
+          documentNumber: invoice.number,
+          documentDate: invoice.date,
+          dueDate: invoice.dueDate,
+          partyType: 'debtor',
+          partyId: invoice.clientId ?? invoice.id,
+          amounts: { netAmount, taxAmount: round2(grossAmount - netAmount), grossAmount },
+        });
+        mockOutgoingAccountingStatus.set(invoice.id, 'posted');
+        postedCount += 1;
+      }
+      const result: IpcResult<'pro:confirmAccountingBackfill'> = {
+        runId: payload.runId,
+        postedCount,
+        unresolvedCount,
+        status: 'completed',
+      };
+      mockBackfillRuns.set(payload.runId, { ...run, status: 'completed', result });
+      return result as IpcResult<K>;
+    }
+
+    case 'pro:postAccountingSource': {
+      const { source } = args as IpcArgs<'pro:postAccountingSource'>;
+      const idempotencyKey = `${source.sourceType}:${source.sourceId}:${source.sourceRevision}`;
+      const existingRun = mockAccountingSourceRuns.find((run) => run.idempotencyKey === idempotencyKey);
+      if (existingRun) return { status: 'duplicate', sourceRun: existingRun, errors: [], idempotencyKey } as IpcResult<K>;
+      const debit = round2(source.lines.reduce((sum, line) => sum + line.debitAmount, 0));
+      const credit = round2(source.lines.reduce((sum, line) => sum + line.creditAmount, 0));
+      const errors: IpcResult<'pro:postAccountingSource'>['errors'] = [];
+      if (!source.lines.length) {
+        errors.push({ code: 'INVALID_AMOUNT', message: 'Mindestens eine Journalzeile ist erforderlich.', field: 'source.lines', blocking: true });
+      } else if (Math.abs(debit - credit) > 0.005) {
+        errors.push({ code: 'UNBALANCED_ENTRY', message: 'Soll und Haben müssen centgenau übereinstimmen.', field: 'source.lines', blocking: true });
+      }
+      if (errors.length) {
+        const run = mockRecordSourceRun({
+          idempotencyKey,
+          sourceType: source.sourceType,
+          sourceId: source.sourceId,
+          sourceRevision: source.sourceRevision,
+          source,
+          status: 'rejected',
+          result: { status: 'rejected', errors },
+        });
+        return { status: 'rejected', sourceRun: run, errors, idempotencyKey } as IpcResult<K>;
+      }
+      const entry = mockCreateJournalEntry({
+        postingDate: source.postingDate,
+        documentDate: source.effectiveDate,
+        bookingText: source.bookingText,
+        reference: source.reference ?? idempotencyKey,
+        lines: source.lines,
+      });
+      const run = mockRecordSourceRun({
+        idempotencyKey,
+        sourceType: source.sourceType,
+        sourceId: source.sourceId,
+        sourceRevision: source.sourceRevision,
+        source,
+        fact: { ...source, lines: source.lines },
+        status: 'posted',
+        result: { status: 'posted', entryId: entry.id },
+        journalEntryId: entry.id,
+      });
+      return {
+        status: 'posted',
+        sourceRun: run,
+        command: { kind: 'standalone', entry },
+        errors: [],
+        idempotencyKey,
+      } as IpcResult<K>;
+    }
+
+    case 'pro:postAccountingCommand': {
+      const payload = args as IpcArgs<'pro:postAccountingCommand'>;
+      const source = payload.source;
+      const idempotencyKey = `${source.sourceType}:${source.sourceId}:${source.sourceRevision}:${payload.kind}`;
+      const existingRun = mockAccountingSourceRuns.find((run) => run.idempotencyKey === idempotencyKey);
+      if (existingRun) return { status: 'duplicate', sourceRun: existingRun, errors: [], idempotencyKey } as IpcResult<K>;
+      const domainFacts = payload.domainFacts && typeof payload.domainFacts === 'object' && !Array.isArray(payload.domainFacts)
+        ? payload.domainFacts as Record<string, unknown>
+        : {};
+      const outcome = mockCommandOutcome(payload.kind, domainFacts);
+      if (outcome.status === 'rejected') {
+        const run = mockRecordSourceRun({
+          idempotencyKey,
+          sourceType: source.sourceType,
+          sourceId: source.sourceId,
+          sourceRevision: source.sourceRevision,
+          source,
+          status: 'rejected',
+          result: { status: 'rejected', kind: payload.kind, ...outcome.result },
+        });
+        return { status: 'rejected', sourceRun: run, errors: outcome.errors, idempotencyKey } as IpcResult<K>;
+      }
+      if (outcome.status === 'noop') {
+        const run = mockRecordSourceRun({
+          idempotencyKey,
+          sourceType: source.sourceType,
+          sourceId: source.sourceId,
+          sourceRevision: source.sourceRevision,
+          source,
+          status: 'noop',
+          result: { status: 'noop', kind: payload.kind, ...outcome.result },
+        });
+        return { status: 'noop', sourceRun: run, errors: [], idempotencyKey } as IpcResult<K>;
+      }
+      const entry = mockCreateJournalEntry({
+        postingDate: source.postingDate,
+        documentDate: source.effectiveDate,
+        bookingText: source.bookingText,
+        reference: source.reference ?? idempotencyKey,
+        lines: outcome.lines,
+      });
+      const run = mockRecordSourceRun({
+        idempotencyKey,
+        sourceType: source.sourceType,
+        sourceId: source.sourceId,
+        sourceRevision: source.sourceRevision,
+        source,
+        fact: { ...source, lines: outcome.lines },
+        status: 'posted',
+        result: { status: 'posted', kind: payload.kind, ...outcome.result },
+        journalEntryId: entry.id,
+      });
+      return {
+        status: 'posted',
+        sourceRun: run,
+        command: { kind: payload.kind, entry },
+        errors: [],
+        idempotencyKey,
+      } as IpcResult<K>;
+    }
+
+    case 'pro:listAccountingSourceRuns':
+      return [...mockAccountingSourceRuns]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)) as IpcResult<K>;
+
+    case 'pro:getAccountingSourceRun': {
+      const { id } = args as IpcArgs<'pro:getAccountingSourceRun'>;
+      return (mockAccountingSourceRuns.find((run) => run.id === id) ?? null) as IpcResult<K>;
+    }
+
+    case 'pro:getReportingReport': {
+      const payload = args as IpcArgs<'pro:getReportingReport'>;
+      return await buildMockReportingReport(payload.kind, payload) as IpcResult<K>;
+    }
+
+    case 'pro:listReportSnapshots': {
+      const { reportType } = args as IpcArgs<'pro:listReportSnapshots'>;
+      return [...mockReportSnapshots]
+        .filter((row) => (reportType ? row.reportType === reportType : true))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)) as IpcResult<K>;
+    }
+
+    case 'pro:saveReportSnapshot': {
+      const payload = args as IpcArgs<'pro:saveReportSnapshot'>;
+      const createdAt = new Date().toISOString();
+      const snapshot: MockReportSnapshot = {
+        id: `report-snapshot-${mockReportSnapshots.length + 1}-${Math.random().toString(36).slice(2)}`,
+        reportType: payload.reportType,
+        args: payload.args ?? {},
+        payload: payload.payload,
+        createdAt,
+        sourceHash: mockDigest({ reportType: payload.reportType, args: payload.args ?? {}, createdAt }),
+      };
+      mockReportSnapshots.unshift(snapshot);
+      return structuredClone(snapshot) as IpcResult<K>;
+    }
+
+    case 'pro:getReportMappingHealth': {
+      const payload = args as IpcArgs<'pro:getReportMappingHealth'>;
+      const statement = payload.statement ?? 'management-guv';
+      const balances = await invoke(
+        'pro:getLedgerBalances',
+        (payload.asOfDate ? { asOfDate: payload.asOfDate } : {}) as IpcArgs<'pro:getLedgerBalances'>,
+      );
+      return {
+        chart: payload.chart ?? getMockActiveChart(),
+        unmapped: balances
+          .map((balance) => balance.accountNumber)
+          .filter((accountNumber) => !mockReportAccountIsCovered(accountNumber))
+          .map((accountNumber) => ({ accountNumber, statement })),
+      } as IpcResult<K>;
+    }
+
+    case 'pro:listReportMappingPositions': {
+      const { statement } = args as IpcArgs<'pro:listReportMappingPositions'>;
+      return mockReportCatalog[statement].map((entry) => ({
+        key: entry.key,
+        label: entry.label,
+        kind: entry.kind,
+        ...(entry.side ? { side: entry.side } : {}),
+      })) as IpcResult<K>;
+    }
+
+    case 'pro:upsertReportMappingOverride': {
+      const payload = args as IpcArgs<'pro:upsertReportMappingOverride'>;
+      const catalogEntry = mockReportCatalog[payload.statement].find((entry) => entry.key === payload.position);
+      if (!catalogEntry) throw new Error(`REPORT_MAPPING_POSITION_NOT_ALLOWED:${payload.position}`);
+      if (payload.side && catalogEntry.side && payload.side !== catalogEntry.side) {
+        throw new Error('REPORT_MAPPING_SIDE_INVALID: Die Seite gehört nicht zur gewählten Position.');
+      }
+      const index = mockReportMappingOverrides.findIndex(
+        (row) => row.chart === payload.chart && row.accountNumber === payload.accountNumber
+          && row.statement === payload.statement && row.asOfDate === payload.asOfDate,
+      );
+      const next = {
+        chart: payload.chart,
+        asOfDate: payload.asOfDate,
+        accountNumber: payload.accountNumber,
+        statement: payload.statement,
+        position: payload.position,
+        label: payload.label,
+        side: payload.side,
+        updatedAt: new Date().toISOString(),
+      };
+      if (index >= 0) mockReportMappingOverrides[index] = next;
+      else mockReportMappingOverrides.push(next);
+      return next as IpcResult<K>;
+    }
+
+    case 'pro:getOpenRouterVlmConfig':
+      return {
+        configured: true,
+        model: 'google/gemini-3.7-flash',
+        models: ['google/gemini-3.7-flash', 'openai/gpt-4o-mini'],
+        maxDocumentBytes: 10 * 1024 * 1024,
+        timeoutMs: 45_000,
+      } as IpcResult<K>;
+
+    case 'pro:analyzeTransactionDocument': {
+      const payload = args as IpcArgs<'pro:analyzeTransactionDocument'>;
+      const transaction = payload.transaction;
+      const grossAmount = round2(Math.abs(transaction.amount));
+      const netAmount = round2(grossAmount / 1.19);
+      const taxAmount = round2(grossAmount - netAmount);
+      const startedAt = new Date().toISOString();
+      return {
+        extraction: {
+          documentType: 'invoice',
+          issuer: transaction.counterparty || null,
+          recipient: null,
+          invoiceNumber: null,
+          invoiceDate: transaction.date,
+          servicePeriod: null,
+          dueDate: null,
+          currency: transaction.currency,
+          netAmount,
+          taxAmount,
+          grossAmount,
+          vatBreakdown: [{ rate: 19, netAmount, taxAmount }],
+          iban: null,
+          paymentReference: transaction.purpose || null,
+          suggestedAccountNumber: transaction.suggestedAccountNumber ?? null,
+          suggestedTaxCase: 'DE_STD_19',
+          matchAssessment: {
+            amountMatches: true,
+            dateMatches: true,
+            partyMatches: Boolean(transaction.counterparty),
+            referenceMatches: Boolean(transaction.purpose),
+            notes: ['Mock-Analyse: Werte stammen aus der Banktransaktion.'],
+          },
+          warnings: ['Mock-VLM: keine echte Dokumentenanalyse, kein OCR-Nachweis.'],
+          evidence: [
+            { field: 'counterparty', value: transaction.counterparty, page: 1, confidence: 0.6, quote: 'Mock-Beleg' },
+            { field: 'grossAmount', value: grossAmount.toFixed(2), page: 1, confidence: 0.6 },
+          ],
+        },
+        deterministicChecks: {
+          amountMatches: true,
+          currencyMatches: true,
+          expectedAmount: grossAmount,
+          extractedAmount: grossAmount,
+          expectedCurrency: transaction.currency,
+          extractedCurrency: transaction.currency,
+        },
+        metadata: {
+          model: payload.model ?? 'google/gemini-3.7-flash',
+          provider: 'mock',
+          requestId: null,
+          request: { method: 'POST' as const, endpoint: 'https://openrouter.ai/api/v1/chat/completions' },
+          timing: { startedAt, completedAt: new Date().toISOString(), durationMs: 1 },
+          documentSha256: mockDigest(payload.document.data),
+        },
       } as IpcResult<K>;
     }
 

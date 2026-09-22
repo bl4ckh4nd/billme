@@ -15,13 +15,13 @@ export default function InboxQueueTabs({ activeQueue, counts, onChange }: InboxQ
         <button
           key={queue}
           onClick={() => onChange(queue)}
-          className={`h-7 px-3 rounded-full text-xs font-bold border transition-colors ${
+          className={`h-7 px-3 rounded-lg text-xs font-bold border transition-colors ${
             activeQueue === queue
               ? 'bg-dark-base text-background border-dark-base'
               : 'bg-surface text-muted border-border hover:bg-surface-muted'
           }`}
         >
-          {inboxQueueLabels[queue]} <span className="opacity-70">{counts[queue] ?? 0}</span>
+          {inboxQueueLabels[queue]} <span className="tabular-nums">{counts[queue] ?? 0}</span>
         </button>
       ))}
     </div>

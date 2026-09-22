@@ -22,7 +22,7 @@ import {
   getTransactionById,
   saveDraft,
 } from '../services/mockBookingStore';
-import { ConfirmDialog } from '@billme/ui';
+import { ConfirmDialog, Modal } from '@billme/ui';
 import { Account, BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
 import AccountCombobox from './AccountCombobox';
 import ActivityTimeline from './ActivityTimeline';
@@ -58,27 +58,16 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
   const [busy, setBusy] = useState(false);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
   const shortcutCloseRef = useRef<HTMLButtonElement>(null);
-  const shortcutDialogRef = useRef<HTMLDivElement>(null);
-  const shortcutPreviousFocusRef = useRef<HTMLElement | null>(null);
   const [announceMessage, setAnnounceMessage] = useState('');
   const [announceKind, setAnnounceKind] = useState<'success' | 'error' | null>(null);
   const [confirmationAction, setConfirmationAction] = useState<BookingAction | null>(null);
+  const [confirmationReason, setConfirmationReason] = useState('');
 
   useEffect(() => {
     if (!transactionId) return;
     setTransaction(getTransactionById(transactionId) ?? null);
     setDraft(getBookingDraftByTransactionId(transactionId) ?? null);
   }, [transactionId]);
-
-  useEffect(() => {
-    if (showShortcutHelp) {
-      shortcutPreviousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      shortcutCloseRef.current?.focus();
-    } else {
-      shortcutPreviousFocusRef.current?.focus();
-      shortcutPreviousFocusRef.current = null;
-    }
-  }, [showShortcutHelp]);
 
   const permissionCtx = permissionContextForRole(role);
   const validationIssues = useMemo(() => {
@@ -100,34 +89,8 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (showShortcutHelp) {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          setShowShortcutHelp(false);
-          return;
-        }
-        if (e.key === 'Tab') {
-          const dialogFocusable = shortcutDialogRef.current?.querySelectorAll<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-          );
-          const focusable: HTMLElement[] = [];
-          dialogFocusable?.forEach((element) => {
-            const htmlElement = element as HTMLElement;
-            if (!htmlElement.hasAttribute('disabled')) focusable.push(htmlElement);
-          });
-          if (focusable.length === 0) return;
-          const first = focusable[0];
-          const last = focusable[focusable.length - 1];
-          if (e.shiftKey && document.activeElement === first) {
-            e.preventDefault();
-            last.focus();
-          } else if (!e.shiftKey && document.activeElement === last) {
-            e.preventDefault();
-            first.focus();
-          }
-        }
-        return;
-      }
+      // The shortcut dialog itself is a Modal: it owns Escape and the focus trap.
+      if (showShortcutHelp) return;
       const target = e.target instanceof HTMLElement ? e.target : null;
       if (target?.closest('input, textarea, select, [contenteditable="true"]') || target?.isContentEditable) return;
       if (e.key === '?') {
@@ -232,7 +195,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
     return saved;
   }
 
-  async function executeWorkflowAction(action: BookingAction) {
+  async function executeWorkflowAction(action: BookingAction, reason?: string) {
     if (!draft) return;
     setBusy(true);
     setAnnounceMessage('');
@@ -245,7 +208,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
       } else {
         const saved = await saveDraft({ ...draft }, role);
         setDraft(saved);
-        const next = await dispatchBookingAction(activeTransactionId, action, { role, actorName: role });
+        const next = await dispatchBookingAction(activeTransactionId, action, {
+          role,
+          actorName: role,
+          ...(action === 'reverse' && reason ? { rejectReason: reason } : {}),
+        });
         setDraft(next);
         setTransaction(getTransactionById(activeTransactionId) ?? transaction);
         onStoreChange();
@@ -265,6 +232,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
     if (!draft) return;
     if (actionRequiresConfirmation(action)) {
       setConfirmationAction(action);
+      setConfirmationReason('');
       return;
     }
     void executeWorkflowAction(action);
@@ -286,7 +254,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
     <div className="flex h-full min-w-0 flex-col bg-surface">
       {announceMessage ? (
         <div
-          className={`mx-4 mt-3 rounded-xl border px-3 py-2 text-sm font-medium ${announceKind === 'error' ? 'border-error-border bg-error-bg text-error' : 'border-success-border bg-success-bg text-success'}`}
+          className={`mx-4 mt-3 rounded-xl border px-3 py-2 text-sm font-medium ${announceKind === 'error' ? 'border-error-border bg-error-bg text-error-text' : 'border-success-border bg-success-bg text-success-text'}`}
           role={announceKind === 'error' ? 'alert' : 'status'}
           aria-live={announceKind === 'error' ? 'assertive' : 'polite'}
         >
@@ -303,26 +271,26 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
           >
             <ArrowLeft size={15} />
           </button>
-          <div className="w-8 h-8 bg-dark-base rounded-lg flex items-center justify-center text-accent shrink-0">
+          <div className="w-8 h-8 bg-dark-base rounded-lg flex items-center justify-center text-background shrink-0">
             <FileText size={15} />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-sm font-black text-foreground truncate">Buchung erfassen</h2>
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusPresentation.className}`}>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${statusPresentation.className}`}>
                 {statusPresentation.label}
               </span>
               {blocking ? (
-                <span className="px-1.5 py-0.5 rounded-md bg-error-bg text-error text-[10px] font-bold inline-flex items-center gap-0.5">
+                <span className="px-1.5 py-0.5 rounded-full border border-error-text bg-error-bg text-error-text text-xs font-bold inline-flex items-center gap-0.5">
                   <ShieldAlert size={10} /> Blockiert
                 </span>
               ) : (
-                <span className="px-1.5 py-0.5 rounded-md bg-success-bg text-success text-[10px] font-bold inline-flex items-center gap-0.5">
+                <span className="px-1.5 py-0.5 rounded-full border border-success-text bg-success-bg text-success-text text-xs font-bold inline-flex items-center gap-0.5">
                   <Check size={10} /> OK
                 </span>
               )}
               {readOnly && (
-                <span className="px-1.5 py-0.5 rounded-md bg-border-subtle text-foreground text-[10px] font-bold inline-flex items-center gap-0.5">
+                <span className="px-1.5 py-0.5 rounded-full border border-border bg-border-subtle text-foreground text-xs font-bold inline-flex items-center gap-0.5">
                   <Lock size={10} /> Read-only
                 </span>
               )}
@@ -353,15 +321,15 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
             <div className="p-4 space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
+                  <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1" htmlFor="bookingeditor-belegdatum">
                     Belegdatum
                   </label>
-                  <input
+                  <input id="bookingeditor-belegdatum"
                     type="date"
                     value={draft.documentDate ?? ''}
                     disabled={readOnly}
                     onChange={(e) => patchDraft((prev) => ({ ...prev, documentDate: e.target.value }))}
-                    className="w-full border border-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
+                    className="w-full border border-control-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
                   />
                 </div>
                 <div>
@@ -373,21 +341,21 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                     value={draft.postingDate ?? ''}
                     disabled={readOnly}
                     onChange={(e) => patchDraft((prev) => ({ ...prev, postingDate: e.target.value }))}
-                    className="w-full border border-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
+                    className="w-full border border-control-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
+                <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1" htmlFor="bookingeditor-buchungstext">
                   Buchungstext *
                 </label>
-                <input
+                <input id="bookingeditor-buchungstext"
                   type="text"
                   value={draft.bookingText}
                   disabled={readOnly}
                   onChange={(e) => patchDraft((prev) => ({ ...prev, bookingText: e.target.value }))}
-                  className="w-full border border-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
+                  className="w-full border border-control-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
                 />
               </div>
 
@@ -400,7 +368,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                   value={draft.externalReference ?? ''}
                   disabled={readOnly}
                   onChange={(e) => patchDraft((prev) => ({ ...prev, externalReference: e.target.value }))}
-                  className="w-full border border-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
+                  className="w-full border border-control-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
                 />
               </div>
 
@@ -411,7 +379,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                 </div>
                 <div className="rounded-xl border border-border p-3">
                   <div className="text-xs font-bold uppercase tracking-wide text-muted">Belegstatus</div>
-                  <div className={`font-bold mt-1 ${transaction.hasReceipt ? 'text-success' : 'text-warning'}`}>
+                  <div className={`font-bold mt-1 ${transaction.hasReceipt ? 'text-success-text' : 'text-warning-text'}`}>
                     {transaction.hasReceipt ? 'Beleg vorhanden' : 'Beleg fehlt'}
                   </div>
                 </div>
@@ -421,18 +389,19 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
         </div>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
           <ValidationSummary issues={validationIssues} />
 
-          <div className="border border-border rounded-xl overflow-hidden flex-1 flex flex-col min-h-0">
-            <div className="p-4 border-b border-border bg-surface-muted flex items-center justify-between">
+          {/* Kartenrumpf: Kopfleiste, Fußleiste und mindestens eine Buchungszeile bleiben immer sichtbar, der Rest scrollt. */}
+          <div className="border border-border rounded-xl overflow-hidden flex-1 flex flex-col min-h-[11.25rem]">
+            <div className="p-4 border-b border-border bg-surface-muted flex items-center justify-between shrink-0">
               <h3 className="text-sm font-bold text-foreground">Buchungssatz</h3>
               <div className="text-xs text-muted font-medium">
                 {draft.lines.length} Zeilen • {blocking ? 'Blocker vorhanden' : 'Prüfbar'}
               </div>
             </div>
 
-            <div className="overflow-auto">
+            <div className="overflow-auto flex-1 min-h-16">
               <div className="grid grid-cols-12 gap-3 px-4 py-3 text-xs font-bold uppercase tracking-wide text-muted border-b border-subtle">
                 <div className="col-span-1">S/H</div>
                 <div className="col-span-4">Konto</div>
@@ -454,7 +423,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                             value={line.type}
                             disabled={readOnly}
                             onChange={(e) => updateLine(line.id, (current) => ({ ...current, type: e.target.value as 'Soll' | 'Haben' }))}
-                            className="w-full border border-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                            className="w-full border border-control-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
                           >
                             <option value="Soll">Soll</option>
                             <option value="Haben">Haben</option>
@@ -494,7 +463,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                             value={line.costCenter ?? ''}
                             disabled={readOnly}
                             onChange={(e) => updateLine(line.id, (current) => ({ ...current, costCenter: e.target.value }))}
-                            className="w-full border border-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                            className="w-full border border-control-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
                             placeholder="-"
                           />
                         </div>
@@ -519,7 +488,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 };
                               })
                             }
-                            className="w-full border border-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                            className="w-full border border-control-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
                           >
                             <option value="">Keine</option>
                             {TAX_CASE_OPTIONS.map((option) => (
@@ -544,7 +513,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                             onChange={(e) =>
                               updateLine(line.id, (current) => ({ ...current, amount: parseAmountInput(e.target.value) }))
                             }
-                            className="w-full border border-border rounded-xl px-2 py-2 text-sm text-right disabled:bg-surface-muted"
+                            className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums text-right disabled:bg-surface-muted"
                           />
                         </div>
 
@@ -552,7 +521,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                           <button
                             onClick={() => removeLine(line.id)}
                             disabled={readOnly || draft.lines.length <= 2}
-                            className="p-2 rounded-lg text-muted hover:text-error hover:bg-error-bg disabled:opacity-40"
+                            className="p-2 rounded-lg text-muted hover:text-error-text hover:bg-error-bg disabled:opacity-40"
                             aria-label="Zeile löschen"
                           >
                             <Trash2 size={16} />
@@ -563,7 +532,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                       {selectedTaxCase && (
                         <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
                           <div>
-                            <label className="block text-[10px] font-bold uppercase tracking-wide text-muted mb-1">
+                            <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
                               Steuersatz %
                             </label>
                             <input
@@ -578,11 +547,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                   taxRate: e.target.value === '' ? undefined : Number(parseAmountInput(e.target.value)),
                                 }))
                               }
-                              className="w-full border border-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                              className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] font-bold uppercase tracking-wide text-muted mb-1">
+                            <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
                               Land
                             </label>
                             <input
@@ -596,11 +565,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 }))
                               }
                               placeholder={selectedTaxCase.requiresCountry ? 'Pflicht (z.B. FR)' : 'Optional'}
-                              className="w-full border border-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                              className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] font-bold uppercase tracking-wide text-muted mb-1">
+                            <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
                               USt-IdNr.
                             </label>
                             <input
@@ -614,11 +583,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 }))
                               }
                               placeholder={selectedTaxCase.requiresCounterpartyVatId ? 'Pflicht' : 'Optional'}
-                              className="w-full border border-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                              className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] font-bold uppercase tracking-wide text-muted mb-1">
+                            <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
                               Nachweisart
                             </label>
                             <input
@@ -627,11 +596,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                               disabled={readOnly}
                               onChange={(e) => updateLine(line.id, (current) => ({ ...current, evidenceType: e.target.value }))}
                               placeholder={selectedTaxCase.requiresEvidence ? 'Pflicht' : 'Optional'}
-                              className="w-full border border-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                              className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] font-bold uppercase tracking-wide text-muted mb-1">
+                            <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
                               Nachweis-Referenz
                             </label>
                             <input
@@ -642,7 +611,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 updateLine(line.id, (current) => ({ ...current, evidenceReference: e.target.value }))
                               }
                               placeholder={selectedTaxCase.requiresEvidence ? 'Pflicht' : 'Optional'}
-                              className="w-full border border-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                              className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                         </div>
@@ -653,11 +622,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
               </div>
             </div>
 
-            <div className="p-3 border-t border-subtle bg-surface-muted/50 flex items-center justify-between">
+            <div className="p-3 border-t border-subtle bg-surface-muted/50 flex items-center justify-between shrink-0">
               <button
                 onClick={addLine}
                 disabled={readOnly}
-                className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted disabled:opacity-50 inline-flex items-center gap-1"
+                className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted disabled:opacity-50 inline-flex items-center gap-1"
               >
                 <Plus size={15} />
                 Zeile hinzufügen
@@ -666,7 +635,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                 <button
                   onClick={() => void handleWorkflowAction('save_draft')}
                   disabled={busy}
-                  className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
+                  className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
                 >
                   <Save size={15} />
                   Speichern
@@ -675,22 +644,22 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-1 2xl:grid-cols-2 gap-4">
+          <div className="mt-4 grid shrink-0 grid-cols-1 xl:grid-cols-2 gap-4">
             <div className="bg-dark-base rounded-2xl p-5 text-background">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex gap-8">
                   <div>
-                    <div className="text-xs uppercase tracking-wider text-muted font-bold">Soll</div>
-                    <div className="text-xl font-bold">{formatCurrency(totalSoll, transaction.currency)}</div>
+                    <div className="text-xs uppercase tracking-wider text-dark-muted font-bold">Soll</div>
+                    <div className="text-xl font-bold tabular-nums">{formatCurrency(totalSoll, transaction.currency)}</div>
                   </div>
                   <div>
-                    <div className="text-xs uppercase tracking-wider text-muted font-bold">Haben</div>
-                    <div className="text-xl font-bold">{formatCurrency(totalHaben, transaction.currency)}</div>
+                    <div className="text-xs uppercase tracking-wider text-dark-muted font-bold">Haben</div>
+                    <div className="text-xl font-bold tabular-nums">{formatCurrency(totalHaben, transaction.currency)}</div>
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-xs uppercase tracking-wider text-muted font-bold">Differenz</div>
-                  <div className={`text-2xl font-bold ${difference < 0.01 ? 'text-accent' : 'text-error'}`}>
+                  <div className="text-xs uppercase tracking-wider text-dark-muted font-bold">Differenz</div>
+                  <div className={`text-2xl font-bold tabular-nums ${difference < 0.01 ? 'text-background' : 'text-background underline decoration-accent decoration-4 underline-offset-4'}`}>
                     {formatCurrency(difference, transaction.currency)}
                   </div>
                 </div>
@@ -702,23 +671,25 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         </div>
       </div>
 
-      {showShortcutHelp && (
-        <div className="absolute inset-0 bg-dark-2/40 flex items-center justify-center p-6" role="presentation">
-          <div ref={shortcutDialogRef} className="w-full max-w-lg bg-surface rounded-2xl border border-border shadow-xl p-6" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title">
-            <div className="flex items-center justify-between mb-4">
-              <h3 id="shortcut-help-title" className="text-lg font-bold text-foreground">Tastenkürzel</h3>
-              <button ref={shortcutCloseRef} aria-label="Schließen (Tastenkürzel-Hilfe)" onClick={() => setShowShortcutHelp(false)} className="text-sm font-bold text-muted">
-                Schließen
-              </button>
-            </div>
-            <ul className="space-y-2 text-sm text-foreground">
-              <li><strong>Ctrl/Cmd + Enter</strong> — Primäraktion ausführen (z. B. Freigeben/Buchen)</li>
-              <li><strong>?</strong> — Shortcut-Hilfe öffnen/schließen</li>
-              <li><strong>Esc</strong> — Dialog schließen</li>
-            </ul>
-          </div>
+      <Modal
+        open={showShortcutHelp}
+        onClose={() => setShowShortcutHelp(false)}
+        titleId="shortcut-help-title"
+        initialFocusRef={shortcutCloseRef}
+        className="max-w-lg rounded-2xl border border-border p-6"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 id="shortcut-help-title" className="text-base font-bold text-foreground">Tastenkürzel</h3>
+          <button ref={shortcutCloseRef} aria-label="Schließen (Tastenkürzel-Hilfe)" onClick={() => setShowShortcutHelp(false)} className="text-sm font-bold text-muted">
+            Schließen
+          </button>
         </div>
-      )}
+        <ul className="space-y-2 text-sm text-foreground">
+          <li><strong>Ctrl/Cmd + Enter</strong>: Primäraktion ausführen (z. B. Freigeben/Buchen)</li>
+          <li><strong>?</strong>: Shortcut-Hilfe öffnen/schließen</li>
+          <li><strong>Esc</strong>: Dialog schließen</li>
+        </ul>
+      </Modal>
 
       <ConfirmDialog
         open={confirmationAction !== null}
@@ -728,12 +699,51 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         cancelLabel="Abbrechen"
         destructive
         busy={busy}
+        reason={confirmationAction === 'reverse' ? {
+          label: 'Grund (Pflicht)',
+          placeholder: 'Warum wird diese Buchung storniert?',
+          required: true,
+          value: confirmationReason,
+          onChange: setConfirmationReason,
+        } : undefined}
+        details={confirmationAction === 'reverse' ? (
+          <div className="space-y-2" aria-label="Buchung, die storniert wird">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wide text-muted">Betrag</div>
+                <div className="font-semibold tabular-nums text-foreground">{formatCurrency(transaction.amount, transaction.currency)}</div>
+              </div>
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wide text-muted">Soll / Haben</div>
+                <div className="font-semibold tabular-nums text-foreground">
+                  {formatCurrency(totalSoll, transaction.currency)} / {formatCurrency(totalHaben, transaction.currency)}
+                </div>
+              </div>
+            </div>
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-muted">Konten und Seiten</div>
+              <ul className="mt-1 space-y-1 text-sm text-foreground">
+                {draft.lines.map((line) => (
+                  <li key={line.id} className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 truncate">{line.accountId || line.accountName}</span>
+                    <span className="shrink-0 font-semibold tabular-nums">{line.type} · {formatCurrency(Number(line.amount) || 0, transaction.currency)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        ) : undefined}
         onConfirm={() => {
           const action = confirmationAction;
           setConfirmationAction(null);
-          if (action) void executeWorkflowAction(action);
+          const reason = confirmationReason.trim();
+          setConfirmationReason('');
+          if (action) void executeWorkflowAction(action, reason);
         }}
-        onCancel={() => setConfirmationAction(null)}
+        onCancel={() => {
+          setConfirmationAction(null);
+          setConfirmationReason('');
+        }}
       />
     </div>
   );

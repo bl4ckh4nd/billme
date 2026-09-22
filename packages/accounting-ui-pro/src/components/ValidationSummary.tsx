@@ -7,7 +7,7 @@ interface ValidationSummaryProps {
 export default function ValidationSummary({ issues }: ValidationSummaryProps) {
   if (issues.length === 0) {
     return (
-      <div className="mb-4 border border-success-border bg-success-bg rounded-xl p-4 text-sm font-medium text-success">
+      <div className="mb-4 border border-success-border bg-success-bg rounded-xl p-4 text-sm font-medium text-success-text">
         Keine Validierungsprobleme. Buchung ist prüfbar.
       </div>
     );
@@ -24,7 +24,7 @@ export default function ValidationSummary({ issues }: ValidationSummaryProps) {
       <div className="px-4 py-3 bg-surface-muted border-b border-border text-sm font-bold text-foreground">
         Validierung ({issues.length})
       </div>
-      <div className="p-4 space-y-3">
+      <div className="grid gap-3 p-4 sm:grid-cols-2">
         {(['error', 'warning', 'info'] as const).map((severity) => {
           if (groups[severity].length === 0) return null;
           return (
@@ -36,6 +36,7 @@ export default function ValidationSummary({ issues }: ValidationSummaryProps) {
                 {groups[severity].map((issue) => (
                   <li key={issue.id} className="text-sm text-foreground flex items-start gap-2">
                     <span
+                      aria-hidden="true"
                       className={`mt-1 h-2 w-2 rounded-full ${
                         severity === 'error'
                           ? 'bg-error'

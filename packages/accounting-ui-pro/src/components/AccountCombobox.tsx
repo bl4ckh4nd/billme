@@ -120,7 +120,7 @@ export default function AccountCombobox({
               setQuery(displayValue(valueAccountId, valueAccountName));
             }
           }}
-          className="w-full border border-border rounded-xl pl-8 pr-2 py-2 text-sm disabled:bg-surface-muted"
+          className="w-full border border-control-border rounded-xl pl-8 pr-2 py-2 text-sm disabled:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         />
       </div>
 
@@ -128,7 +128,7 @@ export default function AccountCombobox({
         <div
           id={listboxId}
           role="listbox"
-          className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded-xl shadow-lg z-20 max-h-56 overflow-auto"
+          className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded-xl shadow-lg z-[var(--z-dropdown)] max-h-56 overflow-auto"
         >
           {filtered.length === 0 ? (
             <div className="px-3 py-2 text-sm text-muted">Kein Konto gefunden</div>

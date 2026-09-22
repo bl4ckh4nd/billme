@@ -10,7 +10,8 @@ export interface GridOverlayProps {
 /** Subtle, non-interactive grid drawn over the page when enabled. */
 export const GridOverlay: React.FC<GridOverlayProps> = ({ enabled, size, width, height }) => {
   if (!enabled || size <= 0) return null;
-  const line = 'rgba(15, 23, 42, 0.06)';
+  // Derived from the foreground token so the guide keeps its weight if the ink colour moves.
+  const line = 'color-mix(in srgb, var(--color-foreground) 6%, transparent)';
   return (
     <div
       aria-hidden

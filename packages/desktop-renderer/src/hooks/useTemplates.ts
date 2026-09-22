@@ -43,7 +43,7 @@ export const useDeleteTemplateMutation = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => ipc.templates.delete({ id }),
-    onSuccess: (_res, id) => {
+    onSuccess: (_res, _id) => {
       // Best-effort: drop from any cached list.
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       // Active template might have been cleared.

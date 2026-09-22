@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, useActionFeedback } from '@billme/ui';
+import { Button, EMPTY_VALUE, EmptyState, ErrorState, useActionFeedback } from '@billme/ui';
 import { LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS } from '@billme/accounting-shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -11,7 +11,7 @@ import {
   AlertCircle,
   XCircle,
   Search,
-  Sparkles,
+  Check,
   RotateCcw,
   Save,
   Ban,
@@ -72,10 +72,10 @@ const LAYER_LABELS: Record<SuggestionLayer, string> = {
 };
 
 const LAYER_COLORS: Record<SuggestionLayer, string> = {
-  rule: 'bg-purple-100 text-purple-700',
-  counterparty: 'bg-green-100 text-green-700',
-  bayes: 'bg-amber-100 text-amber-700',
-  keyword: 'bg-blue-100 text-blue-700',
+  rule: 'border border-border bg-surface-muted text-foreground',
+  counterparty: 'border border-success-border bg-success-bg text-success-text',
+  bayes: 'border border-info-border bg-info-bg text-info-text',
+  keyword: 'border border-warning-border bg-warning-bg text-warning-text',
 };
 
 type UndoChange = {
@@ -384,29 +384,32 @@ export const EurView: React.FC = () => {
   };
 
   return (
-    <div className="bg-white rounded-[2.5rem] p-6 min-h-full shadow-sm">
+    <div className="bg-surface rounded-2xl p-6 min-h-full shadow-sm">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
         <div className="flex items-center gap-3">
           <button
+            type="button"
             onClick={() => navigate({ to: '/finance' })}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            aria-label="Zurück zu Finanzen"
+            className="rounded-lg p-2 text-muted transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
-            <ArrowLeft size={20} />
+            <ArrowLeft size={20} aria-hidden="true" />
           </button>
-          <div className="w-12 h-12 rounded-2xl bg-black text-accent flex items-center justify-center">
+          <div className="w-12 h-12 rounded-xl bg-dark-base text-accent flex items-center justify-center">
             <ReceiptText size={22} />
           </div>
           <div>
-            <h2 className="text-2xl font-black text-gray-900">Anlage EÜR</h2>
-            <p className="text-sm text-gray-500 mt-1">Klassifizierung und Auswertung für Steuerjahr {taxYear}.</p>
+            <h2 className="text-2xl font-black text-foreground">Anlage EÜR</h2>
+            <p className="text-sm text-muted mt-1">Klassifizierung und Auswertung für Steuerjahr {taxYear}.</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <select
             value={taxYear}
+            aria-label="Steuerjahr"
             onChange={(e) => setTaxYear(Number(e.target.value))}
-            className="rounded-xl border border-gray-300 px-3 py-2 text-sm"
+            className="rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
             {SUPPORTED_EUR_TAX_YEARS.map((year) => (
               <option key={year} value={year}>{year}</option>
@@ -433,8 +436,8 @@ export const EurView: React.FC = () => {
 
       {/* Undo Banner */}
       {lastUndo && (
-        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm text-amber-800">
+        <div className="mb-4 rounded-2xl border border-warning-border bg-warning-bg p-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm text-warning-text">
             <RotateCcw size={16} className="flex-shrink-0" />
             <span>Aktion gespeichert: <span className="font-semibold">{lastUndo.label}</span></span>
           </div>
@@ -452,15 +455,15 @@ export const EurView: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Queue Panel */}
-        <div className="rounded-2xl border border-gray-200 p-4 lg:col-span-1">
-          <h3 className="font-bold text-gray-900 mb-3 flex items-center gap-2">
-            <ClipboardList size={18} className="text-gray-500" />
-            Queue
-            <span className="text-xs font-normal text-gray-400 ml-auto">{queueItems.length} Einträge</span>
+        <div className="rounded-2xl border border-border p-4 lg:col-span-1">
+          <h3 className="font-bold text-foreground mb-3 flex items-center gap-2">
+            <ClipboardList size={18} className="text-muted" />
+            Warteschlange
+            <span className="text-xs font-normal text-muted ml-auto tabular-nums">{queueItems.length} Einträge</span>
           </h3>
 
           {/* Filter Tabs */}
-          <div className="rounded-lg border border-gray-200 p-1 bg-gray-50 mb-3">
+          <div className="rounded-lg border border-border p-1 bg-surface-muted mb-3">
             <div className="grid grid-cols-2 gap-1 text-xs">
               {([
                 ['unclassified', 'Offen', statusCounts.unclassified],
@@ -470,11 +473,13 @@ export const EurView: React.FC = () => {
               ] as Array<[QueueStatus, string, number]>).map(([status, label, count]) => (
                 <button
                   key={status}
+                  type="button"
                   onClick={() => setQueueStatus(status)}
-                  className={`rounded-md px-2 py-1.5 font-medium transition-all ${
+                  aria-pressed={queueStatus === status}
+                  className={`rounded-md px-2 py-1.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                     queueStatus === status
-                      ? 'bg-white shadow font-semibold text-gray-900'
-                      : 'text-gray-600 hover:text-gray-800'
+                      ? 'bg-surface shadow-sm font-semibold text-foreground'
+                      : 'text-muted hover:text-foreground'
                   }`}
                 >
                   {label} ({count})
@@ -485,12 +490,13 @@ export const EurView: React.FC = () => {
 
           {/* Search */}
           <div className="relative mb-3">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
             <input
               value={query}
+              aria-label="Einträge durchsuchen"
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Gegenpartei, Zweck oder Datum..."
-              className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900/10"
+ className="w-full pl-9 pr-3 py-2 rounded-xl border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </div>
 
@@ -498,8 +504,9 @@ export const EurView: React.FC = () => {
           <div className="grid grid-cols-2 gap-2 mb-3">
             <select
               value={flowFilter}
+              aria-label="Zahlungsrichtung filtern"
               onChange={(e) => setFlowFilter(e.target.value as 'all' | 'income' | 'expense')}
-              className="rounded-xl border border-gray-300 px-3 py-2 text-sm"
+              className="rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <option value="all">Alle Typen</option>
               <option value="income">Einnahmen</option>
@@ -507,8 +514,9 @@ export const EurView: React.FC = () => {
             </select>
             <select
               value={queueSort}
+              aria-label="Einträge sortieren"
               onChange={(e) => setQueueSort(e.target.value as QueueSort)}
-              className="rounded-xl border border-gray-300 px-3 py-2 text-sm"
+              className="rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <option value="date_desc">Neueste zuerst</option>
               <option value="amount_desc">Betrag absteigend</option>
@@ -517,11 +525,12 @@ export const EurView: React.FC = () => {
           </div>
 
           {/* Bulk Actions */}
-          <div className="mb-3 rounded-xl border border-gray-200 bg-gray-50 p-3">
+          <div className="mb-3 rounded-xl border border-border bg-surface-muted p-3">
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-bold text-gray-700 flex items-center gap-2">
+              <label className="text-xs font-bold text-foreground flex items-center gap-2">
                 <input
                   type="checkbox"
+                  className="h-6 w-6 accent-black"
                   checked={queueItems.length > 0 && selectedItems.length === queueItems.length}
                   onChange={(e) => {
                     if (e.target.checked) {
@@ -531,18 +540,19 @@ export const EurView: React.FC = () => {
                     }
                   }}
                 />
-                {selectedItems.length} ausgewählt
+                <span className="tabular-nums">{selectedItems.length}</span> ausgewählt
               </label>
               <button
+                type="button"
                 onClick={() => setSelectedKeys(new Set())}
-                className="text-xs text-gray-500 hover:text-gray-800 transition-colors"
+                className="min-h-6 rounded-sm px-2 text-xs text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
                 Auswahl löschen
               </button>
             </div>
             <div className="grid grid-cols-1 gap-1.5">
               <label className="text-xs font-bold text-foreground">
-                Begründung (Audit) <span className="text-error">*</span>
+                Begründung (Audit) <span className="text-error-text">*</span>
                 <input
                   aria-label="Begründung für EÜR-Änderung"
                   value={auditReason}
@@ -561,9 +571,9 @@ export const EurView: React.FC = () => {
                   }))
                 }
                 disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
-                className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-left text-foreground transition-colors hover:bg-surface-muted disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
-                <Sparkles size={14} className="text-blue-500 flex-shrink-0" />
+                <Check size={14} className="text-info-text flex-shrink-0" aria-hidden="true" />
                 Vorschlag anwenden
               </button>
               <button
@@ -576,9 +586,9 @@ export const EurView: React.FC = () => {
                   }))
                 }
                 disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
-                className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-left text-foreground transition-colors hover:bg-surface-muted disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
-                <Ban size={14} className="text-red-500 flex-shrink-0" />
+                <Ban size={14} className="text-error-text flex-shrink-0" />
                 Als privat/Transfer markieren
               </button>
               <button
@@ -591,9 +601,9 @@ export const EurView: React.FC = () => {
                   }))
                 }
                 disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
-                className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-left hover:bg-gray-100 transition-colors disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-left text-foreground transition-colors hover:bg-surface-muted disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
-                <RotateCcw size={14} className="text-gray-500 flex-shrink-0" />
+                <RotateCcw size={14} className="text-muted flex-shrink-0" />
                 Klassifizierung zurücksetzen
               </button>
             </div>
@@ -601,46 +611,43 @@ export const EurView: React.FC = () => {
 
           {/* Queue Items */}
           {itemsIsError ? (
-            <div className="flex flex-col items-center justify-center py-12 text-error">
-              <AlertCircle size={48} className="mb-4 opacity-70" />
-              <p className="text-lg font-medium">Einträge konnten nicht geladen werden.</p>
-              <p className="text-sm text-center mt-2">{queryErrorDetail(itemsQueryError)}</p>
-              <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={() => void refetchItems()}>
-                Erneut versuchen
-              </Button>
-            </div>
+            <ErrorState
+              title="Einträge konnten nicht geladen werden"
+              description={queryErrorDetail(itemsQueryError)}
+              onRetry={() => void refetchItems()}
+            />
           ) : itemsLoading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Spinner size="md" />
-              <p className="text-sm text-gray-500 mt-3">Lade Einträge...</p>
+              <p className="text-sm text-muted mt-3">Lade Einträge …</p>
             </div>
           ) : queueItems.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-gray-500">
-              <CheckCircle2 size={48} className="mb-4 opacity-50" />
-              <p className="text-lg font-medium">Keine Einträge</p>
-              <p className="text-sm text-center mt-2">
-                {queueStatus === 'unclassified' && statusCounts.unclassified === 0
-                  ? 'Alle Einträge sind bereits klassifiziert.'
-                  : 'Keine Einträge für diesen Filter.'}
-              </p>
-            </div>
+            <EmptyState
+              title={queueStatus === 'unclassified' && statusCounts.unclassified === 0
+                ? 'Alle Einträge sind klassifiziert'
+                : 'Keine Einträge für diesen Filter'}
+              description={queueStatus === 'unclassified' && statusCounts.unclassified === 0
+                ? 'Für dieses Steuerjahr ist nichts mehr offen. Der Report links zeigt die Summen.'
+                : 'Wähle einen anderen Status oder leere die Suche, um weitere Einträge zu sehen.'}
+              className="border-0 bg-transparent"
+            />
           ) : (
             <div className="space-y-2 max-h-[460px] overflow-auto pr-1">
-              {queueItems.map((item, idx) => {
+              {queueItems.map((item) => {
                 const key = itemKey(item);
                 const isActive = activeSource?.sourceType === item.sourceType && activeSource.sourceId === item.sourceId;
                 return (
                   <div
                     key={key}
-                    className={`w-full text-left p-3 rounded-xl border transition-all animate-enter ${
-                      isActive ? 'border-black bg-gray-50 shadow-sm' : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+                    className={`w-full text-left p-3 rounded-xl border transition-colors ${
+                      isActive ? 'border-foreground bg-surface-muted' : 'border-border hover:border-control-border'
                     }`}
-                    style={{ animationDelay: `${idx * 30}ms` }}
                   >
                     <div className="flex items-start gap-2">
                       <input
                         type="checkbox"
-                        className="mt-1"
+                        className="mt-1 h-6 w-6 accent-black"
+                        aria-label={`${item.counterparty} auswählen`}
                         checked={selectedKeys.has(key)}
                         onChange={(e) => {
                           const next = new Set(selectedKeys);
@@ -653,37 +660,37 @@ export const EurView: React.FC = () => {
                         onClick={() => setActiveSource({ sourceType: item.sourceType, sourceId: item.sourceId })}
                         className="flex-1 text-left"
                       >
-                        <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                        <div className="flex items-center gap-1.5 text-xs text-muted">
                           {item.classification?.excluded ? (
-                            <XCircle size={14} className="text-red-400" />
+                            <XCircle size={14} className="text-error-text" />
                           ) : item.classification?.eurLineId ? (
-                            <CheckCircle2 size={14} className="text-green-500" />
+                            <CheckCircle2 size={14} className="text-success-text" />
                           ) : (
-                            <AlertCircle size={14} className="text-amber-500" />
+                            <AlertCircle size={14} className="text-warning-text" />
                           )}
                           <span>{item.date}</span>
-                          <span className="text-gray-300">|</span>
+                          <span className="text-muted">|</span>
                           <span>{item.sourceType === 'transaction' ? 'Bank' : 'Rechnung'}</span>
                         </div>
-                        <div className="text-sm font-semibold text-gray-900 truncate">{item.counterparty}</div>
-                        <div className="text-xs text-gray-600 truncate">{item.purpose}</div>
-                        <div className={`text-sm font-mono font-bold mt-1 ${
-                          item.flowType === 'income' ? 'text-green-600' : 'text-red-600'
+                        <div className="text-sm font-semibold text-foreground truncate">{item.counterparty}</div>
+                        <div className="text-xs text-muted truncate">{item.purpose}</div>
+                        <div className={`text-sm font-bold tabular-nums mt-1 ${
+                          item.flowType === 'income' ? 'text-success-text' : 'text-error-text'
                         }`}>
                           {item.flowType === 'income' ? '+' : '-'}{formatCurrency(item.amountGross)}
                         </div>
-                        <div className="flex flex-wrap gap-1 mt-2 text-[11px]">
+                        <div className="flex flex-wrap gap-1 mt-2 text-xs">
                           {item.classification?.excluded ? (
-                            <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700">Ausgeschlossen</span>
+                            <span className="px-2 py-0.5 rounded-full bg-error-bg text-error-text">Ausgeschlossen</span>
                           ) : item.classification?.eurLineId ? (
-                            <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700">Klassifiziert</span>
+                            <span className="px-2 py-0.5 rounded-full bg-success-bg text-success-text">Klassifiziert</span>
                           ) : (
-                            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Offen</span>
+                            <span className="px-2 py-0.5 rounded-full bg-warning-bg text-warning-text">Offen</span>
                           )}
                           {item.flowType === 'income' ? (
-                            <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">Einnahme</span>
+                            <span className="px-2 py-0.5 rounded-full bg-success-bg text-success-text">Einnahme</span>
                           ) : (
-                            <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700">Ausgabe</span>
+                            <span className="px-2 py-0.5 rounded-full bg-error-bg text-error-text">Ausgabe</span>
                           )}
                           {item.suggestionLayer && !item.classification?.eurLineId && !item.classification?.excluded && (
                             <span className={`px-2 py-0.5 rounded-full ${LAYER_COLORS[item.suggestionLayer]}`}>
@@ -701,36 +708,36 @@ export const EurView: React.FC = () => {
         </div>
 
         {/* Classification Panel */}
-        <div className="rounded-2xl border border-gray-200 p-4 lg:col-span-1">
-          <h3 className="font-bold text-gray-900 mb-3 flex items-center gap-2">
-            <Tags size={18} className="text-gray-500" />
+        <div className="rounded-2xl border border-border p-4 lg:col-span-1">
+          <h3 className="font-bold text-foreground mb-3 flex items-center gap-2">
+            <Tags size={18} className="text-muted" />
             Klassifizierung
           </h3>
           {!activeItem ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-500">
-              <Tags size={48} className="mb-4 opacity-50" />
-              <p className="text-lg font-medium">Kein Eintrag ausgewählt</p>
-              <p className="text-sm text-center mt-2">Wählen Sie links einen Eintrag zur Klassifizierung aus.</p>
-            </div>
+            <EmptyState
+              title="Kein Eintrag ausgewählt"
+              description="Wähle links einen Eintrag aus, um ihn einer EÜR-Kennziffer zuzuordnen."
+              className="border-0 bg-transparent"
+            />
           ) : (
             <div className="space-y-3">
               {/* Active Item Summary Card */}
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+              <div className="rounded-xl border border-border bg-surface-muted p-3">
                 <div className="flex items-center gap-2 mb-1">
                   {activeItem.flowType === 'income' ? (
-                    <TrendingUp size={16} className="text-green-500" />
+                    <TrendingUp size={16} className="text-success-text" />
                   ) : (
-                    <TrendingDown size={16} className="text-red-500" />
+                    <TrendingDown size={16} className="text-error-text" />
                   )}
-                  <span className="text-sm font-bold text-gray-900 truncate">{activeItem.counterparty}</span>
+                  <span className="text-sm font-bold text-foreground truncate">{activeItem.counterparty}</span>
                 </div>
-                <div className="text-xs text-gray-500 truncate">{activeItem.purpose}</div>
-                <div className={`text-sm font-mono font-bold mt-1 ${
-                  activeItem.flowType === 'income' ? 'text-green-600' : 'text-red-600'
+                <div className="text-xs text-muted truncate">{activeItem.purpose}</div>
+                <div className={`text-sm font-bold tabular-nums mt-1 ${
+                  activeItem.flowType === 'income' ? 'text-success-text' : 'text-error-text'
                 }`}>
                   {formatCurrency(activeItem.amountGross)}
                 </div>
-                <div className="text-xs text-gray-400 mt-1">
+                <div className="text-xs text-muted mt-1">
                   {activeItem.classification?.updatedAt
                     ? `Zuletzt: ${new Date(activeItem.classification.updatedAt).toLocaleString('de-DE')}`
                     : 'Noch nicht klassifiziert'}
@@ -744,21 +751,21 @@ export const EurView: React.FC = () => {
                     setSelectedLineId(activeItem.suggestedLineId!);
                     setExcluded(false);
                   }}
-                  className="w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-left hover:bg-blue-100 transition-colors"
+                  className="w-full rounded-xl border border-info-border bg-info-bg px-3 py-2.5 text-left hover:bg-info-bg transition-colors"
                 >
                   <div className="flex items-center gap-2">
-                    <Sparkles size={16} className="text-blue-600 flex-shrink-0" />
+                    <Check size={16} className="text-info-text flex-shrink-0" aria-hidden="true" />
                     <div className="flex-1">
-                      <div className="text-xs text-blue-700 font-semibold flex items-center gap-2">
+                      <div className="text-xs text-info-text font-semibold flex items-center gap-2">
                         Vorschlag übernehmen
                         {activeItem.suggestionLayer && (
-                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${LAYER_COLORS[activeItem.suggestionLayer]}`}>
+                          <span className={`px-1.5 py-0.5 rounded-full text-xs ${LAYER_COLORS[activeItem.suggestionLayer]}`}>
                             {LAYER_LABELS[activeItem.suggestionLayer]}
                           </span>
                         )}
                       </div>
                       {activeItem.suggestionReason && (
-                        <div className="text-xs text-blue-600">{activeItem.suggestionReason}</div>
+                        <div className="text-xs text-info-text">{activeItem.suggestionReason}</div>
                       )}
                     </div>
                   </div>
@@ -767,12 +774,13 @@ export const EurView: React.FC = () => {
 
               {/* Kennziffer Select */}
               <div>
-                <label className="block text-xs font-bold text-gray-700">Kennziffer</label>
+                <label className="block text-xs font-bold text-foreground" htmlFor="eur-line">Kennziffer</label>
                 <select
+                  id="eur-line"
                   value={selectedLineId}
                   onChange={(e) => setSelectedLineId(e.target.value)}
                   disabled={excluded}
-                  className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">Nicht zugeordnet</option>
                   {activeLineOptions.map((line) => (
@@ -783,12 +791,12 @@ export const EurView: React.FC = () => {
                 </select>
               </div>
 
-              <label className="block text-xs font-bold text-gray-700">Steuerliche Korrektur / Begründung
-                <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm" placeholder="z. B. privater Anteil" />
+              <label className="block text-xs font-bold text-foreground">Steuerliche Korrektur / Begründung
+                <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" placeholder="z. B. privater Anteil" />
               </label>
 
               <label className="block text-xs font-bold text-foreground">
-                Begründung (Audit) <span className="text-error">*</span>
+                Begründung (Audit) <span className="text-error-text">*</span>
                 <input
                   aria-label="Begründung für EÜR-Änderung"
                   value={auditReason}
@@ -800,11 +808,12 @@ export const EurView: React.FC = () => {
 
               {/* VAT Mode Select */}
               <div>
-                <label className="block text-xs font-bold text-gray-700">USt. Modus</label>
+                <label className="block text-xs font-bold text-foreground" htmlFor="eur-vat-mode">USt. Modus</label>
                 <select
+                  id="eur-vat-mode"
                   value={vatMode}
                   onChange={(e) => setVatMode(e.target.value as VatMode)}
-                  className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="none">Keine USt. Umrechnung</option>
                   <option value="default">Default USt. (Netto)</option>
@@ -813,25 +822,27 @@ export const EurView: React.FC = () => {
 
               {isProProduct && vatMode === 'default' && (
                 <div>
-                  <label className="block text-xs font-bold text-gray-700">USt.-Satz (%)</label>
+                  <label className="block text-xs font-bold text-foreground" htmlFor="eur-vat-rate">USt.-Satz (%)</label>
                   <input
+                    id="eur-vat-rate"
                     type="number"
                     min="0"
                     max="100"
                     step="0.01"
                     value={vatRate ?? ''}
                     onChange={(e) => setVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
-                    className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm"
+                    className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     placeholder="z. B. 19"
                   />
-                  {activeItem.vatWarning && <p className="mt-1 text-xs text-amber-700">{activeItem.vatWarning}</p>}
+                  {activeItem.vatWarning && <p className="mt-1 text-xs text-warning-text">{activeItem.vatWarning}</p>}
                 </div>
               )}
 
               {/* Excluded Checkbox */}
-              <label className="flex items-center gap-2 text-sm text-gray-700">
+              <label className="flex items-center gap-2 text-sm text-foreground">
                 <input
                   type="checkbox"
+                  className="h-6 w-6 accent-black"
                   checked={excluded}
                   onChange={(e) => setExcluded(e.target.checked)}
                 />
@@ -861,52 +872,49 @@ export const EurView: React.FC = () => {
         </div>
 
         {/* Report Panel */}
-        <div className="rounded-2xl border border-gray-200 p-4 lg:col-span-1">
-          <h3 className="font-bold text-gray-900 mb-3 flex items-center gap-2">
-            <Layers size={18} className="text-gray-500" />
+        <div className="rounded-2xl border border-border p-4 lg:col-span-1">
+          <h3 className="font-bold text-foreground mb-3 flex items-center gap-2">
+            <Layers size={18} className="text-muted" />
             Report
           </h3>
           {reportIsError ? (
-            <div className="flex flex-col items-center justify-center py-12 text-error">
-              <AlertCircle size={48} className="mb-4 opacity-70" />
-              <p className="text-lg font-medium">Report konnte nicht geladen werden.</p>
-              <p className="text-sm text-center mt-2">{queryErrorDetail(reportQueryError)}</p>
-              <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={() => void refetchReport()}>
-                Erneut versuchen
-              </Button>
-            </div>
+            <ErrorState
+              title="Report konnte nicht geladen werden"
+              description={queryErrorDetail(reportQueryError)}
+              onRetry={() => void refetchReport()}
+            />
           ) : reportLoading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Spinner size="md" />
-              <p className="text-sm text-gray-500 mt-3">Report wird geladen...</p>
+              <p className="text-sm text-muted mt-3">Report wird geladen …</p>
             </div>
           ) : !report ? (
-            <div className="flex flex-col items-center justify-center py-12 text-gray-500">
-              <XCircle size={48} className="mb-4 opacity-50" />
-              <p className="text-lg font-medium">Kein Report verfügbar</p>
-              <p className="text-sm text-center mt-2">Für diesen Zeitraum liegt noch kein Report vor.</p>
-            </div>
+            <EmptyState
+              title="Für dieses Steuerjahr liegt noch kein Report vor"
+              description="Sobald Buchungen importiert oder Rechnungen gestellt sind, entsteht hier die Auswertung."
+              className="border-0 bg-transparent"
+            />
           ) : (
             <>
               {/* Summary Stat Cards */}
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                <div className="rounded-xl bg-green-50 border border-green-100 p-3">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-green-600">Einnahmen</div>
-                  <div className="text-lg font-mono font-bold text-green-700 mt-1">{formatCurrency(report.summary.incomeTotal)}</div>
+              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="rounded-xl bg-success-bg border border-success-border p-3">
+                  <div className="text-xs font-bold uppercase tracking-wider text-success-text">Einnahmen</div>
+                  <div className="text-lg font-bold tabular-nums text-success-text mt-1">{formatCurrency(report.summary.incomeTotal)}</div>
                 </div>
-                <div className="rounded-xl bg-red-50 border border-red-100 p-3">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-red-600">Ausgaben</div>
-                  <div className="text-lg font-mono font-bold text-red-700 mt-1">{formatCurrency(report.summary.expenseTotal)}</div>
+                <div className="rounded-xl bg-error-bg border border-error-border p-3">
+                  <div className="text-xs font-bold uppercase tracking-wider text-error-text">Ausgaben</div>
+                  <div className="text-lg font-bold tabular-nums text-error-text mt-1">{formatCurrency(report.summary.expenseTotal)}</div>
                 </div>
-                <div className="rounded-xl bg-gray-50 border border-gray-200 p-3">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">Überschuss</div>
-                  <div className={`text-lg font-mono font-bold mt-1 ${report.summary.surplus >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                <div className="rounded-xl bg-surface-muted border border-border p-3">
+                  <div className="text-xs font-bold uppercase tracking-wider text-muted">Überschuss</div>
+                  <div className={`text-lg font-bold tabular-nums mt-1 ${report.summary.surplus >= 0 ? 'text-success-text' : 'text-error-text'}`}>
                     {formatCurrency(report.summary.surplus)}
                   </div>
                 </div>
-                <div className="rounded-xl bg-amber-50 border border-amber-100 p-3">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-amber-600">Unklassifiziert</div>
-                  <div className="text-lg font-mono font-bold text-amber-700 mt-1">{report.unclassifiedCount}</div>
+                <div className="rounded-xl bg-warning-bg border border-warning-border p-3">
+                  <div className="text-xs font-bold uppercase tracking-wider text-warning-text">Unklassifiziert</div>
+                  <div className="text-lg font-bold tabular-nums text-warning-text mt-1">{report.unclassifiedCount}</div>
                 </div>
               </div>
 
@@ -914,7 +922,7 @@ export const EurView: React.FC = () => {
               <div className="max-h-[470px] overflow-auto">
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="text-left text-gray-500 border-b border-gray-200">
+                    <tr className="text-left text-muted border-b border-border">
                       <th className="py-2 pr-2 font-semibold">Kz</th>
                       <th className="py-2 pr-2 font-semibold">Bezeichnung</th>
                       <th className="py-2 text-right font-semibold">Betrag</th>
@@ -922,13 +930,13 @@ export const EurView: React.FC = () => {
                   </thead>
                   <tbody>
                     {report.rows.map((row) => (
-                      <tr key={row.lineId} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                        <td className="py-2 pr-2 align-top font-mono text-gray-500">{row.kennziffer ?? '-'}</td>
+                      <tr key={row.lineId} className="border-b border-border-subtle hover:bg-surface-muted transition-colors">
+                        <td className="py-2 pr-2 align-top font-mono text-muted">{row.kennziffer ?? EMPTY_VALUE}</td>
                         <td className="py-2 pr-2">{row.label}</td>
-                        <td className={`py-2 text-right font-mono font-semibold ${
-                          row.kind === 'income' ? 'text-green-600' :
-                          row.kind === 'expense' ? 'text-red-600' :
-                          'text-gray-900'
+                        <td className={`py-2 text-right font-semibold tabular-nums ${
+                          row.kind === 'income' ? 'text-success-text' :
+                          row.kind === 'expense' ? 'text-error-text' :
+                          'text-foreground'
                         }`}>
                           {formatCurrency(row.total)}
                         </td>

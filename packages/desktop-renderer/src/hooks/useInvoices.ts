@@ -1,13 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Invoice } from '@billme/desktop-core/types';
+import { withEffectiveInvoiceStatus } from '@billme/server-core/domain';
 import { ipc } from '../runtime-api';
 
 const invoicesKey = ['invoices'] as const;
+
+const selectEffectiveStatus = (invoices: Invoice[]): Invoice[] =>
+  invoices.map((invoice) => withEffectiveInvoiceStatus(invoice));
 
 export const useInvoicesQuery = () => {
   return useQuery({
     queryKey: invoicesKey,
     queryFn: () => ipc.invoices.list(),
+    select: selectEffectiveStatus,
   });
 };
 

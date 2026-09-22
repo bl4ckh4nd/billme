@@ -610,6 +610,9 @@ importers:
       '@billme/desktop-services':
         specifier: workspace:*
         version: link:../../packages/desktop-services
+      '@billme/desktop-ui':
+        specifier: workspace:*
+        version: link:../../packages/desktop-ui
       '@billme/server-core':
         specifier: workspace:*
         version: link:../../packages/server-core

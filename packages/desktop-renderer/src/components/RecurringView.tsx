@@ -1,10 +1,11 @@
-import { Button, ValidationSummary, useActionFeedback } from '@billme/ui';
+import { Button, EMPTY_VALUE, EmptyState, ErrorState, Modal, ValidationSummary, useActionFeedback } from '@billme/ui';
 import React, { useState } from 'react';
 import {
     Repeat, Calendar, Play, Pause, Plus, Trash2,
-    CheckCircle, AlertCircle, Edit3, X, Clock,
+    Edit3, X, Clock,
     Save, Calculator
 } from 'lucide-react';
+import { Spinner } from '@billme/desktop-ui/components/Spinner';
 import type { RecurringProfile, RecurrenceInterval, InvoiceItem } from '@billme/desktop-core/types';
 import { v4 as uuidv4 } from 'uuid';
 import { useClientsQuery } from '../hooks/useClients';
@@ -35,9 +36,28 @@ const recurringTotal = (items: readonly InvoiceItem[]): number =>
 
 const germanSaveError = 'Abo konnte nicht gespeichert werden. Bitte prüfe die Angaben und versuche es erneut.';
 
+const INTERVAL_INITIALS: Record<RecurringProfile['interval'], string> = {
+  daily: 'T',
+  weekly: 'W',
+  monthly: 'M',
+  quarterly: 'Q',
+  yearly: 'J',
+};
+
+const fieldClass = 'w-full rounded-xl border border-control-border bg-surface-muted p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring';
+const itemFieldClass = 'w-full rounded-sm border border-control-border bg-surface p-2 text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring';
+
 export const RecurringView: React.FC = () => {
-    const { data: profiles = [] } = useRecurringProfilesQuery();
-    const { data: clients = [] } = useClientsQuery();
+    const profilesQuery = useRecurringProfilesQuery();
+    const clientsQuery = useClientsQuery();
+    const profiles = profilesQuery.data ?? [];
+    const clients = clientsQuery.data ?? [];
+    const listIsLoading = profilesQuery.isLoading || clientsQuery.isLoading;
+    const listIsError = profilesQuery.isError || clientsQuery.isError;
+    const retryList = () => {
+        void profilesQuery.refetch();
+        void clientsQuery.refetch();
+    };
     const upsertProfile = useUpsertRecurringProfileMutation();
     const deleteProfile = useDeleteRecurringProfileMutation();
     const { pendingIds, requestDelete } = useDeferredDelete({
@@ -53,6 +73,7 @@ export const RecurringView: React.FC = () => {
     const [validationErrors, setValidationErrors] = useState<Record<string, RecurringValidationError>>({});
     const [saveError, setSaveError] = useState<string | null>(null);
     const editorId = React.useId();
+    const editorTitleId = React.useId();
 
     // Form State
     const [formData, setFormData] = useState<Partial<RecurringProfile>>({});
@@ -191,13 +212,16 @@ export const RecurringView: React.FC = () => {
     };
 
     // Item Management inside Modal
-    const handleItemChange = (index: number, field: keyof InvoiceItem, value: any) => {
+    const updateItem = (index: number, patch: Partial<InvoiceItem>) => {
         if (!formData.items) return;
-        const newItems = [...formData.items];
-        newItems[index] = { ...newItems[index], [field]: value };
-        if (field === 'price' || field === 'quantity') {
-            newItems[index].total = newItems[index].price * newItems[index].quantity;
-        }
+        const newItems = formData.items.map((item, itemIndex) => {
+            if (itemIndex !== index) return item;
+            const next = { ...item, ...patch };
+            if (patch.quantity !== undefined || patch.price !== undefined) {
+                next.total = next.price * next.quantity;
+            }
+            return next;
+        });
         setFormData({ ...formData, items: newItems });
     };
 
@@ -243,306 +267,353 @@ export const RecurringView: React.FC = () => {
         }
     };
 
+    const visibleProfiles = profiles.filter((profile) => !pendingIds.has(profile.id));
+
     return (
-        <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm flex flex-col animate-enter relative">
-            <div className="flex items-center justify-between mb-8">
-                <div>
-                    <h1 className="text-3xl font-black text-gray-900 flex items-center gap-3">
-                        <Repeat className="text-black" />
+        <div className="min-h-full rounded-2xl bg-surface p-8 shadow-sm flex flex-col relative">
+            <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+                <div className="min-w-0">
+                    <h1 className="flex flex-wrap items-center gap-3 text-2xl font-black text-foreground sm:text-3xl">
+                        <Repeat className="text-foreground" />
                         Abo-Rechnungen
                     </h1>
-                    <p className="text-gray-500 font-medium text-sm mt-1">
+                    <p className="text-muted font-medium text-sm mt-1">
                         Wiederkehrende Rechnungen automatisch erstellen
                     </p>
                 </div>
-                <button
-                    onClick={() => handleEdit()}
-                    className="bg-accent text-black px-6 py-3 rounded-full font-bold hover:scale-105 active:scale-95 transition-all shadow-lg shadow-accent/20 flex items-center gap-2"
-                >
+                <Button onClick={() => handleEdit()}>
                     <Plus size={18} /> Neues Abo
-                </button>
+                </Button>
             </div>
 
+            {listIsError ? (
+                <ErrorState
+                    title="Abos konnten nicht geladen werden"
+                    description="Die Liste der wiederkehrenden Rechnungen und die Kundenzuordnung sind ohne Datenbank nicht lesbar."
+                    onRetry={retryList}
+                />
+            ) : listIsLoading ? (
+                <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-muted">
+                    <Spinner size="md" />
+                    <p role="status" className="text-sm font-medium">Abos werden geladen …</p>
+                </div>
+            ) : visibleProfiles.length === 0 ? (
+                <div className="flex flex-1 items-center justify-center py-8">
+                    <EmptyState
+                        title="Keine wiederkehrenden Rechnungen eingerichtet"
+                        description="Ein Abo erstellt Rechnungen automatisch in einem festen Intervall, zum Beispiel monatlich für einen Wartungsvertrag. Lege es über 'Neues Abo' an."
+                        className="max-w-lg"
+                    />
+                </div>
+            ) : (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 overflow-y-auto pb-4">
-                {profiles.filter((profile) => !pendingIds.has(profile.id)).map((profile, idx) => (
+                {visibleProfiles.map((profile) => (
                     <div
                         key={profile.id}
-                        className={`p-6 rounded-[2rem] border transition-all relative overflow-hidden group animate-scale-in ${profile.active ? 'bg-white border-gray-200 hover:border-black hover:shadow-xl' : 'bg-gray-50 border-gray-100 opacity-70'}`}
-                        style={{ animationDelay: `${idx * 50}ms` }}
+                        className={`p-6 rounded-xl border transition-colors relative overflow-hidden group ${profile.active ? 'bg-surface border-border hover:border-control-border' : 'bg-surface-muted border-border-subtle'}`}
                     >
-                        <div className="flex justify-between items-start mb-6">
-                            <div className="flex items-center gap-4">
-                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-xl shadow-sm ${profile.active ? 'bg-black text-accent' : 'bg-gray-200 text-gray-400'}`}>
-                                    {profile.interval === 'monthly' ? 'M' : profile.interval === 'yearly' ? 'J' : 'W'}
+                        <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div className="flex min-w-0 flex-1 items-center gap-4">
+                                <div className={`w-12 h-12 shrink-0 rounded-xl flex items-center justify-center font-bold text-xl ${profile.active ? 'bg-dark-base text-accent' : 'bg-border-subtle text-muted'}`}>
+                                    {INTERVAL_INITIALS[profile.interval]}
                                 </div>
-                                <div>
-                                    <h3 className="font-bold text-lg text-gray-900">{profile.name}</h3>
-                                    <p className="text-sm font-medium text-gray-500">{getClientName(profile.clientId)}</p>
+                                <div className="min-w-0">
+                                    <h3 className="break-words font-bold text-lg text-foreground">{profile.name}</h3>
+                                    <p className="text-sm font-medium text-muted">{getClientName(profile.clientId)}</p>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
+                                    type="button"
                                     onClick={() => handleToggleActive(profile.id)}
-                                    className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 transition-colors ${profile.active ? 'bg-success-bg text-success' : 'bg-gray-200 text-gray-500'}`}
+                                    aria-pressed={profile.active}
+                                    className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${profile.active ? 'border border-control-border bg-success-bg text-success-text' : 'border border-control-border bg-surface text-muted'}`}
                                 >
-                                    {profile.active ? <Play size={10} fill="currentColor" /> : <Pause size={10} fill="currentColor" />}
+                                    {profile.active ? <Play size={12} fill="currentColor" aria-hidden="true" /> : <Pause size={12} fill="currentColor" aria-hidden="true" />}
                                     {profile.active ? 'Aktiv' : 'Pausiert'}
                                 </button>
-                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button onClick={() => handleEdit(profile)} className="p-2 bg-gray-100 hover:bg-black hover:text-white rounded-lg transition-colors"><Edit3 size={14}/></button>
-                                    <button onClick={() => handleDelete(profile.id)} className="p-2 bg-error-bg text-error hover:bg-error hover:text-white rounded-lg transition-colors"><Trash2 size={14}/></button>
+                                <div className="flex gap-1 opacity-0 motion-safe:transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-focus-within:opacity-100">
+                                    <button
+                                        type="button"
+                                        onClick={() => handleEdit(profile)}
+                                        aria-label={`Abo ${profile.name} bearbeiten`}
+                                        className="p-2 rounded-lg bg-surface-muted text-foreground transition-colors hover:bg-dark-base hover:text-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                                    >
+                                        <Edit3 size={14} aria-hidden="true" />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleDelete(profile.id)}
+                                        aria-label={`Abo ${profile.name} löschen`}
+                                        className="p-2 rounded-lg bg-error-bg text-error-text transition-colors hover:bg-error-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                                    >
+                                        <Trash2 size={14} aria-hidden="true" />
+                                    </button>
                                 </div>
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-3 gap-4 mb-6">
-                            <div className="bg-gray-50 rounded-xl p-3">
-                                <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Intervall</p>
+                        <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
+                            <div className="bg-surface-muted rounded-xl p-3">
+                                <p className="text-xs font-bold text-muted uppercase mb-1">Intervall</p>
                                 <p className="text-sm font-bold flex items-center gap-1">
-                                    <Clock size={12} />
+                                    <Clock size={12} aria-hidden="true" />
                                     {profile.interval === 'weekly' && 'Wöchentlich'}
                                     {profile.interval === 'monthly' && 'Monatlich'}
                                     {profile.interval === 'quarterly' && 'Quartalsweise'}
                                     {profile.interval === 'yearly' && 'Jährlich'}
                                 </p>
                             </div>
-                            <div className="bg-gray-50 rounded-xl p-3">
-                                <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Nächste Ausführung</p>
+                            <div className="bg-surface-muted rounded-xl p-3">
+                                <p className="text-xs font-bold text-muted uppercase mb-1">Nächste Ausführung</p>
                                 <p className="text-sm font-bold flex items-center gap-1">
-                                    <Calendar size={12} />
-                                    {formatDate(profile.nextRun)}
+                                    <Calendar size={12} aria-hidden="true" />
+                                    <span className="tabular-nums">{formatDate(profile.nextRun)}</span>
                                 </p>
                             </div>
-                            <div className="bg-gray-50 rounded-xl p-3 text-right">
-                                <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Betrag</p>
-                                <p className="text-lg font-mono font-bold text-gray-900">{formatCurrency(profile.amount)}</p>
+                            <div className="bg-surface-muted rounded-xl p-3 text-right">
+                                <p className="text-xs font-bold text-muted uppercase mb-1">Betrag</p>
+                                <p className="text-lg font-bold tabular-nums text-foreground">{formatCurrency(profile.amount)}</p>
                             </div>
                         </div>
 
-                        <div className="flex items-center justify-between pt-4 border-t border-gray-100">
-                             <p className="text-xs text-gray-400 font-medium">
-                                 Zuletzt: {profile.lastRun ? formatDate(profile.lastRun) : '-'}
+                        <div className="flex items-center justify-between pt-4 border-t border-border-subtle">
+                             <p className="text-xs text-muted font-medium">
+                                 Zuletzt: <span className="tabular-nums">{profile.lastRun ? formatDate(profile.lastRun) : EMPTY_VALUE}</span>
                              </p>
                              <button
+                                type="button"
                                 onClick={() => handleRunNow(profile.id)}
                                 disabled={runningNowId !== null}
-                                className="text-xs font-bold text-black hover:text-accent hover:bg-black px-3 py-1.5 rounded-lg transition-colors border border-transparent hover:border-black disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="text-xs font-bold text-foreground rounded-lg px-3 py-1.5 transition-colors hover:bg-dark-base hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50 disabled:cursor-not-allowed"
                              >
-                                 {runningNowId === profile.id ? 'Generiere...' : 'Jetzt ausführen'}
+                                 {runningNowId === profile.id ? 'Generiere …' : 'Jetzt ausführen'}
                              </button>
                         </div>
                     </div>
                 ))}
-
-                {profiles.every((profile) => pendingIds.has(profile.id)) && (
-                     <div className="col-span-full text-center py-16 text-gray-400">
-                        <Repeat size={48} className="mx-auto mb-4 opacity-20" />
-                        <p>Keine wiederkehrenden Rechnungen eingerichtet.</p>
-                    </div>
-                )}
             </div>
+            )}
 
-            {/* Edit Modal */}
-            {isEditModalOpen && (
-                <div className="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex justify-end">
-                    <div className="w-full max-w-2xl bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300 rounded-l-[2.5rem] overflow-hidden">
-                        <div className="p-8 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                            <div>
-                                <h2 className="text-xl font-bold">{editingProfile ? 'Abo bearbeiten' : 'Neues Abo'}</h2>
-                                <p className="text-xs text-gray-500">{editingProfile?.id || 'Entwurf'}</p>
-                            </div>
-                            <button onClick={() => setIsEditModalOpen(false)} className="p-2 hover:bg-gray-200 rounded-full transition-colors"><X size={20} /></button>
+            <Modal
+                open={isEditModalOpen}
+                onClose={() => setIsEditModalOpen(false)}
+                titleId={editorTitleId}
+                className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden"
+            >
+                    <div className="p-8 border-b border-border-subtle flex justify-between items-center bg-surface-muted">
+                        <div>
+                            <h2 id={editorTitleId} className="text-xl font-bold text-foreground">{editingProfile ? 'Abo bearbeiten' : 'Neues Abo'}</h2>
+                            <p className="text-xs text-muted">{editingProfile?.name || 'Entwurf'}</p>
                         </div>
+                        <button
+                            type="button"
+                            onClick={() => setIsEditModalOpen(false)}
+                            aria-label="Abo-Dialog schließen"
+                            className="p-2 rounded-full text-muted transition-colors hover:bg-border-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        >
+                            <X size={20} aria-hidden="true" />
+                        </button>
+                    </div>
 
-                        <div className="flex-1 overflow-y-auto p-8 space-y-8">
-                            <ValidationSummary
-                                errors={Object.entries(validationErrors)
-                                    .filter(([field]) => field === 'name' || field === 'clientId')
-                                    .map(([field, error]) => ({ id: error.targetId, message: error.message }))}
-                                onJump={(id) => {
-                                    const target = document.getElementById(id);
-                                    if (target instanceof HTMLElement) target.focus();
-                                }}
-                            />
+                    <div className="flex-1 overflow-y-auto p-8 space-y-8">
+                        <ValidationSummary
+                            errors={Object.entries(validationErrors)
+                                .filter(([field]) => field === 'name' || field === 'clientId')
+                                .map(([field, error]) => ({ id: error.targetId, message: error.message }))}
+                            onJump={(id) => {
+                                const target = document.getElementById(id);
+                                if (target instanceof HTMLElement) target.focus();
+                            }}
+                        />
 
-                            {/* General Settings */}
-                            <section className="space-y-4">
-                                <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 flex items-center gap-2">
-                                    <Repeat size={14} /> Einstellungen
-                                </h3>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="col-span-2">
-                                        <label htmlFor={inputId('name')} className="block text-xs font-bold text-gray-500 mb-1">Interne Bezeichnung</label>
-                                        <input
-                                            id={inputId('name')}
-                                            type="text"
-                                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm font-bold focus:ring-2 focus:ring-accent outline-none"
-                                            value={formData.name || ''}
-                                            onChange={e => setFormData({ ...formData, name: e.target.value })}
-                                            placeholder="z.B. Wartungsvertrag 2024"
-                                            required
-                                            aria-required="true"
-                                            aria-invalid={validationErrors.name ? 'true' : undefined}
-                                            aria-describedby={validationErrors.name ? fieldErrorId('name') : undefined}
-                                        />
-                                        {validationErrors.name && <p id={fieldErrorId('name')} className="mt-1 text-xs font-medium text-error">{validationErrors.name.message}</p>}
-                                    </div>
-                                    <div>
-                                        <label htmlFor={inputId('clientId')} className="block text-xs font-bold text-gray-500 mb-1">Kunde</label>
-                                        <select
-                                            id={inputId('clientId')}
-                                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-accent outline-none"
-                                            value={formData.clientId}
-                                            onChange={e => setFormData({ ...formData, clientId: e.target.value })}
-                                            required
-                                            aria-required="true"
-                                            aria-invalid={validationErrors.clientId ? 'true' : undefined}
-                                            aria-describedby={validationErrors.clientId ? fieldErrorId('clientId') : undefined}
-                                        >
-                                            {clients.map(c => (
-                                                <option key={c.id} value={c.id}>{c.company}</option>
-                                            ))}
-                                        </select>
-                                        {validationErrors.clientId && <p id={fieldErrorId('clientId')} className="mt-1 text-xs font-medium text-error">{validationErrors.clientId.message}</p>}
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-gray-500 mb-1">Intervall</label>
-                                        <select
-                                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-accent outline-none"
-                                            value={formData.interval}
-                                            onChange={e => setFormData({ ...formData, interval: e.target.value as RecurrenceInterval })}
-                                        >
-                                            <option value="weekly">Wöchentlich</option>
-                                            <option value="monthly">Monatlich</option>
-                                            <option value="quarterly">Quartalsweise</option>
-                                            <option value="yearly">Jährlich</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-gray-500 mb-1">Start / Nächste Ausführung</label>
-                                        <input
-                                            type="date"
-                                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-accent outline-none"
-                                            value={formData.nextRun}
-                                            onChange={e => setFormData({ ...formData, nextRun: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-gray-500 mb-1">Endet am (Optional)</label>
-                                        <input
-                                            type="date"
-                                            className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-accent outline-none"
-                                            value={formData.endDate || ''}
-                                            onChange={e => setFormData({ ...formData, endDate: e.target.value })}
-                                        />
-                                    </div>
+                        {/* General Settings */}
+                        <section className="space-y-4">
+                            <h3 className="text-sm font-bold uppercase tracking-wider text-muted flex items-center gap-2">
+                                <Repeat size={14} aria-hidden="true" /> Einstellungen
+                            </h3>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="col-span-2">
+                                    <label htmlFor={inputId('name')} className="block text-xs font-bold text-muted mb-1">Interne Bezeichnung</label>
+                                    <input
+                                        id={inputId('name')}
+                                        type="text"
+                                        className={fieldClass}
+                                        value={formData.name || ''}
+                                        onChange={e => setFormData({ ...formData, name: e.target.value })}
+                                        placeholder="z.B. Wartungsvertrag 2024"
+                                        required
+                                        aria-required="true"
+                                        aria-invalid={validationErrors.name ? 'true' : undefined}
+                                        aria-describedby={validationErrors.name ? fieldErrorId('name') : undefined}
+                                    />
+                                    {validationErrors.name && <p id={fieldErrorId('name')} className="mt-1 text-xs font-medium text-error-text">{validationErrors.name.message}</p>}
                                 </div>
-                            </section>
-
-                            <hr className="border-gray-100" />
-
-                            {/* Items Editor */}
-                            <section className="space-y-4">
-                                <div className="flex justify-between items-center">
-                                    <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400 flex items-center gap-2">
-                                        <Calculator size={14} /> Rechnungspositionen
-                                    </h3>
-                                    <button id={inputId('add-item')} onClick={addItem} className="text-xs font-bold bg-black text-accent px-2 py-1 rounded hover:bg-gray-800 transition-colors">
-                                        + Position
-                                    </button>
-                                </div>
-
-                                {validationErrors.items && (
-                                    <div
-                                        id={fieldErrorId('items')}
-                                        className="rounded-lg border border-error-border bg-error-bg p-3 text-sm font-medium text-error"
-                                        role="alert"
-                                        aria-live="assertive"
-                                        aria-atomic="true"
+                                <div>
+                                    <label htmlFor={inputId('clientId')} className="block text-xs font-bold text-muted mb-1">Kunde</label>
+                                    <select
+                                        id={inputId('clientId')}
+                                        className={fieldClass}
+                                        value={formData.clientId}
+                                        onChange={e => setFormData({ ...formData, clientId: e.target.value })}
+                                        required
+                                        aria-required="true"
+                                        aria-invalid={validationErrors.clientId ? 'true' : undefined}
+                                        aria-describedby={validationErrors.clientId ? fieldErrorId('clientId') : undefined}
                                     >
-                                        {validationErrors.items.message}
-                                    </div>
-                                )}
-
-                                <div className="space-y-3">
-                                    {formData.items?.map((item, idx) => (
-                                        <div key={idx} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
-                                            <div className="flex gap-2 mb-2">
-                                                <input
-                                                    id={itemDescriptionId(idx)}
-                                                    type="text"
-                                                    placeholder="Beschreibung"
-                                                    aria-label="Beschreibung"
-                                                    className="flex-1 bg-white border border-gray-200 rounded p-2 text-sm font-bold outline-none focus:border-accent"
-                                                    value={item.description}
-                                                    onChange={e => handleItemChange(idx, 'description', e.target.value)}
-                                                    aria-invalid={validationErrors.items?.targetId === itemDescriptionId(idx) ? 'true' : undefined}
-                                                    aria-describedby={validationErrors.items?.targetId === itemDescriptionId(idx) ? fieldErrorId('items') : undefined}
-                                                />
-                                                <button aria-label="Position entfernen" onClick={() => removeItem(idx)} className="text-gray-400 hover:text-error p-1"><Trash2 size={16}/></button>
-                                            </div>
-                                            <div className="grid grid-cols-3 gap-2">
-                                                <div>
-                                                    <label htmlFor={itemFieldId(idx, 'quantity')} className="text-[10px] text-gray-400 font-bold uppercase">Menge</label>
-                                                    <input
-                                                        id={itemFieldId(idx, 'quantity')}
-                                                        type="number"
-                                                        className="w-full bg-white border border-gray-200 rounded p-2 text-sm outline-none"
-                                                        value={item.quantity}
-                                                        onChange={e => handleItemChange(idx, 'quantity', Number(e.target.value))}
-                                                        aria-invalid={validationErrors.items?.targetId === itemFieldId(idx, 'quantity') ? 'true' : undefined}
-                                                        aria-describedby={validationErrors.items?.targetId === itemFieldId(idx, 'quantity') ? fieldErrorId('items') : undefined}
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label htmlFor={itemFieldId(idx, 'price')} className="text-[10px] text-gray-400 font-bold uppercase">Preis (€)</label>
-                                                    <input
-                                                        id={itemFieldId(idx, 'price')}
-                                                        type="number"
-                                                        className="w-full bg-white border border-gray-200 rounded p-2 text-sm outline-none"
-                                                        value={item.price}
-                                                        onChange={e => handleItemChange(idx, 'price', Number(e.target.value))}
-                                                        aria-invalid={validationErrors.items?.targetId === itemFieldId(idx, 'price') ? 'true' : undefined}
-                                                        aria-describedby={validationErrors.items?.targetId === itemFieldId(idx, 'price') ? fieldErrorId('items') : undefined}
-                                                    />
-                                                </div>
-                                                <div className="text-right">
-                                                    <label className="text-[10px] text-gray-400 font-bold uppercase">Gesamt</label>
-                                                    <p className="text-sm font-bold pt-2">{formatCurrency(item.total)}</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
+                                        {clients.map(c => (
+                                            <option key={c.id} value={c.id}>{c.company}</option>
+                                        ))}
+                                    </select>
+                                    {validationErrors.clientId && <p id={fieldErrorId('clientId')} className="mt-1 text-xs font-medium text-error-text">{validationErrors.clientId.message}</p>}
                                 </div>
-                                <div className="flex justify-between items-center pt-4 border-t border-gray-100">
-                                    <span className="font-bold">Gesamtsumme (Netto)</span>
-                                    <span className="font-mono font-bold text-xl">
-                                        {formatCurrency(recurringTotal(formData.items || []))}
-                                    </span>
+                                <div>
+                                    <label htmlFor={inputId('interval')} className="block text-xs font-bold text-muted mb-1">Intervall</label>
+                                    <select
+                                        id={inputId('interval')}
+                                        className={fieldClass}
+                                        value={formData.interval}
+                                        onChange={e => setFormData({ ...formData, interval: e.target.value as RecurrenceInterval })}
+                                    >
+                                        <option value="weekly">Wöchentlich</option>
+                                        <option value="monthly">Monatlich</option>
+                                        <option value="quarterly">Quartalsweise</option>
+                                        <option value="yearly">Jährlich</option>
+                                    </select>
                                 </div>
-                            </section>
-                        </div>
+                                <div>
+                                    <label htmlFor={inputId('nextRun')} className="block text-xs font-bold text-muted mb-1">Start / Nächste Ausführung</label>
+                                    <input
+                                        id={inputId('nextRun')}
+                                        type="date"
+                                        className={fieldClass}
+                                        value={formData.nextRun}
+                                        onChange={e => setFormData({ ...formData, nextRun: e.target.value })}
+                                    />
+                                </div>
+                                <div>
+                                    <label htmlFor={inputId('endDate')} className="block text-xs font-bold text-muted mb-1">Endet am (optional)</label>
+                                    <input
+                                        id={inputId('endDate')}
+                                        type="date"
+                                        className={fieldClass}
+                                        value={formData.endDate || ''}
+                                        onChange={e => setFormData({ ...formData, endDate: e.target.value })}
+                                    />
+                                </div>
+                            </div>
+                        </section>
 
-                        <div className="p-6 border-t border-gray-100 bg-gray-50">
-                            {saveError && (
-                                <div className="mb-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm font-medium text-error" role="alert" aria-live="assertive">
-                                    {saveError}
+                        <hr className="border-border-subtle" />
+
+                        {/* Items Editor */}
+                        <section className="space-y-4">
+                            <div className="flex justify-between items-center">
+                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted flex items-center gap-2">
+                                    <Calculator size={14} aria-hidden="true" /> Rechnungspositionen
+                                </h3>
+                                <button
+                                    type="button"
+                                    id={inputId('add-item')}
+                                    onClick={addItem}
+                                    className="text-xs font-bold bg-dark-base text-accent px-2 py-1 rounded-sm transition-colors hover:bg-dark-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
+                                >
+                                    + Position
+                                </button>
+                            </div>
+
+                            {validationErrors.items && (
+                                <div
+                                    id={fieldErrorId('items')}
+                                    className="rounded-lg border border-error-border bg-error-bg p-3 text-sm font-medium text-error-text"
+                                    role="alert"
+                                    aria-live="assertive"
+                                    aria-atomic="true"
+                                >
+                                    {validationErrors.items.message}
                                 </div>
                             )}
-                            <div className="flex justify-end gap-3">
-                            <button onClick={() => setIsEditModalOpen(false)} className="px-6 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-200 transition-colors">Abbrechen</button>
-                            <button
-                                onClick={handleSave}
-                                disabled={Boolean(upsertProfile.isPending)}
-                                className="px-6 py-3 rounded-xl font-bold bg-accent text-black hover:bg-accent-hover shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                            >
-                                <Save size={18} /> {upsertProfile.isPending ? 'Speichert...' : 'Speichern'}
-                            </button>
+
+                            <div className="space-y-3">
+                                {formData.items?.map((item, idx) => (
+                                    <div key={idx} className="bg-surface-muted rounded-xl p-3 border border-border-subtle">
+                                        <div className="flex gap-2 mb-2">
+                                            <input
+                                                id={itemDescriptionId(idx)}
+                                                type="text"
+                                                placeholder="Beschreibung"
+                                                aria-label="Beschreibung"
+                                                className="flex-1 rounded-sm border border-control-border bg-surface p-2 text-sm font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                                                value={item.description}
+                                                onChange={e => updateItem(idx, { description: e.target.value })}
+                                                aria-invalid={validationErrors.items?.targetId === itemDescriptionId(idx) ? 'true' : undefined}
+                                                aria-describedby={validationErrors.items?.targetId === itemDescriptionId(idx) ? fieldErrorId('items') : undefined}
+                                            />
+                                            <button
+                                                type="button"
+                                                aria-label="Position entfernen"
+                                                onClick={() => removeItem(idx)}
+                                                className="p-2 rounded-sm text-muted transition-colors hover:text-error-text hover:bg-error-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                                            >
+                                                <Trash2 size={16} aria-hidden="true" />
+                                            </button>
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            <div>
+                                                <label htmlFor={itemFieldId(idx, 'quantity')} className="text-xs text-muted font-bold uppercase">Menge</label>
+                                                <input
+                                                    id={itemFieldId(idx, 'quantity')}
+                                                    type="number"
+                                                    className={itemFieldClass}
+                                                    value={item.quantity}
+                                                    onChange={e => updateItem(idx, { quantity: Number(e.target.value) })}
+                                                    aria-invalid={validationErrors.items?.targetId === itemFieldId(idx, 'quantity') ? 'true' : undefined}
+                                                    aria-describedby={validationErrors.items?.targetId === itemFieldId(idx, 'quantity') ? fieldErrorId('items') : undefined}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label htmlFor={itemFieldId(idx, 'price')} className="text-xs text-muted font-bold uppercase">Preis (€)</label>
+                                                <input
+                                                    id={itemFieldId(idx, 'price')}
+                                                    type="number"
+                                                    className={itemFieldClass}
+                                                    value={item.price}
+                                                    onChange={e => updateItem(idx, { price: Number(e.target.value) })}
+                                                    aria-invalid={validationErrors.items?.targetId === itemFieldId(idx, 'price') ? 'true' : undefined}
+                                                    aria-describedby={validationErrors.items?.targetId === itemFieldId(idx, 'price') ? fieldErrorId('items') : undefined}
+                                                />
+                                            </div>
+                                            <div className="text-right">
+                                                <label className="text-xs text-muted font-bold uppercase">Gesamt</label>
+                                                <p className="text-sm font-bold pt-2 tabular-nums">{formatCurrency(item.total)}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
+                            <div className="flex justify-between items-center pt-4 border-t border-border-subtle">
+                                <span className="font-bold">Gesamtsumme (Netto)</span>
+                                <span className="font-bold text-xl tabular-nums">
+                                    {formatCurrency(recurringTotal(formData.items || []))}
+                                </span>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div className="p-6 border-t border-border-subtle bg-surface-muted">
+                        {saveError && (
+                            <div className="mb-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm font-medium text-error-text" role="alert" aria-live="assertive">
+                                {saveError}
+                            </div>
+                        )}
+                        <div className="flex justify-end gap-3">
+                        <Button variant="ghost" onClick={() => setIsEditModalOpen(false)}>Abbrechen</Button>
+                        <Button onClick={handleSave} loading={upsertProfile.isPending}>
+                            <Save size={18} /> Speichern
+                        </Button>
                         </div>
                     </div>
-                </div>
-            )}
+            </Modal>
         </div>
     );
 };

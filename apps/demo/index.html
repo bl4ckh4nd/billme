@@ -1,12 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="de">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Billme Demo</title>
   </head>
-  <body>
-    <div id="root"></div>
+  <body class="flex h-full flex-col">
+    <div class="flex shrink-0 items-center justify-center border-b border-warning-border bg-warning-bg px-4 py-2 text-center text-xs font-semibold text-warning-text">
+      Demo mit Beispieldaten. Änderungen werden nicht gespeichert.
+    </div>
+    <div id="root" class="min-h-0 flex-1"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -58,13 +58,7 @@ describe("settingsRepo", () => {
     const result = getSettings(db as any);
 
     expect(result).toMatchObject(MOCK_SETTINGS);
-    expect(result?.businessReportingProfile).toEqual({
-      jurisdiction: 'DE',
-      legalForm: 'sole_proprietor',
-      profitDetermination: 'eur',
-      fiscalYearStart: '01-01',
-      vatMethod: 'soll',
-    });
+    expect(result?.businessReportingProfile).toEqual(MOCK_SETTINGS.businessReportingProfile);
     expect(strictJsonParseMock).toHaveBeenCalledTimes(1);
   });
 
@@ -169,13 +163,7 @@ describe("settingsRepo", () => {
       (db.prepare("SELECT settings_json FROM settings WHERE id = 1").get() as { settings_json: string }).settings_json,
     );
     expect(persisted).toMatchObject(MOCK_SETTINGS);
-    expect(persisted.businessReportingProfile).toEqual({
-      jurisdiction: 'DE',
-      legalForm: 'sole_proprietor',
-      profitDetermination: 'eur',
-      fiscalYearStart: '01-01',
-      vatMethod: 'soll',
-    });
+    expect(persisted.businessReportingProfile).toEqual(MOCK_SETTINGS.businessReportingProfile);
     db.close();
   });
 

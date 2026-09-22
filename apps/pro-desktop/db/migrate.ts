@@ -1717,7 +1717,7 @@ export const runMigrations = (db: Database.Database): void => {
   // document is an accounting artifact and must keep the figure it was issued
   // with. Pro used to compute that figure without the per-document tax mode, so
   // some legacy rows can disagree with the freshly derived snapshot. Surface
-  // those instead of silently "correcting" them — the decision is the operator's.
+  // those instead of silently "correcting" them, the decision is the operator's.
   const reportTaxDrift = (table: 'invoices' | 'offers', itemsTable: string, idColumn: string) => {
     const drifted = db
       .prepare(

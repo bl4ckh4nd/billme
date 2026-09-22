@@ -1,3 +1,4 @@
+import { Button, EmptyState } from '@billme/ui';
 import { BalanceSheetPreview, BalanceSheetPreviewLine } from '../../domain/reportTypes';
 import ReportSummaryCards from './ReportSummaryCards';
 
@@ -8,6 +9,7 @@ function euro(value: number) {
 interface BalanceSheetPreviewViewProps {
   report: BalanceSheetPreview | null;
   onSelectLine: (line: BalanceSheetPreviewLine) => void;
+  onRetry?: () => void;
 }
 
 function SideColumn({
@@ -40,7 +42,7 @@ function SideColumn({
                   {line.label}
                 </div>
               </div>
-              <div className={`shrink-0 text-sm font-bold ${line.amount < 0 ? 'text-error' : 'text-foreground'}`}>
+              <div className={`shrink-0 text-sm font-bold tabular-nums ${line.amount < 0 ? 'text-error-text' : 'text-foreground'}`}>
                 {euro(line.amount)}
               </div>
             </div>
@@ -51,20 +53,33 @@ function SideColumn({
   );
 }
 
-export default function BalanceSheetPreviewView({ report, onSelectLine }: BalanceSheetPreviewViewProps) {
-  if (!report) return null;
+export default function BalanceSheetPreviewView({ report, onSelectLine, onRetry }: BalanceSheetPreviewViewProps) {
+  if (!report) {
+    return (
+      <EmptyState
+        title="Bilanzvorschau nicht geladen"
+        description="Für den Stichtag liegt keine Bilanz nach HGB vor. Laden Sie den Report erneut oder prüfen Sie Zeitraum und Konten-Mapping."
+        action={onRetry ? (
+          <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
+            Erneut laden
+          </Button>
+        ) : undefined}
+      />
+    );
+  }
 
   return (
     <div className="space-y-4">
       <ReportSummaryCards
         cards={[
-          { label: 'Aktiva', value: euro(report.totals.aktiva) },
-          { label: 'Passiva', value: euro(report.totals.passiva) },
           {
             label: 'Differenz',
             value: euro(report.totals.difference),
             tone: report.totals.difference === 0 ? 'ok' : 'danger',
+            emphasis: true,
           },
+          { label: 'Aktiva', value: euro(report.totals.aktiva) },
+          { label: 'Passiva', value: euro(report.totals.passiva) },
           {
             label: 'Status',
             value: report.quality.status === 'ok' ? 'Plausibel' : report.quality.status === 'warning' ? 'Prüfen' : 'Fehler',
@@ -83,10 +98,10 @@ export default function BalanceSheetPreviewView({ report, onSelectLine }: Balanc
           <span
             className={`px-2.5 py-1 rounded-full text-xs font-bold ${
               report.quality.status === 'ok'
-                ? 'bg-success-bg text-success'
+                ? 'bg-success-bg text-success-text'
                 : report.quality.status === 'warning'
-                  ? 'bg-warning-bg text-warning'
-                  : 'bg-error-bg text-error'
+                  ? 'bg-warning-bg text-warning-text'
+                  : 'bg-error-bg text-error-text'
             }`}
           >
             {report.quality.status === 'ok' ? 'OK' : report.quality.status === 'warning' ? 'Prüfen' : 'Fehler'}
@@ -108,20 +123,20 @@ export default function BalanceSheetPreviewView({ report, onSelectLine }: Balanc
       </div>
 
       <div className="rounded-2xl border border-border bg-surface p-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-          <div className="rounded-xl border border-subtle p-3">
-            <div className="text-xs font-bold text-muted uppercase tracking-wide">Aktiva gesamt</div>
-            <div className="mt-1 text-lg font-bold text-foreground">{euro(report.totals.aktiva)}</div>
+        <div className="rounded-xl border border-border-subtle bg-surface-muted px-4 py-3">
+          <div className="text-xs font-bold uppercase tracking-wide text-muted">Differenz</div>
+          <div className={`mt-1 text-base font-black tabular-nums ${report.totals.difference === 0 ? 'text-success-text' : 'text-error-text'}`}>
+            {euro(report.totals.difference)}
           </div>
-          <div className="rounded-xl border border-subtle p-3">
-            <div className="text-xs font-bold text-muted uppercase tracking-wide">Passiva gesamt</div>
-            <div className="mt-1 text-lg font-bold text-foreground">{euro(report.totals.passiva)}</div>
+        </div>
+        <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 text-sm">
+          <div className="rounded-lg border border-border-subtle px-3 py-2">
+            <div className="text-xs font-bold text-muted">Aktiva gesamt</div>
+            <div className="mt-0.5 text-sm font-bold tabular-nums text-foreground">{euro(report.totals.aktiva)}</div>
           </div>
-          <div className="rounded-xl border border-subtle p-3">
-            <div className="text-xs font-bold text-muted uppercase tracking-wide">Differenz</div>
-            <div className={`mt-1 text-lg font-bold ${report.totals.difference === 0 ? 'text-success' : 'text-error'}`}>
-              {euro(report.totals.difference)}
-            </div>
+          <div className="rounded-lg border border-border-subtle px-3 py-2">
+            <div className="text-xs font-bold text-muted">Passiva gesamt</div>
+            <div className="mt-0.5 text-sm font-bold tabular-nums text-foreground">{euro(report.totals.passiva)}</div>
           </div>
         </div>
       </div>

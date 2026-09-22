@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { X, AlertTriangle, FileText, Calendar, CheckCircle2, XCircle, Undo2 } from 'lucide-react';
+import { useId, useState } from 'react';
+import { X, AlertTriangle, Calendar, CheckCircle2, XCircle, Undo2, Link2 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../runtime-api';
 import { formatCurrency } from '@billme/desktop-utils/formatters';
-import { Portal } from '@billme/ui';
+import { ConfirmDialog, EmptyState, ErrorState, Modal } from '@billme/ui';
+import { Spinner } from '@billme/desktop-ui/components/Spinner';
 
 interface ImportHistoryModalProps {
   isOpen: boolean;
@@ -11,8 +12,14 @@ interface ImportHistoryModalProps {
   accountId?: string;
 }
 
+const queryErrorDetail = (error: unknown): string =>
+  error instanceof Error && error.message.trim().length > 0
+    ? error.message
+    : 'Unbekannter Fehler beim Laden.';
+
 export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistoryModalProps) => {
   const queryClient = useQueryClient();
+  const titleId = useId();
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [rollbackReason, setRollbackReason] = useState('');
   const [showRollbackConfirm, setShowRollbackConfirm] = useState(false);
@@ -42,6 +49,7 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
     },
   });
 
+  // ponytail: ConfirmDialog enforces a non-empty reason; keep the existing 10-character guard at the mutation seam.
   const handleRollback = () => {
     if (!selectedBatchId || !rollbackReason.trim() || rollbackReason.trim().length < 10) return;
     rollbackMutation.mutate({ batchId: selectedBatchId, reason: rollbackReason });
@@ -55,360 +63,346 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
   const details = detailsQuery.data;
 
   return (
-    <Portal>
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark-base/20 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-[95%] h-[85vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <div>
-            <h2 className="text-xl font-black text-gray-900">Import-Historie</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              Übersicht aller CSV-Importe mit Rollback-Möglichkeit
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <X size={20} className="text-gray-500" />
-          </button>
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      titleId={titleId}
+      className="flex h-[85vh] max-w-4xl flex-col overflow-hidden"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-border p-6">
+        <div>
+          <h2 id={titleId} className="text-xl font-black text-foreground">Import-Historie</h2>
+          <p className="mt-1 text-sm text-muted">
+            Übersicht aller CSV-Importe mit Rollback-Möglichkeit
+          </p>
         </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Import-Historie schließen"
+          className="rounded-lg p-2 text-muted transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        >
+          <X size={20} />
+        </button>
+      </div>
 
-        {/* Content */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Left: Batch List */}
-          <div className="w-1/3 border-r border-gray-200 overflow-y-auto p-4 space-y-2">
-            {batchesQuery.isLoading && (
-              <div className="text-center py-8 text-gray-500">Lade Import-Historie...</div>
-            )}
+      {/* Content */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left: Batch List */}
+        <div className="w-1/3 space-y-2 overflow-y-auto border-r border-border p-4">
+          {batchesQuery.isError && (
+            <ErrorState
+              title="Importe konnten nicht geladen werden"
+              description={queryErrorDetail(batchesQuery.error)}
+              onRetry={() => void batchesQuery.refetch()}
+            />
+          )}
 
-            {batches.length === 0 && !batchesQuery.isLoading && (
-              <div className="text-center py-8 text-gray-500">
-                <FileText size={32} className="mx-auto mb-2 opacity-50" />
-                <p>Keine Importe vorhanden</p>
-              </div>
-            )}
+          {batchesQuery.isLoading && (
+            <div className="flex flex-col items-center gap-3 py-8 text-muted">
+              <Spinner size="sm" />
+              <span className="text-sm">Lade Import-Historie …</span>
+            </div>
+          )}
 
-            {batches.map((batch) => (
-              <button
-                key={batch.id}
-                onClick={() => setSelectedBatchId(batch.id)}
-                className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-                  selectedBatchId === batch.id
-                    ? 'border-accent bg-accent/10'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-gray-900 truncate">{batch.fileName}</p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      <Calendar size={12} className="inline mr-1" />
-                      {new Date(batch.createdAt).toLocaleString('de-DE')}
-                    </p>
-                  </div>
-                  {batch.rolledBackAt && (
-                    <span className="ml-2 px-2 py-1 bg-error-bg text-error text-xs rounded-full whitespace-nowrap">
-                      Rückgängig
-                    </span>
-                  )}
-                </div>
+          {!batchesQuery.isLoading && !batchesQuery.isError && batches.length === 0 && (
+            <EmptyState
+              title="Keine Importe vorhanden"
+              description="Sobald du eine CSV-Datei importierst, erscheint der Vorgang hier mit allen importierten Transaktionen."
+              className="border-0 bg-transparent px-2"
+            />
+          )}
 
-                <div className="flex items-center gap-3 text-xs mt-2">
-                  <span className="flex items-center text-success">
-                    <CheckCircle2 size={12} className="mr-1" />
-                    {batch.importedCount} importiert
-                  </span>
-                  {batch.skippedCount > 0 && (
-                    <span className="flex items-center text-gray-500">
-                      <XCircle size={12} className="mr-1" />
-                      {batch.skippedCount} übersprungen
-                    </span>
-                  )}
-                </div>
-
-                <div className="mt-2 text-xs text-gray-500">
-                  Profil: <span className="font-medium">{batch.profile}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-
-          {/* Right: Batch Details */}
-          <div className="flex-1 overflow-y-auto p-6">
-            {!selectedBatchId && (
-              <div className="flex items-center justify-center h-full text-gray-400">
-                <div className="text-center">
-                  <FileText size={48} className="mx-auto mb-3 opacity-30" />
-                  <p>Wähle einen Import aus der Liste</p>
-                </div>
-              </div>
-            )}
-
-            {selectedBatchId && detailsQuery.isLoading && (
-              <div className="text-center py-8 text-gray-500">Lade Details...</div>
-            )}
-
-            {details && (
-              <div className="space-y-6">
-                {/* Batch Info */}
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <h3 className="font-semibold text-gray-900 mb-3">Import-Details</h3>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <p className="text-gray-500">Dateiname</p>
-                      <p className="font-medium">{details.batch.fileName}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-500">Profil</p>
-                      <p className="font-medium">{details.batch.profile}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-500">Importiert am</p>
-                      <p className="font-medium">
-                        {new Date(details.batch.createdAt).toLocaleString('de-DE')}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-gray-500">Status</p>
-                      {details.batch.rolledBackAt ? (
-                        <p className="font-medium text-error">Rückgängig gemacht</p>
-                      ) : (
-                        <p className="font-medium text-success">Aktiv</p>
-                      )}
-                    </div>
-                  </div>
-
-                  {details.batch.rolledBackAt && (
-                    <div className="mt-3 pt-3 border-t border-gray-200">
-                      <p className="text-gray-500 text-sm">Grund für Rollback</p>
-                      <p className="font-medium text-sm">{details.batch.rollbackReason}</p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        Rückgängig gemacht am:{' '}
-                        {new Date(details.batch.rolledBackAt).toLocaleString('de-DE')}
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="mt-3 pt-3 border-t border-gray-200 flex items-center gap-4 text-sm">
-                    <span className="flex items-center text-success">
-                      <CheckCircle2 size={14} className="mr-1" />
-                      {details.batch.importedCount} importiert
-                    </span>
-                    {details.batch.skippedCount > 0 && (
-                      <span className="flex items-center text-gray-500">
-                        <XCircle size={14} className="mr-1" />
-                        {details.batch.skippedCount} übersprungen
-                      </span>
-                    )}
-                    {details.linkedInvoiceCount > 0 && (
-                      <span className="flex items-center text-info">
-                        🔗 {details.linkedInvoiceCount} mit Rechnungen verknüpft
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Transaction Preview */}
-                <div>
-                  <h3 className="font-semibold text-gray-900 mb-3">
-                    Transaktionen (Vorschau)
-                  </h3>
-                  <div className="border border-gray-200 rounded-lg overflow-hidden">
-                    <div className="max-h-64 overflow-y-auto">
-                      {details.transactions.length === 0 ? (
-                        <div className="text-center py-4 text-gray-500 text-sm">
-                          Keine Transaktionen vorhanden
-                        </div>
-                      ) : (
-                        <table className="w-full text-sm">
-                          <thead className="bg-gray-50 border-b border-gray-200">
-                            <tr>
-                              <th className="text-left px-3 py-2 font-medium text-gray-600">
-                                Datum
-                              </th>
-                              <th className="text-left px-3 py-2 font-medium text-gray-600">
-                                Gegenseite
-                              </th>
-                              <th className="text-left px-3 py-2 font-medium text-gray-600">
-                                Verwendungszweck
-                              </th>
-                              <th className="text-right px-3 py-2 font-medium text-gray-600">
-                                Betrag
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-100">
-                            {details.transactions.map((tx) => (
-                              <tr key={tx.id} className="hover:bg-gray-50">
-                                <td className="px-3 py-2 text-gray-600">
-                                  {new Date(tx.date).toLocaleDateString('de-DE')}
-                                </td>
-                                <td className="px-3 py-2 font-medium text-gray-900">
-                                  {tx.counterparty}
-                                </td>
-                                <td className="px-3 py-2 text-gray-600 truncate max-w-xs">
-                                  {tx.purpose}
-                                </td>
-                                <td
-                                  className={`px-3 py-2 text-right font-medium ${
-                                    tx.type === 'income' ? 'text-success' : 'text-error'
-                                  }`}
-                                >
-                                  {tx.type === 'income' ? '+' : '-'}
-                                  {formatCurrency(Math.abs(tx.amount))}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-                    </div>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-2">
-                    Zeigt maximal 50 Transaktionen
+          {!batchesQuery.isError && batches.map((batch) => (
+            <button
+              key={batch.id}
+              type="button"
+              onClick={() => setSelectedBatchId(batch.id)}
+              aria-pressed={selectedBatchId === batch.id}
+              className={`w-full rounded-lg border-2 p-4 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                selectedBatchId === batch.id
+                  ? 'border-foreground bg-surface-muted'
+                  : 'border-border hover:border-control-border'
+              }`}
+            >
+              <div className="mb-2 flex items-start justify-between">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium text-foreground">{batch.fileName}</p>
+                  <p className="mt-1 flex items-center text-xs tabular-nums text-muted">
+                    <Calendar size={12} className="mr-1" aria-hidden="true" />
+                    {new Date(batch.createdAt).toLocaleString('de-DE')}
                   </p>
                 </div>
+                {batch.rolledBackAt && (
+                  <span className="ml-2 whitespace-nowrap rounded-full border border-error-border bg-error-bg px-2 py-1 text-xs text-error-text">
+                    Rückgängig
+                  </span>
+                )}
+              </div>
 
-                {/* Rollback Section */}
-                {!details.batch.rolledBackAt && (
-                  <div className="border-t border-gray-200 pt-6">
-                    {!details.canRollback && (
-                      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                        <div className="flex items-start gap-3">
-                          <AlertTriangle size={20} className="text-yellow-600 mt-0.5" />
-                          <div className="flex-1">
-                            <p className="font-medium text-yellow-900">
-                              Rollback nicht möglich
-                            </p>
-                            <p className="text-sm text-yellow-700 mt-1">
-                              {details.linkedInvoiceCount} Transaktion(en) sind bereits mit
-                              Rechnungen verknüpft. Bitte löse zuerst die Verknüpfungen.
-                            </p>
-                          </div>
+              <div className="mt-2 flex items-center gap-3 text-xs">
+                <span className="flex items-center tabular-nums text-success-text">
+                  <CheckCircle2 size={12} className="mr-1" aria-hidden="true" />
+                  {batch.importedCount} importiert
+                </span>
+                {batch.skippedCount > 0 && (
+                  <span className="flex items-center tabular-nums text-muted">
+                    <XCircle size={12} className="mr-1" aria-hidden="true" />
+                    {batch.skippedCount} übersprungen
+                  </span>
+                )}
+              </div>
+
+              <div className="mt-2 text-xs text-muted">
+                Profil: <span className="font-medium text-foreground">{batch.profile}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Right: Batch Details */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {!selectedBatchId && (
+            <div className="flex h-full items-center justify-center">
+              <EmptyState
+                title="Kein Import ausgewählt"
+                description="Wähle links einen Vorgang aus, um Details und Rollback-Optionen zu sehen."
+                className="border-0 bg-transparent"
+              />
+            </div>
+          )}
+
+          {selectedBatchId && detailsQuery.isLoading && (
+            <div className="flex flex-col items-center gap-3 py-8 text-muted">
+              <Spinner size="sm" />
+              <span className="text-sm">Lade Details …</span>
+            </div>
+          )}
+
+          {selectedBatchId && detailsQuery.isError && (
+            <ErrorState
+              title="Import-Details konnten nicht geladen werden"
+              description={queryErrorDetail(detailsQuery.error)}
+              onRetry={() => void detailsQuery.refetch()}
+            />
+          )}
+
+          {details && (
+            <div className="space-y-6">
+              {/* Batch Info */}
+              <div className="rounded-lg border border-border bg-surface-muted p-4">
+                <h3 className="mb-3 font-semibold text-foreground">Import-Details</h3>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-muted">Dateiname</p>
+                    <p className="font-medium text-foreground">{details.batch.fileName}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted">Profil</p>
+                    <p className="font-medium text-foreground">{details.batch.profile}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted">Importiert am</p>
+                    <p className="font-medium tabular-nums text-foreground">
+                      {new Date(details.batch.createdAt).toLocaleString('de-DE')}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted">Status</p>
+                    {details.batch.rolledBackAt ? (
+                      <p className="font-medium text-error-text">Rückgängig gemacht</p>
+                    ) : (
+                      <p className="font-medium text-success-text">Aktiv</p>
+                    )}
+                  </div>
+                </div>
+
+                {details.batch.rolledBackAt && (
+                  <div className="mt-3 border-t border-border-subtle pt-3">
+                    <p className="text-sm text-muted">Grund für Rollback</p>
+                    <p className="text-sm font-medium text-foreground">{details.batch.rollbackReason}</p>
+                    <p className="mt-1 text-xs tabular-nums text-muted">
+                      Rückgängig gemacht am:{' '}
+                      {new Date(details.batch.rolledBackAt).toLocaleString('de-DE')}
+                    </p>
+                  </div>
+                )}
+
+                <div className="mt-3 flex items-center gap-4 border-t border-border-subtle pt-3 text-sm">
+                  <span className="flex items-center tabular-nums text-success-text">
+                    <CheckCircle2 size={14} className="mr-1" aria-hidden="true" />
+                    {details.batch.importedCount} importiert
+                  </span>
+                  {details.batch.skippedCount > 0 && (
+                    <span className="flex items-center tabular-nums text-muted">
+                      <XCircle size={14} className="mr-1" aria-hidden="true" />
+                      {details.batch.skippedCount} übersprungen
+                    </span>
+                  )}
+                  {details.linkedInvoiceCount > 0 && (
+                    <span className="flex items-center tabular-nums text-info-text">
+                      <Link2 size={14} className="mr-1" aria-hidden="true" />
+                      {details.linkedInvoiceCount} mit Rechnungen verknüpft
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Transaction Preview */}
+              <div>
+                <h3 className="mb-3 font-semibold text-foreground">
+                  Transaktionen (Vorschau)
+                </h3>
+                <div className="overflow-hidden rounded-lg border border-border">
+                  <div className="max-h-64 overflow-y-auto">
+                    {details.transactions.length === 0 ? (
+                      <div className="py-4 text-center text-sm text-muted">
+                        Keine Transaktionen in diesem Import
+                      </div>
+                    ) : (
+                      <table className="w-full text-sm">
+                        <thead className="border-b border-border bg-surface-muted">
+                          <tr>
+                            <th className="px-3 py-2 text-left font-medium text-muted">
+                              Datum
+                            </th>
+                            <th className="px-3 py-2 text-left font-medium text-muted">
+                              Gegenseite
+                            </th>
+                            <th className="px-3 py-2 text-left font-medium text-muted">
+                              Verwendungszweck
+                            </th>
+                            <th className="px-3 py-2 text-right font-medium text-muted">
+                              Betrag
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border-subtle">
+                          {details.transactions.map((tx) => (
+                            <tr key={tx.id} className="hover:bg-surface-muted">
+                              <td className="px-3 py-2 tabular-nums text-muted">
+                                {new Date(tx.date).toLocaleDateString('de-DE')}
+                              </td>
+                              <td className="px-3 py-2 font-medium text-foreground">
+                                {tx.counterparty}
+                              </td>
+                              <td className="max-w-xs truncate px-3 py-2 text-muted">
+                                {tx.purpose}
+                              </td>
+                              <td
+                                className={`px-3 py-2 text-right font-medium tabular-nums ${
+                                  tx.type === 'income' ? 'text-success-text' : 'text-error-text'
+                                }`}
+                              >
+                                {tx.type === 'income' ? '+' : '-'}
+                                {formatCurrency(Math.abs(tx.amount))}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+                <p className="mt-2 text-xs text-muted">
+                  Zeigt maximal 50 Transaktionen
+                </p>
+              </div>
+
+              {/* Rollback Section */}
+              {!details.batch.rolledBackAt && (
+                <div className="border-t border-border pt-6">
+                  {!details.canRollback && (
+                    <div className="rounded-lg border border-warning-border bg-warning-bg p-4">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle size={20} className="mt-0.5 text-warning-text" aria-hidden="true" />
+                        <div className="flex-1">
+                          <p className="font-medium text-warning-text">
+                            Rollback nicht möglich
+                          </p>
+                          <p className="mt-1 text-sm text-warning-text">
+                            {details.linkedInvoiceCount} Transaktion(en) sind bereits mit
+                            Rechnungen verknüpft. Bitte löse zuerst die Verknüpfungen.
+                          </p>
                         </div>
                       </div>
-                    )}
+                    </div>
+                  )}
 
-                    {details.canRollback && !showRollbackConfirm && (
-                      <button
-                        onClick={() => setShowRollbackConfirm(true)}
-                        className="flex items-center gap-2 px-4 py-2 bg-error-bg text-error rounded-lg hover:bg-error-bg/80 transition-colors font-medium"
-                      >
-                        <Undo2 size={16} />
-                        Import rückgängig machen
-                      </button>
-                    )}
+                  {details.canRollback && !showRollbackConfirm && (
+                    <button
+                      type="button"
+                      onClick={() => setShowRollbackConfirm(true)}
+                      className="flex items-center gap-2 rounded-lg border border-error-border bg-error-bg px-4 py-2 font-medium text-error-text transition-colors hover:bg-error-bg/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    >
+                      <Undo2 size={16} aria-hidden="true" />
+                      Import rückgängig machen
+                    </button>
+                  )}
 
-                    {details.canRollback && showRollbackConfirm && (
-                      <div className="bg-error-bg border border-error/30 rounded-lg p-4">
-                        <div className="flex items-start gap-3 mb-4">
-                          <AlertTriangle size={20} className="text-error mt-0.5" />
-                          <div className="flex-1">
-                            <p className="font-medium text-error">
-                              Import wirklich rückgängig machen?
-                            </p>
-                            <p className="text-sm text-error mt-1">
-                              Dies ist eine unwiderrufliche Aktion. Bitte prüfen Sie die Auswirkungen:
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Impact Preview */}
-                        <div className="bg-white border border-error/30 rounded-lg p-3 mb-4 space-y-2">
-                          <p className="text-sm font-semibold text-gray-900">Auswirkungen:</p>
+                  {details.canRollback && showRollbackConfirm && (
+                    <ConfirmDialog
+                      open
+                      title="Import wirklich rückgängig machen?"
+                      description={(
+                        <>
+                          <p>Dies ist eine unwiderrufliche Aktion. Bitte prüfe die Auswirkungen.</p>
+                          {rollbackMutation.error ? <p className="mt-2 text-error-text">Fehler: {String(rollbackMutation.error)}</p> : null}
+                        </>
+                      )}
+                      confirmLabel="Jetzt rückgängig machen"
+                      cancelLabel="Abbrechen"
+                      destructive
+                      busy={rollbackMutation.isPending}
+                      reason={{
+                        label: 'Grund für Rollback (mindestens 10 Zeichen)',
+                        placeholder: 'z. B. Falsches Konto ausgewählt, falsche Datei importiert …',
+                        required: true,
+                        value: rollbackReason,
+                        onChange: setRollbackReason,
+                      }}
+                      details={(
+                        <div className="space-y-2" aria-label="Auswirkungen">
+                          <p className="text-sm font-semibold text-foreground">Auswirkungen:</p>
                           <div className="flex items-center gap-2 text-sm">
-                            <XCircle size={14} className="text-error" />
-                            <span className="text-gray-700">
-                              <strong>{details.batch.importedCount}</strong> Transaktionen werden gelöscht
+                            <XCircle size={14} className="text-error-text" aria-hidden="true" />
+                            <span>
+                              <strong className="tabular-nums">{details.batch.importedCount}</strong> Transaktionen werden gelöscht
                             </span>
                           </div>
                           {details.linkedInvoiceCount > 0 && (
                             <div className="flex items-center gap-2 text-sm">
-                              <CheckCircle2 size={14} className="text-success" />
-                              <span className="text-gray-700">
-                                <strong>{details.linkedInvoiceCount}</strong> verknüpfte Transaktion(en) bleiben geschützt
+                              <CheckCircle2 size={14} className="text-success-text" aria-hidden="true" />
+                              <span>
+                                <strong className="tabular-nums">{details.linkedInvoiceCount}</strong> verknüpfte Transaktion(en) bleiben geschützt
                               </span>
                             </div>
                           )}
                           <div className="flex items-center gap-2 text-sm">
-                            <AlertTriangle size={14} className="text-orange-500" />
-                            <span className="text-gray-700">
-                              Dieser Import wird als rückgängig gemacht markiert
-                            </span>
+                            <AlertTriangle size={14} className="text-warning-text" aria-hidden="true" />
+                            <span>Dieser Import wird als rückgängig gemacht markiert</span>
                           </div>
+                          <p className={`text-xs tabular-nums ${rollbackReason.trim() && !isReasonValid ? 'text-warning-text' : 'text-muted'}`}>
+                            {rollbackReason.trim().length}/10 Zeichen
+                          </p>
+                          {rollbackReason.trim() && !isReasonValid ? <p className="text-xs text-warning-text">Bitte gib einen aussagekräftigen Grund an.</p> : null}
                         </div>
-
-                        <div className="mb-4">
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Grund für Rollback (mindestens 10 Zeichen)
-                          </label>
-                          <textarea
-                            value={rollbackReason}
-                            onChange={(e) => setRollbackReason(e.target.value)}
-                            placeholder="z.B. Falsches Konto ausgewählt, falsche Datei importiert..."
-                            className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:border-transparent resize-none transition-colors ${
-                              rollbackReason.trim() && !isReasonValid
-                                ? 'border-orange-300 focus:ring-orange-500'
-                                : 'border-gray-300 focus:ring-red-500'
-                            }`}
-                            rows={3}
-                          />
-                          <div className="flex items-center justify-between mt-1">
-                            <p className={`text-xs ${
-                              rollbackReason.trim() && !isReasonValid
-                                ? 'text-orange-600'
-                                : 'text-gray-500'
-                            }`}>
-                              {rollbackReason.trim().length}/10 Zeichen
-                            </p>
-                            {rollbackReason.trim() && !isReasonValid && (
-                              <p className="text-xs text-orange-600">
-                                Bitte geben Sie einen aussagekräftigen Grund an
-                              </p>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex gap-2">
-                          <button
-                            onClick={handleRollback}
-                            disabled={
-                              !isReasonValid || rollbackMutation.isPending
-                            }
-                            className="px-4 py-2 bg-error text-white rounded-lg hover:bg-error/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
-                          >
-                            {rollbackMutation.isPending
-                              ? 'Wird rückgängig gemacht...'
-                              : 'Jetzt rückgängig machen'}
-                          </button>
-                          <button
-                            onClick={() => {
-                              setShowRollbackConfirm(false);
-                              setRollbackReason('');
-                            }}
-                            disabled={rollbackMutation.isPending}
-                            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
-                          >
-                            Abbrechen
-                          </button>
-                        </div>
-
-                        {rollbackMutation.error && (
-                          <div className="mt-3 text-sm text-error">
-                            Fehler: {String(rollbackMutation.error)}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+                      )}
+                      onConfirm={handleRollback}
+                      onCancel={() => {
+                        if (rollbackMutation.isPending) return;
+                        setShowRollbackConfirm(false);
+                        setRollbackReason('');
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
-    </div>
-    </Portal>
+    </Modal>
   );
 };

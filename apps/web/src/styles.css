@@ -1,7 +1,7 @@
 @import "@billme/ui/styles.css";
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   font-family: Inter, system-ui, sans-serif;
 }
 
@@ -13,5 +13,4 @@ body,
 
 body {
   margin: 0;
-  background: #020617;
 }

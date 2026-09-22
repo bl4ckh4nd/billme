@@ -1,6 +1,9 @@
 import React from 'react';
-import { ArrowLeft, Euro } from 'lucide-react';
+import { ArrowLeft, Euro, TriangleAlert } from 'lucide-react';
 import { useNavigate, useParams } from '@tanstack/react-router';
+import type { Project } from '@billme/desktop-core/types';
+import { Button, EmptyState, ErrorState } from '@billme/ui';
+import { SkeletonLoader } from '@billme/desktop-ui/components/SkeletonLoader';
 import { useClientsQuery } from '../hooks/useClients';
 import { useInvoicesQuery } from '../hooks/useInvoices';
 import { useOffersQuery } from '../hooks/useOffers';
@@ -10,10 +13,41 @@ export const ProjectDetailView: React.FC = () => {
   const navigate = useNavigate();
   const { projectId } = useParams({ from: '/projects/$projectId' });
 
-  const { data: clients = [] } = useClientsQuery();
-  const { data: projects = [] } = useProjectsQuery({ includeArchived: true });
-  const { data: invoices = [] } = useInvoicesQuery();
-  const { data: offers = [] } = useOffersQuery();
+  const {
+    data: clients = [],
+    isLoading: isLoadingClients,
+    isError: isClientsError,
+    refetch: refetchClients,
+  } = useClientsQuery();
+  const {
+    data: projects = [],
+    isLoading: isLoadingProjects,
+    isError: isProjectsError,
+    refetch: refetchProjects,
+  } = useProjectsQuery({ includeArchived: true });
+  const {
+    data: invoices = [],
+    isLoading: isLoadingInvoices,
+    isError: isInvoicesError,
+    refetch: refetchInvoices,
+  } = useInvoicesQuery();
+  const {
+    data: offers = [],
+    isLoading: isLoadingOffers,
+    isError: isOffersError,
+    refetch: refetchOffers,
+  } = useOffersQuery();
+
+  // Every figure on this screen is derived from these four queries, so a failed
+  // query must not fall through to a real-looking zero.
+  const isLoading = isLoadingClients || isLoadingProjects || isLoadingInvoices || isLoadingOffers;
+  const hasQueryError = isClientsError || isProjectsError || isInvoicesError || isOffersError;
+  const retryQueries = () => {
+    void refetchClients();
+    void refetchProjects();
+    void refetchInvoices();
+    void refetchOffers();
+  };
 
   const project = projects.find((p) => p.id === projectId) ?? null;
   const client = project?.clientId ? clients.find((c) => c.id === project.clientId) ?? null : null;
@@ -58,17 +92,56 @@ export const ProjectDetailView: React.FC = () => {
   const pctOpen = pipelineTotal > 0 ? Math.min(1, sums.openRemaining / pipelineTotal) : 0;
   const pctOverdue = pipelineTotal > 0 ? Math.min(1, sums.overdueRemaining / pipelineTotal) : 0;
 
-  if (!project) {
+  if (isLoading) {
     return (
-      <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
         <button
           onClick={() => navigate({ to: '/projects' })}
-          className="flex items-center gap-2 text-gray-400 hover:text-black transition-colors mb-6 text-xs font-bold uppercase tracking-wider"
+          className="flex items-center gap-2 text-muted hover:text-foreground transition-colors mb-6 text-xs font-bold uppercase tracking-wider focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring rounded-sm"
         >
-          <ArrowLeft size={14} /> Zurück
+          <ArrowLeft size={14} /> Zurück zu Projekten
         </button>
-        <h2 className="text-xl font-black text-gray-900 mb-2">Projekt nicht gefunden</h2>
-        <p className="text-sm text-gray-500">Bitte über die Projektliste erneut öffnen.</p>
+        <SkeletonLoader variant="table" count={4} />
+      </div>
+    );
+  }
+
+  if (hasQueryError) {
+    return (
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
+        <button
+          onClick={() => navigate({ to: '/projects' })}
+          className="flex items-center gap-2 text-muted hover:text-foreground transition-colors mb-6 text-xs font-bold uppercase tracking-wider focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring rounded-sm"
+        >
+          <ArrowLeft size={14} /> Zurück zu Projekten
+        </button>
+        <ErrorState
+          title="Projektdetails konnten nicht geladen werden"
+          description="Projekt-, Kunden- oder Belegdaten sind nicht verfügbar. Es werden bewusst keine Ersatzwerte angezeigt."
+          onRetry={retryQueries}
+        />
+      </div>
+    );
+  }
+
+  if (!project) {
+    return (
+      <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
+        <button
+          onClick={() => navigate({ to: '/projects' })}
+          className="flex items-center gap-2 text-muted hover:text-foreground transition-colors mb-6 text-xs font-bold uppercase tracking-wider focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring rounded-sm"
+        >
+          <ArrowLeft size={14} /> Zurück zu Projekten
+        </button>
+        <EmptyState
+          title="Projekt nicht gefunden"
+          description="Das Projekt steht nicht mehr in der Projektliste. Es wurde möglicherweise gelöscht oder archiviert."
+          action={
+            <Button variant="secondary" size="sm" onClick={() => navigate({ to: '/projects' })}>
+              Zur Projektliste
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -76,121 +149,146 @@ export const ProjectDetailView: React.FC = () => {
   const remainingBudget = project.budget - sums.paidApplied;
   const overBudget = remainingBudget < 0;
 
+  const statusLabel: Record<Project['status'], string> = {
+    active: 'Aktiv',
+    planned: 'Geplant',
+    on_hold: 'Pausiert',
+    completed: 'Abgeschlossen',
+    inactive: 'Inaktiv',
+    archived: 'Archiviert',
+  };
+
   return (
-    <div className="bg-white rounded-[2.5rem] p-8 min-h-full shadow-sm">
+    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
       <button
         onClick={() => navigate({ to: '/projects' })}
-        className="flex items-center gap-2 text-gray-400 hover:text-black transition-colors mb-6 text-xs font-bold uppercase tracking-wider"
+        className="flex items-center gap-2 text-muted hover:text-foreground transition-colors mb-6 text-xs font-bold uppercase tracking-wider focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring rounded-sm"
       >
         <ArrowLeft size={14} /> Zurück zu Projekten
       </button>
 
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider">{project.code ?? ''}</div>
-          <h2 className="text-2xl font-black text-gray-900">{project.name}</h2>
-          <div className="text-sm text-gray-500 mt-1">{client ? client.company : 'Unbekannter Kunde'}</div>
+          {project.code && (
+            <div className="text-xs font-bold text-muted uppercase tracking-wider">{project.code}</div>
+          )}
+          <h2 className="text-2xl font-black text-foreground">{project.name}</h2>
+          <div className="text-sm text-muted mt-1">{client ? client.company : 'Unbekannter Kunde'}</div>
         </div>
         <button
           onClick={() => navigate({ to: '/documents' })}
-          className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-gray-800 transition-colors"
+          className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-dark-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark transition-colors"
           title="Dokumente öffnen"
         >
           Zu Dokumenten
         </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 mb-8">
-        <div className="rounded-2xl border border-gray-200 p-5 bg-gray-50 animate-scale-in" style={{ animationDelay: '0ms' }}>
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider">Rechnungen</div>
-          <div className="text-3xl font-black text-gray-900 mt-2">{projectInvoices.length}</div>
-        </div>
-        <div className="rounded-2xl border border-gray-200 p-5 bg-gray-50 animate-scale-in" style={{ animationDelay: '50ms' }}>
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider">Angebote</div>
-          <div className="text-3xl font-black text-gray-900 mt-2">{projectOffers.length}</div>
-        </div>
-        <div className="rounded-2xl border border-gray-200 p-5 bg-gray-50 animate-scale-in" style={{ animationDelay: '100ms' }}>
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider">Status</div>
-          <div className="text-xl font-black text-gray-900 mt-3">{project.status}</div>
-        </div>
+      {/* Project identity facts, deliberately quiet: the question this screen
+          answers is the money still owed, which gets the focal card below. */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl border border-border bg-surface-muted px-5 py-3 mb-8 text-xs">
+        <span className="font-bold text-muted uppercase tracking-wider">
+          Rechnungen <span className="ml-1.5 text-sm font-black text-foreground tabular-nums">{projectInvoices.length}</span>
+        </span>
+        <span className="font-bold text-muted uppercase tracking-wider">
+          Angebote <span className="ml-1.5 text-sm font-black text-foreground tabular-nums">{projectOffers.length}</span>
+        </span>
+        <span className="font-bold text-muted uppercase tracking-wider">
+          Status <span className="ml-1.5 text-sm font-black text-foreground">{statusLabel[project.status]}</span>
+        </span>
+        <span className="font-bold text-muted uppercase tracking-wider">
+          Start <span className="ml-1.5 text-sm font-black text-foreground tabular-nums">{project.startDate}</span>
+        </span>
       </div>
 
-      <div className="rounded-3xl border border-gray-200 bg-gray-50 p-6 mb-8">
+      <div className="rounded-3xl border border-border bg-surface-muted p-6 mb-8">
         <div className="flex items-center justify-between gap-4 mb-5">
-          <h3 className="text-sm font-black text-gray-900 flex items-center gap-2 uppercase tracking-wide">
-            <Euro size={16} className="text-gray-500" /> Abrechnung
+          <h3 className="text-sm font-black text-foreground flex items-center gap-2 uppercase tracking-wide">
+            <Euro size={16} className="text-muted" /> Abrechnung
           </h3>
           {project.budget > 0 && (
-            <div className="text-xs font-bold text-gray-500">
-              Budget: <span className="font-mono text-gray-900">{formatCurrency(project.budget)}</span>
+            <div className="text-xs font-bold text-muted">
+              Budget: <span className="tabular-nums text-foreground">{formatCurrency(project.budget)}</span>
             </div>
           )}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          <div className="rounded-2xl bg-white border border-gray-200 p-5 animate-scale-in" style={{ animationDelay: '0ms' }}>
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Rechnungen gestellt</div>
-            <div className="text-3xl font-black text-gray-900 mt-2">{issuedInvoices.length}</div>
-            <div className="text-xs text-gray-500 mt-2">
-              Offen: <span className="font-bold text-gray-900">{openInvoices.length}</span> •
-              Überfällig: <span className="font-bold text-gray-900">{overdueInvoices.length}</span> •
-              Bezahlt: <span className="font-bold text-gray-900">{paidInvoices.length}</span>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Focal: what the client still owes on this project */}
+          <div className="rounded-2xl bg-dark-3 p-6 text-white">
+            <div className="text-xs font-bold uppercase tracking-wider text-dark-muted">Offen</div>
+            <div className="text-3xl font-black mt-2 tabular-nums">{formatCurrency(sums.openRemaining)}</div>
+            <div className="text-xs mt-2 text-dark-muted">
+              Restbetrag aus {openInvoices.length} offenen Rechnungen
             </div>
+            {sums.overdueRemaining > 0 && (
+              <div className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-error-bg px-3 py-1 text-xs font-bold text-error-text">
+                <TriangleAlert size={12} /> {formatCurrency(sums.overdueRemaining)} überfällig
+              </div>
+            )}
           </div>
 
-          <div className="rounded-2xl bg-white border border-gray-200 p-5 animate-scale-in" style={{ animationDelay: '50ms' }}>
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Offen</div>
-            <div className="text-2xl font-black text-gray-900 mt-2 font-mono">{formatCurrency(sums.openRemaining)}</div>
-            <div className="text-xs text-gray-500 mt-2">Restbetrag aus offenen Rechnungen</div>
-          </div>
-
-          <div className="rounded-2xl bg-white border border-gray-200 p-5 animate-scale-in" style={{ animationDelay: '100ms' }}>
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Überfällig</div>
-            <div className="text-2xl font-black text-gray-900 mt-2 font-mono">{formatCurrency(sums.overdueRemaining)}</div>
-            <div className="text-xs text-gray-500 mt-2">Restbetrag aus überfälligen Rechnungen</div>
-          </div>
-
-          <div className="rounded-2xl bg-white border border-gray-200 p-5 animate-scale-in" style={{ animationDelay: '150ms' }}>
-            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Bezahlt</div>
-            <div className="text-2xl font-black text-gray-900 mt-2 font-mono">{formatCurrency(sums.paidApplied)}</div>
-            <div className="text-xs text-gray-500 mt-2">Summe erfasster Zahlungen (gedeckelt)</div>
+          <div className="flex flex-col justify-center gap-2">
+            <div className="flex items-baseline justify-between gap-4 rounded-xl bg-surface px-4 py-3">
+              <span className="text-xs font-bold text-muted uppercase tracking-wider">Rechnungen gestellt</span>
+              <span className="text-right">
+                <span className="block text-lg font-black text-foreground tabular-nums">{issuedInvoices.length}</span>
+                <span className="block text-xs text-muted tabular-nums">
+                  {openInvoices.length} offen · {overdueInvoices.length} überfällig · {paidInvoices.length} bezahlt
+                </span>
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between gap-4 rounded-xl bg-surface px-4 py-3">
+              <span className="text-xs font-bold text-muted uppercase tracking-wider">Überfällig</span>
+              <span className="text-right">
+                <span className="block text-lg font-black text-foreground tabular-nums">{formatCurrency(sums.overdueRemaining)}</span>
+                <span className="block text-xs text-muted">Restbetrag aus überfälligen Rechnungen</span>
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between gap-4 rounded-xl bg-surface px-4 py-3">
+              <span className="text-xs font-bold text-muted uppercase tracking-wider">Bezahlt</span>
+              <span className="text-right">
+                <span className="block text-lg font-black text-foreground tabular-nums">{formatCurrency(sums.paidApplied)}</span>
+                <span className="block text-xs text-muted">Summe erfasster Zahlungen (gedeckelt)</span>
+              </span>
+            </div>
           </div>
         </div>
 
         <div className="mt-5">
-          <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+          <div className="flex items-center justify-between text-xs text-muted mb-2">
             <span>Abrechnungsstatus (nur Rechnungen, ohne Entwürfe)</span>
-            <span className="font-mono font-bold text-gray-900">{formatCurrency(pipelineTotal)}</span>
+            <span className="font-bold text-foreground tabular-nums">{formatCurrency(pipelineTotal)}</span>
           </div>
-          <div className="w-full h-3 rounded-full bg-white border border-gray-200 overflow-hidden flex">
-            <div className="h-full bg-gray-200" style={{ width: `${Math.round(pctOpen * 100)}%` }} title="Offen" />
-            <div className="h-full bg-error/30" style={{ width: `${Math.round(pctOverdue * 100)}%` }} title="Überfällig" />
+          <div className="w-full h-3 rounded-full bg-white border border-border overflow-hidden flex">
+            <div className="h-full bg-border" style={{ width: `${Math.round(pctOpen * 100)}%` }} title="Offen" />
+            <div className="h-full bg-error" style={{ width: `${Math.round(pctOverdue * 100)}%` }} title="Überfällig" />
             <div className="h-full bg-black" style={{ width: `${Math.round(pctPaid * 100)}%` }} title="Bezahlt" />
           </div>
-          <div className="mt-2 flex flex-wrap gap-3 text-xs font-bold text-gray-600">
-            <span>Offen: <span className="font-mono text-gray-900">{formatCurrency(sums.openRemaining)}</span></span>
-            <span>Überfällig: <span className="font-mono text-gray-900">{formatCurrency(sums.overdueRemaining)}</span></span>
-            <span>Bezahlt: <span className="font-mono text-gray-900">{formatCurrency(sums.paidApplied)}</span></span>
+          <div className="mt-2 flex flex-wrap gap-3 text-xs font-bold text-muted">
+            <span>Offen: <span className="text-foreground tabular-nums">{formatCurrency(sums.openRemaining)}</span></span>
+            <span>Überfällig: <span className="text-foreground tabular-nums">{formatCurrency(sums.overdueRemaining)}</span></span>
+            <span>Bezahlt: <span className="text-foreground tabular-nums">{formatCurrency(sums.paidApplied)}</span></span>
           </div>
         </div>
 
         {project.budget > 0 && (
           <div className="mt-5">
-            <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+            <div className="flex items-center justify-between text-xs text-muted mb-2">
               <span>Budget-Fortschritt (bezahlt)</span>
-              <span className="font-mono font-bold text-gray-900">
+              <span className="font-bold text-foreground tabular-nums">
                 {formatCurrency(sums.paidApplied)} / {formatCurrency(project.budget)}
               </span>
             </div>
-            <div className="w-full h-3 rounded-full bg-white border border-gray-200 overflow-hidden">
+            <div className="w-full h-3 rounded-full bg-white border border-border overflow-hidden">
               <div
                 className="h-full bg-black"
                 style={{ width: `${Math.min(100, Math.round((sums.paidApplied / project.budget) * 100))}%` }}
               />
             </div>
-            <div className="mt-2 text-xs text-gray-500">
+            <div className="mt-2 text-xs text-muted">
               {overBudget ? 'Über Budget:' : 'Restbudget:'}{' '}
-              <span className={`font-mono font-bold ${overBudget ? 'text-error' : 'text-gray-900'}`}>
+              <span className={`font-bold tabular-nums ${overBudget ? 'text-error-text' : 'text-foreground'}`}>
                 {formatCurrency(Math.abs(remainingBudget))}
               </span>
             </div>
@@ -199,23 +297,32 @@ export const ProjectDetailView: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-2 gap-6">
-        <div className="rounded-2xl border border-gray-200 overflow-hidden">
-          <div className="bg-gray-50 px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">
+        <div className="rounded-2xl border border-border overflow-hidden">
+          <div className="bg-surface-muted px-4 py-3 text-xs font-bold text-muted uppercase tracking-wider">
             Rechnungen
           </div>
           {projectInvoices.length === 0 ? (
-            <div className="p-6 text-sm text-gray-500">Keine Rechnungen im Projekt.</div>
+            <EmptyState
+              className="rounded-none border-0 bg-transparent py-8"
+              title="Keine Rechnungen im Projekt"
+              description="Rechnungen erscheinen hier, sobald du sie diesem Projekt zuordnest."
+              action={
+                <Button variant="secondary" size="sm" onClick={() => navigate({ to: '/documents' })}>
+                  Zu den Rechnungen
+                </Button>
+              }
+            />
           ) : (
-            <div className="divide-y divide-gray-100">
-              {projectInvoices.map((d, idx) => (
-                <div key={d.id} className="px-4 py-3 flex items-center justify-between animate-enter" style={{ animationDelay: `${idx * 50}ms` }}>
+            <div className="divide-y divide-border-subtle">
+              {projectInvoices.map((d) => (
+                <div key={d.id} className="px-4 py-3 flex items-center justify-between">
                   <div>
-                    <div className="font-bold text-gray-900">{d.number}</div>
-                    <div className="text-xs text-gray-500">{d.date}</div>
+                    <div className="font-bold text-foreground">{d.number}</div>
+                    <div className="text-xs text-muted tabular-nums">{d.date}</div>
                   </div>
                   <button
                     onClick={() => navigate({ to: '/documents' })}
-                    className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-900 font-bold text-sm"
+                    className="px-3 py-2 rounded-xl bg-surface-muted hover:bg-border-subtle text-foreground font-bold text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   >
                     Öffnen
                   </button>
@@ -225,23 +332,32 @@ export const ProjectDetailView: React.FC = () => {
           )}
         </div>
 
-        <div className="rounded-2xl border border-gray-200 overflow-hidden">
-          <div className="bg-gray-50 px-4 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">
+        <div className="rounded-2xl border border-border overflow-hidden">
+          <div className="bg-surface-muted px-4 py-3 text-xs font-bold text-muted uppercase tracking-wider">
             Angebote
           </div>
           {projectOffers.length === 0 ? (
-            <div className="p-6 text-sm text-gray-500">Keine Angebote im Projekt.</div>
+            <EmptyState
+              className="rounded-none border-0 bg-transparent py-8"
+              title="Keine Angebote im Projekt"
+              description="Angebote erscheinen hier, sobald du sie diesem Projekt zuordnest."
+              action={
+                <Button variant="secondary" size="sm" onClick={() => navigate({ to: '/documents' })}>
+                  Zu den Angeboten
+                </Button>
+              }
+            />
           ) : (
-            <div className="divide-y divide-gray-100">
-              {projectOffers.map((d, idx) => (
-                <div key={d.id} className="px-4 py-3 flex items-center justify-between animate-enter" style={{ animationDelay: `${idx * 50}ms` }}>
+            <div className="divide-y divide-border-subtle">
+              {projectOffers.map((d) => (
+                <div key={d.id} className="px-4 py-3 flex items-center justify-between">
                   <div>
-                    <div className="font-bold text-gray-900">{d.number}</div>
-                    <div className="text-xs text-gray-500">{d.date}</div>
+                    <div className="font-bold text-foreground">{d.number}</div>
+                    <div className="text-xs text-muted tabular-nums">{d.date}</div>
                   </div>
                   <button
                     onClick={() => navigate({ to: '/documents' })}
-                    className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-900 font-bold text-sm transition-colors"
+                    className="px-3 py-2 rounded-xl bg-surface-muted hover:bg-border-subtle text-foreground font-bold text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     Öffnen
                   </button>

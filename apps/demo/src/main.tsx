@@ -1,5 +1,6 @@
 import { mountDesktopRendererApp } from '@billme/desktop-renderer';
 import { demoHttpApi } from './ipcHttp';
+import './demo.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

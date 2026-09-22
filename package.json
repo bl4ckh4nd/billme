@@ -28,6 +28,7 @@
     "db:studio": "pnpm -C apps/desktop db:studio",
     "pglite:migrate": "node packages/pglite-migration-cli/bin/billme-pglite-migrate.mjs",
     "check:raw-sql": "node scripts/raw-sql-guard.mjs",
+    "check:design-tokens": "node scripts/design-token-guard.mjs",
     "ci:prepare-sqlite-tests": "node scripts/prepare-better-sqlite3.mjs",
     "ci:prepare-electron": "node scripts/prepare-electron.mjs",
     "dist": "pnpm -C apps/desktop dist",

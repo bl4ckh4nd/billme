@@ -2094,8 +2094,8 @@ export const getReportingReport = async (
   const ledgerReport = kind === 'bwa01' || kind === 'management-guv' || kind === 'eur-ledger-reconciliation';
   const supportedProfile = profile
     && profile.jurisdiction === 'DE'
-    && ((profile.legalForm === 'gmbh' && profile.profitDetermination === 'double_entry')
-      || (profile.legalForm === 'sole_proprietor' && profile.profitDetermination === 'eur'));
+    && (((profile.legalForm === 'gmbh' || profile.legalForm === 'ug') && profile.profitDetermination === 'double_entry')
+      || ((profile.legalForm === 'sole_proprietor' || profile.legalForm === 'gbr' || profile.legalForm === 'ek') && profile.profitDetermination === 'eur'));
   if (!supportedProfile) {
     throw new Error('REPORTING_PROFILE_REQUIRED');
   }
@@ -2105,7 +2105,7 @@ export const getReportingReport = async (
   if (profile.profitDetermination === 'eur' && profile.fiscalYearStart !== '01-01') {
     throw new Error('REPORTING_PROFILE_INVALID');
   }
-  if (hgbReport && (profile.legalForm !== 'gmbh' || profile.profitDetermination !== 'double_entry' || !profile.hgbSizeClass)) {
+  if (hgbReport && (!(profile.legalForm === 'gmbh' || profile.legalForm === 'ug') || profile.profitDetermination !== 'double_entry' || !profile.hgbSizeClass)) {
     throw new Error('REPORTING_PROFILE_REQUIRED');
   }
   if (!hgbReport && !ledgerReport) {

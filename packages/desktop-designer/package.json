@@ -53,22 +53,6 @@
     "./DocumentCanvasEditor": {
       "types": "./src/document-editor/DocumentCanvasEditor.tsx",
       "default": "./src/document-editor/DocumentCanvasEditor.tsx"
-    },
-    "./legacy/CanvasElement": {
-      "types": "./src/legacy/CanvasElement.tsx",
-      "default": "./src/legacy/CanvasElement.tsx"
-    },
-    "./legacy/LayersPanel": {
-      "types": "./src/legacy/LayersPanel.tsx",
-      "default": "./src/legacy/LayersPanel.tsx"
-    },
-    "./legacy/PropertiesPanel": {
-      "types": "./src/legacy/PropertiesPanel.tsx",
-      "default": "./src/legacy/PropertiesPanel.tsx"
-    },
-    "./legacy/Toolbar": {
-      "types": "./src/legacy/Toolbar.tsx",
-      "default": "./src/legacy/Toolbar.tsx"
     }
   }
 }

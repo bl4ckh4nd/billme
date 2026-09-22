@@ -9,7 +9,7 @@ import { DEFAULT_SETTINGS, MOCK_SETTINGS } from '@billme/desktop-services/mockDa
 import { appSettingsSchema as liteAppSettingsSchema } from '@billme/desktop-contracts/schemas';
 import { appSettingsSchema as proAppSettingsSchema } from '@billme/desktop-contracts-pro/schemas';
 import { invoiceSchema } from '@billme/server-core';
-import { shouldShowBusinessOnboarding } from '@billme/ui';
+import { shouldShowBusinessOnboarding } from '@billme/desktop-ui';
 import type { DocumentDraft, ClientLike, ProjectLike } from '@billme/desktop-designer/document-editor';
 
 const documentFixture = (overrides: Partial<DocumentDraft> = {}): DocumentDraft => ({

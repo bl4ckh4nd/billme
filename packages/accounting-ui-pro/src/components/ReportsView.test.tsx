@@ -101,6 +101,20 @@ describe('ReportsView drilldown ranges', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('Mapping unvollständig');
   });
 
+  it('reports the active report instead of a green catalog banner when only that report is unmapped', async () => {
+    const dataAdapter = {
+      getSusaReport: vi.fn(async () => ({ rows: [], totals: { openingDebit: 0, openingCredit: 0, turnoverDebit: 0, turnoverCredit: 0, closingDebit: 0, closingCredit: 0 }, quality: { unmappedAccounts: 2, warnings: 0, mappingStatus: 'blocked' as const, generatedAt: '', source: 'live' as const } })),
+      getReportMappingHealth: vi.fn(async () => ({ chart: 'SKR03' as const, unmapped: [] })),
+      listReportMappingPositions: vi.fn(async () => []),
+      upsertReportMappingOverride: vi.fn(async () => ({})),
+    };
+    render(<ReportsView dataAdapter={dataAdapter} availableTabs={['susa']} />);
+
+    expect(await screen.findByText('Die übrigen Report-Kataloge sind vollständig zugeordnet.')).toBeTruthy();
+    expect(screen.getByText('Mapping unvollständig für Summen- und Saldenliste')).toBeTruthy();
+    expect(screen.queryByText('Alle Konten sind report-spezifisch zugeordnet.')).toBeNull();
+  });
+
   it('offers a retry when report loading fails', async () => {
     const getSusaReport = vi.fn()
       .mockRejectedValueOnce(new Error('Berichts-Backend vorübergehend nicht erreichbar'))

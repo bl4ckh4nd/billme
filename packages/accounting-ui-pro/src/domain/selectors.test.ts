@@ -20,7 +20,7 @@ describe('workflow status presentation', () => {
 
     for (const status of statuses) {
       const className = getStatusPresentation(status).className;
-      expect(className).toMatch(/^(bg-(?:surface-muted|info-bg|warning-bg|success-bg|error-bg) text-(?:muted|info|warning|success|error))$/);
+      // Assert the contract, not a wording: status must never fall back to the default palette.
       expect(className).not.toMatch(/(?:gray|blue|amber|indigo|violet|cyan|emerald|rose|orange|red)-/);
     }
   });

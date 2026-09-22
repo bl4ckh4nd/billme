@@ -50,9 +50,8 @@ describe('ClientsView tax profile', () => {
     );
 
     await user.click(screen.getByText('Alpen GmbH'));
-    const editButton = [...container.querySelectorAll('button')].find((button) => button.className.includes('w-10') && button.className.includes('border-gray-200'));
-    expect(editButton).toBeTruthy();
-    await user.click(editButton!);
+    const editButton = screen.getByRole('button', { name: 'Kunde bearbeiten' });
+    await user.click(editButton);
 
     await user.selectOptions(screen.getByDisplayValue('Unternehmen'), 'business');
     const countryInput = container.querySelector('input[placeholder="DE"]') as HTMLInputElement;
@@ -85,9 +84,8 @@ describe('ClientsView tax profile', () => {
       );
 
       await user.click(screen.getByText('Alpen GmbH'));
-      const editButton = [...container.querySelectorAll('button')].find((button) => button.className.includes('w-10') && button.className.includes('border-gray-200'));
-      expect(editButton).toBeTruthy();
-      await user.click(editButton!);
+      const editButton = screen.getByRole('button', { name: 'Kunde bearbeiten' });
+      await user.click(editButton);
 
       const company = screen.getByLabelText(/Firma/);
       await user.clear(company);

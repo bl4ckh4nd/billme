@@ -18,10 +18,9 @@ export const runLiteSmokeScenario = async (page) => {
 
   await page.goto(state.urls.web, { waitUntil: 'networkidle' });
 
-  await expect(page.getByText('Billme Lite Web')).toBeVisible();
-  await expect(page.getByText('billme-server-api (fastify)')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Konto anlegen|Lite-Arbeitsbereich öffnen/ })).toBeVisible();
-  await expect(page.getByText(/Lite-Konto einrichten|Anmelden/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Billme einrichten|Willkommen zurück/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^(Konto anlegen und loslegen|Anmelden)$/ })).toBeVisible();
+  await expect(page.getByText(/^Verbunden mit /)).toBeVisible();
 };
 
 export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
@@ -30,19 +29,20 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
 
   await page.goto(state.urls.web, { waitUntil: 'networkidle' });
 
-  const bootstrapButton = page.getByRole('button', { name: 'Konto anlegen' });
-  const loginButton = page.getByRole('button', { name: 'Lite-Arbeitsbereich öffnen' });
+  const bootstrapButton = page.getByRole('button', { name: 'Konto anlegen und loslegen' });
+  const loginButton = page.getByRole('button', { name: 'Anmelden', exact: true });
+  await expect(bootstrapButton.or(loginButton)).toBeVisible();
 
   if (await bootstrapButton.isVisible().catch(() => false)) {
-    await expect(page.getByRole('heading', { name: 'Lite-Konto einrichten' })).toBeVisible();
-    await page.getByPlaceholder('Vollständiger Name').fill(identity.fullName);
-    await page.getByPlaceholder('E-Mail').fill(identity.email);
-    await page.getByPlaceholder('Passwort').fill(litePassword);
+    await expect(page.getByRole('heading', { name: 'Billme einrichten' })).toBeVisible();
+    await page.getByLabel('Dein Name').fill(identity.fullName);
+    await page.getByLabel('E-Mail-Adresse').fill(identity.email);
+    await page.getByLabel('Passwort', { exact: true }).fill(litePassword);
     await bootstrapButton.click();
   } else {
-    await expect(page.getByRole('heading', { name: 'Anmelden' })).toBeVisible();
-    await page.getByPlaceholder('E-Mail').fill(identity.email);
-    await page.getByPlaceholder('Passwort').fill(litePassword);
+    await expect(page.getByRole('heading', { name: 'Willkommen zurück' })).toBeVisible();
+    await page.getByLabel('E-Mail-Adresse').fill(identity.email);
+    await page.getByLabel('Passwort', { exact: true }).fill(litePassword);
     await loginButton.click();
   }
 
@@ -59,12 +59,12 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
   });
 
   await page.getByRole('button', { name: 'Abmelden' }).click();
-  await expect(page.getByRole('heading', { name: 'Anmelden' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Willkommen zurück' })).toBeVisible();
   await expect(page.getByText('Du wurdest abgemeldet.')).toBeVisible();
 
-  await page.getByPlaceholder('E-Mail').fill(identity.email);
-  await page.getByPlaceholder('Passwort').fill(litePassword);
-  await page.getByRole('button', { name: 'Lite-Arbeitsbereich öffnen' }).click();
+  await page.getByLabel('E-Mail-Adresse').fill(identity.email);
+  await page.getByLabel('Passwort', { exact: true }).fill(litePassword);
+  await page.getByRole('button', { name: 'Anmelden', exact: true }).click();
 
   await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
   await page.reload({ waitUntil: 'networkidle' });
@@ -78,8 +78,8 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
   await page.goto(state.urls.web, { waitUntil: 'networkidle' });
   await page.goto(liteAppUrl(state, '/documents'), { waitUntil: 'networkidle' });
 
-  await expect(page.getByRole('heading', { name: 'Anmelden' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Lite-Arbeitsbereich öffnen' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Willkommen zurück' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Anmelden', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Abmelden' })).toHaveCount(0);
 
   const clearedSession = await page.evaluate((key) => window.localStorage.getItem(key), liteSessionStorageKey);

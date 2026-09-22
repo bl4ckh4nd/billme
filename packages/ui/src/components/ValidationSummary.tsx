@@ -38,7 +38,8 @@ export const ValidationSummary: React.FC<ValidationSummaryProps> = ({
 
   return (
     <div
-      className={cn('mb-3 rounded-lg border border-error-border bg-error-bg p-3 text-sm text-error', className)}
+      // Live-region contract: this summary is the single assertive form-error region; status feedback stays polite.
+      className={cn('mb-3 rounded-lg border border-error-border bg-error-bg p-3 text-sm text-error-text', className)}
       role="alert"
       aria-live="assertive"
       aria-atomic="true"
@@ -50,7 +51,7 @@ export const ValidationSummary: React.FC<ValidationSummaryProps> = ({
             <button
               type="button"
               aria-controls={error.id}
-              className="w-full rounded text-left underline decoration-error/40 underline-offset-2 hover:decoration-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error"
+              className="inline-flex min-h-6 w-full items-center rounded-sm px-1 text-left underline decoration-error-text/40 underline-offset-2 hover:decoration-error-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               onClick={() => jumpTo(error.id)}
             >
               {error.message}

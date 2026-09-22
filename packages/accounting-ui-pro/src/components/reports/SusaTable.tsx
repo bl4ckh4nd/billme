@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Button, EmptyState, EMPTY_VALUE } from '@billme/ui';
 import { SusaReport, SusaRow } from '../../domain/reportTypes';
 import ReportSummaryCards from './ReportSummaryCards';
 
@@ -11,9 +12,10 @@ type SortKey = keyof Pick<SusaRow, 'accountNumber' | 'accountName' | 'openingBal
 interface SusaTableProps {
   report: SusaReport | null;
   onSelectRow: (row: SusaRow) => void;
+  onRetry?: () => void;
 }
 
-export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
+export default function SusaTable({ report, onSelectRow, onRetry }: SusaTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>('accountNumber');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
@@ -31,7 +33,19 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
     return list;
   }, [report, sortKey, sortDir]);
 
-  if (!report) return null;
+  if (!report) {
+    return (
+      <EmptyState
+        title="Summen- und Saldenliste nicht geladen"
+        description="Für die aktuelle Periode liegt keine SuSa vor. Laden Sie den Report erneut oder prüfen Sie Zeitraum und Konten-Mapping."
+        action={onRetry ? (
+          <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
+            Erneut laden
+          </Button>
+        ) : undefined}
+      />
+    );
+  }
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -45,11 +59,12 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
     <div className="space-y-4">
       <ReportSummaryCards
         cards={[
+          { label: 'Umgemappte Konten', value: String(report.quality.unmappedAccounts), tone: report.quality.unmappedAccounts ? 'warning' : 'ok', emphasis: true },
           { label: 'Konten', value: String(report.rows.length) },
-          { label: 'Umgemappte Konten', value: String(report.quality.unmappedAccounts), tone: report.quality.unmappedAccounts ? 'warning' : 'ok' },
           { label: 'Warnungen', value: String(report.quality.warnings), tone: report.quality.warnings ? 'warning' : 'ok' },
           { label: 'Stand', value: new Date(report.quality.generatedAt).toLocaleString('de-DE') },
         ]}
+        note={report.quality.source === 'live' ? undefined : 'Beispieldaten: Die Salden und Umsätze dieses Reports stammen aus dem Demo-Datensatz.'}
       />
 
       <div className="rounded-2xl border border-border bg-surface overflow-hidden">
@@ -114,35 +129,35 @@ export default function SusaTable({ report, onSelectRow }: SusaTableProps) {
                           onSelectRow(row);
                         }
                       }}
-                      className="rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-info"
+ className="rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       {row.accountNumber}
                     </button>
                   </td>
                   <td className="px-3 py-2.5 text-foreground">{row.accountName}</td>
-                  <td className="px-3 py-2.5 text-right font-medium text-foreground">{euro(row.openingBalance)}</td>
-                  <td className="px-3 py-2.5 text-right font-medium text-foreground">{euro(row.debitTurnover)}</td>
-                  <td className="px-3 py-2.5 text-right font-medium text-foreground">{euro(row.creditTurnover)}</td>
-                  <td className={`px-3 py-2.5 text-right font-bold ${row.closingBalance < 0 ? 'text-error' : 'text-foreground'}`}>{euro(row.closingBalance)}</td>
+                  <td className="px-3 py-2.5 text-right font-medium tabular-nums text-foreground">{euro(row.openingBalance)}</td>
+                  <td className="px-3 py-2.5 text-right font-medium tabular-nums text-foreground">{euro(row.debitTurnover)}</td>
+                  <td className="px-3 py-2.5 text-right font-medium tabular-nums text-foreground">{euro(row.creditTurnover)}</td>
+                  <td className={`px-3 py-2.5 text-right font-bold tabular-nums ${row.closingBalance < 0 ? 'text-error-text' : 'text-foreground'}`}>{euro(row.closingBalance)}</td>
                   <td className="px-3 py-2.5">
                     {row.mappedTo ? (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-border-subtle text-foreground">{row.mappedTo}</span>
+                      <span className="px-2 py-0.5 rounded-full border border-border bg-border-subtle text-foreground text-xs font-bold">{row.mappedTo}</span>
                     ) : (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-warning-bg text-warning">Ungemappt</span>
+                      <span className="px-2 py-0.5 rounded-full border border-warning-text bg-warning-bg text-warning-text text-xs font-bold">Ungemappt</span>
                     )}
                   </td>
                   <td className="px-3 py-2.5">
                     {row.hasWarnings ? (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-warning-bg text-warning">Prüfen</span>
+                      <span className="px-2 py-0.5 rounded-full border border-warning-text bg-warning-bg text-warning-text text-xs font-bold">Prüfen</span>
                     ) : (
-                      <span className="text-muted">—</span>
+                      <span className="text-muted">{EMPTY_VALUE}</span>
                     )}
                   </td>
                 </tr>
               ))}
             </tbody>
             <tfoot className="bg-surface-muted border-t border-border">
-              <tr className="text-xs font-bold text-foreground">
+              <tr className="text-xs font-bold text-foreground tabular-nums">
                 <td className="px-3 py-3" colSpan={2}>Summen</td>
                 <td className="px-3 py-3 text-right">{euro(report.totals.openingDebit - report.totals.openingCredit)}</td>
                 <td className="px-3 py-3 text-right">{euro(report.totals.turnoverDebit)}</td>

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { z } from 'zod';
 import type { OfferStore, PdfStore, PortalDocumentListItem } from './storage/types';
 import { BILLME_FULL_LOGO_DATA_URI } from './branding';
@@ -21,9 +22,225 @@ const formatCurrencyEur = (amount: unknown) => {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(safe);
 };
 
-const looksLikeDocSnapshot = (
-  snap: unknown,
-): snap is {
+/* Missing values render as the half-width dash, never as an empty cell or "Invalid Date". */
+const optionalNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+/* Matches desktop-utils `formatDate`: German invoice views always render TT.MM.JJJJ. */
+const formatDateDe = (value: unknown): string => {
+  const parsed = typeof value === 'string' && value.trim() ? new Date(value) : null;
+  return parsed && !Number.isNaN(parsed.getTime())
+    ? parsed.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : '–';
+};
+
+const formatDateTimeDe = (value: unknown): string => {
+  const parsed = typeof value === 'string' && value.trim() ? new Date(value) : null;
+  return parsed && !Number.isNaN(parsed.getTime())
+    ? parsed.toLocaleString('de-DE', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '–';
+};
+
+/* Portal palette. The portal renders straight from Node without a build step and
+   does not depend on @billme/ui, so the token values from packages/ui/styles.css
+   are declared once here instead of being repeated as literals per element. */
+export const PORTAL_TOKENS = {
+  surface: '#ffffff',
+  surfaceSunken: '#f3f4f6',
+  foreground: '#0b0b0b',
+  muted: '#676d75',
+  border: '#e5e7eb',
+  controlBorder: '#8b8b8b',
+  accent: '#d9f944',
+  accentForeground: '#000000',
+  focusRing: '#0b0b0b',
+  successText: '#15803d',
+  warningText: '#92400e',
+  warningBg: '#fef3c7',
+  warningBorder: '#fde68a',
+  errorText: '#b91c1c',
+  radiusSm: '0.5rem',
+  radiusMd: '1rem',
+  radiusLg: '1.5rem',
+} as const;
+
+/* Inter first, per DESIGN.md. The desktop apps load the webfont themselves; the
+   portal is served as plain HTML, so the stack falls back to Helvetica/Arial. */
+const PORTAL_FONT_STACK = 'Inter, "Helvetica Neue", Helvetica, Arial, sans-serif';
+
+/* One name and one shell width for every page: the header must neither relabel
+   itself nor shift between the start, document and error views. */
+const PORTAL_NAME = 'Angebotsportal';
+const PORTAL_SHELL_MAX_WIDTH_PX = 980;
+
+const PORTAL_CSP_BASE =
+  "default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'";
+const PORTAL_CSP_WITH_FORM =
+  "default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
+const PORTAL_INPUT_STYLE = `width:100%; padding:.625rem .75rem; border-radius:${PORTAL_TOKENS.radiusSm}; border:1px solid ${PORTAL_TOKENS.controlBorder}; background:${PORTAL_TOKENS.surface}; color:${PORTAL_TOKENS.foreground}; font:inherit;`;
+const PORTAL_PRIMARY_BUTTON_STYLE = `cursor:pointer; padding:.625rem .875rem; border-radius:${PORTAL_TOKENS.radiusSm}; border:1px solid ${PORTAL_TOKENS.accent}; background:${PORTAL_TOKENS.accent}; color:${PORTAL_TOKENS.accentForeground}; font:inherit; font-weight:600;`;
+const PORTAL_SECONDARY_BUTTON_STYLE = `cursor:pointer; padding:.625rem .875rem; border-radius:${PORTAL_TOKENS.radiusSm}; border:1px solid ${PORTAL_TOKENS.controlBorder}; background:${PORTAL_TOKENS.surface}; color:${PORTAL_TOKENS.foreground}; font:inherit; font-weight:600;`;
+const PORTAL_LABEL_STYLE = `display:block; font-size:.75rem; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};`;
+const PORTAL_CARD_STYLE = `background:${PORTAL_TOKENS.surface}; border:1px solid ${PORTAL_TOKENS.border}; border-radius:${PORTAL_TOKENS.radiusLg};`;
+
+const renderPortalPage = (options: {
+  title: string;
+  contentSecurityPolicy: string;
+  contentMaxWidthPx?: number;
+  content: string;
+}) => `<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="${options.contentSecurityPolicy}" />
+    <title>${escapeHtml(options.title)}</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        background: ${PORTAL_TOKENS.surfaceSunken};
+        color: ${PORTAL_TOKENS.foreground};
+        font-family: ${PORTAL_FONT_STACK};
+        font-size: 16px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      a:focus-visible, button:focus-visible, input:focus-visible {
+        outline: 2px solid ${PORTAL_TOKENS.focusRing};
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <main style="max-width:${PORTAL_SHELL_MAX_WIDTH_PX}px; margin:0 auto; padding:32px 16px 48px;">
+      <div style="display:flex; align-items:center; gap:.75rem; margin-bottom:1.25rem;">
+        <img src="${BILLME_FULL_LOGO_DATA_URI}" alt="Billme" style="height:28px; width:auto;" />
+        <span style="font-size:.75rem; font-weight:600; letter-spacing:.05em; color:${PORTAL_TOKENS.muted}; text-transform:uppercase;">${escapeHtml(PORTAL_NAME)}</span>
+      </div>
+      <div style="max-width:${options.contentMaxWidthPx ?? PORTAL_SHELL_MAX_WIDTH_PX}px;">
+      ${options.content}
+      </div>
+    </main>
+  </body>
+</html>`;
+
+/* Accent fill is reserved for the one action a page wants the reader to take. */
+const renderPortalActionLink = (href: string, label: string) =>
+  `<a href="${escapeHtml(href)}" style="display:inline-block; padding:.625rem .875rem; border-radius:${PORTAL_TOKENS.radiusSm}; border:1px solid ${PORTAL_TOKENS.accent}; background:${PORTAL_TOKENS.accent}; color:${PORTAL_TOKENS.accentForeground}; font-weight:600; text-decoration:none;">${escapeHtml(label)}</a>`;
+
+const renderPortalTextLink = (href: string, label: string) =>
+  `<a href="${escapeHtml(href)}" style="color:${PORTAL_TOKENS.foreground}; font-weight:600;">${escapeHtml(label)}</a>`;
+
+type PortalErrorCondition = 'unknown' | 'revoked' | 'expired' | 'rate_limited';
+type PortalDecisionErrorCondition = 'csrf_invalid' | 'origin_invalid';
+
+const PORTAL_ERRORS: Record<PortalErrorCondition | PortalDecisionErrorCondition, { title: string; cause: string; action: string; color: string }> = {
+  unknown: {
+    title: 'Dieser Link gehört zu keinem Dokument',
+    cause:
+      'Der Link ist unvollständig oder das Dokument wurde entfernt. Links, die E-Mail-Programme umbrechen, verlieren oft die letzten Zeichen.',
+    action: 'Bitte wende dich an den Absender und bitte um einen neuen Link.',
+    color: PORTAL_TOKENS.muted,
+  },
+  revoked: {
+    title: 'Dieser Link wurde zurückgezogen',
+    cause: 'Der Absender hat den Zugriff über diesen Link beendet. Meist wurde dafür ein neuer Link ausgestellt.',
+    action: 'Bitte wende dich an den Absender und bitte um einen neuen Link.',
+    color: PORTAL_TOKENS.errorText,
+  },
+  expired: {
+    title: 'Dieser Link ist abgelaufen',
+    cause: 'Die Gültigkeitsdauer des Links ist abgelaufen, deshalb werden die Dokumente nicht mehr angezeigt.',
+    action: 'Bitte wende dich an den Absender und bitte um einen neuen Link.',
+    color: PORTAL_TOKENS.warningText,
+  },
+  rate_limited: {
+    title: 'Zu viele Aufrufe in kurzer Zeit',
+    cause: 'Von dieser Verbindung kamen zu viele Anfragen, deshalb pausiert das Portal den Zugriff kurz.',
+    action: 'Bitte lade die Seite in einer Minute erneut.',
+    color: PORTAL_TOKENS.warningText,
+  },
+  csrf_invalid: {
+    title: 'Diese Entscheidung konnte nicht gespeichert werden',
+    cause: 'Das Sicherheitsmerkmal des Formulars fehlt oder ist veraltet. Das passiert, wenn die Seite lange offen war oder Cookies blockiert sind.',
+    action: 'Bitte lade die Dokumentseite neu und sende das Formular erneut.',
+    color: PORTAL_TOKENS.errorText,
+  },
+  origin_invalid: {
+    title: 'Diese Entscheidung konnte nicht gespeichert werden',
+    cause: 'Die Anfrage kam nicht von der Dokumentseite dieses Portals, deshalb wurde sie aus Sicherheitsgründen abgelehnt.',
+    action: 'Bitte öffne das Dokument über den Link aus deiner E-Mail und sende das Formular von dort.',
+    color: PORTAL_TOKENS.errorText,
+  },
+};
+
+const renderPortalErrorPage = (condition: PortalErrorCondition | PortalDecisionErrorCondition, options?: { retryHref?: string }) => {
+  const spec = PORTAL_ERRORS[condition];
+  const retry = options?.retryHref
+    ? `<p style="margin:1rem 0 0;">${renderPortalTextLink(options.retryHref, 'Erneut versuchen')}</p>`
+    : '';
+  return renderPortalPage({
+    title: spec.title,
+    contentSecurityPolicy: PORTAL_CSP_BASE,
+    contentMaxWidthPx: 640,
+    content: `<section style="${PORTAL_CARD_STYLE} padding:1.5rem;">
+  <h1 style="margin:0; font-size:1.5rem; letter-spacing:-.01em;">${escapeHtml(spec.title)}</h1>
+  <p style="margin:.75rem 0 0;">${escapeHtml(spec.cause)}</p>
+  <p style="margin:1rem 0 0; color:${spec.color}; font-weight:600;">${escapeHtml(spec.action)}</p>
+  ${retry}
+</section>`,
+  });
+};
+
+/* Status stays readable text, never colour alone; the label carries the meaning. */
+const portalStatusColor = (status: string): string => {
+  switch (status) {
+    case 'Angenommen':
+    case 'Bezahlt':
+      return PORTAL_TOKENS.successText;
+    case 'Abgelehnt':
+    case 'Abgelaufen':
+    case 'Überfällig':
+      return PORTAL_TOKENS.errorText;
+    default:
+      return PORTAL_TOKENS.muted;
+  }
+};
+
+/* Snapshot statuses are stored in English; the portal only ever shows German labels. */
+const DOCUMENT_STATUS_LABELS: Record<string, string> = {
+  draft: 'Entwurf',
+  open: 'Offen',
+  paid: 'Bezahlt',
+  overdue: 'Überfällig',
+  cancelled: 'Storniert',
+};
+
+const documentStatusLabel = (status: unknown): string => {
+  const raw = typeof status === 'string' ? status.trim() : '';
+  if (!raw) return 'Offen';
+  return DOCUMENT_STATUS_LABELS[raw.toLowerCase()] ?? raw;
+};
+
+type PortalSnapshotItem = {
+  description?: string;
+  quantity?: number;
+  price?: number;
+  total?: number;
+};
+
+type PortalSnapshot = {
   number?: string;
   client?: string;
   clientId?: string;
@@ -32,8 +249,75 @@ const looksLikeDocSnapshot = (
   dueDate?: string;
   amount?: number;
   status?: string;
-  items?: Array<{ description?: string; quantity?: number; total?: number }>;
-} => typeof snap === 'object' && snap !== null;
+  items?: PortalSnapshotItem[];
+  taxSnapshot?: {
+    vatRateApplied?: number;
+    vatAmount?: number;
+    netAmount?: number;
+    grossAmount?: number;
+  };
+};
+
+const looksLikeDocSnapshot = (snap: unknown): snap is PortalSnapshot =>
+  typeof snap === 'object' && snap !== null;
+
+const PORTAL_TABLE_HEAD = `text-align:left; padding:.625rem .5rem .625rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};`;
+const PORTAL_TABLE_HEAD_NUM = `text-align:right; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};`;
+
+/* Mirrors the desktop document view: one row per line item, German quantity and
+   currency notation. A value the snapshot does not carry stays a dash. */
+const renderDocumentPositions = (items: PortalSnapshotItem[]): string =>
+  `<div style="overflow-x:auto;" role="region" aria-label="Positionen" tabindex="0">
+    <table style="width:100%; min-width:28rem; border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="${PORTAL_TABLE_HEAD}">Position</th>
+          <th style="${PORTAL_TABLE_HEAD_NUM}">Menge</th>
+          <th style="${PORTAL_TABLE_HEAD_NUM}">Einzelpreis</th>
+          <th style="${PORTAL_TABLE_HEAD_NUM}">Summe</th>
+        </tr>
+      </thead>
+      <tbody>${items
+        .slice(0, 100)
+        .map((item) => {
+          const quantity = optionalNumber(item.quantity);
+          const price = optionalNumber(item.price);
+          const total = optionalNumber(item.total);
+          return `<tr>
+          <td style="padding:.625rem .5rem .625rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border};">${escapeHtml(item.description ?? '')}</td>
+          <td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; text-align:right; font-variant-numeric:tabular-nums;">${quantity === null ? '–' : escapeHtml(quantity.toLocaleString('de-DE'))}</td>
+          <td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; text-align:right; font-variant-numeric:tabular-nums;">${price === null ? '–' : escapeHtml(formatCurrencyEur(price))}</td>
+          <td style="padding:.625rem 0 .625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; text-align:right; font-variant-numeric:tabular-nums;">${total === null ? '–' : escapeHtml(formatCurrencyEur(total))}</td>
+        </tr>`;
+        })
+        .join('\n')}</tbody>
+    </table>
+  </div>`;
+
+/* Netto, USt and Brutto come from the stored tax snapshot; the line items cover
+   snapshots that predate it, and the document amount is the gross fallback. */
+const renderDocumentTotals = (snapshot: PortalSnapshot | null): string => {
+  const tax = snapshot?.taxSnapshot;
+  const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
+  const itemsNet = items.reduce((sum, item) => sum + (optionalNumber(item.total) ?? 0), 0);
+  const net = optionalNumber(tax?.netAmount) ?? (items.length ? Math.round(itemsNet * 100) / 100 : null);
+  const gross = optionalNumber(tax?.grossAmount) ?? optionalNumber(snapshot?.amount);
+  const vat =
+    optionalNumber(tax?.vatAmount) ??
+    (net !== null && gross !== null ? Math.round((gross - net) * 100) / 100 : null);
+  const vatRate = optionalNumber(tax?.vatRateApplied);
+  const row = (label: string, value: string) =>
+    `<div style="display:flex; justify-content:space-between; gap:1rem;"><span style="color:${PORTAL_TOKENS.muted};">${label}</span><span style="font-variant-numeric:tabular-nums;">${value}</span></div>`;
+
+  return `<div style="margin-top:.875rem; padding-top:.75rem; border-top:1px solid ${PORTAL_TOKENS.border}; display:grid; gap:.375rem; font-size:.875rem;">
+  ${row('Netto', net === null ? '–' : escapeHtml(formatCurrencyEur(net)))}
+  ${row(vatRate === null ? 'USt' : `USt (${vatRate.toLocaleString('de-DE')} %)`, vat === null ? '–' : escapeHtml(formatCurrencyEur(vat)))}
+  <div style="display:flex; justify-content:space-between; gap:1rem; margin-top:.125rem; padding-top:.5rem; border-top:1px solid ${PORTAL_TOKENS.border}; font-size:1rem; font-weight:700;">
+    <span>Brutto</span>
+    <span style="font-variant-numeric:tabular-nums;">${gross === null ? '–' : escapeHtml(formatCurrencyEur(gross))}</span>
+  </div>
+</div>`;
+};
 
 export const publishJsonSchema = z.object({
   token: z.string().min(16),
@@ -94,7 +378,7 @@ const normalizeDocStatus = (item: PortalDocumentListItem) => {
     return 'Offen';
   }
   const snap = looksLikeDocSnapshot(item.snapshotJson) ? item.snapshotJson : null;
-  return snap?.status ? String(snap.status) : expired ? 'Abgelaufen' : 'Offen';
+  return snap?.status ? documentStatusLabel(snap.status) : expired ? 'Abgelaufen' : 'Offen';
 };
 
 type RateBucketState = {
@@ -166,7 +450,11 @@ const applySensitiveResponseHeaders = (
   c.header('Pragma', 'no-cache');
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('X-Frame-Options', options?.allowFrameFromSameOrigin ? 'SAMEORIGIN' : 'DENY');
-  c.header('Referrer-Policy', 'no-referrer');
+  /* `no-referrer` makes browsers send `Origin: null` on the decision form POST,
+     which the origin check then has to reject. `same-origin` still keeps the
+     token-bearing portal URL away from every other origin, while the Origin
+     header stays intact. */
+  c.header('Referrer-Policy', 'same-origin');
 };
 
 const parseCookies = (header: string | null | undefined): Record<string, string> => {
@@ -182,11 +470,6 @@ const parseCookies = (header: string | null | undefined): Record<string, string>
     return acc;
   }, {});
 };
-
-const renderPortalBranding = (subtitle: string) => `<div style="display:flex; align-items:center; gap:12px; margin-bottom: 16px;">
-  <img src="${BILLME_FULL_LOGO_DATA_URI}" alt="Billme" style="height: 28px; width: auto;" />
-  <div style="font-size:12px; font-weight:800; letter-spacing:.08em; color:#666; text-transform:uppercase;">${subtitle}</div>
-</div>`;
 
 const checkPublishAuth = (
   config: PortalConfig,
@@ -211,57 +494,112 @@ const checkPublishAuth = (
 
 export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: PortalConfig }) => {
   const app = new Hono();
-  const publicOrigin = (() => {
+  const publicBase = (() => {
     const base = deps.config.publicBaseUrl?.trim();
     if (!base) return null;
     try {
-      return new URL(base).origin;
+      return new URL(base);
     } catch {
       return null;
     }
   })();
-  const isAllowedDecisionOrigin = (c: any): boolean => {
+  const publicOrigin = publicBase?.origin ?? null;
+  const publicHost = publicBase?.host ?? null;
+
+  /* A decision POST is same-origin when the browser names one of our own origins:
+     the configured public base URL, or the origin the request was addressed to
+     (behind a proxy the two differ). Every other named origin is rejected.
+     `Origin: null` or a missing header means the sending page suppressed the
+     header. That case is accepted only for a form post that we can still tie to
+     our own host, where the SameSite=Strict CSRF cookie identifies the sender. */
+  const isAllowedDecisionOrigin = (c: Context): boolean => {
     if (!publicOrigin) return true;
-    const origin = c.req.header('origin');
-    if (origin && origin === publicOrigin) return true;
-    const referer = c.req.header('referer');
-    if (!referer) return false;
+    let requestOrigin: string | null = null;
     try {
-      return new URL(referer).origin === publicOrigin;
+      requestOrigin = new URL(c.req.url).origin;
     } catch {
-      return false;
+      requestOrigin = null;
     }
+    const allowedOrigins = [publicOrigin];
+    if (requestOrigin && requestOrigin !== publicOrigin) allowedOrigins.push(requestOrigin);
+    const origin = c.req.header('origin');
+    if (origin && origin !== 'null') return allowedOrigins.includes(origin);
+    const contentType = c.req.header('content-type') ?? '';
+    const isFormPost =
+      contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data');
+    if (!isFormPost) return false;
+    const referer = c.req.header('referer');
+    if (referer) {
+      try {
+        return allowedOrigins.includes(new URL(referer).origin);
+      } catch {
+        return false;
+      }
+    }
+    const host = c.req.header('host');
+    if (!host || !publicHost) return false;
+    return host.toLowerCase() === publicHost.toLowerCase();
   };
 
   app.get('/health', (c) => c.json({ ok: true, ts: nowIso() }));
 
+  app.get('/', (c) => {
+    applySensitiveResponseHeaders(c);
+    return c.html(
+      renderPortalPage({
+        title: 'Angebotsportal',
+        contentSecurityPolicy: PORTAL_CSP_BASE,
+        contentMaxWidthPx: 720,
+        content: `<section style="${PORTAL_CARD_STYLE} padding:1.5rem;">
+  <h1 style="margin:0; font-size:1.5rem; letter-spacing:-.01em;">Angebotsportal</h1>
+  <p style="margin:.75rem 0 0;">Über dieses Portal erreichst du Angebote und Rechnungen, die dir per E-Mail zugeschickt wurden. Der Link aus der E-Mail führt direkt zum Dokument.</p>
+  <p style="margin:.75rem 0 0; color:${PORTAL_TOKENS.muted};">Auf der Dokumentseite kannst du ein Angebot annehmen oder ablehnen und die PDF herunterladen. Ein Link gilt nur für die Person, an die er gerichtet ist, und nur bis zum angegebenen Datum.</p>
+  <p style="margin:1rem 0 0; font-weight:600;">Du hast keinen Link zur Hand? Dann bitte den Absender um einen neuen.</p>
+</section>`,
+      }),
+    );
+  });
+
   app.get('/admin/setup', (c) => {
-    const baseUrl = deps.config.publicBaseUrl ?? '(unset)';
+    applySensitiveResponseHeaders(c);
+    const baseUrl = deps.config.publicBaseUrl ?? '(nicht gesetzt)';
     const hasKey = Boolean(deps.config.publishApiKey);
     const strictAuth = Boolean(deps.config.requirePublishApiKey);
-    const authHealth = strictAuth && !hasKey ? 'misconfigured (strict=true, key missing)' : hasKey ? 'enabled' : 'disabled';
-    const html = `<!doctype html>
-<html>
-  <head><meta charset="utf-8" /><title>Einrichtung des Angebotsportals</title></head>
-  <body style="font-family: system-ui; max-width: 720px; margin: 40px auto; padding: 0 16px;">
-    ${renderPortalBranding('Angebotsportal')}
-    <h1>Einrichtung</h1>
-    <p>Dieses Portal läuft als selbst gehosteter Node-Dienst.</p>
-    <ul>
-      <li><strong>PUBLIC_BASE_URL</strong>: ${baseUrl}</li>
-      <li><strong>PUBLISH_API_KEY</strong>: ${hasKey ? 'set' : 'not set'}</li>
-      <li><strong>STRICT_PUBLISH_AUTH</strong>: ${strictAuth ? 'enabled' : 'disabled'}</li>
-      <li><strong>Status der Veröffentlichungsanmeldung</strong>: ${authHealth}</li>
-    </ul>
-    <h2>Nächste Schritte</h2>
-    <ol>
-      <li>Setze <code>PUBLIC_BASE_URL</code> auf deine Domain, zum Beispiel https://offers.example.com.</li>
-      <li>Setze <code>PUBLISH_API_KEY</code> und hinterlege den Schlüssel in der Desktop-App.</li>
-      <li>Prüfe den Dienst mit <code>GET /health</code>.</li>
-    </ol>
-  </body>
-</html>`;
-    return c.html(html);
+    const authHealth =
+      strictAuth && !hasKey ? 'Fehlkonfiguration (STRICT_PUBLISH_AUTH ohne Schlüssel)' : hasKey ? 'aktiv' : 'inaktiv';
+    return c.html(
+      renderPortalPage({
+        title: 'Einrichtung des Angebotsportals',
+        contentSecurityPolicy: PORTAL_CSP_BASE,
+        contentMaxWidthPx: 720,
+        content: `<h1 style="margin:0 0 .5rem; font-size:1.5rem; letter-spacing:-.01em;">Einrichtung</h1>
+<p style="margin:0; color:${PORTAL_TOKENS.muted};">Dieses Portal läuft als selbst gehosteter Node-Dienst.</p>
+<section style="${PORTAL_CARD_STYLE} margin-top:1rem; padding:1.25rem;">
+  <h2 style="margin:0 0 .5rem; font-size:1rem;">Konfiguration</h2>
+  <ul style="margin:0; padding-left:1.25rem;">
+    <li><strong>PUBLIC_BASE_URL</strong>: ${escapeHtml(baseUrl)}</li>
+    <li><strong>PUBLISH_API_KEY</strong>: ${hasKey ? 'gesetzt' : 'nicht gesetzt'}</li>
+    <li><strong>STRICT_PUBLISH_AUTH</strong>: ${strictAuth ? 'aktiv' : 'inaktiv'}</li>
+    <li><strong>Status der Veröffentlichungsanmeldung</strong>: ${authHealth}</li>
+  </ul>
+</section>
+<section style="${PORTAL_CARD_STYLE} margin-top:1rem; padding:1.25rem;">
+  <h2 style="margin:0 0 .5rem; font-size:1rem;">Nächste Schritte</h2>
+  <ol style="margin:0; padding-left:1.25rem;">
+    <li>Setze <code>PUBLIC_BASE_URL</code> auf deine Domain, zum Beispiel https://offers.example.com.</li>
+    <li>Setze <code>PUBLISH_API_KEY</code> und hinterlege den Schlüssel in der Desktop-App.</li>
+    <li>Prüfe den Dienst mit <code>GET /health</code>.</li>
+  </ol>
+</section>`,
+      }),
+    );
+  });
+
+  app.notFound((c) => {
+    const accept = c.req.header('accept') ?? '';
+    if (!accept.includes('text/html')) return c.json({ error: 'not found' }, 404);
+    applySensitiveResponseHeaders(c);
+    return c.html(renderPortalErrorPage('unknown'), 404);
   });
 
   app.post('/customers/access-links', async (c) => {
@@ -485,13 +823,15 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const rl = checkRateLimit(c, 'tokenRead');
     if (!rl.ok) {
       c.header('Retry-After', String(rl.retryAfterSec));
-      return c.text('Zu viele Anfragen. Bitte später erneut versuchen.', 429);
+      return c.html(renderPortalErrorPage('rate_limited', { retryHref: c.req.path }), 429);
     }
-    const token = z.object({ token: z.string().min(16) }).parse(c.req.param()).token;
+    const parsedToken = z.object({ token: z.string().min(16) }).safeParse(c.req.param());
+    if (!parsedToken.success) return c.html(renderPortalErrorPage('unknown'), 404);
+    const token = parsedToken.data.token;
     const access = await deps.store.getCustomerAccessByTokenHash(sha256(token));
-    if (!access) return c.json({ error: 'not found' }, 404);
-    if (access.revokedAt) return c.text('Link ist nicht mehr gueltig.', 403);
-    if (Date.parse(access.expiresAt) < Date.now()) return c.text('Link ist abgelaufen.', 410);
+    if (!access) return c.html(renderPortalErrorPage('unknown'), 404);
+    if (access.revokedAt) return c.html(renderPortalErrorPage('revoked'), 403);
+    if (Date.parse(access.expiresAt) < Date.now()) return c.html(renderPortalErrorPage('expired'), 410);
 
     const query = historyQuerySchema.parse(c.req.query());
     const result = await deps.store.listDocumentsByCustomerRef({
@@ -501,74 +841,95 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
       cursor: query.cursor,
     });
 
+    const customerLabel = escapeHtml(access.customerLabel ?? access.customerRef);
+    const filteredKind = query.kind === 'all' ? null : query.kind === 'offer' ? 'Angebote' : 'Rechnungen';
+
     const rows = result.items
       .map((item) => {
         const snap = looksLikeDocSnapshot(item.snapshotJson) ? item.snapshotJson : null;
         const url = `/d/${encodeURIComponent(item.documentId)}`;
+        const status = normalizeDocStatus(item);
         return `<tr>
-<td style="padding:10px 8px; border-bottom:1px solid #eee;">${item.kind === 'offer' ? 'Angebot' : 'Rechnung'}</td>
-<td style="padding:10px 8px; border-bottom:1px solid #eee;">${escapeHtml(snap?.number ?? '')}</td>
-<td style="padding:10px 8px; border-bottom:1px solid #eee;">${escapeHtml(snap?.date ?? '')}</td>
-<td style="padding:10px 8px; border-bottom:1px solid #eee; text-align:right;">${escapeHtml(formatCurrencyEur(snap?.amount ?? 0))}</td>
-<td style="padding:10px 8px; border-bottom:1px solid #eee;">${escapeHtml(normalizeDocStatus(item))}</td>
-<td style="padding:10px 8px; border-bottom:1px solid #eee;"><a href="${escapeHtml(url)}">Ansehen</a></td>
+<td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">${item.kind === 'offer' ? 'Angebot' : 'Rechnung'}</td>
+<td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">${escapeHtml(snap?.number ?? '')}</td>
+<td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">${escapeHtml(formatDateDe(snap?.date))}</td>
+<td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; text-align:right; font-variant-numeric:tabular-nums;">${escapeHtml(formatCurrencyEur(snap?.amount ?? 0))}</td>
+<td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; color:${portalStatusColor(status)}; font-weight:600;">${escapeHtml(status)}</td>
+<td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">${renderPortalTextLink(url, 'Ansehen')}</td>
 </tr>`;
       })
       .join('\n');
 
+    /* A filtered view that comes back empty is not the same as a portal without
+       documents, so it names the filter and offers the way back to all of them. */
+    const emptyState = filteredKind
+      ? `<div style="padding:1.25rem;">
+  <h2 style="margin:0; font-size:1rem;">Keine ${filteredKind} in dieser Ansicht</h2>
+  <p style="margin:.5rem 0 0; color:${PORTAL_TOKENS.muted};">Für ${customerLabel} ist zurzeit kein Dokument dieser Art hinterlegt. Andere Dokumentarten können vorhanden sein.</p>
+  <p style="margin:.75rem 0 0;">${renderPortalTextLink(`/customers/${encodeURIComponent(token)}`, 'Alle Dokumente anzeigen')}</p>
+</div>`
+      : `<div style="padding:1.25rem;">
+  <h2 style="margin:0; font-size:1rem;">Noch keine Dokumente freigegeben</h2>
+  <p style="margin:.5rem 0 0; color:${PORTAL_TOKENS.muted};">Für ${customerLabel} wurde bisher kein Angebot und keine Rechnung veröffentlicht.</p>
+  <p style="margin:.75rem 0 0;">Sobald der Absender ein Dokument freigibt, erscheint es hier. Erwartest du eines, bitte den Absender um eine neue Freigabe.</p>
+</div>`;
+
     const nextLink = result.nextCursor
-      ? `<a href="/customers/${encodeURIComponent(token)}?kind=${encodeURIComponent(query.kind)}&limit=${query.limit}&cursor=${encodeURIComponent(result.nextCursor)}">Weitere laden</a>`
+      ? `<p style="margin:1rem 0 0;">${renderPortalTextLink(`/customers/${encodeURIComponent(token)}?kind=${encodeURIComponent(query.kind)}&limit=${query.limit}&cursor=${encodeURIComponent(result.nextCursor)}`, 'Weitere laden')}</p>`
       : '';
 
-    const html = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'" />
-    <title>Dokumente</title>
-  </head>
-  <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f3f4f6; margin:0;">
-    <main style="max-width: 980px; margin: 32px auto; padding: 0 16px;">
-      ${renderPortalBranding('Kundenportal')}
-      <h1 style="margin:0 0 6px;">Bisherige Dokumente</h1>
-      <div style="color:#666; margin-bottom: 16px;">${escapeHtml(access.customerLabel ?? access.customerRef)}</div>
-      <section style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding: 8px 14px;">
-        <table style="width:100%; border-collapse:collapse;">
-          <thead>
-            <tr>
-              <th style="text-align:left; padding:10px 8px; border-bottom:1px solid #eee;">Typ</th>
-              <th style="text-align:left; padding:10px 8px; border-bottom:1px solid #eee;">Nummer</th>
-              <th style="text-align:left; padding:10px 8px; border-bottom:1px solid #eee;">Datum</th>
-              <th style="text-align:right; padding:10px 8px; border-bottom:1px solid #eee;">Betrag</th>
-              <th style="text-align:left; padding:10px 8px; border-bottom:1px solid #eee;">Status</th>
-              <th style="text-align:left; padding:10px 8px; border-bottom:1px solid #eee;">Link</th>
-            </tr>
-          </thead>
-          <tbody>${rows || '<tr><td colspan="6" style="padding:12px; color:#666;">Keine Dokumente vorhanden.</td></tr>'}</tbody>
-        </table>
-      </section>
-      <div style="margin-top:12px;">${nextLink}</div>
-    </main>
-  </body>
-</html>`;
-    return c.html(html);
+    return c.html(
+      renderPortalPage({
+        title: 'Dokumente',
+        contentSecurityPolicy: PORTAL_CSP_BASE,
+        content: `<h1 style="margin:0 0 .375rem; font-size:1.5rem; letter-spacing:-.01em;">Bisherige Dokumente</h1>
+<div style="color:${PORTAL_TOKENS.muted}; margin-bottom:1rem;">${customerLabel}</div>
+<section style="${PORTAL_CARD_STYLE} padding:.5rem .875rem;">
+  ${
+    rows
+      ? `<div style="overflow-x:auto;" role="region" aria-label="Dokumente" tabindex="0">
+    <table style="width:100%; min-width:34rem; border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};">Typ</th>
+          <th style="text-align:left; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};">Nummer</th>
+          <th style="text-align:left; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};">Datum</th>
+          <th style="text-align:right; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};">Betrag</th>
+          <th style="text-align:left; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};">Status</th>
+          <th style="text-align:left; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};">Link</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`
+      : emptyState
+  }
+</section>
+${nextLink}`,
+      }),
+    );
   });
 
   app.get('/d/:documentId', async (c) => {
     applySensitiveResponseHeaders(c);
+    const accept = c.req.header('accept') ?? '';
+    const wantsHtml = accept.includes('text/html') || c.req.query('view') === '1';
     const rl = checkRateLimit(c, 'tokenRead');
     if (!rl.ok) {
       c.header('Retry-After', String(rl.retryAfterSec));
-      return c.json({ error: 'rate_limited' }, 429);
+      return wantsHtml
+        ? c.html(renderPortalErrorPage('rate_limited', { retryHref: c.req.path }), 429)
+        : c.json({ error: 'rate_limited' }, 429);
     }
-    const documentId = z.object({ documentId: z.string().min(8) }).parse(c.req.param()).documentId;
+    const parsedDocumentId = z.object({ documentId: z.string().min(8) }).safeParse(c.req.param());
+    if (!parsedDocumentId.success) {
+      return wantsHtml ? c.html(renderPortalErrorPage('unknown'), 404) : c.json({ error: 'not found' }, 404);
+    }
+    const documentId = parsedDocumentId.data.documentId;
     const rec = await deps.store.getDocumentById(documentId);
-    if (!rec) return c.json({ error: 'not found' }, 404);
+    if (!rec) return wantsHtml ? c.html(renderPortalErrorPage('unknown'), 404) : c.json({ error: 'not found' }, 404);
     const expired = Date.parse(rec.expiresAt) < Date.now();
     const snapshot = looksLikeDocSnapshot(rec.snapshotJson) ? rec.snapshotJson : null;
-    const accept = c.req.header('accept') ?? '';
-    const wantsHtml = accept.includes('text/html') || c.req.query('view') === '1';
     if (!wantsHtml) {
       return c.json({
         kind: rec.kind,
@@ -600,7 +961,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
             : 'Offen'
         : expired
           ? 'Abgelaufen'
-          : String(snapshot?.status ?? 'Offen');
+          : documentStatusLabel(snapshot?.status);
     const csrfToken = crypto.randomBytes(24).toString('base64url');
     if (rec.kind === 'offer' && !expired && !rec.decision) {
       c.header(
@@ -608,56 +969,81 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
         `csrfToken=${encodeURIComponent(csrfToken)}; Path=/; HttpOnly; SameSite=Strict${publicOrigin?.startsWith('https://') ? '; Secure' : ''}`,
       );
     }
+    /* While the decision form is on the page it carries the accent, so the PDF
+       link stays a plain link. Without the form, downloading is the main action. */
+    const offerCanBeDecided = rec.kind === 'offer' && !expired && !rec.decision;
     const decisionHtml =
       rec.kind !== 'offer'
         ? ''
         : rec.decision
-          ? `<div style="margin-top: 14px; color:#555;">Entscheidung: <strong>${escapeHtml(rec.decision.decision)}</strong> (${escapeHtml(rec.decision.acceptedName)})</div>`
-          : expired
-            ? ''
-            : `<form method="post" action="/d/${encodeURIComponent(rec.documentId)}/decision" style="margin-top:16px; padding:14px; border:1px solid #e5e7eb; border-radius:14px;">
-  <div style="display:flex; gap:12px; flex-wrap:wrap;">
-    <input name="acceptedName" required minlength="1" placeholder="Name" style="flex:1; min-width:180px; padding:10px; border-radius:10px; border:1px solid #ddd;" />
-    <input name="acceptedEmail" required type="email" placeholder="E-Mail" style="flex:1; min-width:180px; padding:10px; border-radius:10px; border:1px solid #ddd;" />
+          ? `<div style="margin-top:1rem; padding:.875rem 1rem; border:1px solid ${PORTAL_TOKENS.border}; border-radius:${PORTAL_TOKENS.radiusMd}; background:${PORTAL_TOKENS.surfaceSunken};">
+  <div style="font-weight:600; color:${portalStatusColor(statusText)};">${escapeHtml(statusText)}</div>
+  <div style="margin-top:.25rem; color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Bestätigt von ${escapeHtml(rec.decision.acceptedName)} am ${escapeHtml(formatDateTimeDe(rec.decision.decidedAt))}</div>
+</div>`
+          : offerCanBeDecided
+            ? `<form method="post" action="/d/${encodeURIComponent(rec.documentId)}/decision" style="margin-top:1rem; padding:1rem; border:1px solid ${PORTAL_TOKENS.border}; border-radius:${PORTAL_TOKENS.radiusMd};" onsubmit="for (const control of this.querySelectorAll('button')) { control.disabled = true; if (control.dataset.label) continue; control.dataset.label = control.textContent || ''; control.textContent = 'Wird gesendet …'; } return true;">
+  <div style="display:flex; gap:.75rem; flex-wrap:wrap;">
+    <div style="flex:1; min-width:11rem;">
+      <label for="acceptedName" style="${PORTAL_LABEL_STYLE}">Name (Pflicht)</label>
+      <input id="acceptedName" name="acceptedName" required minlength="1" autocomplete="name" style="${PORTAL_INPUT_STYLE} margin-top:.375rem;" />
+    </div>
+    <div style="flex:1; min-width:11rem;">
+      <label for="acceptedEmail" style="${PORTAL_LABEL_STYLE}">E-Mail (Pflicht)</label>
+      <input id="acceptedEmail" name="acceptedEmail" required type="email" autocomplete="email" style="${PORTAL_INPUT_STYLE} margin-top:.375rem;" />
+    </div>
   </div>
   <input type="hidden" name="decisionTextVersion" value="v1" />
   <input type="hidden" name="csrfToken" value="${escapeHtml(csrfToken)}" />
-  <div style="display:flex; gap:12px; margin-top:12px;">
-    <button name="decision" value="accepted" style="padding:10px 12px; border-radius:10px; border:1px solid #111; background:#111; color:#fff; font-weight:700;">Annehmen</button>
-    <button name="decision" value="declined" style="padding:10px 12px; border-radius:10px; border:1px solid #ddd; background:#fff; color:#111; font-weight:700;">Ablehnen</button>
+  <div style="display:flex; gap:.75rem; margin-top:.875rem; flex-wrap:wrap;">
+    <button name="decision" value="accepted" style="${PORTAL_PRIMARY_BUTTON_STYLE}">Annehmen</button>
+    <button name="decision" value="declined" style="${PORTAL_SECONDARY_BUTTON_STYLE}">Ablehnen</button>
   </div>
-</form>`;
+  <p style="margin:.75rem 0 0; color:${PORTAL_TOKENS.muted}; font-size:.8125rem;">Die Entscheidung wird einmalig gespeichert. Das Dokument bleibt danach weiter einsehbar.</p>
+</form>`
+            : '';
+    const expiredNotice = expired
+      ? `<div style="margin-top:1rem; padding:.75rem .875rem; border:1px solid ${PORTAL_TOKENS.warningBorder}; border-radius:${PORTAL_TOKENS.radiusSm}; background:${PORTAL_TOKENS.warningBg}; color:${PORTAL_TOKENS.warningText};">
+  Dieser Link ist abgelaufen. Bitte wende dich an den Absender, wenn du ${rec.kind === 'offer' ? 'das Angebot noch annehmen möchtest' : 'das Dokument erneut brauchst'}.
+</div>`
+      : '';
     const pdfUrl = rec.pdfKey ? `/d/${encodeURIComponent(rec.documentId)}/pdf` : '';
-    const html = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" />
-    <title>${escapeHtml(title)}</title>
-  </head>
-  <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f3f4f6; margin:0;">
-    <main style="max-width: 920px; margin: 30px auto; padding: 0 16px;">
-      ${renderPortalBranding('Kundenportal')}
-      <section style="background:#fff; border:1px solid #e5e7eb; border-radius:18px; padding:18px;">
-        <h1 style="margin:0 0 8px;">${escapeHtml(title)}</h1>
-        <div style="color:#666; font-size:14px;">Status: <strong>${escapeHtml(statusText)}</strong> · Gültig bis: ${escapeHtml(new Date(rec.expiresAt).toLocaleDateString('de-DE'))}</div>
-        <div style="margin-top:12px; color:#555;">Kunde: <strong>${escapeHtml(snapshot?.client ?? rec.customerLabel ?? '')}</strong></div>
-        <div style="margin-top:8px; font-size:20px; font-weight:900;">${escapeHtml(formatCurrencyEur(snapshot?.amount ?? 0))}</div>
-        ${decisionHtml}
-      </section>
-      ${
-        pdfUrl
-          ? `<section style="margin-top:16px; background:#fff; border:1px solid #e5e7eb; border-radius:18px; overflow:hidden;">
-  <div style="padding: 12px 14px; border-bottom:1px solid #eee;"><a href="${escapeHtml(pdfUrl)}" style="font-weight:700; color:#111; text-decoration:none;">PDF herunterladen</a></div>
-  <iframe title="Dokument-PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height: 900px; border:0;"></iframe>
+    const pdfSection = pdfUrl
+      ? `<section style="${PORTAL_CARD_STYLE} margin-top:1rem; overflow:hidden;">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:.75rem; flex-wrap:wrap; padding:.875rem 1rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">
+    <div style="font-weight:600;">PDF</div>
+    ${offerCanBeDecided ? renderPortalTextLink(pdfUrl, 'PDF herunterladen') : renderPortalActionLink(pdfUrl, 'PDF herunterladen')}
+  </div>
+  <iframe title="Dokument-PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height:900px; border:0;"></iframe>
 </section>`
-          : ''
-      }
-    </main>
-  </body>
-</html>`;
-    return c.html(html);
+      : '';
+    const snapshotItems = Array.isArray(snapshot?.items) ? snapshot.items : [];
+    /* The stored snapshot carries the line items and the tax snapshot; when either
+       is missing the card keeps the reader on the PDF instead of inventing figures. */
+    const summarySection = `<section style="${PORTAL_CARD_STYLE} margin-top:1rem; padding:1.25rem;">
+  <h2 style="margin:0; font-size:1rem;">Zusammenfassung</h2>
+  ${
+    snapshotItems.length
+      ? renderDocumentPositions(snapshotItems)
+      : `<div style="margin-top:.625rem; color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Die Positionen stehen in der PDF.</div>`
+  }
+  ${renderDocumentTotals(snapshot)}
+</section>`;
+    return c.html(
+      renderPortalPage({
+        title,
+        contentSecurityPolicy: PORTAL_CSP_WITH_FORM,
+        content: `<section style="${PORTAL_CARD_STYLE} padding:1.25rem;">
+  <h1 style="margin:0 0 .5rem; font-size:1.5rem; letter-spacing:-.01em;">${escapeHtml(title)}</h1>
+  <div style="color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Status: <strong style="color:${portalStatusColor(statusText)};">${escapeHtml(statusText)}</strong> · Gültig bis: ${escapeHtml(formatDateDe(rec.expiresAt))}</div>
+  <div style="margin-top:.75rem;">Kunde: <strong>${escapeHtml(snapshot?.client ?? rec.customerLabel ?? '')}</strong></div>
+  <div style="margin-top:.5rem; font-size:1.25rem; font-weight:700; font-variant-numeric:tabular-nums;">${escapeHtml(formatCurrencyEur(snapshot?.amount ?? 0))}</div>
+  ${expiredNotice}
+  ${decisionHtml}
+</section>
+${summarySection}
+${pdfSection}`,
+      }),
+    );
   });
 
   app.get('/d/:documentId/pdf', async (c) => {
@@ -678,18 +1064,22 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
 
   app.post('/d/:documentId/decision', async (c) => {
     applySensitiveResponseHeaders(c);
+    const decisionAccept = c.req.header('accept') ?? '';
+    const decisionWantsHtml = decisionAccept.includes('text/html');
+    const decisionError = (condition: PortalDecisionErrorCondition | 'expired', retryHref?: string, status: 403 | 410 = 403) =>
+      decisionWantsHtml ? c.html(renderPortalErrorPage(condition, retryHref ? { retryHref } : undefined), status) : c.json({ error: condition }, status);
     const rl = checkRateLimit(c, 'tokenDecision');
     if (!rl.ok) {
       c.header('Retry-After', String(rl.retryAfterSec));
       return c.json({ error: 'rate_limited' }, 429);
     }
-    if (!isAllowedDecisionOrigin(c)) {
-      return c.json({ error: 'origin_invalid' }, 403);
-    }
     const documentId = z.object({ documentId: z.string().min(8) }).parse(c.req.param()).documentId;
+    if (!isAllowedDecisionOrigin(c)) {
+      return decisionError('origin_invalid', `/d/${encodeURIComponent(documentId)}`);
+    }
     const rec = await deps.store.getDocumentById(documentId);
     if (!rec || rec.kind !== 'offer') return c.json({ error: 'not found' }, 404);
-    if (Date.parse(rec.expiresAt) < Date.now()) return c.json({ error: 'expired' }, 410);
+    if (Date.parse(rec.expiresAt) < Date.now()) return decisionError('expired', `/d/${encodeURIComponent(documentId)}`, 410);
     const contentType = c.req.header('content-type') ?? '';
     const isForm =
       contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data');
@@ -699,7 +1089,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
       const csrfCookie = String(cookies.csrfToken ?? '').trim();
       const csrfBody = String((rawBody as any).csrfToken ?? '').trim();
       if (!csrfCookie || !csrfBody || csrfCookie !== csrfBody) {
-        return c.json({ error: 'csrf_invalid' }, 403);
+        return decisionError('csrf_invalid', `/d/${encodeURIComponent(documentId)}`);
       }
     }
     const body = decisionSchema.parse({
@@ -715,8 +1105,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
       acceptedEmail: body.acceptedEmail,
       decisionTextVersion: body.decisionTextVersion,
     });
-    const accept = c.req.header('accept') ?? '';
-    if (accept.includes('text/html')) {
+    if (decisionWantsHtml) {
       return c.redirect(`/d/${encodeURIComponent(documentId)}`);
     }
     return c.json({ ok: true, decision });
@@ -724,20 +1113,26 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
 
   app.get('/offers/:token', async (c) => {
     applySensitiveResponseHeaders(c);
+    const accept = c.req.header('accept') ?? '';
+    const wantsHtml = accept.includes('text/html') || c.req.query('view') === '1';
     const rl = checkRateLimit(c, 'tokenRead');
     if (!rl.ok) {
       c.header('Retry-After', String(rl.retryAfterSec));
-      return c.json({ error: 'rate_limited' }, 429);
+      return wantsHtml
+        ? c.html(renderPortalErrorPage('rate_limited', { retryHref: c.req.path }), 429)
+        : c.json({ error: 'rate_limited' }, 429);
     }
-    const token = z.object({ token: z.string().min(16) }).parse(c.req.param()).token;
+    const parsedToken = z.object({ token: z.string().min(16) }).safeParse(c.req.param());
+    if (!parsedToken.success) {
+      return wantsHtml ? c.html(renderPortalErrorPage('unknown'), 404) : c.json({ error: 'not found' }, 404);
+    }
+    const token = parsedToken.data.token;
     const tokenHash = sha256(token);
     const rec = await deps.store.getOfferByTokenHash(tokenHash);
-    if (!rec) return c.json({ error: 'not found' }, 404);
+    if (!rec) return wantsHtml ? c.html(renderPortalErrorPage('unknown'), 404) : c.json({ error: 'not found' }, 404);
     const document = await deps.store.getDocumentByTokenHash(tokenHash);
     const expired = Date.parse(rec.expiresAt) < Date.now();
 
-    const accept = c.req.header('accept') ?? '';
-    const wantsHtml = accept.includes('text/html') || c.req.query('view') === '1';
     if (!wantsHtml) {
       return c.json({
         publishedAt: rec.publishedAt,
@@ -765,9 +1160,9 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
           : 'Abgelehnt'
         : 'Offen';
 
-    const decidedAt = decision?.decidedAt ? new Date(decision.decidedAt).toLocaleString('de-DE') : '';
-    const expiresAt = rec.expiresAt ? new Date(rec.expiresAt).toLocaleDateString('de-DE') : '';
-    const publishedAt = rec.publishedAt ? new Date(rec.publishedAt).toLocaleDateString('de-DE') : '';
+    const decidedAt = formatDateTimeDe(decision?.decidedAt);
+    const expiresAt = formatDateDe(rec.expiresAt);
+    const publishedAt = formatDateDe(rec.publishedAt);
 
     const itemsHtml =
       snapshot?.items && Array.isArray(snapshot.items) && snapshot.items.length > 0
@@ -778,22 +1173,28 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
               const qty = Number.isFinite(Number(it.quantity)) ? Number(it.quantity) : 0;
               const total = formatCurrencyEur(it.total);
               return `<tr>
-  <td style="padding: 10px 0; border-bottom: 1px solid #eee;">${desc}</td>
-  <td style="padding: 10px 0; border-bottom: 1px solid #eee; text-align:right; font-variant-numeric: tabular-nums;">${qty}</td>
-  <td style="padding: 10px 0; border-bottom: 1px solid #eee; text-align:right; font-variant-numeric: tabular-nums;">${total}</td>
+  <td style="padding:.625rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border};">${desc}</td>
+  <td style="padding:.625rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border}; text-align:right; font-variant-numeric:tabular-nums;">${qty}</td>
+  <td style="padding:.625rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border}; text-align:right; font-variant-numeric:tabular-nums;">${total}</td>
 </tr>`;
             })
             .join('\n')
         : '';
 
     const decisionBox = decision
-      ? `<div style="padding:16px; border-radius:16px; border:1px solid #eee; background:#fafafa; margin-top: 16px;">
-  <div style="font-weight: 800; margin-bottom: 6px;">Status: ${escapeHtml(statusText)}</div>
-  <div style="color:#555; font-size:14px;">Entscheidung am ${escapeHtml(decidedAt)}</div>
-  <div style="color:#555; font-size:14px;">Name: ${escapeHtml(decision.acceptedName)}</div>
-  <div style="color:#555; font-size:14px;">E-Mail: ${escapeHtml(decision.acceptedEmail)}</div>
+      ? `<div style="margin-top:1rem; padding:.875rem 1rem; border:1px solid ${PORTAL_TOKENS.border}; border-radius:${PORTAL_TOKENS.radiusMd}; background:${PORTAL_TOKENS.surfaceSunken};">
+  <div style="font-weight:600; color:${portalStatusColor(statusText)};">${escapeHtml(statusText)}</div>
+  <div style="margin-top:.25rem; color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Entscheidung am ${escapeHtml(decidedAt)}</div>
+  <div style="color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Name: ${escapeHtml(decision.acceptedName)}</div>
+  <div style="color:${PORTAL_TOKENS.muted}; font-size:.875rem;">E-Mail: ${escapeHtml(decision.acceptedEmail)}</div>
 </div>`
       : '';
+    const expiredNotice =
+      expired && !decision
+        ? `<div style="margin-top:1rem; padding:.75rem .875rem; border:1px solid ${PORTAL_TOKENS.warningBorder}; border-radius:${PORTAL_TOKENS.radiusSm}; background:${PORTAL_TOKENS.warningBg}; color:${PORTAL_TOKENS.warningText};">
+  Dieser Link ist abgelaufen. Bitte wende dich an den Absender, wenn du das Angebot noch annehmen möchtest.
+</div>`
+        : '';
     const csrfToken = crypto.randomBytes(24).toString('base64url');
     if (!expired && !decision) {
       c.header(
@@ -805,124 +1206,111 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const actionForm =
       expired || decision
         ? ''
-        : `<form method="post" action="/offers/${encodeURIComponent(token)}/decision" style="margin-top:16px; padding:16px; border-radius:16px; border:1px solid #eee;">
-  <div style="display:flex; gap:12px; flex-wrap:wrap;">
-    <div style="flex:1; min-width: 220px;">
-      <label style="display:block; font-size:12px; font-weight:800; color:#444;">Name (Pflicht)</label>
-      <input name="acceptedName" required minlength="1" autocomplete="name" style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid #ddd; margin-top:6px;" />
+        : `<form method="post" action="/offers/${encodeURIComponent(token)}/decision" style="margin-top:1rem; padding:1rem; border:1px solid ${PORTAL_TOKENS.border}; border-radius:${PORTAL_TOKENS.radiusMd};" onsubmit="for (const control of this.querySelectorAll('button')) { control.disabled = true; if (control.dataset.label) continue; control.dataset.label = control.textContent || ''; control.textContent = 'Wird gesendet …'; } return true;">
+  <div style="display:flex; gap:.75rem; flex-wrap:wrap;">
+    <div style="flex:1; min-width:13rem;">
+      <label for="offerAcceptedName" style="${PORTAL_LABEL_STYLE}">Name (Pflicht)</label>
+      <input id="offerAcceptedName" name="acceptedName" required minlength="1" autocomplete="name" style="${PORTAL_INPUT_STYLE} margin-top:.375rem;" />
     </div>
-    <div style="flex:1; min-width: 220px;">
-      <label style="display:block; font-size:12px; font-weight:800; color:#444;">E-Mail (Pflicht)</label>
-      <input name="acceptedEmail" required minlength="3" autocomplete="email" type="email" style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid #ddd; margin-top:6px;" />
+    <div style="flex:1; min-width:13rem;">
+      <label for="offerAcceptedEmail" style="${PORTAL_LABEL_STYLE}">E-Mail (Pflicht)</label>
+      <input id="offerAcceptedEmail" name="acceptedEmail" required minlength="3" autocomplete="email" type="email" style="${PORTAL_INPUT_STYLE} margin-top:.375rem;" />
     </div>
-  </div>
-  <div style="margin-top:12px; color:#555; font-size:13px;">
-    Mit Klick wird eine Entscheidung gespeichert (einmalig). Das Angebot bleibt danach weiter einsehbar.
   </div>
   <input type="hidden" name="decisionTextVersion" value="v1" />
   <input type="hidden" name="csrfToken" value="${escapeHtml(csrfToken)}" />
-  <div style="display:flex; gap:12px; margin-top: 14px;">
-    <button name="decision" value="accepted" style="cursor:pointer; padding:12px 14px; border-radius:14px; border:1px solid #111; background:#111; color:#fff; font-weight:800;">
-      Angebot annehmen
-    </button>
-    <button name="decision" value="declined" style="cursor:pointer; padding:12px 14px; border-radius:14px; border:1px solid #ddd; background:#fff; color:#111; font-weight:800;">
-      Ablehnen
-    </button>
+  <div style="display:flex; gap:.75rem; margin-top:.875rem; flex-wrap:wrap;">
+    <button name="decision" value="accepted" style="${PORTAL_PRIMARY_BUTTON_STYLE}">Angebot annehmen</button>
+    <button name="decision" value="declined" style="${PORTAL_SECONDARY_BUTTON_STYLE}">Ablehnen</button>
   </div>
+  <p style="margin:.75rem 0 0; color:${PORTAL_TOKENS.muted}; font-size:.8125rem;">Die Entscheidung wird einmalig gespeichert. Das Angebot bleibt danach weiter einsehbar.</p>
 </form>`;
 
-    const html = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; frame-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" />
-    <title>${escapeHtml(title)}</title>
-  </head>
-  <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f3f4f6; margin:0;">
-    <main style="max-width: 980px; margin: 40px auto; padding: 0 16px;">
-      ${renderPortalBranding('Kundenportal')}
-      <div style="display:flex; justify-content:space-between; gap: 12px; flex-wrap:wrap; align-items:flex-end;">
-        <div>
-          <div style="font-size:12px; font-weight:900; letter-spacing: .12em; color:#666; text-transform:uppercase;">Angebot</div>
-          <h1 style="margin:6px 0 0; font-size: 28px; letter-spacing:-.02em;">${escapeHtml(snapshot?.number ?? 'Angebot')}</h1>
-          <div style="margin-top:8px; color:#555;">Kunde: <strong>${escapeHtml(snapshot?.client ?? '')}</strong></div>
-        </div>
-        <div style="padding:14px 16px; border-radius:18px; background:#fff; border:1px solid #e5e7eb;">
-          <div style="font-size:12px; font-weight:900; letter-spacing: .12em; color:#666; text-transform:uppercase;">Status</div>
-          <div style="margin-top:6px; font-size: 16px; font-weight:900;">${escapeHtml(statusText)}</div>
-          <div style="margin-top:4px; font-size: 13px; color:#666;">Veröffentlicht: ${escapeHtml(publishedAt)} · Gültig bis: ${escapeHtml(expiresAt)}</div>
-        </div>
-      </div>
+    return c.html(
+      renderPortalPage({
+        title,
+        contentSecurityPolicy: PORTAL_CSP_WITH_FORM,
+        content: `<div style="display:flex; justify-content:space-between; gap:.75rem; flex-wrap:wrap; align-items:flex-end;">
+  <div>
+    <div style="${PORTAL_LABEL_STYLE}">Angebot</div>
+    <h1 style="margin:.375rem 0 0; font-size:1.5rem; letter-spacing:-.01em;">${escapeHtml(snapshot?.number ?? 'Angebot')}</h1>
+    <div style="margin-top:.5rem; color:${PORTAL_TOKENS.muted};">Kunde: <strong style="color:${PORTAL_TOKENS.foreground};">${escapeHtml(snapshot?.client ?? '')}</strong></div>
+  </div>
+  <div style="${PORTAL_CARD_STYLE} padding:.875rem 1rem;">
+    <div style="${PORTAL_LABEL_STYLE}">Status</div>
+    <div style="margin-top:.375rem; font-size:1rem; font-weight:600; color:${portalStatusColor(statusText)};">${escapeHtml(statusText)}</div>
+    <div style="margin-top:.25rem; font-size:.8125rem; color:${PORTAL_TOKENS.muted};">Veröffentlicht: ${escapeHtml(publishedAt)} · Gültig bis: ${escapeHtml(expiresAt)}</div>
+  </div>
+</div>
 
-      <div style="margin-top: 18px; display:grid; grid-template-columns: 1fr; gap: 16px;">
-        <section style="background:#fff; border:1px solid #e5e7eb; border-radius: 24px; padding: 18px 18px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; gap: 12px; flex-wrap:wrap;">
-            <div style="font-weight: 900;">Zusammenfassung</div>
-            <div style="font-size: 18px; font-weight: 1000; font-variant-numeric: tabular-nums;">
-              ${escapeHtml(formatCurrencyEur(snapshot?.amount))}
-            </div>
-          </div>
-          ${
+<section style="${PORTAL_CARD_STYLE} margin-top:1rem; padding:1.25rem;">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:.75rem; flex-wrap:wrap;">
+    <div style="font-weight:600;">Zusammenfassung</div>
+    <div style="font-size:1.25rem; font-weight:700; font-variant-numeric:tabular-nums;">${escapeHtml(formatCurrencyEur(snapshot?.amount))}</div>
+  </div>
+  ${
             itemsHtml
-              ? `<table style="width:100%; border-collapse:collapse; margin-top: 10px;">
+              ? `<table style="width:100%; border-collapse:collapse; margin-top:.625rem;">
   <thead>
     <tr>
-      <th style="text-align:left; font-size:12px; color:#666; padding: 8px 0; border-bottom: 1px solid #eee;">Position</th>
-      <th style="text-align:right; font-size:12px; color:#666; padding: 8px 0; border-bottom: 1px solid #eee;">Menge</th>
-      <th style="text-align:right; font-size:12px; color:#666; padding: 8px 0; border-bottom: 1px solid #eee;">Summe</th>
+      <th style="text-align:left; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted}; padding:.5rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border};">Position</th>
+      <th style="text-align:right; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted}; padding:.5rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border};">Menge</th>
+      <th style="text-align:right; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted}; padding:.5rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border};">Summe</th>
     </tr>
   </thead>
   <tbody>${itemsHtml}</tbody>
 </table>`
-              : `<div style="margin-top: 10px; color:#666; font-size: 14px;">Details sind in der PDF enthalten.</div>`
+              : `<div style="margin-top:.625rem; color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Die Positionen stehen in der PDF.</div>`
           }
 
-          ${decisionBox}
-          ${actionForm}
-        </section>
+  ${expiredNotice}
+  ${decisionBox}
+  ${actionForm}
+</section>
 
-        ${
-          pdfUrl
-            ? `<section style="background:#fff; border:1px solid #e5e7eb; border-radius: 24px; overflow:hidden;">
-  <div style="display:flex; justify-content:space-between; align-items:center; padding: 14px 16px; border-bottom: 1px solid #eee;">
-    <div style="font-weight:900;">PDF</div>
-    <a href="${escapeHtml(pdfUrl)}" style="text-decoration:none; font-weight:900; color:#111;">PDF herunterladen</a>
+${
+  pdfUrl
+    ? `<section style="${PORTAL_CARD_STYLE} margin-top:1rem; overflow:hidden;">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:.75rem; flex-wrap:wrap; padding:.875rem 1rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">
+    <div style="font-weight:600;">PDF</div>
+    ${expired || decision ? renderPortalActionLink(pdfUrl, 'PDF herunterladen') : renderPortalTextLink(pdfUrl, 'PDF herunterladen')}
   </div>
-  <iframe title="Angebots-PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height: 900px; border:0;"></iframe>
+  <iframe title="Angebots-PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height:900px; border:0;"></iframe>
 </section>`
-            : `<section style="background:#fff; border:1px solid #e5e7eb; border-radius: 24px; padding: 16px;">
-  <div style="font-weight: 900;">PDF</div>
-  <div style="margin-top: 8px; color:#666; font-size: 14px;">Keine PDF verfügbar.</div>
+    : `<section style="${PORTAL_CARD_STYLE} margin-top:1rem; padding:1.25rem;">
+  <div style="font-weight:600;">PDF</div>
+  <div style="margin-top:.5rem; color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Für dieses Angebot liegt keine PDF vor. Bitte wende dich an den Absender, wenn du das Dokument als Datei brauchst.</div>
 </section>`
-        }
-      </div>
+}
 
-      <footer style="margin: 18px 0; color:#666; font-size: 12px;">
-        Angebotsportal · Zugriff per Link · ${escapeHtml(statusText)}
-      </footer>
-    </main>
-  </body>
-</html>`;
-
-    return c.html(html);
+<footer style="margin:1.25rem 0 0; color:${PORTAL_TOKENS.muted}; font-size:.75rem;">
+  Angebotsportal · Zugriff per Link · ${escapeHtml(statusText)}
+</footer>`,
+      }),
+    );
   });
 
   app.get('/invoices/:token', async (c) => {
     applySensitiveResponseHeaders(c);
+    const accept = c.req.header('accept') ?? '';
+    const wantsHtml = accept.includes('text/html') || c.req.query('view') === '1';
     const rl = checkRateLimit(c, 'tokenRead');
     if (!rl.ok) {
       c.header('Retry-After', String(rl.retryAfterSec));
-      return c.json({ error: 'rate_limited' }, 429);
+      return wantsHtml
+        ? c.html(renderPortalErrorPage('rate_limited', { retryHref: c.req.path }), 429)
+        : c.json({ error: 'rate_limited' }, 429);
     }
-    const token = z.object({ token: z.string().min(16) }).parse(c.req.param()).token;
+    const parsedToken = z.object({ token: z.string().min(16) }).safeParse(c.req.param());
+    if (!parsedToken.success) {
+      return wantsHtml ? c.html(renderPortalErrorPage('unknown'), 404) : c.json({ error: 'not found' }, 404);
+    }
+    const token = parsedToken.data.token;
     const rec = await deps.store.getInvoiceByTokenHash(sha256(token));
-    if (!rec) return c.json({ error: 'not found' }, 404);
+    if (!rec) return wantsHtml ? c.html(renderPortalErrorPage('unknown'), 404) : c.json({ error: 'not found' }, 404);
     const document = await deps.store.getDocumentByTokenHash(sha256(token));
     const expired = Date.parse(rec.expiresAt) < Date.now();
 
-    const accept = c.req.header('accept') ?? '';
-    const wantsHtml = accept.includes('text/html') || c.req.query('view') === '1';
     if (!wantsHtml) {
       return c.json({
         publishedAt: rec.publishedAt,
@@ -948,68 +1336,62 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
               const qty = Number.isFinite(Number(it.quantity)) ? Number(it.quantity) : 0;
               const total = formatCurrencyEur(it.total);
               return `<tr>
-  <td style="padding: 10px 0; border-bottom: 1px solid #eee;">${desc}</td>
-  <td style="padding: 10px 0; border-bottom: 1px solid #eee; text-align:right; font-variant-numeric: tabular-nums;">${qty}</td>
-  <td style="padding: 10px 0; border-bottom: 1px solid #eee; text-align:right; font-variant-numeric: tabular-nums;">${total}</td>
+  <td style="padding:.625rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border};">${desc}</td>
+  <td style="padding:.625rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border}; text-align:right; font-variant-numeric:tabular-nums;">${qty}</td>
+  <td style="padding:.625rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border}; text-align:right; font-variant-numeric:tabular-nums;">${total}</td>
 </tr>`;
             })
             .join('\n')
         : '';
 
-    const html = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; frame-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'" />
-    <title>${escapeHtml(snapshot?.number ? `Rechnung ${snapshot.number}` : 'Rechnung')}</title>
-  </head>
-  <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f3f4f6; margin:0;">
-    <main style="max-width: 980px; margin: 40px auto; padding: 0 16px;">
-      ${renderPortalBranding('Kundenportal')}
-      <div style="display:flex; justify-content:space-between; gap: 12px; flex-wrap:wrap; align-items:flex-end;">
-        <div>
-          <div style="font-size:12px; font-weight:900; letter-spacing: .12em; color:#666; text-transform:uppercase;">Rechnung</div>
-          <h1 style="margin:6px 0 0; font-size: 28px; letter-spacing:-.02em;">${escapeHtml(snapshot?.number ?? 'Rechnung')}</h1>
-          <div style="margin-top:8px; color:#555;">Kunde: <strong>${escapeHtml(snapshot?.client ?? '')}</strong></div>
-        </div>
-      </div>
-      <section style="margin-top: 18px; background:#fff; border:1px solid #e5e7eb; border-radius: 24px; padding: 18px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-          <div style="font-weight: 900;">Zusammenfassung</div>
-          <div style="font-size: 18px; font-weight: 1000; font-variant-numeric: tabular-nums;">${escapeHtml(formatCurrencyEur(snapshot?.amount))}</div>
-        </div>
-        ${
-          itemsHtml
-            ? `<table style="width:100%; border-collapse:collapse; margin-top: 10px;">
+    const invoiceTitle = snapshot?.number ? `Rechnung ${snapshot.number}` : 'Rechnung';
+    return c.html(
+      renderPortalPage({
+        title: invoiceTitle,
+        contentSecurityPolicy: PORTAL_CSP_WITH_FORM,
+        content: `<div style="display:flex; justify-content:space-between; gap:.75rem; flex-wrap:wrap; align-items:flex-end;">
+  <div>
+    <div style="${PORTAL_LABEL_STYLE}">Rechnung</div>
+    <h1 style="margin:.375rem 0 0; font-size:1.5rem; letter-spacing:-.01em;">${escapeHtml(snapshot?.number ?? 'Rechnung')}</h1>
+    <div style="margin-top:.5rem; color:${PORTAL_TOKENS.muted};">Kunde: <strong style="color:${PORTAL_TOKENS.foreground};">${escapeHtml(snapshot?.client ?? '')}</strong></div>
+  </div>
+</div>
+<section style="${PORTAL_CARD_STYLE} margin-top:1rem; padding:1.25rem;">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:.75rem; flex-wrap:wrap;">
+    <div style="font-weight:600;">Zusammenfassung</div>
+    <div style="font-size:1.25rem; font-weight:700; font-variant-numeric:tabular-nums;">${escapeHtml(formatCurrencyEur(snapshot?.amount))}</div>
+  </div>
+  ${
+    itemsHtml
+      ? `<table style="width:100%; border-collapse:collapse; margin-top:.625rem;">
   <thead>
     <tr>
-      <th style="text-align:left; font-size:12px; color:#666; padding: 8px 0; border-bottom: 1px solid #eee;">Position</th>
-      <th style="text-align:right; font-size:12px; color:#666; padding: 8px 0; border-bottom: 1px solid #eee;">Menge</th>
-      <th style="text-align:right; font-size:12px; color:#666; padding: 8px 0; border-bottom: 1px solid #eee;">Summe</th>
+      <th style="text-align:left; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted}; padding:.5rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border};">Position</th>
+      <th style="text-align:right; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted}; padding:.5rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border};">Menge</th>
+      <th style="text-align:right; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted}; padding:.5rem 0; border-bottom:1px solid ${PORTAL_TOKENS.border};">Summe</th>
     </tr>
   </thead>
   <tbody>${itemsHtml}</tbody>
 </table>`
-            : `<div style="margin-top: 10px; color:#666; font-size: 14px;">Details sind in der PDF enthalten.</div>`
-        }
-      </section>
-      ${
-        pdfUrl
-          ? `<section style="margin-top:16px; background:#fff; border:1px solid #e5e7eb; border-radius: 24px; overflow:hidden;">
-  <div style="display:flex; justify-content:space-between; align-items:center; padding: 14px 16px; border-bottom: 1px solid #eee;">
-    <div style="font-weight:900;">PDF</div>
-    <a href="${escapeHtml(pdfUrl)}" style="text-decoration:none; font-weight:900; color:#111;">PDF herunterladen</a>
+      : `<div style="margin-top:.625rem; color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Die Positionen stehen in der PDF.</div>`
+  }
+</section>
+${
+  pdfUrl
+    ? `<section style="${PORTAL_CARD_STYLE} margin-top:1rem; overflow:hidden;">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:.75rem; flex-wrap:wrap; padding:.875rem 1rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">
+    <div style="font-weight:600;">PDF</div>
+    ${renderPortalActionLink(pdfUrl, 'PDF herunterladen')}
   </div>
-  <iframe title="Rechnungs-PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height: 900px; border:0;"></iframe>
+  <iframe title="Rechnungs-PDF" src="${escapeHtml(pdfUrl)}" style="width:100%; height:900px; border:0;"></iframe>
 </section>`
-          : ''
-      }
-    </main>
-  </body>
-</html>`;
-
-    return c.html(html);
+    : `<section style="${PORTAL_CARD_STYLE} margin-top:1rem; padding:1.25rem;">
+  <div style="font-weight:600;">PDF</div>
+  <div style="margin-top:.5rem; color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Für diese Rechnung liegt keine PDF vor. Bitte wende dich an den Absender, wenn du das Dokument als Datei brauchst.</div>
+</section>`
+}`,
+      }),
+    );
   });
 
   app.get('/offers/:token/pdf', async (c) => {
@@ -1047,25 +1429,29 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
 
   app.post('/offers/:token/decision', async (c) => {
     applySensitiveResponseHeaders(c);
+    const token = z.object({ token: z.string().min(16) }).parse(c.req.param()).token;
+    const legacyAccept = c.req.header('accept') ?? '';
+    const legacyWantsHtml = legacyAccept.includes('text/html');
+    const legacyError = (condition: PortalDecisionErrorCondition | 'expired', retryHref?: string, status: 403 | 410 = 403) =>
+      legacyWantsHtml ? c.html(renderPortalErrorPage(condition, retryHref ? { retryHref } : undefined), status) : c.json({ error: condition }, status);
     const rl = checkRateLimit(c, 'tokenDecision');
     if (!rl.ok) {
       c.header('Retry-After', String(rl.retryAfterSec));
       return c.json({ error: 'rate_limited' }, 429);
     }
-    const token = z.object({ token: z.string().min(16) }).parse(c.req.param()).token;
     const tokenHash = sha256(token);
     const rec = await deps.store.getOfferByTokenHash(tokenHash);
     if (!rec) return c.json({ error: 'not found' }, 404);
     const document = await deps.store.getDocumentByTokenHash(tokenHash);
 
     const expired = Date.parse(rec.expiresAt) < Date.now();
-    if (expired) return c.json({ error: 'expired' }, 410);
+    if (expired) return legacyError('expired', `/offers/${encodeURIComponent(token)}`, 410);
 
     const contentType = c.req.header('content-type') ?? '';
     const isForm =
       contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data');
     if (!isAllowedDecisionOrigin(c)) {
-      return c.json({ error: 'origin_invalid' }, 403);
+      return legacyError('origin_invalid', `/offers/${encodeURIComponent(token)}`);
     }
     const rawBody = isForm ? await c.req.parseBody() : await c.req.json();
     if (isForm) {
@@ -1073,7 +1459,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
       const csrfCookie = String(cookies.csrfToken ?? '').trim();
       const csrfBody = String((rawBody as any).csrfToken ?? '').trim();
       if (!csrfCookie || !csrfBody || csrfCookie !== csrfBody) {
-        return c.json({ error: 'csrf_invalid' }, 403);
+        return legacyError('csrf_invalid', `/offers/${encodeURIComponent(token)}`);
       }
     }
     const body = decisionSchema.parse({
@@ -1090,9 +1476,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
       decisionTextVersion: body.decisionTextVersion,
     });
 
-    const accept = c.req.header('accept') ?? '';
-    const wantsHtml = accept.includes('text/html');
-    if (wantsHtml) {
+    if (legacyWantsHtml) {
       if (document?.documentId) {
         return c.redirect(`/d/${encodeURIComponent(document.documentId)}`);
       }

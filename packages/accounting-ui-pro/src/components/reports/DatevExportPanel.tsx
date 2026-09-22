@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { FileDown, LockKeyhole } from 'lucide-react';
-import { Button, Input } from '@billme/ui';
+import { Button, EMPTY_VALUE, Input } from '@billme/ui';
 import type { DatevExportResult, ProAccountingDataAdapter } from '../../services/mockBookingStore';
 import { permissionContextForRole } from '../../mocks/users';
 import type { UserRole } from '../../types';
@@ -56,7 +56,7 @@ function validate(values: DatevExportValues) {
 }
 
 function formatDate(value?: string) {
-  if (!value) return '—';
+  if (!value) return EMPTY_VALUE;
   return new Intl.DateTimeFormat('de-DE').format(new Date(`${value}T00:00:00`));
 }
 
@@ -190,7 +190,7 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
             <select
               value={values.encoding}
               onChange={(event) => update('encoding', event.target.value as DatevEncoding)}
-              className="mt-2 block w-full rounded-xl border border-border bg-surface-muted px-4 py-3 text-sm outline-none transition focus:border-accent focus:ring-2 focus:ring-accent"
+              className="mt-2 block w-full rounded-xl border border-control-border bg-surface-muted px-4 py-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <option value="cp1252">CP1252 (DATEV)</option>
               <option value="utf8-bom">UTF-8 mit BOM</option>
@@ -199,9 +199,9 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
         </div>
 
         {validationError && canExport ? <p className="text-xs text-muted">{validationError}</p> : null}
-        {error ? <div className="rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">{error}</div> : null}
+        {error ? <div className="rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">{error}</div> : null}
         {success ? (
-          <div className="rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success" role="status" aria-live="polite">
+          <div className="rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text" role="status" aria-live="polite">
             DATEV-Datei heruntergeladen · Serverbeleg <span className="break-all font-mono text-xs">{success.id}</span> · {success.recordCount} {success.recordCount === 1 ? 'Buchung' : 'Buchungen'}.
             {success.sha256 ? <span className="mt-1 block break-all font-mono text-xs">SHA-256: {success.sha256}</span> : null}
           </div>
@@ -220,7 +220,7 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
           {loadingHistory ? <span className="text-xs text-muted" aria-live="polite">Lade Verlauf…</span> : null}
         </div>
         {historyError ? (
-          <div className="mt-2 flex flex-wrap items-center gap-3 rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error" role="alert" aria-live="assertive">
+          <div className="mt-2 flex flex-wrap items-center gap-3 rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">
             <span>{historyError}</span>
             <Button type="button" size="sm" variant="secondary" onClick={() => void loadHistory()} disabled={loadingHistory} aria-busy={loadingHistory}>
               {loadingHistory ? 'Lade Verlauf…' : 'Erneut laden'}

@@ -12,11 +12,9 @@ export const Spinner = ({ size = 'md', className = '' }: SpinnerProps) => {
 
   return (
     <div
-      className={`${sizeClasses[size]} border-gray-200 border-t-gray-800 rounded-full animate-spin ${className}`}
+      className={`${sizeClasses[size]} border-border border-t-foreground rounded-full motion-safe:animate-spin motion-reduce:animate-none ${className}`}
       role="status"
       aria-label="Lädt..."
-    >
-      <span className="sr-only">Lädt...</span>
-    </div>
+    />
   );
 };

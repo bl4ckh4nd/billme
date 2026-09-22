@@ -196,7 +196,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
           try {
             moveable.dragStart(e.inputEvent);
           } catch {
-            /* target not ready — ignore */
+            /* target not ready, ignore */
           }
         });
       });
@@ -219,14 +219,16 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
         >
           <GridOverlay enabled={grid.enabled} size={grid.size} width={pageW} height={pageH} />
 
-          {/* DIN 5008 zone hints */}
+          {/* DIN 5008 zone hints: alignment guides, not errors, so they read as neutral outlines.
+              Kept at 10px: the label sits inside the guide on the scaled page and 12px collides
+              with the guide edges at low zoom. */}
           {dinZones.map((zone, i) => (
             <div
               key={i}
-              className="absolute border border-dashed border-error/40 pointer-events-none opacity-15 hover:opacity-60 transition-opacity"
+              className="absolute border border-dashed border-muted/50 pointer-events-none opacity-15 hover:opacity-60 motion-safe:transition-opacity motion-reduce:transition-none"
               style={{ left: zone.x, top: zone.y, width: zone.width, height: zone.height }}
             >
-              <span className="text-[8px] text-error absolute top-0.5 left-1">{zone.label}</span>
+              <span className="text-[10px] text-muted absolute top-0.5 left-1">{zone.label}</span>
             </div>
           ))}
 
@@ -242,6 +244,13 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
               className={el.locked || el.hidden ? undefined : 'designer-element'}
               onDoubleClick={() => {
                 if (!el.locked && el.type === ElementType.TEXT) onEditingChange(el.id);
+              }}
+              onKeySelect={(id, additive) => {
+                if (additive) {
+                  onSelectionChange(selectedIds.includes(id) ? selectedIds.filter((current) => current !== id) : [...selectedIds, id]);
+                } else {
+                  onSelectionChange([id]);
+                }
               }}
             />
           ))}

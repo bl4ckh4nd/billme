@@ -49,14 +49,6 @@ export function useZoomPan(
   const spaceRef = useRef(false);
   const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
 
-  const viewportPoint = useCallback(
-    (clientX: number, clientY: number) => {
-      const rect = viewportRef.current?.getBoundingClientRect();
-      return { x: clientX - (rect?.left ?? 0), y: clientY - (rect?.top ?? 0) };
-    },
-    [viewportRef],
-  );
-
   const zoomTo = useCallback(
     (next: number, anchor?: { clientX: number; clientY: number }) => {
       const target = clamp(next, MIN_ZOOM, MAX_ZOOM);

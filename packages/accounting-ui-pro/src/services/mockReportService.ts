@@ -19,6 +19,17 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+/**
+ * Demo harness. This module only serves the local Demo-Datensatz: every report
+ * it returns keeps or is stamped with `quality.source = 'mock'`, and the views
+ * label that source as Beispieldaten next to the figures. The comparison and
+ * period figures below scale that same mock base, so they are Beispieldaten and
+ * never measured numbers. Live adapters never call these helpers: ReportsView
+ * fails closed with "nicht verfügbar" when an adapter method is missing instead
+ * of falling back to a scaled mock.
+ */
+const MOCK_SOURCE = 'mock' as const;
+
 function compareMultiplier(compareMode: ReportFilterState['compareMode']) {
   if (compareMode === 'prev_period') return 0.94;
   if (compareMode === 'prev_year') return 0.86;
@@ -46,7 +57,7 @@ function scaledReport(report: GuvReport, multiplier: number): GuvReport {
       expenses: Math.round(report.totals.expenses * multiplier * 100) / 100,
       result: Math.round(report.totals.result * multiplier * 100) / 100,
     },
-    quality: { ...report.quality, generatedAt: new Date().toISOString() },
+    quality: { ...report.quality, generatedAt: new Date().toISOString(), source: MOCK_SOURCE },
   };
 }
 
@@ -66,6 +77,8 @@ export async function getSusaReport(filters: ReportFilterState): Promise<SusaRep
     .filter((row) => filters.chart === 'SKR03' || row.accountNumber !== '9000');
 
   report.quality.generatedAt = new Date().toISOString();
+  // Turnover is derived from the drafts switch, so the rows are Beispieldaten too.
+  report.quality.source = MOCK_SOURCE;
   report.quality.warnings = report.rows.filter((r) => r.hasWarnings).length;
   report.quality.unmappedAccounts = report.rows.filter((r) => !r.mappedTo).length;
   report.totals = calculateSusaTotals(report.rows);
@@ -111,6 +124,7 @@ export async function getGuvReport(filters: ReportFilterState): Promise<GuvRepor
     result: flatten.find((l) => l.id === 'guv-8')?.amountCurrent ?? 0,
   };
   report.quality.generatedAt = new Date().toISOString();
+  report.quality.source = MOCK_SOURCE;
   return report;
 }
 
@@ -153,6 +167,7 @@ export async function getBalanceSheetPreview(filters: ReportFilterState): Promis
     report.quality.status = 'ok';
   }
   report.quality.generatedAt = new Date().toISOString();
+  report.quality.source = MOCK_SOURCE;
   return report;
 }
 

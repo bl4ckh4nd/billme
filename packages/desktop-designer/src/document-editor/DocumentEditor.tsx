@@ -521,7 +521,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const firstValidationError = validationErrors[0]?.message;
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-canvas">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-surface">
       <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-surface px-3 sm:px-5">
         <button type="button" onClick={handleCancel} className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-muted hover:bg-surface-muted hover:text-foreground" aria-label="Zurück">
           <ArrowLeft size={16} /> <span className="hidden sm:inline">Zurück</span>
@@ -544,7 +544,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
       {saveError && validationErrors.length === 0 ? <div className="mx-auto mt-3 w-full max-w-[900px] rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm font-medium text-error" role="alert" aria-live="assertive">{saveError}</div> : null}
       {validationErrors.length > 0 ? <div className="mx-auto mt-3 w-full max-w-[900px]"><ValidationSummary title="Bitte korrigiere die markierten Pflichtfelder." errors={validationErrors.map(({ id, message }) => ({ id, message }))} onJump={focusValidationField} /></div> : null}
 
-      <main className="flex-1 overflow-auto bg-editor-viewport p-4 sm:p-8">
+      <main className="flex-1 overflow-auto bg-dark-1 p-4 sm:p-8">
         {view === 'preview' ? (
           <div className="mx-auto w-fit min-w-[min(100%,794px)]" data-document-preview data-testid="document-preview">
             <DocumentCanvasEditor elements={previewElements} />

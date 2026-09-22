@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shouldShowBusinessOnboarding } from '@billme/ui';
+import { shouldShowBusinessOnboarding } from '@billme/desktop-ui';
 import { MOCK_SETTINGS } from '../data/mockData';
 
 describe('shouldShowBusinessOnboarding', () => {
@@ -36,5 +36,19 @@ describe('shouldShowBusinessOnboarding', () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it('shows a saved draft even after the company name was entered', () => {
+    expect(
+      shouldShowBusinessOnboarding({
+        ...MOCK_SETTINGS,
+        onboardingCompleted: false,
+        onboardingDraftSaved: true,
+        company: {
+          ...MOCK_SETTINGS.company,
+          name: 'Begonnener Entwurf',
+        },
+      }),
+    ).toBe(true);
   });
 });

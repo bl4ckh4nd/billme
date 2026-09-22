@@ -60,7 +60,7 @@ const ToolButton: React.FC<{
     title={title}
     aria-label={title}
     disabled={disabled}
-    className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+    className={`flex h-8 w-8 items-center justify-center rounded-sm motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark disabled:opacity-30 disabled:cursor-not-allowed ${
       active ? 'bg-accent text-black' : 'text-dark-muted hover:bg-dark-2 hover:text-white'
     }`}
   >
@@ -106,13 +106,13 @@ export const TopBar: React.FC<TopBarProps> = ({
       <button
         onClick={onBack}
         title="Zurück zur Übersicht"
-        className="flex h-8 w-8 items-center justify-center rounded-lg text-dark-muted hover:bg-dark-2 hover:text-white transition-colors"
+        className="flex h-8 w-8 items-center justify-center rounded-sm text-dark-muted hover:bg-dark-2 hover:text-white motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
       >
         <ArrowLeft size={16} />
       </button>
       <span
-        className={`hidden md:inline rounded px-2 py-1 text-[10px] font-bold uppercase tracking-widest ${
-          templateType === 'offer' ? 'bg-purple-900 text-purple-200' : 'bg-dark-2 text-dark-muted'
+        className={`hidden md:inline rounded-sm px-2 py-1 text-xs font-bold uppercase tracking-widest ${
+          templateType === 'offer' ? 'bg-accent text-accent-foreground' : 'bg-dark-2 text-dark-muted'
         }`}
       >
         {templateType === 'offer' ? 'Angebot' : 'Rechnung'}
@@ -121,7 +121,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         value={templateName}
         onChange={(e) => onRenameTemplate(e.target.value)}
         placeholder={templateType === 'offer' ? 'Angebotsvorlage' : 'Rechnungsvorlage'}
-        className="w-40 lg:w-56 rounded-lg border border-transparent bg-dark-2 px-3 py-1.5 text-sm font-semibold text-white outline-none transition-colors placeholder-gray-600 hover:border-dark-border-subtle focus:border-accent"
+        className="w-40 lg:w-56 rounded-sm border border-dark-border-subtle bg-dark-2 px-3 py-1.5 text-sm font-semibold text-white motion-safe:transition-colors motion-reduce:transition-none placeholder:text-dark-muted hover:border-dark-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
       />
 
       <Divider />
@@ -143,7 +143,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       <button
         onClick={onReset}
         title="Auf 100% zurücksetzen (Strg+0)"
-        className="h-8 min-w-14 rounded-lg px-1 text-xs font-mono font-semibold text-white hover:bg-dark-2 transition-colors tabular-nums"
+        className="h-8 min-w-14 rounded-sm px-1 text-xs font-semibold text-white tabular-nums motion-safe:transition-colors motion-reduce:transition-none hover:bg-dark-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
       >
         {Math.round(zoom * 100)}%
       </button>
@@ -161,7 +161,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           e.currentTarget.value = '';
         }}
         title="Zoom-Voreinstellung"
-        className="h-8 rounded-lg border border-dark-border-subtle bg-dark-2 px-1 text-xs text-dark-muted outline-none hover:border-dark-border focus:border-accent"
+        className="h-8 rounded-sm border border-dark-border-subtle bg-dark-2 px-1 text-xs text-dark-muted hover:border-dark-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
       >
         <option value="">Zoom…</option>
         <option value="0.25">25%</option>
@@ -183,7 +183,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           value={gridMm}
           onChange={(e) => onGridSize(Number(e.target.value) * mmToPx)}
           title="Rastergröße"
-          className="h-8 rounded-lg border border-dark-border-subtle bg-dark-2 px-1 text-xs text-dark-muted outline-none hover:border-dark-border focus:border-accent"
+          className="h-8 rounded-sm border border-dark-border-subtle bg-dark-2 px-1 text-xs text-dark-muted hover:border-dark-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
         >
           <option value={2.5}>2,5 mm</option>
           <option value={5}>5 mm</option>
@@ -199,15 +199,15 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           onClick={onLegalCheck}
           title="DIN & Pflichtangaben prüfen"
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-dark-border-subtle bg-dark-2 px-3 text-xs font-bold text-dark-muted hover:border-dark-border hover:text-white transition-colors"
+          className="flex h-8 items-center gap-1.5 rounded-lg border border-dark-border-subtle bg-dark-2 px-3 text-xs font-bold text-dark-muted hover:border-dark-border hover:text-white motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
         >
-          <ShieldCheck size={14} className="text-success" />
+          <ShieldCheck size={14} className="text-success-text" />
           <span className="hidden lg:inline">Rechts-Check</span>
         </button>
         <button
           onClick={onExport}
           title="Als PDF exportieren"
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-dark-border-subtle bg-dark-2 px-3 text-xs font-bold text-dark-muted hover:border-dark-border hover:text-white transition-colors"
+          className="flex h-8 items-center gap-1.5 rounded-lg border border-dark-border-subtle bg-dark-2 px-3 text-xs font-bold text-dark-muted hover:border-dark-border hover:text-white motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
         >
           <Printer size={14} />
           <span className="hidden lg:inline">PDF</span>
@@ -218,7 +218,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           onClick={onSave}
           disabled={saving}
-          className="flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-bold text-black hover:bg-accent-hover transition-transform active:scale-95 disabled:opacity-50"
+          className="flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-bold text-black hover:bg-accent-hover motion-safe:transition-transform motion-safe:active:scale-95 motion-reduce:transition-none disabled:opacity-50"
         >
           <Save size={14} />
           Speichern

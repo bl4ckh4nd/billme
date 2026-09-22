@@ -14,17 +14,17 @@ export default function IssueBadges({ transaction }: IssueBadgesProps) {
   return (
     <div className="flex flex-wrap gap-1 justify-end">
       {issueCounts.errors > 0 && (
-        <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-error-bg text-error">
+        <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-error-bg text-error-text">
           {issueCounts.errors} Fehler
         </span>
       )}
       {issueCounts.warnings > 0 && (
-        <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-warning-bg text-warning">
+        <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-warning-bg text-warning-text">
           {issueCounts.warnings} Warn.
         </span>
       )}
       {flags.slice(0, 2).map((flag) => (
-        <span key={flag} className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-border-subtle text-foreground">
+        <span key={flag} className="px-2 py-0.5 rounded-full text-xs font-bold bg-border-subtle text-foreground">
           {getFlagLabel(flag)}
         </span>
       ))}

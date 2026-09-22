@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Das Firmen-Onboarding liegt jetzt in `@billme/desktop-ui`, trennt Lite und Pro sichtbar, führt schrittweise durch die Abrechnung, erklärt Buchhaltungsbegriffe, akzeptiert deutsche Dezimalwerte und kann Entwürfe zum späteren Fortsetzen speichern.
+- Die Oberflächen von Lite, Pro, Browser-Shells, Demo, Portal und Landingpage folgen jetzt durchgängig den Design-Tokens: keine grauen Standardfarben oder rohen Hex-Werte mehr, Radien aus der Skala, Beträge in Inter mit `tabular-nums`, kein Deko-Glow, keine Farbverläufe als Standardfläche und keine dekorativen Einblend-Animationen. Ein neues Skript `pnpm check:design-tokens` hält das in der CI fest.
+- Einstellungen, Beleg-Editor und Dashboards zeigen nie mehr erfundene Firmendaten: der `MOCK_SETTINGS`-Fallback ist entfernt, die betroffenen Ansichten haben Lade- und Fehlerzustände, und der Beleg rendert Absender, Bankverbindung und Steuernummer nur noch aus echten Einstellungen.
+- Überlagerungen (Dialoge, Popover, Toasts) laufen über die gemeinsame `Modal`-Primitive mit Fokusfalle, Escape und Layer-Tokens; klickbare Zeilen und Karten sind echte Schaltflächen, und die Texte erreichen AA-Kontrast, inklusive Fokusindikator und Steuerelementkanten.
+- Das öffentliche Angebotsportal hat gestaltete Fehlerseiten (unbekannt, widerrufen, abgelaufen), eine Startseite, `lang="de"`, die Marken-Akzentfarbe für die Hauptaktion und eine Tabelle, die bei 320 px horizontal scrollt.
+- Die Marketing-Seite hat Impressum und Datenschutz, einen Beispieldaten-Hinweis am Screenshot, eine sichtbare FAQ-Aufklappmarke und einen Fokusring in der richtigen Farbe; der Demo-Build kennzeichnet sich sichtbar als Beispieldaten-Demo.
+- Die Lite- und Pro-Shell teilt sich jetzt sechs zuvor doppelte Komponenten in `@billme/desktop-ui`; der tote Designer-Legacy-Ordner und seine acht Re-Export-Shims sind entfernt.
 - Pro-Korrekturüberbuchungen liefern wieder einen typisierten, auditierten Ablehnungsstatus; die zugehörigen Accounting- und Browser-Abnahmetests folgen den aktuellen Unveränderlichkeits-, Steuer- und Formularverträgen.
 - Die Linux-CI stellt die native Keychain-Laufzeit, das explizit vorbereitete Electron-Binary und Xvfb für Desktop-Abnahmetests bereit und führt root-level Node-Testdateien mit einem Node-20-kompatiblen Muster aus, sodass die vollständigen Server-, Worker-, Demo- und Migrationsprüfungen nicht mehr vorzeitig abbrechen.
 - Deaktivierte Auswahlfelder übernehmen extern zurückgesetzte Werte sofort; beim Wechsel auf einen freien Belegempfänger bleibt dadurch kein zuvor gewähltes Projekt sichtbar.
@@ -31,6 +38,7 @@
 - Formularvalidierung zeigt jetzt feldbezogene, anklickbare Fehlerzusammenfassungen, fokussiert und zentriert das erste fehlerhafte Feld und kennzeichnet Pflichtfelder in Kunden-, OPOS-, Onboarding- und Dokumenteditor-Formularen sichtbar und barrierefrei; im WYSIWYG-Belegeditor erhalten fehlerhafte rahmenlose Felder eine sichtbare Fehlerkante, und „Erneut versuchen“ erscheint in OPOS nur noch bei Ladefehlern.
 
 - Native confirmations now use a shared accessible dialog, while client/article/subscription/account deletes optimistically hide rows with an eight-second undo window and deferred commit; action errors and import/status feedback use scoped toasts.
+- Dokumentänderungen, Import-Rollbacks und Buchungsstornos erfassen ihre Begründung jetzt über den gemeinsamen ConfirmDialog; Buchungsstornos zeigen Betrag, Konten und Soll/Haben-Seiten vor der Ausführung.
 - Pro-Buchhaltungsansichten zeigen jetzt immer nur die zuletzt erzeugte Erfolgs- oder Fehlermeldung; Steuerexportfehler blenden veraltete Vorbereitungsstatus aus.
 - Desktop-Aktionsmeldungen laufen jetzt über einen gemeinsamen, scope-basierten Feedback-Stack mit Fortschrittsstatus und optionaler Aktion.
 - Lite- und Pro-Dialoge für den GoBD-Änderungsgrund werden jetzt per Body-Portal viewportweit bedienbar gerendert und verwenden den einheitlichen Overlay-Backdrop.

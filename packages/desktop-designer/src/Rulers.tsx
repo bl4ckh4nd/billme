@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 export const RULER_SIZE = 24; // px thickness
 
@@ -34,7 +34,7 @@ function buildTicks(panOffset: number, zoom: number, mmToPx: number, length: num
 /**
  * Figma-style mm rulers that track zoom + pan. Self-contained: it observes the
  * viewport size and pointer itself, so moving the mouse only re-renders the
- * rulers — never the whole designer tree.
+ * rulers, never the whole designer tree.
  */
 export const Rulers: React.FC<RulersProps> = ({ zoom, pan, mmToPx, viewportRef }) => {
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -79,7 +79,8 @@ export const Rulers: React.FC<RulersProps> = ({ zoom, pan, mmToPx, viewportRef }
         {topTicks.map((t) => (
           <div key={t.mm} className="absolute top-0 h-full" style={{ left: t.pos - RULER_SIZE }}>
             <div className="absolute bottom-0 w-px h-1.5 bg-dark-muted" />
-            <span className="absolute top-0.5 left-1 text-[9px] leading-none text-dark-muted tabular-nums">{t.mm}</span>
+            {/* 10px: the ruler band is 24px tall and a 12px label clips against the tick marks. */}
+            <span className="absolute top-0.5 left-1 text-[10px] leading-none text-dark-muted tabular-nums">{t.mm}</span>
           </div>
         ))}
         {pointer && pointer.x >= RULER_SIZE && (
@@ -95,8 +96,9 @@ export const Rulers: React.FC<RulersProps> = ({ zoom, pan, mmToPx, viewportRef }
         {leftTicks.map((t) => (
           <div key={t.mm} className="absolute left-0 w-full" style={{ top: t.pos - RULER_SIZE }}>
             <div className="absolute right-0 h-px w-1.5 bg-dark-muted" />
+            {/* 10px: same 24px band as the top ruler, with the label rotated. */}
             <span
-              className="absolute left-0.5 top-0.5 text-[9px] leading-none text-dark-muted tabular-nums"
+              className="absolute left-0.5 top-0.5 text-[10px] leading-none text-dark-muted tabular-nums"
               style={{ writingMode: 'vertical-rl' }}
             >
               {t.mm}

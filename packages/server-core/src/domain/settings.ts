@@ -8,7 +8,7 @@ const isValidMonthDay = (value: string): boolean => {
 export const businessReportingProfileSchema = z
   .object({
     jurisdiction: z.literal('DE'),
-    legalForm: z.enum(['sole_proprietor', 'gmbh']),
+    legalForm: z.enum(['sole_proprietor', 'gmbh', 'ug', 'gbr', 'ek']),
     profitDetermination: z.enum(['eur', 'double_entry']),
     hgbSizeClass: z.enum(['micro', 'small']).optional(),
     fiscalYearStart: z.string()
@@ -25,14 +25,14 @@ export const businessReportingProfileSchema = z
         message: 'EÜR requires a calendar-year start (01-01)',
       });
     }
-    if (profile.legalForm === 'sole_proprietor' && profile.profitDetermination !== 'eur') {
+    if (['sole_proprietor', 'gbr', 'ek'].includes(profile.legalForm) && profile.profitDetermination !== 'eur') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['profitDetermination'],
         message: 'Sole proprietors require EÜR (cash-basis accounting)',
       });
     }
-    if (profile.legalForm !== 'gmbh') return;
+    if (profile.legalForm !== 'gmbh' && profile.legalForm !== 'ug') return;
     if (profile.profitDetermination !== 'double_entry') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

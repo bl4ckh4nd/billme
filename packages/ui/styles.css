@@ -27,26 +27,49 @@
   --color-foreground: #0b0b0b;
   --color-surface: #ffffff;
   --color-surface-muted: #f9fafb;
-  --color-muted: #6b7280;
+  /* App shell ground. The app sits on a slightly recessed grey so white cards
+     read as surfaces; #f3f4f6 is the value the desktop shells already used as
+     raw hex, now named. 1.1:1 against white, so it separates surfaces without
+     competing with the accent. */
+  --color-surface-sunken: #f3f4f6;
+  /* Secondary copy. #676d75 instead of #6b7280 so text-muted clears 4.5:1 on
+     all three light grounds (white 5.22:1, surface-muted 5.00:1, sunken 4.75:1);
+     #6b7280 failed on sunken at 4.39:1. */
+  --color-muted: #676d75;
   --color-border: #e5e7eb;
   --color-border-subtle: #f3f4f6;
+  /* Boundary of interactive controls (input, select, textarea, checkbox).
+     --color-border is 1.24:1 against white and cannot carry a control outline,
+     so controls use this instead: 3.41:1 on white, 3.26:1 on surface-muted,
+     3.10:1 on sunken, meeting the 3:1 non-text requirement. */
+  --color-control-border: #8b8b8b;
+
+  /* Interaction States */
+  --color-focus-ring: #0b0b0b;
+  --color-focus-ring-dark: #d9f944;
+  --color-disabled-foreground: #4b5563;
+  --color-disabled-surface: #e5e7eb;
 
   /* Semantic Colors */
   --color-success: #22c55e;
   --color-success-bg: #f0fdf4;
   --color-success-border: #bbf7d0;
+  --color-success-text: #15803d;
 
   --color-warning: #f59e0b;
   --color-warning-bg: #fef3c7;
   --color-warning-border: #fde68a;
+  --color-warning-text: #92400e;
 
   --color-error: #dc2626;
   --color-error-bg: #fef2f2;
   --color-error-border: #fecaca;
+  --color-error-text: #b91c1c;
 
   --color-info: #3b82f6;
   --color-info-bg: #eff6ff;
   --color-info-border: #bfdbfe;
+  --color-info-text: #1d4ed8;
 
   /* Invoice Status Colors */
   --color-status-paid: #d9f944;
@@ -54,13 +77,21 @@
 
   --color-status-open: #ffffff;
   --color-status-open-text: #000000;
-  --color-status-open-border: #e5e7eb;
+  --color-status-open-border: #6b7280;
 
   --color-status-overdue: #fef2f2;
-  --color-status-overdue-text: #dc2626;
+  --color-status-overdue-text: #b91c1c;
 
   --color-status-draft: #f3f4f6;
-  --color-status-draft-text: #6b7280;
+  --color-status-draft-text: #4b5563;
+  --color-status-draft-border: #6b7280;
+
+  --color-status-cancelled-border: #6b7280;
+
+  /* Layering */
+  --z-dropdown: 30;
+  --z-overlay: 40;
+  --z-toast: 50;
 
   /* Border Radius */
   --radius-sm: 0.5rem;
@@ -76,10 +107,128 @@
     height: 100%;
   }
 
+  /* Light-only product. Declaring the scheme stops the OS from rendering native
+     controls and scrollbars dark inside a light shell, and keeps the partial
+     `prefers-color-scheme` overrides that used to leak into the app from
+     activating. */
+  html {
+    color-scheme: light;
+  }
+
   body {
     background: var(--color-background);
     color: var(--color-foreground);
     font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
+  }
+
+  /* Motion policy: MOTION 1 means interaction feedback only (hover, focus,
+     loading) plus origin-aware enter for overlays/popovers/toasts.
+     Duration scale: micro 150ms (buttons, chevrons, day cells), overlay 200ms
+     (popovers, modals, toasts), progress 200ms. Easing: strong ease-out
+     (.ease-premium). Every transition must carry its own motion-reduce: guard;
+     the global kill-switch below is the backstop, not the contract. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Shell chrome shared by the desktop apps, the browser shells and the editor.
+     These live here rather than in each app's index.html, so they exist in
+     every shell and in print output. */
+  .a4-canvas {
+    width: 210mm;
+    height: 297mm;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .mask-linear-fade {
+    mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent);
+  }
+
+  .ease-premium {
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* Shared press feedback for raw buttons outside the Button primitive:
+     160ms strong ease-out, scale 0.97 per Emil 0.95-0.98 band. */
+  .ui-press {
+    transition: none;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .ui-press {
+      transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+  }
+  .ui-press:active {
+    transform: scale(0.97);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ui-press:active {
+      transform: none;
+    }
+  }
+
+  /* Touch devices fire :hover on tap with sticky false positives. Decorative
+     reveals ride this helper: hidden until hover-capable hover or focus. */
+  .ui-reveal {
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .ui-reveal {
+      transition: opacity 150ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+  }
+  .ui-reveal:focus-within {
+    opacity: 1;
+  }
+  *:focus-visible + .ui-reveal,
+  .ui-reveal:has(:focus-visible) {
+    opacity: 1;
+  }
+  @media (hover: none), (pointer: coarse) {
+    .ui-reveal {
+      opacity: 1;
+    }
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .group:hover .ui-reveal {
+      opacity: 1;
+    }
+  }
+
+  @media print {
+    @page {
+      size: A4;
+      margin: 0;
+    }
+    body {
+      background: white;
+    }
+    .no-print {
+      display: none !important;
+    }
+    .print-area {
+      box-shadow: none !important;
+      margin: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+    }
   }
 }

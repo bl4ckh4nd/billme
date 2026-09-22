@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, FileSearch, RefreshCw } from 'lucide-react';
+import { formatEmptyValue } from '@billme/ui';
 import { getFlagLabel, getStatusPresentation } from '../domain/selectors';
 import {
   assignExceptionOwner,
@@ -112,7 +113,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
               <button
                 key={key}
                 onClick={() => setFilter(key)}
-                className={`h-7 px-2.5 rounded-full text-xs font-bold border ${
+                className={`h-7 px-2.5 rounded-lg text-xs font-bold border ${
                   filter === key ? 'bg-dark-base text-background border-dark-base' : 'bg-surface text-muted border-border'
                 }`}
               >
@@ -132,34 +133,34 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="font-bold text-foreground truncate">{tx.payee}</div>
-                <span className={`px-2 py-1 rounded-full text-[11px] font-bold ${getStatusPresentation(tx.workflowStatus).className}`}>
+                <span className={`px-2 py-1 rounded-full text-xs font-bold ${getStatusPresentation(tx.workflowStatus).className}`}>
                   {getStatusPresentation(tx.workflowStatus).label}
                 </span>
               </div>
               <div className="text-xs text-muted mt-1 truncate">{tx.description}</div>
               <div className="mt-2 flex flex-wrap gap-1">
                 {tx.issueCounts.errors > 0 && (
-                  <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-error-bg text-error">
+                  <span className="px-2 py-0.5 rounded-full border border-error-text bg-error-bg text-error-text text-xs font-bold">
                     {tx.issueCounts.errors} Fehler
                   </span>
                 )}
                 {tx.issueCounts.warnings > 0 && (
-                  <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-warning-bg text-warning">
+                  <span className="px-2 py-0.5 rounded-full border border-warning-text bg-warning-bg text-warning-text text-xs font-bold">
                     {tx.issueCounts.warnings} Warnungen
                   </span>
                 )}
                 {tx.flags.map((flag) => (
-                  <span key={flag} className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-border-subtle text-foreground">
+                  <span key={flag} className="px-2 py-0.5 rounded-full border border-border bg-border-subtle text-foreground text-xs font-bold">
                     {getFlagLabel(flag)}
                   </span>
                 ))}
                 {tx.exceptionCase?.state && (
-                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                  <span className={`px-2 py-0.5 rounded-full border text-xs font-bold ${
                     tx.exceptionCase.state === 'resolved'
-                      ? 'bg-success-bg text-success'
+                      ? 'border-success-text bg-success-bg text-success-text'
                       : tx.exceptionCase.state === 'snoozed'
-                        ? 'bg-info-bg text-info'
-                        : 'bg-border-subtle text-foreground'
+                        ? 'border-info-text bg-info-bg text-info-text'
+                        : 'border-border bg-border-subtle text-foreground'
                   }`}>
                     {exceptionStateLabels[tx.exceptionCase.state]}
                   </span>
@@ -190,7 +191,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                   </div>
                   <button
                     onClick={() => onOpenTransaction(selectedTx.id)}
-                    className="px-4 py-2 rounded-full bg-dark-base text-background text-sm font-bold hover:bg-dark-2"
+                    className="px-4 py-2 rounded-lg bg-dark-base text-background text-sm font-bold hover:bg-dark-2"
                   >
                     Im Editor öffnen
                   </button>
@@ -200,9 +201,9 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
               <div className="border border-border rounded-2xl bg-surface p-5">
                 <div className="text-sm font-bold text-foreground mb-2">Validierungsdetails</div>
                 {selectedDraft.validationIssues.length === 0 && !hasActiveExceptionMarkers ? (
-                  <div className="text-sm text-success">Keine aktiven Validierungsprobleme.</div>
+                  <div className="text-sm text-success-text">Keine aktiven Validierungsprobleme.</div>
                 ) : selectedDraft.validationIssues.length === 0 ? (
-                  <div className="text-sm text-warning" role="status">
+                  <div className="text-sm text-warning-text" role="status">
                     Aktive Hinweise: {exceptionMarkers.join(', ')}
                   </div>
                 ) : (
@@ -211,6 +212,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                       <li key={issue.id} className="border border-subtle rounded-lg p-3">
                         <div className="flex items-center gap-2">
                           <span
+                            aria-hidden="true"
                             className={`inline-block h-2 w-2 rounded-full ${
                               issue.severity === 'error'
                                 ? 'bg-error'
@@ -219,9 +221,18 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                                   : 'bg-muted'
                             }`}
                           />
+                          <span className={`text-xs font-bold ${
+                            issue.severity === 'error'
+                              ? 'text-error-text'
+                              : issue.severity === 'warning'
+                                ? 'text-warning-text'
+                                : 'text-muted'
+                          }`}>
+                            {issue.severity === 'error' ? 'Fehler' : issue.severity === 'warning' ? 'Warnung' : 'Hinweis'}
+                          </span>
                           <span className="text-sm font-bold text-foreground">{issue.code}</span>
                           {issue.blocking && (
-                            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-error-bg text-error">
+                            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-error-bg text-error-text">
                               Blocker
                             </span>
                           )}
@@ -241,7 +252,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => onOpenTransaction(selectedTx.id)}
-                    className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
+                    className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
                   >
                     <FileSearch size={14} /> Prüfen
                   </button>
@@ -257,13 +268,13 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         }
                       })();
                     }}
-                    className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted"
+                    className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted"
                   >
                     Beleg anfordern
                   </button>
                   <button
                     onClick={() => onRefresh()}
-                    className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
+                    className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
                   >
                     <RefreshCw size={14} /> Neu bewerten
                   </button>
@@ -273,7 +284,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
               <div className="border border-border rounded-2xl bg-surface p-5">
                 <div className="text-sm font-bold text-foreground mb-3">Ausnahme bearbeiten</div>
                 {!canMutateExceptions && <div className="mb-3 text-sm text-muted" role="status">Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.</div>}
-                {mutationError && <div className="mb-3 text-sm text-error" role="alert" aria-live="assertive">{mutationError}</div>}
+                {mutationError && <div className="mb-3 text-sm text-error-text" role="alert" aria-live="assertive">{mutationError}</div>}
                 <fieldset disabled={!canMutateExceptions} className="space-y-3">
                 <div className="space-y-3">
                   <div>
@@ -285,7 +296,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         type="text"
                         value={ownerDraft}
                         onChange={(e) => setOwnerDraft(e.target.value)}
-                        className="flex-1 border border-border rounded-xl px-3 py-2 text-sm"
+                        className="flex-1 border border-control-border rounded-xl px-3 py-2 text-sm"
                         placeholder="Name"
                       />
                       <button
@@ -314,7 +325,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         type="date"
                         value={snoozeUntil}
                         onChange={(e) => setSnoozeUntil(e.target.value)}
-                        className="flex-1 border border-border rounded-xl px-3 py-2 text-sm"
+                        className="flex-1 border border-control-border rounded-xl px-3 py-2 text-sm"
                       />
                       <button
                         onClick={() => void (async () => {
@@ -341,7 +352,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                     <textarea
                       value={resolutionNote}
                       onChange={(e) => setResolutionNote(e.target.value)}
-                      className="w-full border border-border rounded-xl px-3 py-2 text-sm min-h-20"
+                      className="w-full border border-control-border rounded-xl px-3 py-2 text-sm min-h-20"
                       placeholder="Was wurde geprüft/gelöst?"
                     />
                   </div>
@@ -357,7 +368,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                           setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
                         }
                       })()}
-                      className="px-4 py-2 rounded-full bg-dark-base text-background text-sm font-bold hover:bg-dark-2"
+                      className="px-4 py-2 rounded-lg bg-dark-base text-background text-sm font-bold hover:bg-dark-2"
                     >
                       Als gelöst markieren
                     </button>
@@ -371,7 +382,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                           setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
                         }
                       })()}
-                      className="px-4 py-2 rounded-full border border-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted"
+                      className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted"
                     >
                       Wieder öffnen
                     </button>
@@ -389,11 +400,11 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted">Fehler</span>
-                    <span className="font-bold text-error">{selectedTx.issueCounts.errors}</span>
+                    <span className="font-bold tabular-nums text-error-text">{selectedTx.issueCounts.errors}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted">Warnungen</span>
-                    <span className="font-bold text-warning">{selectedTx.issueCounts.warnings}</span>
+                    <span className="font-bold tabular-nums text-warning-text">{selectedTx.issueCounts.warnings}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted">Freigabe</span>
@@ -405,7 +416,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted">Verantwortliche Person</span>
-                    <span className="font-bold text-foreground">{selectedTx.exceptionCase?.owner ?? '—'}</span>
+                    <span className="font-bold text-foreground">{formatEmptyValue(selectedTx.exceptionCase?.owner)}</span>
                   </div>
                   {selectedTx.exceptionCase?.snoozedUntil && (
                     <div className="flex justify-between">

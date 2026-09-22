@@ -14,7 +14,7 @@ import { ElementRail } from './ElementRail';
 import { CanvasStage } from './CanvasStage';
 import { Inspector } from './Inspector';
 import { LayersPanel } from './LayersPanel';
-import { Rulers, RULER_SIZE } from './Rulers';
+import { Rulers } from './Rulers';
 import { useHistory } from './hooks/useHistory';
 import { useZoomPan } from './hooks/useZoomPan';
 import { useDesignerKeyboard } from './hooks/useDesignerKeyboard';
@@ -323,7 +323,7 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
         <ElementRail onAddElement={handleAddElement} />
 
         {/* Canvas viewport */}
-        <div ref={viewportRef} className="relative flex-1 overflow-hidden bg-editor-viewport" style={{ cursor }}>
+        <div ref={viewportRef} className="relative flex-1 overflow-hidden bg-dark-1" style={{ cursor }}>
           <CanvasStage
             elements={elements}
             selectedIds={selectedIds}
@@ -347,14 +347,14 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
 
           {/* Validation overlay */}
           {validation.show && (
-            <div className="absolute left-1/2 top-8 z-40 max-w-sm -translate-x-1/2 rounded-xl bg-white p-4 shadow-2xl no-print">
+            <div className="absolute left-1/2 top-8 z-[var(--z-dropdown)] max-w-sm -translate-x-1/2 rounded-xl bg-white p-4 shadow-2xl no-print">
               <div className="mb-2 flex items-center gap-2 font-bold text-black">
-                {validation.issues.length === 0 ? <CheckCircle className="text-success" /> : <AlertTriangle className="text-error" />}
+                {validation.issues.length === 0 ? <CheckCircle className="text-success-text" /> : <AlertTriangle className="text-error-text" />}
                 {validation.issues.length === 0 ? 'Alles in Ordnung' : 'Prüfung: Handlungsbedarf'}
               </div>
               {validation.issues.map((issue, i) => (
-                <p key={i} className="mt-1 flex items-center gap-2 text-xs text-error">
-                  <span className="h-1.5 w-1.5 rounded-full bg-error" />
+                <p key={i} className="mt-1 flex items-center gap-2 text-xs text-error-text">
+                  <span className="h-1.5 w-1.5 rounded-full bg-error-text" />
                   {issue}
                 </p>
               ))}
@@ -362,7 +362,7 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
           )}
 
           {/* Hint */}
-          <div className="pointer-events-none absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded-full bg-dark-1/80 px-3 py-1 text-[10px] text-dark-muted no-print">
+          <div className="pointer-events-none absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded-full bg-dark-1/80 px-3 py-1 text-xs text-dark-muted no-print">
             Leertaste/Mittelklick zum Verschieben · Strg+Scroll zum Zoomen · Alt hält Einrasten an
           </div>
         </div>

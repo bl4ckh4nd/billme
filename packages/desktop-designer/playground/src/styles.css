@@ -8,7 +8,8 @@ body { margin: 0; }
 .playground-toolbar span { color: #687064; font-size: 12px; }
 .playground-toolbar select, .playground-toolbar button { border: 1px solid #cfd4c7; border-radius: 7px; background: #fff; padding: 7px 9px; }
 .playground-toolbar button { cursor: pointer; background: #d9f944; border-color: #d9f944; font-weight: 700; }
-.playground-toolbar button:disabled { cursor: not-allowed; opacity: .45; }
+/* Disabled must be unmistakable, not a faded lime (DESIGN.md). */
+.playground-toolbar button:disabled { cursor: not-allowed; background: #e5e7eb; border-color: #8b8b8b; color: #4b5563; }
 .playground-stats { display: flex; flex-wrap: wrap; gap: 8px; max-width: 980px; margin: 0 auto 14px; }
 .playground-stats span { padding: 6px 9px; border: 1px solid #d6dacd; border-radius: 999px; background: #fff; font-size: 12px; }
 .playground-stats .good { color: #2d6a3a; }.playground-stats .bad { color: #a32222; background: #fff0f0; }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Search, Plus, FileText,
   Clock, ArrowLeft,
@@ -19,6 +19,7 @@ import { useDeleteOfferMutation, useOffersQuery, useUpsertOfferMutation } from '
 import { useSettingsQuery } from '../hooks/useSettings';
 import { formatDocumentHistoryAction } from '../documentHistory';
 import { getRendererRuntime, ipc } from '../runtime-api';
+import type { IpcArgs } from '@billme/desktop-contracts/contract';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
 import { SkeletonLoader } from '@billme/desktop-ui/components/SkeletonLoader';
@@ -98,6 +99,10 @@ const isAmountChainAction = (action: ChainAction): action is AmountChainAction =
   action === 'final_invoice' ||
   action === 'credit_note' ||
   action === 'cancellation_invoice';
+
+type ChainIssueArgs = IpcArgs<'documents:chainIssue'>;
+type WithoutId<T> = T extends { id: string } ? Omit<T, 'id'> : never;
+type ChainIssueIntent = WithoutId<ChainIssueArgs>;
 
 export const DocumentsView: React.FC<DocumentsViewProps> = ({
   onOpenTemplates,
@@ -194,6 +199,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [chainAmountDialog, setChainAmountDialog] = useState<{ action: AmountChainAction } | null>(null);
   const [chainAmountInput, setChainAmountInput] = useState('');
   const [chainAmountError, setChainAmountError] = useState<string | null>(null);
+  const [chainIssuePending, setChainIssuePending] = useState(false);
+  const pendingChainOperationRef = useRef<{ id: string; intentKey: string } | null>(null);
 
   // Choose data source based on document type
   const {
@@ -432,9 +439,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   };
 
   const persistChainDocument = (action: ChainAction, amount?: number) => {
-    if (!selectedDocument) return;
+    if (!selectedDocument || chainIssuePending) return;
     void (async () => {
-      let reservationId: string | undefined;
       try {
         const today = new Date().toISOString().split('T')[0] ?? '';
         const reasonByAction: Record<ChainAction, string> = {
@@ -448,53 +454,56 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           revision: 'Revisionsdokument erstellt',
         };
         const reason = reasonByAction[action];
-        const reservation = await ipc.numbers.reserve({ kind: 'invoice' });
-        const reservedId = reservation.reservationId;
-        reservationId = reservedId;
-        const base = { id: uuidv4(), number: reservation.number, date: today, reason };
-        let created: Invoice;
 
+        let issuePayload: ChainIssueIntent;
         if (action === 'order_confirmation') {
-          created = await ipc.documents.chainCreate({ operation: action, ...base, offerId: selectedDocument.id });
+          issuePayload = { operation: action, offerId: selectedDocument.id, date: today, reason };
         } else if (action === 'delivery_note') {
-          created = await ipc.documents.chainCreate({ operation: action, ...base, orderId: selectedDocument.id });
+          issuePayload = { operation: action, orderId: selectedDocument.id, date: today, reason };
         } else if (action === 'revision') {
-          created = await ipc.documents.chainCreate({ operation: action, ...base, invoiceId: selectedDocument.id });
+          issuePayload = { operation: action, invoiceId: selectedDocument.id, date: today, reason };
         } else if (action === 'credit_note' || action === 'cancellation_invoice') {
           if (amount === undefined) throw new Error('Ein Korrekturbetrag ist erforderlich.');
-          created = await ipc.documents.chainCreate({ operation: 'correction', ...base, invoiceId: selectedDocument.id, kind: action, amount });
+          issuePayload = { operation: 'correction', invoiceId: selectedDocument.id, kind: action, amount, date: today, reason };
         } else {
           if (amount === undefined) throw new Error('Ein Rechnungsbetrag ist erforderlich.');
-          created = await ipc.documents.chainCreate({ operation: 'settlement_invoice', ...base, orderId: selectedDocument.id, kind: action, amount });
+          issuePayload = { operation: 'settlement_invoice', orderId: selectedDocument.id, kind: action, amount, date: today, reason };
         }
+        // The intent string excludes the operation id, so a retry after a lost
+        // response reuses the same id while any changed intent starts anew.
+        const intentKey = JSON.stringify(issuePayload);
+        const pending = pendingChainOperationRef.current;
+        const operationId = pending && pending.intentKey === intentKey ? pending.id : uuidv4();
+        pendingChainOperationRef.current = { id: operationId, intentKey };
 
-        await ipc.numbers.finalize({ reservationId: reservedId, documentId: created.id });
-        reservationId = undefined;
-        const finalized = await ipc.invoices.upsert({
-          invoice: { ...created, status: 'open' },
-          reason: `${reason} (finalisiert)`,
-        });
-        queryClient.setQueryData<Invoice[]>(['invoices'], (current = []) => [
-          finalized,
-          ...current.filter((invoice) => invoice.id !== finalized.id),
-        ]);
-        await queryClient.invalidateQueries({ queryKey: ['invoices'] });
-        if (action === 'order_confirmation') {
-          setDocumentType('invoice');
-          setIsTypeDropdownOpen(false);
-          setSelectedIds(new Set());
+        setChainIssuePending(true);
+        try {
+          const issued = await ipc.documents.chainIssue({ id: operationId, ...issuePayload });
+          pendingChainOperationRef.current = null;
+          queryClient.setQueryData<Invoice[]>(['invoices'], (current = []) => [
+            issued,
+            ...current.filter((invoice) => invoice.id !== issued.id),
+          ]);
+          await queryClient.invalidateQueries({ queryKey: ['invoices'] });
+          if (action === 'order_confirmation') {
+            setDocumentType('invoice');
+            setIsTypeDropdownOpen(false);
+            setSelectedIds(new Set());
+          }
+          setSelectedId(issued.id);
+          setViewMode('detail');
+          notify('success', `${getInvoiceDocumentLabel(issued.documentKind)} ${issued.number} erstellt.`);
+        } finally {
+          setChainIssuePending(false);
         }
-        setSelectedId(finalized.id);
-        setViewMode('detail');
-        notify('success', `${getInvoiceDocumentLabel(finalized.documentKind)} ${finalized.number} erstellt.`);
       } catch (error) {
-        if (reservationId) await ipc.numbers.release({ reservationId }).catch(() => undefined);
         notify('error', `Dokument konnte nicht erstellt werden: ${String(error)}`);
       }
     })();
   };
 
   const handleCreateChainDocument = (action: ChainAction) => {
+    if (chainIssuePending) return;
     if (!selectedDocument) return;
     if (action === 'order_confirmation' && documentType !== 'offer') return;
     if (action !== 'order_confirmation' && documentType !== 'invoice') return;
@@ -515,6 +524,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   };
 
   const confirmChainAmount = () => {
+    if (chainIssuePending) return;
     if (!chainAmountDialog) return;
     const normalized = chainAmountInput.trim().replace(/\s/g, '').replace(',', '.');
     const amount = Number(normalized);
@@ -1219,6 +1229,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           <Button
                             onClick={() => handleCreateChainDocument('order_confirmation')}
                             size="md"
+                            disabled={chainIssuePending}
                             title="Auftragsbestätigung aus angenommenem Angebot erstellen"
                           >
                             <FileText size={16} />
@@ -1238,16 +1249,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                       {documentType === 'invoice' && selectedDocument.documentKind === 'order_confirmation' && (
                         <>
-                          <Button onClick={() => handleCreateChainDocument('delivery_note')} size="md" title="Lieferschein aus Auftragsbestätigung erstellen">
+                          <Button onClick={() => handleCreateChainDocument('delivery_note')} size="md" disabled={chainIssuePending} title="Lieferschein aus Auftragsbestätigung erstellen">
                             <FileText size={16} /> Lieferschein
                           </Button>
-                          <Button onClick={() => handleCreateChainDocument('advance_invoice')} size="md" title="Abschlagsrechnung erstellen">
+                          <Button onClick={() => handleCreateChainDocument('advance_invoice')} size="md" disabled={chainIssuePending} title="Abschlagsrechnung erstellen">
                             <Euro size={16} /> Abschlag
                           </Button>
-                          <Button onClick={() => handleCreateChainDocument('partial_invoice')} size="md" title="Teilrechnung erstellen">
+                          <Button onClick={() => handleCreateChainDocument('partial_invoice')} size="md" disabled={chainIssuePending} title="Teilrechnung erstellen">
                             <Euro size={16} /> Teilrechnung
                           </Button>
-                          <Button onClick={() => handleCreateChainDocument('final_invoice')} size="md" title="Schlussrechnung erstellen">
+                          <Button onClick={() => handleCreateChainDocument('final_invoice')} size="md" disabled={chainIssuePending} title="Schlussrechnung erstellen">
                             <CheckCircle size={16} /> Schlussrechnung
                           </Button>
                           <div className="w-px h-6 bg-border-subtle mx-1" />
@@ -1256,13 +1267,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                       {documentType === 'invoice' && isBillingDocumentKind(selectedDocument.documentKind) && selectedDocument.status !== 'draft' && (
                         <>
-                          <Button onClick={() => handleCreateChainDocument('credit_note')} size="md" title="Gutschrift aus dieser Rechnung erstellen">
+                          <Button onClick={() => handleCreateChainDocument('credit_note')} size="md" disabled={chainIssuePending} title="Gutschrift aus dieser Rechnung erstellen">
                             <ArrowLeft size={16} /> Gutschrift
                           </Button>
-                          <Button onClick={() => handleCreateChainDocument('cancellation_invoice')} size="md" title="Stornorechnung aus dieser Rechnung erstellen">
+                          <Button onClick={() => handleCreateChainDocument('cancellation_invoice')} size="md" disabled={chainIssuePending} title="Stornorechnung aus dieser Rechnung erstellen">
                             <RefreshCw size={16} /> Storno
                           </Button>
-                          <Button onClick={() => handleCreateChainDocument('revision')} size="md" title="Neue Revision aus dieser Rechnung erstellen">
+                          <Button onClick={() => handleCreateChainDocument('revision')} size="md" disabled={chainIssuePending} title="Neue Revision aus dieser Rechnung erstellen">
                             <FileText size={16} /> Revision
                           </Button>
                           <div className="w-px h-6 bg-border-subtle mx-1" />

@@ -88,6 +88,7 @@ const selectChainDocument = async (page, document) => {
 };
 
 const completeChainAction = async ({ page, rootDocumentId, action, kind, amount, knownIds = [] }) => {
+  const chainBefore = await invokeDesktopIpc(page, 'documents:chainList', { rootDocumentId });
   await page.getByRole('button', { name: action, exact: true }).click();
   if (amount !== undefined) {
     const dialog = page.getByRole('dialog');
@@ -119,6 +120,9 @@ const completeChainAction = async ({ page, rootDocumentId, action, kind, amount,
     const visibleText = await page.locator('body').innerText();
     throw new Error(`${error instanceof Error ? error.message : String(error)}\nVisible UI:\n${visibleText.slice(-2_000)}`);
   }
+  // Each chain action must issue exactly one document.
+  const chainAfter = await invokeDesktopIpc(page, 'documents:chainList', { rootDocumentId });
+  expect(chainAfter).toHaveLength(chainBefore.length + 1);
   const createdHeading = page.getByRole('heading', { name: created.number, exact: true });
   if (!await createdHeading.isVisible().catch(() => false)) {
     await page.reload();

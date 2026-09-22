@@ -529,3 +529,32 @@ test('Lite HTTP adapter routes portal, email, dunning, and recurring actions wit
     'POST https://example.test/api/v1/lite/recurring/manual-run',
   ]);
 });
+
+test('Lite HTTP adapter issues a document chain through one request without a client number', async () => {
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const api = createLiteHttpBillmeApi({ baseUrl: 'https://example.test', auth: { mode: 'bearer', token: 'test-token' },
+    fetch: async (input, init) => {
+      const body: Record<string, unknown> = JSON.parse(String(init?.body));
+      calls.push({ url: String(input), body });
+      return response({ kind: 'invoice', id: 'doc-1', tenantId: 'tenant', documentKind: 'advance_invoice',
+        sourceDocumentId: 'order-1', rootDocumentId: 'order-1', number: 'RE-2026-0007', numberReservationId: 'res-1',
+        client: 'Buyer', clientEmail: 'buyer@example.test', date: '2026-09-04', dueDate: '2026-09-18',
+        amount: 40, status: 'open', items: [], payments: [], history: [] });
+    },
+  });
+
+  const issued = await api.documents.chainIssue({
+    operation: 'settlement_invoice', id: 'doc-1', orderId: 'order-1',
+    kind: 'advance_invoice', amount: 40, date: '2026-09-04', reason: 'Abschlagsrechnung erstellt',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, 'https://example.test/api/v1/lite/document-chain/issue');
+  const body = calls[0]?.body;
+  assert.ok(body);
+  assert.equal(body.operation, 'settlement_invoice');
+  assert.equal(body.id, 'doc-1');
+  assert.equal('number' in body, false);
+  assert.equal(issued.status, 'open');
+  assert.equal(issued.number, 'RE-2026-0007');
+});

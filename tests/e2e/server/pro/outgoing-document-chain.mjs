@@ -68,36 +68,21 @@ const configureOutgoingPosting = async (state, session) => {
   }
 };
 
-const createNumberedDocument = async (state, session, endpoint, fields, expectedKind) => {
-  const reservation = await requestJson(state, session, '/api/v1/pro/numbers/reserve', undefined, {
-    method: 'POST',
-    body: { kind: 'invoice' },
-  });
-  const created = await requestJson(state, session, `/api/v1/pro/document-chain/${endpoint}`, undefined, {
+const createIssuedDocument = async (state, session, operation, fields, expectedKind) => {
+  const created = await requestJson(state, session, '/api/v1/pro/document-chain/issue', undefined, {
     method: 'POST',
     body: {
+      operation,
       id: fields.id,
-      number: reservation.number,
       date: '2026-09-04',
       dueDate: '2026-09-18',
       reason: fields.reason,
       ...fields,
     },
   });
-  expect(created).toMatchObject({ id: fields.id, documentKind: expectedKind, status: 'draft' });
-  await requestJson(state, session, '/api/v1/pro/numbers/finalize', undefined, {
-    method: 'POST',
-    body: { reservationId: reservation.reservationId, documentId: fields.id },
-  });
-  const saved = await requestJson(state, session, '/api/v1/pro/invoices', undefined, {
-    method: 'POST',
-    body: {
-      reason: `${fields.reason}: Nummer finalisiert`,
-      invoice: { ...created, number: reservation.number, status: 'open' },
-    },
-  });
-  expect(saved).toMatchObject({ id: fields.id, number: reservation.number, status: 'open' });
-  return { document: saved, reservation };
+  expect(created).toMatchObject({ id: fields.id, documentKind: expectedKind, status: 'open' });
+  expect(created.number).toBeTruthy();
+  return { document: created };
 };
 
 export const runProOutgoingDocumentChainScenario = async (page) => {
@@ -115,45 +100,45 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
   await configureOutgoingPosting(state, session);
 
   const offer = await createAcceptedOffer(state, session);
-  const order = await createNumberedDocument(state, session, 'order-confirmations', {
+  const order = await createIssuedDocument(state, session, 'order_confirmation', {
     id: `outgoing-chain-order-${suffix}`,
     offerId: offer.id,
     reason: 'E2E: Auftragsbestätigung aus Angebot',
   }, 'order_confirmation');
-  const delivery = await createNumberedDocument(state, session, 'delivery-notes', {
+  const delivery = await createIssuedDocument(state, session, 'delivery_note', {
     id: `outgoing-chain-delivery-${suffix}`,
     orderId: order.document.id,
     reason: 'E2E: Lieferschein aus Auftrag',
   }, 'delivery_note');
-  const advance = await createNumberedDocument(state, session, 'settlement-invoices', {
+  const advance = await createIssuedDocument(state, session, 'settlement_invoice', {
     id: `outgoing-chain-advance-${suffix}`,
     orderId: order.document.id,
     kind: 'advance_invoice',
     amount: 40,
     reason: 'E2E: Abschlagsrechnung',
   }, 'advance_invoice');
-  const partial = await createNumberedDocument(state, session, 'settlement-invoices', {
+  const partial = await createIssuedDocument(state, session, 'settlement_invoice', {
     id: `outgoing-chain-partial-${suffix}`,
     orderId: order.document.id,
     kind: 'partial_invoice',
     amount: 30,
     reason: 'E2E: Teilrechnung',
   }, 'partial_invoice');
-  const final = await createNumberedDocument(state, session, 'settlement-invoices', {
+  const final = await createIssuedDocument(state, session, 'settlement_invoice', {
     id: `outgoing-chain-final-${suffix}`,
     orderId: order.document.id,
     kind: 'final_invoice',
     amount: 50,
     reason: 'E2E: Schlussrechnung',
   }, 'final_invoice');
-  const credit = await createNumberedDocument(state, session, 'corrections', {
+  const credit = await createIssuedDocument(state, session, 'correction', {
     id: `outgoing-chain-credit-${suffix}`,
     invoiceId: final.document.id,
     kind: 'credit_note',
     amount: 20,
     reason: 'E2E: Teilgutschrift',
   }, 'credit_note');
-  const revision = await createNumberedDocument(state, session, 'revisions', {
+  const revision = await createIssuedDocument(state, session, 'revision', {
     id: `outgoing-chain-revision-${suffix}`,
     invoiceId: final.document.id,
     reason: 'E2E: Revision mit korrigiertem Dokumentstand',
@@ -208,7 +193,7 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
     body: {
       reason: 'E2E: idempotenter Korrektur-Buchungsretry',
       invoiceId: credit.document.id,
-      reservationId: credit.reservation.reservationId,
+      reservationId: credit.document.numberReservationId,
     },
   });
   expect(retry).toMatchObject({ sourceId: credit.document.id, status: 'ready' });

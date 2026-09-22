@@ -160,6 +160,7 @@ type NumberReservation = {
   documentId: string | null;
 };
 const numberReservations = new Map<string, NumberReservation>();
+const documentIssuanceReceipts = new Map<string, { intentKey: string; response: Invoice }>();
 const documentNumberingPorts: SyncDocumentNumberingPorts<AppSettings> = {
   tx: {
     inTransaction<TResult>(work: () => TResult): TResult {
@@ -2369,6 +2370,26 @@ const buildMockEurCsv = (report: ReturnType<typeof getMockEurReport>): string =>
   return `\uFEFF${[header, ...rows].join('\n')}`;
 };
 
+const createMockChainDependencies = () => ({
+  invoiceRepo: {
+    list: () => invoices,
+    getById: (_scope: unknown, id: string) => invoices.find((invoice) => invoice.id === id) ?? null,
+    save: (_scope: unknown, document: unknown) => {
+      const invoice = document as Invoice;
+      invoices.unshift(invoice);
+      return invoice;
+    },
+    remove: (_scope: unknown, id: string) => {
+      const index = invoices.findIndex((invoice) => invoice.id === id);
+      if (index >= 0) invoices.splice(index, 1);
+    },
+  },
+  offerRepo: {
+    getById: (_scope: unknown, id: string) => offers.find((offer) => offer.id === id) ?? null,
+  },
+  auditLog: { append: () => undefined },
+});
+
 const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<IpcResult<K>> => {
   switch (key) {
     case 'invoices:list':
@@ -2602,26 +2623,7 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
     case 'documents:chainCreate': {
       const input = args as IpcArgs<'documents:chainCreate'>;
       const scope = { tenantId: 'default', product, deploymentMode: 'single-tenant' as const };
-      const dependencies = {
-        invoiceRepo: {
-          list: () => invoices,
-          getById: (_scope: typeof scope, id: string) => invoices.find((invoice) => invoice.id === id) ?? null,
-          save: (_scope: typeof scope, document: unknown) => {
-            const invoice = document as Invoice;
-            invoices.unshift(invoice);
-            return invoice;
-          },
-          remove: (_scope: typeof scope, id: string) => {
-            const index = invoices.findIndex((invoice) => invoice.id === id);
-            if (index >= 0) invoices.splice(index, 1);
-          },
-        },
-        offerRepo: {
-          getById: (_scope: typeof scope, id: string) => offers.find((offer) => offer.id === id) ?? null,
-        },
-        auditLog: { append: () => undefined },
-      };
-      const chainDependencies = dependencies as unknown as Parameters<typeof createOrderConfirmationFromOffer>[1];
+      const chainDependencies = createMockChainDependencies() as unknown as Parameters<typeof createOrderConfirmationFromOffer>[1];
       const document = input.operation === 'order_confirmation'
         ? createOrderConfirmationFromOffer(scope, chainDependencies, input as Parameters<typeof createOrderConfirmationFromOffer>[2])
         : input.operation === 'delivery_note'
@@ -2632,6 +2634,51 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
               ? createCorrectionDocument(scope, chainDependencies, input as unknown as Parameters<typeof createCorrectionDocument>[2])
               : createInvoiceRevision(scope, chainDependencies, input as Parameters<typeof createInvoiceRevision>[2]);
       return structuredClone(document) as IpcResult<K>;
+    }
+    case 'documents:chainIssue': {
+      const input = args as IpcArgs<'documents:chainIssue'>;
+      const { id: operationId, ...intent } = input;
+      const receiptKey = `${product}:${MOCK_TENANT_ID}:${operationId}`;
+      const intentKey = JSON.stringify(Object.fromEntries(Object.entries(intent).sort(([a], [b]) => a.localeCompare(b))));
+      const recorded = documentIssuanceReceipts.get(receiptKey);
+      if (recorded) {
+        if (recorded.intentKey !== intentKey) throw new Error('Issuance intent differs from the recorded operation');
+        return structuredClone(recorded.response) as IpcResult<K>;
+      }
+      const scope = { tenantId: MOCK_TENANT_ID, product, deploymentMode: 'single-tenant' as const };
+      const invoicesBefore = structuredClone(invoices);
+      const settingsBefore = structuredClone(settings);
+      const reservationsBefore = [...numberReservations].map(([key, value]) => [key, { ...value }] as const);
+      try {
+        const reservation = reserveNumber('invoice');
+        const chainDependencies = createMockChainDependencies() as unknown as Parameters<typeof createOrderConfirmationFromOffer>[1];
+        // Stored rows use the legacy invoice shape, like invoiceRepo.save's cast.
+        const document = (input.operation === 'order_confirmation'
+          ? createOrderConfirmationFromOffer(scope, chainDependencies, { ...input, number: reservation.number } as unknown as Parameters<typeof createOrderConfirmationFromOffer>[2])
+          : input.operation === 'delivery_note'
+            ? createDeliveryNoteFromOrder(scope, chainDependencies, { ...input, number: reservation.number } as unknown as Parameters<typeof createDeliveryNoteFromOrder>[2])
+            : input.operation === 'settlement_invoice'
+              ? createSettlementInvoice(scope, chainDependencies, { ...input, number: reservation.number } as unknown as Parameters<typeof createSettlementInvoice>[2])
+              : input.operation === 'correction'
+                ? createCorrectionDocument(scope, chainDependencies, { ...input, number: reservation.number } as unknown as Parameters<typeof createCorrectionDocument>[2])
+                : createInvoiceRevision(scope, chainDependencies, { ...input, number: reservation.number } as unknown as Parameters<typeof createInvoiceRevision>[2])) as Invoice;
+        document.status = 'open';
+        document.numberReservationId = reservation.reservationId;
+        document.history = [
+          { date: toIsoDate(new Date()), action: `invoice.chain.create (${input.reason})` },
+          { date: toIsoDate(new Date()), action: `invoice.update (${input.reason} (finalisiert))` },
+        ];
+        finalizeNumber(reservation.reservationId, document.id);
+        const response = structuredClone(document);
+        documentIssuanceReceipts.set(receiptKey, { intentKey, response });
+        return structuredClone(response) as IpcResult<K>;
+      } catch (error) {
+        invoices.splice(0, invoices.length, ...invoicesBefore);
+        settings = settingsBefore;
+        numberReservations.clear();
+        for (const [key, value] of reservationsBefore) numberReservations.set(key, value);
+        throw error;
+      }
     }
     case 'documents:chainList': {
       const { rootDocumentId } = args as IpcArgs<'documents:chainList'>;

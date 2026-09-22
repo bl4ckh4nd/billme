@@ -252,7 +252,11 @@ export function finalizeDocumentNumber<TSettings extends NumberingSettingsShape>
 ): MaybePromise<{ ok: true }> {
   return ports.tx.inTransaction(() => {
     return chainMaybePromise(ports.getReservationById(reservationId), (reservation) => {
-      if (!reservation || reservation.status === 'finalized') {
+      if (!reservation) return { ok: true } as const;
+      if (reservation.status === 'finalized') {
+        if (reservation.documentId !== documentId) {
+          throw new Error('FINALIZED_RESERVATION_DOCUMENT_MISMATCH');
+        }
         return { ok: true } as const;
       }
       if (reservation.status !== 'reserved') {

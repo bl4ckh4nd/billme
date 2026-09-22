@@ -975,3 +975,16 @@ export const accountingSourceRuns = pgTable("accounting_source_runs", {
   reason: text("reason"),
   createdAt: text("created_at"),
 });
+
+export const documentIssuanceReceipts = pgTable("document_issuance_receipts", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  product: text("product"),
+  operationId: text("operation_id"),
+  intentVersion: integer("intent_version"),
+  intentHash: text("intent_hash"),
+  documentId: text("document_id"),
+  reservationId: text("reservation_id"),
+  responseJson: text("response_json"),
+  createdAt: text("created_at"),
+});

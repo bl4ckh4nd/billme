@@ -91,7 +91,7 @@ const HTTP_ROUTE_KEYS = new Set<IpcRouteKey>([
   'recurring:list', 'recurring:upsert', 'recurring:delete',
   'settings:get', 'settings:set',
   'numbers:reserve', 'numbers:release', 'numbers:finalize',
-  'documents:createFromClient', 'documents:convertOfferToInvoice', 'documents:chainCreate', 'documents:chainList',
+  'documents:createFromClient', 'documents:convertOfferToInvoice', 'documents:chainCreate', 'documents:chainIssue', 'documents:chainList',
   'eur:getReport', 'eur:listItems', 'eur:upsertClassification', 'eur:exportCsv',
   'audit:verify', 'audit:exportCsv', 'eur:listRules', 'eur:upsertRule', 'eur:deleteRule',
   'portal:health', 'portal:publishOffer', 'portal:publishInvoice', 'portal:syncOfferStatus',
@@ -642,6 +642,11 @@ export const createLiteHttpBillmeApi = ({
                 : 'revisions';
         const { operation: _operation, ...body } = parsed;
         const saved = await requestJson('POST', `${PRODUCT_PREFIX}/document-chain/${endpoint}`, serverInvoiceSchema, body);
+        return parseResult(key, toLegacyInvoice(saved));
+      }
+      case 'documents:chainIssue': {
+        const parsed = args as IpcArgs<'documents:chainIssue'>;
+        const saved = await requestJson('POST', `${PRODUCT_PREFIX}/document-chain/issue`, serverInvoiceSchema, parsed);
         return parseResult(key, toLegacyInvoice(saved));
       }
       case 'documents:chainList': {

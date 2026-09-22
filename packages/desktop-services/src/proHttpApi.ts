@@ -871,6 +871,10 @@ export const createProWebClient = ({
       const { operation: _operation, ...body } = parsed;
       return requestJson({ method: 'POST', body, parser: invoiceSchema }, `/api/v1/pro/document-chain/${endpoint}`);
     },
+    issueDocumentChain(input: unknown) {
+      const parsed = ipcRoutes['documents:chainIssue'].args.parse(input);
+      return requestJson({ method: 'POST', body: parsed, parser: invoiceSchema }, '/api/v1/pro/document-chain/issue');
+    },
     listDocumentChain(rootDocumentId: string) {
       return requestJson({ parser: parseArray(invoiceSchema) }, `/api/v1/pro/document-chain/${encodeURIComponent(rootDocumentId)}`);
     },
@@ -1783,6 +1787,10 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
         }
         case 'documents:chainCreate': {
           const result = await client.createDocumentChain(args);
+          return ipcRoutes[key].result.parse(toLegacyInvoice(result)) as IpcResult<K>;
+        }
+        case 'documents:chainIssue': {
+          const result = await client.issueDocumentChain(args);
           return ipcRoutes[key].result.parse(toLegacyInvoice(result)) as IpcResult<K>;
         }
         case 'documents:chainList': {

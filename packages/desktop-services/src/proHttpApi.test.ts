@@ -3883,3 +3883,41 @@ test('Pro HTTP Billme API routes portal, email, dunning, and recurring actions t
     'POST http://127.0.0.1:43123/api/v1/pro/recurring/manual-run',
   ]);
 });
+
+test('Pro HTTP Billme API issues the document chain in one request without the IPC fallback', async () => {
+  const requests: Array<{ url: string; method: string; body: Record<string, unknown> }> = [];
+  const fallbackCalls: IpcRouteKey[] = [];
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fallback: async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<IpcResult<K>> => {
+      fallbackCalls.push(key);
+      return null as IpcResult<K>;
+    },
+    fetch: async (input, init) => {
+      const body: Record<string, unknown> = JSON.parse(String(init?.body));
+      requests.push({ url: String(input), method: init?.method ?? 'GET', body });
+      return response({ kind: 'invoice', id: 'doc-1', tenantId: 'tenant', documentKind: 'advance_invoice',
+        sourceDocumentId: 'order-1', rootDocumentId: 'order-1', number: 'RE-2026-0007', numberReservationId: 'res-1',
+        client: 'Buyer', clientEmail: 'buyer@example.test', date: '2026-09-04', dueDate: '2026-09-18',
+        amount: 40, status: 'open', items: [], payments: [], history: [] });
+    },
+  });
+
+  const issued = await api.documents.chainIssue({
+    operation: 'settlement_invoice', id: 'doc-1', orderId: 'order-1',
+    kind: 'advance_invoice', amount: 40, date: '2026-09-04', reason: 'Abschlagsrechnung erstellt',
+  });
+
+  assert.deepEqual(fallbackCalls, []);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.url, 'http://127.0.0.1:43123/api/v1/pro/document-chain/issue');
+  assert.equal(requests[0]?.method, 'POST');
+  const body = requests[0]?.body;
+  assert.ok(body);
+  assert.equal(body.operation, 'settlement_invoice');
+  assert.equal(body.id, 'doc-1');
+  assert.equal('number' in body, false);
+  assert.equal(issued.status, 'open');
+  assert.equal(issued.number, 'RE-2026-0007');
+});

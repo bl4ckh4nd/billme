@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Produktbrief, visuelle Auditberichte, Layout-Prüfwerkzeug und der Abnahmeplan für die ausgehende Dokumentkette dokumentieren jetzt die überprüften Oberflächenregeln und offenen Nachweise.
 - Das Firmen-Onboarding liegt jetzt in `@billme/desktop-ui`, trennt Lite und Pro sichtbar, führt schrittweise durch die Abrechnung, erklärt Buchhaltungsbegriffe, akzeptiert deutsche Dezimalwerte und kann Entwürfe zum späteren Fortsetzen speichern.
 - Die Oberflächen von Lite, Pro, Browser-Shells, Demo, Portal und Landingpage folgen jetzt durchgängig den Design-Tokens: keine grauen Standardfarben oder rohen Hex-Werte mehr, Radien aus der Skala, Beträge in Inter mit `tabular-nums`, kein Deko-Glow, keine Farbverläufe als Standardfläche und keine dekorativen Einblend-Animationen. Ein neues Skript `pnpm check:design-tokens` hält das in der CI fest.
 - Einstellungen, Beleg-Editor und Dashboards zeigen nie mehr erfundene Firmendaten: der `MOCK_SETTINGS`-Fallback ist entfernt, die betroffenen Ansichten haben Lade- und Fehlerzustände, und der Beleg rendert Absender, Bankverbindung und Steuernummer nur noch aus echten Einstellungen.

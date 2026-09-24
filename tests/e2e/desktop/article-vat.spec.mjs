@@ -31,7 +31,7 @@ for (const app of ['desktop', 'pro']) {
       expect(articles.find((article) => article.title === 'E2E Reduced VAT')?.taxRate).toBe(7);
 
       await page.goto(appUrl(baseUrl, '/documents'));
-      await page.getByTitle('Neue Rechnung').click();
+      await page.getByRole('button', { name: 'Neue Rechnung' }).click();
       await expect(page.getByRole('heading', { name: 'Rechnung erstellen' })).toBeVisible();
       await page.getByRole('combobox', { name: 'Kunde auswählen' }).fill('Musterfirma');
       await page.getByRole('option').filter({ hasText: 'Musterfirma GmbH' }).click();

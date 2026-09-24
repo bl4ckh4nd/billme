@@ -148,7 +148,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
     <section className="rounded-2xl border border-border bg-surface p-4" aria-labelledby="report-mapping-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="report-mapping-title" className="text-sm font-black text-foreground">Report-Konten einrichten</h2>
+          <h2 id="report-mapping-title" className="text-sm font-semibold text-foreground">Report-Konten einrichten</h2>
           <p className="mt-1 text-xs text-muted">Fehlende Konten werden je Report-Katalog eingerichtet. Positionen stammen ausschließlich aus dem erlaubten Katalog.</p>
         </div>
         <Button type="button" size="sm" variant="secondary" onClick={() => void load()} disabled={loading || Boolean(saving)} aria-busy={loading}>
@@ -158,7 +158,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
 
       {activeReportMapping?.blocked ? (
         <div className="mt-3 rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert">
-          <div className="font-bold">Mapping unvollständig für {activeReportMapping.label}</div>
+          <div className="font-semibold">Mapping unvollständig für {activeReportMapping.label}</div>
           <p className="mt-1">Export und Abschluss dieses Reports bleiben gesperrt, bis alle Konten zugeordnet sind.</p>
           {health && missingRows.length === 0 ? (
             <p className="mt-1 text-xs">Die übrigen Report-Kataloge sind vollständig zugeordnet.</p>
@@ -177,7 +177,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
             Audit-Grund für Mapping-Änderungen
             <input
               id="report-mapping-reason"
-              className="mt-1 block w-full rounded-lg border border-control-border bg-surface px-3 py-2 text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-2.5 h-8 hover:border-ink-500 mt-1 block w-full rounded-control border border-control-border bg-surface text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               placeholder="z. B. Kontenabstimmung Monatsabschluss"
@@ -194,8 +194,8 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
               return (
                 <div key={id} className="grid gap-2 rounded-xl border border-border bg-surface-muted p-3 lg:grid-cols-[auto_12rem_minmax(0,1fr)_auto] lg:items-end">
                   <div className="min-w-24">
-                    <div className="text-xs font-bold text-muted">Konto</div>
-                    <div className="font-mono text-sm font-bold text-foreground">{entry.accountNumber}</div>
+                    <div className="text-xs font-semibold text-muted">Konto</div>
+                    <div className="font-mono text-sm font-semibold text-foreground">{entry.accountNumber}</div>
                   </div>
                   <div className="min-w-36 text-xs font-semibold text-foreground">
                     <div>Report</div>
@@ -208,7 +208,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
                       value={selected.position}
                       disabled={!canMutate || Boolean(saving) || allowedPositions.length === 0}
                       onChange={(event) => setSelections((current) => ({ ...current, [id]: { ...selected, position: event.target.value } }))}
-                      className="mt-1 block w-full rounded-lg border border-control-border bg-surface px-2 py-2 text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className="px-2.5 h-8 hover:border-ink-500 mt-1 block w-full rounded-control border border-control-border bg-surface text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <option value="">Position auswählen…</option>
                       {allowedPositions.map((position) => <option key={position.key} value={position.key}>{position.label}{position.side ? ` · ${position.side === 'asset' ? 'Aktiva' : 'Passiva'}` : ''}</option>)}

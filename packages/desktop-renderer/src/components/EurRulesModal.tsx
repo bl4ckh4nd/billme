@@ -142,7 +142,7 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border p-6">
         <div>
-          <h3 id={titleId} className="text-lg font-bold text-foreground">Klassifizierungsregeln</h3>
+          <h3 id={titleId} className="text-lg font-semibold text-foreground">Klassifizierungsregeln</h3>
           <p className="text-xs text-muted">Automatische Zuordnung nach Stichworten für {taxYear}</p>
         </div>
         <button
@@ -160,7 +160,7 @@ export const EurRulesModal: React.FC<EurRulesModalProps> = ({ taxYear, onClose, 
         {/* Add/Edit Form */}
         {isAdding ? (
           <div className="mb-4 rounded-xl border border-border bg-surface-muted p-4">
-            <h4 className="mb-3 text-sm font-bold text-foreground">
+            <h4 className="mb-3 text-sm font-semibold text-foreground">
               {editId ? 'Regel bearbeiten' : 'Neue Regel'}
             </h4>
             <div className="mb-3 grid grid-cols-2 gap-3">

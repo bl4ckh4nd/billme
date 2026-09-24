@@ -1,11 +1,15 @@
-import { Button, EmptyState, ErrorState, Modal } from '@billme/ui';
+import {
+  Badge, Button, Checkbox, EmptyState, ErrorState, IconButton, Input, Menu, Modal, PageHeader,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@billme/ui';
 import React from 'react';
-import { Archive, Edit3, Plus, Search, X } from 'lucide-react';
+import { Archive, Edit3, MoreHorizontal, Plus, Search, X } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
 import { v4 as uuidv4 } from 'uuid';
 import type { Project } from '@billme/desktop-core/types';
 import { useClientsQuery } from '../hooks/useClients';
 import { useArchiveProjectMutation, useProjectsQuery, useUpsertProjectMutation } from '../hooks/useProjects';
+import { useCreateIntent } from '../hooks/useCreateIntent';
 import { SkeletonLoader } from '@billme/desktop-ui/components/SkeletonLoader';
 
 type EditorMode = 'create' | 'edit';
@@ -32,6 +36,8 @@ export const ProjectsView: React.FC = () => {
   // The rows show the client name and the status filter reads the project list,
   // so a failed clients query would render "Unbekannt" for every row.
   const isLoadingView = isLoadingProjects || isLoadingClients;
+  // Linked from the command palette (?create=project); the draft preselects the first client.
+  useCreateIntent('/projects', ['project'] as const, () => openCreate(), !isLoadingView);
   const hasQueryError = isProjectsError || isClientsError;
   const retryQueries = () => {
     void refetchProjects();
@@ -131,6 +137,15 @@ export const ProjectsView: React.FC = () => {
     );
   };
 
+  const statusTone: Record<Project['status'], 'success' | 'info' | 'warning' | 'neutral'> = {
+    active: 'success',
+    planned: 'info',
+    on_hold: 'warning',
+    completed: 'neutral',
+    inactive: 'neutral',
+    archived: 'neutral',
+  };
+
   const statusLabel: Record<Project['status'], string> = {
     active: 'Aktiv',
     planned: 'Geplant',
@@ -141,137 +156,125 @@ export const ProjectsView: React.FC = () => {
   };
 
   return (
-    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm">
-      <div className="flex items-start justify-between gap-4 mb-6">
-        <div>
-          <h2 className="text-2xl font-black text-foreground">Projekte</h2>
-          <p className="text-sm text-muted mt-1">
-            Projekte strukturieren alle Dokumente (Rechnungen/Angebote) pro Kunde.
-          </p>
-        </div>
-        <button
-          onClick={openCreate}
-          className="px-5 py-3 rounded-xl font-bold bg-black text-white hover:bg-dark-2 transition-colors inline-flex items-center gap-2"
-        >
-          <Plus size={18} /> Neues Projekt
-        </button>
-      </div>
-
-      <div className="flex items-center justify-between gap-4 mb-6">
-        {/* The wrapper is the label so a click anywhere on the field, including its
-            padding, focuses the input. */}
-        <label className="flex items-center gap-3 w-full max-w-xl bg-surface-muted border border-control-border rounded-xl px-4 py-3">
-          <Search size={18} className="text-muted shrink-0" aria-hidden="true" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            aria-label="Projekte durchsuchen"
-            className="bg-transparent text-sm font-medium w-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring rounded-sm"
-            placeholder="Suchen (Code, Projektname, Kunde)..."
-          />
-        </label>
-
-        <label className="flex items-center gap-2 text-sm font-bold text-foreground select-none">
-          <input
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(e) => setIncludeArchived(e.target.checked)}
-            className="h-6 w-6 rounded-sm border-control-border accent-black focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          />
-          Archiviert anzeigen
-        </label>
-      </div>
-
-      <div className="overflow-hidden rounded-2xl border border-border">
-        <div className="hidden grid-cols-12 bg-surface-muted px-4 py-3 text-xs font-bold text-muted uppercase tracking-wider md:grid">
-          <div className="col-span-3">Projekt</div>
-          <div className="col-span-2">Kunde</div>
-          <div className="col-span-2">Status</div>
-          <div className="col-span-2">Start</div>
-          <div className="col-span-3 text-right">Aktionen</div>
-        </div>
-
-        {isLoadingView ? (
-          <SkeletonLoader variant="table" count={5} />
-        ) : hasQueryError ? (
-          <div className="p-6">
-            <ErrorState
-              title="Projekte konnten nicht geladen werden"
-              description="Projekt- oder Kundendaten sind nicht verfügbar. Es werden bewusst keine Ersatzdaten angezeigt."
-              onRetry={retryQueries}
+    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs">
+      <PageHeader
+        title="Projekte"
+        description="Projekte bündeln alle Rechnungen und Angebote eines Kunden."
+        actions={
+          <Button onClick={openCreate}>
+            <Plus size={16} aria-hidden="true" /> Neues Projekt
+          </Button>
+        }
+        toolbar={
+          <>
+            <div className="w-full sm:w-80">
+              <Input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                aria-label="Projekte durchsuchen"
+                placeholder="Code, Projekt oder Kunde suchen"
+                prefix={<Search size={14} aria-hidden="true" />}
+                fullWidth
+              />
+            </div>
+            <Checkbox
+              className="ml-auto"
+              label="Archivierte anzeigen"
+              checked={includeArchived}
+              onChange={(e) => setIncludeArchived(e.target.checked)}
             />
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="p-6">
-            {projects.length === 0 ? (
-              <EmptyState
-                title={includeArchived ? 'Noch keine Projekte angelegt' : 'Noch keine aktiven Projekte'}
-                description={
-                  includeArchived
-                    ? 'Ein Projekt bündelt alle Dokumente eines Kunden, damit Rechnungen und Angebote zuordenbar bleiben. Lege das erste Projekt über "Neues Projekt" oben rechts an.'
-                    : 'Archivierte Projekte sind ausgeblendet. Aktiviere "Archiviert anzeigen" oben rechts oder lege über "Neues Projekt" ein neues an.'
-                }
-              />
-            ) : (
-              <EmptyState
-                title="Kein Projekt passt zu dieser Suche"
-                description={`Die Suche "${search.trim()}" schließt alle ${projects.length} geladenen Projekte aus.`}
-                action={
-                  <Button variant="secondary" size="sm" onClick={() => setSearch('')}>
-                    Suche zurücksetzen
-                  </Button>
-                }
-              />
-            )}
-          </div>
+          </>
+        }
+      />
+
+      {isLoadingView ? (
+        <SkeletonLoader variant="table" count={5} />
+      ) : hasQueryError ? (
+        <ErrorState
+          title="Projekte konnten nicht geladen werden"
+          description="Projekt- oder Kundendaten sind nicht verfügbar. Es werden bewusst keine Ersatzdaten angezeigt."
+          onRetry={retryQueries}
+        />
+      ) : filtered.length === 0 ? (
+        projects.length === 0 ? (
+          <EmptyState
+            title={includeArchived ? 'Noch keine Projekte angelegt' : 'Noch keine aktiven Projekte'}
+            description={
+              includeArchived
+                ? 'Ein Projekt bündelt alle Dokumente eines Kunden, damit Rechnungen und Angebote zuordenbar bleiben. Lege das erste Projekt über "Neues Projekt" oben rechts an.'
+                : 'Archivierte Projekte sind ausgeblendet. Aktiviere "Archivierte anzeigen" oder lege über "Neues Projekt" ein neues an.'
+            }
+          />
         ) : (
-          <div className="divide-y divide-border-subtle">
+          <EmptyState
+            title="Kein Projekt passt zu dieser Suche"
+            description={`Die Suche "${search.trim()}" schließt alle ${projects.length} geladenen Projekte aus.`}
+            action={
+              <Button variant="secondary" size="sm" onClick={() => setSearch('')}>
+                Suche zurücksetzen
+              </Button>
+            }
+          />
+        )
+      ) : (
+        <Table aria-label="Projekte">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Projekt</TableHead>
+              <TableHead>Kunde</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="hidden md:table-cell">Start</TableHead>
+              <TableHead className="w-12"><span className="sr-only">Aktionen</span></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {filtered.map((p) => {
               const clientName = clients.find((c) => c.id === p.clientId)?.company ?? 'Unbekannt';
               return (
-                <div
-                  key={p.id}
-                  className="grid grid-cols-1 gap-1 px-4 py-4 hover:bg-surface-muted transition-colors md:grid-cols-12 md:items-center md:gap-0"
-                >
-                  <button
-                    className="min-w-0 text-left md:col-span-3"
-                    onClick={() => navigate({ to: `/projects/${p.id}` })}
-                    title="Projekt öffnen"
-                  >
-                    <div className="font-black text-foreground">{p.name}</div>
-                    <div className="text-xs text-muted">{p.code ?? ''}</div>
-                  </button>
-                  <div className="min-w-0 truncate text-sm font-bold text-foreground md:col-span-2">{clientName}</div>
-                  <div className="flex flex-wrap items-center gap-x-3 text-sm md:contents">
-                    <div className="font-bold text-foreground md:col-span-2">{statusLabel[p.status]}</div>
-                    <div className="text-muted tabular-nums md:col-span-2">{p.startDate}</div>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 md:col-span-3 md:mt-0 md:justify-end">
-                    <button
-                      onClick={() => openEdit(p)}
-                      className="px-3 py-2 rounded-xl bg-surface-muted hover:bg-border-subtle text-foreground font-bold text-sm inline-flex items-center gap-2"
-                    >
-                      <Edit3 size={16} /> Bearbeiten
-                    </button>
-                    <button
-                      onClick={() => {
-                        setArchiveTarget(p);
-                        setArchiveReason('');
-                        setArchiveError(null);
-                      }}
-                      className="px-3 py-2 rounded-xl bg-surface-muted hover:bg-border-subtle text-foreground font-bold text-sm inline-flex items-center gap-2"
-                      disabled={Boolean(p.archivedAt)}
-                      title={p.archivedAt ? 'Bereits archiviert' : 'Archivieren'}
-                    >
-                      <Archive size={16} /> Archivieren
-                    </button>
-                  </div>
-                </div>
+                <TableRow key={p.id} interactive onClick={() => navigate({ to: `/projects/${p.id}` })} title="Projekt öffnen">
+                  <TableCell>
+                    <div className="font-medium">{p.name}</div>
+                    {p.code && <div className="text-caption text-muted">{p.code}</div>}
+                  </TableCell>
+                  <TableCell className="max-w-64 truncate">{clientName}</TableCell>
+                  <TableCell>
+                    <Badge tone={statusTone[p.status]}>
+                      {statusLabel[p.status]}
+                    </Badge>
+                  </TableCell>
+                  <TableCell muted className="hidden tabular-nums md:table-cell">{p.startDate}</TableCell>
+                  <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
+                    <Menu
+                      aria-label={`Aktionen für ${p.name}`}
+                      align="end"
+                      trigger={(props) => (
+                        <IconButton {...props} size="sm" tooltip="Aktionen" aria-label={`Aktionen für ${p.name}`}>
+                          <MoreHorizontal size={16} aria-hidden="true" />
+                        </IconButton>
+                      )}
+                      items={[
+                        { id: 'edit', label: 'Bearbeiten', icon: <Edit3 size={14} />, onSelect: () => openEdit(p) },
+                        {
+                          id: 'archive',
+                          label: 'Archivieren',
+                          icon: <Archive size={14} />,
+                          disabled: Boolean(p.archivedAt),
+                          onSelect: () => {
+                            setArchiveTarget(p);
+                            setArchiveReason('');
+                            setArchiveError(null);
+                          },
+                        },
+                      ]}
+                    />
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </div>
-        )}
-      </div>
+          </TableBody>
+        </Table>
+      )}
 
       <Modal
         open={isEditorOpen && Boolean(draft)}
@@ -284,7 +287,7 @@ export const ProjectsView: React.FC = () => {
           <>
             <div className="flex items-center justify-between px-6 py-5 border-b border-border">
               <div>
-                <h3 id="project-editor-title" className="text-lg font-black text-foreground">
+                <h3 id="project-editor-title" className="text-lg font-semibold text-foreground">
                   {editorMode === 'create' ? 'Neues Projekt' : 'Projekt bearbeiten'}
                 </h3>
                 <p id="project-editor-description" className="text-sm text-muted mt-1">Änderungen werden im Audit-Log gespeichert.</p>
@@ -293,20 +296,20 @@ export const ProjectsView: React.FC = () => {
                 type="button"
                 onClick={closeEditor}
                 aria-label="Dialog schließen"
-                className="w-10 h-10 rounded-full bg-surface-muted hover:bg-border-subtle flex items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
-                <X size={18} />
+                <X size={16} />
               </button>
             </div>
 
             <div className="p-6 grid grid-cols-2 gap-4">
               <div className="col-span-2">
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="projectsview-kunde-pflicht">Kunde (Pflicht)</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-kunde-pflicht">Kunde (Pflicht)</label>
                 <select id="projectsview-kunde-pflicht"
                   value={draft.clientId ?? ''}
                   onChange={(e) => setDraft({ ...draft, clientId: e.target.value })}
                   disabled={editorMode === 'edit'}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-60"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-60"
                 >
                   <option value="">(Bitte auswählen)</option>
                   {clients.map((c) => (
@@ -323,21 +326,21 @@ export const ProjectsView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="projectsview-projektcode">Projektcode</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-projektcode">Projektcode</label>
                 <input id="projectsview-projektcode"
                   value={draft.code ?? ''}
                   onChange={(e) => setDraft({ ...draft, code: e.target.value })}
                   placeholder="Leer lassen für automatische Vergabe (z.B. PRJ-2026-001)"
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="projectsview-status">Status</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-status">Status</label>
                 <select id="projectsview-status"
                   value={draft.status}
                   onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="active">Aktiv</option>
                   <option value="planned">Geplant</option>
@@ -347,62 +350,62 @@ export const ProjectsView: React.FC = () => {
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="projectsview-projektname-pflicht">Projektname (Pflicht)</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-projektname-pflicht">Projektname (Pflicht)</label>
                 <input id="projectsview-projektname-pflicht"
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="projectsview-start">Start</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-start">Start</label>
                 <input id="projectsview-start"
                   type="date"
                   value={draft.startDate}
                   onChange={(e) => setDraft({ ...draft, startDate: e.target.value })}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="projectsview-ende-optional">Ende (optional)</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-ende-optional">Ende (optional)</label>
                 <input id="projectsview-ende-optional"
                   type="date"
                   value={draft.endDate ?? ''}
                   onChange={(e) => setDraft({ ...draft, endDate: e.target.value || undefined })}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="projectsview-budget">Budget</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-budget">Budget</label>
                 <input id="projectsview-budget"
                   type="number"
                   value={draft.budget ?? 0}
                   onChange={(e) => setDraft({ ...draft, budget: Number(e.target.value) })}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-muted mb-1">Archiviert</label>
+                <label className="block text-xs font-semibold text-muted mb-1">Archiviert</label>
                 <div className="w-full bg-surface-muted border border-border rounded-xl p-3 text-sm font-medium text-foreground">
                   {draft.archivedAt ? draft.archivedAt : 'Nein'}
                 </div>
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="projectsview-beschreibung-optional">Beschreibung (optional)</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-beschreibung-optional">Beschreibung (optional)</label>
                 <textarea id="projectsview-beschreibung-optional"
                   value={draft.description ?? ''}
                   onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                   rows={3}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+ className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
                 />
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="projectsview-grund-pflicht">Grund (Pflicht)</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-grund-pflicht">Grund (Pflicht)</label>
                 <textarea id="projectsview-grund-pflicht"
                   value={reason}
                   onChange={(e) => {
@@ -411,9 +414,9 @@ export const ProjectsView: React.FC = () => {
                   }}
                   rows={3}
                   placeholder="z.B. Projektstart verschoben, Code angepasst, ..."
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+ className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
                 />
-                {reasonError && <div className="mt-2 text-sm font-bold text-error-text">{reasonError}</div>}
+                {reasonError && <div className="mt-2 text-sm font-semibold text-error-text">{reasonError}</div>}
               </div>
             </div>
 
@@ -442,11 +445,11 @@ export const ProjectsView: React.FC = () => {
       >
         {archiveTarget && (
           <>
-            <h3 id="project-archive-title" className="text-lg font-black text-foreground mb-1">Projekt archivieren</h3>
+            <h3 id="project-archive-title" className="text-lg font-semibold text-foreground mb-1">Projekt archivieren</h3>
             <p id="project-archive-description" className="text-sm text-muted mb-4">
               {archiveTarget.name} wird archiviert (nicht gelöscht). Bitte Grund angeben.
             </p>
-            <label htmlFor="project-archive-reason" className="text-xs font-bold text-muted">Grund (Pflicht)</label>
+            <label htmlFor="project-archive-reason" className="text-xs font-semibold text-muted">Grund (Pflicht)</label>
             <textarea
               id="project-archive-reason"
               value={archiveReason}
@@ -455,10 +458,10 @@ export const ProjectsView: React.FC = () => {
                 if (archiveError) setArchiveError(null);
               }}
               rows={3}
-              className="mt-2 w-full rounded-2xl border border-control-border bg-surface-muted px-4 py-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-3 py-2.5 hover:border-ink-500 mt-2 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               placeholder="z.B. Projekt abgeschlossen, Kunde gekündigt, ..."
             />
-            {archiveError && <div className="mt-2 text-sm font-bold text-error-text">{archiveError}</div>}
+            {archiveError && <div className="mt-2 text-sm font-semibold text-error-text">{archiveError}</div>}
             <div className="mt-6 flex items-center justify-end gap-3">
               <Button
                 variant="secondary"

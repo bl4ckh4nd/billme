@@ -53,7 +53,7 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border p-6">
         <div className="flex items-center gap-3">
-          <IconComponent size={28} className={iconColor} aria-hidden="true" />
+          <IconComponent size={24} className={iconColor} aria-hidden="true" />
           <div>
             <h2 id={titleId} className="text-xl font-semibold text-foreground">{statusMessage}</h2>
             <p className="mt-1 text-sm text-muted">
@@ -81,7 +81,7 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
               <FileText size={20} className="text-muted" aria-hidden="true" />
               <span className="text-sm font-medium text-muted">Geprüfte Rechnungen</span>
             </div>
-            <p className="text-3xl font-bold text-foreground">{result.processedInvoices}</p>
+            <p className="text-3xl font-semibold text-foreground">{result.processedInvoices}</p>
           </div>
 
           {/* Emails Sent */}
@@ -90,7 +90,7 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
               <Mail size={20} className="text-success-text" aria-hidden="true" />
               <span className="text-sm font-medium text-success-text">E-Mails versendet</span>
             </div>
-            <p className="text-3xl font-bold text-success-text">{result.emailsSent}</p>
+            <p className="text-3xl font-semibold text-success-text">{result.emailsSent}</p>
           </div>
 
           {/* Fees Applied */}
@@ -99,7 +99,7 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
               <Euro size={20} className="text-info-text" aria-hidden="true" />
               <span className="text-sm font-medium text-info-text">Mahngebühren</span>
             </div>
-            <p className="text-3xl font-bold text-info-text">{result.feesApplied}</p>
+            <p className="text-3xl font-semibold text-info-text">{result.feesApplied}</p>
           </div>
         </div>
 

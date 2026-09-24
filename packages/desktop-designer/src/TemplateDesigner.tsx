@@ -348,7 +348,7 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
           {/* Validation overlay */}
           {validation.show && (
             <div className="absolute left-1/2 top-8 z-[var(--z-dropdown)] max-w-sm -translate-x-1/2 rounded-xl bg-white p-4 shadow-2xl no-print">
-              <div className="mb-2 flex items-center gap-2 font-bold text-black">
+              <div className="mb-2 flex items-center gap-2 font-semibold text-black">
                 {validation.issues.length === 0 ? <CheckCircle className="text-success-text" /> : <AlertTriangle className="text-error-text" />}
                 {validation.issues.length === 0 ? 'Alles in Ordnung' : 'Prüfung: Handlungsbedarf'}
               </div>
@@ -368,12 +368,12 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
         </div>
 
         {/* Right inspector / layers */}
-        <div className="z-20 flex w-80 flex-col border-l border-dark-border bg-white no-print">
-          <div className="flex border-b border-border">
+        <div className="z-20 flex w-80 flex-col border-l border-dark-border bg-dark-1 text-inverse-foreground no-print">
+          <div className="flex border-b border-dark-border">
             <button
               onClick={() => setActiveTab('inspector')}
-              className={`flex flex-1 items-center justify-center gap-2 py-4 text-xs font-bold uppercase tracking-wider transition-colors ${
-                activeTab === 'inspector' ? 'border-b-2 border-black text-black' : 'text-muted hover:text-foreground'
+              className={`flex flex-1 items-center justify-center gap-2 py-3 text-label transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring-dark ${
+                activeTab === 'inspector' ? 'border-b-2 border-accent text-inverse-foreground' : 'text-dark-muted hover:text-inverse-foreground'
               }`}
             >
               <SlidersHorizontal size={14} />
@@ -381,8 +381,8 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('layers')}
-              className={`flex flex-1 items-center justify-center gap-2 py-4 text-xs font-bold uppercase tracking-wider transition-colors ${
-                activeTab === 'layers' ? 'border-b-2 border-black text-black' : 'text-muted hover:text-foreground'
+              className={`flex flex-1 items-center justify-center gap-2 py-3 text-label transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring-dark ${
+                activeTab === 'layers' ? 'border-b-2 border-accent text-inverse-foreground' : 'text-dark-muted hover:text-inverse-foreground'
               }`}
             >
               <Layers size={14} />

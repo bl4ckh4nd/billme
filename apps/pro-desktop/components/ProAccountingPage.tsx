@@ -134,11 +134,18 @@ const mapLedgerAccountNames = (
 const mapTransactions = (
   rows: Awaited<ReturnType<typeof ipc.pro.listBankTransactions>>,
   virtualPostedTransactionIds: ReadonlySet<string> = new Set(),
+  draftsByTransactionId: ReadonlyMap<string, NonNullable<IpcResult<'pro:getDraftByTransactionId'>>> = new Map(),
 ): ProUiTransaction[] => {
   return rows.map((row) => {
+    // The persisted booking draft owns the workflow state and its validation
+    // issues; without it a blocked draft looked like an untouched import.
+    const draft = draftsByTransactionId.get(row.id);
     const workflowStatus: ProUiTransaction['workflowStatus'] =
-      row.status === 'booked' || row.linkedInvoiceId ? 'posted' : 'imported';
+      row.status === 'booked' || row.linkedInvoiceId ? 'posted' : draft?.workflowStatus ?? 'imported';
     const missingReceipt = !row.linkedInvoiceId;
+    const draftIssues = draft?.validationIssues ?? [];
+    const draftErrors = draftIssues.filter((issue) => issue.severity === 'error').length;
+    const draftWarnings = draftIssues.filter((issue) => issue.severity === 'warning').length;
 
     return {
       id: row.id,
@@ -153,9 +160,9 @@ const mapTransactions = (
       suggestionConfidence: row.suggestionConfidence,
       hasReceipt: !missingReceipt,
       issueCounts: {
-        errors: 0,
-        warnings: missingReceipt ? 1 : 0,
-        infos: 0,
+        errors: draftErrors,
+        warnings: draftWarnings + (missingReceipt ? 1 : 0),
+        infos: draftIssues.length - draftErrors - draftWarnings,
       },
       flags: missingReceipt ? ['missing_receipt'] : [],
       bookingDraftId: `draft-${row.id}`,
@@ -342,6 +349,7 @@ export const ProAccountingPage: React.FC = () => {
     const baseTransactions = mapTransactions(
       transactionRows,
       virtualPostedTransactionIds,
+      new Map(draftRows.map((draft) => [draft.transactionId, draft])),
     );
     const mergedTransactions = baseTransactions;
     const bankAccountNumberByTransactionId = Object.fromEntries(
@@ -720,7 +728,7 @@ export const ProAccountingPage: React.FC = () => {
 
   if (txQuery.isLoading || draftQuery.isLoading || policyQuery.isLoading) {
     return (
-      <div className="bg-surface rounded-2xl p-8 min-h-full shadow-sm text-sm text-muted">
+      <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs text-sm text-muted">
         Lade Pro-Buchhaltungsdaten…
       </div>
     );
@@ -728,7 +736,7 @@ export const ProAccountingPage: React.FC = () => {
 
   if (txQuery.isError || draftQuery.isError || policyQuery.isError || ledgerStatsError || ledgerAccountsError || bankAccountsError) {
     return (
-      <div className="bg-surface rounded-2xl p-8 min-h-full shadow-sm text-sm text-error-text" role="alert">
+      <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs text-sm text-error-text" role="alert">
         Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error ?? policyQuery.error ?? ledgerStatsLoadError ?? ledgerAccountsLoadError ?? bankAccountsLoadError)}
       </div>
     );
@@ -736,8 +744,8 @@ export const ProAccountingPage: React.FC = () => {
 
   if ((ledgerStats?.total ?? 0) === 0) {
     return (
-      <div className="bg-surface rounded-2xl p-8 min-h-full shadow-sm">
-        <h2 className="text-xl font-black text-foreground">Pro Kontenrahmen fehlt</h2>
+      <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs">
+        <h2 className="text-xl font-semibold text-foreground">Pro Kontenrahmen fehlt</h2>
         <p className="mt-2 text-sm text-muted">
           Bitte laden Sie zuerst den SKR03/04 Kontenrahmen für die Pro-Buchhaltung.
         </p>
@@ -757,14 +765,14 @@ export const ProAccountingPage: React.FC = () => {
   }
 
   return (
-    <div className="bg-surface rounded-2xl px-6 pt-5 pb-0 h-full flex flex-col shadow-sm">
-      <div className="mb-3 flex items-center justify-between shrink-0">
+    <div className="bg-surface rounded-panel px-6 pt-6 pb-0 h-full flex flex-col shadow-xs">
+      <div className="mb-4 flex items-start justify-between shrink-0">
         <div>
-          <h2 className="text-xl font-black text-foreground leading-tight">Pro Buchhaltung</h2>
-          <p className="text-xs text-muted mt-0.5">Doppelte Buchführung, Kontenrahmen und Berichte.</p>
+          <h1 className="text-title text-foreground">Pro Buchhaltung</h1>
+          <p className="text-sm text-muted mt-1">Doppelte Buchführung, Kontenrahmen und Berichte.</p>
         </div>
-        <Button size="sm" variant="secondary" onClick={() => setShowRulesModal(true)}>
-          <Settings2 size={14} />
+        <Button variant="secondary" onClick={() => setShowRulesModal(true)}>
+          <Settings2 size={16} aria-hidden="true" />
           Regeln
         </Button>
       </div>

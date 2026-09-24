@@ -1,6 +1,7 @@
 import React from 'react';
 import { CircleHelp } from 'lucide-react';
 import { cn } from '../utils/cn';
+import { popoverExitClass, useExitTransition } from '../utils/useExitTransition';
 import { Portal } from './Portal';
 
 export interface HelpHintProps extends Omit<React.HTMLAttributes<HTMLSpanElement>, 'children'> {
@@ -25,6 +26,7 @@ export const HelpHint: React.FC<HelpHintProps> = ({
   const popupRef = React.useRef<HTMLDivElement>(null);
   const [open, setOpen] = React.useState(false);
   const [position, setPosition] = React.useState<PopupPosition | null>(null);
+  const { mounted, closing } = useExitTransition(open);
   // Emil: delay the first tooltip, then open adjacent ones instantly.
   const openTimer = React.useRef<number | undefined>(undefined);
   const lastCloseAt = React.useRef(0);
@@ -55,11 +57,13 @@ export const HelpHint: React.FC<HelpHintProps> = ({
     setOpen(false);
   };
 
+  // The last position survives the exit transition; it resets once the tooltip unmounts.
   React.useEffect(() => {
-    if (!open) {
-      setPosition(null);
-      return undefined;
-    }
+    if (!mounted) setPosition(null);
+  }, [mounted]);
+
+  React.useEffect(() => {
+    if (!open) return undefined;
 
     const updatePosition = () => {
       const anchor = anchorRef.current;
@@ -141,7 +145,7 @@ export const HelpHint: React.FC<HelpHintProps> = ({
       >
         <CircleHelp size={16} aria-hidden="true" />
       </button>
-      {open && (
+      {mounted && (
         <Portal>
           <div
             ref={popupRef}
@@ -149,13 +153,17 @@ export const HelpHint: React.FC<HelpHintProps> = ({
             role="tooltip"
             aria-live="polite"
             aria-atomic="true"
-            className="ui-enter-popover fixed z-[var(--z-dropdown)] w-80 max-w-full max-h-screen overflow-auto rounded-lg border border-dark-border-subtle bg-dark-base p-3 text-sm text-background"
+            className={cn(
+              'ui-enter-popover fixed z-[var(--z-dropdown)] w-80 max-w-full max-h-screen overflow-auto rounded-control bg-surface-inverse p-3 text-sm text-inverse-foreground',
+              closing && popoverExitClass,
+            )}
             style={{
               top: position?.top ?? 0,
               left: position?.left ?? 0,
               width: position?.width,
               visibility: position ? 'visible' : 'hidden',
-            }}
+              '--origin': 'top left',
+            } as React.CSSProperties}
           >
             {children}
           </div>

@@ -243,7 +243,19 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
     'invoice.sellerVatId': invoice.taxMeta?.sellerVatId ?? settings.finance.vatId ?? '',
   };
 
-  return text.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
+  // Templates saved before the due date became a placeholder still carry the old
+  // fixed 14-day sentence, which contradicts any other payment term.
+  const documentLabel = getInvoiceDocumentLabel(invoice.documentKind);
+  // German compounds need a linking "s": Rechnungs-Nr, Auftragsbestätigungs-Nr, but Lieferschein-Nr.
+  const numberLabel = /(rechnung|bestätigung)$/i.test(documentLabel) ? `${documentLabel}s-Nr` : `${documentLabel}-Nr`;
+  const normalizedText = text
+    .replace(
+      'Bitte überweisen Sie den Betrag innerhalb von 14 Tagen ohne Abzug',
+      'Bitte überweisen Sie den Betrag bis spätestens {{invoice.dueDate}} ohne Abzug',
+    )
+    .replaceAll('{{invoice.documentLabel}}-Nr', numberLabel);
+
+  return normalizedText.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
     const val = dataMap[key.trim()];
     return val !== undefined ? val : match;
   });

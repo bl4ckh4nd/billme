@@ -4,7 +4,7 @@ import { Modal } from '@billme/ui';
 import { ipc } from '../ipc/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
-import { useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
+import { useProActiveChart, useProLedgerAccountsQuery } from '../hooks/useProLedger';
 
 interface BankAccountModalProps {
   isOpen: boolean;
@@ -15,9 +15,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
   const queryClient = useQueryClient();
   const titleId = useId();
   const descriptionId = useId();
-  const { data: ledgerStats } = useProLedgerStatsQuery();
-  const activeChart =
-    (ledgerStats?.byChart.SKR03 ?? 0) >= (ledgerStats?.byChart.SKR04 ?? 0) ? 'SKR03' : 'SKR04';
+  const activeChart = useProActiveChart();
   const { data: ledgerAccounts = [], isError: ledgerAccountsError } = useProLedgerAccountsQuery({
     chart: activeChart,
     limit: 3000,
@@ -102,7 +100,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
             <Building2 size={20} aria-hidden="true" />
           </div>
           <div>
-            <h2 id={titleId} className="text-xl font-black text-foreground">Neues Bankkonto</h2>
+            <h2 id={titleId} className="text-xl font-semibold text-foreground">Neues Bankkonto</h2>
             <p id={descriptionId} className="text-sm text-muted mt-0.5">
               Fügen Sie ein neues Konto hinzu
             </p>
@@ -160,7 +158,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
             value={formData.iban}
             onChange={(e) => setFormData({ ...formData, iban: e.target.value })}
             placeholder="DE89 3704 0044 0532 0130 00"
-            className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </div>
 
@@ -174,7 +172,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
             step="0.01"
             value={formData.balance}
             onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
-            className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </div>
 
@@ -188,7 +186,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
             onChange={(e) =>
               setFormData({ ...formData, defaultSkrAccountNumber: e.target.value })
             }
-            className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             disabled={ledgerAccounts.length === 0}
           >
             {ledgerAccounts.length === 0 ? (
@@ -215,7 +213,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
         <button
           type="button"
           onClick={onClose}
-          className="px-5 py-2.5 rounded-xl font-bold text-muted hover:bg-surface-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          className="px-5 py-2.5 rounded-xl font-semibold text-muted hover:bg-surface-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         >
           Abbrechen
         </button>
@@ -223,7 +221,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
           type="button"
           onClick={handleSave}
           disabled={isSaving}
-          className="px-5 py-2.5 rounded-xl font-bold bg-accent text-accent-foreground hover:bg-accent-hover disabled:bg-disabled-surface disabled:text-disabled-foreground disabled:cursor-not-allowed transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          className="px-5 py-2.5 rounded-xl font-semibold bg-accent text-accent-foreground hover:bg-accent-hover disabled:bg-disabled-surface disabled:text-disabled-foreground disabled:cursor-not-allowed transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         >
           {isSaving ? 'Speichern...' : 'Speichern'}
         </button>

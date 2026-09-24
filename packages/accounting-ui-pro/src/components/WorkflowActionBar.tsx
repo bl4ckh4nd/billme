@@ -30,7 +30,7 @@ export default function WorkflowActionBar({
             type="button"
             onClick={() => onAction(action)}
             disabled={isBusy}
-            className="px-4 py-2 rounded-lg border border-control-border bg-surface text-foreground text-sm font-bold hover:bg-surface-muted disabled:opacity-50"
+            className="px-4 py-2 rounded-lg border border-control-border bg-surface text-foreground text-sm font-semibold hover:bg-surface-muted disabled:opacity-50"
           >
             {bookingActionLabels[action]}
           </button>
@@ -39,7 +39,7 @@ export default function WorkflowActionBar({
         type="button"
         onClick={() => onAction(primary)}
         disabled={isBusy}
-        className="min-h-11 px-5 py-2 rounded-lg bg-dark-base text-background text-sm font-bold hover:bg-dark-2 disabled:opacity-50"
+        className="min-h-11 px-5 py-2 rounded-control bg-surface-inverse text-inverse-foreground text-sm font-semibold hover:bg-surface-inverse-raised disabled:opacity-50"
       >
         {isBusy ? 'Speichert...' : bookingActionLabels[primary]}
       </button>

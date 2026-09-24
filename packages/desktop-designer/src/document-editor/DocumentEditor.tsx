@@ -257,10 +257,18 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   useEffect(() => {
     if (mode !== 'create' || formData.dueDate) return;
     const due = new Date();
-    due.setDate(due.getDate() + (templateType === 'invoice' ? effectiveSettings.legal?.paymentTermsDays ?? 14 : 0));
+    // ponytail: offers default to 30 days validity; replace with a settings field once one exists.
+    due.setDate(due.getDate() + (templateType === 'invoice' ? effectiveSettings.legal?.paymentTermsDays ?? 14 : 30));
     const iso = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`;
+    if (formData === baseline) {
+      // A default is not a user edit: keep an untouched draft pristine for the discard prompt.
+      const next = { ...formData, dueDate: iso };
+      history.reset(next);
+      setBaseline(next);
+      return;
+    }
     setFormData((previous) => previous.dueDate ? previous : { ...previous, dueDate: iso });
-  }, [effectiveSettings.legal?.paymentTermsDays, formData.dueDate, mode, setFormData, templateType]);
+  }, [baseline, effectiveSettings.legal?.paymentTermsDays, formData, history.reset, mode, setFormData, templateType]);
 
   const applyClientToDocument = useCallback((client: ClientLike) => {
     const addresses = client.addresses ?? [];
@@ -535,10 +543,10 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
         {dirty ? <span className="hidden items-center gap-1 text-xs font-semibold text-warning md:flex"><span className="h-1.5 w-1.5 rounded-full bg-warning" />Ungespeichert</span> : null}
         <div className="flex rounded-lg border border-border bg-surface-muted p-0.5" role="group" aria-label="Dokumentansicht">
           <button type="button" aria-pressed={view === 'edit'} onClick={() => setView('edit')} className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${view === 'edit' ? 'bg-surface text-foreground shadow-sm' : 'text-muted'}`}>Bearbeiten</button>
-          <button type="button" aria-pressed={view === 'preview'} onClick={() => setView('preview')} className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold ${view === 'preview' ? 'bg-surface text-foreground shadow-sm' : 'text-muted'}`}><Eye size={13} /> Vorschau</button>
+          <button type="button" aria-pressed={view === 'preview'} onClick={() => setView('preview')} className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold ${view === 'preview' ? 'bg-surface text-foreground shadow-sm' : 'text-muted'}`}><Eye size={14} /> Vorschau</button>
         </div>
         {firstValidationError ? <span id="document-save-validation-error" className="max-w-56 text-right text-xs text-error" role="status" aria-live="assertive">{firstValidationError}</span> : null}
-        <button type="button" onClick={handleSave} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground hover:bg-accent-hover" aria-label="Speichern" aria-describedby={firstValidationError ? 'document-save-validation-error' : undefined}><Save size={15} /> <span className="hidden sm:inline">Speichern</span></button>
+        <button type="button" onClick={handleSave} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground hover:bg-accent-hover" aria-label="Speichern" aria-describedby={firstValidationError ? 'document-save-validation-error' : undefined}><Save size={16} /> <span className="hidden sm:inline">Speichern</span></button>
       </header>
 
       {saveError && validationErrors.length === 0 ? <div className="mx-auto mt-3 w-full max-w-[900px] rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm font-medium text-error" role="alert" aria-live="assertive">{saveError}</div> : null}

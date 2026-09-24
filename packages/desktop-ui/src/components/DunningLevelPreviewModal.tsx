@@ -83,7 +83,7 @@ export const DunningLevelPreviewModal = ({
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border bg-surface-muted px-6 py-4">
         <div>
-          <h2 id={titleId} className="text-lg font-bold text-foreground">
+          <h2 id={titleId} className="text-lg font-semibold text-foreground">
             E-Mail Vorschau – Mahnstufe {levelNumber}
           </h2>
           <p className="mt-0.5 text-xs text-muted">
@@ -119,7 +119,7 @@ export const DunningLevelPreviewModal = ({
           <div className="border-b border-border-subtle bg-surface px-6 py-4">
             <div className="mb-3 flex items-start justify-between">
               <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-surface-muted text-sm font-bold text-foreground">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-surface-muted text-sm font-semibold text-foreground">
                   {senderInitials}
                 </div>
                 <div>

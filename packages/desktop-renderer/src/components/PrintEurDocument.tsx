@@ -27,12 +27,12 @@ export const PrintEurDocument: React.FC<Props> = (props) => (
 );
 
 const PrintEurInner: React.FC<Props> = ({ taxYear, from, to }) => {
-  const { data: report } = useQuery({
+  const { data: report, error: reportError } = useQuery({
     queryKey: ['eur', 'report', taxYear, from, to],
     queryFn: () => ipc.eur.getReport({ taxYear, from, to }),
   });
 
-  const { data: settings } = useQuery({
+  const { data: settings, error: settingsError } = useQuery({
     queryKey: ['settings'],
     queryFn: () => ipc.settings.get(),
   });
@@ -40,6 +40,11 @@ const PrintEurInner: React.FC<Props> = ({ taxYear, from, to }) => {
   React.useEffect(() => {
     (globalThis as any).__PDF_READY__ = false;
   }, []);
+
+  React.useEffect(() => {
+    const error = reportError ?? settingsError;
+    (globalThis as any).__PDF_ERROR__ = error ? `EÜR konnte nicht geladen werden: ${String((error as Error).message ?? error)}` : undefined;
+  }, [reportError, settingsError]);
 
   React.useEffect(() => {
     if (!report || !settings) return;

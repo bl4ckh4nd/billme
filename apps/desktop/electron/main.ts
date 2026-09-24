@@ -7,6 +7,9 @@ import { initNotificationPush } from './notifications';
 import { logger } from '../utils/logger';
 import { PRODUCT_PROFILE } from '../productProfile';
 import { registerEmbeddedConnectionHandler } from '@billme/desktop-core/electron/embeddedConnection';
+import { isPdfPrintWebContents } from '@billme/desktop-core/electron/pdfExport';
+import { createDesktopIntegration, startEmbeddedAutomationTicker } from '@billme/desktop-core/electron/embeddedAutomation';
+import { secrets } from './secrets';
 import { createLocalBackend, type LocalBackendHandle } from './localBackend';
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
@@ -99,9 +102,11 @@ const createWindow = async () => {
   await win.loadFile(path.join(appDir, '../renderer/index.html'), { hash: '/' });
 };
 
+let stopAutomation: (() => Promise<void>) | undefined;
+
 const unregisterEmbeddedConnection = registerEmbeddedConnectionHandler(ipcMain, {
   resolveConnection: () => localBackend?.embeddedConnection() ?? null,
-  isTrustedSender: (sender) => mainWindow?.webContents === sender,
+  isTrustedSender: (sender) => mainWindow?.webContents === sender || isPdfPrintWebContents(sender),
 });
 
 registerNativeIpcHandlers(ipcMain, {
@@ -162,6 +167,13 @@ app.whenReady().then(async () => {
   localBackend = await createLocalBackend({
     userDataPath,
     profile: PRODUCT_PROFILE,
+    desktopIntegration: createDesktopIntegration({ secrets, getUserDataPath: () => app.getPath('userData') }),
+  });
+  const backend = localBackend;
+  stopAutomation = startEmbeddedAutomationTicker({
+    product: 'lite',
+    connection: () => backend.embeddedConnection(),
+    logger,
   });
 
   await createWindow();
@@ -219,6 +231,7 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   shutdownPromise ??= (async () => {
     unregisterEmbeddedConnection();
+    await stopAutomation?.();
     await localBackend?.close();
   })();
 

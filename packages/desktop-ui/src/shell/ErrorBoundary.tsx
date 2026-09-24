@@ -1,6 +1,10 @@
 import React, { ReactNode, ErrorInfo } from 'react';
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react';
 
+// Vite replaces `process.env.NODE_ENV` at build time. Declared module-locally so
+// browser tsconfigs without Node types accept it; Node-typed apps are unaffected.
+declare const process: { env: { NODE_ENV?: string } };
+
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: (error: Error, reset: () => void) => ReactNode;
@@ -87,7 +91,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
               <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-error-bg border border-error-border mb-4">
                 <AlertTriangle size={32} className="text-error-text" aria-hidden="true" />
               </div>
-              <h1 className="text-3xl font-bold text-foreground mb-2">
+              <h1 className="text-title text-foreground mb-2">
                 Diese Ansicht konnte nicht geladen werden
               </h1>
               <p className="text-muted">
@@ -98,7 +102,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
             {/* Error Details */}
             <div className="bg-surface rounded-xl border border-error-border p-6 mb-6">
               <div className="mb-4">
-                <h2 className="text-sm font-bold text-muted uppercase tracking-wide mb-2">
+                <h2 className="text-sm font-semibold text-muted uppercase tracking-wide mb-2">
                   Fehlerdetails
                 </h2>
                 <div className="bg-error-bg border border-error-border rounded-md p-4 max-h-48 overflow-y-auto">
@@ -110,7 +114,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 
               {isDev && this.state.errorInfo && (
                 <div>
-                  <h2 className="text-sm font-bold text-muted uppercase tracking-wide mb-2">
+                  <h2 className="text-sm font-semibold text-muted uppercase tracking-wide mb-2">
                     Stack Trace
                   </h2>
                   <div className="bg-surface-muted border border-border rounded-md p-4 max-h-48 overflow-y-auto">
@@ -138,17 +142,17 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                   <button
                     type="button"
                     onClick={this.handleReset}
-                    className="w-full flex items-center justify-center gap-2 bg-dark-base hover:bg-dark-2 text-background font-bold py-3 px-4 rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="w-full flex items-center justify-center gap-2 bg-dark-base hover:bg-dark-2 text-background font-semibold py-3 px-4 rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
-                    <RefreshCw size={18} aria-hidden="true" />
+                    <RefreshCw size={16} aria-hidden="true" />
                     Erneut versuchen
                   </button>
                   <button
                     type="button"
                     onClick={this.handleReload}
-                    className="w-full flex items-center justify-center gap-2 bg-surface-muted hover:bg-border text-foreground font-bold py-3 px-4 rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="w-full flex items-center justify-center gap-2 bg-surface-muted hover:bg-border text-foreground font-semibold py-3 px-4 rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
-                    <Home size={18} aria-hidden="true" />
+                    <Home size={16} aria-hidden="true" />
                     Anwendung neu laden
                   </button>
                 </>
@@ -156,9 +160,9 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                 <button
                   type="button"
                   onClick={this.handleReload}
-                  className="w-full flex items-center justify-center gap-2 bg-error-text hover:bg-error text-background font-bold py-3 px-4 rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="w-full flex items-center justify-center gap-2 bg-error-text hover:bg-error text-background font-semibold py-3 px-4 rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
-                  <RefreshCw size={18} aria-hidden="true" />
+                  <RefreshCw size={16} aria-hidden="true" />
                   Anwendung neu laden
                 </button>
               )}

@@ -1,10 +1,10 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
-    Euro, TrendingUp, TrendingDown, Clock, Plus,
-    ArrowUpRight, CheckCircle, CreditCard, PieChart, Settings2
+    TrendingUp, TrendingDown, Plus,
+    ArrowUpRight, CheckCircle, CreditCard, Settings2
 } from 'lucide-react';
-import { EMPTY_VALUE, EmptyState, ErrorState, useActionFeedback } from '@billme/ui';
+import { Avatar, Badge, Button, EmptyState, ErrorState, IconButton, PageHeader, cn, popoverExitClass, useActionFeedback, useExitTransition, Sparkline } from '@billme/ui';
 import type { AppSettings, DocumentTemplate, Invoice, InvoiceElement } from '@billme/desktop-core/types';
 import { useInvoicesQuery } from '@billme/desktop-renderer/hooks/useInvoices';
 import { useArticlesQuery } from '@billme/desktop-renderer/hooks/useArticles';
@@ -37,12 +37,13 @@ const DashboardSettingsPopover: React.FC<{
   fields: Array<{ key: string; label: string; min?: number; max?: number; step?: number }>;
   values: Record<string, number>;
   dark?: boolean;
-}> = ({ children, onSave, fields, values, dark }) => {
+}> = ({ onSave, fields, values, dark }) => {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(values);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const pos = useAnchoredPosition(buttonRef, open);
+  const panel = useExitTransition(open);
 
   // Sync draft when opening
   useEffect(() => {
@@ -78,21 +79,24 @@ const DashboardSettingsPopover: React.FC<{
         title="Kennzahlen anpassen"
         aria-expanded={open}
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
-        className={`ui-press p-1.5 rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 ${dark ? 'text-dark-muted hover:bg-white/10 hover:text-white focus-visible:outline-focus-ring-dark' : 'text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-focus-ring'}`}
+        className={`ui-press inline-flex size-8 items-center justify-center rounded-control transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 ${dark ? 'text-inverse-muted hover:bg-surface-inverse-overlay hover:text-inverse-foreground focus-visible:outline-focus-ring-dark' : 'text-muted hover:bg-surface-sunken hover:text-foreground focus-visible:outline-focus-ring'}`}
       >
         <Settings2 size={14} />
       </button>
-      {open && createPortal(
+      {panel.mounted && createPortal(
         <div
           ref={dropdownRef}
           style={{ position: 'fixed', top: pos.top, right: pos.right }}
-          className="ui-enter-popover z-[var(--z-dropdown)] bg-surface text-foreground rounded-xl shadow-2xl p-4 min-w-[260px]"
+          className={cn(
+            'ui-enter-popover [--origin:top_right] z-[var(--z-dropdown)] bg-surface text-foreground rounded-panel shadow-md p-4 min-w-[260px]',
+            panel.closing && popoverExitClass,
+          )}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="space-y-3">
             {fields.map((f) => (
               <div key={f.key}>
-                <label className="block text-xs font-bold text-muted uppercase tracking-wide mb-1" htmlFor={`dashboardviews-field-${f.key}`}>{f.label}</label>
+                <label className="block mb-1 text-label text-foreground" htmlFor={`dashboardviews-field-${f.key}`}>{f.label}</label>
                 <input id={`dashboardviews-field-${f.key}`}
                   type="number"
                   min={f.min ?? 1}
@@ -100,7 +104,7 @@ const DashboardSettingsPopover: React.FC<{
                   step={f.step ?? 1}
                   value={draft[f.key] ?? 0}
                   onChange={(e) => setDraft({ ...draft, [f.key]: Number(e.target.value) })}
-                  className="w-full bg-surface-muted border border-control-border rounded-md px-3 py-2 text-sm font-bold tabular-nums text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm tabular-nums text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
             ))}
@@ -108,14 +112,13 @@ const DashboardSettingsPopover: React.FC<{
           <button
             type="button"
             onClick={() => { onSave(draft); setOpen(false); }}
-            className="mt-3 w-full py-2 bg-dark-base text-background rounded-md text-xs font-bold hover:bg-dark-2 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="mt-3 w-full py-2 bg-dark-base text-background rounded-md text-xs font-semibold hover:bg-dark-2 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
             Speichern
           </button>
         </div>,
         document.body,
       )}
-      {children}
     </>
   );
 };
@@ -200,10 +203,19 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
         const d = new Date(inv.date);
         return d.getFullYear() === currentYear && d.getMonth() === currentMonth;
       });
-    const monthRevenueNet = monthIssued.reduce(
-      (acc, inv) => acc + (inv.items ?? []).reduce((s, it) => s + (Number(it.total) || 0), 0),
-      0,
-    );
+    const netOf = (inv: (typeof invoices)[number]) => (inv.items ?? []).reduce((s, it) => s + (Number(it.total) || 0), 0);
+    const monthRevenueNet = monthIssued.reduce((acc, inv) => acc + netOf(inv), 0);
+    // The same measure for the five months before, oldest first, for the trend line.
+    const revenueTrend = Array.from({ length: 6 }, (_, index) => {
+      const month = new Date(currentYear, currentMonth - 5 + index, 1);
+      return invoices
+        .filter((inv) => inv.status !== 'draft')
+        .filter((inv) => {
+          const d = new Date(inv.date);
+          return d.getFullYear() === month.getFullYear() && d.getMonth() === month.getMonth();
+        })
+        .reduce((acc, inv) => acc + netOf(inv), 0);
+    });
 
     return {
       outstandingTotal,
@@ -213,6 +225,7 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
       dueSoonTotal,
       monthRevenueNet,
       monthIssuedCount: monthIssued.length,
+      revenueTrend,
     };
   }, [invoices, settings, dash.dueSoonDays]);
 
@@ -418,291 +431,243 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-8">
+    <div className="pb-4">
+      <PageHeader
+        title="Übersicht"
+        description={new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+        className="px-1 pt-2"
+      />
 
-      {/* 1. Dark Card - Open Invoices / Liquidity */}
-      <div className="bg-dark-3 rounded-2xl p-8 text-white relative overflow-hidden min-h-[420px] flex flex-col justify-between shadow-sm">
-         <div className="relative z-10">
-             <div className="flex justify-between items-start mb-12">
-                 <div className="p-3 bg-white/10 rounded-xl border border-white/10">
-                    <Clock size={24} className="text-background" />
-                 </div>
-                 <div className="flex gap-2 items-center">
-                     <DashboardSettingsPopover
-                       dark
-                       fields={[{ key: 'dueSoonDays', label: 'Fällig in X Tagen', min: 1, max: 90 }]}
-                       values={{ dueSoonDays: dash.dueSoonDays }}
-                       onSave={(v) => saveDashboardSettings({ dueSoonDays: v.dueSoonDays })}
-                     ><span /></DashboardSettingsPopover>
-                     <button type="button" onClick={() => onNavigate('documents')} className="px-3 py-1.5 rounded-md border border-white/20 flex items-center gap-2 hover:bg-white/10 transition-colors text-xs font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark">
-                         Alle ansehen <ArrowUpRight size={14} />
-                     </button>
-                 </div>
-             </div>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
 
-             <div className="mb-4">
-                 <p className="text-dark-muted text-sm font-bold uppercase tracking-wide mb-2">Offene Forderungen</p>
-                 <h2 className="text-4xl sm:text-5xl font-bold tabular-nums tracking-tight mb-4 break-words">{formatCurrency(kpis.outstandingTotal)}</h2>
-
-                 <div className="flex flex-col gap-3">
-                     <div className="flex items-center justify-between bg-white/5 p-3 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
-                        <div className="flex items-center gap-3">
-                            <span className="px-2 py-0.5 rounded-full border border-error bg-error-bg text-xs font-bold text-error-text">Überfällig</span>
-                            <span className="text-sm font-bold text-white">({kpis.overdueCount})</span>
-                        </div>
-                        <span className="font-bold tabular-nums text-white">{formatCurrency(kpis.overdueTotal)}</span>
-                     </div>
-                     <div className="flex items-center justify-between bg-white/5 p-3 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
-                        <div className="flex items-center gap-3">
-                            <span className="px-2 py-0.5 rounded-full border border-background/40 bg-white/10 text-xs font-bold text-background">Fällig</span>
-                            <span className="text-sm font-bold text-white">in {dash.dueSoonDays} Tagen ({kpis.dueSoonCount})</span>
-                        </div>
-                        <span className="font-bold tabular-nums text-background">{formatCurrency(kpis.dueSoonTotal)}</span>
-                     </div>
-                 </div>
-             </div>
-         </div>
-
-         <div className="relative z-10 pt-6 border-t border-white/10">
-             <div className="flex justify-between items-end">
-                <div>
-                     <p className="text-dark-muted text-xs font-medium">Liquiditätsprognose</p>
-                     {paymentTrend !== null ? (
-                       <p className="text-white text-sm font-bold flex items-center gap-2 mt-1">
-                          <span className={`${paymentTrend >= 0 ? 'bg-success/20 text-white' : 'bg-error/20 text-white'} px-1.5 py-1 rounded text-xs flex items-center gap-0.5`}>
-                            {paymentTrend >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                            {paymentTrend >= 0 ? '+' : ''}{paymentTrend}%
-                          </span>
-                          zum Vormonat
-                       </p>
-                     ) : (
-                       <p className="text-dark-muted text-xs mt-1">Keine Vormonatsdaten</p>
-                     )}
-                </div>
-                <button
-                    type="button"
-                    onClick={() => onNavigate('documents', { kind: 'invoice', status: 'overdue' })}
-                    className="bg-accent text-accent-foreground px-6 py-3 rounded-xl font-bold text-sm hover:bg-accent-hover transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
-                >
-                    Mahnung senden
-                </button>
-             </div>
-         </div>
-      </div>
-
-      {/* 2. White Card - Revenue / Bestsellers */}
-      <div className="bg-surface rounded-2xl p-8 text-foreground relative overflow-hidden min-h-[420px] flex flex-col shadow-sm">
-          <div className="flex justify-between items-start mb-8">
-             <div>
-                <h3 className="text-2xl font-black mb-1">Umsatz (aktueller Monat)</h3>
-                <p className="text-muted text-xs font-bold uppercase">Laufendes Geschäftsjahr</p>
-             </div>
-             <div className="flex items-center gap-2">
+      {/* Focal card: the one inverse surface on this view (DESIGN.md contrast budget). */}
+      <section aria-labelledby="dashboard-receivables" className="lg:col-span-5 flex flex-col rounded-panel bg-surface-inverse p-6 text-inverse-foreground">
+         <div className="flex items-center justify-between gap-3">
+             <h2 id="dashboard-receivables" className="text-label text-inverse-muted">Offene Forderungen</h2>
+             <div className="flex items-center gap-1">
                  <DashboardSettingsPopover
-                   fields={[
-                     { key: 'monthlyRevenueGoal', label: 'Monatsziel (€)', min: 0, step: 1000 },
-                     { key: 'topCategoriesLimit', label: 'Top Kategorien (Anzahl)', min: 1, max: 20 },
-                   ]}
-                   values={{ monthlyRevenueGoal: dash.monthlyRevenueGoal, topCategoriesLimit: dash.topCategoriesLimit }}
-                   onSave={(v) => saveDashboardSettings({ monthlyRevenueGoal: v.monthlyRevenueGoal, topCategoriesLimit: v.topCategoriesLimit })}
+                   dark
+                   fields={[{ key: 'dueSoonDays', label: 'Fällig in X Tagen', min: 1, max: 90 }]}
+                   values={{ dueSoonDays: dash.dueSoonDays }}
+                   onSave={(v) => saveDashboardSettings({ dueSoonDays: v.dueSoonDays })}
                  ><span /></DashboardSettingsPopover>
-                 <div className="p-3 bg-surface-muted rounded-xl">
-                     <Euro size={24} className="text-foreground" />
-                 </div>
+                 <button type="button" onClick={() => onNavigate('documents')} className="inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-label text-inverse-muted transition-colors hover:bg-surface-inverse-overlay hover:text-inverse-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark">
+                     Alle ansehen <ArrowUpRight size={14} aria-hidden="true" />
+                 </button>
              </div>
+         </div>
+
+         <p className="mt-3 text-4xl font-semibold tracking-[-0.02em] tabular-nums break-words">{formatCurrency(kpis.outstandingTotal)}</p>
+
+         <dl className="mt-6 divide-y divide-border-inverse rounded-card bg-surface-inverse-raised">
+             <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <dt className="flex items-center gap-2 text-sm">
+                    <span className="size-1.5 rounded-full bg-error-inverse" aria-hidden="true" />
+                    Überfällig <span className="text-inverse-muted tabular-nums">({kpis.overdueCount})</span>
+                </dt>
+                <dd className="font-medium tabular-nums">{formatCurrency(kpis.overdueTotal)}</dd>
+             </div>
+             <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <dt className="flex items-center gap-2 text-sm">
+                    <span className="size-1.5 rounded-full bg-inverse-muted" aria-hidden="true" />
+                    Fällig in {dash.dueSoonDays} Tagen <span className="text-inverse-muted tabular-nums">({kpis.dueSoonCount})</span>
+                </dt>
+                <dd className="font-medium tabular-nums">{formatCurrency(kpis.dueSoonTotal)}</dd>
+             </div>
+         </dl>
+
+         <div className="mt-auto flex items-end justify-between gap-4 pt-6">
+            <div>
+                 <p className="text-caption text-inverse-muted">Liquiditätsprognose</p>
+                 {paymentTrend !== null ? (
+                   <p className="mt-1 flex items-center gap-1.5 text-sm">
+                      <span className={`inline-flex items-center gap-0.5 font-medium tabular-nums ${paymentTrend >= 0 ? 'text-accent' : 'text-error-inverse'}`}>
+                        {paymentTrend >= 0 ? <TrendingUp size={14} aria-hidden="true" /> : <TrendingDown size={14} aria-hidden="true" />}
+                        {paymentTrend >= 0 ? '+' : ''}{paymentTrend}%
+                      </span>
+                      <span className="text-inverse-muted">zum Vormonat</span>
+                   </p>
+                 ) : (
+                   <p className="mt-1 text-sm text-inverse-muted">Keine Vormonatsdaten</p>
+                 )}
+            </div>
+            <Button onClick={() => onNavigate('documents', { kind: 'invoice', status: 'overdue' })}>
+                Mahnung senden
+            </Button>
+         </div>
+      </section>
+
+      {/* Revenue this month */}
+      <section aria-labelledby="dashboard-revenue" className="lg:col-span-7 flex flex-col rounded-panel bg-surface p-6 shadow-xs">
+          <div className="flex items-start justify-between gap-3">
+             <div>
+                <h2 id="dashboard-revenue" className="text-section">Umsatz im laufenden Monat</h2>
+                <p className="text-caption text-muted">Netto, gestellte Rechnungen: <span className="tabular-nums">{kpis.monthIssuedCount}</span></p>
+             </div>
+             <DashboardSettingsPopover
+               fields={[
+                 { key: 'monthlyRevenueGoal', label: 'Monatsziel (€)', min: 0, step: 1000 },
+                 { key: 'topCategoriesLimit', label: 'Top Kategorien (Anzahl)', min: 1, max: 20 },
+               ]}
+               values={{ monthlyRevenueGoal: dash.monthlyRevenueGoal, topCategoriesLimit: dash.topCategoriesLimit }}
+               onSave={(v) => saveDashboardSettings({ monthlyRevenueGoal: v.monthlyRevenueGoal, topCategoriesLimit: v.topCategoriesLimit })}
+             ><span /></DashboardSettingsPopover>
           </div>
 
-          <div className="mb-8">
-              <h2 className="text-5xl font-bold tabular-nums mb-2">{formatCurrency(kpis.monthRevenueNet)}</h2>
-              <p className="text-xs text-muted font-bold uppercase tracking-wide mt-2">
-                Gestellte Rechnungen: {kpis.monthIssuedCount}
+          <div className="mt-3 flex items-end justify-between gap-4">
+            <p className="text-figure tabular-nums">{formatCurrency(kpis.monthRevenueNet)}</p>
+            {kpis.revenueTrend.some((value) => value > 0) && (
+              <Sparkline values={kpis.revenueTrend} aria-label="Netto-Umsatz der letzten 6 Monate" className="w-32" />
+            )}
+          </div>
+          {/* The goal is a user setting. A workspace that has not set one gets no
+              progress figure instead of a fabricated target. */}
+          {dash.monthlyRevenueGoal > 0 && (
+            <div className="mt-4">
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-ink-100">
+                  <div
+                    className="h-full rounded-full bg-ink-950"
+                    style={{ width: `${Math.min(100, (kpis.monthRevenueNet / dash.monthlyRevenueGoal) * 100)}%` }}
+                  />
+              </div>
+              <div className="mt-1.5 flex justify-between text-caption text-muted">
+                  <span className="tabular-nums">{Math.round(Math.min(100, (kpis.monthRevenueNet / dash.monthlyRevenueGoal) * 100))} % erreicht</span>
+                  <span className="tabular-nums">Ziel {formatCurrency(dash.monthlyRevenueGoal)}</span>
+              </div>
+            </div>
+          )}
+
+          <h3 className="mt-6 text-label text-muted">Wichtigste Einnahmequellen</h3>
+          {topCategories.length === 0 ? (
+            <EmptyState
+              title="Noch keine Umsätze in diesem Monat"
+              description="Sobald eine Rechnung dieses Monats als bezahlt erfasst ist, erscheint ihre Kategorie hier."
+              className="mt-2 px-3 py-6"
+            />
+          ) : (
+            <ul className="mt-1 divide-y divide-border-subtle">
+              {topCategories.map((row) => (
+                <li key={row.category}>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('articles', { query: row.category })}
+                    className="-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-3 rounded-control px-2 py-2.5 text-left transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  >
+                    <span className="flex min-w-0 items-center gap-3">
+                      <Avatar name={row.category} size="sm" />
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium">{row.category}</span>
+                        <span className="text-caption text-muted tabular-nums">
+                          {row.invoiceCount} {row.invoiceCount === 1 ? 'Rechnung' : 'Rechnungen'}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="font-medium tabular-nums">{formatCurrency(row.amount)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="mt-auto flex items-end justify-between gap-4 border-t border-border-subtle pt-4">
+            <div>
+              <p className="text-label text-muted">Offene Angebote, netto</p>
+              <p className="mt-0.5 text-caption text-muted tabular-nums">
+                Offen {offerPipeline.activeCount} · Angenommen {offerPipeline.acceptedCount} · Abgelehnt {offerPipeline.declinedCount}
               </p>
-              {/* The goal is a user setting. A workspace that has not set one gets no
-                  progress figure instead of a fabricated target. */}
-              {dash.monthlyRevenueGoal > 0 && (
-                <>
-                  <div className="w-full bg-surface-muted h-3 rounded-full overflow-hidden mt-4">
-                      <div
-                        className="bg-dark-base h-full rounded-full relative"
-                        style={{ width: `${Math.min(100, (kpis.monthRevenueNet / dash.monthlyRevenueGoal) * 100)}%` }}
-                      >
-                          <div className="absolute right-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-white/50 rounded-full"></div>
-                      </div>
-                  </div>
-                  <div className="flex justify-between mt-2 text-xs font-bold text-muted">
-                      <span>0 €</span>
-                      <span className="tabular-nums">Ziel: {formatCurrency(dash.monthlyRevenueGoal)}</span>
-                  </div>
-                </>
-              )}
+            </div>
+            <p className="text-xl font-semibold tabular-nums">{formatCurrency(offerPipeline.potentialNet)}</p>
+          </div>
+      </section>
+
+      {/* VAT estimate */}
+      <section aria-labelledby="dashboard-tax" className="lg:col-span-5 flex flex-col rounded-panel bg-surface p-6 shadow-xs">
+           <div className="flex items-start justify-between gap-3">
+              <h2 id="dashboard-tax" className="text-section">Steuerschätzung</h2>
+              <Badge tone="info">{taxEstimate.periodLabel}</Badge>
           </div>
 
-          <div className="flex-1 flex flex-col justify-end gap-4">
-              <h4 className="font-bold text-sm text-foreground">Wichtigste Einnahmequellen</h4>
+          <p className="mt-3 text-label text-muted">
+            {taxEstimate.vat <= 0 ? 'Keine voraussichtliche Umsatzsteuer' : 'Voraussichtliche Umsatzsteuer'}
+          </p>
+          <p className="mt-1 text-figure tabular-nums">{formatCurrency(taxEstimate.vat)}</p>
+          {taxEstimate.vat > 0 && (
+            <p className="mt-1 text-caption text-muted">Fällig am <span className="tabular-nums">{taxEstimate.dueLabel}</span></p>
+          )}
 
-              <div className="space-y-3">
-                  {topCategories.length === 0 ? (
-                    <EmptyState
-                      title="Noch keine Umsätze in diesem Monat"
-                      description="Sobald eine Rechnung dieses Monats als bezahlt erfasst ist, erscheint ihre Kategorie hier."
-                      className="px-3 py-6"
-                    />
-                  ) : (
-                    topCategories.map((row) => {
-                      const initials = row.category
-                        .split(/\s+/)
-                        .filter(Boolean)
-                        .slice(0, 2)
-                        .map((s) => s[0]!.toUpperCase())
-                        .join('');
-
-                      return (
-                        <button
-                          type="button"
-                          key={row.category}
-                          onClick={() => onNavigate('articles', { query: row.category })}
-                          className="flex w-full items-center justify-between p-3 border border-border rounded-xl hover:bg-surface-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-10 h-10 rounded-md bg-surface-muted text-foreground flex items-center justify-center font-bold text-xs shrink-0">
-                              {initials || EMPTY_VALUE}
-                            </div>
-                            <div className="min-w-0">
-                              <span className="font-bold text-sm block truncate">{row.category}</span>
-                              <span className="text-xs text-muted font-bold">
-                                {row.invoiceCount} {row.invoiceCount === 1 ? 'Rechnung' : 'Rechnungen'}
-                              </span>
-                            </div>
-                          </div>
-                          <span className="font-bold tabular-nums text-lg">{formatCurrency(row.amount)}</span>
-                        </button>
-                      );
-                    })
-                  )}
+          <dl className="mt-auto grid grid-cols-2 gap-4 border-t border-border-subtle pt-4">
+              <div>
+                  <dt className="text-caption text-muted">Netto-Basis ({taxMethod === 'ist' ? 'Ist' : 'Soll'})</dt>
+                  <dd className="mt-0.5 font-medium tabular-nums">{formatCurrency(taxEstimate.net)}</dd>
               </div>
-
-              <div className="mt-5 p-4 rounded-xl border border-border bg-surface-muted">
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <p className="text-xs font-bold text-muted uppercase tracking-wide">Offene Angebote</p>
-                    <p className="text-sm font-bold text-foreground">Nettowert</p>
-                  </div>
-                  <div className="text-lg font-bold tabular-nums text-foreground">{formatCurrency(offerPipeline.potentialNet)}</div>
-                </div>
-                <div className="text-xs text-muted font-bold">
-                  Basis: veröffentlicht/verschickt (Portal) • Offen: {offerPipeline.activeCount} • Angenommen: {offerPipeline.acceptedCount} • Abgelehnt: {offerPipeline.declinedCount}
-                </div>
+              <div>
+                  <dt className="text-caption text-muted">Brutto</dt>
+                  <dd className="mt-0.5 font-medium tabular-nums">{formatCurrency(taxEstimate.gross)}</dd>
               </div>
-          </div>
-      </div>
+          </dl>
+      </section>
 
-      {/* 3. Lime Card - Recent Payments */}
-      <div className="bg-accent rounded-2xl p-8 text-accent-foreground min-h-[350px] flex flex-col shadow-sm">
-
-          <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-black flex items-center gap-2">
-                 <CheckCircle size={20} className="text-accent-foreground" />
-                 Zahlungseingänge
-              </h3>
-              <div className="flex items-center gap-2">
+      {/* Recent payments */}
+      <section aria-labelledby="dashboard-payments" className="lg:col-span-7 flex flex-col rounded-panel bg-surface p-6 shadow-xs">
+          <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 id="dashboard-payments" className="text-section">Zahlungseingänge</h2>
+                <p className="text-caption text-muted">
+                  Dieser Monat <span className="font-medium text-foreground tabular-nums">{formatCurrency(paymentsThisMonthGross)}</span>
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
                   <DashboardSettingsPopover
                     fields={[{ key: 'recentPaymentsLimit', label: 'Angezeigte Zahlungen', min: 1, max: 20 }]}
                     values={{ recentPaymentsLimit: dash.recentPaymentsLimit }}
                     onSave={(v) => saveDashboardSettings({ recentPaymentsLimit: v.recentPaymentsLimit })}
                   ><span /></DashboardSettingsPopover>
-                  <button
-                    type="button"
-                    aria-label="Zu den Finanzen"
-                    onClick={() => onNavigate('finance')}
-                    className="w-10 h-10 rounded-full bg-black/5 flex items-center justify-center hover:bg-black/10 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                  >
-                      <ArrowUpRight size={18} />
-                  </button>
+                  <IconButton size="sm" aria-label="Zu den Finanzen" onClick={() => onNavigate('finance')}>
+                      <ArrowUpRight size={16} aria-hidden="true" />
+                  </IconButton>
               </div>
           </div>
 
-          <div className="space-y-2">
-              {payments.length === 0 ? (
-                <EmptyState
-                  title="Noch keine Zahlungseingänge"
-                  description="Erfasste Zahlungen erscheinen hier, sobald du sie an einer Rechnung einträgst."
-                  className="py-6"
-                />
-              ) : (
-                payments.slice(0, dash.recentPaymentsLimit).map((item) => (
+          {payments.length === 0 ? (
+            <EmptyState
+              title="Noch keine Zahlungseingänge"
+              description="Erfasste Zahlungen erscheinen hier, sobald du sie an einer Rechnung einträgst."
+              className="mt-4 py-6"
+            />
+          ) : (
+            <ul className="mt-3 divide-y divide-border-subtle">
+              {payments.slice(0, dash.recentPaymentsLimit).map((item) => (
+                <li key={`${item.invoiceId}:${item.date}:${item.amount}`}>
                   <button
                     type="button"
-                    key={`${item.invoiceId}:${item.date}:${item.amount}`}
-                    className="flex w-full items-center justify-between p-3 bg-white/60 rounded-xl border border-white/40 hover:bg-white/80 transition-colors text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    onClick={() =>
-                      onNavigate('documents', { kind: 'invoice', id: item.invoiceId })
-                    }
+                    className="-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-3 rounded-control px-2 py-2.5 text-left transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    onClick={() => onNavigate('documents', { kind: 'invoice', id: item.invoiceId })}
                     title={`${item.invoiceNumber}, ${item.client}`}
                   >
-                      <div className="min-w-0">
-                          <p className="text-xs font-bold text-black/70 mb-0.5">{formatDate(item.date)}</p>
-                          <p className="text-sm font-bold truncate">{item.client}</p>
-                          <p className="text-xs font-bold text-black/70 truncate">{item.invoiceNumber}</p>
-                      </div>
-                      <div className="text-right">
-                          <p className="text-base font-bold tabular-nums">{formatCurrency(item.amount)}</p>
-                          <div className="flex items-center justify-end gap-1 text-black/70">
-                             <CreditCard size={12} aria-hidden="true" />
-                             <p className="text-xs font-bold">{item.method}</p>
-                          </div>
-                      </div>
+                    <span className="flex min-w-0 items-center gap-3">
+                      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-100 text-accent-800" aria-hidden="true">
+                        <CheckCircle size={14} />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium">{item.client}</span>
+                        <span className="block truncate text-caption text-muted"><span className="tabular-nums">{formatDate(item.date)}</span> · {item.invoiceNumber}</span>
+                      </span>
+                    </span>
+                    <span className="text-right">
+                      <span className="block font-medium tabular-nums">{formatCurrency(item.amount)}</span>
+                      <span className="inline-flex items-center gap-1 text-caption text-muted">
+                        <CreditCard size={12} aria-hidden="true" />
+                        {item.method}
+                      </span>
+                    </span>
                   </button>
-                ))
-              )}
-          </div>
+                </li>
+              ))}
+            </ul>
+          )}
+      </section>
 
-          <div className="mt-auto pt-6 flex justify-between items-end">
-               <div>
-                   <p className="text-xs font-bold text-black/70 uppercase">Dieser Monat (Zahlungen)</p>
-                   <p className="text-2xl font-bold tabular-nums">{formatCurrency(paymentsThisMonthGross)}</p>
-               </div>
-          </div>
       </div>
-
-      {/* 4. Taxes (Umsatzsteuer). Tinted surface plus border marks it as a different
-          kind of figure than the two revenue cards above it. */}
-      <div className="bg-info-bg rounded-2xl p-6 text-foreground min-h-[350px] flex flex-col border border-info-border">
-           <div className="flex justify-between items-center mb-8">
-              <h3 className="text-xl font-black flex items-center gap-2">
-                 <PieChart size={20} className="text-info-text" aria-hidden="true" />
-                 Steuerschätzung
-              </h3>
-              <div className="bg-info-border/50 px-3 py-1 rounded-full text-xs font-bold text-info-text">
-                  {taxEstimate.periodLabel}
-              </div>
-          </div>
-
-          <div className="flex-1 flex flex-col justify-center">
-              <div className="text-center mb-8">
-                  <p className="text-xs font-bold text-muted uppercase tracking-wide mb-2">
-                    {taxEstimate.vat <= 0 ? 'Keine voraussichtliche Umsatzsteuer' : 'Voraussichtliche Umsatzsteuer'}
-                  </p>
-                  <h2 className="text-5xl font-bold tabular-nums">{formatCurrency(taxEstimate.vat)}</h2>
-                  {taxEstimate.vat > 0 && (
-                    <p className="text-xs font-bold mt-2 bg-info-border/50 inline-block px-3 py-1 rounded-full text-info-text">
-                      Fällig am {taxEstimate.dueLabel}
-                    </p>
-                  )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-surface rounded-xl p-4 border border-info-border">
-                      <p className="text-xs font-bold text-muted uppercase mb-1">Netto-Basis ({taxMethod === 'ist' ? 'Ist' : 'Soll'})</p>
-                      <p className="text-lg font-bold tabular-nums">{formatCurrency(taxEstimate.net)}</p>
-                  </div>
-                  <div className="bg-surface rounded-xl p-4 border border-info-border">
-                      <p className="text-xs font-bold text-muted uppercase mb-1">Brutto</p>
-                      <p className="text-lg font-bold tabular-nums">{formatCurrency(taxEstimate.gross)}</p>
-                  </div>
-              </div>
-          </div>
-      </div>
-
     </div>
   );
 };
@@ -745,24 +710,24 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
     };
 
     return (
-        <div className="bg-surface rounded-2xl shadow-sm p-8 min-h-[80vh]">
+        <div className="bg-surface rounded-panel shadow-xs p-6 lg:p-8 min-h-full">
             <div className="flex items-center justify-between mb-8">
                 <div>
-                    <h3 className="font-bold text-2xl text-foreground mb-1">Vorlagen</h3>
+                    <h3 className="font-semibold text-2xl text-foreground mb-1">Vorlagen</h3>
                     <p className="text-sm text-muted">Lege das Layout deiner Geschäftsdokumente fest.</p>
                 </div>
                 <div className="bg-surface-muted p-1 rounded-full flex items-center">
                     <button
                         type="button"
                         onClick={() => setActiveTab('invoice')}
-                        className={`px-6 py-2 rounded-full text-xs font-bold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${activeTab === 'invoice' ? 'bg-surface shadow-sm text-foreground' : 'text-muted hover:text-foreground'}`}
+                        className={`px-6 py-2 rounded-control text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${activeTab === 'invoice' ? 'bg-surface shadow-sm text-foreground' : 'text-muted hover:text-foreground'}`}
                     >
                         Rechnungen
                     </button>
                     <button
                         type="button"
                         onClick={() => setActiveTab('offer')}
-                        className={`px-6 py-2 rounded-full text-xs font-bold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${activeTab === 'offer' ? 'bg-surface shadow-sm text-foreground' : 'text-muted hover:text-foreground'}`}
+                        className={`px-6 py-2 rounded-control text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${activeTab === 'offer' ? 'bg-surface shadow-sm text-foreground' : 'text-muted hover:text-foreground'}`}
                     >
                         Angebote
                     </button>
@@ -785,7 +750,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
                         <button
                             type="button"
                             onClick={() => void handleCreateNewTemplate()}
-                            className="px-4 py-2 rounded-full text-xs font-bold bg-dark-base text-background hover:bg-dark-2 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                            className="px-4 py-2 rounded-control text-xs font-semibold bg-dark-base text-background hover:bg-surface-inverse-raised transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                         >
                             Neue Vorlage anlegen
                         </button>
@@ -802,7 +767,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
                     <div className="w-16 h-16 bg-surface border border-border rounded-full flex items-center justify-center">
                         <Plus size={24} className="text-muted group-hover:text-foreground" aria-hidden="true" />
                     </div>
-                    <span className="font-bold text-muted group-hover:text-foreground text-center px-4">
+                    <span className="font-semibold text-muted group-hover:text-foreground text-center px-4">
                         Neue {activeTab === 'invoice' ? 'Rechnungsvorlage' : 'Angebotsvorlage'}
                     </span>
                 </button>
@@ -839,7 +804,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
                              </div>
                          </div>
                     </div>
-                    <h4 className="font-bold text-lg text-foreground">{t.name}</h4>
+                    <h4 className="font-semibold text-lg text-foreground">{t.name}</h4>
                     <p className="text-xs text-muted">A4 • {t.id === activeTemplate?.id ? 'Aktiv' : 'Vorlage'}</p>
 
                     <button
@@ -848,7 +813,7 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
                             e.stopPropagation();
                             void setActiveTemplateMutation.mutateAsync({ kind: activeTab, templateId: t.id });
                         }}
-                        className={`absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-bold uppercase border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                        className={`absolute top-4 left-4 px-3 py-1 rounded-control text-xs font-semibold uppercase border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                             t.id === activeTemplate?.id
                                 ? 'bg-accent text-accent-foreground border-accent'
                                 : 'bg-surface text-muted border-control-border hover:bg-surface-muted'
@@ -861,9 +826,9 @@ export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer')
                         type="button"
                         aria-label={`Vorlage ${t.name} öffnen`}
                         onClick={(e) => { e.stopPropagation(); onOpenEditor(activeTab); }}
-                        className="absolute bottom-4 right-4 bg-dark-base text-background w-10 h-10 rounded-full flex items-center justify-center motion-safe:transition-opacity motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground absolute bottom-4 right-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
                     >
-                        <ArrowUpRight size={18} aria-hidden="true" />
+                        <ArrowUpRight size={16} aria-hidden="true" />
                     </button>
                 </div>
                 ))}

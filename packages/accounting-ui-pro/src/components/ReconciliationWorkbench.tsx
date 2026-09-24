@@ -265,11 +265,11 @@ export default function ReconciliationWorkbench({
       <div className="w-96 shrink-0 border-r border-subtle flex flex-col">
         <div className="px-4 py-3 border-b border-subtle">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-dark-base text-accent flex items-center justify-center shrink-0">
-              <ArrowRightLeft size={15} />
+            <div className="w-8 h-8 rounded-control bg-surface-sunken text-foreground flex items-center justify-center shrink-0">
+              <ArrowRightLeft size={16} />
             </div>
             <div className="min-w-0">
-              <h1 className="text-sm font-black tracking-tight text-foreground leading-tight">Bankabgleich Workbench</h1>
+              <h1 className="text-sm font-semibold tracking-tight text-foreground leading-tight">Bankabgleich Workbench</h1>
               <p className="text-xs text-muted font-medium leading-tight">
                 Vorschläge prüfen und in den Buchungsworkflow überführen.
               </p>
@@ -291,16 +291,16 @@ export default function ReconciliationWorkbench({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="font-bold text-sm text-foreground leading-tight">{tx.payee}</div>
+                    <div className="font-semibold text-sm text-foreground leading-tight">{tx.payee}</div>
                     <div className="text-xs text-muted mt-0.5 line-clamp-2">
                       {new Date(tx.date).toLocaleDateString('de-DE')} • {tx.description}
                     </div>
                   </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-bold ${status.className}`}>
+                  <span className={`px-2 py-1 rounded-full text-xs font-semibold ${status.className}`}>
                     {status.label}
                   </span>
                 </div>
-                <div className={`text-xs font-bold tabular-nums mt-1.5 ${tx.amount < 0 ? 'text-error-text' : 'text-success-text'}`}>
+                <div className={`text-xs font-semibold tabular-nums mt-1.5 ${tx.amount < 0 ? 'text-error-text' : 'text-success-text'}`}>
                   {formatCurrency(tx.amount, tx.currency)}
                 </div>
                 <div className="mt-1.5">
@@ -325,21 +325,21 @@ export default function ReconciliationWorkbench({
             <section className="space-y-4">
               {mutationError && <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">{mutationError}</div>}
               <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="text-xs uppercase tracking-wider text-muted font-bold">Bankbewegung</div>
+                <div className="text-xs uppercase tracking-wider text-muted font-semibold">Bankbewegung</div>
                 <div className="mt-2 grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
                   <div className="min-w-0">
-                    <div className="font-bold text-base text-foreground">{selectedTx.payee}</div>
+                    <div className="font-semibold text-base text-foreground">{selectedTx.payee}</div>
                     <div className="text-sm text-muted line-clamp-2">{selectedTx.description}</div>
                     <div className="text-xs text-muted mt-1">
                       {new Date(selectedTx.date).toLocaleDateString('de-DE')} • {selectedTx.id}
                     </div>
                   </div>
-                  <div className={`text-xl font-bold tabular-nums whitespace-nowrap ${selectedTx.amount < 0 ? 'text-error-text' : 'text-success-text'}`}>
+                  <div className={`text-xl font-semibold tabular-nums whitespace-nowrap ${selectedTx.amount < 0 ? 'text-error-text' : 'text-success-text'}`}>
                     {formatCurrency(selectedTx.amount, selectedTx.currency)}
                   </div>
                 </div>
                 <div className="mt-4">
-                  <div className="text-xs font-bold uppercase tracking-wide text-muted mb-1">Gegenkonto</div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted mb-1">Gegenkonto</div>
                   <AccountCombobox
                     accounts={accountOptions}
                     valueAccountId={bankAccountNumber ? draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountId ?? '' : ''}
@@ -368,7 +368,7 @@ export default function ReconciliationWorkbench({
 
               <div className="border border-border rounded-2xl bg-surface p-5">
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-bold text-foreground">Kontierungsvorschlag</div>
+                  <div className="text-sm font-semibold text-foreground">Kontierungsvorschlag</div>
                   <span className="text-xs text-muted font-medium">
                     Sicherheit {Math.round((selectedTx.suggestionConfidence ?? 0.5) * 100)} %
                   </span>
@@ -376,7 +376,7 @@ export default function ReconciliationWorkbench({
                 <div className="mt-4 space-y-3">
                   <div className="border border-border rounded-xl p-4 bg-surface-muted/50">
                     <div className="flex items-center justify-between">
-                      <div className="font-bold text-foreground">
+                      <div className="font-semibold text-foreground">
                         {selectedTx.suggestion ?? 'Kein Vorschlag'}
                       </div>
                     </div>
@@ -387,19 +387,19 @@ export default function ReconciliationWorkbench({
                         <button
                           onClick={runPrimaryAction}
                           disabled={!primary || !splitIsValid || mutationBusy}
-                        className="px-4 py-2 rounded-lg bg-dark-base text-background text-sm font-bold hover:bg-dark-2 disabled:opacity-40 inline-flex items-center gap-1"
+                        className="px-4 py-2 rounded-control bg-surface-inverse text-inverse-foreground text-sm font-semibold hover:bg-surface-inverse-raised disabled:opacity-40 inline-flex items-center gap-1"
                       >
                         <CheckCircle2 size={14} />
                         {primary ? 'Nächste Aktion' : 'Kein Schritt möglich'}
                       </button>
                         <button
                           onClick={() => onOpenTransaction(selectedTx.id)}
-                        className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted"
+                        className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted"
                       >
                         Im Editor öffnen
                       </button>
                         <button
-                          className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
+                          className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
                           onClick={addSplitLine}
                           disabled={draftReadOnly}
                       >
@@ -410,12 +410,12 @@ export default function ReconciliationWorkbench({
                   </div>
                   {!splitIsValid && (
                     <div className="mt-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text">
-                      <div className="font-bold">Abgleich-Validierung fehlgeschlagen</div>
+                      <div className="font-semibold">Abgleich-Validierung fehlgeschlagen</div>
                       <ul className="mt-1 space-y-1">
                         {splitDifference >= 0.01 && (
                           <li>
                             Summe der Gegenbuchungen stimmt nicht mit der Bankbewegung überein. Differenz:{' '}
-                            <span className="font-bold tabular-nums">{formatCurrency(splitDifference, selectedTx.currency)}</span>
+                            <span className="font-semibold tabular-nums">{formatCurrency(splitDifference, selectedTx.currency)}</span>
                           </li>
                         )}
                         {directionErrors.map((msg) => (
@@ -431,11 +431,11 @@ export default function ReconciliationWorkbench({
             <section className="space-y-4">
               <div className="border border-border rounded-2xl bg-surface p-5">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-bold text-foreground">Entwurf / Split-Bearbeitung inline</div>
+                  <div className="text-sm font-semibold text-foreground">Entwurf / Split-Bearbeitung inline</div>
                     <button
                     onClick={saveInlineSplit}
                     disabled={draftReadOnly || mutationBusy}
-                    className="px-3 py-1.5 rounded-lg bg-dark-base text-background text-xs font-bold hover:bg-dark-2"
+                    className="px-3 py-1.5 rounded-control bg-surface-inverse text-inverse-foreground text-xs font-semibold hover:bg-surface-inverse-raised"
                   >
                     Split speichern
                   </button>
@@ -452,7 +452,7 @@ export default function ReconciliationWorkbench({
                           updateLine(line.id, (cur) => ({ ...cur, type: e.target.value as 'Soll' | 'Haben' }))
                         }
                         disabled={draftReadOnly}
-                        className="col-span-2 border border-control-border rounded-xl px-2 py-2 text-sm"
+                        className="px-2.5 h-8 hover:border-ink-500 col-span-2 border border-control-border rounded-control text-sm"
                         aria-label="Soll/Haben"
                       >
                         <option value="Soll">Soll</option>
@@ -486,12 +486,12 @@ export default function ReconciliationWorkbench({
                         value={line.amount}
                         onChange={(e) => updateLine(line.id, (cur) => ({ ...cur, amount: e.target.value }))}
                         disabled={draftReadOnly}
-                        className="col-span-3 border border-control-border rounded-xl px-2 py-2 text-sm text-right"
+                        className="px-2.5 h-8 hover:border-ink-500 col-span-3 border border-control-border rounded-control text-sm text-right"
                         aria-label="Betrag"
                       />
                       <button
                         onClick={() => removeLine(line.id)}
-                        className="col-span-1 text-xs font-bold text-muted hover:text-error-text"
+                        className="col-span-1 text-xs font-semibold text-muted hover:text-error-text"
                         aria-label="Zeile entfernen"
                         disabled={draftReadOnly || draft.lines.length <= 2}
                       >
@@ -508,14 +508,14 @@ export default function ReconciliationWorkbench({
                   <span>
                     Richtung: {selectedTx.amount >= 0 ? 'Eingang (Bank Soll)' : 'Ausgang (Bank Haben)'}
                   </span>
-                  <span className={`tabular-nums ${splitIsValid ? 'text-success-text font-bold' : 'text-error-text font-bold'}`}>
+                  <span className={`tabular-nums ${splitIsValid ? 'text-success-text font-semibold' : 'text-error-text font-semibold'}`}>
                     {splitIsValid ? 'OK' : `Diff ${formatCurrency(splitDifference, selectedTx.currency)}`}
                   </span>
                 </div>
               </div>
 
               <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="text-sm font-bold text-foreground mb-2">Workflow Schnellaktionen</div>
+                <div className="text-sm font-semibold text-foreground mb-2">Workflow Schnellaktionen</div>
                 <div className="flex flex-wrap gap-2">
                   {allowed.map((action) => (
                     <button
@@ -537,10 +537,10 @@ export default function ReconciliationWorkbench({
                           }
                         })();
                       }}
-                      className="px-3 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
+                      className="px-3 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
                       disabled={mutationBusy || (!splitIsValid && (action === 'submit_for_review' || action === 'approve' || action === 'post'))}
                     >
-                      {action === 'post' ? <Play size={13} /> : <ArrowRight size={13} />}
+                      {action === 'post' ? <Play size={14} /> : <ArrowRight size={14} />}
                       {actionLabel(action)}
                     </button>
                   ))}

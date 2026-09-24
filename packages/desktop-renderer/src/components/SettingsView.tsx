@@ -432,94 +432,94 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         return (
           <div className="max-w-2xl space-y-8">
             <div>
-              <h3 className="text-xl font-bold mb-1">Unternehmensdaten</h3>
+              <h3 className="text-xl font-semibold mb-1">Unternehmensdaten</h3>
               <p className="text-muted text-sm">Diese Informationen erscheinen im Kopf- und Fußbereich der Rechnung.</p>
             </div>
 
             <div className="grid grid-cols-1 gap-6">
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-firmenname">Firmenname</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-firmenname">Firmenname</label>
                 <input
                   id="settings-firmenname"
                   type="text"
                   value={settings.company.name}
                   onChange={(e) => updateNested('company', 'name', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-bold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-inhaber-geschaftsfuhrer">Inhaber / Geschäftsführer</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-inhaber-geschaftsfuhrer">Inhaber / Geschäftsführer</label>
                 <input
                   id="settings-inhaber-geschaftsfuhrer"
                   type="text"
                   value={settings.company.owner}
                   onChange={(e) => updateNested('company', 'owner', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div className="col-span-2">
-                  <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-strae-hausnr">Straße & Hausnr.</label>
+                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-strae-hausnr">Straße & Hausnr.</label>
                   <input
                     id="settings-strae-hausnr"
                     type="text"
                     value={settings.company.street}
                     onChange={(e) => updateNested('company', 'street', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-plz">PLZ</label>
+                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-plz">PLZ</label>
                   <input
                     id="settings-plz"
                     type="text"
                     value={settings.company.zip}
                     onChange={(e) => updateNested('company', 'zip', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-stadt">Stadt</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-stadt">Stadt</label>
                 <input
                   id="settings-stadt"
                   type="text"
                   value={settings.company.city}
                   onChange={(e) => updateNested('company', 'city', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
               <div className="border-t border-border-subtle my-4"></div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-e-mail-adresse">E-Mail Adresse</label>
+                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-e-mail-adresse">E-Mail Adresse</label>
                   <input
                     id="settings-e-mail-adresse"
                     type="email"
                     value={settings.company.email}
                     onChange={(e) => updateNested('company', 'email', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-telefon">Telefon</label>
+                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-telefon">Telefon</label>
                   <input
                     id="settings-telefon"
                     type="text"
                     value={settings.company.phone}
                     onChange={(e) => updateNested('company', 'phone', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-webseite">Webseite</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-webseite">Webseite</label>
                 <input
                   id="settings-webseite"
                   type="text"
                   value={settings.company.website}
                   onChange={(e) => updateNested('company', 'website', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
             </div>
@@ -529,7 +529,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         return (
           <div className="max-w-2xl space-y-8">
             <div>
-              <h3 className="text-xl font-bold mb-1">Kategorien</h3>
+              <h3 className="text-xl font-semibold mb-1">Kategorien</h3>
               <p className="text-muted text-sm">
                 Kategorien für „Produkte & Leistungen“. Änderungen können beim Speichern automatisch in Artikeln
                 übernommen werden.
@@ -538,7 +538,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
             <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle space-y-4">
               <div className="flex items-center justify-between">
-                <h4 className="font-bold text-sm uppercase flex items-center gap-2">
+                <h4 className="font-semibold text-sm uppercase flex items-center gap-2">
                   <Tags size={16} /> Kategorien
                 </h4>
                 <Button
@@ -568,11 +568,11 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 <div className="space-y-3">
                   {(settings.catalog?.categories ?? []).map((cat, idx) => (
                     <div key={cat.id} className="flex items-center gap-3 bg-surface rounded-xl p-3 border border-border-subtle">
-                      <div className="w-10 h-10 rounded-xl bg-surface-muted border border-border-subtle flex items-center justify-center text-xs font-bold text-muted">
+                      <div className="w-10 h-10 rounded-xl bg-surface-muted border border-border-subtle flex items-center justify-center text-xs font-semibold text-muted">
                         {String(idx + 1).padStart(2, '0')}
                       </div>
                       <div className="flex-1">
-                        <label className="block text-xs font-bold text-muted uppercase tracking-wider mb-1">
+                        <label className="block mb-1 text-label text-foreground">
                           Name
                         </label>
                         <input
@@ -585,7 +585,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                               return { ...prev, catalog: { categories: list } };
                             });
                           }}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                         />
                       </div>
                       <button type="button"
@@ -596,9 +596,9 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                           });
                         }}
                         aria-label={`Kategorie ${cat.name} entfernen`}
-                        className="w-10 h-10 rounded-full bg-error-bg text-error-text transition-colors hover:bg-error-border flex items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       >
-                        <Trash2 size={18} aria-hidden="true" />
+                        <Trash2 size={16} aria-hidden="true" />
                       </button>
                     </div>
                   ))}
@@ -611,41 +611,41 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         return (
           <div className="max-w-2xl space-y-8">
             <div>
-              <h3 className="text-xl font-bold mb-1">Bankverbindung & Steuer</h3>
+              <h3 className="text-xl font-semibold mb-1">Bankverbindung & Steuer</h3>
               <p className="text-muted text-sm">Wichtig für den Zahlungsverkehr und die Pflichtangaben auf der Rechnung.</p>
             </div>
 
             <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle">
-              <h4 className="font-bold mb-4 flex items-center gap-2 text-sm uppercase">
+              <h4 className="font-semibold mb-4 flex items-center gap-2 text-sm uppercase">
                 <Landmark size={16} /> Bankkonto
               </h4>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2" htmlFor="settingsview-bankname">Bankname</label>
+                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-bankname">Bankname</label>
                   <input id="settingsview-bankname"
                     type="text"
                     value={settings.finance.bankName}
                     onChange={(e) => updateNested('finance', 'bankName', e.target.value)}
- className="w-full bg-surface border border-control-border rounded-xl p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-muted mb-2" htmlFor="settingsview-iban">IBAN</label>
+                    <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-iban">IBAN</label>
                     <input id="settingsview-iban"
                       type="text"
                       value={settings.finance.iban}
                       onChange={(e) => updateNested('finance', 'iban', e.target.value)}
- className="w-full bg-surface border border-control-border rounded-xl p-3 text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-muted mb-2" htmlFor="settingsview-bic">BIC</label>
+                    <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-bic">BIC</label>
                     <input id="settingsview-bic"
                       type="text"
                       value={settings.finance.bic}
                       onChange={(e) => updateNested('finance', 'bic', e.target.value)}
- className="w-full bg-surface border border-control-border rounded-xl p-3 text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                     />
                   </div>
                 </div>
@@ -654,36 +654,36 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
             <div className="grid grid-cols-2 gap-6">
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-steuernummer">Steuernummer</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-steuernummer">Steuernummer</label>
                 <input
                   id="settings-steuernummer"
                   type="text"
                   value={settings.finance.taxId}
                   onChange={(e) => updateNested('finance', 'taxId', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-ust-idnr">USt-IdNr.</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-ust-idnr">USt-IdNr.</label>
                 <input
                   id="settings-ust-idnr"
                   type="text"
                   value={settings.finance.vatId}
                   onChange={(e) => updateNested('finance', 'vatId', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-registergericht-hrb">Registergericht / HRB</label>
+              <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-registergericht-hrb">Registergericht / HRB</label>
               <input
                 id="settings-registergericht-hrb"
                 type="text"
                 value={settings.finance.registerCourt}
                 onChange={(e) => updateNested('finance', 'registerCourt', e.target.value)}
                 placeholder="z.B. Amtsgericht Berlin HRB 12345"
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
               />
             </div>
           </div>
@@ -692,25 +692,25 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         return (
           <div className="max-w-2xl space-y-8">
             <div>
-              <h3 className="text-xl font-bold mb-1">Nummernkreise</h3>
+              <h3 className="text-xl font-semibold mb-1">Nummernkreise</h3>
               <p className="text-muted text-sm">Definieren Sie das Format für Ihre Rechnungs-, Angebots- und Kundennummern.</p>
             </div>
 
             <div className="bg-surface-muted rounded-xl p-6 border border-border">
               <div className="flex justify-between items-start mb-6">
-                <h4 className="font-bold flex items-center gap-2">
-                  <FileDigit size={18} /> Rechnungen
+                <h4 className="font-semibold flex items-center gap-2">
+                  <FileDigit size={16} /> Rechnungen
                 </h4>
                 <div className="bg-surface px-3 py-1 rounded-lg shadow-sm">
-                  <span className="text-xs font-bold text-muted uppercase mr-2">Vorschau:</span>
-                  <span className="font-mono font-bold">{nextInvoicePreview}</span>
+                  <span className="text-xs font-semibold text-muted uppercase mr-2">Vorschau:</span>
+                  <span className="font-mono font-semibold">{nextInvoicePreview}</span>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
                   <div className="flex items-center gap-2 mb-2">
-                    <label className="text-xs font-bold text-muted uppercase tracking-wide">Präfix Format</label>
+                    <label className="text-label text-foreground">Präfix Format</label>
                     <div className="group relative">
                       <HelpCircle size={12} className="text-muted cursor-help" />
                       <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-dark-base text-background text-xs p-2 rounded-sm pointer-events-none opacity-0 group-hover:opacity-100 motion-safe:transition-opacity motion-reduce:transition-none z-[var(--z-dropdown)]">
@@ -722,11 +722,11 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="text"
                     value={settings.numbers.invoicePrefix}
                     onChange={(e) => updateNested('numbers', 'invoicePrefix', e.target.value)}
- className="w-full bg-surface border border-control-border rounded-xl p-3 font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-nachste-nummer">Nächste Nummer</label>
+                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-nachste-nummer">Nächste Nummer</label>
                   <input
                     id="settings-nachste-nummer"
                     type="number"
@@ -737,12 +737,12 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       'nextInvoiceNumber',
                       parsePositiveInteger(e.target.value, settings.numbers.nextInvoiceNumber),
                     )}
- className="w-full bg-surface border border-control-border rounded-xl p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow tabular-nums"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-mindestlange-padding">Mindestlänge (Padding)</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-mindestlange-padding">Mindestlänge (Padding)</label>
                 <input
                   id="settings-mindestlange-padding"
                   type="range"
@@ -757,7 +757,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   )}
                   className="w-full accent-dark-base h-2 bg-border rounded-lg appearance-none cursor-pointer"
                 />
-                <div className="flex justify-between text-xs font-bold text-muted mt-1">
+                <div className="flex justify-between text-xs font-semibold text-muted mt-1">
                   <span>1</span>
                   <span className="tabular-nums">{settings.numbers.numberLength} Stellen (z.B. 001)</span>
                   <span>6</span>
@@ -767,23 +767,23 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
             <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle">
               <div className="flex justify-between items-start mb-6">
-                <h4 className="font-bold flex items-center gap-2">
-                  <FileDigit size={18} /> Angebote
+                <h4 className="font-semibold flex items-center gap-2">
+                  <FileDigit size={16} /> Angebote
                 </h4>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-prafix-format">Präfix Format</label>
+                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-prafix-format">Präfix Format</label>
                   <input
                     id="settings-prafix-format"
                     type="text"
                     value={settings.numbers.offerPrefix}
                     onChange={(e) => updateNested('numbers', 'offerPrefix', e.target.value)}
- className="w-full bg-surface border border-control-border rounded-xl p-3 font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-nachste-nummer-2">Nächste Nummer</label>
+                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-nachste-nummer-2">Nächste Nummer</label>
                   <input
                     id="settings-nachste-nummer-2"
                     type="number"
@@ -794,7 +794,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       'nextOfferNumber',
                       parsePositiveInteger(e.target.value, settings.numbers.nextOfferNumber),
                     )}
- className="w-full bg-surface border border-control-border rounded-xl p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow tabular-nums"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
                   />
                 </div>
               </div>
@@ -802,27 +802,27 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
             <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle">
               <div className="flex justify-between items-start mb-6">
-                <h4 className="font-bold flex items-center gap-2">
-                  <FileDigit size={18} /> Kunden
+                <h4 className="font-semibold flex items-center gap-2">
+                  <FileDigit size={16} /> Kunden
                 </h4>
                 <div className="bg-surface px-3 py-1 rounded-lg shadow-sm">
-                  <span className="text-xs font-bold text-muted uppercase mr-2">Vorschau:</span>
-                  <span className="font-mono font-bold">{nextCustomerPreview}</span>
+                  <span className="text-xs font-semibold text-muted uppercase mr-2">Vorschau:</span>
+                  <span className="font-mono font-semibold">{nextCustomerPreview}</span>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-prafix-format-2">Präfix Format</label>
+                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-prafix-format-2">Präfix Format</label>
                   <input
                     id="settings-prafix-format-2"
                     type="text"
                     value={settings.numbers.customerPrefix}
                     onChange={(e) => updateNested('numbers', 'customerPrefix', e.target.value)}
- className="w-full bg-surface border border-control-border rounded-xl p-3 font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-nachste-nummer-3">Nächste Nummer</label>
+                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-nachste-nummer-3">Nächste Nummer</label>
                   <input
                     id="settings-nachste-nummer-3"
                     type="number"
@@ -833,12 +833,12 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       'nextCustomerNumber',
                       parsePositiveInteger(e.target.value, settings.numbers.nextCustomerNumber),
                     )}
- className="w-full bg-surface border border-control-border rounded-xl p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow tabular-nums"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-mindestlange-padding-2">Mindestlänge (Padding)</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-mindestlange-padding-2">Mindestlänge (Padding)</label>
                 <input
                   id="settings-mindestlange-padding-2"
                   type="range"
@@ -853,7 +853,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   )}
                   className="w-full accent-dark-base h-2 bg-border rounded-lg appearance-none cursor-pointer"
                 />
-                <div className="flex justify-between text-xs font-bold text-muted mt-1">
+                <div className="flex justify-between text-xs font-semibold text-muted mt-1">
                   <span>1</span>
                   <span className="tabular-nums">{settings.numbers.customerNumberLength} Stellen (z.B. 0001)</span>
                   <span>8</span>
@@ -866,13 +866,13 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         return (
           <div className="max-w-3xl space-y-8">
             <div>
-              <h3 className="text-xl font-bold mb-1">E-Mail Konfiguration</h3>
+              <h3 className="text-xl font-semibold mb-1">E-Mail Konfiguration</h3>
               <p className="text-muted text-sm">Konfigurieren Sie SMTP oder Resend für den E-Mail-Versand.</p>
             </div>
 
             {/* Provider Selection */}
             <div className="bg-surface border border-border rounded-xl p-6">
-              <h4 className="font-bold mb-4">E-Mail-Anbieter</h4>
+              <h4 className="font-semibold mb-4">E-Mail-Anbieter</h4>
               <div className="flex gap-3">
                 <button type="button"
                   aria-pressed={settings.email.provider === 'none'}
@@ -916,26 +916,26 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             {/* SMTP Configuration */}
             {settings.email.provider === 'smtp' && (
               <div className="bg-surface border border-border rounded-xl p-6 space-y-4">
-                <h4 className="font-bold">SMTP-Konfiguration</h4>
+                <h4 className="font-semibold">SMTP-Konfiguration</h4>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-muted mb-2" htmlFor="settingsview-server-host">Server (Host)</label>
+                    <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-server-host">Server (Host)</label>
                     <input id="settingsview-server-host"
                       type="text"
                       value={settings.email.smtpHost}
                       onChange={(e) => updateNested('email', 'smtpHost', e.target.value)}
                       placeholder="smtp.example.com"
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-muted mb-2" htmlFor="settingsview-port">Port</label>
+                    <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-port">Port</label>
                     <input id="settingsview-port"
                       type="number"
                       value={settings.email.smtpPort}
                       onChange={(e) => updateNested('email', 'smtpPort', Number(e.target.value))}
                       placeholder="587"
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                     />
                   </div>
                 </div>
@@ -951,17 +951,17 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   </label>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2" htmlFor="settingsview-benutzername">Benutzername</label>
+                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-benutzername">Benutzername</label>
                   <input id="settingsview-benutzername"
                     type="text"
                     value={settings.email.smtpUser}
                     onChange={(e) => updateNested('email', 'smtpUser', e.target.value)}
                     placeholder="user@example.com"
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2" htmlFor="settingsview-passwort">Passwort</label>
+                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-passwort">Passwort</label>
                 <input id="settingsview-passwort"
                   type="password"
                   value={smtpPassword}
@@ -970,7 +970,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     setSmtpPasswordTouched(true);
                   }}
                   placeholder={smtpPasswordConfigured ? '•••••••• (gespeichert)' : '••••••••'}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                   <p className="text-xs text-muted mt-1">Wird sicher im Schlüsselbund des Systems gespeichert.</p>
                 </div>
@@ -1000,9 +1000,9 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             {/* Resend Configuration */}
             {settings.email.provider === 'resend' && (
               <div className="bg-surface border border-border rounded-xl p-6 space-y-4">
-                <h4 className="font-bold">Resend API-Konfiguration</h4>
+                <h4 className="font-semibold">Resend API-Konfiguration</h4>
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2" htmlFor="settingsview-api-key">API-Key</label>
+                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-api-key">API-Key</label>
                   <input id="settingsview-api-key"
                     type="password"
                     value={resendApiKey}
@@ -1020,7 +1020,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       }
                     }}
                     placeholder={resendApiKeyConfigured ? 're_*** (gespeichert)' : 're_***'}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                   <p className="text-xs text-muted mt-1">Wird sicher im Schlüsselbund des Systems gespeichert.</p>
                 </div>
@@ -1046,25 +1046,25 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             {/* Sender Information */}
             {settings.email.provider !== 'none' && (
               <div className="bg-surface border border-border rounded-xl p-6 space-y-4">
-                <h4 className="font-bold">Absender-Informationen</h4>
+                <h4 className="font-semibold">Absender-Informationen</h4>
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2" htmlFor="settingsview-absender-name">Absender-Name</label>
+                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-absender-name">Absender-Name</label>
                   <input id="settingsview-absender-name"
                     type="text"
                     value={settings.email.fromName}
                     onChange={(e) => updateNested('email', 'fromName', e.target.value)}
                     placeholder={settings.company.name || 'Meine Firma'}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2" htmlFor="settingsview-absender-e-mail">Absender-E-Mail</label>
+                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-absender-e-mail">Absender-E-Mail</label>
                   <input id="settingsview-absender-e-mail"
                     type="email"
                     value={settings.email.fromEmail}
                     onChange={(e) => updateNested('email', 'fromEmail', e.target.value)}
                     placeholder={settings.company.email || 'info@example.com'}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
               </div>
@@ -1081,7 +1081,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             {/* Header */}
             <div className="flex items-end justify-between">
               <div>
-                <h3 className="text-xl font-bold mb-1">Mahnwesen</h3>
+                <h3 className="text-xl font-semibold mb-1">Mahnwesen</h3>
                 <p className="text-muted text-sm">Automatische Zahlungserinnerungen und Mahnungen</p>
               </div>
             </div>
@@ -1101,7 +1101,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   {dunningEnabled && <CheckCircle size={14} className="text-success-text" />}
                 </span>
                 <div>
-                  <h4 className="font-bold text-sm">Mahnwesen aktivieren</h4>
+                  <h4 className="font-semibold text-sm">Mahnwesen aktivieren</h4>
                   <p className="text-xs text-muted mt-1">Automatische Zahlungserinnerungen für überfällige Rechnungen</p>
                 </div>
               </div>
@@ -1110,9 +1110,9 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             {/* Email Provider Warning (if not configured) */}
             {dunningEnabled && settings.email.provider === 'none' && (
               <div className="bg-warning-bg border border-warning-border rounded-xl p-4 flex items-start gap-3">
-                <AlertTriangle size={18} className="text-warning-text shrink-0 mt-0.5" />
+                <AlertTriangle size={16} className="text-warning-text shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-sm font-bold text-warning-text">E-Mail-Provider erforderlich</p>
+                  <p className="text-sm font-semibold text-warning-text">E-Mail-Provider erforderlich</p>
                   <p className="text-xs text-warning-text mt-1">
                     Konfigurieren Sie SMTP oder Resend im E-Mail-Tab, um Mahnungen versenden zu können.
                   </p>
@@ -1123,27 +1123,27 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             {/* Automation Settings Card (only when enabled) */}
             {dunningEnabled && (
               <div className="bg-surface-muted border border-border rounded-xl p-6 space-y-5">
-                <h4 className="font-bold flex items-center gap-2">
-                  <Megaphone size={18} /> Automatisierung
+                <h4 className="font-semibold flex items-center gap-2">
+                  <Megaphone size={16} /> Automatisierung
                 </h4>
 
                 {/* Schedule Time */}
                 <div>
-                  <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-tagliche-ausfuhrung-um">Tägliche Ausführung um</label>
+                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-tagliche-ausfuhrung-um">Tägliche Ausführung um</label>
                   <input
                     id="settings-tagliche-ausfuhrung-um"
                     type="time"
                     value={settings.automation?.dunningRunTime ?? '09:00'}
                     onChange={(e) => updateAutomation('dunningRunTime', e.target.value)}
- className="w-48 bg-surface border border-control-border rounded-lg px-3 py-2 text-sm font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-2.5 h-8 hover:border-ink-500 w-48 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </div>
 
                 {/* Status Display */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-surface border border-border-subtle rounded-lg p-3">
-                    <label className="block text-xs font-bold text-muted uppercase tracking-wide mb-1">Letzter Lauf</label>
-                    <p className="text-sm font-bold text-foreground">
+                    <label className="block mb-1 text-label text-foreground">Letzter Lauf</label>
+                    <p className="text-sm font-semibold text-foreground">
                       {settings.automation?.lastDunningRun
                         ? new Date(settings.automation.lastDunningRun).toLocaleDateString('de-DE', {
                             day: '2-digit',
@@ -1155,8 +1155,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     </p>
                   </div>
                   <div className="bg-surface border border-border-subtle rounded-lg p-3">
-                    <label className="block text-xs font-bold text-muted uppercase tracking-wide mb-1">Nächster Lauf</label>
-                    <p className="text-sm font-bold text-foreground">
+                    <label className="block mb-1 text-label text-foreground">Nächster Lauf</label>
+                    <p className="text-sm font-semibold text-foreground">
                       {calculateNextRun(settings.automation?.dunningRunTime ?? '09:00')}
                     </p>
                   </div>
@@ -1180,7 +1180,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             {dunningEnabled && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <h4 className="font-bold">Mahnstufen</h4>
+                  <h4 className="font-semibold">Mahnstufen</h4>
                   <p className="text-sm text-muted tabular-nums">
                     {activeLevelCount} von {totalLevels} aktiv
                   </p>
@@ -1208,12 +1208,12 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
  <div className="w-11 h-6 bg-control-border peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring rounded-full peer peer-checked:after:translate-x-full motion-safe:peer-checked:after:transition-transform motion-safe:peer-checked:after:duration-150 motion-reduce:transition-none after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-surface after:rounded-full after:h-5 after:w-5 peer-checked:bg-dark-base"></div>
                         </label>
 
-                        <span className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs ${
+                        <span className={`w-7 h-7 rounded-full flex items-center justify-center font-semibold text-xs ${
                           level.enabled ? 'bg-dark-base text-background' : 'bg-border-subtle text-muted'
                         }`}>
                           {level.id}
                         </span>
-                        <h5 className="font-bold text-sm">{level.name}</h5>
+                        <h5 className="font-semibold text-sm">{level.name}</h5>
                       </div>
 
                       {/* Quick edit inline */}
@@ -1225,7 +1225,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                             value={level.daysAfterDueDate}
                             onChange={(e) => updateDunningLevel(index, 'daysAfterDueDate', Number(e.target.value))}
                             disabled={!level.enabled}
- className="w-14 bg-surface border border-control-border rounded-sm px-2 py-1 text-center font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50"
+ className="px-2.5 h-8 hover:border-ink-500 text-sm w-14 bg-surface border border-control-border rounded-sm text-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50"
                           />
                           <span className="text-muted font-medium">Tagen</span>
                         </div>
@@ -1238,7 +1238,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                             value={level.fee}
                             onChange={(e) => updateDunningLevel(index, 'fee', Number(e.target.value))}
                             disabled={!level.enabled}
- className="w-16 bg-surface border border-control-border rounded-sm px-2 py-1 text-center font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50"
+ className="px-2.5 h-8 hover:border-ink-500 text-sm w-16 bg-surface border border-control-border rounded-sm text-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50"
                           />
                           <span className="text-muted font-medium">€</span>
                         </div>
@@ -1249,24 +1249,24 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     {level.enabled && (
                       <div className="p-4 space-y-3">
                         <div>
-                          <label className="block text-xs font-bold text-muted mb-1.5 uppercase tracking-wide" htmlFor="settingsview-betreff">Betreff</label>
+                          <label className="block mb-1.5 text-label text-foreground" htmlFor="settingsview-betreff">Betreff</label>
                           <input id="settingsview-betreff"
                             type="text"
                             value={level.subject}
                             onChange={(e) => updateDunningLevel(index, 'subject', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-lg px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-2.5 h-8 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                             placeholder="z.B. Zahlungserinnerung für Rechnung %N"
                           />
                         </div>
                         <div>
                           <div className="flex items-center justify-between mb-1.5">
-                            <label className="block text-xs font-bold text-muted uppercase tracking-wide">Einleitungstext</label>
+                            <label className="block text-label text-foreground">Einleitungstext</label>
                             <button type="button"
                               onClick={() => {
                                 setPreviewLevelIndex(index);
                                 setPreviewModalOpen(true);
                               }}
-                              className="px-2.5 py-1 bg-surface-muted hover:bg-border text-foreground rounded-sm text-xs font-bold transition-colors"
+                              className="px-2.5 py-1 bg-surface-muted hover:bg-border text-foreground rounded-sm text-xs font-semibold transition-colors"
                             >
                               Vorschau
                             </button>
@@ -1275,7 +1275,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                             rows={2}
                             value={level.text}
                             onChange={(e) => updateDunningLevel(index, 'text', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-lg px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+ className="px-2.5 py-2 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
                             placeholder="z.B. leider haben wir noch keinen Zahlungseingang für die Rechnung %N vom %D über %A erhalten..."
                           />
                           <div className="mt-1.5 flex items-center justify-between">
@@ -1301,7 +1301,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                                       }, 0);
                                     }
                                   }}
-                                  className={`px-1.5 py-1 rounded-sm text-xs font-bold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                                  className={`px-1.5 py-1 rounded-sm text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                                     ph.present
                                       ? 'bg-success-bg text-success-text'
                                       : 'bg-surface-muted text-muted hover:bg-border'
@@ -1338,8 +1338,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             {/* Recurring Invoices Section */}
             <div className="border-t border-border pt-8 mt-8">
               <div className="mb-6">
-                <h3 className="text-xl font-bold mb-1 flex items-center gap-2">
-                  <Repeat size={22} /> Automatische Abo-Rechnungen
+                <h3 className="text-xl font-semibold mb-1 flex items-center gap-2">
+                  <Repeat size={20} /> Automatische Abo-Rechnungen
                 </h3>
                 <p className="text-muted text-sm">Automatische Generierung wiederkehrender Rechnungen</p>
               </div>
@@ -1359,7 +1359,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     {settings.automation.recurringEnabled && <CheckCircle size={14} className="text-success-text" />}
                   </span>
                   <div>
-                    <h4 className="font-bold text-sm">Automatische Generierung aktivieren</h4>
+                    <h4 className="font-semibold text-sm">Automatische Generierung aktivieren</h4>
                     <p className="text-xs text-muted mt-1">Abo-Rechnungen werden automatisch zum festgelegten Zeitpunkt erstellt</p>
                   </div>
                 </div>
@@ -1368,19 +1368,19 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
               {/* Automation Settings Card (only when enabled) */}
               {settings.automation.recurringEnabled && (
                 <div className="bg-surface-muted border border-border rounded-xl p-6 space-y-5 mt-4">
-                  <h4 className="font-bold flex items-center gap-2">
-                    <Repeat size={18} /> Automatisierung
+                  <h4 className="font-semibold flex items-center gap-2">
+                    <Repeat size={16} /> Automatisierung
                   </h4>
 
                   {/* Schedule Time */}
                   <div>
-                    <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-tagliche-ausfuhrung-um-2">Tägliche Ausführung um</label>
+                    <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-tagliche-ausfuhrung-um-2">Tägliche Ausführung um</label>
                     <input
                       id="settings-tagliche-ausfuhrung-um-2"
                       type="time"
                       value={settings.automation?.recurringRunTime ?? '03:00'}
                       onChange={(e) => updateAutomation('recurringRunTime', e.target.value)}
- className="w-48 bg-surface border border-control-border rounded-lg px-3 py-2 text-sm font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-2.5 h-8 hover:border-ink-500 w-48 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     />
                     <p className="text-xs text-muted mt-2">
                       Empfohlen: 03:00 Uhr (nachts, um Konflikte mit Mahnlauf zu vermeiden)
@@ -1390,8 +1390,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   {/* Status Display */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="bg-surface border border-border-subtle rounded-lg p-3">
-                      <label className="block text-xs font-bold text-muted uppercase tracking-wide mb-1">Letzter Lauf</label>
-                      <p className="text-sm font-bold text-foreground">
+                      <label className="block mb-1 text-label text-foreground">Letzter Lauf</label>
+                      <p className="text-sm font-semibold text-foreground">
                         {settings.automation?.lastRecurringRun
                           ? new Date(settings.automation.lastRecurringRun).toLocaleDateString('de-DE', {
                               day: '2-digit',
@@ -1403,8 +1403,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       </p>
                     </div>
                     <div className="bg-surface border border-border-subtle rounded-lg p-3">
-                      <label className="block text-xs font-bold text-muted uppercase tracking-wide mb-1">Nächster Lauf</label>
-                      <p className="text-sm font-bold text-foreground">
+                      <label className="block mb-1 text-label text-foreground">Nächster Lauf</label>
+                      <p className="text-sm font-semibold text-foreground">
                         {calculateNextRun(settings.automation?.recurringRunTime ?? '03:00')}
                       </p>
                     </div>
@@ -1419,7 +1419,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         return (
           <div className="max-w-2xl space-y-8">
             <div>
-              <h3 className="text-xl font-bold mb-1">Rechtliches & Texte</h3>
+              <h3 className="text-xl font-semibold mb-1">Rechtliches & Texte</h3>
               <p className="text-muted text-sm">Steuerliche Einstellungen und Standardtexte.</p>
             </div>
 
@@ -1438,7 +1438,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     {settings.legal.smallBusinessRule && <CheckCircle size={14} className="text-success-text" />}
                   </span>
                   <div>
-                    <h4 className="font-bold text-sm">Kleinunternehmerregelung anwenden</h4>
+                    <h4 className="font-semibold text-sm">Kleinunternehmerregelung anwenden</h4>
                     <p className="text-xs text-muted mt-1">Keine Umsatzsteuerberechnung gem. § 19 UStG.</p>
                   </div>
                 </div>
@@ -1447,55 +1447,55 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
             <div className="bg-surface border-2 border-border-subtle rounded-xl p-6 space-y-5">
               <div>
-                <h4 className="font-bold text-sm">Berichtsprofil</h4>
+                <h4 className="font-semibold text-sm">Berichtsprofil</h4>
                 <p className="text-xs text-muted mt-1">Der aktuelle Berichts- und Steuerumfang unterstützt Deutschland. AT/CH-Berichte sind noch nicht verfügbar.</p>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <label className="block text-xs font-bold text-muted uppercase tracking-wide">
+                <label className="block text-label text-foreground">
                   Rechtsraum
-                  <select aria-label="Rechtsraum" value={reportingProfile.jurisdiction} onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')} className="mt-2 w-full bg-surface-muted border border-control-border rounded-xl p-3 font-bold text-foreground">
+                  <select aria-label="Rechtsraum" value={reportingProfile.jurisdiction} onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                     <option value="DE">Deutschland</option>
                   </select>
                 </label>
-                <label className="block text-xs font-bold text-muted uppercase tracking-wide">
+                <label className="block text-label text-foreground">
                   Rechtsform
-                  <select aria-label="Rechtsform" value={reportingProfile.legalForm} onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])} className="mt-2 w-full bg-surface-muted border border-control-border rounded-xl p-3 font-bold text-foreground">
+                  <select aria-label="Rechtsform" value={reportingProfile.legalForm} onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                     <option value="sole_proprietor">Einzelunternehmen</option>
                     <option value="gmbh">GmbH</option>
                   </select>
                 </label>
-                <label className="block text-xs font-bold text-muted uppercase tracking-wide">
+                <label className="block text-label text-foreground">
                   Gewinnermittlung
-                  <select aria-label="Gewinnermittlung" value={reportingProfile.profitDetermination} onChange={(event) => updateReportingProfile('profitDetermination', event.target.value as BusinessReportingProfile['profitDetermination'])} className="mt-2 w-full bg-surface-muted border border-control-border rounded-xl p-3 font-bold text-foreground">
+                  <select aria-label="Gewinnermittlung" value={reportingProfile.profitDetermination} onChange={(event) => updateReportingProfile('profitDetermination', event.target.value as BusinessReportingProfile['profitDetermination'])} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                     <option value="eur" disabled={reportingProfile.legalForm === 'gmbh'}>EÜR</option>
                     <option value="double_entry">Doppelte Buchführung</option>
                   </select>
                 </label>
                 {reportingProfile.legalForm === 'gmbh' && (
-                  <label className="block text-xs font-bold text-muted uppercase tracking-wide">
+                  <label className="block text-label text-foreground">
                     GmbH-Größe
-                    <select aria-label="GmbH-Größe" value={reportingProfile.hgbSizeClass ?? ''} onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')} className="mt-2 w-full bg-surface-muted border border-control-border rounded-xl p-3 font-bold text-foreground">
+                    <select aria-label="GmbH-Größe" value={reportingProfile.hgbSizeClass ?? ''} onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                       <option value="micro">Micro</option>
                       <option value="small">Small</option>
                     </select>
                   </label>
                 )}
                 {reportingProfile.profitDetermination === 'double_entry' && (
-                  <label className="block text-xs font-bold text-muted uppercase tracking-wide">
+                  <label className="block text-label text-foreground">
                     Kontenrahmen
-                    <select aria-label="Kontenrahmen" value={reportingProfile.chart ?? ''} onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')} className="mt-2 w-full bg-surface-muted border border-control-border rounded-xl p-3 font-bold text-foreground">
+                    <select aria-label="Kontenrahmen" value={reportingProfile.chart ?? ''} onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                       <option value="SKR03">SKR03</option>
                       <option value="SKR04">SKR04</option>
                     </select>
                   </label>
                 )}
-                <label className="block text-xs font-bold text-muted uppercase tracking-wide">
+                <label className="block text-label text-foreground">
                   Wirtschaftsjahresbeginn (MM-TT)
-                  <input aria-label="Wirtschaftsjahresbeginn" value={reportingProfile.fiscalYearStart} onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)} placeholder="01-01" className="mt-2 w-full bg-surface-muted border border-control-border rounded-xl p-3 font-bold text-foreground" />
+                  <input aria-label="Wirtschaftsjahresbeginn" value={reportingProfile.fiscalYearStart} onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)} placeholder="01-01" className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground" />
                 </label>
-                <label className="block text-xs font-bold text-muted uppercase tracking-wide">
+                <label className="block text-label text-foreground">
                   Umsatzsteuer-Methode
-                  <select aria-label="Umsatzsteuer-Methode" value={reportingProfile.vatMethod} onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])} className="mt-2 w-full bg-surface-muted border border-control-border rounded-xl p-3 font-bold text-foreground">
+                  <select aria-label="Umsatzsteuer-Methode" value={reportingProfile.vatMethod} onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                     <option value="soll">Soll-Versteuerung</option>
                     <option value="ist">Ist-Versteuerung</option>
                   </select>
@@ -1519,7 +1519,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     {settings.eInvoice.enabled && <CheckCircle size={14} className="text-success-text" />}
                   </span>
                   <div>
-                    <h4 className="font-bold text-sm">ZUGFeRD Export für Rechnungen aktivieren</h4>
+                    <h4 className="font-semibold text-sm">ZUGFeRD Export für Rechnungen aktivieren</h4>
                     <p className="text-xs text-muted mt-1">
                       Exportiert Rechnungen als ZUGFeRD EN16931 (Profil {settings.eInvoice.profile}, Version {settings.eInvoice.version}).
                     </p>
@@ -1530,12 +1530,12 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
             <div className="grid grid-cols-2 gap-6">
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-sitzland-des-verkaufers">Sitzland des Verkäufers</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-sitzland-des-verkaufers">Sitzland des Verkäufers</label>
                 <select
                   id="settings-sitzland-des-verkaufers"
                   value={settings.legal.countryCode ?? 'DE'}
                   onChange={(e) => updateNested('legal', 'countryCode', e.target.value)}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-bold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 >
                   <option value="DE">Deutschland</option>
                   <option value="AT">Österreich</option>
@@ -1543,30 +1543,30 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-standard-umsatzsteuer">Standard Umsatzsteuer (%)</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-standard-umsatzsteuer">Standard Umsatzsteuer (%)</label>
                 <input
                   id="settings-standard-umsatzsteuer"
                   type="number"
                   value={settings.legal.defaultVatRate}
                   disabled={settings.legal.smallBusinessRule}
                   onChange={(e) => updateNested('legal', 'defaultVatRate', parseFloat(e.target.value))}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-bold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-zahlungsziel-tage">Zahlungsziel (Tage)</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-zahlungsziel-tage">Zahlungsziel (Tage)</label>
                 <input
                   id="settings-zahlungsziel-tage"
                   type="number"
                   value={settings.legal.paymentTermsDays}
                   onChange={(e) => updateNested('legal', 'paymentTermsDays', parseInt(e.target.value))}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-bold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
             </div>
 
             <div className="bg-surface border border-border-subtle rounded-xl p-6">
-              <h4 className="font-bold text-sm mb-2">Umsatzsteuer-Basis (Übersicht)</h4>
+              <h4 className="font-semibold text-sm mb-2">Umsatzsteuer-Basis (Übersicht)</h4>
               <p className="text-xs text-muted mb-4">
                 Soll: basiert auf gestellten Rechnungen (Status ≠ Entwurf) nach Rechnungsdatum. Ist: basiert auf erfassten Zahlungen nach Zahlungsdatum.
               </p>
@@ -1575,7 +1575,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   <button type="button"
                     key={m}
                     onClick={() => updateNested('legal', 'taxAccountingMethod', m)}
-                    className={`px-5 py-2 rounded-full text-xs font-bold transition-colors ${
+                    className={`px-5 py-2 rounded-control text-xs font-semibold transition-colors ${
                       (settings.legal.taxAccountingMethod ?? 'soll') === m
                         ? 'bg-dark-base text-background shadow-md'
                         : 'text-muted hover:bg-surface hover:text-foreground hover:shadow-sm'
@@ -1588,26 +1588,26 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             </div>
 
             <div className="border-t border-border-subtle pt-6">
-              <h4 className="font-bold text-sm mb-4">Standardtexte</h4>
+              <h4 className="font-semibold text-sm mb-4">Standardtexte</h4>
 
               <div className="mb-6">
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-einleitungstext-standard">Einleitungstext (Standard)</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-einleitungstext-standard">Einleitungstext (Standard)</label>
                 <textarea
                   id="settings-einleitungstext-standard"
                   value={settings.legal.defaultIntroText}
                   onChange={(e) => updateNested('legal', 'defaultIntroText', e.target.value)}
                   rows={3}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none transition-shadow"
+ className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none transition-colors"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-fuzeilentext-zusatz">Fußzeilentext (Zusatz)</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-fuzeilentext-zusatz">Fußzeilentext (Zusatz)</label>
                 <textarea
                   id="settings-fuzeilentext-zusatz"
                   value={settings.legal.defaultFooterText}
                   onChange={(e) => updateNested('legal', 'defaultFooterText', e.target.value)}
                   rows={2}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none transition-shadow"
+ className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none transition-colors"
                 />
               </div>
             </div>
@@ -1617,26 +1617,26 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         return (
           <div className="max-w-2xl space-y-8">
             <div>
-              <h3 className="text-xl font-bold mb-1">Angebotsportal</h3>
+              <h3 className="text-xl font-semibold mb-1">Angebotsportal</h3>
               <p className="text-muted text-sm">Angebotslinks veröffentlichen und Status synchronisieren.</p>
             </div>
 
             <div className="bg-surface border-2 border-border-subtle rounded-xl p-6 space-y-6">
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-portal-basis-url">Portal-Basis-URL</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-portal-basis-url">Portal-Basis-URL</label>
                 <input
                   id="settings-portal-basis-url"
                   type="text"
                   value={settings.portal.baseUrl}
                   onChange={(e) => updateNested('portal', 'baseUrl', e.target.value)}
                   placeholder="https://offers.example.com"
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-bold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
                 <p className="text-xs text-muted mt-2">Tipp: Einrichtungsseite im Portal: <span className="font-mono">/admin/setup</span></p>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-muted mb-2 uppercase tracking-wide" htmlFor="settings-publish-api-schlussel-optional">Publish-API-Schlüssel (optional)</label>
+                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-publish-api-schlussel-optional">Publish-API-Schlüssel (optional)</label>
                 <input
                   id="settings-publish-api-schlussel-optional"
                   type="password"
@@ -1650,7 +1650,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       ? '(im System-Schlüsselbund gespeichert, zum Ersetzen eingeben)'
                       : '(im System-Schlüsselbund gespeichert)'
                   }
- className="w-full bg-surface-muted border border-control-border rounded-xl p-4 font-bold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
 
@@ -1667,7 +1667,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       setPortalTestStatus(`Fehler: ${String(e)}`);
                     }
                   }}
-                  className="px-5 py-3 rounded-xl font-bold bg-surface border border-border hover:bg-surface-muted transition-colors w-full sm:w-auto"
+                  className="px-5 py-3 rounded-xl font-semibold bg-surface border border-border hover:bg-surface-muted transition-colors w-full sm:w-auto"
                 >
                   Verbindung testen
                 </button>
@@ -1682,14 +1682,14 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         return (
           <div className="max-w-2xl space-y-10">
             <div>
-              <h3 className="text-xl font-bold mb-1">System</h3>
+              <h3 className="text-xl font-semibold mb-1">System</h3>
               <p className="text-muted text-sm">Audit-Log, Backup und Wiederherstellung.</p>
             </div>
 
             <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
-                  <h4 className="text-lg font-bold text-foreground">Audit</h4>
+                  <h4 className="text-lg font-semibold text-foreground">Audit</h4>
                   <p className="text-sm text-muted">Audit-Log prüfen und als CSV exportieren.</p>
                 </div>
                 <div className="flex gap-3">
@@ -1744,7 +1744,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
             <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle space-y-4">
               <div>
-                <h4 className="text-lg font-bold text-foreground">Backup</h4>
+                <h4 className="text-lg font-semibold text-foreground">Backup</h4>
                 <p className="text-sm text-muted">
                   Datenbank sichern oder aus einer Sicherung wiederherstellen.
                 </p>
@@ -1771,7 +1771,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     value={backupPath}
                     onChange={(e) => setBackupPath(e.target.value)}
                     placeholder="Pfad zur .pglite.tar-Sicherung..."
- className="flex-1 bg-surface border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 flex-1 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                   <Button
                     variant="dark"
@@ -1805,18 +1805,18 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
   };
 
   return (
-    <div className="bg-surface rounded-2xl shadow-sm h-full flex overflow-hidden relative">
+    <div className="bg-surface rounded-panel shadow-xs h-full flex overflow-hidden relative">
 
       {/* Sidebar Navigation. The card is capped at the page height, so the
           nine tabs can outgrow it; the sidebar owns that overflow instead of
           pushing the save footer below the fold. */}
-      <div className="w-72 bg-surface-muted border-r border-border-subtle p-8 flex flex-col overflow-y-auto">
-        <h2 className="text-2xl font-black mb-8">Einstellungen</h2>
-        <nav className="space-y-5">
+      <div className="w-64 bg-surface-muted border-r border-border-subtle px-4 py-6 flex flex-col overflow-y-auto">
+        <h1 className="text-title px-2 mb-6">Einstellungen</h1>
+        <nav aria-label="Einstellungsbereiche" className="space-y-5">
           {navGroups.map((group) => (
             <div key={group.label}>
-              <p className="text-xs font-bold text-muted uppercase tracking-widest mb-2 px-1">{group.label}</p>
-              <div className="space-y-1">
+              <p className="text-caption text-muted mb-1 px-2">{group.label}</p>
+              <div className="space-y-0.5">
                 {group.items.map((item) => {
                   const Icon = item.icon;
                   const isActive = activeTab === item.id;
@@ -1825,25 +1825,15 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       key={item.id}
                       onClick={() => setActiveTab(item.id as SettingsTab)}
                       aria-current={isActive ? 'page' : undefined}
-                      className={`w-full text-left p-3 rounded-xl flex items-center gap-3 transition-colors group focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                      title={item.desc}
+                      className={`w-full h-9 text-left px-2 rounded-control flex items-center gap-2.5 text-label transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                         isActive
-                          ? 'bg-surface shadow-sm'
-                          : 'hover:bg-surface'
+                          ? 'bg-surface text-foreground shadow-sm'
+                          : 'text-muted hover:bg-ink-100 hover:text-foreground'
                       }`}
                     >
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors shrink-0 ${
-                        isActive ? 'bg-dark-base text-accent' : 'bg-border text-muted group-hover:text-foreground'
-                      }`}>
-                        <Icon size={18} />
-                      </div>
-                      <div className="min-w-0">
-                        <div className={`font-bold text-sm truncate ${isActive ? 'text-foreground' : 'text-muted'}`}>
-                          {item.label}
-                        </div>
-                        <div className="text-xs font-medium text-muted truncate">
-                          {item.desc}
-                        </div>
-                      </div>
+                      <Icon size={16} aria-hidden="true" className="shrink-0" />
+                      <span className="truncate">{item.label}</span>
                     </button>
                   );
                 })}
@@ -1853,31 +1843,29 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         </nav>
 
         <div className="mt-auto">
-             <div className="bg-accent/20 p-4 rounded-xl">
-                 <div className="flex items-start gap-3">
-                     <AlertCircle size={18} className="text-foreground shrink-0 mt-0.5" />
-                     <p className="text-xs text-foreground font-medium">Alle Änderungen wirken sich sofort auf neue Dokumente aus.</p>
-                 </div>
-             </div>
+             <p className="flex items-start gap-2 px-2 pt-6 text-caption text-muted">
+                 <AlertCircle size={14} className="shrink-0 mt-px" aria-hidden="true" />
+                 Alle Änderungen wirken sich sofort auf neue Dokumente aus.
+             </p>
         </div>
       </div>
 
       {/* Main Content Form. The column stretches to the card height, so the save
           footer sits at the card end and the tab body scrolls above it. */}
       <div className="flex-1 flex flex-col">
-         <div className="flex-1 overflow-y-auto p-8 lg:p-12">
+         <div className="flex-1 overflow-y-auto px-8 py-8 lg:px-12">
 
             {renderActiveTab()}
 
          </div>
 
          {/* Footer Actions */}
-         <div className="p-8 border-t border-border-subtle flex justify-end bg-surface rounded-b-2xl">
+         <div className="px-8 py-4 border-t border-border-subtle flex justify-end bg-surface">
              <Button
                 onClick={handleSave}
                 loading={setSettingsMutation.isPending}
              >
-                 <Save size={18} />
+                 <Save size={16} aria-hidden="true" />
                  Einstellungen speichern
              </Button>
          </div>

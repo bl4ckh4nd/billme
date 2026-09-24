@@ -351,10 +351,16 @@ describe('SonderbuchungenWorkspace', () => {
     }
   });
 
-  it('marks required fields invalid with German inline guidance', () => {
+  it('marks required fields invalid with German inline guidance once the field was left', () => {
     render(<SonderbuchungenWorkspace dataAdapter={valid()} />);
     const reason = screen.getByLabelText('Audit-Grund');
     expect(reason.getAttribute('required')).not.toBeNull();
+    // A fresh form is not an error state: no inline error and no alert yet.
+    expect(reason.getAttribute('aria-invalid')).toBe('false');
+    expect(document.getElementById('audit-reason-error')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    fireEvent.blur(reason);
     expect(reason.getAttribute('aria-invalid')).toBe('true');
     expect(reason.getAttribute('aria-describedby')).toBe('audit-reason-error');
     expect(screen.getAllByText('Audit-Grund ist erforderlich.').length).toBeGreaterThan(0);

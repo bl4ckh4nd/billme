@@ -41,18 +41,18 @@ export interface InspectorProps {
 }
 
 const numberField =
-'w-full border border-border bg-surface-muted rounded-lg p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring tabular-nums';
-const fieldLabel = 'text-xs text-muted font-medium mb-1 block';
+'w-full border border-dark-border bg-dark-2 rounded-lg p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark tabular-nums';
+const fieldLabel = 'text-xs text-dark-muted font-medium mb-1 block';
 // Group sections with whitespace (gap-6 between blocks), not hard dividers.
-const sectionLabel = 'text-xs font-bold text-muted uppercase tracking-wider block';
+const sectionLabel = 'text-xs font-semibold text-dark-muted uppercase tracking-wider block';
 
 const EmptyState: React.FC = () => (
-  <div className="flex flex-col items-center justify-center h-full p-8 text-muted">
-    <div className="w-16 h-16 bg-surface-muted rounded-md flex items-center justify-center mb-4">
-      <Type size={32} className="opacity-20 text-black" />
+  <div className="flex flex-col items-center justify-center h-full p-8 text-dark-muted">
+    <div className="w-16 h-16 bg-dark-2 rounded-md flex items-center justify-center mb-4">
+      <Type size={32} className="opacity-20 text-inverse-foreground" />
     </div>
     <p className="text-center font-medium">Element auswählen, um es zu bearbeiten</p>
-    <p className="text-center text-xs mt-1 text-muted">Mehrfachauswahl mit Umschalt-Klick oder Rahmen ziehen</p>
+    <p className="text-center text-xs mt-1 text-dark-muted">Mehrfachauswahl mit Umschalt-Klick oder Rahmen ziehen</p>
   </div>
 );
 
@@ -65,7 +65,7 @@ const AlignButton: React.FC<{ title: string; onClick: () => void; children: Reac
     onClick={onClick}
     title={title}
     aria-label={title}
-    className="flex h-9 flex-1 items-center justify-center rounded-lg border border-border bg-white text-muted hover:border-black hover:bg-black hover:text-accent transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+    className="flex h-9 flex-1 items-center justify-center rounded-lg border border-dark-border bg-dark-2 text-dark-muted hover:border-ink-400 hover:bg-dark-3 hover:text-accent transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
   >
     {children}
   </button>
@@ -79,8 +79,8 @@ const MultiPanel: React.FC<{
 }> = ({ count, onAlign, onDistribute, onDelete }) => (
   <div className="flex flex-col gap-6 p-6 h-full overflow-y-auto">
     <div>
-      <h3 className="font-bold text-xl mb-1 text-black">{count} Elemente</h3>
-      <span className="inline-block bg-accent px-2 py-1 rounded-sm text-xs font-bold tracking-widest uppercase text-accent-foreground">
+      <h3 className="font-semibold text-xl mb-1 text-inverse-foreground">{count} Elemente</h3>
+      <span className="inline-block bg-accent px-2 py-1 rounded-sm text-xs font-semibold tracking-widest uppercase text-accent-foreground">
         Mehrfachauswahl
       </span>
     </div>
@@ -123,7 +123,7 @@ const MultiPanel: React.FC<{
     <div className="mt-auto pt-6">
       <button
         onClick={onDelete}
-        className="w-full flex items-center justify-center gap-2 text-error border border-error/30 bg-error-bg hover:bg-error-bg/80 p-3 rounded-xl transition-colors font-medium text-sm"
+        className="w-full flex items-center justify-center gap-2 text-error-inverse border border-error/40 bg-error/15 hover:bg-error/25 p-3 rounded-xl transition-colors font-medium text-sm"
       >
         <Trash2 size={16} />
         {count} Elemente löschen
@@ -250,8 +250,8 @@ export const Inspector: React.FC<InspectorProps> = ({
   return (
     <div className="flex flex-col gap-6 p-6 h-full overflow-y-auto">
       <div>
-        <h3 className="font-bold text-xl mb-1 text-black">Eigenschaften</h3>
-        <span className="inline-block bg-accent px-2 py-1 rounded-sm text-xs font-bold tracking-widest uppercase text-accent-foreground">
+        <h3 className="font-semibold text-xl mb-1 text-inverse-foreground">Eigenschaften</h3>
+        <span className="inline-block bg-accent px-2 py-1 rounded-sm text-xs font-semibold tracking-widest uppercase text-accent-foreground">
           {element.type}
         </span>
       </div>
@@ -259,43 +259,43 @@ export const Inspector: React.FC<InspectorProps> = ({
       {/* Text content + variables */}
       {isText && (
         <div className="flex flex-col gap-2">
-          <label className="text-xs font-bold text-muted uppercase tracking-wide" htmlFor="inspector-inhalt">Inhalt</label>
+          <label className="text-xs font-semibold text-dark-muted uppercase tracking-wide" htmlFor="inspector-inhalt">Inhalt</label>
           <textarea id="inspector-inhalt"
-            className="w-full border border-border bg-surface-muted rounded-xl p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring focus:border-transparent min-h-[100px] text-foreground resize-none"
+            className="w-full border border-dark-border bg-dark-2 rounded-xl p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark focus:border-transparent min-h-[100px] text-inverse-foreground resize-none"
             value={element.content || ''}
             onChange={(e) => onUpdate(element.id, { content: e.target.value })}
             placeholder="Text eingeben…"
           />
-          <div className="border border-border-subtle rounded-xl bg-surface-muted overflow-hidden">
-            <div className="p-2 border-b border-border bg-surface flex items-center gap-2 text-xs font-bold text-muted">
+          <div className="border border-dark-border rounded-xl bg-dark-2 overflow-hidden">
+            <div className="p-2 border-b border-dark-border bg-dark-1 flex items-center gap-2 text-xs font-semibold text-dark-muted">
               <Database size={12} />
               Dynamische Daten einfügen
             </div>
             <div className="p-2 space-y-1">
               {variableGroups.map((group) => (
-                <div key={group.title} className="rounded-lg bg-white border border-border overflow-hidden">
+                <div key={group.title} className="rounded-lg bg-dark-2 border border-dark-border overflow-hidden">
                   <button
                     onClick={() => setOpenVariableGroup(openVariableGroup === group.title ? null : group.title)}
-                    className="w-full flex items-center justify-between p-2 text-left hover:bg-surface-muted transition-colors"
+                    className="w-full flex items-center justify-between p-2 text-left hover:bg-dark-3 transition-colors"
                   >
-                    <span className="text-xs font-bold uppercase">{group.title}</span>
+                    <span className="text-xs font-semibold uppercase">{group.title}</span>
                     {openVariableGroup === group.title ? (
-                      <ChevronDown size={12} className="text-muted" />
+                      <ChevronDown size={12} className="text-dark-muted" />
                     ) : (
-                      <ChevronRight size={12} className="text-muted" />
+                      <ChevronRight size={12} className="text-dark-muted" />
                     )}
                   </button>
                   {openVariableGroup === group.title && (
-                    <div className="p-2 bg-surface-muted grid grid-cols-1 gap-1 border-t border-border-subtle">
+                    <div className="p-2 bg-dark-2 grid grid-cols-1 gap-1 border-t border-dark-border">
                       {group.variables.map((v) => (
                         <button
                           key={v.key}
                           onClick={() => insertVariable(v.key)}
-                          className="text-left px-2 py-1.5 rounded-sm hover:bg-accent/15 hover:text-foreground text-xs font-medium text-muted flex items-center justify-between group/item"
+                          className="text-left px-2 py-1.5 rounded-sm hover:bg-accent/15 hover:text-inverse-foreground text-xs font-medium text-dark-muted flex items-center justify-between group/item"
                           title={v.description}
                         >
                           <span>{v.label}</span>
-                          <span className="text-xs opacity-0 group-hover/item:opacity-100 text-muted">+ Einfügen</span>
+                          <span className="text-xs opacity-0 group-hover/item:opacity-100 text-dark-muted">+ Einfügen</span>
                         </button>
                       ))}
                     </div>
@@ -311,12 +311,12 @@ export const Inspector: React.FC<InspectorProps> = ({
       {isTable && element.tableData?.columns && (
         <div className="space-y-4">
           <div className="flex justify-between items-center">
-            <label className="text-xs font-bold text-muted uppercase tracking-wider">Spaltenkonfiguration</label>
-            <Columns size={14} className="text-muted" />
+            <label className="text-xs font-semibold text-dark-muted uppercase tracking-wider">Spaltenkonfiguration</label>
+            <Columns size={14} className="text-dark-muted" />
           </div>
           <div
-            className={`text-xs font-bold p-2 rounded-sm flex items-center gap-2 ${
-              isOverflowing ? 'bg-error-bg text-error-text' : 'bg-surface-muted text-muted'
+            className={`text-xs font-semibold p-2 rounded-sm flex items-center gap-2 ${
+              isOverflowing ? 'bg-error/15 text-error-inverse' : 'bg-dark-2 text-dark-muted'
             }`}
           >
             {isOverflowing && <AlertTriangle size={12} />}
@@ -329,7 +329,7 @@ export const Inspector: React.FC<InspectorProps> = ({
               <div
                 key={col.id}
                 className={`p-3 rounded-lg border transition-colors ${
-                  col.visible ? 'bg-white border-border' : 'bg-surface-muted border-transparent opacity-60'
+                  col.visible ? 'bg-dark-2 border-dark-border' : 'bg-dark-2 border-transparent opacity-60'
                 }`}
               >
                 <div className="flex items-center justify-between mb-2">
@@ -337,11 +337,11 @@ export const Inspector: React.FC<InspectorProps> = ({
                     type="text"
                     value={col.label}
                     onChange={(e) => updateColumn(idx, 'label', e.target.value)}
-                    className="text-xs font-bold bg-transparent border-b border-control-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring w-24"
+                    className="text-xs font-semibold bg-transparent border-b border-ink-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark w-24"
                   />
                   <button
                     onClick={() => updateColumn(idx, 'visible', !col.visible)}
-                    className={`inline-flex min-h-6 min-w-6 items-center justify-center rounded-sm p-1 hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${col.visible ? 'text-black' : 'text-muted'}`}
+                    className={`inline-flex min-h-6 min-w-6 items-center justify-center rounded-sm p-1 hover:bg-dark-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark ${col.visible ? 'text-inverse-foreground' : 'text-dark-muted'}`}
                   >
                     {col.visible ? <Eye size={14} /> : <EyeOff size={14} />}
                   </button>
@@ -349,28 +349,28 @@ export const Inspector: React.FC<InspectorProps> = ({
                 {col.visible && (
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="text-xs text-muted uppercase font-bold" htmlFor="inspector-breite">Breite</label>
+                      <label className="text-xs text-dark-muted uppercase font-semibold" htmlFor="inspector-breite">Breite</label>
                       <input id="inspector-breite"
                         type="number"
                         value={col.width}
                         onChange={(e) => updateColumn(idx, 'width', Number(e.target.value))}
- className="w-full bg-surface-muted rounded-lg p-1 text-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring tabular-nums"
+ className="w-full bg-dark-2 rounded-lg p-1 text-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark tabular-nums"
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-muted uppercase font-bold">Ausr.</label>
-                      <div className="flex bg-surface-muted rounded-sm p-0.5">
+                      <label className="text-xs text-dark-muted uppercase font-semibold">Ausr.</label>
+                      <div className="flex bg-dark-2 rounded-sm p-0.5">
                         {(['left', 'center', 'right'] as const).map((align) => (
                           <button
                             key={align}
                             onClick={() => updateColumn(idx, 'align', align)}
-                            className={`flex min-h-6 flex-1 items-center justify-center rounded-sm py-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                              col.align === align ? 'bg-white shadow text-black' : 'text-muted'
+                            className={`flex min-h-6 flex-1 items-center justify-center rounded-sm py-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark ${
+                              col.align === align ? 'bg-dark-2 shadow text-inverse-foreground' : 'text-dark-muted'
                             }`}
                           >
-                            {align === 'left' && <AlignLeft size={10} />}
-                            {align === 'center' && <AlignCenter size={10} />}
-                            {align === 'right' && <AlignRight size={10} />}
+                            {align === 'left' && <AlignLeft size={12} />}
+                            {align === 'center' && <AlignCenter size={12} />}
+                            {align === 'right' && <AlignRight size={12} />}
                           </button>
                         ))}
                       </div>
@@ -386,7 +386,7 @@ export const Inspector: React.FC<InspectorProps> = ({
       {isImage && (
         <div className="space-y-3">
           <label className={sectionLabel}>Bild</label>
-          <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-control-border bg-surface-muted px-3 py-3 text-xs font-bold text-foreground transition-colors focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring hover:border-black hover:bg-surface">
+          <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-ink-400 bg-dark-2 px-3 py-3 text-xs font-semibold text-inverse-foreground transition-colors focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring hover:border-ink-400 hover:bg-dark-3">
             {element.src ? 'Bild ersetzen' : 'Bild auswählen'}
             <input
               type="file"
@@ -399,15 +399,15 @@ export const Inspector: React.FC<InspectorProps> = ({
               }}
             />
           </label>
-          <p className="text-xs text-muted">PNG, JPG oder WebP · maximal 8 MB</p>
-          {uploadError ? <p className="text-xs font-medium text-error">{uploadError}</p> : null}
+          <p className="text-xs text-dark-muted">PNG, JPG oder WebP · maximal 8 MB</p>
+          {uploadError ? <p className="text-xs font-medium text-error-inverse">{uploadError}</p> : null}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={fieldLabel} htmlFor="inspector-darstellung">Darstellung</label>
               <select id="inspector-darstellung"
                 value={element.style.imageFit ?? 'contain'}
                 onChange={(event) => setStyle({ imageFit: event.target.value as 'cover' | 'contain' })}
- className="w-full border border-border bg-surface-muted rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="w-full border border-dark-border bg-dark-2 rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
               >
                 <option value="contain">Ganz zeigen</option>
                 <option value="cover">Fläche füllen</option>
@@ -416,12 +416,12 @@ export const Inspector: React.FC<InspectorProps> = ({
             <button
               type="button"
               onClick={togglePageBackground}
-              className="self-end rounded-xl border border-border bg-surface-muted px-3 py-2 text-left text-xs font-bold text-foreground transition-colors hover:border-black hover:bg-surface"
+              className="self-end rounded-xl border border-dark-border bg-dark-2 px-3 py-2 text-left text-xs font-semibold text-inverse-foreground transition-colors hover:border-ink-400 hover:bg-dark-3"
             >
               {isPageBackground ? 'Als Bild verwenden' : 'Als A4-Hintergrund setzen'}
             </button>
           </div>
-          <p className="text-xs leading-relaxed text-muted">
+          <p className="text-xs leading-relaxed text-dark-muted">
             Hintergrundbilder werden auf A4 {pageWidthPx} × {pageHeightPx}px gesetzt und hinter den Inhalt gelegt.
           </p>
         </div>
@@ -435,7 +435,7 @@ export const Inspector: React.FC<InspectorProps> = ({
             <label className={fieldLabel} htmlFor="inspector-iban">IBAN</label>
             <input id="inspector-iban"
               type="text"
- className="w-full border border-border bg-surface-muted rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="w-full border border-dark-border bg-dark-2 rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
               placeholder="DE12…"
               value={element.qrData?.iban || ''}
               onChange={(e) =>
@@ -449,7 +449,7 @@ export const Inspector: React.FC<InspectorProps> = ({
             <label className={fieldLabel} htmlFor="inspector-bic">BIC</label>
             <input id="inspector-bic"
               type="text"
- className="w-full border border-border bg-surface-muted rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="w-full border border-dark-border bg-dark-2 rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
               value={element.qrData?.bic || ''}
               onChange={(e) =>
                 onUpdate(element.id, {
@@ -485,7 +485,7 @@ export const Inspector: React.FC<InspectorProps> = ({
         <button
           onClick={() => setAspectLocked((v) => !v)}
           className={`flex items-center gap-2 text-xs font-medium rounded-lg px-3 py-2 border transition-colors ${
-            aspectLocked ? 'bg-black text-accent border-black' : 'bg-surface-muted text-muted border-border hover:border-border'
+            aspectLocked ? 'bg-accent text-accent-foreground border-accent' : 'bg-dark-2 text-dark-muted border-dark-border hover:border-ink-400'
           }`}
         >
           {aspectLocked ? <Link2 size={14} /> : <Unlink2 size={14} />}
@@ -494,7 +494,7 @@ export const Inspector: React.FC<InspectorProps> = ({
         <div>
           <div className="flex items-center justify-between mb-1">
             <label className={fieldLabel}>Deckkraft</label>
-            <span className="text-xs text-muted tabular-nums">{Math.round((element.style.opacity ?? 1) * 100)}%</span>
+            <span className="text-xs text-dark-muted tabular-nums">{Math.round((element.style.opacity ?? 1) * 100)}%</span>
           </div>
           <input
             type="range"
@@ -514,9 +514,9 @@ export const Inspector: React.FC<InspectorProps> = ({
           <div className="flex items-center gap-3">
             <div className="flex-1">
               <label className={fieldLabel}>Farbe</label>
-              <div className="flex items-center gap-2 bg-surface-muted p-1.5 rounded-lg border border-border">
+              <div className="flex items-center gap-2 bg-dark-2 p-1.5 rounded-lg border border-dark-border">
                 <input type="color" value={(styleVal('color') as string) || '#000000'} onChange={(e) => setStyle({ color: e.target.value })} className="h-6 w-6 rounded-sm cursor-pointer border-none bg-transparent" />
-                <span className="text-xs text-muted tabular-nums">{element.style.color}</span>
+                <span className="text-xs text-dark-muted tabular-nums">{element.style.color}</span>
               </div>
             </div>
             <div className="w-20">
@@ -526,7 +526,7 @@ export const Inspector: React.FC<InspectorProps> = ({
           </div>
           <div>
             <label className={fieldLabel} htmlFor="inspector-schriftart">Schriftart</label>
- <select id="inspector-schriftart" value={element.style.fontFamily ||'Inter, sans-serif'} onChange={(e) => setStyle({ fontFamily: e.target.value })} className="w-full border border-border bg-surface-muted rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">
+ <select id="inspector-schriftart" value={element.style.fontFamily ||'Inter, sans-serif'} onChange={(e) => setStyle({ fontFamily: e.target.value })} className="w-full border border-dark-border bg-dark-2 rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark">
               <option value="Inter, sans-serif">Inter (Modern)</option>
               <option value="Times New Roman, serif">Times (Classic)</option>
               <option value="Arial, sans-serif">Arial</option>
@@ -543,21 +543,21 @@ export const Inspector: React.FC<InspectorProps> = ({
               <input id="inspector-laufweite" type="number" step={0.1} value={element.style.letterSpacing ?? ''} placeholder="0" onChange={(e) => setStyle({ letterSpacing: e.target.value ? Number(e.target.value) : undefined })} className={numberField} />
             </div>
           </div>
-          <div className="flex bg-surface-muted rounded-lg p-1 gap-1 justify-between">
-            <button onClick={() => setStyle({ textAlign: 'left' })} className={`flex min-h-6 flex-1 py-1.5 rounded-lg justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${element.style.textAlign === 'left' ? 'bg-white shadow-sm text-black' : 'text-muted hover:bg-surface'}`}>
+          <div className="flex bg-dark-2 rounded-lg p-1 gap-1 justify-between">
+            <button onClick={() => setStyle({ textAlign: 'left' })} className={`flex min-h-6 flex-1 py-1.5 rounded-lg justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark ${element.style.textAlign === 'left' ? 'bg-dark-2 shadow-sm text-inverse-foreground' : 'text-dark-muted hover:bg-dark-3'}`}>
               <AlignLeft size={16} />
             </button>
-            <button onClick={() => setStyle({ textAlign: 'center' })} className={`flex min-h-6 flex-1 py-1.5 rounded-lg justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${element.style.textAlign === 'center' ? 'bg-white shadow-sm text-black' : 'text-muted hover:bg-surface'}`}>
+            <button onClick={() => setStyle({ textAlign: 'center' })} className={`flex min-h-6 flex-1 py-1.5 rounded-lg justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark ${element.style.textAlign === 'center' ? 'bg-dark-2 shadow-sm text-inverse-foreground' : 'text-dark-muted hover:bg-dark-3'}`}>
               <AlignCenter size={16} />
             </button>
-            <button onClick={() => setStyle({ textAlign: 'right' })} className={`flex min-h-6 flex-1 py-1.5 rounded-lg justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${element.style.textAlign === 'right' ? 'bg-white shadow-sm text-black' : 'text-muted hover:bg-surface'}`}>
+            <button onClick={() => setStyle({ textAlign: 'right' })} className={`flex min-h-6 flex-1 py-1.5 rounded-lg justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark ${element.style.textAlign === 'right' ? 'bg-dark-2 shadow-sm text-inverse-foreground' : 'text-dark-muted hover:bg-dark-3'}`}>
               <AlignRight size={16} />
             </button>
             <div className="w-px bg-border mx-1 my-1" />
-            <button onClick={() => setStyle({ fontWeight: element.style.fontWeight === 'bold' ? 'normal' : 'bold' })} aria-pressed={element.style.fontWeight === 'bold'} className={`flex min-h-6 flex-1 py-1.5 rounded-lg justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${element.style.fontWeight === 'bold' ? 'bg-dark-base text-background' : 'text-muted hover:bg-surface'}`}>
+            <button onClick={() => setStyle({ fontWeight: element.style.fontWeight === 'bold' ? 'normal' : 'bold' })} aria-pressed={element.style.fontWeight === 'bold'} className={`flex min-h-6 flex-1 py-1.5 rounded-lg justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark ${element.style.fontWeight === 'bold' ? 'bg-accent text-accent-foreground' : 'text-dark-muted hover:bg-dark-3'}`}>
               <Bold size={16} />
             </button>
-            <button onClick={() => setStyle({ textDecoration: element.style.textDecoration === 'underline' ? 'none' : 'underline' })} aria-pressed={element.style.textDecoration === 'underline'} className={`flex min-h-6 flex-1 py-1.5 rounded-lg justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${element.style.textDecoration === 'underline' ? 'bg-dark-base text-background' : 'text-muted hover:bg-surface'}`}>
+            <button onClick={() => setStyle({ textDecoration: element.style.textDecoration === 'underline' ? 'none' : 'underline' })} aria-pressed={element.style.textDecoration === 'underline'} className={`flex min-h-6 flex-1 py-1.5 rounded-lg justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark ${element.style.textDecoration === 'underline' ? 'bg-accent text-accent-foreground' : 'text-dark-muted hover:bg-dark-3'}`}>
               <Underline size={16} />
             </button>
           </div>
@@ -571,7 +571,7 @@ export const Inspector: React.FC<InspectorProps> = ({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={fieldLabel} htmlFor="inspector-hintergrund">Hintergrund</label>
-              <input id="inspector-hintergrund" type="color" value={element.style.backgroundColor || '#ffffff'} onChange={(e) => setStyle({ backgroundColor: e.target.value })} className="h-9 w-full rounded-lg cursor-pointer border border-border" />
+              <input id="inspector-hintergrund" type="color" value={element.style.backgroundColor || '#ffffff'} onChange={(e) => setStyle({ backgroundColor: e.target.value })} className="h-9 w-full rounded-lg cursor-pointer border border-dark-border" />
             </div>
             <div>
               <label className={fieldLabel} htmlFor="inspector-radius">Radius</label>
@@ -583,7 +583,7 @@ export const Inspector: React.FC<InspectorProps> = ({
             </div>
             <div>
               <label className={fieldLabel} htmlFor="inspector-rahmenfarbe">Rahmenfarbe</label>
-              <input id="inspector-rahmenfarbe" type="color" value={element.style.borderColor || '#000000'} onChange={(e) => setStyle({ borderColor: e.target.value })} className="h-9 w-full rounded-lg cursor-pointer border border-border" />
+              <input id="inspector-rahmenfarbe" type="color" value={element.style.borderColor || '#000000'} onChange={(e) => setStyle({ borderColor: e.target.value })} className="h-9 w-full rounded-lg cursor-pointer border border-dark-border" />
             </div>
             <div>
               <label className={fieldLabel} htmlFor="inspector-innenabstand">Innenabstand</label>
@@ -600,7 +600,7 @@ export const Inspector: React.FC<InspectorProps> = ({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={fieldLabel} htmlFor="inspector-farbe">Farbe</label>
-              <input id="inspector-farbe" type="color" value={element.style.backgroundColor || '#000000'} onChange={(e) => setStyle({ backgroundColor: e.target.value })} className="h-10 w-full rounded-lg cursor-pointer border border-border" />
+              <input id="inspector-farbe" type="color" value={element.style.backgroundColor || '#000000'} onChange={(e) => setStyle({ backgroundColor: e.target.value })} className="h-10 w-full rounded-lg cursor-pointer border border-dark-border" />
             </div>
             <div>
               <label className={fieldLabel} htmlFor="inspector-dicke">Dicke</label>
@@ -613,7 +613,7 @@ export const Inspector: React.FC<InspectorProps> = ({
       <div className="mt-auto pt-6">
         <button
           onClick={() => onDelete([element.id])}
-          className="w-full flex items-center justify-center gap-2 text-error border border-error/30 bg-error-bg hover:bg-error-bg/80 p-3 rounded-xl transition-colors font-medium text-sm"
+          className="w-full flex items-center justify-center gap-2 text-error-inverse border border-error/40 bg-error/15 hover:bg-error/25 p-3 rounded-xl transition-colors font-medium text-sm"
         >
           <Trash2 size={16} />
           Element löschen

@@ -1,5 +1,8 @@
 import React from 'react';
-import { Button, EMPTY_VALUE, EmptyState, ErrorState, useActionFeedback } from '@billme/ui';
+import {
+  Button, EMPTY_VALUE, EmptyState, ErrorState, Metric, PageHeader, Select,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useActionFeedback,
+} from '@billme/ui';
 import { LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS } from '@billme/accounting-shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -384,55 +387,41 @@ export const EurView: React.FC = () => {
   };
 
   return (
-    <div className="bg-surface rounded-2xl p-6 min-h-full shadow-sm">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => navigate({ to: '/finance' })}
-            aria-label="Zurück zu Finanzen"
-            className="rounded-lg p-2 text-muted transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
-            <ArrowLeft size={20} aria-hidden="true" />
-          </button>
-          <div className="w-12 h-12 rounded-xl bg-dark-base text-accent flex items-center justify-center">
-            <ReceiptText size={22} />
-          </div>
-          <div>
-            <h2 className="text-2xl font-black text-foreground">Anlage EÜR</h2>
-            <p className="text-sm text-muted mt-1">Klassifizierung und Auswertung für Steuerjahr {taxYear}.</p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <select
-            value={taxYear}
-            aria-label="Steuerjahr"
-            onChange={(e) => setTaxYear(Number(e.target.value))}
-            className="rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
-            {SUPPORTED_EUR_TAX_YEARS.map((year) => (
-              <option key={year} value={year}>{year}</option>
-            ))}
-          </select>
-          {!isWebShell && (
-            <Button variant="secondary" size="sm" onClick={() => setShowRulesModal(true)}>
-              <Settings2 size={16} />
-              Regeln
+    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs">
+      <PageHeader
+        title="Anlage EÜR"
+        description={`Klassifizierung und Auswertung für Steuerjahr ${taxYear}.`}
+        back={{ label: 'Zurück zu Finanzen', onClick: () => navigate({ to: '/finance' }) }}
+        actions={
+          <>
+            <Select
+              value={taxYear}
+              aria-label="Steuerjahr"
+              onChange={(e) => setTaxYear(Number(e.target.value))}
+            >
+              {SUPPORTED_EUR_TAX_YEARS.map((year) => (
+                <option key={year} value={year}>{year}</option>
+              ))}
+            </Select>
+            {!isWebShell && (
+              <Button variant="secondary" onClick={() => setShowRulesModal(true)}>
+                <Settings2 size={16} aria-hidden="true" />
+                Regeln
+              </Button>
+            )}
+            <Button variant="secondary" onClick={() => void exportCsv()}>
+              <Download size={16} aria-hidden="true" />
+              CSV exportieren
             </Button>
-          )}
-          <Button variant="dark" size="sm" onClick={() => void exportCsv()}>
-            <Download size={16} />
-            CSV exportieren
-          </Button>
-          {!isWebShell && (
-            <Button variant="dark" size="sm" onClick={() => void exportPdf()} disabled={isPdfExporting}>
-              <Download size={16} />
-              {isPdfExporting ? 'PDF...' : 'PDF exportieren'}
-            </Button>
-          )}
-        </div>
-      </div>
+            {!isWebShell && (
+              <Button onClick={() => void exportPdf()} loading={isPdfExporting}>
+                <Download size={16} aria-hidden="true" />
+                PDF exportieren
+              </Button>
+            )}
+          </>
+        }
+      />
 
       {/* Undo Banner */}
       {lastUndo && (
@@ -456,8 +445,8 @@ export const EurView: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Queue Panel */}
         <div className="rounded-2xl border border-border p-4 lg:col-span-1">
-          <h3 className="font-bold text-foreground mb-3 flex items-center gap-2">
-            <ClipboardList size={18} className="text-muted" />
+          <h3 className="font-semibold text-foreground mb-3 flex items-center gap-2">
+            <ClipboardList size={16} className="text-muted" />
             Warteschlange
             <span className="text-xs font-normal text-muted ml-auto tabular-nums">{queueItems.length} Einträge</span>
           </h3>
@@ -496,7 +485,7 @@ export const EurView: React.FC = () => {
               aria-label="Einträge durchsuchen"
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Gegenpartei, Zweck oder Datum..."
- className="w-full pl-9 pr-3 py-2 rounded-xl border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-2.5 h-8 hover:border-ink-500 w-full pl-9 pr-3 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </div>
 
@@ -506,7 +495,7 @@ export const EurView: React.FC = () => {
               value={flowFilter}
               aria-label="Zahlungsrichtung filtern"
               onChange={(e) => setFlowFilter(e.target.value as 'all' | 'income' | 'expense')}
-              className="rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <option value="all">Alle Typen</option>
               <option value="income">Einnahmen</option>
@@ -516,7 +505,7 @@ export const EurView: React.FC = () => {
               value={queueSort}
               aria-label="Einträge sortieren"
               onChange={(e) => setQueueSort(e.target.value as QueueSort)}
-              className="rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <option value="date_desc">Neueste zuerst</option>
               <option value="amount_desc">Betrag absteigend</option>
@@ -527,7 +516,7 @@ export const EurView: React.FC = () => {
           {/* Bulk Actions */}
           <div className="mb-3 rounded-xl border border-border bg-surface-muted p-3">
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-bold text-foreground flex items-center gap-2">
+              <label className="text-xs font-semibold text-foreground flex items-center gap-2">
                 <input
                   type="checkbox"
                   className="h-6 w-6 accent-black"
@@ -551,7 +540,7 @@ export const EurView: React.FC = () => {
               </button>
             </div>
             <div className="grid grid-cols-1 gap-1.5">
-              <label className="text-xs font-bold text-foreground">
+              <label className="text-xs font-semibold text-foreground">
                 Begründung (Audit) <span className="text-error-text">*</span>
                 <input
                   aria-label="Begründung für EÜR-Änderung"
@@ -674,7 +663,7 @@ export const EurView: React.FC = () => {
                         </div>
                         <div className="text-sm font-semibold text-foreground truncate">{item.counterparty}</div>
                         <div className="text-xs text-muted truncate">{item.purpose}</div>
-                        <div className={`text-sm font-bold tabular-nums mt-1 ${
+                        <div className={`text-sm font-semibold tabular-nums mt-1 ${
                           item.flowType === 'income' ? 'text-success-text' : 'text-error-text'
                         }`}>
                           {item.flowType === 'income' ? '+' : '-'}{formatCurrency(item.amountGross)}
@@ -709,8 +698,8 @@ export const EurView: React.FC = () => {
 
         {/* Classification Panel */}
         <div className="rounded-2xl border border-border p-4 lg:col-span-1">
-          <h3 className="font-bold text-foreground mb-3 flex items-center gap-2">
-            <Tags size={18} className="text-muted" />
+          <h3 className="font-semibold text-foreground mb-3 flex items-center gap-2">
+            <Tags size={16} className="text-muted" />
             Klassifizierung
           </h3>
           {!activeItem ? (
@@ -729,10 +718,10 @@ export const EurView: React.FC = () => {
                   ) : (
                     <TrendingDown size={16} className="text-error-text" />
                   )}
-                  <span className="text-sm font-bold text-foreground truncate">{activeItem.counterparty}</span>
+                  <span className="text-sm font-semibold text-foreground truncate">{activeItem.counterparty}</span>
                 </div>
                 <div className="text-xs text-muted truncate">{activeItem.purpose}</div>
-                <div className={`text-sm font-bold tabular-nums mt-1 ${
+                <div className={`text-sm font-semibold tabular-nums mt-1 ${
                   activeItem.flowType === 'income' ? 'text-success-text' : 'text-error-text'
                 }`}>
                   {formatCurrency(activeItem.amountGross)}
@@ -774,13 +763,13 @@ export const EurView: React.FC = () => {
 
               {/* Kennziffer Select */}
               <div>
-                <label className="block text-xs font-bold text-foreground" htmlFor="eur-line">Kennziffer</label>
+                <label className="block text-xs font-semibold text-foreground" htmlFor="eur-line">Kennziffer</label>
                 <select
                   id="eur-line"
                   value={selectedLineId}
                   onChange={(e) => setSelectedLineId(e.target.value)}
                   disabled={excluded}
-                  className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">Nicht zugeordnet</option>
                   {activeLineOptions.map((line) => (
@@ -791,11 +780,11 @@ export const EurView: React.FC = () => {
                 </select>
               </div>
 
-              <label className="block text-xs font-bold text-foreground">Steuerliche Korrektur / Begründung
-                <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" placeholder="z. B. privater Anteil" />
+              <label className="block text-xs font-semibold text-foreground">Steuerliche Korrektur / Begründung
+                <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" placeholder="z. B. privater Anteil" />
               </label>
 
-              <label className="block text-xs font-bold text-foreground">
+              <label className="block text-xs font-semibold text-foreground">
                 Begründung (Audit) <span className="text-error-text">*</span>
                 <input
                   aria-label="Begründung für EÜR-Änderung"
@@ -808,12 +797,12 @@ export const EurView: React.FC = () => {
 
               {/* VAT Mode Select */}
               <div>
-                <label className="block text-xs font-bold text-foreground" htmlFor="eur-vat-mode">USt. Modus</label>
+                <label className="block text-xs font-semibold text-foreground" htmlFor="eur-vat-mode">USt. Modus</label>
                 <select
                   id="eur-vat-mode"
                   value={vatMode}
                   onChange={(e) => setVatMode(e.target.value as VatMode)}
-                  className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="none">Keine USt. Umrechnung</option>
                   <option value="default">Default USt. (Netto)</option>
@@ -822,7 +811,7 @@ export const EurView: React.FC = () => {
 
               {isProProduct && vatMode === 'default' && (
                 <div>
-                  <label className="block text-xs font-bold text-foreground" htmlFor="eur-vat-rate">USt.-Satz (%)</label>
+                  <label className="block text-xs font-semibold text-foreground" htmlFor="eur-vat-rate">USt.-Satz (%)</label>
                   <input
                     id="eur-vat-rate"
                     type="number"
@@ -831,7 +820,7 @@ export const EurView: React.FC = () => {
                     step="0.01"
                     value={vatRate ?? ''}
                     onChange={(e) => setVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
-                    className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     placeholder="z. B. 19"
                   />
                   {activeItem.vatWarning && <p className="mt-1 text-xs text-warning-text">{activeItem.vatWarning}</p>}
@@ -873,8 +862,8 @@ export const EurView: React.FC = () => {
 
         {/* Report Panel */}
         <div className="rounded-2xl border border-border p-4 lg:col-span-1">
-          <h3 className="font-bold text-foreground mb-3 flex items-center gap-2">
-            <Layers size={18} className="text-muted" />
+          <h3 className="font-semibold text-foreground mb-3 flex items-center gap-2">
+            <Layers size={16} className="text-muted" />
             Report
           </h3>
           {reportIsError ? (
@@ -896,55 +885,55 @@ export const EurView: React.FC = () => {
             />
           ) : (
             <>
-              {/* Summary Stat Cards */}
-              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="rounded-xl bg-success-bg border border-success-border p-3">
-                  <div className="text-xs font-bold uppercase tracking-wider text-success-text">Einnahmen</div>
-                  <div className="text-lg font-bold tabular-nums text-success-text mt-1">{formatCurrency(report.summary.incomeTotal)}</div>
-                </div>
-                <div className="rounded-xl bg-error-bg border border-error-border p-3">
-                  <div className="text-xs font-bold uppercase tracking-wider text-error-text">Ausgaben</div>
-                  <div className="text-lg font-bold tabular-nums text-error-text mt-1">{formatCurrency(report.summary.expenseTotal)}</div>
-                </div>
-                <div className="rounded-xl bg-surface-muted border border-border p-3">
-                  <div className="text-xs font-bold uppercase tracking-wider text-muted">Überschuss</div>
-                  <div className={`text-lg font-bold tabular-nums mt-1 ${report.summary.surplus >= 0 ? 'text-success-text' : 'text-error-text'}`}>
-                    {formatCurrency(report.summary.surplus)}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-warning-bg border border-warning-border p-3">
-                  <div className="text-xs font-bold uppercase tracking-wider text-warning-text">Unklassifiziert</div>
-                  <div className="text-lg font-bold tabular-nums text-warning-text mt-1">{report.unclassifiedCount}</div>
-                </div>
+              {/* Summary: neutral figures; a tone dot plus the label carries the meaning. */}
+              <div className="mb-4 grid grid-cols-2 gap-x-4 gap-y-4 border-b border-border-subtle pb-4">
+                <Metric label="Einnahmen" tone="success" value={formatCurrency(report.summary.incomeTotal)} />
+                <Metric label="Ausgaben" tone="error" value={formatCurrency(report.summary.expenseTotal)} />
+                <Metric
+                  label="Überschuss"
+                  value={formatCurrency(report.summary.surplus)}
+                />
+                <Metric
+                  label="Unklassifiziert"
+                  tone={report.unclassifiedCount > 0 ? 'warning' : 'neutral'}
+                  value={report.unclassifiedCount}
+                />
               </div>
 
-              {/* Report Table */}
-              <div className="max-h-[470px] overflow-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-muted border-b border-border">
-                      <th className="py-2 pr-2 font-semibold">Kz</th>
-                      <th className="py-2 pr-2 font-semibold">Bezeichnung</th>
-                      <th className="py-2 text-right font-semibold">Betrag</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.rows.map((row) => (
-                      <tr key={row.lineId} className="border-b border-border-subtle hover:bg-surface-muted transition-colors">
-                        <td className="py-2 pr-2 align-top font-mono text-muted">{row.kennziffer ?? EMPTY_VALUE}</td>
-                        <td className="py-2 pr-2">{row.label}</td>
-                        <td className={`py-2 text-right font-semibold tabular-nums ${
+              <Table aria-label="EÜR-Report" density="compact" bare containerClassName="max-h-[470px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-16">Kz</TableHead>
+                    <TableHead>Bezeichnung</TableHead>
+                    <TableHead numeric>Betrag</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {report.rows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={3} muted className="h-20 text-center">
+                        Noch keine Positionen in diesem Steuerjahr.
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                  {report.rows.map((row) => (
+                    <TableRow key={row.lineId}>
+                      <TableCell muted className="font-mono">{row.kennziffer ?? EMPTY_VALUE}</TableCell>
+                      <TableCell>{row.label}</TableCell>
+                      <TableCell
+                        numeric
+                        className={`font-medium ${
                           row.kind === 'income' ? 'text-success-text' :
                           row.kind === 'expense' ? 'text-error-text' :
-                          'text-foreground'
-                        }`}>
-                          {formatCurrency(row.total)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                          ''
+                        }`}
+                      >
+                        {formatCurrency(row.total)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </>
           )}
         </div>

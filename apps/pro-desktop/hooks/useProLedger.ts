@@ -13,6 +13,15 @@ export const useProLedgerStatsQuery = () => {
   });
 };
 
+/** The accounting policy owns the active chart; never infer it from catalog sizes. */
+export const useProActiveChart = (): 'SKR03' | 'SKR04' => {
+  const { data } = useQuery({
+    queryKey: ['pro-accounting', 'policy'],
+    queryFn: () => ipc.pro.getAccountingPolicy(),
+  });
+  return data?.activeChart ?? 'SKR03';
+};
+
 export const useProLedgerAccountsQuery = (
   args: IpcArgs<'pro:listLedgerAccounts'> = {},
 ) => {

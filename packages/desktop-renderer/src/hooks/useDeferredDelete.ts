@@ -2,6 +2,8 @@ import { useActionFeedback } from '@billme/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export const DEFERRED_DELETE_DELAY_MS = 8000;
+/** How long a deleted row stays rendered (faded out) before it leaves the list. */
+export const DEFERRED_DELETE_LEAVE_MS = 180;
 
 export interface UseDeferredDeleteOptions {
   scope: string;
@@ -11,6 +13,12 @@ export interface UseDeferredDeleteOptions {
 
 export interface UseDeferredDeleteResult {
   pendingIds: ReadonlySet<string>;
+  /**
+   * Pending ids that are still fading out. Keep these rows rendered with
+   * `data-leaving` (styled in @billme/ui styles.css) instead of hiding them;
+   * empty when the user prefers reduced motion.
+   */
+  leavingIds: ReadonlySet<string>;
   requestDelete: (ids: string[]) => void;
   undo: () => void;
 }
@@ -37,6 +45,8 @@ export const useDeferredDelete = ({
 }: UseDeferredDeleteOptions): UseDeferredDeleteResult => {
   const { notify, clear } = useActionFeedback(scope);
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
+  const [leavingIds, setLeavingIds] = useState<Set<string>>(() => new Set());
+  const leaveTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
   const pendingIdsRef = useRef<Set<string>>(new Set());
   const recordsRef = useRef(new Map<string, DeleteRecord>());
   const batchesRef = useRef(new Map<number, DeleteBatch>());
@@ -107,6 +117,7 @@ export const useDeferredDelete = ({
       pendingIdsRef.current.delete(id);
     }
     publishPendingIds();
+    setLeavingIds((current) => withoutIds(current, batch.ids));
   }, [publishPendingIds]);
 
   const requestDelete = useCallback((ids: string[]) => {
@@ -132,6 +143,14 @@ export const useDeferredDelete = ({
       record.timer = setTimeout(() => commitRecord(id), DEFERRED_DELETE_DELAY_MS);
     }
     publishPendingIds();
+    if (!prefersReducedMotion()) {
+      setLeavingIds((current) => new Set([...current, ...uniqueIds]));
+      const timer = setTimeout(() => {
+        leaveTimersRef.current.delete(timer);
+        if (mountedRef.current) setLeavingIds((current) => withoutIds(current, uniqueIds));
+      }, DEFERRED_DELETE_LEAVE_MS);
+      leaveTimersRef.current.add(timer);
+    }
 
     notifyRef.current('success', labelRef.current(uniqueIds.length), {
       action: {
@@ -150,6 +169,8 @@ export const useDeferredDelete = ({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      for (const timer of leaveTimersRef.current) clearTimeout(timer);
+      leaveTimersRef.current.clear();
       const records = Array.from(recordsRef.current.values());
       for (const record of records) {
         if (record.state !== 'pending') continue;
@@ -164,8 +185,19 @@ export const useDeferredDelete = ({
     };
   }, [commitRecord]);
 
-  return { pendingIds, requestDelete, undo };
+  return { pendingIds, leavingIds, requestDelete, undo };
 };
+
+const withoutIds = (current: Set<string>, ids: string[]): Set<string> => {
+  if (!ids.some((id) => current.has(id))) return current;
+  const next = new Set(current);
+  for (const id of ids) next.delete(id);
+  return next;
+};
+
+const prefersReducedMotion = (): boolean =>
+  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const formatDeleteError = (error: unknown): string => {
   const detail = error instanceof Error ? error.message : String(error);

@@ -39,7 +39,7 @@ vi.mock('../hooks/useRecurring', () => ({
     useDeleteRecurringProfileMutation: () => ({ mutateAsync: vi.fn() }),
 }));
 vi.mock('../hooks/useDeferredDelete', () => ({
-    useDeferredDelete: () => ({ pendingIds: new Set<string>(), requestDelete: vi.fn() }),
+    useDeferredDelete: () => ({ pendingIds: new Set<string>(), leavingIds: new Set<string>(), requestDelete: vi.fn() }),
 }));
 vi.mock('../runtime-api', () => ({
     ipc: { recurring: { manualRun: mocks.manualRun } },

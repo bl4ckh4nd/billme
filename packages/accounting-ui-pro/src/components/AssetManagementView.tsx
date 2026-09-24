@@ -186,7 +186,7 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
         aria-busy={busy}
       >
         <div>
-          <h2 className="text-base font-black text-foreground">{form.id ? 'Anlage bearbeiten' : 'Neue Anlage'}</h2>
+          <h2 className="text-base font-semibold text-foreground">{form.id ? 'Anlage bearbeiten' : 'Neue Anlage'}</h2>
           <p className="mt-1 text-sm text-muted">Speichern und Aktivieren erzeugen jeweils einen nachvollziehbaren Audit-Eintrag.</p>
         </div>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -207,25 +207,25 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
                 onChange={input(key)}
                 placeholder={placeholder}
                 required={['assetNumber', 'name', 'assetClass', 'costCenter', 'location', 'assetAccountNumber'].includes(key)}
-                className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm"
+                className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm"
               />
             </label>
           ))}
           <label className="space-y-1 text-sm font-semibold text-foreground">
             <span>Aktivierungsdatum *</span>
-            <input type="date" value={form.activationDate} onChange={input('activationDate')} required className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm" />
+            <input type="date" value={form.activationDate} onChange={input('activationDate')} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
           </label>
           <label className="space-y-1 text-sm font-semibold text-foreground">
             <span>Anschaffungskosten netto *</span>
-            <input type="number" min="0" step="0.01" value={form.acquisitionCost} onChange={input('acquisitionCost')} required className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm" />
+            <input type="number" min="0" step="0.01" value={form.acquisitionCost} onChange={input('acquisitionCost')} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
           </label>
           <label className="space-y-1 text-sm font-semibold text-foreground">
             <span>Nutzungsdauer in Jahren</span>
-            <input type="number" min="1" step="1" value={form.usefulLifeYears} onChange={input('usefulLifeYears')} className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm" />
+            <input type="number" min="1" step="1" value={form.usefulLifeYears} onChange={input('usefulLifeYears')} className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
           </label>
           <label className="space-y-1 text-sm font-semibold text-foreground">
             <span>Abschreibungsmethode *</span>
-            <select value={form.depreciationMethod} onChange={input('depreciationMethod')} required className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm">
+            <select value={form.depreciationMethod} onChange={input('depreciationMethod')} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm">
               <option value="linear">Linear</option>
               <option value="gwg">GWG</option>
               <option value="pool">Pool</option>
@@ -233,7 +233,7 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
           </label>
           <label htmlFor="asset-status" className="space-y-1 text-sm font-semibold text-foreground">
             <span>Status *</span>
-            <select id="asset-status" value={form.status} onChange={input('status')} required disabled={accountingOwned} aria-describedby={accountingOwned ? 'asset-status-ownership-note' : undefined} className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60">
+            <select id="asset-status" value={form.status} onChange={input('status')} required disabled={accountingOwned} aria-describedby={accountingOwned ? 'asset-status-ownership-note' : undefined} className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm disabled:cursor-not-allowed disabled:opacity-60">
               <option value="entwurf">Entwurf</option>
               <option value="aktiv">Aktiv</option>
               <option value="voll_abgeschrieben">Voll abgeschrieben</option>
@@ -249,7 +249,7 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
         </label>
         <label className="block space-y-1 text-sm font-semibold text-foreground">
           <span>Audit-Grund *</span>
-          <textarea value={form.reason} onChange={input('reason')} required minLength={1} rows={2} placeholder="Warum wird die Anlage geändert?" className="w-full rounded-lg border border-control-border bg-surface-muted px-3 py-2 text-sm" />
+          <textarea value={form.reason} onChange={input('reason')} required minLength={1} rows={2} placeholder="Warum wird die Anlage geändert?" className="px-2.5 py-2 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm" />
         </label>
         <div className="flex flex-wrap justify-end gap-2">
           <Button type="button" onClick={onCancel} disabled={busy} variant="secondary" size="sm" className="h-9 px-4">Abbrechen</Button>
@@ -557,15 +557,15 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
       <div className="flex min-h-0 flex-col border-b border-subtle xl:w-96 xl:min-w-96 xl:max-w-96 xl:border-b-0 xl:border-r">
         <div className="px-4 py-3 border-b border-subtle space-y-2.5">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-dark-base text-accent flex items-center justify-center shrink-0">
-              <Building2 size={15} />
+            <div className="w-8 h-8 rounded-control bg-surface-sunken text-foreground flex items-center justify-center shrink-0">
+              <Building2 size={16} />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2">
-                <h1 className="text-sm font-black tracking-tight text-foreground leading-tight">Anlagenverwaltung</h1>
+                <h1 className="text-sm font-semibold tracking-tight text-foreground leading-tight">Anlagenverwaltung</h1>
                 {!dataAdapter ? (
                   <span
-                    className="rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs font-bold text-warning-text"
+                    className="rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs font-semibold text-warning-text"
                     role="status"
                     title="Ohne verbundenes Anlagen-Backend zeigt diese Ansicht einen Demo-Datensatz."
                   >
@@ -590,37 +590,37 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
           </div>
 
           <div className="rounded-lg border border-border bg-surface px-3 py-2">
-            <div className="text-xs font-bold uppercase tracking-wide text-muted">Restbuchwert</div>
-            <div className="mt-0.5 text-base font-black tabular-nums text-foreground">{euro(totals.totalResidual)}</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted">Restbuchwert</div>
+            <div className="mt-0.5 text-base font-semibold tabular-nums text-foreground">{euro(totals.totalResidual)}</div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-lg border border-border-subtle px-3 py-2">
-              <div className="text-xs font-bold text-muted">Anlagen gesamt</div>
-              <div className="mt-0.5 text-sm font-bold tabular-nums text-foreground">{totals.totalAssets} <span className="text-xs font-medium text-muted">({totals.activeAssets} aktiv)</span></div>
+              <div className="text-xs font-semibold text-muted">Anlagen gesamt</div>
+              <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{totals.totalAssets} <span className="text-xs font-medium text-muted">({totals.activeAssets} aktiv)</span></div>
             </div>
             <div className="rounded-lg border border-border-subtle px-3 py-2">
-              <div className="text-xs font-bold text-muted">Anschaffungskosten</div>
-              <div className="mt-0.5 text-sm font-bold tabular-nums text-foreground">{euro(totals.totalAcquisition)}</div>
+              <div className="text-xs font-semibold text-muted">Anschaffungskosten</div>
+              <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{euro(totals.totalAcquisition)}</div>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={13} />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={14} />
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Anlage suchen (Nr., Name, Klasse, KSt.)"
-                className="w-full h-8 rounded-lg border border-control-border pl-8 pr-3 text-xs"
+                className="px-2.5 hover:border-ink-500 w-full h-8 rounded-control border border-control-border pl-8 pr-3 text-xs"
               />
             </div>
             <div className="flex items-center gap-1.5">
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as 'alle' | AssetStatus)}
-                className="h-8 rounded-lg border border-control-border px-2 text-xs font-medium"
+                className="px-2.5 hover:border-ink-500 h-8 rounded-control border border-control-border text-xs"
               >
                 <option value="alle">Alle Status</option>
                 <option value="entwurf">Entwurf</option>
@@ -648,28 +648,28 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-xs text-muted font-bold">{asset.assetNumber}</div>
-                    <div className="font-bold text-foreground truncate">{asset.name}</div>
+                    <div className="text-xs text-muted font-semibold">{asset.assetNumber}</div>
+                    <div className="font-semibold text-foreground truncate">{asset.name}</div>
                     <div className="text-xs text-muted mt-0.5">
                       {asset.assetClass} • {asset.costCenter} • {asset.location}
                     </div>
                   </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-bold whitespace-nowrap ${pill.className}`}>
+                  <span className={`px-2 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${pill.className}`}>
                     {pill.label}
                   </span>
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                   <div>
-                    <div className="text-muted font-bold uppercase tracking-wide">AK</div>
-                    <div className="text-foreground font-bold tabular-nums">{euro(asset.acquisitionCost)}</div>
+                    <div className="text-muted font-semibold uppercase tracking-wide">AK</div>
+                    <div className="text-foreground font-semibold tabular-nums">{euro(asset.acquisitionCost)}</div>
                   </div>
                   <div>
-                    <div className="text-muted font-bold uppercase tracking-wide">RBW</div>
-                    <div className="text-foreground font-bold tabular-nums">{euro(asset.residualValue)}</div>
+                    <div className="text-muted font-semibold uppercase tracking-wide">RBW</div>
+                    <div className="text-foreground font-semibold tabular-nums">{euro(asset.residualValue)}</div>
                   </div>
                   <div>
-                    <div className="text-muted font-bold uppercase tracking-wide">Nächste AfA</div>
-                    <div className="text-foreground font-bold tabular-nums">{asset.nextDepreciation}</div>
+                    <div className="text-muted font-semibold uppercase tracking-wide">Nächste AfA</div>
+                    <div className="text-foreground font-semibold tabular-nums">{asset.nextDepreciation}</div>
                   </div>
                 </div>
               </button>
@@ -702,15 +702,15 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-xs font-bold text-muted">{selected.assetNumber}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${statusPill(selected.status).className}`}>
+                    <span className="text-xs font-semibold text-muted">{selected.assetNumber}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusPill(selected.status).className}`}>
                       {statusPill(selected.status).label}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${selected.receiptLinked ? 'bg-success-bg text-success-text' : 'bg-warning-bg text-warning-text'}`}>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${selected.receiptLinked ? 'bg-success-bg text-success-text' : 'bg-warning-bg text-warning-text'}`}>
                       {selected.receiptLinked ? 'Beleg verknüpft' : 'Beleg fehlt'}
                     </span>
                   </div>
-                  <h2 className="text-base font-black text-foreground tracking-tight mt-0.5">{selected.name}</h2>
+                  <h2 className="text-base font-semibold text-foreground tracking-tight mt-0.5">{selected.name}</h2>
                   <p className="text-xs text-muted font-medium">
                     {selected.assetClass} • {selected.costCenter} • {selected.location}
                   </p>
@@ -724,22 +724,22 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
               </div>
 
               <div className="rounded-lg border border-border px-3 py-2 bg-surface">
-                <div className="text-xs font-bold uppercase tracking-wide text-muted">Restbuchwert</div>
-                <div className="mt-0.5 text-base font-black tabular-nums text-foreground">{euro(selected.residualValue)}</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted">Restbuchwert</div>
+                <div className="mt-0.5 text-base font-semibold tabular-nums text-foreground">{euro(selected.residualValue)}</div>
               </div>
 
               <div className="grid grid-cols-3 gap-2">
                 <div className="rounded-lg border border-border-subtle px-3 py-2 bg-surface-muted">
-                  <div className="text-xs font-bold text-muted">AK</div>
-                  <div className="mt-0.5 text-sm font-bold tabular-nums text-foreground">{euro(selected.acquisitionCost)}</div>
+                  <div className="text-xs font-semibold text-muted">AK</div>
+                  <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{euro(selected.acquisitionCost)}</div>
                 </div>
                 <div className="rounded-lg border border-border-subtle px-3 py-2 bg-surface-muted">
-                  <div className="text-xs font-bold text-muted">AfA p.a.</div>
-                  <div className="mt-0.5 text-sm font-bold tabular-nums text-foreground">{euro(selected.annualDepreciation)}</div>
+                  <div className="text-xs font-semibold text-muted">AfA p.a.</div>
+                  <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{euro(selected.annualDepreciation)}</div>
                 </div>
                 <div className="rounded-lg border border-border-subtle px-3 py-2 bg-surface-muted">
-                  <div className="text-xs font-bold text-muted">Nächste AfA</div>
-                  <div className="mt-0.5 text-sm font-bold tabular-nums text-foreground">{selected.nextDepreciation}</div>
+                  <div className="text-xs font-semibold text-muted">Nächste AfA</div>
+                  <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{selected.nextDepreciation}</div>
                 </div>
               </div>
 
@@ -748,9 +748,9 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
-                    className={`h-7 px-3 rounded-lg text-xs font-bold border ${
+                    className={`h-7 px-3 rounded-lg text-xs font-semibold border ${
                       activeTab === tab
-                        ? 'bg-dark-base text-background border-dark-base'
+                        ? 'bg-surface-inverse text-inverse-foreground border-surface-inverse'
                         : 'bg-surface text-muted border-border hover:bg-surface-muted'
                     }`}
                   >
@@ -763,21 +763,21 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
             <div className="min-h-0 flex-1 overflow-y-auto p-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
               <section className="min-w-0 space-y-4">
                 <div className="rounded-2xl border border-border bg-surface p-5">
-                  <div className="text-sm font-bold text-foreground mb-3">{activeTab}</div>
+                  <div className="text-sm font-semibold text-foreground mb-3">{activeTab}</div>
 
                   {activeTab === 'Übersicht' && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                       <div className="space-y-2">
-                        <div className="flex justify-between gap-3"><span className="text-muted">Lieferant</span><span className="font-bold text-foreground">{formatEmptyValue(selected.supplier)}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Rechnung</span><span className="font-bold text-foreground">{formatEmptyValue(selected.invoiceRef)}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Aktivierung</span><span className="font-bold tabular-nums text-foreground">{selected.activationDate}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Kostenstelle</span><span className="font-bold text-foreground">{selected.costCenter}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Lieferant</span><span className="font-semibold text-foreground">{formatEmptyValue(selected.supplier)}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Rechnung</span><span className="font-semibold text-foreground">{formatEmptyValue(selected.invoiceRef)}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Aktivierung</span><span className="font-semibold tabular-nums text-foreground">{selected.activationDate}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Kostenstelle</span><span className="font-semibold text-foreground">{selected.costCenter}</span></div>
                       </div>
                       <div className="space-y-2">
-                        <div className="flex justify-between gap-3"><span className="text-muted">Standort</span><span className="font-bold text-foreground">{selected.location}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Status</span><span className="font-bold text-foreground">{statusPill(selected.status).label}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Beleg</span><span className="font-bold text-foreground">{selected.receiptLinked ? 'Verknüpft' : 'Offen'}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Nächste AfA</span><span className="font-bold tabular-nums text-foreground">{selected.nextDepreciation}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Standort</span><span className="font-semibold text-foreground">{selected.location}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Status</span><span className="font-semibold text-foreground">{statusPill(selected.status).label}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Beleg</span><span className="font-semibold text-foreground">{selected.receiptLinked ? 'Verknüpft' : 'Offen'}</span></div>
+                        <div className="flex justify-between gap-3"><span className="text-muted">Nächste AfA</span><span className="font-semibold tabular-nums text-foreground">{selected.nextDepreciation}</span></div>
                       </div>
                     </div>
                   )}
@@ -800,10 +800,10 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                         const depreciated = rows.slice(0, index + 1).reduce((sum, row) => sum + row.amount, 0);
                         return (
                         <div key={period.id} className="grid grid-cols-4 gap-3 rounded-lg border border-subtle p-3 text-sm">
-                          <div><div className="text-xs text-muted font-bold">Jahr</div><div className="font-bold tabular-nums text-foreground">{period.year}</div></div>
-                          <div><div className="text-xs text-muted font-bold">AfA</div><div className="font-bold tabular-nums text-foreground">{euro(period.amount)}</div></div>
-                          <div><div className="text-xs text-muted font-bold">Status</div><div className="font-bold text-foreground">{period.status === 'posted' ? 'Gebucht' : period.status === 'cancelled' ? 'Storniert' : 'Geplant'}</div></div>
-                          <div><div className="text-xs text-muted font-bold">RBW danach</div><div className="font-bold tabular-nums text-foreground">{euro(Math.max(selected.acquisitionCost - depreciated, 0))}</div></div>
+                          <div><div className="text-xs text-muted font-semibold">Jahr</div><div className="font-semibold tabular-nums text-foreground">{period.year}</div></div>
+                          <div><div className="text-xs text-muted font-semibold">AfA</div><div className="font-semibold tabular-nums text-foreground">{euro(period.amount)}</div></div>
+                          <div><div className="text-xs text-muted font-semibold">Status</div><div className="font-semibold text-foreground">{period.status === 'posted' ? 'Gebucht' : period.status === 'cancelled' ? 'Storniert' : 'Geplant'}</div></div>
+                          <div><div className="text-xs text-muted font-semibold">RBW danach</div><div className="font-semibold tabular-nums text-foreground">{euro(Math.max(selected.acquisitionCost - depreciated, 0))}</div></div>
                         </div>
                       );})}
                     </div>
@@ -813,7 +813,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                     <div className="space-y-3">
                       {!schedule.length && dataAdapter ? <div className="text-sm text-muted">Kein Abschreibungsplan vorhanden.</div> : null}
                       <div className="rounded-xl border border-border bg-surface-muted/60 p-4">
-                        <div className="font-bold text-foreground">Zugang / Aktivierung</div>
+                        <div className="font-semibold text-foreground">Zugang / Aktivierung</div>
                         <div className="text-sm text-muted mt-1">
                           {selected.activationDate} • Anschaffung <span className="tabular-nums">{euro(selected.acquisitionCost)}</span> • Status {statusPill(selected.status).label}
                         </div>
@@ -833,14 +833,14 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                 {canMutate && dataAdapter?.runDepreciation && selected.status === 'aktiv' && (
                   <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" noValidate onSubmit={(event) => { event.preventDefault(); void postDepreciation(); }} aria-busy={busyAction === 'depreciation'}>
                     <div>
-                      <h3 className="text-sm font-bold text-foreground">Abschreibung buchen</h3>
+                      <h3 className="text-sm font-semibold text-foreground">Abschreibung buchen</h3>
                       <p className="mt-1 text-xs text-muted">Die Buchung wird erst nach erfolgreicher Antwort in Liste und Plan übernommen.</p>
                     </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Geschäftsjahr *</span><input type="number" min="2000" step="1" value={depreciationYear} onChange={(event) => setDepreciationYear(event.target.value)} required className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm" /></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Buchungsdatum *</span><input type="date" value={postingDate} onChange={(event) => setPostingDate(event.target.value)} required className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Geschäftsjahr *</span><input type="number" min="2000" step="1" value={depreciationYear} onChange={(event) => setDepreciationYear(event.target.value)} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Buchungsdatum *</span><input type="date" value={postingDate} onChange={(event) => setPostingDate(event.target.value)} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
                     </div>
-                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={depreciationReason} onChange={(event) => setDepreciationReason(event.target.value)} required rows={2} placeholder="Warum wird die AfA jetzt gebucht?" className="w-full rounded-lg border border-control-border bg-surface-muted px-3 py-2 text-sm" /></label>
+                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={depreciationReason} onChange={(event) => setDepreciationReason(event.target.value)} required rows={2} placeholder="Warum wird die AfA jetzt gebucht?" className="px-2.5 py-2 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
                     <Button type="submit" disabled={busyAction !== null} variant="dark" size="sm" className="h-9 px-4">{busyAction === 'depreciation' ? 'Buche…' : 'AfA buchen'}</Button>
                   </form>
                 )}
@@ -848,16 +848,16 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                 {canMutate && dataAdapter?.disposeAsset && !['verkauft', 'stillgelegt'].includes(selected.status) && (
                   <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" noValidate onSubmit={(event) => { event.preventDefault(); void dispose(); }} aria-busy={busyAction === 'disposal'}>
                     <div>
-                      <h3 className="text-sm font-bold text-foreground">Anlage ausbuchen</h3>
+                      <h3 className="text-sm font-semibold text-foreground">Anlage ausbuchen</h3>
                       <p className="mt-1 text-xs text-muted">Verkaufserlös 0,00 € führt zur Stilllegung; ein Erlös führt zum Verkauf.</p>
                     </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Ausbuchungsdatum *</span><input type="date" value={disposalDate} onChange={(event) => setDisposalDate(event.target.value)} required className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm" /></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Verkaufserlös netto *</span><input type="number" min="0" step="0.01" value={disposalProceeds} onChange={(event) => setDisposalProceeds(event.target.value)} required className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm" /></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Umsatzsteuersatz *</span><select value={disposalTaxRate} onChange={(event) => setDisposalTaxRate(event.target.value as '0' | '7' | '19')} required className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm"><option value="0">0 %</option><option value="7">7 %</option><option value="19">19 %</option></select></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Erlöskonto / Zahlungskonto</span><input value={proceedsAccountNumber} onChange={(event) => setProceedsAccountNumber(event.target.value)} placeholder="Optional, z. B. 1200" className="h-9 w-full rounded-lg border border-control-border bg-surface-muted px-3 text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Ausbuchungsdatum *</span><input type="date" value={disposalDate} onChange={(event) => setDisposalDate(event.target.value)} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Verkaufserlös netto *</span><input type="number" min="0" step="0.01" value={disposalProceeds} onChange={(event) => setDisposalProceeds(event.target.value)} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Umsatzsteuersatz *</span><select value={disposalTaxRate} onChange={(event) => setDisposalTaxRate(event.target.value as '0' | '7' | '19')} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm"><option value="0">0 %</option><option value="7">7 %</option><option value="19">19 %</option></select></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Erlöskonto / Zahlungskonto</span><input value={proceedsAccountNumber} onChange={(event) => setProceedsAccountNumber(event.target.value)} placeholder="Optional, z. B. 1200" className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
                     </div>
-                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={disposalReason} onChange={(event) => setDisposalReason(event.target.value)} required rows={2} placeholder="Warum wird die Anlage ausgebucht?" className="w-full rounded-lg border border-control-border bg-surface-muted px-3 py-2 text-sm" /></label>
+                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={disposalReason} onChange={(event) => setDisposalReason(event.target.value)} required rows={2} placeholder="Warum wird die Anlage ausgebucht?" className="px-2.5 py-2 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
                     <label className="flex items-start gap-2 text-sm text-foreground"><input type="checkbox" checked={disposalConfirmed} onChange={(event) => setDisposalConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 rounded-sm border-control-border" /><span>Ich bestätige die Ausbuchung und die daraus folgende Journalbuchung.</span></label>
                     <Button type="submit" disabled={busyAction !== null || !disposalConfirmed} variant="dark" size="sm" className="h-9 px-4">{busyAction === 'disposal' ? 'Buche…' : 'Ausbuchung bestätigen'}</Button>
                   </form>

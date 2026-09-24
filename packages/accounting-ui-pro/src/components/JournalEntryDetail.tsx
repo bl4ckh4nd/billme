@@ -72,7 +72,7 @@ export default function JournalEntryDetail({ entryId, dataAdapter }: JournalEntr
     return (
       <div className="rounded-xl border border-error-border bg-error-bg p-4 text-sm text-error-text" role="alert" aria-live="assertive">
         <div>{error}</div>
-        <button type="button" className="mt-3 rounded-lg border border-error-border px-3 py-1.5 font-bold" onClick={() => setRetry((value) => value + 1)}>
+        <button type="button" className="mt-3 rounded-lg border border-error-border px-3 py-1.5 font-semibold" onClick={() => setRetry((value) => value + 1)}>
           Erneut versuchen
         </button>
       </div>
@@ -87,10 +87,10 @@ export default function JournalEntryDetail({ entryId, dataAdapter }: JournalEntr
     <section className="rounded-xl border border-border bg-surface p-4" aria-labelledby="journal-entry-detail-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="journal-entry-detail-heading" className="text-base font-bold text-foreground">Journal {entry.entryNumber}</h2>
+          <h2 id="journal-entry-detail-heading" className="text-base font-semibold text-foreground">Journal {entry.entryNumber}</h2>
           <p className="mt-1 text-sm text-muted">{entry.bookingText}</p>
         </div>
-        <span className="rounded-full border border-border px-2.5 py-1 text-xs font-bold text-muted">
+        <span className="rounded-full border border-border px-2.5 py-1 text-xs font-semibold text-muted">
           {entry.status === 'reversed' ? 'Storniert' : 'Gebucht'}
         </span>
       </div>
@@ -108,7 +108,7 @@ export default function JournalEntryDetail({ entryId, dataAdapter }: JournalEntr
           return (
             <div key={line.id} className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-surface-muted px-3 py-2 text-sm">
               <span className="font-semibold text-foreground">{isDebit ? 'Soll' : 'Haben'} · Konto {line.accountNumber}</span>
-              <span className="font-bold tabular-nums text-foreground">{euro.format(amount)}</span>
+              <span className="font-semibold tabular-nums text-foreground">{euro.format(amount)}</span>
             </div>
           );
         })}
@@ -128,8 +128,8 @@ export function JournalEntryDetailModal({ entryId, dataAdapter, onClose }: Journ
       className="max-w-3xl rounded-2xl border border-border p-4 sm:p-6"
     >
       <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 id="journal-entry-dialog-heading" className="text-lg font-black text-foreground">Journalbuchung</h2>
-        <button type="button" className="min-h-10 rounded-lg border border-control-border px-3 py-2 text-sm font-bold text-foreground hover:bg-surface-muted" aria-label="Journalansicht schließen" onClick={onClose}>Schließen</button>
+        <h2 id="journal-entry-dialog-heading" className="text-lg font-semibold text-foreground">Journalbuchung</h2>
+        <button type="button" className="min-h-10 rounded-lg border border-control-border px-3 py-2 text-sm font-semibold text-foreground hover:bg-surface-muted" aria-label="Journalansicht schließen" onClick={onClose}>Schließen</button>
       </div>
       <JournalEntryDetail entryId={entryId} dataAdapter={dataAdapter} />
     </Modal>

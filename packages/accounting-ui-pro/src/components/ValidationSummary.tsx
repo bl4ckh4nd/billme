@@ -7,7 +7,7 @@ interface ValidationSummaryProps {
 export default function ValidationSummary({ issues }: ValidationSummaryProps) {
   if (issues.length === 0) {
     return (
-      <div className="mb-4 border border-success-border bg-success-bg rounded-xl p-4 text-sm font-medium text-success-text">
+      <div className="mb-4 shrink-0 border border-success-border bg-success-bg rounded-xl p-4 text-sm font-medium text-success-text">
         Keine Validierungsprobleme. Buchung ist prüfbar.
       </div>
     );
@@ -20,8 +20,8 @@ export default function ValidationSummary({ issues }: ValidationSummaryProps) {
   };
 
   return (
-    <div aria-live="polite" className="mb-4 border border-border rounded-xl overflow-hidden">
-      <div className="px-4 py-3 bg-surface-muted border-b border-border text-sm font-bold text-foreground">
+    <div aria-live="polite" className="mb-4 shrink-0 border border-border rounded-xl overflow-hidden">
+      <div className="px-4 py-3 bg-surface-muted border-b border-border text-sm font-semibold text-foreground">
         Validierung ({issues.length})
       </div>
       <div className="grid gap-3 p-4 sm:grid-cols-2">
@@ -29,7 +29,7 @@ export default function ValidationSummary({ issues }: ValidationSummaryProps) {
           if (groups[severity].length === 0) return null;
           return (
             <div key={severity}>
-              <div className="text-xs font-bold uppercase tracking-wide text-muted mb-1">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted mb-1">
                 {severity === 'error' ? 'Fehler' : severity === 'warning' ? 'Warnungen' : 'Hinweise'}
               </div>
               <ul className="space-y-1">

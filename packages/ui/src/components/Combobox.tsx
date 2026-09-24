@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Plus, Search } from 'lucide-react';
 import { cn } from '../utils/cn';
+import { popoverExitClass, useExitTransition } from '../utils/useExitTransition';
 import { Portal } from './Portal';
 
 const normalizeSearchText = (value: string) => value
@@ -69,7 +70,8 @@ function ComboboxInner<T extends ComboboxItem>(
   const anchorRef = useRef<HTMLDivElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const popupPointerDownRef = useRef(false);
-  const [popupPosition, setPopupPosition] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [popupPosition, setPopupPosition] = useState<{ top: number; left: number; width: number; above: boolean } | null>(null);
+  const { mounted: popupMounted, closing: popupClosing } = useExitTransition(open && !disabled);
 
   useEffect(() => {
     if (disabled || !focused) setQuery(value);
@@ -92,11 +94,13 @@ function ComboboxInner<T extends ComboboxItem>(
     document.getElementById(`${inputId}-opt-${activeOption.id}`)?.scrollIntoView?.({ block: 'nearest' });
   }, [activeIndex, activeOption, inputId, open]);
 
+  // The last position survives the exit transition; it resets once the popup unmounts.
   useEffect(() => {
-    if (!open) {
-      setPopupPosition(null);
-      return;
-    }
+    if (!popupMounted) setPopupPosition(null);
+  }, [popupMounted]);
+
+  useEffect(() => {
+    if (!open) return;
 
     const updatePosition = () => {
       const anchor = anchorRef.current?.getBoundingClientRect();
@@ -120,7 +124,7 @@ function ComboboxInner<T extends ComboboxItem>(
         ? Math.max(8, anchor.top - Math.min(estimatedHeight, spaceAbove))
         : Math.min(anchor.bottom + 4, Math.max(8, window.innerHeight - 8));
 
-      setPopupPosition({ top, left, width });
+      setPopupPosition({ top, left, width, above: opensAbove });
     };
 
     updatePosition();
@@ -213,9 +217,9 @@ function ComboboxInner<T extends ComboboxItem>(
       >
         {richRow ? (
           <>
-            {showAvatar ? <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-muted text-xs font-bold text-foreground">{getLabel(item).trim().charAt(0).toUpperCase()}</span> : null}
+            {showAvatar ? <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-muted text-xs font-semibold text-foreground">{getLabel(item).trim().charAt(0).toUpperCase()}</span> : null}
             <div className="min-w-0 flex-1">
-              <div className="truncate whitespace-nowrap text-sm font-bold text-foreground" title={getLabel(item)}>{getLabel(item)}</div>
+              <div className="truncate whitespace-nowrap text-sm font-semibold text-foreground" title={getLabel(item)}>{getLabel(item)}</div>
               {getSublabel?.(item) ? (
                 <div className="mt-0.5 truncate whitespace-nowrap text-xs text-muted">{getSublabel(item)}</div>
               ) : null}
@@ -224,7 +228,7 @@ function ComboboxInner<T extends ComboboxItem>(
           </>
         ) : (
           <>
-            <div className="min-w-0 max-w-full truncate whitespace-nowrap text-sm font-bold text-foreground" title={getLabel(item)}>{getLabel(item)}</div>
+            <div className="min-w-0 max-w-full truncate whitespace-nowrap text-sm font-semibold text-foreground" title={getLabel(item)}>{getLabel(item)}</div>
             {getSublabel?.(item) ? <div className="mt-0.5 max-w-full truncate whitespace-nowrap text-xs text-muted">{getSublabel(item)}</div> : null}
           </>
         )}
@@ -323,13 +327,23 @@ function ComboboxInner<T extends ComboboxItem>(
         />
       </div>
 
-      {open && !disabled ? (
+      {popupMounted ? (
         <Portal>
           <div
             ref={popupRef}
             onPointerDown={() => { popupPointerDownRef.current = true; }}
-            className="ui-enter-popover fixed z-[var(--z-dropdown)] overflow-hidden rounded-lg border border-border bg-surface shadow-lg"
-            style={popupPosition ? { top: popupPosition.top, left: popupPosition.left, width: popupPosition.width } : { visibility: 'hidden' }}
+            className={cn(
+              'ui-enter-popover fixed z-[var(--z-dropdown)] overflow-hidden rounded-card bg-surface shadow-md',
+              popupClosing && popoverExitClass,
+            )}
+            style={popupPosition
+              ? {
+                top: popupPosition.top,
+                left: popupPosition.left,
+                width: popupPosition.width,
+                '--origin': popupPosition.above ? 'bottom center' : 'top center',
+              } as React.CSSProperties
+              : { visibility: 'hidden' }}
           >
             <div id={listboxId} role="listbox" className="max-h-56 overflow-auto">
               {optionRows}

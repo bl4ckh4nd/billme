@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, Info, LoaderCircle, XCircle } from 'lucide-react';
+import { OVERLAY_EXIT_MS } from '../utils/useExitTransition';
 import { Portal } from './Portal';
 import { Toast, toastOverlayPosition, type ToastAction } from './Toast';
 
@@ -45,10 +46,10 @@ const getDuration = (kind: FeedbackKind, options: FeedbackOptions): number | nul
 const normalizedScope = (scope: string): string => scope.trim() || 'global';
 
 const FeedbackIcon: React.FC<{ kind: FeedbackKind }> = ({ kind }) => {
-  if (kind === 'progress') return <LoaderCircle size={16} className="shrink-0 motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />;
-  if (kind === 'error') return <XCircle size={16} aria-hidden="true" />;
-  if (kind === 'info') return <Info size={16} aria-hidden="true" />;
-  return <CheckCircle2 size={16} aria-hidden="true" />;
+  if (kind === 'progress') return <LoaderCircle size={16} className="shrink-0 text-inverse-muted motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />;
+  if (kind === 'error') return <XCircle size={16} className="shrink-0 text-error-inverse" aria-hidden="true" />;
+  if (kind === 'info') return <Info size={16} className="shrink-0 text-info-inverse" aria-hidden="true" />;
+  return <CheckCircle2 size={16} className="shrink-0 text-accent" aria-hidden="true" />;
 };
 
 export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
@@ -68,7 +69,7 @@ export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }
     timerMeta.current.delete(scope);
   }, []);
 
-  // Two-phase removal: flag `leaving` for the 150ms exit, then delete.
+  // Two-phase removal: flag `leaving` for the exit transition, then delete.
   const removeEntry = useCallback((scope: string) => {
     const key = normalizedScope(scope);
     clearTimer(key);
@@ -106,7 +107,7 @@ export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }
         delete next[key];
         return next;
       });
-    }, 150);
+    }, OVERLAY_EXIT_MS);
     exitTimers.current.set(key, timer);
   }, [clearTimer]);
 
@@ -185,7 +186,7 @@ export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }
           <div
             role="region"
             aria-label="Aktionsmeldungen"
-            className={`pointer-events-none ${toastOverlayPosition} flex max-w-md flex-col items-end gap-3`}
+            className={`pointer-events-none ${toastOverlayPosition} flex flex-col items-stretch gap-2`}
           >
             {visibleEntries.map(([scope, entry], index) => (
               <Toast
@@ -208,7 +209,7 @@ export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }
                 className="pointer-events-auto w-full"
               >
                 <FeedbackIcon kind={entry.kind} />
-                <span className="min-w-0 flex-1 text-sm font-bold">{entry.message}</span>
+                <span className="min-w-0 flex-1 text-sm font-medium">{entry.message}</span>
               </Toast>
             ))}
           </div>

@@ -72,7 +72,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     >
       <form onSubmit={handleSubmit}>
         <div className="p-6">
-          <h2 id={titleId} className="text-base font-black text-foreground">
+          <h2 id={titleId} className="text-base font-semibold text-foreground">
             {title}
           </h2>
           {description ? (

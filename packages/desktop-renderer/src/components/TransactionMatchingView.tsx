@@ -468,7 +468,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
               <ArrowLeft size={20} aria-hidden="true" />
             </button>
             <div>
-              <h1 className="text-2xl font-black text-foreground">Transaktionen bearbeiten</h1>
+              <h1 className="text-title text-foreground">Transaktionen bearbeiten</h1>
               <p className="text-sm text-muted mt-1 tabular-nums">{listSummary}</p>
             </div>
           </div>
@@ -495,14 +495,14 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
 
         {activeTab === 'matching' ? (
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} aria-hidden="true" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} aria-hidden="true" />
             <input
               type="text"
               placeholder="Transaktion suchen"
               aria-label="Transaktion suchen"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-control-border bg-surface rounded-lg text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-2.5 h-8 hover:border-ink-500 w-full pl-10 pr-4 border border-control-border bg-surface rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
             {searchQuery && (
               <button
@@ -511,7 +511,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                 aria-label="Suche zurücksetzen"
                 className="absolute right-3 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
-                <X size={18} aria-hidden="true" />
+                <X size={16} aria-hidden="true" />
               </button>
             )}
           </div>
@@ -530,7 +530,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
               onChange={(e) => setEurQuery(e.target.value)}
               placeholder="Suche Gegenpartei/Zweck"
               aria-label="EÜR-Einträge durchsuchen"
-              className="rounded-xl border border-control-border bg-surface px-3 py-2 text-sm min-w-[220px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm min-w-[220px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
             <select
               value={eurStatus}
@@ -652,7 +652,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                             <p className="text-sm text-muted line-clamp-2">{transaction.purpose}</p>
                           </div>
                           <div className="text-right ml-4 flex-shrink-0">
-                            <div className="text-lg font-bold tabular-nums text-success-text">
+                            <div className="text-lg font-semibold tabular-nums text-success-text">
                               {formatCurrency(transaction.amount)}
                             </div>
                             <div className="text-xs text-muted tabular-nums">{formatDate(transaction.date)}</div>
@@ -685,7 +685,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                   <div className="bg-surface rounded-lg border border-success-border p-6">
                     <div className="flex items-center gap-3 mb-4">
                       <CheckCircle2 size={24} className="text-success-text" aria-hidden="true" />
-                      <h2 className="text-xl font-bold text-foreground">Bereits zugeordnet</h2>
+                      <h2 className="text-xl font-semibold text-foreground">Bereits zugeordnet</h2>
                     </div>
                     <p className="text-muted mb-6">
                       Diese Transaktion ist bereits einer Rechnung zugeordnet.
@@ -703,7 +703,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                 </div>
               ) : (
                 <div className="p-6">
-                  <h2 className="text-lg font-bold text-foreground mb-4">Passende Rechnungen</h2>
+                  <h2 className="text-lg font-semibold text-foreground mb-4">Passende Rechnungen</h2>
 
                   {matchesQuery.isError ? (
                     <ErrorState
@@ -740,7 +740,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                             <div className="flex items-start justify-between mb-3">
                               <div className="flex-1">
                                 <div className="flex items-center gap-2 mb-2">
-                                  <span className="font-bold text-foreground">{suggestion.invoice.number}</span>
+                                  <span className="font-semibold text-foreground">{suggestion.invoice.number}</span>
                                   {getConfidenceBadge(suggestion.confidence)}
                                 </div>
                                 <p className="text-sm text-muted mb-1">
@@ -753,7 +753,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                                 </p>
                               </div>
                               <div className="text-right ml-4">
-                                <div className="text-lg font-bold tabular-nums text-foreground">
+                                <div className="text-lg font-semibold tabular-nums text-foreground">
                                   {formatCurrency(remaining)}
                                 </div>
                                 <div className="text-xs text-muted">offen</div>
@@ -815,7 +815,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                       aria-label="Begründung für EÜR-Änderung"
                       value={eurReason}
                       onChange={(event) => setEurReason(event.target.value)}
-                      className="mt-1 w-full rounded-lg border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
                     />
                   </label>
@@ -918,7 +918,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                             </div>
                             <div className="text-sm font-semibold text-foreground truncate">{item.counterparty}</div>
                             <div className="text-xs text-muted truncate">{item.purpose}</div>
-                            <div className={`text-sm font-bold mt-1 tabular-nums ${
+                            <div className={`text-sm font-semibold mt-1 tabular-nums ${
                               item.flowType === 'income' ? 'text-success-text' : 'text-error-text'
                             }`}>
                               {item.flowType === 'income' ? '+' : '-'}{formatCurrency(item.amountGross)}
@@ -962,14 +962,14 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                         aria-label="Begründung für EÜR-Änderung"
                         value={eurReason}
                         onChange={(event) => setEurReason(event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                         placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
                       />
                     </label>
                   </div>
 
                   <div>
-                    <h2 className="text-lg font-bold text-foreground">EÜR-Klassifizierung</h2>
+                    <h2 className="text-lg font-semibold text-foreground">EÜR-Klassifizierung</h2>
                     <p className="text-sm text-muted">Direkt in der Bank-Ansicht klassifizieren.</p>
                   </div>
 
@@ -1007,7 +1007,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                       value={eurLineId}
                       onChange={(e) => setEurLineId(e.target.value)}
                       disabled={eurExcluded}
-                      className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm disabled:bg-surface-muted disabled:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm disabled:bg-surface-muted disabled:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <option value="">Nicht zugeordnet</option>
                       {eurActiveLineOptions.map((line) => (
@@ -1024,7 +1024,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                       id="tm-eur-vat-mode"
                       value={eurVatMode}
                       onChange={(e) => setEurVatMode(e.target.value as 'none' | 'default')}
-                      className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <option value="none">Keine USt. Umrechnung</option>
                       <option value="default">Default USt. (Netto)</option>
@@ -1042,7 +1042,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                         step="0.01"
                         value={eurVatRate ?? ''}
                         onChange={(e) => setEurVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
-                        className="mt-1 w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                         placeholder="z. B. 19"
                       />
                       {eurActive.vatWarning && <p className="mt-1 text-xs text-warning-text">{eurActive.vatWarning}</p>}
@@ -1100,7 +1100,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
             <TriangleAlert size={20} className="text-warning-text" aria-hidden="true" />
           </div>
           <div className="flex-1">
-            <h3 id={unlinkTitleId} className="text-lg font-bold text-foreground mb-2">
+            <h3 id={unlinkTitleId} className="text-lg font-semibold text-foreground mb-2">
               Zuordnung wirklich aufheben?
             </h3>
             <p className="text-sm text-muted mb-2">

@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { cn } from '../utils/cn';
+import { useExitTransition } from '../utils/useExitTransition';
 import { Portal } from './Portal';
 
 const focusableSelector = [
@@ -46,32 +47,8 @@ export const Modal: React.FC<ModalProps> = ({
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  // Mounted stays true through the 150ms exit so overlay/panel can fade out.
-  // Enter (200ms) rides @starting-style; exit is faster (150ms) per Emil.
-  const [mounted, setMounted] = useState(open);
-  const [closing, setClosing] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setMounted(true);
-      setClosing(false);
-      return undefined;
-    }
-    if (!mounted) return undefined;
-    const reduceMotion = typeof window !== 'undefined'
-      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    if (reduceMotion) {
-      setMounted(false);
-      setClosing(false);
-      return undefined;
-    }
-    setClosing(true);
-    const timer = window.setTimeout(() => {
-      setMounted(false);
-      setClosing(false);
-    }, 150);
-    return () => window.clearTimeout(timer);
-  }, [open, mounted]);
+  // Mounted stays true through the exit so overlay and panel can fade out.
+  const { mounted, closing } = useExitTransition(open);
 
   useEffect(() => {
     if (typeof document === 'undefined') return undefined;
@@ -166,7 +143,7 @@ export const Modal: React.FC<ModalProps> = ({
         ref={overlayRef}
         className={cn(
           'ui-enter-fade fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center overflow-y-auto bg-dark-base/20 p-4 backdrop-blur-sm',
-          closing && 'opacity-0 duration-100',
+          closing && 'opacity-0 duration-(--dur-overlay-exit)',
         )}
         onClick={(event) => {
           if (dismissOnBackdrop && event.target === event.currentTarget) onCloseRef.current();
@@ -181,8 +158,8 @@ export const Modal: React.FC<ModalProps> = ({
           aria-busy={ariaBusy || undefined}
           tabIndex={-1}
           className={cn(
-            'ui-enter-panel w-full max-w-lg rounded-3xl bg-surface shadow-2xl',
-            closing && 'translate-y-2 scale-[0.96] opacity-0 duration-150',
+            'ui-enter-panel w-full max-w-lg rounded-modal bg-surface shadow-lg',
+            closing && 'translate-y-1 scale-[0.98] opacity-0 duration-(--dur-overlay-exit)',
             className,
           )}
         >

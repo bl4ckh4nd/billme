@@ -8,7 +8,7 @@ import { useInvoicesQuery } from '../hooks/useInvoices';
 import { useOffersQuery } from '../hooks/useOffers';
 import { getPreviewElements } from '@billme/desktop-utils/documentPreview';
 
-type PdfReadyGlobal = { __PDF_READY__?: boolean };
+type PdfReadyGlobal = { __PDF_READY__?: boolean; __PDF_ERROR__?: string };
 type PreviewArgs = Parameters<typeof getPreviewElements>;
 
 const pageStyle: React.CSSProperties = {
@@ -55,6 +55,19 @@ export const PrintDocument: React.FC<{ kind: 'invoice' | 'offer'; id: string }> 
   React.useEffect(() => {
     (globalThis as PdfReadyGlobal).__PDF_READY__ = false;
   }, []);
+
+  // Tell the exporter about a dead end right away instead of letting it time out.
+  const documentsQuery = kind === 'offer' ? offersQuery : invoicesQuery;
+  const printError = documentsQuery.isError
+    ? 'Belege konnten nicht geladen werden.'
+    : documentsQuery.isSuccess && !doc
+      ? `Dokument nicht gefunden (${kind} / ${id}).`
+      : settingsQuery.isError
+        ? 'Stammdaten konnten nicht geladen werden.'
+        : null;
+  React.useEffect(() => {
+    (globalThis as PdfReadyGlobal).__PDF_ERROR__ = printError ?? undefined;
+  }, [printError]);
 
   // Ensure layout has painted before printToPDF.
   const handleReady = React.useCallback(() => {

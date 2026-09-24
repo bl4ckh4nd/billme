@@ -102,7 +102,7 @@ export function ItemRow({
             aria-label="Position duplizieren"
             onClick={onDuplicate}
           >
-            <Copy size={13} />
+            <Copy size={14} />
           </button>
           <button
             type="button"
@@ -111,7 +111,7 @@ export function ItemRow({
             aria-label="Position löschen"
             onClick={onRemove}
           >
-            <Trash2 size={13} />
+            <Trash2 size={14} />
           </button>
         </div>
       </div>

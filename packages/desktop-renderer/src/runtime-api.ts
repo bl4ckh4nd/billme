@@ -23,6 +23,7 @@ export type RendererRuntime = {
   product?: RendererProduct;
   shell?: 'desktop' | 'web';
   validateVatId?: VatValidationClient;
+  onLogout?: () => void;
 };
 
 type RendererApi = LiteBillmeApi | ProBillmeApi;

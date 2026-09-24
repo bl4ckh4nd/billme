@@ -401,9 +401,9 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ elements, f
                 aria-required="true"
                 required
                 onChange={(event) => set((previous) => ({ ...previous, number: event.target.value }))}
-                className={`${inputClass(Boolean(fields.fieldErrors?.number), `text-right ${fields.isNumberLocked ? 'pr-5 text-muted' : ''}`)}`}
+                className={`${inputClass(Boolean(fields.fieldErrors?.number), `text-right ${fields.onUnlockNumber ? 'pr-7' : ''} ${fields.isNumberLocked ? 'text-muted' : ''}`)}`}
               />
-              {fields.onUnlockNumber ? <button type="button" onClick={fields.onUnlockNumber} className="absolute right-0 top-1/2 inline-flex min-h-6 min-w-6 -translate-y-1/2 items-center justify-center rounded-sm p-0.5 text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" aria-label={fields.isNumberLocked ? 'Nummer entsperren' : 'Nummer sperren'} title="Nummer bearbeiten (GoBD-Warnung)">{fields.isNumberLocked ? <LockKeyhole size={11} /> : <UnlockKeyhole size={11} />}</button> : null}
+              {fields.onUnlockNumber ? <button type="button" onClick={fields.onUnlockNumber} className="absolute right-0 top-1/2 inline-flex min-h-6 min-w-6 -translate-y-1/2 items-center justify-center rounded-sm p-0.5 text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" aria-label={fields.isNumberLocked ? 'Nummer entsperren' : 'Nummer sperren'} title="Nummer bearbeiten (GoBD-Warnung)">{fields.isNumberLocked ? <LockKeyhole size={12} /> : <UnlockKeyhole size={12} />}</button> : null}
             </div>
           </div>
           {error('document-input-number-error', fields.fieldErrors?.number)}
@@ -428,7 +428,7 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ elements, f
 
       <div className="pointer-events-auto absolute box-border bg-white px-1 py-1 text-[11px] text-foreground" style={{ left: recipient.x, top: recipient.y, width: recipient.width, height: recipient.height }}>
         <div id="document-field-client" data-field-block data-field-error={fields.fieldErrors?.client ? 'true' : undefined} className="mb-0.5 min-w-0">
-          <div className="min-w-0"><span className={documentLabelClass}>{isManualRecipient ? 'Empfänger' : 'Kunde'}{requiredMark(true)}</span><Combobox key={`recipient-${document.id}`} ref={(input) => { recipientInputRef.current = input; setInputA11y(input, 'document-input-client', Boolean(fields.fieldErrors?.client), fields.fieldErrors?.client ? 'document-input-client-error' : undefined, true); }} items={fields.clients} value={document.client || fields.selectedClientLabel} onValueChange={fields.onClientNameChange ?? ((value) => set((previous) => ({ ...previous, client: value })))} onSelect={fields.onSelectClient} getLabel={(client) => client.company} getSublabel={clientSublabel} getSearchText={(client) => `${client.company} ${client.customerNumber ?? ''} ${client.email ?? ''} ${client.address ?? ''} ${(client.addresses ?? []).map((entry) => Object.values(entry).join(' ')).join(' ')}`} allowFreeText placeholder="Empfänger oder Kunde suchen…" aria-label="Kunde auswählen" showSearchIcon={false} leadingIcon={<UserRound size={13} />} showChevron showAvatar selectedId={fields.selectedClientId} footer={{ label: 'Empfänger ohne Kundenstamm eingeben', onSelect: startManualRecipient }} inputClassName={`${inputClass(Boolean(fields.fieldErrors?.client), 'font-medium')}`} /></div>
+          <div className="min-w-0"><span className={documentLabelClass}>{isManualRecipient ? 'Empfänger' : 'Kunde'}{requiredMark(true)}</span><Combobox key={`recipient-${document.id}`} ref={(input) => { recipientInputRef.current = input; setInputA11y(input, 'document-input-client', Boolean(fields.fieldErrors?.client), fields.fieldErrors?.client ? 'document-input-client-error' : undefined, true); }} items={fields.clients} value={document.client || fields.selectedClientLabel} onValueChange={fields.onClientNameChange ?? ((value) => set((previous) => ({ ...previous, client: value })))} onSelect={fields.onSelectClient} getLabel={(client) => client.company} getSublabel={clientSublabel} getSearchText={(client) => `${client.company} ${client.customerNumber ?? ''} ${client.email ?? ''} ${client.address ?? ''} ${(client.addresses ?? []).map((entry) => Object.values(entry).join(' ')).join(' ')}`} allowFreeText placeholder="Empfänger oder Kunde suchen…" aria-label="Kunde auswählen" showSearchIcon={false} leadingIcon={<UserRound size={14} />} showChevron showAvatar selectedId={fields.selectedClientId} footer={{ label: 'Empfänger ohne Kundenstamm eingeben', onSelect: startManualRecipient }} inputClassName={`${inputClass(Boolean(fields.fieldErrors?.client), 'font-medium')}`} /></div>
           {isManualRecipient ? <p className="mt-0.5 text-[10px] text-muted" role="status">Nur in diesem Beleg gespeichert</p> : null}
           {error('document-input-client-error', fields.fieldErrors?.client)}
         </div>
@@ -640,9 +640,12 @@ export const DocumentCanvasEditor: React.FC<DocumentCanvasEditorProps> = ({
     setCommandQuery('');
     setCommandIndex(0);
   };
+  const commandShortcut = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
+    ? { label: '⌘K', aria: 'Meta+K' }
+    : { label: 'Strg K', aria: 'Control+K' };
   const actionBar = editable && documentFields ? (
     <div className="relative mb-2 flex justify-end print:hidden" data-inline-actions>
-      <button type="button" aria-label="Aktionen ⌘K" onClick={() => setCommandOpen(true)} className="border border-control-border bg-white px-2 py-1 text-xs font-semibold text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">Aktionen <span className="ml-1 text-xs text-muted">⌘K</span></button>
+      <button type="button" aria-label="Aktionen" aria-keyshortcuts={commandShortcut.aria} onClick={() => setCommandOpen(true)} className="border border-control-border bg-white px-2 py-1 text-xs font-semibold text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">Aktionen <span className="ml-1 text-xs text-muted">{commandShortcut.label}</span></button>
       {commandOpen ? <div role="dialog" aria-label="Aktionen" data-command-dialog className="absolute right-0 top-full z-[var(--z-dropdown)] mt-1 w-80 border border-border bg-white p-2 text-foreground shadow-xl">
         <input ref={commandInputRef} value={commandQuery} onChange={(event) => { setCommandQuery(event.target.value); setCommandIndex(0); }} onKeyDown={(event) => {
           if (event.key === 'ArrowDown') { event.preventDefault(); setCommandIndex((index) => Math.min(index + 1, Math.max(0, filteredCommandActions.length - 1))); }

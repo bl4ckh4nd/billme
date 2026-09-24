@@ -152,8 +152,7 @@ export const runProDesktopOutgoingDocumentChainScenario = async (page, baseUrl) 
   });
 
   await page.goto(appUrl(baseUrl, '/documents'));
-  await page.getByRole('button', { name: 'Rechnungen', exact: true }).click();
-  await page.getByRole('button', { name: 'Angebote', exact: true }).click();
+  await page.getByRole('radio', { name: 'Angebote', exact: true }).click();
   await page.getByText('ANG-2026-001', { exact: true }).click();
   await expect(page.getByRole('button', { name: 'Auftragsbestätigung', exact: true })).toBeVisible();
   await screenshot(page, '01-accepted-offer');

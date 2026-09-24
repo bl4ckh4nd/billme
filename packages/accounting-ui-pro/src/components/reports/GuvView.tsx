@@ -1,8 +1,11 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { Button, EmptyState } from '@billme/ui';
+import {
+  Button, EmptyState, IconButton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@billme/ui';
 import { GuvLine, GuvReport } from '../../domain/reportTypes';
 import ReportSummaryCards from './ReportSummaryCards';
+import { displayPositionCode } from '../../domain/references';
 
 function euro(value: number) {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
@@ -99,7 +102,7 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
           data-testid="guv-unmapped-accounts"
           className="rounded-2xl border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-text"
         >
-          <div className="font-bold">Nicht zugeordnete Konten</div>
+          <div className="font-semibold">Nicht zugeordnete Konten</div>
           <ul className="mt-1 space-y-0.5 text-xs">
             {report.quality.unmappedAccounts.map((account) => (
               <li key={account.accountNumber}>
@@ -110,55 +113,50 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
         </div>
       ) : null}
 
-      <div className="rounded-2xl border border-border bg-surface overflow-hidden">
-        <div className="px-4 h-12 border-b border-subtle flex items-center justify-between gap-3">
-          <div className="text-sm font-bold text-foreground">{title}</div>
+      <div className="overflow-hidden rounded-card bg-surface shadow-xs">
+        <div className="px-4 h-12 border-b border-border-subtle flex items-center justify-between gap-3">
+          <div className="text-sm font-semibold text-foreground">{title}</div>
           <div className="text-xs text-muted">
             Stand: {new Date(report.quality.generatedAt).toLocaleString('de-DE')}
           </div>
         </div>
 
-        <div className="max-h-[32rem] overflow-auto">
-          {visibleLines.length === 0 ? (
-            <div className="p-4">
-              <EmptyState
-                title="Keine GuV-Positionen im Zeitraum"
-                description="Der Report wurde geladen, enthält für die gewählten Filter aber keine Positionen. Prüfen Sie Zeitraum und Konten-Mapping."
-                action={retryAction}
-              />
-            </div>
-          ) : (
-          <table className="w-full text-sm table-fixed">
-            <thead className="sticky top-0 bg-surface-muted z-10">
-              <tr className="text-xs uppercase tracking-wide text-muted">
-                <th scope="col" className="px-3 py-3 text-left font-bold">Position</th>
-                <th scope="col" className="px-3 py-3 text-right font-bold">Aktuell</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border-subtle">
+        {visibleLines.length === 0 ? (
+          <div className="p-4">
+            <EmptyState
+              title="Keine GuV-Positionen im Zeitraum"
+              description="Der Report wurde geladen, enthält für die gewählten Filter aber keine Positionen. Prüfen Sie Zeitraum und Konten-Mapping."
+              action={retryAction}
+            />
+          </div>
+        ) : (
+          <Table aria-label={title} bare containerClassName="max-h-[32rem]" className="table-fixed">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Position</TableHead>
+                <TableHead numeric className="w-40">Aktuell</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {visibleLines.map(({ line, level }) => {
                 const hasChildren = Boolean(line.children?.length);
+                const expanded = effectiveExpanded.has(line.id);
                 return (
-                  <tr
-                    key={line.id}
-                    className={`hover:bg-surface-muted ${line.isSubtotal ? 'bg-surface-muted/70' : ''}`}
-                  >
-                    <td className="px-3 py-2.5">
+                  <TableRow key={line.id} className={line.isSubtotal ? 'bg-surface-muted' : undefined}>
+                    <TableCell className="py-2">
                       <div className="flex items-center gap-2" style={{ paddingLeft: `${level * 16}px` }}>
                         {hasChildren ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggle(line.id);
-                            }}
-                            className="w-6 h-6 rounded-md border border-border text-muted hover:bg-surface flex items-center justify-center"
-                            aria-label={effectiveExpanded.has(line.id) ? 'Einklappen' : 'Ausklappen'}
+                          <IconButton
+                            size="sm"
+                            onClick={() => toggle(line.id)}
+                            aria-label={expanded ? 'Einklappen' : 'Ausklappen'}
+                            aria-expanded={expanded}
+                            className="-my-1"
                           >
-                            {effectiveExpanded.has(line.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                          </button>
+                            {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                          </IconButton>
                         ) : (
-                          <span className="w-6 h-6" />
+                          <span className="size-8 shrink-0" aria-hidden="true" />
                         )}
                         <button
                           type="button"
@@ -169,10 +167,10 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
                               onSelectLine(line);
                             }
                           }}
- className="min-w-0 text-left rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                          className="min-w-0 text-left rounded-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                         >
-                          <div className={`font-medium ${line.isSubtotal ? 'font-bold text-foreground' : 'text-foreground'}`}>
-                            <span className="text-muted mr-2">{line.code}</span>
+                          <div className={line.isSubtotal ? 'font-semibold' : 'font-medium'}>
+                            {displayPositionCode(line.code) ? <span className="mr-2 text-muted tabular-nums">{displayPositionCode(line.code)}</span> : null}
                             {line.label}
                           </div>
                           {line.accountRefs?.length ? (
@@ -180,17 +178,16 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
                           ) : null}
                         </button>
                       </div>
-                    </td>
-                    <td className={`px-3 py-2.5 text-right font-bold tabular-nums ${line.amountCurrent < 0 ? 'text-error-text' : 'text-foreground'}`}>
+                    </TableCell>
+                    <TableCell numeric className={`font-medium ${line.amountCurrent < 0 ? 'text-error-text' : ''}`}>
                       {euro(line.amountCurrent)}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 );
               })}
-            </tbody>
-          </table>
-          )}
-        </div>
+            </TableBody>
+          </Table>
+        )}
       </div>
     </div>
   );

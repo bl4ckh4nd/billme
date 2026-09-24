@@ -120,7 +120,7 @@ export default function AccountCombobox({
               setQuery(displayValue(valueAccountId, valueAccountName));
             }
           }}
-          className="w-full border border-control-border rounded-xl pl-8 pr-2 py-2 text-sm disabled:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control pl-8 pr-2 text-sm disabled:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         />
       </div>
 
@@ -151,7 +151,7 @@ export default function AccountCombobox({
                   }}
                   onMouseEnter={() => setActiveIndex(index)}
                 >
-                  <div className="text-sm font-bold text-foreground">
+                  <div className="text-sm font-semibold text-foreground">
                     {account.number} - {account.name}
                   </div>
                   {!!account.keywords?.length && (

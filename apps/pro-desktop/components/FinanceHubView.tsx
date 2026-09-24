@@ -39,9 +39,9 @@ export const FinanceHubView: React.FC = () => {
       : `SKR03: ${ledgerStats?.byChart.SKR03 ?? 0} | SKR04: ${ledgerStats?.byChart.SKR04 ?? 0}`;
 
   return (
-    <div className="bg-surface rounded-2xl p-8 min-h-full shadow-sm">
+    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs">
       <div className="mb-8">
-        <h2 className="text-2xl font-black text-foreground">Finanzen</h2>
+        <h1 className="text-title text-foreground">Finanzen</h1>
         <p className="text-sm text-muted mt-1">
           Kontoverwaltung und Pro-Buchhaltung in einem Bereich.
         </p>
@@ -55,11 +55,11 @@ export const FinanceHubView: React.FC = () => {
         >
           <div className="flex items-center justify-between mb-4">
             <div className="w-12 h-12 rounded-xl bg-dark-1 text-background flex items-center justify-center">
-              <Wallet size={22} aria-hidden="true" />
+              <Wallet size={20} aria-hidden="true" />
             </div>
             <ArrowRight className="text-muted" aria-hidden="true" />
           </div>
-          <div className="text-lg font-black text-foreground">Konten &amp; Transaktionen</div>
+          <div className="text-lg font-semibold text-foreground">Konten &amp; Transaktionen</div>
           <div className="text-sm text-muted mt-1">
             Bankkonten verwalten, CSV importieren und Konto-SKR-Zuordnung steuern.
           </div>
@@ -72,11 +72,11 @@ export const FinanceHubView: React.FC = () => {
         >
           <div className="flex items-center justify-between mb-4">
             <div className="w-12 h-12 rounded-xl bg-dark-1 text-background flex items-center justify-center">
-              <ShieldCheck size={22} aria-hidden="true" />
+              <ShieldCheck size={20} aria-hidden="true" />
             </div>
             <ArrowRight className="text-muted" aria-hidden="true" />
           </div>
-          <div className="text-lg font-black text-foreground">Pro Buchhaltung</div>
+          <div className="text-lg font-semibold text-foreground">Pro Buchhaltung</div>
           <div className="text-sm text-muted mt-1">
             Inbox, Buchungssätze, Abgleich, SuSa/GuV/Bilanz und Ausnahmen.
           </div>
@@ -89,7 +89,7 @@ export const FinanceHubView: React.FC = () => {
       <div className="mt-8 rounded-xl border border-border bg-surface-muted p-4">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
-            <h3 className="text-base font-black text-foreground">SKR03/04 Kontenrahmen (Pro)</h3>
+            <h3 className="text-base font-semibold text-foreground">SKR03/04 Kontenrahmen (Pro)</h3>
             <p className="text-sm text-muted mt-1">
               Lädt den vollständigen Kontenrahmen in die Pro-Datenbank.
             </p>
@@ -101,9 +101,9 @@ export const FinanceHubView: React.FC = () => {
             type="button"
             onClick={() => void handleImportSkr()}
             disabled={importSkr.isPending}
-            className="rounded-full bg-dark-base px-4 py-2 text-sm font-bold text-background transition-colors hover:bg-dark-1 disabled:opacity-60 disabled:hover:bg-dark-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
+            className="rounded-control bg-dark-base px-4 py-2 text-sm font-semibold text-background transition-colors hover:bg-dark-1 disabled:opacity-60 disabled:hover:bg-dark-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
           >
-            {importSkr.isPending ? 'Import läuft…' : 'SKR jetzt importieren'}
+            {importSkr.isPending ? 'Import läuft…' : (ledgerStats?.total ?? 0) > 0 ? 'Kontenrahmen aktualisieren' : 'SKR jetzt importieren'}
           </button>
         </div>
         {importNotice ? (

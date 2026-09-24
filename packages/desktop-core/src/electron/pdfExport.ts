@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, type WebContents } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -17,14 +17,70 @@ const sanitizeFilePart = (value: string) => {
     .slice(0, 120);
 };
 
+// Hidden print windows render the document through the same embedded backend as the
+// main window, so the embedded-connection handler must trust them while they exist.
+const printWebContents = new Set<WebContents>();
+
+export const isPdfPrintWebContents = (sender: unknown): boolean =>
+  printWebContents.has(sender as WebContents);
+
 const waitForPdfReady = async (win: BrowserWindow, timeoutMs: number) => {
   const start = Date.now();
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const ready = await win.webContents.executeJavaScript('Boolean(globalThis.__PDF_READY__ === true)', true);
-    if (ready) return;
+    const state = await win.webContents.executeJavaScript(
+      '({ ready: globalThis.__PDF_READY__ === true, error: typeof globalThis.__PDF_ERROR__ === "string" ? globalThis.__PDF_ERROR__ : null })',
+      true,
+    );
+    if (state.ready) return;
+    if (state.error) throw new Error(state.error);
     if (Date.now() - start > timeoutMs) throw new Error('Timed out waiting for PDF render readiness');
     await new Promise((r) => setTimeout(r, 75));
+  }
+};
+
+const renderPdf = async (query: Record<string, string>, timeoutMs: number): Promise<Uint8Array> => {
+  const win = new BrowserWindow({
+    show: false,
+    width: 900,
+    height: 1200,
+    backgroundColor: '#ffffff',
+    webPreferences: {
+      preload: path.join(appDir, '../preload/index.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  const contents = win.webContents;
+  printWebContents.add(contents);
+
+  try {
+    const devServerUrl = process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL;
+    if (devServerUrl) {
+      const url = new URL(devServerUrl);
+      for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+      await win.loadURL(url.toString());
+    } else {
+      await win.loadFile(path.join(appDir, '../renderer/index.html'), { query });
+    }
+
+    await waitForPdfReady(win, timeoutMs);
+
+    const buffer = await contents.printToPDF({
+      pageSize: 'A4',
+      landscape: false,
+      printBackground: true,
+      marginsType: 0,
+    });
+    return new Uint8Array(buffer);
+  } finally {
+    printWebContents.delete(contents);
+    try {
+      win.destroy();
+    } catch {
+      // ignore
+    }
   }
 };
 
@@ -40,49 +96,8 @@ export const exportPdf = async (params: {
   const fileName = `${sanitizeFilePart(params.suggestedName || `${params.kind}-${params.id}`)}.pdf`;
   const destPath = path.join(exportsDir, fileName);
 
-  const win = new BrowserWindow({
-    show: false,
-    width: 900,
-    height: 1200,
-    backgroundColor: '#ffffff',
-    webPreferences: {
-      preload: path.join(appDir, '../preload/index.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-
-  const devServerUrl = process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL;
-  if (devServerUrl) {
-    const url = new URL(devServerUrl);
-    url.searchParams.set('__print', '1');
-    url.searchParams.set('kind', params.kind);
-    url.searchParams.set('id', params.id);
-    await win.loadURL(url.toString());
-  } else {
-    await win.loadFile(path.join(appDir, '../renderer/index.html'), {
-      query: { __print: '1', kind: params.kind, id: params.id },
-    });
-  }
-
-  await waitForPdfReady(win, 15_000);
-
-  const buffer = await win.webContents.printToPDF({
-    pageSize: 'A4',
-    landscape: false,
-    printBackground: true,
-    marginsType: 0,
-  });
-
-  const bytes = new Uint8Array(buffer);
+  const bytes = await renderPdf({ __print: '1', kind: params.kind, id: params.id }, 15_000);
   fs.writeFileSync(destPath, bytes);
-
-  try {
-    win.destroy();
-  } catch {
-    // ignore
-  }
 
   return { path: destPath, bytes };
 };
@@ -99,19 +114,6 @@ export const exportEurPdf = async (params: {
   const fileName = `${sanitizeFilePart(`anlage-euer-${params.taxYear}`)}.pdf`;
   const destPath = path.join(exportsDir, fileName);
 
-  const win = new BrowserWindow({
-    show: false,
-    width: 900,
-    height: 1200,
-    backgroundColor: '#ffffff',
-    webPreferences: {
-      preload: path.join(appDir, '../preload/index.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-
   const query: Record<string, string> = {
     __print: '1',
     kind: 'eur',
@@ -120,31 +122,7 @@ export const exportEurPdf = async (params: {
   if (params.from) query.from = params.from;
   if (params.to) query.to = params.to;
 
-  const devServerUrl = process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL;
-  if (devServerUrl) {
-    const url = new URL(devServerUrl);
-    for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
-    await win.loadURL(url.toString());
-  } else {
-    await win.loadFile(path.join(appDir, '../renderer/index.html'), { query });
-  }
-
-  await waitForPdfReady(win, 20_000);
-
-  const buffer = await win.webContents.printToPDF({
-    pageSize: 'A4',
-    landscape: false,
-    printBackground: true,
-    marginsType: 0,
-  });
-
-  fs.writeFileSync(destPath, new Uint8Array(buffer));
-
-  try {
-    win.destroy();
-  } catch {
-    // ignore
-  }
+  fs.writeFileSync(destPath, await renderPdf(query, 20_000));
 
   return { path: destPath };
 };

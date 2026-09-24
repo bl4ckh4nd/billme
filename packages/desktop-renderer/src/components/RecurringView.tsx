@@ -1,4 +1,4 @@
-import { Button, EMPTY_VALUE, EmptyState, ErrorState, Modal, ValidationSummary, useActionFeedback } from '@billme/ui';
+import { Button, EMPTY_VALUE, EmptyState, ErrorState, Modal, ValidationSummary, useActionFeedback, IconButton } from '@billme/ui';
 import React, { useState } from 'react';
 import {
     Repeat, Calendar, Play, Pause, Plus, Trash2,
@@ -60,7 +60,7 @@ export const RecurringView: React.FC = () => {
     };
     const upsertProfile = useUpsertRecurringProfileMutation();
     const deleteProfile = useDeleteRecurringProfileMutation();
-    const { pendingIds, requestDelete } = useDeferredDelete({
+    const { pendingIds, leavingIds, requestDelete } = useDeferredDelete({
         scope: 'recurring',
         commit: (id) => deleteProfile.mutateAsync(id),
         label: (count) => count === 1 ? 'Abo gelöscht' : `${count} Abos gelöscht`,
@@ -267,13 +267,13 @@ export const RecurringView: React.FC = () => {
         }
     };
 
-    const visibleProfiles = profiles.filter((profile) => !pendingIds.has(profile.id));
+    const visibleProfiles = profiles.filter((profile) => !pendingIds.has(profile.id) || leavingIds.has(profile.id));
 
     return (
-        <div className="min-h-full rounded-2xl bg-surface p-8 shadow-sm flex flex-col relative">
+        <div className="min-h-full rounded-panel bg-surface p-6 lg:p-8 shadow-xs flex flex-col relative">
             <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
                 <div className="min-w-0">
-                    <h1 className="flex flex-wrap items-center gap-3 text-2xl font-black text-foreground sm:text-3xl">
+                    <h1 className="flex flex-wrap items-center gap-3 text-title text-foreground">
                         <Repeat className="text-foreground" />
                         Abo-Rechnungen
                     </h1>
@@ -282,7 +282,7 @@ export const RecurringView: React.FC = () => {
                     </p>
                 </div>
                 <Button onClick={() => handleEdit()}>
-                    <Plus size={18} /> Neues Abo
+                    <Plus size={16} /> Neues Abo
                 </Button>
             </div>
 
@@ -306,20 +306,21 @@ export const RecurringView: React.FC = () => {
                     />
                 </div>
             ) : (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 overflow-y-auto pb-4">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 overflow-y-auto p-0.5 pb-4">
                 {visibleProfiles.map((profile) => (
                     <div
                         key={profile.id}
-                        className={`p-6 rounded-xl border transition-colors relative overflow-hidden group ${profile.active ? 'bg-surface border-border hover:border-control-border' : 'bg-surface-muted border-border-subtle'}`}
+                        data-leaving={leavingIds.has(profile.id) || undefined}
+                        className={`group relative rounded-card p-5 transition-shadow ${profile.active ? 'bg-surface shadow-xs hover:shadow-md' : 'bg-surface-muted'}`}
                     >
-                        <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                             <div className="flex min-w-0 flex-1 items-center gap-4">
-                                <div className={`w-12 h-12 shrink-0 rounded-xl flex items-center justify-center font-bold text-xl ${profile.active ? 'bg-dark-base text-accent' : 'bg-border-subtle text-muted'}`}>
+                                <span aria-hidden="true" className={`flex size-9 shrink-0 items-center justify-center rounded-control text-label ${profile.active ? 'bg-accent-100 text-accent-800' : 'bg-surface-sunken text-muted'}`}>
                                     {INTERVAL_INITIALS[profile.interval]}
-                                </div>
+                                </span>
                                 <div className="min-w-0">
-                                    <h3 className="break-words font-bold text-lg text-foreground">{profile.name}</h3>
-                                    <p className="text-sm font-medium text-muted">{getClientName(profile.clientId)}</p>
+                                    <h3 className="break-words text-section text-foreground">{profile.name}</h3>
+                                    <p className="text-sm text-muted">{getClientName(profile.clientId)}</p>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -327,65 +328,51 @@ export const RecurringView: React.FC = () => {
                                     type="button"
                                     onClick={() => handleToggleActive(profile.id)}
                                     aria-pressed={profile.active}
-                                    className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${profile.active ? 'border border-control-border bg-success-bg text-success-text' : 'border border-control-border bg-surface text-muted'}`}
+                                    className={`inline-flex h-6 items-center gap-1 rounded-full border px-2 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${profile.active ? 'border-success-text bg-success-bg text-success-text' : 'border-ink-500 bg-surface text-ink-700'}`}
                                 >
                                     {profile.active ? <Play size={12} fill="currentColor" aria-hidden="true" /> : <Pause size={12} fill="currentColor" aria-hidden="true" />}
                                     {profile.active ? 'Aktiv' : 'Pausiert'}
                                 </button>
-                                <div className="flex gap-1 opacity-0 motion-safe:transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-focus-within:opacity-100">
-                                    <button
-                                        type="button"
-                                        onClick={() => handleEdit(profile)}
-                                        aria-label={`Abo ${profile.name} bearbeiten`}
-                                        className="p-2 rounded-lg bg-surface-muted text-foreground transition-colors hover:bg-dark-base hover:text-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                                    >
+                                <div className="ui-reveal flex gap-0.5">
+                                    <IconButton size="sm" tooltip="Bearbeiten" onClick={() => handleEdit(profile)} aria-label={`Abo ${profile.name} bearbeiten`}>
                                         <Edit3 size={14} aria-hidden="true" />
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => handleDelete(profile.id)}
-                                        aria-label={`Abo ${profile.name} löschen`}
-                                        className="p-2 rounded-lg bg-error-bg text-error-text transition-colors hover:bg-error-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                                    >
+                                    </IconButton>
+                                    <IconButton size="sm" tooltip="Löschen" onClick={() => handleDelete(profile.id)} aria-label={`Abo ${profile.name} löschen`} className="hover:bg-error-bg hover:text-error-text">
                                         <Trash2 size={14} aria-hidden="true" />
-                                    </button>
+                                    </IconButton>
                                 </div>
                             </div>
                         </div>
 
-                        <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
-                            <div className="bg-surface-muted rounded-xl p-3">
-                                <p className="text-xs font-bold text-muted uppercase mb-1">Intervall</p>
-                                <p className="text-sm font-bold flex items-center gap-1">
-                                    <Clock size={12} aria-hidden="true" />
+                        <dl className="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-3">
+                            <div>
+                                <dt className="text-caption text-muted">Intervall</dt>
+                                <dd className="mt-0.5 text-sm font-medium">
                                     {profile.interval === 'weekly' && 'Wöchentlich'}
                                     {profile.interval === 'monthly' && 'Monatlich'}
                                     {profile.interval === 'quarterly' && 'Quartalsweise'}
                                     {profile.interval === 'yearly' && 'Jährlich'}
-                                </p>
+                                </dd>
                             </div>
-                            <div className="bg-surface-muted rounded-xl p-3">
-                                <p className="text-xs font-bold text-muted uppercase mb-1">Nächste Ausführung</p>
-                                <p className="text-sm font-bold flex items-center gap-1">
-                                    <Calendar size={12} aria-hidden="true" />
-                                    <span className="tabular-nums">{formatDate(profile.nextRun)}</span>
-                                </p>
+                            <div>
+                                <dt className="text-caption text-muted">Nächste Ausführung</dt>
+                                <dd className="mt-0.5 text-sm font-medium tabular-nums">{formatDate(profile.nextRun)}</dd>
                             </div>
-                            <div className="bg-surface-muted rounded-xl p-3 text-right">
-                                <p className="text-xs font-bold text-muted uppercase mb-1">Betrag</p>
-                                <p className="text-lg font-bold tabular-nums text-foreground">{formatCurrency(profile.amount)}</p>
+                            <div className="sm:text-right">
+                                <dt className="text-caption text-muted">Betrag</dt>
+                                <dd className="mt-0.5 text-lg font-semibold tabular-nums">{formatCurrency(profile.amount)}</dd>
                             </div>
-                        </div>
+                        </dl>
 
                         <div className="flex items-center justify-between pt-4 border-t border-border-subtle">
-                             <p className="text-xs text-muted font-medium">
+                             <p className="text-caption text-muted">
                                  Zuletzt: <span className="tabular-nums">{profile.lastRun ? formatDate(profile.lastRun) : EMPTY_VALUE}</span>
                              </p>
                              <button
                                 type="button"
                                 onClick={() => handleRunNow(profile.id)}
                                 disabled={runningNowId !== null}
-                                className="text-xs font-bold text-foreground rounded-lg px-3 py-1.5 transition-colors hover:bg-dark-base hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="h-8 rounded-control px-3 text-label text-foreground transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50 disabled:cursor-not-allowed"
                              >
                                  {runningNowId === profile.id ? 'Generiere …' : 'Jetzt ausführen'}
                              </button>
@@ -403,7 +390,7 @@ export const RecurringView: React.FC = () => {
             >
                     <div className="p-8 border-b border-border-subtle flex justify-between items-center bg-surface-muted">
                         <div>
-                            <h2 id={editorTitleId} className="text-xl font-bold text-foreground">{editingProfile ? 'Abo bearbeiten' : 'Neues Abo'}</h2>
+                            <h2 id={editorTitleId} className="text-xl font-semibold text-foreground">{editingProfile ? 'Abo bearbeiten' : 'Neues Abo'}</h2>
                             <p className="text-xs text-muted">{editingProfile?.name || 'Entwurf'}</p>
                         </div>
                         <button
@@ -429,12 +416,12 @@ export const RecurringView: React.FC = () => {
 
                         {/* General Settings */}
                         <section className="space-y-4">
-                            <h3 className="text-sm font-bold uppercase tracking-wider text-muted flex items-center gap-2">
+                            <h3 className="text-sm font-semibold uppercase tracking-wider text-muted flex items-center gap-2">
                                 <Repeat size={14} aria-hidden="true" /> Einstellungen
                             </h3>
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="col-span-2">
-                                    <label htmlFor={inputId('name')} className="block text-xs font-bold text-muted mb-1">Interne Bezeichnung</label>
+                                    <label htmlFor={inputId('name')} className="block text-xs font-semibold text-muted mb-1">Interne Bezeichnung</label>
                                     <input
                                         id={inputId('name')}
                                         type="text"
@@ -450,7 +437,7 @@ export const RecurringView: React.FC = () => {
                                     {validationErrors.name && <p id={fieldErrorId('name')} className="mt-1 text-xs font-medium text-error-text">{validationErrors.name.message}</p>}
                                 </div>
                                 <div>
-                                    <label htmlFor={inputId('clientId')} className="block text-xs font-bold text-muted mb-1">Kunde</label>
+                                    <label htmlFor={inputId('clientId')} className="block text-xs font-semibold text-muted mb-1">Kunde</label>
                                     <select
                                         id={inputId('clientId')}
                                         className={fieldClass}
@@ -468,7 +455,7 @@ export const RecurringView: React.FC = () => {
                                     {validationErrors.clientId && <p id={fieldErrorId('clientId')} className="mt-1 text-xs font-medium text-error-text">{validationErrors.clientId.message}</p>}
                                 </div>
                                 <div>
-                                    <label htmlFor={inputId('interval')} className="block text-xs font-bold text-muted mb-1">Intervall</label>
+                                    <label htmlFor={inputId('interval')} className="block text-xs font-semibold text-muted mb-1">Intervall</label>
                                     <select
                                         id={inputId('interval')}
                                         className={fieldClass}
@@ -482,7 +469,7 @@ export const RecurringView: React.FC = () => {
                                     </select>
                                 </div>
                                 <div>
-                                    <label htmlFor={inputId('nextRun')} className="block text-xs font-bold text-muted mb-1">Start / Nächste Ausführung</label>
+                                    <label htmlFor={inputId('nextRun')} className="block text-xs font-semibold text-muted mb-1">Start / Nächste Ausführung</label>
                                     <input
                                         id={inputId('nextRun')}
                                         type="date"
@@ -492,7 +479,7 @@ export const RecurringView: React.FC = () => {
                                     />
                                 </div>
                                 <div>
-                                    <label htmlFor={inputId('endDate')} className="block text-xs font-bold text-muted mb-1">Endet am (optional)</label>
+                                    <label htmlFor={inputId('endDate')} className="block text-xs font-semibold text-muted mb-1">Endet am (optional)</label>
                                     <input
                                         id={inputId('endDate')}
                                         type="date"
@@ -509,14 +496,14 @@ export const RecurringView: React.FC = () => {
                         {/* Items Editor */}
                         <section className="space-y-4">
                             <div className="flex justify-between items-center">
-                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted flex items-center gap-2">
+                                <h3 className="text-sm font-semibold uppercase tracking-wider text-muted flex items-center gap-2">
                                     <Calculator size={14} aria-hidden="true" /> Rechnungspositionen
                                 </h3>
                                 <button
                                     type="button"
                                     id={inputId('add-item')}
                                     onClick={addItem}
-                                    className="text-xs font-bold bg-dark-base text-accent px-2 py-1 rounded-sm transition-colors hover:bg-dark-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
+                                    className="text-xs font-semibold bg-dark-base text-accent px-2 py-1 rounded-sm transition-colors hover:bg-dark-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
                                 >
                                     + Position
                                 </button>
@@ -543,7 +530,7 @@ export const RecurringView: React.FC = () => {
                                                 type="text"
                                                 placeholder="Beschreibung"
                                                 aria-label="Beschreibung"
-                                                className="flex-1 rounded-sm border border-control-border bg-surface p-2 text-sm font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                                                className="px-2.5 h-8 hover:border-ink-500 flex-1 rounded-sm border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                                                 value={item.description}
                                                 onChange={e => updateItem(idx, { description: e.target.value })}
                                                 aria-invalid={validationErrors.items?.targetId === itemDescriptionId(idx) ? 'true' : undefined}
@@ -560,7 +547,7 @@ export const RecurringView: React.FC = () => {
                                         </div>
                                         <div className="grid grid-cols-3 gap-2">
                                             <div>
-                                                <label htmlFor={itemFieldId(idx, 'quantity')} className="text-xs text-muted font-bold uppercase">Menge</label>
+                                                <label htmlFor={itemFieldId(idx, 'quantity')} className="text-label text-foreground">Menge</label>
                                                 <input
                                                     id={itemFieldId(idx, 'quantity')}
                                                     type="number"
@@ -572,7 +559,7 @@ export const RecurringView: React.FC = () => {
                                                 />
                                             </div>
                                             <div>
-                                                <label htmlFor={itemFieldId(idx, 'price')} className="text-xs text-muted font-bold uppercase">Preis (€)</label>
+                                                <label htmlFor={itemFieldId(idx, 'price')} className="text-label text-foreground">Preis (€)</label>
                                                 <input
                                                     id={itemFieldId(idx, 'price')}
                                                     type="number"
@@ -584,16 +571,16 @@ export const RecurringView: React.FC = () => {
                                                 />
                                             </div>
                                             <div className="text-right">
-                                                <label className="text-xs text-muted font-bold uppercase">Gesamt</label>
-                                                <p className="text-sm font-bold pt-2 tabular-nums">{formatCurrency(item.total)}</p>
+                                                <label className="text-label text-foreground">Gesamt</label>
+                                                <p className="text-sm font-semibold pt-2 tabular-nums">{formatCurrency(item.total)}</p>
                                             </div>
                                         </div>
                                     </div>
                                 ))}
                             </div>
                             <div className="flex justify-between items-center pt-4 border-t border-border-subtle">
-                                <span className="font-bold">Gesamtsumme (Netto)</span>
-                                <span className="font-bold text-xl tabular-nums">
+                                <span className="font-semibold">Gesamtsumme (Netto)</span>
+                                <span className="font-semibold text-xl tabular-nums">
                                     {formatCurrency(recurringTotal(formData.items || []))}
                                 </span>
                             </div>
@@ -609,7 +596,7 @@ export const RecurringView: React.FC = () => {
                         <div className="flex justify-end gap-3">
                         <Button variant="ghost" onClick={() => setIsEditModalOpen(false)}>Abbrechen</Button>
                         <Button onClick={handleSave} loading={upsertProfile.isPending}>
-                            <Save size={18} /> Speichern
+                            <Save size={16} /> Speichern
                         </Button>
                         </div>
                     </div>

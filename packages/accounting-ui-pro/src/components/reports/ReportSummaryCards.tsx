@@ -31,8 +31,8 @@ export default function ReportSummaryCards({ cards, note }: ReportSummaryCardsPr
     <div className="space-y-2">
       {focal ? (
         <div key={focal.label} className="rounded-xl border border-border bg-surface px-4 py-3">
-          <div className="text-xs font-bold uppercase tracking-wide text-muted">{focal.label}</div>
-          <div className={`mt-1 text-base font-black tabular-nums ${toneText(focal.tone)}`}>{focal.value}</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted">{focal.label}</div>
+          <div className={`mt-1 text-base font-semibold tabular-nums ${toneText(focal.tone)}`}>{focal.value}</div>
           {focal.sublabel ? <div className="mt-0.5 text-xs text-muted">{focal.sublabel}</div> : null}
         </div>
       ) : null}
@@ -40,8 +40,8 @@ export default function ReportSummaryCards({ cards, note }: ReportSummaryCardsPr
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
           {rest.map((card) => (
             <div key={card.label} className="rounded-lg border border-border-subtle bg-surface-muted px-3 py-2">
-              <div className="text-xs font-bold text-muted">{card.label}</div>
-              <div className={`mt-0.5 text-sm font-bold tabular-nums ${toneText(card.tone)}`}>{card.value}</div>
+              <div className="text-xs font-semibold text-muted">{card.label}</div>
+              <div className={`mt-0.5 text-sm font-semibold tabular-nums ${toneText(card.tone)}`}>{card.value}</div>
               {card.sublabel ? <div className="text-xs text-muted">{card.sublabel}</div> : null}
             </div>
           ))}

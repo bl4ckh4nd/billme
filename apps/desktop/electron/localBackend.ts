@@ -72,6 +72,7 @@ export interface LocalBackendStartDependencies {
   readonly startEmbeddedServer?: (
     options: StartEmbeddedServerOptions,
   ) => Promise<EmbeddedServerHandle>;
+  readonly desktopIntegration?: StartEmbeddedServerOptions['desktopIntegration'];
   readonly restoreDataDir?: (
     options: { archivePath: string; activeDataDir: string; product: 'lite'; tenantId: string },
   ) => Promise<RestorePgliteDataDirResult>;
@@ -170,6 +171,7 @@ export const createLocalBackend = async (
     userDataPath: dependencies.userDataPath,
     dataDirName: dependencies.profile.dataDirName,
     product: 'lite',
+    desktopIntegration: dependencies.desktopIntegration,
     identity: {
       tenantId: dependencies.profile.localTenantId,
       userId: dependencies.profile.localUserId,

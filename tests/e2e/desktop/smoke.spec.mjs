@@ -55,7 +55,7 @@ test('global search opens a deep link result', async () => {
   const { page, baseUrl } = desktop;
   await page.goto(appUrl(baseUrl, '/'));
 
-  await page.getByLabel('Globale Suche').fill('KD-0001');
+  await page.getByLabel('Suche und Befehle').fill('KD-0001');
   const clientSearchResult = page.locator('button').filter({ hasText: 'Musterfirma GmbH' }).filter({ hasText: 'KD-0001' }).first();
   await expect(clientSearchResult).toBeVisible();
   await clientSearchResult.click();

@@ -107,7 +107,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
       onSaveAndExit={handleSaveAndExit}
       saving={setSettingsMutation.isPending}
       productName={productName}
-      submitLabel="Zu Angeboten und Rechnungen"
+      submitLabel="Einrichtung abschließen"
       edition={edition}
     />
   );

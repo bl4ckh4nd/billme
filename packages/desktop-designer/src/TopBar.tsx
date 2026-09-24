@@ -111,7 +111,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <ArrowLeft size={16} />
       </button>
       <span
-        className={`hidden md:inline rounded-sm px-2 py-1 text-xs font-bold uppercase tracking-widest ${
+        className={`hidden md:inline rounded-sm px-2 py-1 text-xs font-semibold uppercase tracking-widest ${
           templateType === 'offer' ? 'bg-accent text-accent-foreground' : 'bg-dark-2 text-dark-muted'
         }`}
       >
@@ -199,7 +199,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           onClick={onLegalCheck}
           title="DIN & Pflichtangaben prüfen"
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-dark-border-subtle bg-dark-2 px-3 text-xs font-bold text-dark-muted hover:border-dark-border hover:text-white motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
+          className="flex h-8 items-center gap-1.5 rounded-lg border border-dark-border-subtle bg-dark-2 px-3 text-xs font-semibold text-dark-muted hover:border-dark-border hover:text-white motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
         >
           <ShieldCheck size={14} className="text-success-text" />
           <span className="hidden lg:inline">Rechts-Check</span>
@@ -207,7 +207,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           onClick={onExport}
           title="Als PDF exportieren"
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-dark-border-subtle bg-dark-2 px-3 text-xs font-bold text-dark-muted hover:border-dark-border hover:text-white motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
+          className="flex h-8 items-center gap-1.5 rounded-lg border border-dark-border-subtle bg-dark-2 px-3 text-xs font-semibold text-dark-muted hover:border-dark-border hover:text-white motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
         >
           <Printer size={14} />
           <span className="hidden lg:inline">PDF</span>
@@ -218,7 +218,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           onClick={onSave}
           disabled={saving}
-          className="flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-bold text-black hover:bg-accent-hover motion-safe:transition-transform motion-safe:active:scale-95 motion-reduce:transition-none disabled:opacity-50"
+          className="flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-semibold text-black hover:bg-accent-hover motion-safe:transition-transform motion-safe:active:scale-95 motion-reduce:transition-none disabled:opacity-50"
         >
           <Save size={14} />
           Speichern

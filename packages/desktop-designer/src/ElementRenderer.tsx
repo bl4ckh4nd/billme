@@ -1,6 +1,22 @@
 import React, { forwardRef } from 'react';
 import { ElementType, type InvoiceElement, type RenderText, type TableColumn, type TableRow } from './types';
 
+// Screen readers announce these instead of the internal template identifiers.
+const TEMPLATE_ELEMENT_NAMES: Record<string, string> = {
+  sender_company: 'Absenderfirma',
+  sender_line: 'Absenderzeile',
+  recipient_block: 'Empfänger',
+  invoice_meta: 'Belegdaten',
+  invoice_title: 'Belegtitel',
+  intro_text: 'Einleitung',
+  items_table: 'Positionstabelle',
+  totals_block: 'Summenblock',
+  payment_terms: 'Zahlungsbedingungen',
+  footer_company: 'Fußzeile Firma',
+  footer_contact: 'Fußzeile Kontakt',
+  footer_bank: 'Fußzeile Bankverbindung',
+};
+
 export type TableRowRenderer = (row: TableRow, columns: TableColumn[]) => React.ReactNode;
 
 export interface ElementRendererProps {
@@ -90,7 +106,7 @@ export const ElementRenderer = forwardRef<HTMLDivElement, ElementRendererProps>(
       onDoubleClick={onDoubleClick}
       tabIndex={readOnly || editing ? undefined : 0}
       role={readOnly ? undefined : 'button'}
-      aria-label={readOnly ? undefined : element.label || `Element ${element.id}`}
+      aria-label={readOnly ? undefined : (element.label && TEMPLATE_ELEMENT_NAMES[element.label]) || element.label || `Element ${element.id}`}
       aria-pressed={readOnly ? undefined : selected}
       onKeyDown={readOnly ? undefined : (event) => {
         if (event.target !== event.currentTarget) return;
@@ -216,11 +232,11 @@ function renderContent(
                   <th
                     key={col.id}
                     style={{ width: `${col.width}px`, textAlign: col.align || 'left' }}
-                    className="relative border-b-2 border-border-subtle p-2 bg-surface-muted text-xs font-bold uppercase tracking-wide text-muted truncate"
+                    className="relative border-b-2 border-border-subtle p-2 bg-surface-muted text-xs font-bold uppercase tracking-wide text-muted"
                   >
-                    <span>{col.label}</span>
-                    {tableHeaderOverlay && columns.find((candidate) => candidate.visible)?.id === col.id ? (
-                      <span className="absolute right-0 top-0 z-30 print:hidden">{tableHeaderOverlay}</span>
+                    <span className="block truncate">{col.label}</span>
+                    {tableHeaderOverlay && columns.filter((candidate) => candidate.visible).at(-1)?.id === col.id ? (
+                      <span className="absolute left-1 top-1/2 z-30 -translate-y-1/2 print:hidden">{tableHeaderOverlay}</span>
                     ) : null}
                   </th>
                 );

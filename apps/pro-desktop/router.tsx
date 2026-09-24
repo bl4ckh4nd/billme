@@ -40,6 +40,7 @@ import { TaxFilingCenter } from './components/TaxFilingCenter';
 import { Button, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
 import { shouldShowBusinessOnboarding } from '@billme/desktop-ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import { useCreateIntent } from '@billme/desktop-renderer/hooks/useCreateIntent';
 
 const RootLayout: React.FC = () => {
   const navigate = useNavigate();
@@ -98,7 +99,7 @@ const RootLayout: React.FC = () => {
           }}
         />
       )}
-      {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
+      <ShortcutsModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </>
   );
 };
@@ -212,6 +213,9 @@ const DocumentsPage: React.FC = () => {
       }
     })();
   };
+
+  // The command palette links to /documents?create=invoice|offer; wait for settings, which pricing needs.
+  useCreateIntent('/documents', ['invoice', 'offer'] as const, handleCreateDocument, Boolean(settings));
 
   return (
     <DocumentsView

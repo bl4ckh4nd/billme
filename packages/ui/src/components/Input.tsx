@@ -147,14 +147,14 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         onFocus={handleFocus}
         onBlur={handleBlur}
         className={cn(
-          'bg-surface-muted border rounded-xl px-4 py-3 text-sm',
-          'transition-[border-color,box-shadow,outline-color] motion-reduce:transition-none',
+          'h-10 bg-surface border rounded-control px-3 text-sm text-foreground',
+          'transition-[border-color,box-shadow,outline-color] motion-reduce:transition-none hover:border-ink-500',
           'placeholder:text-muted',
           'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
           'disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground disabled:placeholder:text-disabled-foreground disabled:cursor-not-allowed disabled:opacity-100',
           isNumeric && 'text-right tabular-nums',
-          (prefix !== undefined && prefix !== null) && 'pl-10',
-          (suffix !== undefined && suffix !== null) && 'pr-10',
+          (prefix !== undefined && prefix !== null) && 'pl-9',
+          (suffix !== undefined && suffix !== null) && 'pr-9',
           error ? 'border-error' : 'border-control-border',
           fullWidth && 'w-full',
           className,
@@ -170,8 +170,8 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className={cn(fullWidth && 'w-full')}>
         {label && (
-          <div className="mb-2 flex items-baseline">
-            <label htmlFor={inputId} className="block text-sm font-medium text-foreground">
+          <div className="mb-1.5 flex items-baseline">
+            <label htmlFor={inputId} className="block text-label text-foreground">
               {label}
             </label>
             {/* outside the <label> so the accessible name stays exactly `label` */}
@@ -183,13 +183,13 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         {(prefix !== undefined && prefix !== null) || (suffix !== undefined && suffix !== null) ? (
           <div className="relative">
             {prefix !== undefined && prefix !== null ? (
-              <span className="pointer-events-none absolute inset-y-0 left-4 flex items-center text-sm text-muted" aria-hidden="true">
+              <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted" aria-hidden="true">
                 {prefix}
               </span>
             ) : null}
             {input}
             {suffix !== undefined && suffix !== null ? (
-              <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-sm text-muted" aria-hidden="true">
+              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted" aria-hidden="true">
                 {suffix}
               </span>
             ) : null}

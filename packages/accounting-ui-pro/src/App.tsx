@@ -117,7 +117,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
                 key={view}
                 onClick={() => setCurrentView(view)}
                 aria-current={isActive ? 'page' : undefined}
-                className={`relative min-h-10 rounded-t-lg px-4 py-2 text-sm font-bold transition-colors ${
+                className={`relative min-h-10 rounded-t-lg px-4 py-2 text-sm font-semibold transition-colors ${
                   isActive
                     ? 'text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-dark-base'
                     : 'text-muted hover:text-foreground'
@@ -129,7 +129,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
           })}
           {dataAdapter ? null : (
             <span
-              className="ml-2 inline-flex items-center gap-1 rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs font-bold text-warning-text"
+              className="ml-2 inline-flex items-center gap-1 rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs font-semibold text-warning-text"
               role="status"
               title="Ohne verbundene Datenquelle zeigen Buchungen, Ausnahmen und Auswertungen einen Demo-Datensatz."
             >
@@ -140,7 +140,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
         </nav>
       </div>
 
-      <main className="min-w-0 flex-1 overflow-hidden">
+      <div className="min-w-0 flex-1 overflow-hidden">
         {busy ? <div className="sr-only" aria-live="polite">Speichere Änderung…</div> : null}
         <div className="flex h-full min-w-0 flex-col overflow-hidden">
           {currentView === 'inbox' ? (
@@ -201,7 +201,7 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
             <AssetManagementView dataAdapter={dataAdapter} role={role} />
           )}
         </div>
-      </main>
+      </div>
       <JournalEntryDetailModal entryId={selectedJournalEntryId} dataAdapter={dataAdapter} onClose={() => setSelectedJournalEntryId(null)} />
     </div>
   );

@@ -27,7 +27,7 @@ export function MappingHealthBlock({ quality }: ReportStatusBadgeProps & { notes
   if (!reportIsMappingBlocked(quality)) return null;
   return (
     <div className="rounded-2xl border border-error-border bg-error-bg px-4 py-3 text-sm text-error-text" role="alert">
-      <div className="font-bold">Auswertung blockiert: Konten-Mapping unvollständig</div>
+      <div className="font-semibold">Auswertung blockiert: Konten-Mapping unvollständig</div>
       <p className="mt-1">Bitte ordnen Sie alle betroffenen Konten zu, bevor Sie diesen Report als Abschluss verwenden oder exportieren.</p>
       {quality?.mappingStatus === 'blocked' ? <p className="mt-1 text-xs">Mapping-Health: blockierend.</p> : null}
       {Array.isArray(quality?.unmappedAccounts) && quality.unmappedAccounts.length > 0 ? (

@@ -15,3 +15,20 @@ export const userFacingReference = (value: string | null | undefined): string | 
   if (!candidate) return undefined;
   return TECHNICAL_ID_PATTERNS.some((pattern) => pattern.test(candidate)) ? undefined : candidate;
 };
+
+/**
+ * Berichtspositionen: HGB-Gliederungsnummern (`A.I`, `B.II.1`, `1.`) werden gezeigt,
+ * Katalogschlüssel der Report-Adapter (`umsatzerloese`, `umlaufvermoegen.vorraete`) sind
+ * interne Kennungen und entfallen.
+ */
+export const displayPositionCode = (code: string | null | undefined): string | undefined => {
+  const candidate = code?.trim();
+  if (!candidate || /[a-z_]/.test(candidate)) return undefined;
+  return candidate;
+};
+
+/** Anzeigename einer Berichtsposition, mit Gliederungsnummer nur wenn es eine gibt. */
+export const positionTitle = (line: { code?: string | null; label: string }, separator = ' · '): string => {
+  const code = displayPositionCode(line.code);
+  return code ? `${code}${separator}${line.label}` : line.label;
+};

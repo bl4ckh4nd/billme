@@ -128,7 +128,41 @@ const rules = [
       /^packages\/desktop-ui\/src\/shell\/StatisticsView\.tsx$/, // dark-3 revenue card
       /^packages\/desktop-designer\/src\/LayersPanel\.tsx$/, // dark rail
       /^apps\/landing-page\/src\/App\.tsx$/, // dark screenshots frame, GoBD band, CTA card
+      /^packages\/ui\/src\/components\/FeedbackProvider\.tsx$/, // toast icons, Toast is bg-surface-inverse
+      /^packages\/ui\/src\/components\/Sparkline\.tsx$/, // lime only in the `inverse` variant, used on surface-inverse
     ],
+  },
+  {
+    id: 'P-01',
+    description: 'font-black in product UI (DESIGN.md Typography: weights are 400/500/600, bold only for figures)',
+    pattern: /\bfont-black\b/g,
+    // The marketing site keeps its own display scale.
+    skipFile: [/^apps\/landing-page\//],
+  },
+  {
+    id: 'P-02',
+    description: 'transition on a layout property (animate transform or opacity; disclosure height uses the sanctioned accordion utility)',
+    pattern: /transition-\[(?:[\w-]+,)*(?:width|height|top|left|right|bottom|margin|padding)[\],]/g,
+    // SegmentedControl's thumb is absolutely positioned, so its width change
+    // reflows nothing; it is the one sanctioned exception.
+    skipFile: [/^packages\/ui\/src\/components\/SegmentedControl\.tsx$/],
+  },
+  {
+    id: 'P-03',
+    description: 'raw <table> in app chrome (use Table from @billme/ui: sticky header, numeric cells, row states)',
+    pattern: /<table\b/g,
+    skipFile: [
+      /^packages\/ui\//, // the primitive itself and BarChart's screen-reader table
+      /^packages\/desktop-designer\/src\/ElementRenderer\.tsx$/, // customer document content, user-styled
+      /^apps\/offer-portal\//, // server-rendered HTML, no React
+    ],
+  },
+  {
+    id: 'P-04',
+    description: 'icon size off the scale (12 caption, 14, 16 default, 20; 24/32/48 for illustrations)',
+    pattern: /\bsize=\{(?!(?:12|14|16|20|24|32|48)\})\d+\}/g,
+    // The marketing site keeps its own display scale.
+    skipFile: [/^apps\/landing-page\//],
   },
 ];
 

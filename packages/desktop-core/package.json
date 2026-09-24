@@ -77,6 +77,10 @@
       "types": "./src/electron/pdfExport.ts",
       "default": "./src/electron/pdfExport.ts"
     },
+    "./electron/embeddedAutomation": {
+      "types": "./src/electron/embeddedAutomation.ts",
+      "default": "./src/electron/embeddedAutomation.ts"
+    },
     "./electron/secrets": {
       "types": "./src/electron/secrets.ts",
       "default": "./src/electron/secrets.ts"

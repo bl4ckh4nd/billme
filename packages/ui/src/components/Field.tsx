@@ -48,10 +48,10 @@ export const Field: React.FC<FieldProps> = ({
   });
 
   return (
-    <div className={cn('text-sm font-medium text-foreground', className)}>
+    <div className={cn('text-sm text-foreground', className)}>
       {label !== undefined && label !== null && (
-        <div className="mb-2 flex items-baseline">
-          <label htmlFor={id} className="block text-sm font-medium text-foreground">
+        <div className="mb-1.5 flex items-baseline">
+          <label htmlFor={id} className="block text-label text-foreground">
             {label}
           </label>
           {/* outside the <label> so the accessible name stays exactly `label` */}

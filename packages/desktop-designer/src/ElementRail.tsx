@@ -18,7 +18,7 @@ const ITEMS: { type: ElementType; icon: React.ComponentType<{ size?: number; str
 /** Left rail of insertable element types. */
 export const ElementRail: React.FC<ElementRailProps> = ({ onAddElement }) => (
   <div className="flex w-20 shrink-0 flex-col items-center gap-2 border-r border-dark-border bg-dark-1 py-3 no-print">
-    <span className="mb-1 text-xs font-bold uppercase tracking-widest text-dark-muted">Einfügen</span>
+    <span className="mb-1 text-xs font-semibold uppercase tracking-widest text-dark-muted">Einfügen</span>
     {ITEMS.map((item) => (
       <button
         key={item.type}

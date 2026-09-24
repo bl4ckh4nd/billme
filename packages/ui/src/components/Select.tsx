@@ -30,8 +30,8 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
       <select
         ref={ref}
         className={cn(
-          'bg-surface-muted border rounded-xl px-4 py-3 text-sm',
-          'transition-[border-color,box-shadow,outline-color] motion-reduce:transition-none',
+          'h-10 bg-surface border rounded-control pl-3 pr-8 text-sm text-foreground',
+          'transition-[border-color,box-shadow,outline-color] motion-reduce:transition-none hover:border-ink-500',
           'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
           'disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground disabled:placeholder:text-disabled-foreground disabled:cursor-not-allowed disabled:opacity-100',
           error ? 'border-error' : 'border-control-border',

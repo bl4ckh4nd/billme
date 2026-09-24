@@ -7,7 +7,10 @@ import {
   AlertTriangle, Mail, Gavel, CheckCircle, X,
   Download, Printer, Send, Paperclip, MoreHorizontal, Calendar, User, RefreshCw, Link, ExternalLink, Trash2, LayoutTemplate, Edit3, Euro, ArrowRight
 } from 'lucide-react';
-import { Badge, Button, ConfirmDialog, EMPTY_VALUE, EmptyState, ErrorState, Modal, formatEmptyValue, useActionFeedback } from '@billme/ui';
+import {
+  Badge, Button, Checkbox, ConfirmDialog, EMPTY_VALUE, EmptyState, ErrorState, IconButton, Input, Modal, PageHeader, SegmentedControl,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow, formatEmptyValue, nextSort, useActionFeedback, type SortDirection,
+} from '@billme/ui';
 import {
   getInvoiceDocumentLabel,
   isBillingDocumentKind,
@@ -47,28 +50,19 @@ const formatDate = (dateString: string) => {
 const MISSING_COUNTERPARTY = 'Unbekannt';
 
 const getDunningBadge = (level: number | undefined) => {
-    if (!level || level === 0) return null;
-    let label = '';
-    let colorClass = '';
-    switch(level) {
-        case 1:
-            label = '1. Mahnung';
-            colorClass = 'bg-warning-bg text-warning-text border-warning-border';
-            break;
-        case 2:
-            label = '2. Mahnung';
-            colorClass = 'bg-error-bg text-error-text border-error-border';
-            break;
-        case 3:
-            label = 'Inkasso';
-            colorClass = 'bg-dark-base text-background border-dark-base';
-            break;
-        default:
-            return null;
-    }
-    return <span className={`px-2 py-1 rounded-sm text-xs font-bold border ${colorClass} uppercase tracking-wide flex items-center gap-1 whitespace-nowrap`}>
-        <AlertTriangle size={10} /> {label}
-    </span>;
+    if (!level || level < 1 || level > 3) return null;
+    const config = level === 1
+      ? { tone: 'warning' as const, label: '1. Mahnung' }
+      : level === 2
+        ? { tone: 'error' as const, label: '2. Mahnung' }
+        : { tone: 'inverse' as const, label: 'Inkasso' };
+    return (
+      <Badge tone={config.tone} className="whitespace-nowrap">
+        <span className="inline-flex items-center gap-1">
+          <AlertTriangle size={12} aria-hidden="true" /> {config.label}
+        </span>
+      </Badge>
+    );
 };
 
 interface DocumentsViewProps {
@@ -115,7 +109,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 }) => {
   const queryClient = useQueryClient();
   const [documentType, setDocumentType] = useState<'invoice' | 'offer'>('invoice');
-  const [isTypeDropdownOpen, setIsTypeDropdownOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'detail'>('list');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<InvoiceStatus | 'all'>('all');
@@ -164,24 +157,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     };
   }, [isToolbarOverflowOpen]);
 
-  const typeDropdownRef = React.useRef<HTMLDivElement | null>(null);
-  React.useEffect(() => {
-    if (!isTypeDropdownOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (typeDropdownRef.current && !typeDropdownRef.current.contains(e.target as Node)) {
-        setIsTypeDropdownOpen(false);
-      }
-    };
-    const keyHandler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsTypeDropdownOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    document.addEventListener('keydown', keyHandler);
-    return () => {
-      document.removeEventListener('mousedown', handler);
-      document.removeEventListener('keydown', keyHandler);
-    };
-  }, [isTypeDropdownOpen]);
 
   // Payments (Invoice detail)
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -284,6 +259,20 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           doc.number.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesFilter && matchesSearch;
   });
+
+  type DocumentSortKey = 'number' | 'client' | 'date' | 'dueDate' | 'amount';
+  const [sort, setSort] = useState<{ key: DocumentSortKey; direction: SortDirection } | null>(null);
+  const sortFor = (key: DocumentSortKey): SortDirection | false => (sort?.key === key ? sort.direction : false);
+  const sortedDocuments = sort
+    ? [...filteredDocuments].sort((a, b) => {
+        const factor = sort.direction === 'asc' ? 1 : -1;
+        if (sort.key === 'amount') return (a.amount - b.amount) * factor;
+        const left = String(a[sort.key] ?? '');
+        const right = String(b[sort.key] ?? '');
+        return left.localeCompare(right, 'de', { numeric: true }) * factor;
+      })
+    : filteredDocuments;
+  const allFilteredSelected = filteredDocuments.length > 0 && filteredDocuments.every((doc) => selectedIds.has(doc.id));
 
   const overdueInvoices = invoices.filter(i => i.status === 'overdue');
   // Mirrors the level choice of the shared dunning engine, which sends the run.
@@ -487,7 +476,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           await queryClient.invalidateQueries({ queryKey: ['invoices'] });
           if (action === 'order_confirmation') {
             setDocumentType('invoice');
-            setIsTypeDropdownOpen(false);
             setSelectedIds(new Set());
           }
           setSelectedId(issued.id);
@@ -539,7 +527,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   const switchDocumentType = (type: 'invoice' | 'offer') => {
       setDocumentType(type);
-      setIsTypeDropdownOpen(false);
       setSelectedId(null);
       setViewMode('list');
       clearSelection();
@@ -695,6 +682,26 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       }
   };
 
+  // Customers also accept by phone or mail; record that decision without the portal.
+  const handleRecordOfferDecision = (decision: 'accepted' | 'declined') => {
+      if (!selectedDocument || documentType !== 'offer') return;
+      const reason = decision === 'accepted' ? 'Angebot manuell als angenommen markiert' : 'Angebot manuell als abgelehnt markiert';
+      upsertOffer.mutate(
+        {
+          offer: {
+            ...selectedDocument,
+            shareDecision: decision,
+            acceptedAt: decision === 'accepted' ? new Date().toISOString() : selectedDocument.acceptedAt,
+          },
+          reason,
+        },
+        {
+          onSuccess: () => notify('success', decision === 'accepted' ? 'Angebot als angenommen markiert.' : 'Angebot als abgelehnt markiert.'),
+          onError: (error: unknown) => notify('error', `Entscheidung konnte nicht gespeichert werden: ${String(error)}`),
+        },
+      );
+  };
+
   const handleCreateReminder = () => {
       if (!selectedDocument || documentType !== 'invoice') return;
       const currentLevel = selectedDocument.dunningLevel || 0;
@@ -754,7 +761,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       >
           <div className="p-6 border-b border-border flex justify-between items-center bg-surface-muted">
               <div>
-                <h3 id="dunning-modal-title" className="text-xl font-black">Mahnlauf starten</h3>
+                <h3 id="dunning-modal-title" className="text-xl font-semibold">Mahnlauf starten</h3>
                 <p id="dunning-modal-description" className="text-sm text-muted tabular-nums">{dueDunningCount} von {overdueInvoices.length} überfälligen Rechnungen erreichen eine neue Mahnstufe</p>
               </div>
               <button
@@ -774,18 +781,18 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                    </p>
                )}
                {dunningPreview.map(({ inv, level, due }) => (
-                   <div key={inv.id} className={`p-4 rounded-xl border-2 ${due ? 'border-foreground bg-surface-muted' : 'border-border bg-white'}`}>
+                   <div key={inv.id} className={`p-4 rounded-xl border-2 ${due ? 'border-foreground bg-surface-muted' : 'border-border bg-surface'}`}>
                        <div className="flex justify-between items-center mb-2">
                            <div className="flex items-center gap-3">
-                                <span className="font-bold">{inv.number}</span>
+                                <span className="font-semibold">{inv.number}</span>
                                 <span className="text-sm text-muted">{inv.client}</span>
                            </div>
-                           <span className="font-bold tabular-nums">{formatCurrency(inv.amount)}</span>
+                           <span className="font-semibold tabular-nums">{formatCurrency(inv.amount)}</span>
                        </div>
                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                           <span className="bg-error-bg text-error-text px-2 py-1 rounded-sm font-bold tabular-nums">Fällig seit {new Date(inv.dueDate).toLocaleDateString('de-DE')}</span>
+                           <span className="bg-error-bg text-error-text px-2 py-1 rounded-sm font-semibold tabular-nums">Fällig seit {new Date(inv.dueDate).toLocaleDateString('de-DE')}</span>
                            {due && level ? (
-                             <span className="bg-dark-base text-background px-2 py-1 rounded-sm font-bold">{level.name}{level.fee > 0 ? ` (+${formatCurrency(level.fee)})` : ''} an {inv.clientEmail || 'keine E-Mail-Adresse'}</span>
+                             <span className="bg-dark-base text-background px-2 py-1 rounded-sm font-semibold">{level.name}{level.fee > 0 ? ` (+${formatCurrency(level.fee)})` : ''} an {inv.clientEmail || 'keine E-Mail-Adresse'}</span>
                            ) : (
                              <span className="text-muted">{level ? `${level.name} bereits versendet` : 'Noch keine Mahnstufe erreicht'}</span>
                            )}
@@ -825,45 +832,45 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       className="max-w-lg overflow-hidden flex flex-col"
     >
         <div className="p-6 border-b border-border flex justify-between items-center bg-surface-muted">
-            <h3 id="email-modal-title" className="text-lg font-black flex items-center gap-2"><Mail size={18}/> Per E-Mail senden</h3>
+            <h3 id="email-modal-title" className="text-lg font-semibold flex items-center gap-2"><Mail size={16}/> Per E-Mail senden</h3>
             <button
               type="button"
               onClick={() => setIsEmailModalOpen(false)}
               aria-label="Dialog schließen"
               className="p-2 hover:bg-border-subtle rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
-              <X size={18}/>
+              <X size={16}/>
             </button>
         </div>
         <div className="p-6 space-y-4">
             <div>
-                <label htmlFor="email-recipient" className="block text-xs font-bold text-muted mb-1">Empfänger</label>
+                <label htmlFor="email-recipient" className="block text-xs font-semibold text-muted mb-1">Empfänger</label>
                 <input
                     id="email-recipient"
                     type="email"
                     value={emailData.to}
                     onChange={e => setEmailData({...emailData, to: e.target.value})}
-                    className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
             </div>
             <div>
-                <label htmlFor="email-subject" className="block text-xs font-bold text-muted mb-1">Betreff</label>
+                <label htmlFor="email-subject" className="block text-xs font-semibold text-muted mb-1">Betreff</label>
                 <input
                     id="email-subject"
                     type="text"
                     value={emailData.subject}
                     onChange={e => setEmailData({...emailData, subject: e.target.value})}
-                    className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
             </div>
             <div>
-                <label htmlFor="email-message" className="block text-xs font-bold text-muted mb-1">Nachricht</label>
+                <label htmlFor="email-message" className="block text-xs font-semibold text-muted mb-1">Nachricht</label>
                 <textarea
                     id="email-message"
                     rows={6}
                     value={emailData.message}
                     onChange={e => setEmailData({...emailData, message: e.target.value})}
-                    className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+                    className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
                 />
             </div>
             <div className="flex items-center gap-2 text-xs text-muted bg-surface-muted p-3 rounded-lg border border-border">
@@ -897,7 +904,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       >
           <div className="flex items-center justify-between px-6 py-5 border-b border-border">
             <div>
-              <h3 id="payment-modal-title" className="text-lg font-black text-foreground">
+              <h3 id="payment-modal-title" className="text-lg font-semibold text-foreground">
                 {editingPaymentId ? 'Zahlung bearbeiten' : 'Zahlung erfassen'}
               </h3>
               <p id="payment-modal-description" className="text-sm text-muted mt-1">Wird im Audit-Log gespeichert (GoBD).</p>
@@ -905,42 +912,42 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             <button
               type="button"
               onClick={closePaymentModal}
-              className="w-10 h-10 rounded-full bg-surface-muted hover:bg-border-subtle flex items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               aria-label="Dialog schließen"
             >
-              <X size={18} />
+              <X size={16} />
             </button>
           </div>
 
           <div className="p-6 space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="invoicesview-datum">Datum</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="invoicesview-datum">Datum</label>
                 <input id="invoicesview-datum"
                   type="date"
                   value={paymentForm.date}
                   onChange={(e) => setPaymentForm((p) => ({ ...p, date: e.target.value }))}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-muted mb-1" htmlFor="invoicesview-betrag-eur">Betrag (EUR)</label>
+                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="invoicesview-betrag-eur">Betrag (EUR)</label>
                 <input id="invoicesview-betrag-eur"
                   inputMode="decimal"
                   value={paymentForm.amount}
                   onChange={(e) => setPaymentForm((p) => ({ ...p, amount: e.target.value }))}
                   placeholder="z.B. 250,00"
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-muted mb-1" htmlFor="invoicesview-methode">Methode</label>
+              <label className="block text-xs font-semibold text-muted mb-1" htmlFor="invoicesview-methode">Methode</label>
               <select id="invoicesview-methode"
                 value={paymentForm.method}
                 onChange={(e) => setPaymentForm((p) => ({ ...p, method: e.target.value }))}
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
                 <option value="Überweisung">Überweisung</option>
                 <option value="PayPal">PayPal</option>
@@ -951,7 +958,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-muted mb-1" htmlFor="invoicesview-grund-pflicht">Grund (Pflicht)</label>
+              <label className="block text-xs font-semibold text-muted mb-1" htmlFor="invoicesview-grund-pflicht">Grund (Pflicht)</label>
               <textarea id="invoicesview-grund-pflicht"
                 value={paymentReason}
                 onChange={(e) => {
@@ -960,11 +967,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 }}
                 rows={3}
                 placeholder="z.B. Zahlungseingang Kontoauszug, Teilzahlung, ..."
- className="w-full bg-surface-muted border border-control-border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+ className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
               />
             </div>
 
-            {paymentError && <div className="text-sm font-bold text-error-text">{paymentError}</div>}
+            {paymentError && <div className="text-sm font-semibold text-error-text">{paymentError}</div>}
           </div>
 
           <div className="px-6 py-5 border-t border-border flex items-center justify-end gap-3">
@@ -1047,16 +1054,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       >
           <div className="flex items-center justify-between border-b border-border px-6 py-5">
             <div>
-              <h3 id="chain-amount-title" className="text-lg font-black text-foreground">{label} erstellen</h3>
+              <h3 id="chain-amount-title" className="text-lg font-semibold text-foreground">{label} erstellen</h3>
               <p id="chain-amount-description" className="mt-1 text-sm text-muted">Der Betrag wird als eigener, verknüpfter Beleg gespeichert.</p>
             </div>
-            <button type="button" onClick={cancelChainAmount} className="flex h-10 w-10 items-center justify-center rounded-full bg-surface-muted hover:bg-border-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" aria-label="Dialog schließen">
-              <X size={18} />
+            <button type="button" onClick={cancelChainAmount} className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" aria-label="Dialog schließen">
+              <X size={16} />
             </button>
           </div>
           <form onSubmit={(event) => { event.preventDefault(); confirmChainAmount(); }}>
             <div className="space-y-2 p-6">
-              <label htmlFor="chain-amount" className="block text-xs font-bold text-muted">Betrag (EUR)</label>
+              <label htmlFor="chain-amount" className="block text-xs font-semibold text-muted">Betrag (EUR)</label>
               <input
                 id="chain-amount"
                 autoFocus
@@ -1065,7 +1072,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 onChange={(event) => { setChainAmountInput(event.target.value); setChainAmountError(null); }}
                 aria-invalid={Boolean(chainAmountError)}
                 aria-describedby={chainAmountError ? 'chain-amount-error' : undefined}
-                className="w-full rounded-xl border border-control-border bg-surface-muted p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="px-3 h-10 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
               {chainAmountError && <p id="chain-amount-error" role="alert" className="text-sm font-medium text-error-text">{chainAmountError}</p>}
             </div>
@@ -1094,12 +1101,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         descriptionId="payment-delete-description"
         className="max-w-lg p-6"
       >
-          <h3 id="payment-delete-title" className="text-lg font-black text-foreground mb-1">Zahlung löschen</h3>
+          <h3 id="payment-delete-title" className="text-lg font-semibold text-foreground mb-1">Zahlung löschen</h3>
           <p id="payment-delete-description" className="text-sm text-muted mb-4">
             Die Zahlung wird entfernt. Bitte Begründung angeben (GoBD).
           </p>
 
-          <label htmlFor="payment-delete-reason" className="text-xs font-bold text-muted">Grund (Pflicht)</label>
+          <label htmlFor="payment-delete-reason" className="text-xs font-semibold text-muted">Grund (Pflicht)</label>
           <textarea
             id="payment-delete-reason"
             value={paymentDeleteReason}
@@ -1108,10 +1115,10 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               if (paymentDeleteError) setPaymentDeleteError(null);
             }}
             rows={3}
-            className="mt-2 w-full rounded-2xl border border-control-border bg-surface-muted px-4 py-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="px-3 py-2.5 hover:border-ink-500 mt-2 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             placeholder="z.B. falsch erfasst, Doppelbuchung, ..."
           />
-          {paymentDeleteError && <div className="mt-2 text-sm font-bold text-error-text">{paymentDeleteError}</div>}
+          {paymentDeleteError && <div className="mt-2 text-sm font-semibold text-error-text">{paymentDeleteError}</div>}
 
           <div className="mt-6 flex items-center justify-end gap-3">
             <Button variant="secondary" onClick={closePaymentDelete}>
@@ -1161,7 +1168,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   };
 
   const renderSettingsGate = () => (
-    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm flex flex-col">
+    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs flex flex-col">
       {isSettingsError ? (
         <ErrorState
           title="Einstellungen konnten nicht geladen werden"
@@ -1184,7 +1191,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   if (viewMode === 'detail' && selectedDocument) {
       return (
-          <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm relative">
+          <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs relative">
 
               {renderEmailModal()}
               {renderPaymentModal()}
@@ -1197,13 +1204,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       <button
                         onClick={() => setViewMode('list')}
                         aria-label="Zurück zur Liste"
-                        className="w-10 h-10 rounded-full border border-control-border flex items-center justify-center hover:bg-black hover:text-white transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       >
-                          <ArrowLeft size={18} />
+                          <ArrowLeft size={16} />
                       </button>
                       <div>
                            <div className="flex items-center gap-3 mb-1">
-                                <h1 className="text-3xl font-bold">
+                                <h1 className="text-title">
                                     {selectedDocument.number}
                                 </h1>
                                 {getDunningBadge(selectedDocument.dunningLevel)}
@@ -1211,9 +1218,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                            <div className="flex items-center gap-3">
                                 <Badge status={selectedDocument.status} />
                                 {documentType === 'offer' ? (
-                                    <span className="bg-info-bg text-info-text px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">Angebot</span>
+                                    <span className="bg-info-bg text-info-text px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">Angebot</span>
                                 ) : (
-                                    <span className="bg-surface-muted text-foreground px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
+                                    <span className="bg-surface-muted text-foreground px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">
                                       {getInvoiceDocumentLabel(selectedDocument.documentKind)}
                                     </span>
                                 )}
@@ -1223,10 +1230,23 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                   {/* Actions toolbar, tiered: primary, secondary, overflow */}
                   <div className="flex flex-wrap items-center gap-2">
+                      {documentType === 'offer' && !selectedDocument.shareDecision && (
+                        <>
+                          <Button variant="secondary" onClick={() => handleRecordOfferDecision('accepted')} size="md" disabled={upsertOffer.isPending} title="Kunde hat das Angebot angenommen (z. B. per Telefon oder E-Mail)">
+                            <CheckCircle size={16} /> Angenommen
+                          </Button>
+                          <Button variant="secondary" onClick={() => handleRecordOfferDecision('declined')} size="md" disabled={upsertOffer.isPending} title="Kunde hat das Angebot abgelehnt">
+                            Abgelehnt
+                          </Button>
+                          <div className="w-px h-6 bg-border-subtle mx-1" />
+                        </>
+                      )}
+
                       {/* Convert to invoice: the prominent CTA for accepted offers */}
                       {documentType === 'offer' && selectedDocument.shareDecision === 'accepted' && (
                         <>
                           <Button
+                            variant="secondary"
                             onClick={() => handleCreateChainDocument('order_confirmation')}
                             size="md"
                             disabled={chainIssuePending}
@@ -1236,6 +1256,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                             Auftragsbestätigung
                           </Button>
                           <Button
+                            variant="secondary"
                             onClick={handleConvertOfferToInvoice}
                             size="md"
                             title="Angebot in Rechnung umwandeln"
@@ -1249,16 +1270,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                       {documentType === 'invoice' && selectedDocument.documentKind === 'order_confirmation' && (
                         <>
-                          <Button onClick={() => handleCreateChainDocument('delivery_note')} size="md" disabled={chainIssuePending} title="Lieferschein aus Auftragsbestätigung erstellen">
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('delivery_note')} size="md" disabled={chainIssuePending} title="Lieferschein aus Auftragsbestätigung erstellen">
                             <FileText size={16} /> Lieferschein
                           </Button>
-                          <Button onClick={() => handleCreateChainDocument('advance_invoice')} size="md" disabled={chainIssuePending} title="Abschlagsrechnung erstellen">
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('advance_invoice')} size="md" disabled={chainIssuePending} title="Abschlagsrechnung erstellen">
                             <Euro size={16} /> Abschlag
                           </Button>
-                          <Button onClick={() => handleCreateChainDocument('partial_invoice')} size="md" disabled={chainIssuePending} title="Teilrechnung erstellen">
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('partial_invoice')} size="md" disabled={chainIssuePending} title="Teilrechnung erstellen">
                             <Euro size={16} /> Teilrechnung
                           </Button>
-                          <Button onClick={() => handleCreateChainDocument('final_invoice')} size="md" disabled={chainIssuePending} title="Schlussrechnung erstellen">
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('final_invoice')} size="md" disabled={chainIssuePending} title="Schlussrechnung erstellen">
                             <CheckCircle size={16} /> Schlussrechnung
                           </Button>
                           <div className="w-px h-6 bg-border-subtle mx-1" />
@@ -1267,13 +1288,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                       {documentType === 'invoice' && isBillingDocumentKind(selectedDocument.documentKind) && selectedDocument.status !== 'draft' && (
                         <>
-                          <Button onClick={() => handleCreateChainDocument('credit_note')} size="md" disabled={chainIssuePending} title="Gutschrift aus dieser Rechnung erstellen">
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('credit_note')} size="md" disabled={chainIssuePending} title="Gutschrift aus dieser Rechnung erstellen">
                             <ArrowLeft size={16} /> Gutschrift
                           </Button>
-                          <Button onClick={() => handleCreateChainDocument('cancellation_invoice')} size="md" disabled={chainIssuePending} title="Stornorechnung aus dieser Rechnung erstellen">
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('cancellation_invoice')} size="md" disabled={chainIssuePending} title="Stornorechnung aus dieser Rechnung erstellen">
                             <RefreshCw size={16} /> Storno
                           </Button>
-                          <Button onClick={() => handleCreateChainDocument('revision')} size="md" disabled={chainIssuePending} title="Neue Revision aus dieser Rechnung erstellen">
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('revision')} size="md" disabled={chainIssuePending} title="Neue Revision aus dieser Rechnung erstellen">
                             <FileText size={16} /> Revision
                           </Button>
                           <div className="w-px h-6 bg-border-subtle mx-1" />
@@ -1281,22 +1302,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       )}
 
                       {/* PRIMARY: labeled action buttons */}
-                      <button
-                        onClick={() => onEditInvoice(selectedDocument, documentType)}
-                        className="h-10 px-4 bg-surface-muted border border-control-border hover:bg-border-subtle text-foreground rounded-full font-bold text-xs transition-colors flex items-center gap-2"
-                      >
-                        <Edit3 size={14} /> Bearbeiten
-                      </button>
+                      <Button variant="secondary" onClick={() => onEditInvoice(selectedDocument, documentType)}>
+                        <Edit3 size={16} aria-hidden="true" /> Bearbeiten
+                      </Button>
                       <Button onClick={handleOpenEmail} size="md">
                         <Mail size={16} /> Senden
                       </Button>
-                      <button
-                        onClick={handleDownloadPdf}
-                        className="h-10 px-4 bg-white border border-control-border hover:bg-surface-muted text-foreground rounded-full font-bold text-xs transition-colors flex items-center gap-2"
-                        title="PDF herunterladen"
-                      >
-                        <Download size={14} /> PDF
-                      </button>
+                      <Button variant="secondary" onClick={handleDownloadPdf} title="PDF herunterladen">
+                        <Download size={16} aria-hidden="true" /> PDF
+                      </Button>
 
                       {/* SECONDARY: icon buttons */}
                       <div className="w-px h-6 bg-border-subtle mx-1" />
@@ -1304,11 +1318,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       {documentType === 'invoice' && selectedDocument.status === 'draft' && (
                         <button
                           onClick={handleFinalizeDraftInvoice}
-                          className="h-10 w-10 bg-white border border-control-border hover:bg-surface-muted text-foreground rounded-full flex items-center justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                          className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                           title="Als gestellt markieren (Entwurf → Offen)"
                           aria-label="Als gestellt markieren (Entwurf zu Offen)"
                         >
-                          <CheckCircle size={18} />
+                          <CheckCircle size={16} />
                         </button>
                       )}
 
@@ -1317,7 +1331,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           {!selectedDocument.shareToken ? (
                             <button
                               onClick={handlePublishOffer}
-                              className="h-10 px-3 bg-black text-white rounded-full font-bold text-xs transition-colors flex items-center gap-1.5 hover:bg-dark-2"
+                              className="h-10 px-3 bg-surface-inverse text-inverse-foreground rounded-control font-semibold text-xs transition-colors flex items-center gap-1.5 hover:bg-surface-inverse-raised"
                               title="Öffentlichen Link erzeugen"
                             >
                               <Link size={14} /> Veröffentlichen
@@ -1339,27 +1353,27 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                     notify('error', `Kopieren fehlgeschlagen: ${String(error)}`);
                                   }
                                 }}
-                                className="h-10 w-10 bg-white border border-control-border hover:bg-surface-muted text-foreground rounded-full flex items-center justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                                 title="Link kopieren"
                                 aria-label="Angebotslink kopieren"
                               >
-                                <Link size={18} />
+                                <Link size={16} />
                               </button>
                               <button
                                 onClick={handleOpenOfferLink}
-                                className="h-10 w-10 bg-white border border-control-border hover:bg-surface-muted text-foreground rounded-full flex items-center justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                                 title="Im Browser öffnen"
                                 aria-label="Angebot im Browser öffnen"
                               >
-                                <ExternalLink size={18} />
+                                <ExternalLink size={16} />
                               </button>
                               <button
                                 onClick={handleSyncOfferDecision}
-                                className="h-10 w-10 bg-white border border-control-border hover:bg-surface-muted text-foreground rounded-full flex items-center justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                                 title="Portal-Status synchronisieren"
                                 aria-label="Portal-Status synchronisieren"
                               >
-                                <RefreshCw size={18} />
+                                <RefreshCw size={16} />
                               </button>
                             </>
                           )}
@@ -1371,15 +1385,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                         <button
                           onClick={() => setIsToolbarOverflowOpen((v) => !v)}
                           aria-expanded={isToolbarOverflowOpen}
-                          className="h-10 w-10 bg-white border border-control-border hover:bg-surface-muted text-foreground rounded-full flex items-center justify-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                          className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                           title="Weitere Aktionen"
+                          aria-haspopup="menu"
                           aria-label="Weitere Aktionen"
                         >
-                          <MoreHorizontal size={18} />
+                          <MoreHorizontal size={16} />
                         </button>
                         {isToolbarOverflowOpen && (
-                          <div className="absolute right-0 top-full mt-1 bg-white rounded-2xl shadow-xl p-1.5 z-[var(--z-dropdown)] min-w-[180px]">
-                            <button
+                          <div role="menu" aria-label="Weitere Aktionen" className="absolute right-0 top-full mt-1 bg-surface rounded-2xl shadow-xl p-1.5 z-[var(--z-dropdown)] min-w-[180px]">
+                            <button role="menuitem"
                               onClick={() => {
                                 setIsToolbarOverflowOpen(false);
                                 if (!selectedDocument) return;
@@ -1398,12 +1413,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                             >
                               <Printer size={14} /> Drucken / PDF öffnen
                             </button>
-                            <button
+                            {documentType === 'invoice' && (
+                            <button role="menuitem"
                               onClick={() => { setIsToolbarOverflowOpen(false); handleSharePaymentLink(); }}
                               className="w-full text-left px-3 py-2 text-sm text-foreground hover:bg-surface-muted rounded-xl flex items-center gap-2 transition-colors"
                             >
                               <Share2 size={14} /> Zahlungslink kopieren
                             </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1420,26 +1437,26 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           {/* Meta Header */}
                           <div className="flex flex-col md:flex-row justify-between gap-8 mb-10 pb-8 border-b border-border border-dashed">
                               <div>
-                                  <p className="text-xs font-bold text-muted uppercase tracking-widest mb-2 flex items-center gap-1">
+                                  <p className="text-xs font-semibold text-muted uppercase tracking-widest mb-2 flex items-center gap-1">
                                       <User size={12}/> Empfänger
                                   </p>
-                                  <p className="font-bold text-foreground text-lg">{selectedDocument.client}</p>
+                                  <p className="font-semibold text-foreground text-lg">{selectedDocument.client}</p>
                                   <p className="text-sm text-muted whitespace-pre-line leading-relaxed mt-1">
                                       {selectedDocument.clientAddress || selectedDocument.clientEmail}
                                   </p>
                               </div>
                               <div className="flex gap-8">
                                   <div>
-                                      <p className="text-xs font-bold text-muted uppercase tracking-widest mb-2 flex items-center gap-1">
+                                      <p className="text-xs font-semibold text-muted uppercase tracking-widest mb-2 flex items-center gap-1">
                                           <Calendar size={12}/> Datum
                                       </p>
-                                      <p className="tabular-nums font-bold text-foreground">{formatDate(selectedDocument.date)}</p>
+                                      <p className="tabular-nums font-semibold text-foreground">{formatDate(selectedDocument.date)}</p>
                                   </div>
                                   <div>
-                                      <p className="text-xs font-bold text-muted uppercase tracking-widest mb-2 flex items-center gap-1">
+                                      <p className="text-xs font-semibold text-muted uppercase tracking-widest mb-2 flex items-center gap-1">
                                           <Clock size={12}/> {documentType === 'offer' ? 'Gültig bis' : 'Fällig'}
                                       </p>
-                                      <p className={`tabular-nums font-bold ${selectedDocument.status === 'overdue' ? 'text-error-text' : 'text-foreground'}`}>
+                                      <p className={`tabular-nums font-semibold ${selectedDocument.status === 'overdue' ? 'text-error-text' : 'text-foreground'}`}>
                                           {formatDate(selectedDocument.dueDate)}
                                       </p>
                                   </div>
@@ -1448,34 +1465,36 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                           {/* Items Table */}
                           <div className="mb-8">
-                              <table className="w-full">
-                                  <thead>
-                                      <tr className="text-xs font-bold text-muted uppercase tracking-wider text-left border-b border-border">
-                                          <th className="pb-3 pl-2">Beschreibung</th>
-                                          <th className="pb-3 text-right">Menge</th>
-                                          <th className="pb-3 text-right">Einzel</th>
-                                          <th className="pb-3 text-right pr-2">Gesamt</th>
-                                      </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-border-subtle">
+                              <Table aria-label="Positionen" bare>
+                                  <TableHeader>
+                                      <TableRow>
+                                          <TableHead>Beschreibung</TableHead>
+                                          <TableHead numeric>Menge</TableHead>
+                                          <TableHead numeric>Einzel</TableHead>
+                                          <TableHead numeric>Gesamt</TableHead>
+                                      </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
                                       {selectedDocument.items.map((item, i) => (
-                                          <tr key={i} className="group hover:bg-white/50 transition-colors">
-                                              <td className="py-4 pl-2 font-bold text-foreground">{item.description}</td>
-                                              <td className="py-4 text-right text-muted tabular-nums text-sm">{item.quantity}</td>
-                                              <td className="py-4 text-right text-muted tabular-nums text-sm">{formatCurrency(item.price)}</td>
-                                              <td className="py-4 text-right font-bold text-foreground tabular-nums pr-2">{formatCurrency(item.total)}</td>
-                                          </tr>
+                                          <TableRow key={i}>
+                                              <TableCell className="font-medium">{item.description}</TableCell>
+                                              <TableCell numeric muted>{item.quantity}</TableCell>
+                                              <TableCell numeric muted>{formatCurrency(item.price)}</TableCell>
+                                              <TableCell numeric className="font-medium">{formatCurrency(item.total)}</TableCell>
+                                          </TableRow>
                                       ))}
-                                  </tbody>
-                              </table>
+                                  </TableBody>
+                              </Table>
                           </div>
 
                           {/* Totals & Notes */}
                           <div className="flex flex-col md:flex-row justify-between items-start gap-8 border-t border-border border-dashed pt-8">
                                <div className="flex-1">
-                                   <p className="text-xs font-bold text-foreground mb-2">Hinweis</p>
+                                   <p className="text-xs font-semibold text-foreground mb-2">Hinweis</p>
                                    <p className="text-xs text-muted leading-relaxed max-w-sm">
-                                       Vielen Dank für Ihren Auftrag. Bitte überweisen Sie den fälligen Betrag innerhalb von 14 Tagen auf das unten angegebene Konto.
+                                       {documentType === 'offer'
+                                         ? `Dieses Angebot ist gültig bis ${formatDate(selectedDocument.dueDate)}.`
+                                         : `Bitte überweisen Sie den fälligen Betrag bis ${formatDate(selectedDocument.dueDate)} auf das unten angegebene Konto.`}
                                    </p>
                                </div>
                                <div className="w-full md:w-64 space-y-2">
@@ -1487,7 +1506,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                        <span>USt {(selectedDocumentTax?.vatRateApplied ?? 0)}%</span>
                                        <span className="tabular-nums">{formatCurrency(selectedDocumentTax?.vatAmount ?? 0)}</span>
                                    </div>
-                                   <div className="flex justify-between text-xl font-bold text-foreground border-t border-border pt-3 mt-1">
+                                   <div className="flex justify-between text-xl font-semibold text-foreground border-t border-border pt-3 mt-1">
                                        <span>Gesamt</span>
                                        <span className="tabular-nums">{formatCurrency(selectedDocumentTax?.grossAmount ?? selectedDocument.amount)}</span>
                                    </div>
@@ -1507,12 +1526,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                         >
                           <div className="flex items-start justify-between gap-3 mb-4">
                             <div>
-                              <h4 className="font-bold text-sm text-foreground flex items-center gap-2">
+                              <h4 className="font-semibold text-sm text-foreground flex items-center gap-2">
                                 <Link size={16} className="text-muted" /> Dokumentkette
                               </h4>
                               <p className="text-xs text-muted mt-1">Auftrag, Abrechnung und Revisionen</p>
                             </div>
-                            <span className="text-xs font-bold uppercase tracking-wider text-muted">
+                            <span className="text-xs font-semibold uppercase tracking-wider text-muted">
                               {selectedChain.length} Dokumente
                             </span>
                           </div>
@@ -1534,15 +1553,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                   onClick={() => setSelectedId(document.id)}
                                   className={`w-full text-left rounded-2xl border px-3 py-2.5 transition-colors ${
                                     isCurrent
-                                      ? 'border-foreground bg-white'
-                                      : 'border-control-border bg-white/60 hover:bg-white hover:border-control-border'
+                                      ? 'border-foreground bg-surface'
+                                      : 'border-control-border bg-white/60 hover:bg-surface hover:border-control-border'
                                   }`}
                                 >
                                   <div className="flex items-center justify-between gap-2">
-                                    <span className="text-xs font-bold text-foreground truncate">
+                                    <span className="text-xs font-semibold text-foreground truncate">
                                       {getInvoiceDocumentLabel(document.documentKind)} · {document.number}
                                     </span>
-                                    <span className="text-xs font-bold uppercase tracking-wide text-muted shrink-0">
+                                    <span className="text-xs font-semibold uppercase tracking-wide text-muted shrink-0">
                                       {relationLabel}
                                     </span>
                                   </div>
@@ -1558,19 +1577,19 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       )}
 
                       {/* Status Card */}
-                      <div className="bg-white border border-border rounded-3xl p-6">
-                          <h4 className="font-bold text-sm text-foreground mb-4 flex items-center gap-2">
+                      <div className="bg-surface border border-border rounded-3xl p-6">
+                          <h4 className="font-semibold text-sm text-foreground mb-4 flex items-center gap-2">
                               <CheckCircle size={16} className="text-foreground" /> Status
                           </h4>
                           {selectedDocument.status === 'overdue' && (
                               <div className="bg-error-bg rounded-xl p-4 mb-4 border border-error-border">
                                   <div className="flex items-start gap-3">
-                                      <AlertTriangle size={18} className="text-error-text mt-0.5" />
+                                      <AlertTriangle size={16} className="text-error-text mt-0.5" />
                                       <div>
-                                          <p className="text-xs font-bold text-error-text mb-1">Zahlung überfällig</p>
+                                          <p className="text-xs font-semibold text-error-text mb-1">Zahlung überfällig</p>
                                           <button
                                             onClick={handleCreateReminder}
-                                            className="text-xs font-bold bg-white border border-error-border text-error-text px-2 py-1 rounded-sm hover:bg-error-bg transition-colors"
+                                            className="text-xs font-semibold bg-surface border border-error-border text-error-text px-2 py-1 rounded-sm hover:bg-error-bg transition-colors"
                                           >
                                               Mahnung erstellen
                                           </button>
@@ -1590,12 +1609,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                        ? `Bezahlt am ${formatDate(lastPayment.date)}`
                                        : 'Bezahlt';
                                    })()
-                                 : 'Noch nicht bezahlt'}
+                                 : documentType === 'offer'
+                                   ? (selectedDocument.shareDecision === 'accepted' ? 'Vom Kunden angenommen' : selectedDocument.shareDecision === 'declined' ? 'Vom Kunden abgelehnt' : 'Noch keine Entscheidung')
+                                   : 'Noch nicht bezahlt'}
                                </span>
                           </div>
                           <div className="mt-3 border-t border-border pt-3">
-                            <p className="text-xs font-bold text-muted uppercase tracking-wider mb-2">Steuerbehandlung</p>
-                            <div className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border bg-surface-muted text-xs font-bold text-foreground">
+                            <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">Steuerbehandlung</p>
+                            <div className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border bg-surface-muted text-xs font-semibold text-foreground">
                               <span className="w-1.5 h-1.5 rounded-full bg-muted" />
                               {selectedTaxDefinition?.label ?? 'Regelbesteuerung'}
                             </div>
@@ -1607,21 +1628,22 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                       {/* Payments (Invoices only) */}
                       {documentType === 'invoice' && (
-                        <div className="bg-white border border-border rounded-3xl p-6">
+                        <div className="bg-surface border border-border rounded-3xl p-6">
                           <div className="flex items-center justify-between mb-4">
-                            <h4 className="font-bold text-sm text-foreground flex items-center gap-2">
+                            <h4 className="font-semibold text-sm text-foreground flex items-center gap-2">
                               <Euro size={16} className="text-muted" /> Zahlungen
                             </h4>
                             <button
                               onClick={() => {
                                 const today = new Date().toISOString().split('T')[0] ?? '';
                                 setEditingPaymentId(null);
-                                setPaymentForm({ date: today, amount: '', method: 'Überweisung' });
+                                const openAmount = Math.max(0, (Number(selectedDocumentTax?.grossAmount ?? selectedDocument.amount) || 0) - sumPayments(selectedDocument));
+                                setPaymentForm({ date: today, amount: openAmount > 0 ? openAmount.toFixed(2) : '', method: 'Überweisung' });
                                 setPaymentReason('Zahlung erfasst');
                                 setPaymentError(null);
                                 setIsPaymentModalOpen(true);
                               }}
-                              className="px-3 py-2 rounded-xl bg-surface-muted border border-control-border hover:bg-border-subtle text-foreground font-bold text-sm inline-flex items-center gap-2"
+                              className="px-3 py-2 rounded-xl bg-surface-muted border border-control-border hover:bg-border-subtle text-foreground font-semibold text-sm inline-flex items-center gap-2"
                             >
                               <Plus size={16} /> Zahlung
                             </button>
@@ -1641,17 +1663,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                 <div className="mb-4">
                                   <div className="flex items-center justify-between text-xs text-muted mb-2">
                                     <span>Bezahlt</span>
-                                    <span className="tabular-nums font-bold text-foreground">{formatCurrency(paid)}</span>
+                                    <span className="tabular-nums font-semibold text-foreground">{formatCurrency(paid)}</span>
                                   </div>
                                   <div className="w-full h-2 rounded-full bg-surface-muted border border-control-border overflow-hidden">
                                     <div
-                                      className="h-full bg-black"
+                                      className="h-full bg-surface-inverse"
                                       style={{ width: `${Math.round(pct * 100)}%` }}
                                     />
                                   </div>
                                   <div className="flex items-center justify-between text-xs text-muted mt-2">
                                     <span>Noch offen</span>
-                                    <span className="tabular-nums font-bold text-foreground">{formatCurrency(remaining)}</span>
+                                    <span className="tabular-nums font-semibold text-foreground">{formatCurrency(remaining)}</span>
                                   </div>
                                 </div>
 
@@ -1668,13 +1690,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                           className="flex items-center justify-between p-3 bg-surface-muted rounded-2xl border border-border"
                                         >
                                           <div>
-                                            <p className="text-xs font-bold text-foreground">{formatDate(p.date)}</p>
-                                            <p className="text-xs text-muted font-bold uppercase tracking-wide">
+                                            <p className="text-xs font-semibold text-foreground">{formatDate(p.date)}</p>
+                                            <p className="text-xs text-muted font-semibold uppercase tracking-wide">
                                               {p.method}
                                             </p>
                                           </div>
                                           <div className="flex items-center gap-2">
-                                            <div className="tabular-nums font-bold text-foreground min-w-[120px] text-right">
+                                            <div className="tabular-nums font-semibold text-foreground min-w-[120px] text-right">
                                               {formatCurrency(p.amount)}
                                             </div>
                                             <button
@@ -1689,7 +1711,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                                 setPaymentError(null);
                                                 setIsPaymentModalOpen(true);
                                               }}
-                                              className="w-9 h-9 rounded-xl bg-white border border-control-border hover:bg-surface-muted flex items-center justify-center"
+                                              className="w-9 h-9 rounded-xl bg-surface border border-control-border hover:bg-surface-muted flex items-center justify-center"
                                               title="Bearbeiten"
                                             >
                                               <Edit3 size={16} className="text-foreground" />
@@ -1701,7 +1723,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                                 setPaymentDeleteError(null);
                                                 setIsPaymentDeleteOpen(true);
                                               }}
-                                              className="w-9 h-9 rounded-xl bg-white border border-control-border hover:bg-surface-muted flex items-center justify-center"
+                                              className="w-9 h-9 rounded-xl bg-surface border border-control-border hover:bg-surface-muted flex items-center justify-center"
                                               title="Löschen"
                                             >
                                               <Trash2 size={16} className="text-foreground" />
@@ -1719,7 +1741,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                       {/* Internal Notes */}
                       <div className="bg-warning-bg border border-warning-border rounded-3xl p-6">
-                          <h4 className="font-bold text-sm text-foreground mb-3 flex items-center gap-2">
+                          <h4 className="font-semibold text-sm text-foreground mb-3 flex items-center gap-2">
                               Interne Notiz
                           </h4>
                           <textarea
@@ -1727,7 +1749,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               aria-label="Interne Notiz"
                               value={noteDraft}
                               onChange={(event) => setNoteDraft(event.target.value)}
- className="w-full bg-white border border-warning-border rounded-xl p-3 text-xs text-muted resize-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
+ className="w-full bg-surface border border-warning-border rounded-xl p-3 text-xs text-muted resize-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
                               rows={3}
                               placeholder="Notiz zu diesem Vorgang..."
                           />
@@ -1739,15 +1761,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       </div>
 
                       {/* Timeline */}
-                      <div className="bg-white border border-border rounded-3xl p-6">
-                          <h4 className="font-bold text-sm text-foreground mb-4 flex items-center gap-2">
+                      <div className="bg-surface border border-border rounded-3xl p-6">
+                          <h4 className="font-semibold text-sm text-foreground mb-4 flex items-center gap-2">
                               <Clock size={16} className="text-muted" /> Verlauf
                           </h4>
                           <div className="space-y-4 relative pl-2 border-l border-border ml-1">
                               {selectedDocument.history && selectedDocument.history.length > 0 ? selectedDocument.history.map((h, i) => (
                                   <div key={i} className="pl-4 relative">
                                       <div className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-border border-2 border-white"></div>
-                                      <p className="text-xs font-bold text-muted uppercase tracking-wide">{formatDate(h.date)}</p>
+                                      <p className="text-xs font-semibold text-muted uppercase tracking-wide">{formatDate(h.date)}</p>
                                       <p className="text-xs font-medium text-foreground">{formatDocumentHistoryAction(h.action)}</p>
                                   </div>
                               )) : (
@@ -1781,7 +1803,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       >
           <div className="p-6 border-b border-border flex justify-between items-center bg-surface-muted">
             <div>
-              <h3 id="bulk-delete-title" className="text-lg font-black">Löschen bestätigen</h3>
+              <h3 id="bulk-delete-title" className="text-lg font-semibold">Löschen bestätigen</h3>
               <p id="bulk-delete-description" className="text-sm text-muted tabular-nums">{count} Einträge ausgewählt</p>
             </div>
             <button
@@ -1799,14 +1821,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               Diese Aktion kann nicht rückgängig gemacht werden. Es wird ein Audit-Eintrag geschrieben.
             </div>
             <div>
-              <label htmlFor="bulk-delete-reason" className="block text-xs font-bold text-muted mb-1">Grund (Pflicht)</label>
+              <label htmlFor="bulk-delete-reason" className="block text-xs font-semibold text-muted mb-1">Grund (Pflicht)</label>
               <textarea
                 id="bulk-delete-reason"
                 value={bulkDeleteReason}
                 onChange={(e) => setBulkDeleteReason(e.target.value)}
                 rows={4}
                 placeholder="z.B. Duplikat, Testdaten, Kunde hat storniert ..."
-                className="w-full bg-surface-muted border border-control-border rounded-2xl p-4 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+                className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
               />
             </div>
           </div>
@@ -1878,7 +1900,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-2xl p-8 min-h-full shadow-sm flex flex-col relative">
+    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs flex flex-col relative">
       {renderDunningModal()}
       {renderEmailModal()}
       {renderPaymentModal()}
@@ -1897,166 +1919,125 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         />
       )}
 
-       <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
-        <div className="flex flex-wrap items-center gap-4">
-           {/* Document Type Dropdown */}
-           <div ref={typeDropdownRef} className="relative">
-                <button
-                    type="button"
-                    onClick={() => setIsTypeDropdownOpen(!isTypeDropdownOpen)}
-                    aria-expanded={isTypeDropdownOpen}
-                    aria-haspopup="menu"
-                    className="flex items-center gap-2 text-3xl font-bold text-foreground hover:text-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring rounded-sm"
-                >
-                    {documentType === 'invoice' ? 'Rechnungen' : 'Angebote'}
-                    <ChevronDown size={28} className={`motion-safe:transition-transform motion-safe:duration-200 motion-safe:ease-out motion-reduce:transition-none ${isTypeDropdownOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {isTypeDropdownOpen && (
-                    <div className="ui-enter-popover absolute top-full left-0 mt-2 w-56 bg-white rounded-2xl shadow-xl p-2 z-[var(--z-dropdown)]">
-                        <button
-                            onClick={() => switchDocumentType('invoice')}
-                            className={`w-full text-left px-4 py-3 rounded-xl font-bold text-sm transition-colors flex items-center justify-between ${documentType === 'invoice' ? 'bg-black text-white' : 'hover:bg-surface-muted text-foreground'}`}
-                        >
-                            Rechnungen
-                            {documentType === 'invoice' && <Check size={16} />}
-                        </button>
-                        <button
-                            onClick={() => switchDocumentType('offer')}
-                            className={`w-full text-left px-4 py-3 rounded-xl font-bold text-sm transition-colors flex items-center justify-between ${documentType === 'offer' ? 'bg-black text-white' : 'hover:bg-surface-muted text-foreground'}`}
-                        >
-                            Angebote
-                            {documentType === 'offer' && <Check size={16} />}
-                        </button>
-                    </div>
-                )}
-           </div>
-
-           <div className="flex gap-2">
-                {(['all', 'open', 'paid', 'overdue'] as const).map(s => {
-                    const labels: Record<string, string> = { all: 'Alle', open: 'Offen', paid: 'Bezahlt', overdue: 'Überfällig' };
-                    return (
-                        <button
-                            key={s}
-                            onClick={() => setFilter(s)}
-                            aria-pressed={filter === s}
-                            className={`ui-press px-4 py-1.5 rounded-full text-xs font-bold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${filter === s ? 'bg-black text-white' : 'bg-surface-muted text-muted hover:bg-border-subtle'}`}
-                        >
-                            {labels[s]}
-                        </button>
-                    );
-                })}
-           </div>
-        </div>
-
-        {/* Action Header Area. Wraps below the toolbar copy on narrow windows,
-            and the search field takes the full row there so nothing is clipped. */}
-        <div className="flex flex-wrap items-center justify-end gap-3">
-           {filter === 'overdue' && overdueInvoices.length > 0 && (
-               <button
-                  onClick={handleStartDunningRun}
-                  title={`Mahnlauf starten (${overdueInvoices.length} überfällige Rechnungen)`}
-                  className="h-12 w-40 shrink-0 justify-center bg-error-bg text-error-text border border-error-border px-3 rounded-full font-bold text-sm hover:bg-error-bg transition-colors flex items-center gap-2 tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-               >
-                   <Gavel size={16} />
-                   Mahnlauf ({overdueInvoices.length})
-               </button>
-           )}
-
-           <div className="relative w-full sm:w-auto">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted" size={18} />
-                <input
-                    type="text"
-                    placeholder="Suchen..."
-                    aria-label="Rechnungen und Angebote durchsuchen"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-12 pr-6 py-3 bg-surface-muted border border-control-border rounded-full text-sm font-bold w-full sm:w-64 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-           </div>
-
-           <button
-             onClick={onOpenTemplates}
-             className="px-4 py-3 rounded-full bg-surface-muted border border-control-border text-foreground hover:bg-border-subtle transition-colors font-bold text-sm flex items-center gap-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-             title="Vorlagen verwalten"
-           >
-             <LayoutTemplate size={18} />
-             Vorlagen
-           </button>
-
-           <button
-             onClick={onOpenRecurring}
-             className="px-4 py-3 rounded-full bg-surface-muted border border-control-border text-foreground hover:bg-border-subtle transition-colors font-bold text-sm flex items-center gap-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-             title="Abos / Serien-Dokumente"
-           >
-             <RefreshCw size={18} />
-             Abos
-           </button>
-           <button
-             onClick={() => onCreateInvoice(documentType)}
-             className="w-12 h-12 bg-accent text-accent-foreground rounded-full flex items-center justify-center motion-safe:transition-transform motion-safe:active:scale-95 motion-reduce:transition-none shadow-sm hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-             title={documentType === 'invoice' ? "Neue Rechnung" : "Neues Angebot"}
-             aria-label={documentType === 'invoice' ? "Neue Rechnung" : "Neues Angebot"}
-           >
-             <Plus size={24} />
-           </button>
-         </div>
-       </div>
+      <PageHeader
+        title="Dokumente"
+        description={`${filteredDocuments.length} von ${currentData.length} ${documentType === 'invoice' ? 'Rechnungen' : 'Angeboten'}`}
+        actions={
+          <>
+            {filter === 'overdue' && overdueInvoices.length > 0 && (
+              <Button
+                variant="secondary"
+                onClick={handleStartDunningRun}
+                title={`Mahnlauf starten (${overdueInvoices.length} überfällige Rechnungen)`}
+                className="text-error-text tabular-nums"
+              >
+                <Gavel size={16} aria-hidden="true" />
+                Mahnlauf ({overdueInvoices.length})
+              </Button>
+            )}
+            <Button variant="secondary" onClick={onOpenTemplates} title="Vorlagen verwalten">
+              <LayoutTemplate size={16} aria-hidden="true" />
+              Vorlagen
+            </Button>
+            <Button variant="secondary" onClick={onOpenRecurring} title="Abos / Serien-Dokumente">
+              <RefreshCw size={16} aria-hidden="true" />
+              Abos
+            </Button>
+            <Button onClick={() => onCreateInvoice(documentType)}>
+              <Plus size={16} aria-hidden="true" />
+              {documentType === 'invoice' ? 'Neue Rechnung' : 'Neues Angebot'}
+            </Button>
+          </>
+        }
+        toolbar={
+          <>
+            <SegmentedControl
+              aria-label="Dokumentart"
+              value={documentType}
+              onChange={switchDocumentType}
+              options={[{ value: 'invoice', label: 'Rechnungen' }, { value: 'offer', label: 'Angebote' }]}
+            />
+            <SegmentedControl
+              aria-label="Status"
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { value: 'all', label: 'Alle' },
+                { value: 'open', label: 'Offen' },
+                { value: 'paid', label: 'Bezahlt' },
+                { value: 'overdue', label: 'Überfällig' },
+              ]}
+            />
+            <div className="ml-auto w-full sm:w-64">
+              <Input
+                type="search"
+                placeholder="Nummer oder Kunde suchen"
+                aria-label="Rechnungen und Angebote durchsuchen"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                prefix={<Search size={14} aria-hidden="true" />}
+                fullWidth
+              />
+            </div>
+          </>
+        }
+      />
 
        {isSelecting && (
-         <div className="mb-5 bg-black text-white rounded-3xl px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shadow-xl">
-           <div className="flex items-center gap-3">
-             <div className="w-8 h-8 rounded-full bg-accent text-accent-foreground flex items-center justify-center font-bold text-xs">
+         <div className="mb-4 flex flex-col gap-3 rounded-card bg-surface-inverse px-4 py-2.5 text-inverse-foreground shadow-lg md:flex-row md:items-center md:justify-between">
+           <div className="flex items-center gap-3 text-sm">
+             <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-accent px-1.5 text-caption font-semibold text-accent-foreground tabular-nums">
                {selectedIds.size}
-             </div>
-             <div className="font-bold">
-               Auswahl aktiv
-               <span className="ml-2 text-xs font-bold text-white/60">
-                 ({documentType === 'invoice' ? 'Rechnungen' : 'Angebote'})
-               </span>
-             </div>
+             </span>
+             <span className="font-medium">
+               {documentType === 'invoice' ? 'Rechnungen' : 'Angebote'} ausgewählt
+             </span>
            </div>
-           <div className="flex flex-wrap items-center gap-2">
+           <div className="flex flex-wrap items-center gap-1">
              <button
+               type="button"
                onClick={toggleSelectAllFiltered}
-               className="h-10 px-4 bg-white/10 hover:bg-white/15 border border-white/15 rounded-full text-xs font-bold transition-colors"
+               className="h-8 rounded-control px-3 text-label text-inverse-muted transition-colors hover:bg-surface-inverse-overlay hover:text-inverse-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
                title="Alle in der aktuellen Liste auswählen"
              >
                Alle auswählen
              </button>
              <button
+               type="button"
                onClick={clearSelection}
-               className="h-10 px-4 bg-white/10 hover:bg-white/15 border border-white/15 rounded-full text-xs font-bold transition-colors"
+               className="h-8 rounded-control px-3 text-label text-inverse-muted transition-colors hover:bg-surface-inverse-overlay hover:text-inverse-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
              >
                Aufheben
              </button>
-             <div className="w-px h-6 bg-white/15 mx-1"></div>
+             <div className="mx-1 h-5 w-px bg-border-inverse" aria-hidden="true" />
              <button
+               type="button"
                onClick={() => handleBulkExport({ openFolderAfter: false })}
-               className="h-10 px-4 bg-white rounded-full text-xs font-bold text-black hover:bg-border-subtle transition-colors flex items-center gap-2"
+               className="inline-flex h-8 items-center gap-1.5 rounded-control px-3 text-label text-inverse-foreground transition-colors hover:bg-surface-inverse-overlay focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
                title="PDFs exportieren (in App-Exports)"
              >
-               <Download size={16} /> Export
+               <Download size={14} aria-hidden="true" /> Export
              </button>
              <Button
                onClick={() => handleBulkExport({ openFolderAfter: true })}
                size="sm"
                title="PDFs erstellen und Export-Ordner öffnen"
              >
-               <Printer size={16} /> Drucken
+               <Printer size={14} aria-hidden="true" /> Drucken
              </Button>
              <button
+               type="button"
                onClick={() => setIsBulkDeleteOpen(true)}
-               className="h-10 px-4 bg-error text-white rounded-full text-xs font-bold hover:bg-error/90 transition-colors flex items-center gap-2"
+               className="inline-flex h-8 items-center gap-1.5 rounded-control px-3 text-label text-error-inverse transition-colors hover:bg-surface-inverse-overlay focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
                title="Ausgewählte Einträge löschen"
              >
-               <Trash2 size={16} /> Löschen
+               <Trash2 size={14} aria-hidden="true" /> Löschen
              </button>
            </div>
          </div>
        )}
 
-       <div className="space-y-3 flex-1 overflow-y-auto pt-2 px-1 -mx-1">
+       <div className="flex-1">
            {isLoading ? (
              <SkeletonLoader variant="list" count={5} />
            ) : isCurrentDataError ? (
@@ -2065,107 +2046,88 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                description="Die Liste ist nicht abrufbar. Eine leere Liste würde hier fälschlich als 'keine Dokumente' gelesen."
                onRetry={refetchCurrentData}
              />
-           ) : filteredDocuments.length > 0 ? filteredDocuments.map((doc) => (
-               <div
-                 key={doc.id}
-                 role="button"
-                 tabIndex={0}
-                 aria-label={`${getInvoiceDocumentLabel(doc.documentKind)} ${doc.number} öffnen`}
-                 onClick={() => {
-                   if (isSelecting) toggleSelected(doc.id);
-                   else handleOpenDetail(doc.id);
-                 }}
-                 onKeyDown={(event) => {
-                   if (event.target !== event.currentTarget) return;
-                   if (event.key !== 'Enter' && event.key !== ' ') return;
-                   event.preventDefault();
-                   if (isSelecting) toggleSelected(doc.id);
-                   else handleOpenDetail(doc.id);
-                 }}
-                 className={`group flex flex-wrap items-center gap-4 p-4 rounded-xl border transition-colors cursor-pointer relative focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                   selectedIds.has(doc.id)
-                     ? 'border-foreground bg-surface-muted'
-                     : 'border-border-subtle hover:border-control-border bg-white'
-                 }`}
-               >
-                   <button
-                     onClick={(e) => {
-                       e.stopPropagation();
-                       toggleSelected(doc.id);
-                     }}
-                     className="shrink-0 -m-0.5 p-0.5"
-                     aria-label={selectedIds.has(doc.id) ? `${doc.number}: Auswahl entfernen` : `${doc.number} auswählen`}
-                     aria-pressed={selectedIds.has(doc.id)}
-                   >
-                     <div
-                       className={`w-5 h-5 rounded-sm border flex items-center justify-center transition-colors ${
-                         selectedIds.has(doc.id)
-                           ? 'bg-black border-black text-white'
-                           : 'border-control-border bg-white group-hover:border-foreground/40'
-                       }`}
+           ) : sortedDocuments.length > 0 ? (
+             <Table aria-label={documentType === 'invoice' ? 'Rechnungen' : 'Angebote'}>
+               <TableHeader>
+                 <TableRow>
+                   <TableHead className="w-10">
+                     <Checkbox
+                       aria-label="Alle in der Liste auswählen"
+                       checked={allFilteredSelected}
+                       indeterminate={isSelecting && !allFilteredSelected}
+                       onChange={toggleSelectAllFiltered}
+                     />
+                   </TableHead>
+                   <TableHead sort={sortFor('number')} onSort={() => setSort((current) => nextSort(current, 'number'))}>Nummer</TableHead>
+                   <TableHead sort={sortFor('client')} onSort={() => setSort((current) => nextSort(current, 'client'))}>Kunde</TableHead>
+                   <TableHead className="hidden lg:table-cell" sort={sortFor('date')} onSort={() => setSort((current) => nextSort(current, 'date'))}>Datum</TableHead>
+                   <TableHead className="hidden lg:table-cell" sort={sortFor('dueDate')} onSort={() => setSort((current) => nextSort(current, 'dueDate'))}>
+                     {documentType === 'offer' ? 'Gültig bis' : 'Fällig'}
+                   </TableHead>
+                   <TableHead numeric sort={sortFor('amount')} onSort={() => setSort((current) => nextSort(current, 'amount'))}>Betrag</TableHead>
+                   <TableHead>Status</TableHead>
+                   <TableHead className="w-12"><span className="sr-only">Aktionen</span></TableHead>
+                 </TableRow>
+               </TableHeader>
+               <TableBody>
+                 {sortedDocuments.map((doc) => {
+                   const selected = selectedIds.has(doc.id);
+                   return (
+                     <TableRow
+                       key={doc.id}
+                       interactive
+                       selected={selected}
+                       aria-label={`${getInvoiceDocumentLabel(doc.documentKind)} ${doc.number} öffnen`}
+                       onClick={() => {
+                         if (isSelecting) toggleSelected(doc.id);
+                         else handleOpenDetail(doc.id);
+                       }}
                      >
-                       {selectedIds.has(doc.id) && <Check size={12} />}
-                     </div>
-                   </button>
-                   {/* Flex Column 1: Info (Flex 1 to take remaining space) */}
-                   <div className="flex-1 flex items-center gap-4 min-w-0">
-                       <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-muted group-hover:bg-surface-muted transition-colors shrink-0 ${documentType === 'offer' ? 'bg-info-bg text-info-text' : 'bg-surface-muted'}`}>
-                           <FileText size={20} />
-                      </div>
-                      <div className="min-w-0">
-                          <p className="font-bold text-lg text-foreground flex items-center gap-2 flex-wrap">
-                              <span className="truncate">{doc.number}</span>
-                              {getDunningBadge(doc.dunningLevel)}
-                          </p>
-                          <p className="text-xs font-bold text-muted truncate">
-                            {documentType === 'offer' ? 'Angebot' : getInvoiceDocumentLabel(doc.documentKind)} · {doc.client === MISSING_COUNTERPARTY ? EMPTY_VALUE : formatEmptyValue(doc.client)}
-                          </p>
-                      </div>
-                  </div>
-
-                  {/* Metadata group: its own right-aligned line below md, inline from md. */}
-                  <div className="flex w-full items-center justify-end gap-4 md:w-auto">
-
-                  {/* Flex Column 2: Date (Fixed Width). Shown from lg: below that the
-                      row keeps number, amount and status and drops the date pair. */}
-                  <div className="hidden lg:block w-32 text-right shrink-0">
-                      <p className="text-xs font-bold text-muted uppercase">Datum</p>
-                      <p className="text-sm font-bold tabular-nums">{formatDate(doc.date)}</p>
-                  </div>
-
-                  {/* Flex Column 3: Due Date (Fixed Width) */}
-                  <div className="hidden lg:block w-32 text-right shrink-0">
-                      <p className="text-xs font-bold text-muted uppercase">{documentType === 'offer' ? 'Gültig bis' : 'Fällig'}</p>
-                      <p className={`text-sm font-bold tabular-nums ${doc.status === 'overdue' ? 'text-error-text' : ''}`}>{formatDate(doc.dueDate)}</p>
-                  </div>
-
-                  {/* Flex Column 4: Amount (Fixed Width) */}
-                  <div className="w-24 lg:w-32 text-right shrink-0">
-                      <p className="text-lg tabular-nums font-bold truncate">{formatCurrency(doc.amount)}</p>
-                  </div>
-
-                  {/* Flex Column 5: Status (Fixed Width) */}
-                  <div className="w-24 lg:w-28 flex justify-end shrink-0">
-                      <Badge status={doc.status} />
-                  </div>
-
-                  {/* Flex Column 6: Arrow (Fixed Width) */}
-                  <div className="w-10 flex justify-center shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 motion-safe:transition-opacity motion-reduce:transition-none">
-                      <button
-                        className="p-2 hover:bg-border-subtle rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                        title="Bearbeiten"
-                        aria-label={`${doc.number} bearbeiten`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onEditInvoice(doc, documentType);
-                        }}
-                      >
-                          <ArrowUpRight size={18} />
-                      </button>
-                  </div>
-                  </div>
-              </div>
-          )) : (
+                       <TableCell onClick={(event) => event.stopPropagation()}>
+                         <Checkbox
+                           aria-label={selected ? `${doc.number}: Auswahl entfernen` : `${doc.number} auswählen`}
+                           checked={selected}
+                           onChange={() => toggleSelected(doc.id)}
+                         />
+                       </TableCell>
+                       <TableCell>
+                         <div className="flex items-center gap-2">
+                           <span className="font-medium">{doc.number}</span>
+                           {getDunningBadge(doc.dunningLevel)}
+                         </div>
+                         <div className="text-caption text-muted">
+                           {documentType === 'offer' ? 'Angebot' : getInvoiceDocumentLabel(doc.documentKind)}
+                         </div>
+                       </TableCell>
+                       <TableCell className="max-w-64 truncate">
+                         {doc.client === MISSING_COUNTERPARTY ? EMPTY_VALUE : formatEmptyValue(doc.client)}
+                       </TableCell>
+                       <TableCell muted className="hidden tabular-nums lg:table-cell">{formatDate(doc.date)}</TableCell>
+                       <TableCell className={`hidden tabular-nums lg:table-cell ${doc.status === 'overdue' ? 'font-medium text-error-text' : 'text-muted'}`}>
+                         {formatDate(doc.dueDate)}
+                       </TableCell>
+                       <TableCell numeric className="font-medium">{formatCurrency(doc.amount)}</TableCell>
+                       <TableCell><Badge status={doc.status} /></TableCell>
+                       <TableCell className="text-right">
+                         <IconButton
+                           size="sm"
+                           className="ui-reveal"
+                           tooltip="Bearbeiten"
+                           aria-label={`${doc.number} bearbeiten`}
+                           onClick={(e) => {
+                             e.stopPropagation();
+                             onEditInvoice(doc, documentType);
+                           }}
+                         >
+                           <ArrowUpRight size={16} aria-hidden="true" />
+                         </IconButton>
+                       </TableCell>
+                     </TableRow>
+                   );
+                 })}
+               </TableBody>
+             </Table>
+           ) : (
               <EmptyState
                 title={
                   searchTerm.trim() || filter !== 'all'
@@ -2175,7 +2137,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 description={
                   searchTerm.trim() || filter !== 'all'
                     ? `Suche und Statusfilter schließen alle ${currentData.length} geladenen ${documentType === 'invoice' ? 'Rechnungen' : 'Angebote'} aus.`
-                    : `${documentType === 'invoice' ? 'Rechnungen' : 'Angebote'} entstehen hier und laufen anschließend durch die Belegkette. Lege ${documentType === 'invoice' ? 'die erste Rechnung' : 'das erste Angebot'} über das + oben rechts an.`
+                    : `${documentType === 'invoice' ? 'Rechnungen' : 'Angebote'} entstehen hier und laufen anschließend durch die Belegkette. Lege ${documentType === 'invoice' ? 'die erste Rechnung' : 'das erste Angebot'} über die Schaltfläche oben rechts an.`
                 }
                 action={
                   searchTerm.trim() || filter !== 'all' ? (

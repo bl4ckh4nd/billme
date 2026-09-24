@@ -38,8 +38,9 @@ test('creates and archives a project with an audit reason', async () => {
     (project) => Boolean(project.archivedAt),
   ).length;
 
-  const createdRow = page.locator('div.grid.grid-cols-12').filter({ hasText: projectName }).first();
-  await createdRow.getByRole('button', { name: 'Archivieren' }).click();
+  const createdRow = page.getByRole('row').filter({ hasText: projectName }).first();
+  await createdRow.getByRole('button', { name: `Aktionen für ${projectName}` }).click();
+  await page.getByRole('menuitem', { name: 'Archivieren' }).click();
 
   await expect(page.getByRole('heading', { name: 'Projekt archivieren' })).toBeVisible();
   await page.locator('label:has-text("Grund (Pflicht)")').locator('xpath=following-sibling::textarea[1]').fill('Projekt abgeschlossen');

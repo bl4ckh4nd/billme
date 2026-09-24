@@ -79,7 +79,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     <div className="flex flex-col h-full bg-white">
       <div className="p-6 border-b border-border-subtle flex items-center gap-2">
         <Layers size={20} className="text-muted" />
-        <h3 className="font-bold text-xl text-black">Ebenen</h3>
+        <h3 className="font-semibold text-xl text-black">Ebenen</h3>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-2">
@@ -109,7 +109,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   {iconFor(el.type)}
                 </div>
                 <div className="flex flex-col min-w-0">
-                  <span className="text-xs font-bold truncate">{labelFor(el)}</span>
+                  <span className="text-xs font-semibold truncate">{labelFor(el)}</span>
                   <span className={`text-xs tabular-nums ${selected ? 'text-dark-muted' : 'text-muted'}`}>z: {el.zIndex}</span>
                 </div>
               </div>
@@ -123,7 +123,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   title={el.hidden ? 'Einblenden' : 'Ausblenden'}
                   className={`${rowControl(selected)} p-1.5 ${selected ? 'text-muted hover:text-white' : 'text-muted hover:text-foreground'}`}
                 >
-                  {el.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
+                  {el.hidden ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
                 <button
                   onClick={(e) => {
@@ -133,7 +133,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   title={el.locked ? 'Entsperren' : 'Sperren'}
                   className={`${rowControl(selected)} p-1.5 ${selected ? 'text-muted hover:text-white' : 'text-muted hover:text-foreground'}`}
                 >
-                  {el.locked ? <Lock size={13} /> : <Unlock size={13} />}
+                  {el.locked ? <Lock size={14} /> : <Unlock size={14} />}
                 </button>
                 <div className="ui-reveal flex flex-col gap-0.5 group-focus-within:opacity-100">
                   <button
@@ -165,7 +165,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   title="Löschen"
                   className={`ui-reveal ${rowControl(selected)} p-1.5 text-muted group-focus-within:opacity-100 ${selected ? 'hover:text-error' : 'hover:text-error-text'}`}
                 >
-                  <Trash2 size={13} />
+                  <Trash2 size={14} />
                 </button>
               </div>
             </div>
@@ -179,14 +179,14 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         <div className="p-4 bg-surface-muted border-t border-border grid grid-cols-2 gap-2">
           <button
             onClick={() => onReorder(primary, 'front')}
-            className="flex items-center justify-center gap-2 bg-white border border-border py-2 rounded-lg text-xs font-bold hover:bg-black hover:text-accent hover:border-black motion-safe:transition-colors motion-reduce:transition-none"
+            className="flex items-center justify-center gap-2 bg-white border border-border py-2 rounded-lg text-xs font-semibold hover:bg-black hover:text-accent hover:border-black motion-safe:transition-colors motion-reduce:transition-none"
           >
             <ArrowUp size={14} />
             Ganz nach vorne
           </button>
           <button
             onClick={() => onReorder(primary, 'back')}
-            className="flex items-center justify-center gap-2 bg-white border border-border py-2 rounded-lg text-xs font-bold hover:bg-black hover:text-accent hover:border-black motion-safe:transition-colors motion-reduce:transition-none"
+            className="flex items-center justify-center gap-2 bg-white border border-border py-2 rounded-lg text-xs font-semibold hover:bg-black hover:text-accent hover:border-black motion-safe:transition-colors motion-reduce:transition-none"
           >
             <ArrowDown size={14} />
             Ganz nach hinten

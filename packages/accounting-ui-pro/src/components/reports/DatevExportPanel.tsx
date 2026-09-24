@@ -163,10 +163,10 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-2">
           <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-dark-base text-accent">
-            <FileDown size={15} aria-hidden="true" />
+            <FileDown size={16} aria-hidden="true" />
           </span>
           <div>
-            <h2 id="datev-export-title" className="text-sm font-black text-foreground">DATEV Buchungsstapel</h2>
+            <h2 id="datev-export-title" className="text-sm font-semibold text-foreground">DATEV Buchungsstapel</h2>
             <p className="mt-0.5 text-xs text-muted">Unveränderlicher Export aus dem aktiven Journal ({chartFramework}).</p>
           </div>
         </div>
@@ -190,7 +190,7 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
             <select
               value={values.encoding}
               onChange={(event) => update('encoding', event.target.value as DatevEncoding)}
-              className="mt-2 block w-full rounded-xl border border-control-border bg-surface-muted px-4 py-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-3 h-10 hover:border-ink-500 mt-2 block w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <option value="cp1252">CP1252 (DATEV)</option>
               <option value="utf8-bom">UTF-8 mit BOM</option>
@@ -216,7 +216,7 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
 
       <div className="mt-5 border-t border-border pt-4" aria-label="Unveränderlicher DATEV-Exportverlauf">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-xs font-black uppercase tracking-wide text-muted">Exportverlauf</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Exportverlauf</h3>
           {loadingHistory ? <span className="text-xs text-muted" aria-live="polite">Lade Verlauf…</span> : null}
         </div>
         {historyError ? (

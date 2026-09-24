@@ -88,16 +88,16 @@ const InvoiceIllustration: React.FC<{ product: 'lite' | 'pro' }> = ({ product })
     <div className="absolute left-0 top-0 grid w-full gap-2 rounded-md border border-dark-border bg-dark-1 px-4 py-3 opacity-60 -rotate-2">
       <div className="flex items-center justify-between gap-3 text-xs text-dark-muted">
         <span className="font-semibold text-background">RE-2026-0141</span>
-        <span className="rounded-full border border-status-open-border px-2 py-0.5 font-bold">Offen</span>
+        <span className="rounded-full border border-status-open-border px-2 py-0.5 font-semibold">Offen</span>
       </div>
-      <span className="text-xl font-bold tabular-nums text-background">2.380,00 €</span>
+      <span className="text-xl font-semibold tabular-nums text-background">2.380,00 €</span>
     </div>
     <div className="absolute left-4 top-10 grid w-full gap-2.5 rounded-md border border-dark-border bg-dark-2 px-4 py-3 rotate-1">
       <div className="flex items-center justify-between gap-3 text-xs">
         <span className="font-semibold text-background">RE-2026-0142 · Nordlicht GmbH</span>
-        <span className="rounded-full bg-status-paid px-2 py-0.5 font-bold text-status-paid-text">Bezahlt</span>
+        <span className="rounded-full bg-status-paid px-2 py-0.5 font-semibold text-status-paid-text">Bezahlt</span>
       </div>
-      <span className="text-xl font-bold tabular-nums text-background">1.248,50 €</span>
+      <span className="text-xl font-semibold tabular-nums text-background">1.248,50 €</span>
       <span className="h-1.5 rounded-full bg-accent" />
       <div className="flex justify-between gap-3 text-xs text-dark-muted">
         <span>Zahlung eingegangen</span>
@@ -118,8 +118,8 @@ const PasswordField: React.FC<{
   const [visible, setVisible] = React.useState(false);
   return (
     <div>
-      <div className="mb-2 flex items-baseline justify-between gap-3">
-        <label htmlFor={id} className="text-sm font-medium text-foreground">Passwort</label>
+      <div className="mb-1.5 flex items-baseline justify-between gap-3">
+        <label htmlFor={id} className="text-label text-foreground">Passwort</label>
         <button
           type="button"
           onClick={() => setVisible((current) => !current)}
@@ -263,7 +263,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               <div className="grid gap-6">
                 <WifiOff aria-hidden="true" className="size-10 text-foreground" strokeWidth={1.8} />
                 <div className="grid gap-2">
-                  <h1 className="text-2xl font-bold tracking-tight">Billme ist gerade nicht erreichbar</h1>
+                  <h1 className="text-2xl font-semibold tracking-tight">Billme ist gerade nicht erreichbar</h1>
                   <p className="text-sm text-muted">
                     Wir erreichen <span className="font-semibold text-foreground">{host}</span> nicht. Prüfe deine
                     Internetverbindung. Hält das an, sag deiner Administration Bescheid.
@@ -277,7 +277,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             ) : (
               <form noValidate onSubmit={(event) => void handleSubmit(event)} className="grid gap-5">
                 <div className="grid gap-1.5">
-                  <h1 className="text-2xl font-bold tracking-tight">{isSetup ? 'Billme einrichten' : 'Willkommen zurück'}</h1>
+                  <h1 className="text-2xl font-semibold tracking-tight">{isSetup ? 'Billme einrichten' : 'Willkommen zurück'}</h1>
                   <p className="text-sm text-muted">
                     {isSetup
                       ? 'Lege das erste Konto an. Es erhält alle Rechte und kann danach weitere Personen einladen.'
@@ -375,7 +375,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           className="grid gap-5"
         >
           <div className="grid gap-1">
-            <h2 id={serverTitleId} className="text-lg font-bold tracking-tight">Server-Adresse</h2>
+            <h2 id={serverTitleId} className="text-lg font-semibold tracking-tight">Server-Adresse</h2>
             <p id={serverDescriptionId} className="text-sm text-muted">
               Nur ändern, wenn deine Administration dir eine andere Adresse genannt hat.
             </p>

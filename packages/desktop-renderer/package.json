@@ -9,6 +9,7 @@
   },
   "exports": {
     ".": "./src/index.tsx",
+    "./pro": "./src/pro.tsx",
     "./runtime-api": "./src/runtime-api.ts",
     "./ui-store": "./src/ui-store.ts",
     "./createDesktopApp": "./src/createDesktopApp.tsx",

@@ -3,10 +3,10 @@ import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { FeedbackProvider } from '@billme/ui';
 import { describe, expect, it, vi } from 'vitest';
-import { DEFERRED_DELETE_DELAY_MS, useDeferredDelete } from './useDeferredDelete';
+import { DEFERRED_DELETE_DELAY_MS, DEFERRED_DELETE_LEAVE_MS, useDeferredDelete } from './useDeferredDelete';
 
 const DeferredDeleteHarness: React.FC<{ commit: (id: string) => Promise<unknown> }> = ({ commit }) => {
-  const { pendingIds, requestDelete, undo } = useDeferredDelete({
+  const { pendingIds, leavingIds, requestDelete, undo } = useDeferredDelete({
     scope: 'deferred-delete-test',
     commit,
     label: (count) => `${count} Element${count === 1 ? '' : 'e'} gelöscht`,
@@ -15,6 +15,7 @@ const DeferredDeleteHarness: React.FC<{ commit: (id: string) => Promise<unknown>
   return (
     <>
       <output data-testid="pending">{pendingIds.has('item-1') ? 'hidden' : 'visible'}</output>
+      <output data-testid="leaving">{leavingIds.has('item-1') ? 'leaving' : 'settled'}</output>
       <button type="button" onClick={() => requestDelete(['item-1'])}>Löschen</button>
       <button type="button" data-testid="undo-hook" onClick={undo}>Rückgängig</button>
     </>
@@ -27,7 +28,39 @@ const renderHarness = (commit: (id: string) => Promise<unknown>) => render(
   </FeedbackProvider>,
 );
 
+const mockReducedMotion = (reduce: boolean) => {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: reduce && query.includes('reduce'),
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+};
+
 describe('useDeferredDelete', () => {
+  it('keeps a deleted row fading for the leave window, and skips the fade under reduced motion', () => {
+    vi.useFakeTimers();
+    const originalMatchMedia = window.matchMedia;
+    try {
+      mockReducedMotion(false);
+      const { unmount } = renderHarness(vi.fn().mockResolvedValue(undefined));
+      act(() => fireEvent.click(screen.getByRole('button', { name: 'Löschen' })));
+      expect(screen.getByTestId('leaving')).toHaveTextContent('leaving');
+      act(() => vi.advanceTimersByTime(DEFERRED_DELETE_LEAVE_MS));
+      expect(screen.getByTestId('leaving')).toHaveTextContent('settled');
+      expect(screen.getByTestId('pending')).toHaveTextContent('hidden');
+      unmount();
+
+      mockReducedMotion(true);
+      renderHarness(vi.fn().mockResolvedValue(undefined));
+      act(() => fireEvent.click(screen.getByRole('button', { name: 'Löschen' })));
+      expect(screen.getByTestId('leaving')).toHaveTextContent('settled');
+    } finally {
+      window.matchMedia = originalMatchMedia;
+      vi.useRealTimers();
+    }
+  });
+
   it('hides an id immediately and undo prevents its deferred commit', () => {
     vi.useFakeTimers();
     try {

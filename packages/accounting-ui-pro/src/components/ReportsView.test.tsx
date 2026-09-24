@@ -45,7 +45,7 @@ describe('ReportsView drilldown ranges', () => {
     render(<ReportsView dataAdapter={{ getBalanceSheetPreview, getReportDrilldownEntries }} availableTabs={['bilanz']} />);
 
     const mappedLine = await screen.findByRole('button', { name: /1000 Bank/ });
-    const unmappedLine = screen.getByRole('button', { name: /unmapped Nicht zugeordnet/ });
+    const unmappedLine = screen.getByRole('button', { name: /^Nicht zugeordnet/ });
     expect((unmappedLine as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(mappedLine);
     await waitFor(() => expect(getReportDrilldownEntries).toHaveBeenCalledWith(expect.objectContaining({ accountNumbers: ['1000'] })));

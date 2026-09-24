@@ -141,7 +141,7 @@ export const INITIAL_INVOICE_TEMPLATE: InvoiceElement[] = [
     x: 20 * MM_TO_PX,
     y: 200 * MM_TO_PX,
     zIndex: 10,
-    content: 'Bitte überweisen Sie den Betrag innerhalb von 14 Tagen ohne Abzug auf das unten genannte Konto.\nEs gelten unsere AGB.',
+    content: 'Bitte überweisen Sie den Betrag bis spätestens {{invoice.dueDate}} ohne Abzug auf das unten genannte Konto.\nEs gelten unsere AGB.',
     style: { ...DEFAULT_TEXT_STYLE, fontSize: 10, width: 700, height: 50 },
     label: 'payment_terms'
   },

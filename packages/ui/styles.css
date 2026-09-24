@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* Self-hosted so the offline desktop apps and print output render Inter
+   without a network round trip. */
+@import "@fontsource-variable/inter";
 @source "./src/**/*.{ts,tsx}";
 /* Every workspace package renders through this stylesheet, while app-level components are re-exports. Keep this sibling glob. */
 @source "../*/src/**/*.{ts,tsx}";
@@ -8,98 +11,188 @@
 @source "../../apps/web-pro/**/*.{ts,tsx,html}";
 
 @theme {
-  /* Brand Colors */
+  /* Palette: roles over ramps. Every step is an OKLCH value (hue 260 for ink,
+     119 for lime) rounded to hex; neighbouring steps stay >=25% apart. The
+     role tokens below map onto these ramps, so change a ramp step, not a role. */
+
+  /* Ink: faint cool neutral. 0 is paper, 950 is the darkest ink. */
+  --color-ink-0: #ffffff;
+  --color-ink-25: #f9fafb;
+  --color-ink-50: #f3f4f6;
+  --color-ink-100: #e5e6e9;
+  --color-ink-200: #d2d4d7;
+  --color-ink-300: #b5b7bb;
+  --color-ink-400: #87898d;
+  --color-ink-500: #6f7276;
+  --color-ink-600: #64686d;
+  --color-ink-700: #4a4d52;
+  --color-ink-800: #2e3034;
+  --color-ink-900: #1a1c1f;
+  --color-ink-950: #0d0e11;
+
+  /* Brand accent ramp. 300 is the brand lime. 50/100 are selection tints;
+     700 (4.54:1) and 800 (7.55:1 on white) are the only lime values that may
+     carry text on light surfaces. */
   --color-accent: #d9f944;
-  --color-accent-hover: #cbe83e;
-  --color-accent-foreground: #000000;
+  --color-accent-hover: #cfed41;
+  --color-accent-foreground: #0d0e11;
+  --color-accent-50: #f7fee4;
+  --color-accent-100: #edfcbf;
+  --color-accent-200: #e4fc8c;
+  --color-accent-400: #cfed41;
+  --color-accent-500: #b1cd23;
+  --color-accent-600: #8ea515;
+  --color-accent-700: #6c7e06;
+  --color-accent-800: #4d5a07;
+  --color-accent-900: #313a03;
 
-  /* Dark UI (Editor) */
-  --color-dark-base: #000000;
-  --color-dark-1: #111111;
-  --color-dark-2: #1a1a1a;
-  --color-dark-3: #1c1c1c;
-  --color-dark-border: #222222;
-  --color-dark-border-subtle: #333333;
-  --color-dark-muted: #9ca3af;
+  /* Inverse surfaces: the deliberate contrast. Allowed for the document
+     editor chrome, tooltips, toasts, the command palette, and at most one
+     focal element per view (see DESIGN.md "Contrast budget"). Depth comes from
+     lighter raised steps, not shadows. The dark-* names are kept for existing
+     call sites; the surface-inverse-* roles are the names to use in new code. */
+  --color-dark-base: #0d0e11;
+  --color-dark-1: #181a1d;
+  --color-dark-2: #222428;
+  /* Collapsed into dark-1: #1c1c1c sat 2% from #1a1a1a, below the 25% step rule. */
+  --color-dark-3: #181a1d;
+  --color-dark-border: #2e3034;
+  --color-dark-border-subtle: #42454a;
+  --color-dark-muted: #aeb1b6;
+  --color-surface-inverse: #0d0e11;
+  --color-surface-inverse-raised: #181a1d;
+  --color-surface-inverse-overlay: #222428;
+  --color-border-inverse: #2e3034;
+  --color-inverse-foreground: #ffffff;
+  /* 8.11:1 on surface-inverse-raised, 7.23:1 on -overlay. */
+  --color-inverse-muted: #aeb1b6;
+  /* Semantic hues legible on inverse surfaces (6.98:1 and 10.70:1 on ink). */
+  --color-error-inverse: #f87171;
+  --color-info-inverse: #93c5fd;
 
-  /* Light UI */
+  /* Light UI roles (mapped onto ink) */
   --color-background: #ffffff;
-  --color-foreground: #0b0b0b;
+  --color-foreground: #0d0e11;
   --color-surface: #ffffff;
   --color-surface-muted: #f9fafb;
-  /* App shell ground. The app sits on a slightly recessed grey so white cards
-     read as surfaces; #f3f4f6 is the value the desktop shells already used as
-     raw hex, now named. 1.1:1 against white, so it separates surfaces without
-     competing with the accent. */
+  /* App shell ground, ink-50. White surfaces read as raised against it. */
   --color-surface-sunken: #f3f4f6;
-  /* Secondary copy. #676d75 instead of #6b7280 so text-muted clears 4.5:1 on
-     all three light grounds (white 5.22:1, surface-muted 5.00:1, sunken 4.75:1);
-     #6b7280 failed on sunken at 4.39:1. */
-  --color-muted: #676d75;
-  --color-border: #e5e7eb;
+  /* Secondary copy, ink-600: 5.61:1 on white, 5.37:1 on surface-muted,
+     5.10:1 on surface-sunken. */
+  --color-muted: #64686d;
+  --color-border: #e5e6e9;
   --color-border-subtle: #f3f4f6;
-  /* Boundary of interactive controls (input, select, textarea, checkbox).
-     --color-border is 1.24:1 against white and cannot carry a control outline,
-     so controls use this instead: 3.41:1 on white, 3.26:1 on surface-muted,
-     3.10:1 on sunken, meeting the 3:1 non-text requirement. */
-  --color-control-border: #8b8b8b;
+  /* Boundary of interactive controls, ink-400: 3.50:1 on white, 3.18:1 on
+     surface-sunken, meeting the 3:1 non-text requirement. --color-border is
+     1.25:1 and can only separate, never outline a control. */
+  --color-control-border: #87898d;
 
   /* Interaction States */
-  --color-focus-ring: #0b0b0b;
+  --color-focus-ring: #0d0e11;
   --color-focus-ring-dark: #d9f944;
-  --color-disabled-foreground: #4b5563;
-  --color-disabled-surface: #e5e7eb;
+  --color-disabled-foreground: #4a4d52;
+  --color-disabled-surface: #e5e6e9;
 
-  /* Semantic Colors */
+  /* Semantic Colors. -bg tints carry 60% of the hue's chroma so a row of
+     semantic tiles reads as information, not decoration. */
   --color-success: #22c55e;
-  --color-success-bg: #f0fdf4;
+  --color-success-bg: #f5fdf8;
   --color-success-border: #bbf7d0;
   --color-success-text: #15803d;
 
   --color-warning: #f59e0b;
-  --color-warning-bg: #fef3c7;
+  --color-warning-bg: #fbf5da;
   --color-warning-border: #fde68a;
   --color-warning-text: #92400e;
 
   --color-error: #dc2626;
-  --color-error-bg: #fef2f2;
+  --color-error-bg: #fcf5f5;
   --color-error-border: #fecaca;
   --color-error-text: #b91c1c;
 
   --color-info: #3b82f6;
-  --color-info-bg: #eff6ff;
+  --color-info-bg: #f3f7fd;
   --color-info-border: #bfdbfe;
   --color-info-text: #1d4ed8;
 
   /* Invoice Status Colors */
   --color-status-paid: #d9f944;
-  --color-status-paid-text: #000000;
+  --color-status-paid-text: #0d0e11;
 
   --color-status-open: #ffffff;
-  --color-status-open-text: #000000;
-  --color-status-open-border: #6b7280;
+  --color-status-open-text: #0d0e11;
+  --color-status-open-border: #6f7276;
 
-  --color-status-overdue: #fef2f2;
+  --color-status-overdue: #fcf5f5;
   --color-status-overdue-text: #b91c1c;
 
   --color-status-draft: #f3f4f6;
-  --color-status-draft-text: #4b5563;
-  --color-status-draft-border: #6b7280;
+  --color-status-draft-text: #4a4d52;
+  --color-status-draft-border: #6f7276;
 
-  --color-status-cancelled-border: #6b7280;
+  --color-status-cancelled-border: #6f7276;
 
   /* Layering */
   --z-dropdown: 30;
   --z-overlay: 40;
   --z-toast: 50;
 
-  /* Border Radius */
-  --radius-sm: 0.5rem;
-  --radius-md: 1rem;
-  --radius-lg: 1.5rem;
-  --radius-xl: 2rem;
-  --radius-2xl: 2.5rem;
-  --radius-3xl: 3rem;
+  /* Radius: a precision scale. The step names are kept so existing call sites
+     shrink in place; primitives use the semantic aliases. Nested corners are
+     concentric: outer = inner + padding. */
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.25rem;
+  --radius-control: 0.5rem;
+  --radius-card: 0.75rem;
+  --radius-panel: 1rem;
+  --radius-modal: 1.25rem;
+
+  /* Elevation: layered, transparent, ink-tinted. Every step carries a 1px
+     hairline ring, so a raised surface needs no border (DESIGN.md: border or
+     shadow, never both). xl/2xl alias the floating steps for older call sites. */
+  --shadow-xs: 0 0 0 1px rgb(13 14 17 / 0.06), 0 1px 2px rgb(13 14 17 / 0.04);
+  --shadow-sm: 0 0 0 1px rgb(13 14 17 / 0.06), 0 1px 2px rgb(13 14 17 / 0.04), 0 2px 4px rgb(13 14 17 / 0.03);
+  --shadow-md: 0 0 0 1px rgb(13 14 17 / 0.07), 0 2px 4px -1px rgb(13 14 17 / 0.06), 0 8px 16px -4px rgb(13 14 17 / 0.08);
+  --shadow-lg: 0 0 0 1px rgb(13 14 17 / 0.07), 0 4px 8px -2px rgb(13 14 17 / 0.06), 0 16px 32px -8px rgb(13 14 17 / 0.14);
+  --shadow-xl: 0 0 0 1px rgb(13 14 17 / 0.07), 0 2px 4px -1px rgb(13 14 17 / 0.06), 0 12px 24px -6px rgb(13 14 17 / 0.12);
+  --shadow-2xl: 0 0 0 1px rgb(13 14 17 / 0.07), 0 4px 8px -2px rgb(13 14 17 / 0.06), 0 24px 48px -12px rgb(13 14 17 / 0.18);
+  /* Filled buttons: a 1px top highlight gives the fill a pressed, tactile edge
+     without a glow; the ring keeps lime legible on white. */
+  --shadow-button: inset 0 1px 0 rgb(255 255 255 / 0.45), 0 0 0 1px rgb(13 14 17 / 0.1), 0 1px 2px rgb(13 14 17 / 0.08);
+  --shadow-button-inverse: inset 0 1px 0 rgb(255 255 255 / 0.12), 0 0 0 1px rgb(13 14 17 / 0.9), 0 1px 2px rgb(13 14 17 / 0.2);
+
+  /* Type roles. Weight contrast carries hierarchy: 400 body, 500 labels,
+     600 titles and controls. Uppercase tracking belongs to table column
+     headers only. */
+  --font-sans: 'Inter Variable', Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --text-title: 1.5rem;
+  --text-title--line-height: 2rem;
+  --text-title--letter-spacing: -0.02em;
+  --text-title--font-weight: 600;
+  --text-section: 0.9375rem;
+  --text-section--line-height: 1.375rem;
+  --text-section--font-weight: 600;
+  --text-label: 0.8125rem;
+  --text-label--line-height: 1.125rem;
+  --text-label--font-weight: 500;
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1rem;
+  --text-figure: 2rem;
+  --text-figure--line-height: 2.25rem;
+  --text-figure--letter-spacing: -0.02em;
+  --text-figure--font-weight: 600;
+
+  /* Motion. Every transition-* utility without its own duration or ease
+     reads these two defaults. */
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 }
 
 @layer base {
@@ -115,18 +208,49 @@
     color-scheme: light;
   }
 
+  :root {
+    --dur-micro: 120ms;
+    --dur-overlay: 180ms;
+    --dur-overlay-exit: 120ms;
+    --dur-panel: 240ms;
+  }
+
   body {
     background: var(--color-background);
     color: var(--color-foreground);
-    font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+    font-family: var(--font-sans);
+    /* cv11 single-storey a, ss03 rounded quotes; calt keeps contextual
+       alternates on. Figures opt into tnum through tabular-nums. */
+    font-feature-settings: "cv11", "ss03", "calt";
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Icon stroke follows the weight of the text beside it: 1.75 next to
+     regular and medium text, 2 inside semibold or bold labels (buttons, titles).
+     CSS outranks lucide's stroke-width attribute, so no call site sets it. */
+  .lucide {
+    stroke-width: 1.75;
+  }
+  :where(.font-semibold, .font-bold) .lucide {
+    stroke-width: 2;
   }
 
   /* Motion policy: MOTION 1 means interaction feedback only (hover, focus,
      loading) plus origin-aware enter for overlays/popovers/toasts.
-     Duration scale: micro 150ms (buttons, chevrons, day cells), overlay 200ms
-     (popovers, modals, toasts), progress 200ms. Easing: strong ease-out
-     (.ease-premium). Every transition must carry its own motion-reduce: guard;
+     Duration scale: --dur-micro 120ms (buttons, chevrons, thumbs, checks),
+     --dur-overlay 180ms enter / --dur-overlay-exit 120ms (popovers, modals,
+     toasts), --dur-panel 240ms (disclosure height). Easing: the default
+     transition curve for state changes, --ease-out-strong for overlays. Every transition must carry its own motion-reduce: guard;
      the global kill-switch below is the backstop, not the contract. */
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -134,6 +258,85 @@
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* A deleted row fades before it leaves the list (useDeferredDelete keeps it
+   rendered with data-leaving for --dur-overlay). Unlayered on purpose: rows
+   carry their own transition utilities (transition-shadow, transition-colors),
+   and a layered rule would lose to them. The hook sets no data-leaving under
+   reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-leaving] {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur-overlay) var(--ease-out-strong);
+  }
+}
+
+/* Overlay entrance. Mounting is the trigger: @starting-style supplies the
+   from-state, so no class toggling is needed. The rules live in the components
+   layer so a closing state's utilities (opacity-0, translate-y-2, duration-150)
+   override them and reuse the same transition for the exit. Tailwind v4 writes
+   translate and scale as individual properties, so those are what transition.
+   Popovers grow from --origin, which an anchored overlay sets to the side that
+   faces its trigger. */
+@layer components {
+  @media (prefers-reduced-motion: no-preference) {
+    .ui-enter-fade,
+    .ui-enter-panel,
+    .ui-enter-popover,
+    .ui-enter-toast {
+      transition-property: opacity, translate, scale;
+      transition-duration: var(--dur-overlay);
+      transition-timing-function: var(--ease-out-strong);
+    }
+
+    .ui-enter-fade {
+      @starting-style {
+        opacity: 0;
+      }
+    }
+
+    .ui-enter-panel {
+      @starting-style {
+        opacity: 0;
+        translate: 0 8px;
+        scale: 0.98;
+      }
+    }
+
+    .ui-enter-popover {
+      transform-origin: var(--origin, top center);
+      @starting-style {
+        opacity: 0;
+        scale: 0.96;
+      }
+    }
+
+    .ui-enter-toast {
+      @starting-style {
+        opacity: 0;
+        translate: 0 8px;
+      }
+    }
+
+    /* The sanctioned disclosure motion: native <details> content grows to its
+       measured height. interpolate-size is scoped to details so no other
+       keyword-sized box starts animating. */
+    details {
+      interpolate-size: allow-keywords;
+    }
+    details::details-content {
+      block-size: 0;
+      overflow-y: clip;
+      transition:
+        block-size var(--dur-panel) var(--ease-out-strong),
+        content-visibility var(--dur-panel) allow-discrete;
+    }
+    details[open]::details-content {
+      block-size: auto;
     }
   }
 }
@@ -159,22 +362,18 @@
     mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent);
   }
 
-  .ease-premium {
-    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
   /* Shared press feedback for raw buttons outside the Button primitive:
-     160ms strong ease-out, scale 0.97 per Emil 0.95-0.98 band. */
+     the same 0.96 press as Button, on the overlay curve. */
   .ui-press {
     transition: none;
   }
   @media (prefers-reduced-motion: no-preference) {
     .ui-press {
-      transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+      transition: transform var(--dur-micro) var(--ease-out-strong);
     }
   }
   .ui-press:active {
-    transform: scale(0.97);
+    transform: scale(0.96);
   }
   @media (prefers-reduced-motion: reduce) {
     .ui-press:active {
@@ -189,7 +388,7 @@
   }
   @media (prefers-reduced-motion: no-preference) {
     .ui-reveal {
-      transition: opacity 150ms cubic-bezier(0.16, 1, 0.3, 1);
+      transition: opacity var(--dur-micro) var(--ease-out-strong);
     }
   }
   .ui-reveal:focus-within {

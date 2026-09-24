@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '../utils/cn';
+import { OVERLAY_EXIT_MS } from '../utils/useExitTransition';
 import { Portal } from './Portal';
 
 export type ToastVariant = 'success' | 'error' | 'info' | 'progress';
@@ -29,16 +30,16 @@ export interface ToastProps {
 }
 
 const sizeStyles: Record<ToastSize, string> = {
-  default: 'rounded-2xl px-6 py-3',
-  compact: 'rounded-xl px-4 py-2.5',
+  default: 'px-4 py-3',
+  compact: 'px-3.5 py-2.5',
 };
 
 /**
- * Portal toasts sit below the shell chrome: titlebar (`h-10` = 2.5rem) plus header
- * (`h-[88px]` = 5.5rem) plus 8px of air. `top-14` used to land inside the header
- * and covered the global search field and the header icon buttons.
+ * Toasts stack bottom-centre, clear of the shell chrome and the page's primary
+ * actions, and rise into place. Centring uses auto margins rather than a
+ * translate, because the enter transition owns the translate property.
  */
-export const toastOverlayPosition = 'fixed inset-x-4 top-[8.5rem] z-[var(--z-toast)] sm:left-auto sm:right-8';
+export const toastOverlayPosition = 'fixed inset-x-4 bottom-6 mx-auto w-auto max-w-md z-[var(--z-toast)]';
 
 export const Toast: React.FC<ToastProps> = ({
   children,
@@ -55,7 +56,6 @@ export const Toast: React.FC<ToastProps> = ({
   staggerIndex = 0,
 }) => {
   const isError = variant === 'error';
-  const isInfo = variant === 'info' || variant === 'progress';
   const [dismissed, setDismissed] = useState(false);
   const [closing, setClosing] = useState(false);
   const isHovered = useRef(false);
@@ -74,9 +74,10 @@ export const Toast: React.FC<ToastProps> = ({
       return;
     }
     setClosing(true);
-    window.setTimeout(() => setDismissed(true), 150);
+    window.setTimeout(() => setDismissed(true), OVERLAY_EXIT_MS);
   };
-  const focusRing = isError || isInfo ? 'focus-visible:outline-focus-ring' : 'focus-visible:outline-focus-ring-dark';
+  // Every toast sits on the inverse surface, so every focus ring is the dark-surface ring.
+  const focusRing = 'focus-visible:outline-focus-ring-dark';
 
   const content = (
     <div
@@ -104,9 +105,9 @@ export const Toast: React.FC<ToastProps> = ({
         }
       }}
       className={cn(
-        'ui-enter-toast no-print flex max-w-md items-center gap-3 break-words',
+        'ui-enter-toast no-print flex max-w-md items-center gap-3 break-words rounded-card bg-surface-inverse text-inverse-foreground shadow-lg',
         portal ? toastOverlayPosition : 'relative',
-        (leaving || closing) && 'translate-y-2 opacity-0 duration-150 [transition-delay:0ms]',
+        (leaving || closing) && 'translate-y-1 opacity-0 duration-(--dur-overlay-exit) [transition-delay:0ms]',
         sizeStyles[size],
         className,
       )}
@@ -118,7 +119,7 @@ export const Toast: React.FC<ToastProps> = ({
           type="button"
           onClick={action.onClick}
           className={cn(
-            'ml-2 inline-flex min-h-6 shrink-0 items-center text-xs font-bold underline underline-offset-2 opacity-80 motion-safe:transition-opacity motion-reduce:transition-none hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2',
+            'ml-2 inline-flex min-h-6 shrink-0 items-center text-xs font-semibold underline underline-offset-2 opacity-80 motion-safe:transition-opacity motion-reduce:transition-none hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2',
             focusRing,
           )}
         >

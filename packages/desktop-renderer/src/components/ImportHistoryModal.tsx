@@ -3,7 +3,9 @@ import { X, AlertTriangle, Calendar, CheckCircle2, XCircle, Undo2, Link2 } from 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../runtime-api';
 import { formatCurrency } from '@billme/desktop-utils/formatters';
-import { ConfirmDialog, EmptyState, ErrorState, Modal } from '@billme/ui';
+import {
+  ConfirmDialog, EmptyState, ErrorState, Modal, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@billme/ui';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
 
 interface ImportHistoryModalProps {
@@ -72,7 +74,7 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border p-6">
         <div>
-          <h2 id={titleId} className="text-xl font-black text-foreground">Import-Historie</h2>
+          <h2 id={titleId} className="text-xl font-semibold text-foreground">Import-Historie</h2>
           <p className="mt-1 text-sm text-muted">
             Übersicht aller CSV-Importe mit Rollback-Möglichkeit
           </p>
@@ -254,57 +256,45 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
                 <h3 className="mb-3 font-semibold text-foreground">
                   Transaktionen (Vorschau)
                 </h3>
-                <div className="overflow-hidden rounded-lg border border-border">
-                  <div className="max-h-64 overflow-y-auto">
-                    {details.transactions.length === 0 ? (
-                      <div className="py-4 text-center text-sm text-muted">
-                        Keine Transaktionen in diesem Import
-                      </div>
-                    ) : (
-                      <table className="w-full text-sm">
-                        <thead className="border-b border-border bg-surface-muted">
-                          <tr>
-                            <th className="px-3 py-2 text-left font-medium text-muted">
-                              Datum
-                            </th>
-                            <th className="px-3 py-2 text-left font-medium text-muted">
-                              Gegenseite
-                            </th>
-                            <th className="px-3 py-2 text-left font-medium text-muted">
-                              Verwendungszweck
-                            </th>
-                            <th className="px-3 py-2 text-right font-medium text-muted">
-                              Betrag
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border-subtle">
-                          {details.transactions.map((tx) => (
-                            <tr key={tx.id} className="hover:bg-surface-muted">
-                              <td className="px-3 py-2 tabular-nums text-muted">
-                                {new Date(tx.date).toLocaleDateString('de-DE')}
-                              </td>
-                              <td className="px-3 py-2 font-medium text-foreground">
-                                {tx.counterparty}
-                              </td>
-                              <td className="max-w-xs truncate px-3 py-2 text-muted">
-                                {tx.purpose}
-                              </td>
-                              <td
-                                className={`px-3 py-2 text-right font-medium tabular-nums ${
-                                  tx.type === 'income' ? 'text-success-text' : 'text-error-text'
-                                }`}
-                              >
-                                {tx.type === 'income' ? '+' : '-'}
-                                {formatCurrency(Math.abs(tx.amount))}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
+                {details.transactions.length === 0 ? (
+                  <div className="rounded-card border border-border py-4 text-center text-sm text-muted">
+                    Keine Transaktionen in diesem Import
                   </div>
-                </div>
+                ) : (
+                  <Table
+                    aria-label="Transaktionen dieses Imports"
+                    density="compact"
+                    bare
+                    containerClassName="max-h-64 rounded-card border border-border"
+                  >
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Datum</TableHead>
+                        <TableHead>Gegenseite</TableHead>
+                        <TableHead>Verwendungszweck</TableHead>
+                        <TableHead numeric>Betrag</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {details.transactions.map((tx) => (
+                        <TableRow key={tx.id}>
+                          <TableCell muted className="tabular-nums">
+                            {new Date(tx.date).toLocaleDateString('de-DE')}
+                          </TableCell>
+                          <TableCell className="font-medium">{tx.counterparty}</TableCell>
+                          <TableCell muted className="max-w-xs truncate">{tx.purpose}</TableCell>
+                          <TableCell
+                            numeric
+                            className={`font-medium ${tx.type === 'income' ? 'text-success-text' : 'text-error-text'}`}
+                          >
+                            {tx.type === 'income' ? '+' : '-'}
+                            {formatCurrency(Math.abs(tx.amount))}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
                 <p className="mt-2 text-xs text-muted">
                   Zeigt maximal 50 Transaktionen
                 </p>

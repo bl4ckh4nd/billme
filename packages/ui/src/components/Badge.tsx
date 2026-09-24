@@ -1,8 +1,7 @@
 import React from 'react';
 import { cn } from '../utils/cn';
 
-export interface BadgeProps {
-  status:
+export type BadgeStatus =
     | 'paid'
     | 'open'
     | 'overdue'
@@ -15,8 +14,12 @@ export interface BadgeProps {
     | 'accepted'
     | 'declined'
     | 'expired';
-  className?: string;
-}
+
+export type BadgeTone = 'neutral' | 'info' | 'success' | 'warning' | 'error' | 'accent' | 'inverse';
+
+export type BadgeProps =
+  | { status: BadgeStatus; tone?: never; children?: never; className?: string }
+  | { tone: BadgeTone; status?: never; children: React.ReactNode; className?: string };
 
 type BadgeConfig = {
   bg: string;
@@ -25,7 +28,7 @@ type BadgeConfig = {
   label: string;
 };
 
-const statusConfig: Record<BadgeProps['status'], BadgeConfig> = {
+const statusConfig: Record<BadgeStatus, BadgeConfig> = {
   paid: {
     bg: 'bg-status-paid',
     text: 'text-status-paid-text',
@@ -100,21 +103,36 @@ const statusConfig: Record<BadgeProps['status'], BadgeConfig> = {
   },
 };
 
-export const Badge: React.FC<BadgeProps> = ({ status, className }) => {
-  const config = statusConfig[status];
+type ToneConfig = Omit<BadgeConfig, 'label'>;
+
+// Every pill keeps a >=3:1 boundary: the shape is what makes status scannable.
+const toneConfig: Record<BadgeTone, ToneConfig> = {
+  neutral: { bg: 'bg-surface-muted', text: 'text-ink-700', border: 'border-ink-500' },
+  info: { bg: 'bg-info-bg', text: 'text-info-text', border: 'border-info-text' },
+  success: { bg: 'bg-success-bg', text: 'text-success-text', border: 'border-success-text' },
+  warning: { bg: 'bg-warning-bg', text: 'text-warning-text', border: 'border-warning-text' },
+  error: { bg: 'bg-error-bg', text: 'text-error-text', border: 'border-error-text' },
+  accent: { bg: 'bg-accent', text: 'text-accent-foreground', border: 'border-accent-700' },
+  inverse: { bg: 'bg-surface-inverse', text: 'text-inverse-foreground', border: 'border-surface-inverse' },
+};
+
+export const Badge: React.FC<BadgeProps> = (props) => {
+  const config = props.status !== undefined ? statusConfig[props.status] : toneConfig[props.tone];
+  const label = props.status !== undefined ? statusConfig[props.status].label : props.children;
 
   return (
     <span
       className={cn(
         // ponytail: wrapping preserves complete labels on narrow layouts; replace with truncation plus an accessible description only if badges must become single-line.
-        'max-w-full px-3 py-1 rounded-full text-xs font-bold border inline-flex items-center gap-1 whitespace-normal',
+        'inline-flex max-w-full items-center gap-1 whitespace-normal rounded-full border px-2 py-0.5 text-xs font-medium leading-4',
         config.bg,
         config.text,
         config.border,
-        className
+        props.className
       )}
     >
-      <span className="min-w-0">{config.label}</span>
+      {/* inline-flex keeps a leading icon (svg is display:block) on the label's line. */}
+      <span className="inline-flex min-w-0 items-center gap-1">{label}</span>
     </span>
   );
 };

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Button, EMPTY_VALUE, Input, Select, ValidationSummary } from '@billme/ui';
+import { Check } from 'lucide-react';
 
 export type BusinessReportingProfile = {
   jurisdiction: 'DE';
@@ -118,13 +119,13 @@ const FIELD_IDS: Record<FieldPath, string> = {
 const FIELD_LABELS: Record<FieldPath, string> = {
   'company.name': 'Firmenname',
   'company.owner': 'Inhaber oder Geschäftsführung',
-  'company.street': 'Strasse und Hausnummer',
+  'company.street': 'Straße und Hausnummer',
   'company.zip': 'PLZ',
   'company.city': 'Stadt',
   'company.email': 'E-Mail für Angebote und Rechnungen',
   'finance.taxId': 'Steuernummer',
-  'numbers.invoicePrefix': 'Rechnungs-Praefix',
-  'numbers.offerPrefix': 'Angebots-Praefix',
+  'numbers.invoicePrefix': 'Rechnungs-Präfix',
+  'numbers.offerPrefix': 'Angebots-Präfix',
   'legal.paymentTermsDays': 'Zahlungsziel in Tagen',
   'legal.defaultVatRate': 'Standard-MwSt. in Prozent',
   'finance.bankName': 'Bankname',
@@ -221,7 +222,7 @@ const validateIdentityStep = (draft: BusinessOnboardingDraft): Partial<Record<Fi
 
   if (!trim(draft.company.name)) errors['company.name'] = 'Bitte gib den Firmennamen ein.';
   if (!trim(draft.company.owner)) errors['company.owner'] = 'Bitte gib die verantwortliche Person ein.';
-  if (!trim(draft.company.street)) errors['company.street'] = 'Bitte gib Strasse und Hausnummer ein.';
+  if (!trim(draft.company.street)) errors['company.street'] = 'Bitte gib Straße und Hausnummer ein.';
   if (!trim(draft.company.zip)) errors['company.zip'] = 'Bitte gib die Postleitzahl ein.';
   if (!trim(draft.company.city)) errors['company.city'] = 'Bitte gib die Stadt ein.';
   if (!trim(draft.company.email)) {
@@ -239,10 +240,10 @@ const validateBillingStep = (draft: BusinessOnboardingDraft): Partial<Record<Fie
 
   if (!trim(draft.finance.taxId)) errors['finance.taxId'] = 'Bitte gib die Steuernummer ein.';
   if (!trim(draft.numbers.invoicePrefix)) {
-    errors['numbers.invoicePrefix'] = 'Bitte lege ein Rechnungs-Praefix fest.';
+    errors['numbers.invoicePrefix'] = 'Bitte lege ein Rechnungs-Präfix fest.';
   }
   if (!trim(draft.numbers.offerPrefix)) {
-    errors['numbers.offerPrefix'] = 'Bitte lege ein Angebots-Praefix fest.';
+    errors['numbers.offerPrefix'] = 'Bitte lege ein Angebots-Präfix fest.';
   }
   if (draft.legal.paymentTermsDays === null || !Number.isFinite(draft.legal.paymentTermsDays) || draft.legal.paymentTermsDays < 1) {
     errors['legal.paymentTermsDays'] = 'Bitte gib ein Zahlungsziel von mindestens 1 Tag an.';
@@ -529,7 +530,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
       }}
     >
       <div className="mx-auto grid min-h-full w-full max-w-6xl overflow-hidden rounded-2xl bg-surface shadow-2xl lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <aside className="relative overflow-hidden bg-dark-1 px-6 py-7 text-white sm:px-8 lg:px-7">
+        <aside className="relative overflow-hidden bg-dark-1 px-6 py-7 text-inverse-foreground sm:px-8 lg:px-7">
           <div className="absolute inset-x-0 top-0 h-1 bg-dark-border">
             <div
               className="h-full origin-left bg-accent motion-safe:transition-transform motion-safe:duration-300 motion-safe:ease-out motion-reduce:transition-none"
@@ -548,9 +549,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
             </div>
 
             <div className="mt-8 border-y border-dark-border py-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-dark-muted">
-                Pflichtfelder
-              </p>
+              <p className="text-label text-dark-muted">Pflichtfelder</p>
               <div className="mt-3 flex items-end gap-3">
                 <strong className="text-3xl font-semibold">{essentialsCompleted}/9</strong>
                 <span className="pb-1 text-sm text-dark-muted">eingetragen</span>
@@ -578,15 +577,15 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   >
                     <div className="flex items-start gap-3">
                       <span
-                        className={`mt-0.5 flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
+                        className={`mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
                           state === 'current'
                             ? 'bg-accent text-accent-foreground'
                             : state === 'done'
-                              ? 'bg-dark-border-subtle text-white'
+                              ? 'bg-dark-border-subtle text-inverse-foreground'
                               : 'bg-dark-2 text-dark-muted'
                         }`}
                       >
-                        {state === 'done' ? 'OK' : index + 1}
+                        {state === 'done' ? <Check size={14} aria-label="erledigt" /> : index + 1}
                       </span>
                       <div>
                         <p className="text-sm font-semibold">{step.label}</p>
@@ -599,9 +598,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
             </ol>
 
             <div className="mt-auto hidden border-t border-dark-border pt-4 lg:block">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-dark-muted">
-                Danach kannst du
-              </p>
+              <p className="text-label text-dark-muted">Danach kannst du</p>
               <ul className="mt-4 space-y-2 text-sm text-dark-muted">
                 <li>Angebote mit deinen Firmendaten erstellen</li>
                 <li>Rechnungsnummern vergeben</li>
@@ -654,12 +651,12 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   <div className="md:col-span-2">
                     <Input
                       id={FIELD_IDS['company.street']}
-                      label="Strasse und Hausnummer"
+                      label="Straße und Hausnummer"
                       fullWidth
                       required
                       value={draft.company.street}
                       onChange={(event) => updateCompany('street', event.target.value)}
-                      placeholder="Strasse und Hausnummer"
+                      placeholder="Straße und Hausnummer"
                       error={errors['company.street']}
                     />
                   </div>
@@ -740,7 +737,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     />
                     <Input
                       id={FIELD_IDS['numbers.invoicePrefix']}
-                      label="Rechnungs-Praefix"
+                      label="Rechnungs-Präfix"
                       fullWidth
                       required
                       value={draft.numbers.invoicePrefix}
@@ -750,7 +747,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     />
                     <Input
                       id={FIELD_IDS['numbers.offerPrefix']}
-                      label="Angebots-Praefix"
+                      label="Angebots-Präfix"
                       fullWidth
                       required
                       value={draft.numbers.offerPrefix}
@@ -983,13 +980,13 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   <p className="text-base font-semibold text-foreground">Zusammenfassung</p>
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
                     <div className="border-b border-border px-1 py-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Firmenkopf</p>
+                      <p className="text-label text-muted">Firmenkopf</p>
                       <p className="mt-2 text-sm font-medium text-foreground">
                         {trim(draft.company.name) || 'Noch offen'}
                       </p>
                     </div>
                     <div className="border-b border-border px-1 py-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Steuer</p>
+                      <p className="text-label text-muted">Steuer</p>
                       <p className="mt-2 text-sm font-medium text-foreground">
                         {draft.legal.smallBusinessRule
                           ? 'Kleinunternehmerregelung aktiv'
@@ -997,13 +994,13 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                       </p>
                     </div>
                     <div className="border-b border-border px-1 py-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Zahlungsziel</p>
+                      <p className="text-label text-muted">Zahlungsziel</p>
                       <p className="mt-2 text-sm font-medium text-foreground">
                         {draft.legal.paymentTermsDays ?? EMPTY_VALUE} Tage
                       </p>
                     </div>
                     <div className="border-b border-border px-1 py-3">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Nummernkreis</p>
+                      <p className="text-label text-muted">Nummernkreis</p>
                       <p className="mt-2 text-sm font-medium text-foreground">
                         {trim(draft.numbers.invoicePrefix) || 'RE-'} / {trim(draft.numbers.offerPrefix) || 'ANG-'}
                       </p>

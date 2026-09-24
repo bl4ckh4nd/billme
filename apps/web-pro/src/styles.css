@@ -2,7 +2,7 @@
 
 :root {
   color-scheme: light;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 
 html,

@@ -269,29 +269,29 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
             aria-label="Zurück zur Inbox"
             className="w-8 h-8 flex items-center justify-center rounded-lg border border-border text-muted hover:bg-surface-muted shrink-0"
           >
-            <ArrowLeft size={15} />
+            <ArrowLeft size={16} />
           </button>
           <div className="w-8 h-8 bg-dark-base rounded-lg flex items-center justify-center text-background shrink-0">
-            <FileText size={15} />
+            <FileText size={16} />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-sm font-black text-foreground truncate">Buchung erfassen</h2>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${statusPresentation.className}`}>
+              <h2 className="text-sm font-semibold text-foreground truncate">Buchung erfassen</h2>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusPresentation.className}`}>
                 {statusPresentation.label}
               </span>
               {blocking ? (
-                <span className="px-1.5 py-0.5 rounded-full border border-error-text bg-error-bg text-error-text text-xs font-bold inline-flex items-center gap-0.5">
-                  <ShieldAlert size={10} /> Blockiert
+                <span className="px-1.5 py-0.5 rounded-full border border-error-text bg-error-bg text-error-text text-xs font-semibold inline-flex items-center gap-0.5">
+                  <ShieldAlert size={12} /> Blockiert
                 </span>
               ) : (
-                <span className="px-1.5 py-0.5 rounded-full border border-success-text bg-success-bg text-success-text text-xs font-bold inline-flex items-center gap-0.5">
-                  <Check size={10} /> OK
+                <span className="px-1.5 py-0.5 rounded-full border border-success-text bg-success-bg text-success-text text-xs font-semibold inline-flex items-center gap-0.5">
+                  <Check size={12} /> OK
                 </span>
               )}
               {readOnly && (
-                <span className="px-1.5 py-0.5 rounded-full border border-border bg-border-subtle text-foreground text-xs font-bold inline-flex items-center gap-0.5">
-                  <Lock size={10} /> Read-only
+                <span className="px-1.5 py-0.5 rounded-full border border-border bg-border-subtle text-foreground text-xs font-semibold inline-flex items-center gap-0.5">
+                  <Lock size={12} /> Read-only
                 </span>
               )}
             </div>
@@ -316,12 +316,12 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         <div className="flex w-full shrink-0 flex-col gap-4 md:w-80">
           <div className="border border-border rounded-2xl overflow-hidden">
             <div className="p-4 border-b border-subtle bg-surface-muted/50 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-foreground">Transaktion & Meta</h3>
+              <h3 className="text-sm font-semibold text-foreground">Transaktion & Meta</h3>
             </div>
             <div className="p-4 space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1" htmlFor="bookingeditor-belegdatum">
+                  <label className="block mb-1 text-label text-foreground" htmlFor="bookingeditor-belegdatum">
                     Belegdatum
                   </label>
                   <input id="bookingeditor-belegdatum"
@@ -329,11 +329,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                     value={draft.documentDate ?? ''}
                     disabled={readOnly}
                     onChange={(e) => patchDraft((prev) => ({ ...prev, documentDate: e.target.value }))}
-                    className="w-full border border-control-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
+                    className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
+                  <label className="block mb-1 text-label text-foreground">
                     Buchungsdatum *
                   </label>
                   <input
@@ -341,13 +341,13 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                     value={draft.postingDate ?? ''}
                     disabled={readOnly}
                     onChange={(e) => patchDraft((prev) => ({ ...prev, postingDate: e.target.value }))}
-                    className="w-full border border-control-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
+                    className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1" htmlFor="bookingeditor-buchungstext">
+                <label className="block mb-1 text-label text-foreground" htmlFor="bookingeditor-buchungstext">
                   Buchungstext *
                 </label>
                 <input id="bookingeditor-buchungstext"
@@ -355,12 +355,12 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                   value={draft.bookingText}
                   disabled={readOnly}
                   onChange={(e) => patchDraft((prev) => ({ ...prev, bookingText: e.target.value }))}
-                  className="w-full border border-control-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
+                  className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
+                <label className="block mb-1 text-label text-foreground">
                   Referenz / Belegnummer
                 </label>
                 <input
@@ -368,18 +368,18 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                   value={draft.externalReference ?? ''}
                   disabled={readOnly}
                   onChange={(e) => patchDraft((prev) => ({ ...prev, externalReference: e.target.value }))}
-                  className="w-full border border-control-border rounded-xl px-3 py-2 text-sm disabled:bg-surface-muted"
+                  className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div className="rounded-xl border border-border p-3">
-                  <div className="text-xs font-bold uppercase tracking-wide text-muted">Mandant/Framework</div>
-                  <div className="font-bold text-foreground mt-1">{draft.chartFramework} (Default)</div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted">Kontenrahmen</div>
+                  <div className="font-semibold text-foreground mt-1">{draft.chartFramework} (Default)</div>
                 </div>
                 <div className="rounded-xl border border-border p-3">
-                  <div className="text-xs font-bold uppercase tracking-wide text-muted">Belegstatus</div>
-                  <div className={`font-bold mt-1 ${transaction.hasReceipt ? 'text-success-text' : 'text-warning-text'}`}>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted">Belegstatus</div>
+                  <div className={`font-semibold mt-1 ${transaction.hasReceipt ? 'text-success-text' : 'text-warning-text'}`}>
                     {transaction.hasReceipt ? 'Beleg vorhanden' : 'Beleg fehlt'}
                   </div>
                 </div>
@@ -392,23 +392,24 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
           <ValidationSummary issues={validationIssues} />
 
-          {/* Kartenrumpf: Kopfleiste, Fußleiste und mindestens eine Buchungszeile bleiben immer sichtbar, der Rest scrollt. */}
-          <div className="border border-border rounded-xl overflow-hidden flex-1 flex flex-col min-h-[11.25rem]">
+          {/* Kartenrumpf: Kopfleiste, Fußleiste und mindestens eine Buchungszeile bleiben immer sichtbar, der Rest scrollt.
+              min-h-26 = Spaltenkopf (41px) + eine Zeile (57px); min-h-55 = das plus Kopf- und Fußleiste. */}
+          <div className="border border-border rounded-xl overflow-hidden flex-1 flex flex-col min-h-55">
             <div className="p-4 border-b border-border bg-surface-muted flex items-center justify-between shrink-0">
-              <h3 className="text-sm font-bold text-foreground">Buchungssatz</h3>
+              <h3 className="text-sm font-semibold text-foreground">Buchungssatz</h3>
               <div className="text-xs text-muted font-medium">
                 {draft.lines.length} Zeilen • {blocking ? 'Blocker vorhanden' : 'Prüfbar'}
               </div>
             </div>
 
-            <div className="overflow-auto flex-1 min-h-16">
-              <div className="grid grid-cols-12 gap-3 px-4 py-3 text-xs font-bold uppercase tracking-wide text-muted border-b border-subtle">
+            <div className="overflow-auto flex-1 min-h-26">
+              <div className="sticky top-0 z-10 grid grid-cols-12 gap-3 bg-surface px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted border-b border-subtle">
                 <div className="col-span-1">S/H</div>
                 <div className="col-span-4">Konto</div>
                 <div className="col-span-2">KSt.</div>
                 <div className="col-span-2">Steuerfall</div>
                 <div className="col-span-2 text-right">Betrag</div>
-                <div className="col-span-1 text-right">-</div>
+                <div className="col-span-1 text-right"><span className="sr-only">Zeile entfernen</span></div>
               </div>
 
               <div className="divide-y divide-border-subtle">
@@ -423,10 +424,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                             value={line.type}
                             disabled={readOnly}
                             onChange={(e) => updateLine(line.id, (current) => ({ ...current, type: e.target.value as 'Soll' | 'Haben' }))}
-                            className="w-full border border-control-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                            aria-label="Soll oder Haben"
+                            className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                           >
-                            <option value="Soll">Soll</option>
-                            <option value="Haben">Haben</option>
+                            <option value="Soll">S</option>
+                            <option value="Haben">H</option>
                           </select>
                         </div>
 
@@ -463,7 +465,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                             value={line.costCenter ?? ''}
                             disabled={readOnly}
                             onChange={(e) => updateLine(line.id, (current) => ({ ...current, costCenter: e.target.value }))}
-                            className="w-full border border-control-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                            className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                             placeholder="-"
                           />
                         </div>
@@ -488,7 +490,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 };
                               })
                             }
-                            className="w-full border border-control-border rounded-xl px-2 py-2 text-sm disabled:bg-surface-muted"
+                            className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                           >
                             <option value="">Keine</option>
                             {TAX_CASE_OPTIONS.map((option) => (
@@ -513,7 +515,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                             onChange={(e) =>
                               updateLine(line.id, (current) => ({ ...current, amount: parseAmountInput(e.target.value) }))
                             }
-                            className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums text-right disabled:bg-surface-muted"
+                            className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums text-right disabled:bg-surface-muted"
                           />
                         </div>
 
@@ -532,7 +534,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                       {selectedTaxCase && (
                         <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
                           <div>
-                            <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
+                            <label className="block mb-1 text-label text-foreground">
                               Steuersatz %
                             </label>
                             <input
@@ -547,11 +549,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                   taxRate: e.target.value === '' ? undefined : Number(parseAmountInput(e.target.value)),
                                 }))
                               }
-                              className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums disabled:bg-surface-muted"
+                              className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
-                            <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
+                            <label className="block mb-1 text-label text-foreground">
                               Land
                             </label>
                             <input
@@ -565,11 +567,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 }))
                               }
                               placeholder={selectedTaxCase.requiresCountry ? 'Pflicht (z.B. FR)' : 'Optional'}
-                              className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums disabled:bg-surface-muted"
+                              className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
-                            <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
+                            <label className="block mb-1 text-label text-foreground">
                               USt-IdNr.
                             </label>
                             <input
@@ -583,11 +585,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 }))
                               }
                               placeholder={selectedTaxCase.requiresCounterpartyVatId ? 'Pflicht' : 'Optional'}
-                              className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums disabled:bg-surface-muted"
+                              className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
-                            <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
+                            <label className="block mb-1 text-label text-foreground">
                               Nachweisart
                             </label>
                             <input
@@ -596,11 +598,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                               disabled={readOnly}
                               onChange={(e) => updateLine(line.id, (current) => ({ ...current, evidenceType: e.target.value }))}
                               placeholder={selectedTaxCase.requiresEvidence ? 'Pflicht' : 'Optional'}
-                              className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums disabled:bg-surface-muted"
+                              className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
-                            <label className="block text-xs font-bold uppercase tracking-wide text-muted mb-1">
+                            <label className="block mb-1 text-label text-foreground">
                               Nachweis-Referenz
                             </label>
                             <input
@@ -611,7 +613,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 updateLine(line.id, (current) => ({ ...current, evidenceReference: e.target.value }))
                               }
                               placeholder={selectedTaxCase.requiresEvidence ? 'Pflicht' : 'Optional'}
-                              className="w-full border border-control-border rounded-xl px-2 py-2 text-sm tabular-nums disabled:bg-surface-muted"
+                              className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                         </div>
@@ -626,18 +628,18 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
               <button
                 onClick={addLine}
                 disabled={readOnly}
-                className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted disabled:opacity-50 inline-flex items-center gap-1"
+                className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted disabled:opacity-50 inline-flex items-center gap-1"
               >
-                <Plus size={15} />
+                <Plus size={16} />
                 Zeile hinzufügen
               </button>
               {!readOnly && (
                 <button
                   onClick={() => void handleWorkflowAction('save_draft')}
                   disabled={busy}
-                  className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-bold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
+                  className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
                 >
-                  <Save size={15} />
+                  <Save size={16} />
                   Speichern
                 </button>
               )}
@@ -649,17 +651,17 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex gap-8">
                   <div>
-                    <div className="text-xs uppercase tracking-wider text-dark-muted font-bold">Soll</div>
-                    <div className="text-xl font-bold tabular-nums">{formatCurrency(totalSoll, transaction.currency)}</div>
+                    <div className="text-xs uppercase tracking-wider text-dark-muted font-semibold">Soll</div>
+                    <div className="text-xl font-semibold tabular-nums">{formatCurrency(totalSoll, transaction.currency)}</div>
                   </div>
                   <div>
-                    <div className="text-xs uppercase tracking-wider text-dark-muted font-bold">Haben</div>
-                    <div className="text-xl font-bold tabular-nums">{formatCurrency(totalHaben, transaction.currency)}</div>
+                    <div className="text-xs uppercase tracking-wider text-dark-muted font-semibold">Haben</div>
+                    <div className="text-xl font-semibold tabular-nums">{formatCurrency(totalHaben, transaction.currency)}</div>
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-xs uppercase tracking-wider text-dark-muted font-bold">Differenz</div>
-                  <div className={`text-2xl font-bold tabular-nums ${difference < 0.01 ? 'text-background' : 'text-background underline decoration-accent decoration-4 underline-offset-4'}`}>
+                  <div className="text-xs uppercase tracking-wider text-dark-muted font-semibold">Differenz</div>
+                  <div className={`text-2xl font-semibold tabular-nums ${difference < 0.01 ? 'text-background' : 'text-background underline decoration-accent decoration-4 underline-offset-4'}`}>
                     {formatCurrency(difference, transaction.currency)}
                   </div>
                 </div>
@@ -679,8 +681,8 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         className="max-w-lg rounded-2xl border border-border p-6"
       >
         <div className="flex items-center justify-between mb-4">
-          <h3 id="shortcut-help-title" className="text-base font-bold text-foreground">Tastenkürzel</h3>
-          <button ref={shortcutCloseRef} aria-label="Schließen (Tastenkürzel-Hilfe)" onClick={() => setShowShortcutHelp(false)} className="text-sm font-bold text-muted">
+          <h3 id="shortcut-help-title" className="text-base font-semibold text-foreground">Tastenkürzel</h3>
+          <button ref={shortcutCloseRef} aria-label="Schließen (Tastenkürzel-Hilfe)" onClick={() => setShowShortcutHelp(false)} className="text-sm font-semibold text-muted">
             Schließen
           </button>
         </div>
@@ -710,18 +712,18 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
           <div className="space-y-2" aria-label="Buchung, die storniert wird">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <div className="text-xs font-bold uppercase tracking-wide text-muted">Betrag</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted">Betrag</div>
                 <div className="font-semibold tabular-nums text-foreground">{formatCurrency(transaction.amount, transaction.currency)}</div>
               </div>
               <div>
-                <div className="text-xs font-bold uppercase tracking-wide text-muted">Soll / Haben</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted">Soll / Haben</div>
                 <div className="font-semibold tabular-nums text-foreground">
                   {formatCurrency(totalSoll, transaction.currency)} / {formatCurrency(totalHaben, transaction.currency)}
                 </div>
               </div>
             </div>
             <div>
-              <div className="text-xs font-bold uppercase tracking-wide text-muted">Konten und Seiten</div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted">Konten und Seiten</div>
               <ul className="mt-1 space-y-1 text-sm text-foreground">
                 {draft.lines.map((line) => (
                   <li key={line.id} className="flex items-center justify-between gap-3">

@@ -70,7 +70,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
         </p>
       ) : null}
       <div className="flex flex-wrap items-end gap-3">
-        <label className="text-xs font-bold text-muted">
+        <label className="text-xs font-semibold text-muted">
           Zeitraum
           <select
             aria-label="Zeitraum"
@@ -78,14 +78,14 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             onChange={(event) => setPreset(event.target.value as ReportFilterState['periodPreset'])}
             disabled={lockNativeEurPeriod}
             aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="mt-0.5 h-8 w-full rounded-lg border border-control-border px-2 text-sm"
+            className="px-3 hover:border-ink-500 mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
           >
             <option value="current">Aktuelle Periode</option>
             <option value="ytd">Jahr bis heute</option>
             <option value="prev_year">Vorjahr</option>
           </select>
         </label>
-        <label className="text-xs font-bold text-muted">
+        <label className="text-xs font-semibold text-muted">
           Stichtag
           <input
             type="date"
@@ -93,11 +93,11 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             onChange={(e) => setAsOfDate(e.target.value)}
             disabled={lockNativeEurPeriod}
             aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="mt-0.5 h-8 w-full rounded-lg border border-control-border px-2 text-sm"
+            className="px-3 hover:border-ink-500 mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
           />
         </label>
 
-        <label className="text-xs font-bold text-muted">
+        <label className="text-xs font-semibold text-muted">
           Periode von
           <input
             type="month"
@@ -105,11 +105,11 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             onChange={(e) => onChange({ ...filters, periodFrom: e.target.value, periodFromDate: undefined, periodPreset: undefined })}
             disabled={lockNativeEurPeriod}
             aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="mt-0.5 h-8 w-full rounded-lg border border-control-border px-2 text-sm"
+            className="px-3 hover:border-ink-500 mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
           />
         </label>
 
-        <label className="text-xs font-bold text-muted">
+        <label className="text-xs font-semibold text-muted">
           Periode bis
           <input
             type="month"
@@ -117,7 +117,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             onChange={(e) => onChange({ ...filters, periodTo: e.target.value, periodToDate: undefined, periodPreset: undefined })}
             disabled={lockNativeEurPeriod}
             aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="mt-0.5 h-8 w-full rounded-lg border border-control-border px-2 text-sm"
+            className="px-3 hover:border-ink-500 mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
           />
         </label>
 
@@ -130,7 +130,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             onClick={() =>
               lockNativeEurPeriod ? forceNativeEurPeriod() : onChange(defaultReportFilters(filters.chart, filters.businessReportingProfile))
             }
-            className="h-7 px-2.5 rounded-lg border border-control-border text-xs font-bold text-muted hover:bg-surface-muted inline-flex items-center gap-1 transition-colors"
+            className="h-7 px-2.5 rounded-lg border border-control-border text-xs font-semibold text-muted hover:bg-surface-muted inline-flex items-center gap-1 transition-colors"
           >
             <RotateCcw size={12} />
             Reset
@@ -138,10 +138,10 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
           {onExport && activeTab ? (
             <>
               <Button type="button" size="sm" variant="secondary" onClick={() => onExport('pdf')} disabled={exporting || Boolean(exportBlockedReason)}>
-                <FileText size={13} aria-hidden="true" /> PDF
+                <FileText size={14} aria-hidden="true" /> PDF
               </Button>
               <Button type="button" size="sm" variant="secondary" onClick={() => onExport('csv')} disabled={exporting || Boolean(exportBlockedReason)}>
-                <FileDown size={13} aria-hidden="true" /> CSV
+                <FileDown size={14} aria-hidden="true" /> CSV
               </Button>
             </>
           ) : null}

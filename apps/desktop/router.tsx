@@ -39,6 +39,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { Button, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
 import { shouldShowBusinessOnboarding } from '@billme/desktop-ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import { useCreateIntent } from '@billme/desktop-renderer/hooks/useCreateIntent';
 
 const RootLayout: React.FC = () => {
   const navigate = useNavigate();
@@ -91,7 +92,7 @@ const RootLayout: React.FC = () => {
           }}
         />
       )}
-      {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
+      <ShortcutsModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </>
   );
 };
@@ -205,6 +206,9 @@ const DocumentsPage: React.FC = () => {
       }
     })();
   };
+
+  // The command palette links to /documents?create=invoice|offer; wait for settings, which pricing needs.
+  useCreateIntent('/documents', ['invoice', 'offer'] as const, handleCreateDocument, Boolean(settings));
 
   return (
     <DocumentsView
@@ -344,7 +348,7 @@ const DocumentEditorPage: React.FC = () => {
                 key={chip}
                 type="button"
                 onClick={() => setReason(chip)}
-                className={`rounded-full border px-3 py-1.5 text-xs font-bold transition-colors ${reason === chip ? 'border-dark-base bg-dark-base text-background' : 'border-border bg-surface-muted text-muted hover:bg-surface'}`}
+                className={`rounded-control border px-3 py-1.5 text-xs font-semibold transition-colors ${reason === chip ? 'border-dark-base bg-dark-base text-background' : 'border-border bg-surface-muted text-muted hover:bg-surface'}`}
               >
                 {chip}
               </button>

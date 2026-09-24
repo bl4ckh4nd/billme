@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '../utils/cn';
+import { popoverExitClass, useExitTransition } from '../utils/useExitTransition';
 import { Portal } from './Portal';
 
 export interface DatePickerProps {
@@ -86,7 +87,8 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     return { year: base.getFullYear(), month: base.getMonth() };
   });
   const [focusedDate, setFocusedDate] = useState<string | null>(null);
-  const [popupPosition, setPopupPosition] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [popupPosition, setPopupPosition] = useState<{ top: number; left: number; width: number; above: boolean } | null>(null);
+  const { mounted: popupMounted, closing: popupClosing } = useExitTransition(open);
 
   const isDateUnavailable = (iso: string): boolean => Boolean(
     (min && iso < min) ||
@@ -133,11 +135,13 @@ export const DatePicker: React.FC<DatePickerProps> = ({
     document.getElementById(`${calendarId}-day-${focusedDate}`)?.focus();
   }, [calendarId, focusedDate, open, popupPosition]);
 
+  // The last position survives the exit transition; it resets once the popup unmounts.
   useEffect(() => {
-    if (!open) {
-      setPopupPosition(null);
-      return;
-    }
+    if (!popupMounted) setPopupPosition(null);
+  }, [popupMounted]);
+
+  useEffect(() => {
+    if (!open) return;
 
     const updatePosition = () => {
       const anchor = triggerRef.current?.getBoundingClientRect();
@@ -160,7 +164,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
         ? Math.max(8, anchor.top - Math.min(estimatedHeight, spaceAbove))
         : Math.min(anchor.bottom + 6, Math.max(8, window.innerHeight - 8));
 
-      setPopupPosition({ top, left, width });
+      setPopupPosition({ top, left, width, above: opensAbove });
     };
 
     updatePosition();
@@ -337,7 +341,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
         <Calendar size={14} strokeWidth={1.5} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
       </div>
 
-      {open && popupPosition ? (
+      {popupMounted && popupPosition ? (
         <Portal>
           <div
             ref={popupRef}
@@ -350,8 +354,16 @@ export const DatePicker: React.FC<DatePickerProps> = ({
                 closeCalendar(true);
               }
             }}
-            className="ui-enter-popover fixed z-[var(--z-dropdown)] select-none rounded-2xl border border-border bg-surface p-3 shadow-xl"
-            style={{ top: popupPosition.top, left: popupPosition.left, width: popupPosition.width }}
+            className={cn(
+              'ui-enter-popover fixed z-[var(--z-dropdown)] select-none rounded-panel bg-surface p-3 shadow-md',
+              popupClosing && popoverExitClass,
+            )}
+            style={{
+              top: popupPosition.top,
+              left: popupPosition.left,
+              width: popupPosition.width,
+              '--origin': popupPosition.above ? 'bottom left' : 'top left',
+            } as React.CSSProperties}
           >
             <div className="mb-2.5 flex items-center justify-between">
               <button
@@ -362,7 +374,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               >
                 <ChevronLeft size={14} strokeWidth={1.5} aria-hidden="true" />
               </button>
-              <span id={titleId} className="text-xs font-bold text-foreground">
+              <span id={titleId} className="text-xs font-semibold text-foreground">
                 {MONTHS_DE[view.month]} {view.year}
               </span>
               <button
@@ -378,7 +390,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
             <div role="grid" aria-label={`Kalender ${MONTHS_DE[view.month]} ${view.year}`}>
               <div role="row" className="mb-1 grid grid-cols-7">
                 {DAYS_DE.map((day) => (
-                  <div key={day} role="columnheader" className="py-0.5 text-center text-xs font-bold text-muted">
+                  <div key={day} role="columnheader" className="py-0.5 text-center text-xs font-semibold text-muted">
                     {day}
                   </div>
                 ))}
@@ -410,9 +422,9 @@ export const DatePicker: React.FC<DatePickerProps> = ({
                           disabled
                             ? 'cursor-not-allowed bg-disabled-surface text-disabled-foreground'
                             : selected
-                            ? cn('bg-accent font-bold text-accent-foreground', today && 'ring-2 ring-foreground')
+                            ? cn('bg-accent font-semibold text-accent-foreground', today && 'ring-2 ring-foreground')
                             : today
-                            ? 'bg-surface-muted font-bold text-foreground ring-1 ring-foreground'
+                            ? 'bg-surface-muted font-semibold text-foreground ring-1 ring-foreground'
                             : 'text-foreground hover:bg-surface-muted',
                         )}
                       >

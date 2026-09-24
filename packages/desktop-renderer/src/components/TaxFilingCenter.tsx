@@ -59,7 +59,7 @@ export const TaxFilingCenter: React.FC = () => {
 
   if (isLoading) {
     return <Card className="max-w-3xl space-y-4">
-      <div><h1 className="text-2xl font-semibold">Steuer-Filing-Center</h1><p className="text-muted">Nur eingefrorene Steuerberichte können lokal validiert oder exportiert werden.</p></div>
+      <div><h1 className="text-title">Steuer-Filing-Center</h1><p className="text-muted">Nur eingefrorene Steuerberichte können lokal validiert oder exportiert werden.</p></div>
       <div className="flex flex-col items-center justify-center gap-3 py-10 text-muted">
         <Spinner size="md" />
         <p role="status" className="text-sm font-medium">Filing-Status wird geladen …</p>
@@ -69,16 +69,16 @@ export const TaxFilingCenter: React.FC = () => {
 
   if (loadError) {
     return <Card className="max-w-3xl space-y-4">
-      <div><h1 className="text-2xl font-semibold">Steuer-Filing-Center</h1><p className="text-muted">Nur eingefrorene Steuerberichte können lokal validiert oder exportiert werden.</p></div>
+      <div><h1 className="text-title">Steuer-Filing-Center</h1><p className="text-muted">Nur eingefrorene Steuerberichte können lokal validiert oder exportiert werden.</p></div>
       <ErrorState title="Filing-Status konnte nicht geladen werden" description={loadError} onRetry={() => void refresh()} />
     </Card>;
   }
 
   return <Card className="max-w-3xl space-y-4">
-    <div><h1 className="text-2xl font-semibold">Steuer-Filing-Center</h1><p className="text-muted">Nur eingefrorene Steuerberichte können lokal validiert oder exportiert werden.</p></div>
+    <div><h1 className="text-title">Steuer-Filing-Center</h1><p className="text-muted">Nur eingefrorene Steuerberichte können lokal validiert oder exportiert werden.</p></div>
     <p role="status">Provider: <span className="font-medium">{provider}</span></p>
     <div><h2 className="font-medium">Zertifikate</h2>{certificates.length ? <ul>{certificates.map((certificate) => <li key={certificate.id}>{certificate.id} · {certificate.fingerprint} · gültig bis {certificate.expiresAt}</li>)}</ul> : <p className="text-muted">Keine Zertifikate registriert. Geheimnisse bleiben im Hauptprozess.</p>}</div>
-    {records.length ? <div className="space-y-2"><label className="block font-medium" htmlFor="tax-filing-record">Eingefrorener Bericht</label><select id="tax-filing-record" className="w-full rounded-md border border-control-border bg-surface p-2" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>{records.map((record) => <option key={record.id} value={record.id}>{kindLabel[record.kind]} · {record.periodStart} – {record.periodEnd} · {record.status}</option>)}</select><p className="text-xs text-muted">Snapshot: {selected?.sourceHash}</p><div className="flex gap-2"><Button type="button" disabled={busy || !selected} onClick={() => void run('validate')}>Validieren</Button><Button type="button" disabled={busy || !selected} onClick={() => void run('export')}>Exportieren</Button></div></div> : <EmptyState title="Keine eingefrorenen Berichte" description="Sobald ein Steuerbericht eingefroren ist, erscheint er hier zur Validierung und zum Export." />}
+    {records.length ? <div className="space-y-2"><label className="block font-medium" htmlFor="tax-filing-record">Eingefrorener Bericht</label><select id="tax-filing-record" className="px-2.5 h-8 hover:border-ink-500 text-sm w-full rounded-control border border-control-border bg-surface" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>{records.map((record) => <option key={record.id} value={record.id}>{kindLabel[record.kind]} · {record.periodStart} – {record.periodEnd} · {record.status}</option>)}</select><p className="text-xs text-muted">Snapshot: {selected?.sourceHash}</p><div className="flex gap-2"><Button type="button" disabled={busy || !selected} onClick={() => void run('validate')}>Validieren</Button><Button type="button" disabled={busy || !selected} onClick={() => void run('export')}>Exportieren</Button></div></div> : <EmptyState title="Keine eingefrorenen Berichte" description="Sobald ein Steuerbericht eingefroren ist, erscheint er hier zur Validierung und zum Export." />}
     <div className="rounded-md border border-border p-3"><h2 className="font-medium">Übermittlung</h2><p className="text-muted">Deaktiviert: Ein serverseitiger Vier-Augen-Grant ist in dieser Desktop-Installation nicht verfügbar. Es wird keine lokale Übermittlung simuliert.</p><Button type="button" disabled>Übermitteln (Server-Freigabe erforderlich)</Button></div>
     {message && <p role="alert">{message}</p>}
   </Card>;

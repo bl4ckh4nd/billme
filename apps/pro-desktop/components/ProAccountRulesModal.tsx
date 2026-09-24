@@ -146,7 +146,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
     >
       <div className="flex items-center justify-between border-b border-border p-6">
         <div>
-          <h2 id={titleId} className="text-lg font-bold text-foreground">Kontierungsvorschlag-Regeln</h2>
+          <h2 id={titleId} className="text-lg font-semibold text-foreground">Kontierungsvorschlag-Regeln</h2>
           <p id={descriptionId} className="text-xs text-muted">Regeln für {chartFramework}</p>
         </div>
         <button
@@ -162,7 +162,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
       <div className="flex-1 overflow-auto p-6">
         {isAdding ? (
           <div className="rounded-xl border border-border bg-surface-muted p-4 mb-4">
-            <h3 className="mb-3 text-sm font-bold text-foreground">{editId ? 'Regel bearbeiten' : 'Neue Regel'}</h3>
+            <h3 className="mb-3 text-sm font-semibold text-foreground">{editId ? 'Regel bearbeiten' : 'Neue Regel'}</h3>
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
                 <label htmlFor="rule-field" className="block text-xs font-semibold text-foreground mb-1">Feld</label>
@@ -170,7 +170,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   id="rule-field"
                   value={field}
                   onChange={(e) => setField(e.target.value as RuleField)}
-                  className="w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {(Object.entries(FIELD_LABELS) as [RuleField, string][]).map(([k, v]) => (
                     <option key={k} value={k}>{v}</option>
@@ -183,7 +183,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   id="rule-operator"
                   value={operator}
                   onChange={(e) => setOperator(e.target.value as RuleOperator)}
-                  className="w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {(Object.entries(OPERATOR_LABELS) as [RuleOperator, string][]).map(([k, v]) => (
                     <option key={k} value={k}>{v}</option>
@@ -199,7 +199,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
                 placeholder="z.B. telefon, telekom, aws"
-                className="w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </div>
 
@@ -210,7 +210,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   id="rule-target"
                   value={targetAccountNumber}
                   onChange={(e) => setTargetAccountNumber(e.target.value)}
-                  className="w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">Bitte wählen ...</option>
                   {accounts.map((acc) => (
@@ -231,7 +231,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   id="rule-flow"
                   value={flowType}
                   onChange={(e) => setFlowType(e.target.value as RuleFlow)}
-                  className="w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {(Object.entries(FLOW_LABELS) as [RuleFlow, string][]).map(([k, v]) => (
                     <option key={k} value={k}>{v}</option>
@@ -246,7 +246,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   min={0}
                   value={priority}
                   onChange={(e) => setPriority(Number(e.target.value))}
-                  className="w-full rounded-xl border border-control-border bg-surface px-3 py-2 text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
             </div>

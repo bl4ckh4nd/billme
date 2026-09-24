@@ -97,7 +97,7 @@ export const runLiteRegressionScenario = async (page, scenarioKey = 'regressions
 
   await applyLiteSession(page, runtime.state, session, '/');
 
-  await page.getByLabel('Globale Suche').fill(seed.clients[0].customerNumber);
+  await page.getByLabel('Suche und Befehle').fill(seed.clients[0].customerNumber);
   const clientSearchResult = page
     .locator('button')
     .filter({ hasText: seed.clients[0].company })
@@ -294,8 +294,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
   expect(createdOffer.number.startsWith(seed.settings.numbers.offerPrefix)).toBe(true);
 
   await page.goto(liteAppUrl(runtime.state, '/documents'), { waitUntil: 'networkidle' });
-  await page.getByRole('button', { name: 'Rechnungen' }).click();
-  await page.getByRole('button', { name: 'Angebote' }).click();
+  await page.getByRole('radio', { name: 'Angebote' }).click();
   await expect(page.getByText(createdOffer.number)).toBeVisible();
   await page.getByText(createdOffer.number).first().click();
   await expect(page.getByRole('heading', { name: createdOffer.number })).toBeVisible();

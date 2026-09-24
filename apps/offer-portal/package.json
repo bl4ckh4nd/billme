@@ -8,7 +8,7 @@
     "dev": "tsx watch src/node.ts",
     "start": "node dist/node.js",
     "build": "tsc -p tsconfig.json",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",

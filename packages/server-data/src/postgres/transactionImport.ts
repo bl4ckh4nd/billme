@@ -332,7 +332,9 @@ export const commitServerTransactionImport = async (
           row.parsed.type,
           row.parsed.counterparty ?? '',
           row.parsed.purpose ?? '',
-          row.parsed.status ?? 'booked',
+          // Accounting workflow status: a freshly imported bank line is never in the
+          // ledger yet, whatever the bank reported ("gebucht" = settled at the bank).
+          'pending',
           transactionId,
           bankTransactionTimestamp,
         ],

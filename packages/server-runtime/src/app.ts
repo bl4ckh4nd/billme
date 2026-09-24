@@ -26,6 +26,7 @@ import {
   offerSchema,
   recurringProfileSchema,
   releaseDocumentNumber,
+  settleInvoiceStatusFromPayments,
   reserveDocumentNumber,
   serverProductSchema,
   supportedServerProducts,
@@ -89,7 +90,7 @@ import { registerProAccountingRoutes, type ProAccountingRouteOptions } from './p
 import { registerTaxFilingRoutes } from './taxFilingRoutes.js';
 import { registerLiteEurRoutes } from './liteEurRoutes.js';
 import { registerTransactionRoutes } from './transactionRoutes.js';
-import { registerAutomationRoutes } from './automationRoutes.js';
+import { registerAutomationRoutes, type RegisterAutomationRoutesOptions } from './automationRoutes.js';
 import { registerAuditRoutes } from './auditRoutes.js';
 import { registerEurRuleRoutes } from './eurRuleRoutes.js';
 import {
@@ -121,6 +122,7 @@ export interface BuildServerApiOptions {
   readonly sessionSecret?: string;
   readonly localAuth?: EmbeddedLocalAuthOptions;
   readonly openRouterVlmService?: ProAccountingRouteOptions['openRouterVlmService'];
+  readonly desktopIntegration?: RegisterAutomationRoutesOptions['desktopIntegration'];
 }
 
 const runtimeCapabilitiesResponseSchema = capabilitiesResponseSchema.extend({
@@ -352,10 +354,18 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     async handler({ request, body }) {
       const session = await requireSession(app, product, request.headers.authorization);
       const pool = requireDatabase(app);
+      // New clients without a manual number draw the next one from the customer
+      // number range configured under Einstellungen → Nummernkreise.
+      const needsNumber = !body.client.customerNumber?.trim()
+        && !(await createPostgresBillingDependencies(pool).clientRepo.getById(session.scope, body.client.id));
+      const reservation = needsNumber ? await reserveNumberForScope(pool, session.scope, 'customer') : null;
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
-      return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
+      let saved: z.output<typeof clientSchema>;
+      try {
+        saved = await unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
         const nextClient = clientSchema.parse({
           ...body.client,
+          ...(reservation ? { customerNumber: reservation.number } : {}),
           tenantId: session.scope.tenantId,
         });
         const before = await repositories.clientRepo.getById(session.scope, nextClient.id);
@@ -374,7 +384,13 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
           ),
         );
         return saved;
-      });
+        });
+      } catch (error) {
+        if (reservation) await releaseNumberForScope(pool, session.scope, reservation.reservationId).catch(() => undefined);
+        throw error;
+      }
+      if (reservation) await finalizeNumberForScope(pool, session.scope, reservation.reservationId, saved.id);
+      return saved;
     },
   });
 
@@ -443,10 +459,10 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
       const database = requireDatabase(app);
       const saved = await database.transaction({}, async (transaction) => {
         const repositories = createPostgresBillingDependencies(transaction);
-        const nextInvoice = invoiceSchema.parse({
+        const nextInvoice = settleInvoiceStatusFromPayments(invoiceSchema.parse({
           ...body.invoice,
           tenantId: session.scope.tenantId,
-        });
+        }));
         const before = await repositories.invoiceRepo.getById(session.scope, nextInvoice.id);
         const after = await repositories.invoiceRepo.save(session.scope, nextInvoice);
         await repositories.auditLog.append(
@@ -1619,10 +1635,12 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerAutomationRoutes(app, 'lite', '/api/v1/lite', {
       requireSession,
       requireDatabase,
+      desktopIntegration: options.desktopIntegration,
     });
     registerAutomationRoutes(app, 'pro', '/api/v1/pro', {
       requireSession,
       requireDatabase,
+      desktopIntegration: options.desktopIntegration,
     });
   } else {
     registerBillingRoutes(app, product, `/api/v1/${product}`);
@@ -1643,6 +1661,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerAutomationRoutes(app, product, `/api/v1/${product}`, {
       requireSession,
       requireDatabase,
+      desktopIntegration: options.desktopIntegration,
     });
   }
 

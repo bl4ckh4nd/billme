@@ -178,6 +178,22 @@ const mergeOfferShare = (offer: Offer, existing: Offer | null): Offer => {
   };
 };
 
+/**
+ * Keeps the invoice status in step with its recorded payments: fully paid
+ * open/overdue invoices become paid, and a paid invoice whose payments no
+ * longer cover the total reopens. Invoices without payment records keep
+ * whatever status the user set.
+ */
+export const settleInvoiceStatusFromPayments = <T extends Pick<Invoice, 'status' | 'amount' | 'payments'>>(invoice: T): T => {
+  const payments = invoice.payments ?? [];
+  if (payments.length === 0) return invoice;
+  const paid = payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+  const covered = Math.round(paid * 100) >= Math.round(Number(invoice.amount) * 100);
+  if (covered && (invoice.status === 'open' || invoice.status === 'overdue')) return { ...invoice, status: 'paid' };
+  if (!covered && invoice.status === 'paid') return { ...invoice, status: 'open' };
+  return invoice;
+};
+
 export const listInvoices = (scope: TenantScope, dependencies: InvoiceDomainDependencies): Invoice[] => {
   return dependencies.invoiceRepo.list(scope).map((invoice) => withInvoiceHistory(scope, dependencies, invoice));
 };

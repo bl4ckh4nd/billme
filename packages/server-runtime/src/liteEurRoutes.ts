@@ -31,7 +31,7 @@ export const liteEurAnnexFactBodySchema = z.object({ taxYear: z.union([z.literal
 
 const mapEurError = (error: unknown): never => {
   if (!(error instanceof Error)) throw error;
-  if (error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(503, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
+  if (error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(409, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
   if (error.message === 'EUR_RANGE_2025_REQUIRED' || error.message === 'EUR_RANGE_2026_REQUIRED') throw new ApiError(400, 'EÜR verwendet ausschließlich vollständige Kalenderjahre.');
   if (error.message === 'EUR_SERVER_REPORT_UNAVAILABLE') throw new ApiError(503, 'Native EÜR-Daten sind derzeit nicht verfügbar.');
   if (error.message === 'EUR_SOURCE_NOT_FOUND') throw new ApiError(400, 'Die EÜR-Cash-Quelle ist im gewählten Kalenderzeitraum nicht vorhanden.');

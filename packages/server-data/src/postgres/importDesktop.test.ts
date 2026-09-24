@@ -342,17 +342,17 @@ test('tenant-scoped postgres tables stay covered by import overwrite guards', as
 test('Drizzle migration journal contains incremental migrations', async () => {
   const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ idx: number; tag: string }> };
   assert.deepEqual(journal.entries.slice(-7), [
-    { idx: 22, version: '7', when: 1786538400010, tag: '0022_server_data_accounting_source_runs', breakpoints: false },
     { idx: 23, version: '7', when: 1786538400011, tag: '0023_server_data_import_source_run_rejected', breakpoints: false },
     { idx: 24, version: '7', when: 1786538400012, tag: '0024_server_data_portal_publications', breakpoints: false },
     { idx: 25, version: '7', when: 1788528600000, tag: '0025_server_data_incoming_invoice_documents', breakpoints: false },
     { idx: 26, version: '7', when: 1788528600001, tag: '0026_server_data_invoice_document_chain', breakpoints: false },
     { idx: 27, version: '7', when: 1788528600002, tag: '0027_server_data_account_skr_optional', breakpoints: false },
     { idx: 28, version: '7', when: 1788528600003, tag: '0028_server_data_document_issuance_receipts', breakpoints: false },
+    { idx: 29, version: '7', when: 1788528600004, tag: '0029_server_data_core_ledger_accounts', breakpoints: false },
   ]);
   assert.deepEqual(journal.entries.map((entry) => entry.tag), [
     '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
-    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog', '0018_server_data_canonical_catalog', '0019_server_data_audit_tenant_hash', '0021_server_data_eur_facts', '0022_server_data_accounting_source_runs', '0023_server_data_import_source_run_rejected', '0024_server_data_portal_publications', '0025_server_data_incoming_invoice_documents', '0026_server_data_invoice_document_chain', '0027_server_data_account_skr_optional', '0028_server_data_document_issuance_receipts',
+    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog', '0018_server_data_canonical_catalog', '0019_server_data_audit_tenant_hash', '0021_server_data_eur_facts', '0022_server_data_accounting_source_runs', '0023_server_data_import_source_run_rejected', '0024_server_data_portal_publications', '0025_server_data_incoming_invoice_documents', '0026_server_data_invoice_document_chain', '0027_server_data_account_skr_optional', '0028_server_data_document_issuance_receipts', '0029_server_data_core_ledger_accounts',
   ]);
 });
 

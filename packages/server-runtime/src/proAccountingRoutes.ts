@@ -395,7 +395,7 @@ const mutationFor = (session: Awaited<ReturnType<typeof requireProSession>>, rea
 
 const mapEurRuntimeError = (error: unknown): never => {
   if (!(error instanceof Error)) throw error;
-  if (error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(503, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
+  if (error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(409, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
   if (error.message === 'EUR_SERVER_REPORT_UNAVAILABLE') throw new ApiError(503, 'Native EÜR-Daten sind derzeit nicht verfügbar.');
   if (/^EUR_RANGE_\d{4}_REQUIRED$/.test(error.message)) throw new ApiError(400, 'EÜR verwendet ausschließlich vollständige Kalenderjahre.');
   if (error.message === 'EUR_SOURCE_NOT_FOUND') throw new ApiError(400, 'Die EÜR-Cash-Quelle ist im gewählten Kalenderzeitraum nicht vorhanden.');
@@ -600,7 +600,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
           : await repositoryFor(app).listEurCashItems(session.scope, query);
         return filterEurListItems(items, query);
       } catch (error) {
-        if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(503, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
+        if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(409, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
         if (error instanceof Error && error.message === 'EUR_RANGE_2025_REQUIRED') throw new ApiError(400, 'EÜR verwendet ausschließlich den Kalenderzeitraum 2025.');
         if (error instanceof Error && error.message === 'EUR_SERVER_REPORT_UNAVAILABLE') throw new ApiError(503, 'Native EÜR-Daten sind derzeit nicht verfügbar.');
         throw error;
@@ -630,7 +630,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
           ? await saveServerEurClassificationFact(requireDatabase(app), session.scope, input)
           : await repositoryFor(app).upsertEurClassification(session.scope, input);
       } catch (error) {
-        if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(503, 'EÜR-Klassifikation ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
+        if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') throw new ApiError(409, 'EÜR-Klassifikation ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
         if (error instanceof Error && error.message === 'EUR_SERVER_REPORT_UNAVAILABLE') throw new ApiError(503, 'Native EÜR-Daten sind derzeit nicht verfügbar.');
         if (error instanceof Error && error.message === 'EUR_SOURCE_NOT_FOUND') throw new ApiError(400, 'Die EÜR-Cash-Quelle ist im Kalenderzeitraum 2025 nicht vorhanden.');
         if (error instanceof Error && error.message === 'EUR_RANGE_2025_REQUIRED') throw new ApiError(400, 'EÜR verwendet ausschließlich den Kalenderzeitraum 2025.');
@@ -858,7 +858,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
           throw new ApiError(503, 'EÜR ist im Server-Modus erst verfügbar, wenn der Katalog und die Kontenklassifikation importiert sind.');
         }
         if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') {
-          throw new ApiError(503, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
+          throw new ApiError(409, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
         }
         if (error instanceof Error && error.message === 'EUR_RANGE_2025_REQUIRED') {
           throw new ApiError(400, 'EÜR unterstützt ausschließlich vollständige Kalenderjahre.');
@@ -884,7 +884,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
           throw new ApiError(503, 'EÜR ist im Server-Modus erst verfügbar, wenn der Katalog und die Kontenklassifikation importiert sind.');
         }
         if (error instanceof Error && error.message === 'EUR_PROFILE_REQUIRED') {
-          throw new ApiError(503, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
+          throw new ApiError(409, 'EÜR ist nur für ein Einzelunternehmen mit Gewinnermittlung EÜR verfügbar.');
         }
         if (error instanceof Error && /^EUR_RANGE_/.test(error.message)) {
           throw new ApiError(400, 'EÜR unterstützt ausschließlich vollständige Kalenderjahre.');

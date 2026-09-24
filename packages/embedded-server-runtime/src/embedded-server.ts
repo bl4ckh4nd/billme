@@ -47,6 +47,7 @@ export interface StartEmbeddedServerOptions {
   readonly identity: EmbeddedLocalIdentity;
   readonly initializeDatabase?: EmbeddedDatabaseInitializer;
   readonly logger?: EmbeddedServerLogger;
+  readonly desktopIntegration?: BuildServerApiOptions['desktopIntegration'];
 }
 
 export interface EmbeddedServerHandle {
@@ -174,6 +175,7 @@ export const startEmbeddedServer = async (
       logger: false,
       sessionSecret,
       localAuth: toLocalAuth(options.identity, accessToken),
+      desktopIntegration: options.desktopIntegration,
     } satisfies BuildServerApiOptions);
 
     await options.initializeDatabase?.(lifecycleDatabase, {

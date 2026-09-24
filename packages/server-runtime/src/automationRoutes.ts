@@ -13,6 +13,7 @@ import {
   summarizeInvoiceDunningStatus,
   type AuditActor,
   type DunningSettings,
+  type EmailOutboxEntry,
   type Invoice,
   type Offer,
   type TenantScope,
@@ -23,6 +24,7 @@ import {
   createPostgresBillingDependencies,
   createPostgresBillingUnitOfWork,
   createPostgresDunningHistoryRepository,
+  createPostgresEmailOutboxRepository,
   createPostgresInvoiceRepository,
   createPostgresOfferRepository,
   getPortalPublication,
@@ -272,6 +274,43 @@ const appendAudit = async (
   });
 };
 
+export type EmbeddedSecretKey = 'smtp.password' | 'resend.apiKey' | 'portal.apiKey';
+
+/**
+ * Desktop-only capabilities of the embedded runtime. The hosted server has a
+ * separate worker and env secrets; the desktop has neither, so it delivers
+ * mail immediately with a rendered PDF and reads secrets from the OS keychain.
+ */
+export interface EmbeddedDesktopIntegration {
+  readonly getSecret: (key: EmbeddedSecretKey) => Promise<string | null>;
+  readonly renderDocumentPdf: (args: {
+    kind: 'invoice' | 'offer';
+    id: string;
+    suggestedName: string;
+  }) => Promise<{ path: string }>;
+}
+
+const ENV_SECRET_NAMES: Record<EmbeddedSecretKey, string> = {
+  'smtp.password': 'SMTP_PASSWORD',
+  'resend.apiKey': 'RESEND_API_KEY',
+  'portal.apiKey': 'PORTAL_API_KEY',
+};
+
+/**
+ * Catch-up variant of the worker's 15-minute schedule window: a desktop app is
+ * often closed at the configured time, so a daily job is due from that time on
+ * until it has run once that day.
+ */
+const isDailyRunDue = (enabled: boolean | undefined, runTime: string | undefined, lastRun: string | undefined, now = new Date()): boolean => {
+  if (!enabled) return false;
+  const [hour, minute] = (runTime ?? '').split(':').map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
+  if (now.getHours() * 60 + now.getMinutes() < hour! * 60 + minute!) return false;
+  if (!lastRun) return true;
+  const last = new Date(lastRun);
+  return last.getFullYear() !== now.getFullYear() || last.getMonth() !== now.getMonth() || last.getDate() !== now.getDate();
+};
+
 export interface RegisterAutomationRoutesOptions {
   readonly requireSession: (
     app: FastifyInstance,
@@ -279,6 +318,7 @@ export interface RegisterAutomationRoutesOptions {
     authorization: string | undefined,
   ) => Promise<AuthSession>;
   readonly requireDatabase: (app: FastifyInstance) => ServerDatabase;
+  readonly desktopIntegration?: EmbeddedDesktopIntegration;
 }
 
 export const registerAutomationRoutes = (
@@ -290,6 +330,106 @@ export const registerAutomationRoutes = (
   const sessionFor = (authorization: string | undefined) =>
     options.requireSession(app, product, authorization);
   const database = () => options.requireDatabase(app);
+  const integration = options.desktopIntegration;
+  const secretFor = async (key: EmbeddedSecretKey): Promise<string | undefined> =>
+    (integration ? await integration.getSecret(key) : process.env[ENV_SECRET_NAMES[key]]) || undefined;
+  const missingSecretSuffix = integration ? 'Bitte in den Einstellungen hinterlegen.' : 'Bitte auf dem Server konfigurieren.';
+
+  const resolveEmailDelivery = async (settings: RuntimeSettings) => {
+    const from = {
+      name: settings.email.fromName || settings.company.name,
+      email: settings.email.fromEmail || settings.company.email,
+    };
+    if (settings.email.provider === 'none') {
+      throw new Error('Kein E-Mail-Anbieter eingerichtet. Konfiguriere SMTP oder Resend unter Einstellungen → E-Mail.');
+    }
+    if (settings.email.provider === 'smtp') {
+      const pass = await secretFor('smtp.password');
+      if (!pass) throw new Error(`SMTP-Passwort fehlt. ${missingSecretSuffix}`);
+      return {
+        provider: 'smtp' as const,
+        config: {
+          host: settings.email.smtpHost,
+          port: settings.email.smtpPort,
+          secure: settings.email.smtpSecure,
+          auth: { user: settings.email.smtpUser, pass },
+        },
+        from,
+      };
+    }
+    const apiKey = await secretFor('resend.apiKey');
+    if (!apiKey) throw new Error(`Resend-API-Key fehlt. ${missingSecretSuffix}`);
+    return { provider: 'resend' as const, config: { apiKey }, from };
+  };
+
+  /**
+   * Desktop delivery: claims due outbox entries under a lease, attaches the
+   * rendered document PDF and records the outcome. The hosted server leaves
+   * this to apps/server-worker.
+   */
+  const dispatchQueuedEmails = async (
+    scope: TenantScope,
+  ): Promise<Map<string, { success: boolean; messageId?: string; error?: string }>> => {
+    const outcomes = new Map<string, { success: boolean; messageId?: string; error?: string }>();
+    if (!integration) return outcomes;
+    const db = database();
+    const settings = await requireSettings(db, scope);
+    const delivery = await resolveEmailDelivery(settings.settings);
+    const outbox = createPostgresEmailOutboxRepository(queryTarget(db));
+    const workerId = 'embedded-desktop';
+    const claimedAt = new Date();
+    const claimed: EmailOutboxEntry[] = await outbox.claimDue(scope, {
+      limit: 25,
+      workerId,
+      now: claimedAt.toISOString(),
+      leaseExpiresAt: new Date(claimedAt.getTime() + 5 * 60_000).toISOString(),
+    });
+    for (const entry of claimed) {
+      const attemptedAt = new Date().toISOString();
+      let outcome: { success: boolean; messageId?: string; error?: string };
+      try {
+        const pdf = await integration.renderDocumentPdf({
+          kind: entry.documentType,
+          id: entry.documentId,
+          suggestedName: `${entry.documentNumber || entry.documentType}-${entry.recipientName}`,
+        });
+        outcome = await sendEmail(delivery.provider, delivery.config, {
+          from: delivery.from,
+          to: { name: entry.recipientName, email: entry.recipientEmail },
+          subject: entry.subject,
+          text: entry.bodyText,
+          attachments: [{ filename: `${entry.documentNumber || entry.documentType}.pdf`, path: pdf.path }],
+        });
+      } catch (error) {
+        outcome = { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+      await insertEmailLogRow(queryTarget(db), scope.tenantId, {
+        id: randomUUID(),
+        documentType: entry.documentType,
+        documentId: entry.documentId,
+        documentNumber: entry.documentNumber,
+        recipientEmail: entry.recipientEmail,
+        recipientName: entry.recipientName,
+        subject: entry.subject,
+        bodyText: entry.bodyText,
+        provider: delivery.provider,
+        status: outcome.success ? 'sent' : 'failed',
+        errorMessage: outcome.error ?? null,
+        sentAt: attemptedAt,
+        createdAt: attemptedAt,
+      });
+      if (outcome.success) {
+        await outbox.markSent(scope, { id: entry.id, workerId, sentAt: attemptedAt, provider: delivery.provider, providerMessageId: outcome.messageId });
+      } else {
+        const retryAt = isRetryableEmailError(new Error(outcome.error ?? ''))
+          ? new Date(Date.now() + 15 * 60_000).toISOString()
+          : undefined;
+        await outbox.markFailed(scope, { id: entry.id, workerId, failedAt: attemptedAt, provider: delivery.provider, error: outcome.error ?? 'Unbekannter Versandfehler', retryAt });
+      }
+      outcomes.set(entry.id, outcome);
+    }
+    return outcomes;
+  };
 
   typedRoute(app, {
     method: 'GET',
@@ -317,7 +457,7 @@ export const registerAutomationRoutes = (
       const reservation = await reserveOfferPortalToken(db, session.scope, session, body.offerId);
       const publication = await portalClient.publishOffer({
         baseUrl,
-        apiKey: process.env.PORTAL_API_KEY,
+        apiKey: await secretFor('portal.apiKey'),
         token: reservation.token,
         snapshot: {
           ...reservation.offer,
@@ -365,7 +505,7 @@ export const registerAutomationRoutes = (
       const reservation = await reserveInvoicePortalToken(db, session.scope, session, body.invoiceId);
       const publication = await portalClient.publishInvoice({
         baseUrl,
-        apiKey: process.env.PORTAL_API_KEY,
+        apiKey: await secretFor('portal.apiKey'),
         token: reservation.token,
         snapshot: reservation.invoice,
         customerRef: scopedCustomerRef(session.scope, reservation.invoice.clientId ?? reservation.invoice.id),
@@ -430,7 +570,7 @@ export const registerAutomationRoutes = (
         const baseUrl = requirePortalBaseUrl(settings.settings);
         const publication = await portalClient[clientMethod]({
           baseUrl,
-          apiKey: process.env.PORTAL_API_KEY,
+          apiKey: await secretFor('portal.apiKey'),
           customerRef: scopedCustomerRef(session.scope, body.customerRef),
           customerLabel: body.customerLabel,
           expiresInDays: body.expiresInDays,
@@ -449,6 +589,13 @@ export const registerAutomationRoutes = (
     async handler({ request, body }) {
       const session = await requireAutomationMutationSession(sessionFor, request.headers.authorization);
       const db = database();
+      const settings = await requireSettings(db, session.scope);
+      try {
+        await resolveEmailDelivery(settings.settings);
+      } catch (error) {
+        // Never report a queued mail as sent when nothing can deliver it.
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
       const repositories = createPostgresBillingDependencies(queryTarget(db));
       const document = body.documentType === 'invoice'
         ? await repositories.invoiceRepo.getById(session.scope, body.documentId)
@@ -474,7 +621,14 @@ export const registerAutomationRoutes = (
         });
         return entry;
       });
-      return { success: true, messageId: queued.id };
+      if (!integration) return { success: true, messageId: queued.id };
+      const outcome = (await dispatchQueuedEmails(session.scope)).get(queued.id);
+      if (!outcome) {
+        return { success: false, error: 'Die E-Mail wurde bereits versendet oder wird gerade versendet.' };
+      }
+      return outcome.success
+        ? { success: true, messageId: outcome.messageId ?? queued.id }
+        : { success: false, error: outcome.error ?? 'E-Mail konnte nicht versendet werden.' };
     },
   });
 
@@ -487,8 +641,8 @@ export const registerAutomationRoutes = (
       const session = await requireAutomationMutationSession(sessionFor, request.headers.authorization);
       const settings = await requireSettings(database(), session.scope);
       if (body.provider === 'smtp') {
-        const pass = process.env.SMTP_PASSWORD;
-        if (!pass) return { success: false, error: 'SMTP password is not configured on the server' };
+        const pass = await secretFor('smtp.password');
+        if (!pass) return { success: false, error: `SMTP-Passwort fehlt. ${missingSecretSuffix}` };
         return testEmailConfig('smtp', {
           host: body.smtpHost ?? settings.settings.email.smtpHost,
           port: body.smtpPort ?? settings.settings.email.smtpPort,
@@ -496,8 +650,8 @@ export const registerAutomationRoutes = (
           auth: { user: body.smtpUser ?? settings.settings.email.smtpUser, pass },
         });
       }
-      const apiKey = process.env.RESEND_API_KEY;
-      if (!apiKey) return { success: false, error: 'Resend API key is not configured on the server' };
+      const apiKey = await secretFor('resend.apiKey');
+      if (!apiKey) return { success: false, error: `Resend-API-Key fehlt. ${missingSecretSuffix}` };
       return testEmailConfig('resend', { apiKey });
     },
   });
@@ -543,9 +697,7 @@ export const registerAutomationRoutes = (
             },
           },
           secretStore: {
-            get: async (key) => key === 'smtp.password'
-              ? (process.env.SMTP_PASSWORD ?? null)
-              : (process.env.RESEND_API_KEY ?? null),
+            get: async (key) => (await secretFor(key === 'smtp.password' ? 'smtp.password' : 'resend.apiKey')) ?? null,
           },
           auditLog: createPostgresAuditLogPort(queryable),
           actor: actorFor(session),
@@ -600,4 +752,106 @@ export const registerAutomationRoutes = (
       }
     },
   });
+
+  if (integration) {
+    // Desktop replacement for apps/server-worker's schedules: the Electron main
+    // process calls this periodically; each job decides itself whether it is due.
+    typedRoute(app, {
+      method: 'POST',
+      url: `${prefix}/automation/tick`,
+      body: z.undefined(),
+      response: z.object({
+        recurring: z.enum(['skipped', 'ran', 'failed']),
+        dunning: z.enum(['skipped', 'ran', 'failed']),
+        emailsDispatched: z.number(),
+        portalDecisionsApplied: z.number(),
+        errors: z.array(z.string()),
+      }),
+      async handler({ request }) {
+        const session = await requireAutomationMutationSession(sessionFor, request.headers.authorization);
+        const db = database();
+        const errors: string[] = [];
+        const snapshot = await requireSettings(db, session.scope);
+
+        let recurring: 'skipped' | 'ran' | 'failed' = 'skipped';
+        const automation = snapshot.settings.automation;
+        if (isDailyRunDue(automation.recurringEnabled, automation.recurringRunTime, automation.lastRecurringRun)) {
+          const runAt = nowIso();
+          try {
+            await runRecurringInvoiceRun(
+              session.scope,
+              createServerRecurringDependencies(db, session.scope, { actor: actorFor(session) }),
+              {
+                auditLog: createPostgresAuditLogPort(db),
+                actor: actorFor(session),
+                reason: 'scheduled',
+                action: 'recurring.scheduled_run',
+                afterProcess: async () => {
+                  const current = await requireSettings(db, session.scope);
+                  await saveServerSettings(queryTarget(db), {
+                    tenantId: session.scope.tenantId,
+                    settingsJson: JSON.stringify({
+                      ...current.settings,
+                      automation: { ...current.settings.automation, lastRecurringRun: runAt },
+                    }),
+                    createdAt: current.createdAt,
+                    updatedAt: runAt,
+                  });
+                },
+              },
+            );
+            recurring = 'ran';
+          } catch (error) {
+            recurring = 'failed';
+            errors.push(`Abo-Lauf: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+
+        let dunning: 'skipped' | 'ran' | 'failed' = 'skipped';
+        if (isDailyRunDue(automation.dunningEnabled, automation.dunningRunTime, automation.lastDunningRun)) {
+          const response = await app.inject({
+            method: 'POST',
+            url: `${prefix}/dunning/manual-run`,
+            headers: {
+              ...(request.headers.authorization ? { authorization: request.headers.authorization } : {}),
+              ...(request.headers['x-billme-local-token'] ? { 'x-billme-local-token': String(request.headers['x-billme-local-token']) } : {}),
+            },
+          });
+          const payload = response.json() as { success?: boolean; error?: string };
+          dunning = response.statusCode < 300 && payload.success ? 'ran' : 'failed';
+          if (dunning === 'failed') errors.push(`Mahnlauf: ${payload.error ?? `HTTP ${response.statusCode}`}`);
+        }
+
+        let emailsDispatched = 0;
+        try {
+          const outcomes = await dispatchQueuedEmails(session.scope);
+          emailsDispatched = [...outcomes.values()].filter((outcome) => outcome.success).length;
+        } catch (error) {
+          // No provider configured yet: queued mails stay pending until one is.
+          errors.push(`E-Mail-Versand: ${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        let portalDecisionsApplied = 0;
+        const portalBaseUrl = snapshot.settings.portal?.baseUrl?.trim();
+        if (portalBaseUrl) {
+          const offers = await createPostgresOfferRepository(queryTarget(db)).list(session.scope);
+          for (const offer of offers.filter((entry) => entry.share?.token && !entry.share.decision && !entry.share.acceptedAt)) {
+            try {
+              const shareToken = offer.share!.token!;
+              const { decision } = await portalClient.getOfferStatus(portalBaseUrl, shareToken);
+              if (!decision) continue;
+              const result = await applyServerOfferPortalDecision(db, session.scope, {
+                offerId: offer.id, shareToken, decision, actor: actorFor(session),
+              });
+              if (result.updated) portalDecisionsApplied += 1;
+            } catch (error) {
+              errors.push(`Portal ${offer.number}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+        }
+
+        return { recurring, dunning, emailsDispatched, portalDecisionsApplied, errors };
+      },
+    });
+  }
 };

@@ -35,15 +35,11 @@ test('document issuance receipts gain incrementally and enforce their constraint
     await database.migrate();
 
     // Upgrade simulation: rewind to the pre-0028 state of an existing
-    // deployment, then let the incremental migration gain the table.
-    const latest = (
-      await database.query<{ at: string }>(
-        'SELECT max(created_at)::text AS at FROM drizzle.__drizzle_migrations',
-      )
-    ).rows[0]?.at;
-    assert.ok(latest);
+    // deployment (0028 and every later migration), then let the incremental
+    // migrations gain the table again. Later migrations are idempotent.
+    const migration0028CreatedAt = 1788528600003;
     await database.query('DROP TABLE document_issuance_receipts');
-    await database.query('DELETE FROM drizzle.__drizzle_migrations WHERE created_at = $1', [latest]);
+    await database.query('DELETE FROM drizzle.__drizzle_migrations WHERE created_at >= $1', [migration0028CreatedAt]);
     await database.migrate();
     const present = await database.query<{ table_name: string }>(RECEIPT_TABLE_PRESENCE);
     assert.equal(present.rows[0]?.table_name, 'document_issuance_receipts');

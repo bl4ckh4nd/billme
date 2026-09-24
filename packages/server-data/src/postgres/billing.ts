@@ -58,6 +58,7 @@ import {
   isNull,
   lt,
   lte,
+  ne,
   or,
   sql,
 } from "drizzle-orm";
@@ -1577,6 +1578,18 @@ export const saveServerNumberReservation = async (
   };
 
   const drizzleDb = requireDrizzle(db);
+    // Released numbers are handed out again to keep the range gapless. Drop the
+    // stale released row of another reservation first, or the (tenant, kind,
+    // number) unique key rejects every later reservation of that number.
+    await drizzleDb
+      .delete(schema.numberReservations)
+      .where(and(
+        eq(schema.numberReservations.tenantId, nextReservation.tenantId),
+        eq(schema.numberReservations.kind, nextReservation.kind),
+        eq(schema.numberReservations.number, nextReservation.number),
+        eq(schema.numberReservations.status, 'released'),
+        ne(schema.numberReservations.id, nextReservation.id),
+      ));
     await drizzleDb
       .insert(schema.numberReservations)
       .values({

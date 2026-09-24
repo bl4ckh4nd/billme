@@ -56,21 +56,21 @@ const formatDateTimeDe = (value: unknown): string => {
 export const PORTAL_TOKENS = {
   surface: '#ffffff',
   surfaceSunken: '#f3f4f6',
-  foreground: '#0b0b0b',
-  muted: '#676d75',
-  border: '#e5e7eb',
-  controlBorder: '#8b8b8b',
+  foreground: '#0d0e11',
+  muted: '#64686d',
+  border: '#e5e6e9',
+  controlBorder: '#87898d',
   accent: '#d9f944',
-  accentForeground: '#000000',
-  focusRing: '#0b0b0b',
+  accentForeground: '#0d0e11',
+  focusRing: '#0d0e11',
   successText: '#15803d',
   warningText: '#92400e',
-  warningBg: '#fef3c7',
+  warningBg: '#fbf5da',
   warningBorder: '#fde68a',
   errorText: '#b91c1c',
-  radiusSm: '0.5rem',
-  radiusMd: '1rem',
-  radiusLg: '1.5rem',
+  radiusSm: '0.375rem',
+  radiusMd: '0.5rem',
+  radiusLg: '0.75rem',
 } as const;
 
 /* Inter first, per DESIGN.md. The desktop apps load the webfont themselves; the
@@ -90,7 +90,7 @@ const PORTAL_CSP_WITH_FORM =
 const PORTAL_INPUT_STYLE = `width:100%; padding:.625rem .75rem; border-radius:${PORTAL_TOKENS.radiusSm}; border:1px solid ${PORTAL_TOKENS.controlBorder}; background:${PORTAL_TOKENS.surface}; color:${PORTAL_TOKENS.foreground}; font:inherit;`;
 const PORTAL_PRIMARY_BUTTON_STYLE = `cursor:pointer; padding:.625rem .875rem; border-radius:${PORTAL_TOKENS.radiusSm}; border:1px solid ${PORTAL_TOKENS.accent}; background:${PORTAL_TOKENS.accent}; color:${PORTAL_TOKENS.accentForeground}; font:inherit; font-weight:600;`;
 const PORTAL_SECONDARY_BUTTON_STYLE = `cursor:pointer; padding:.625rem .875rem; border-radius:${PORTAL_TOKENS.radiusSm}; border:1px solid ${PORTAL_TOKENS.controlBorder}; background:${PORTAL_TOKENS.surface}; color:${PORTAL_TOKENS.foreground}; font:inherit; font-weight:600;`;
-const PORTAL_LABEL_STYLE = `display:block; font-size:.75rem; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};`;
+const PORTAL_LABEL_STYLE = `display:block; font-size:.8125rem; font-weight:500; color:${PORTAL_TOKENS.foreground};`;
 const PORTAL_CARD_STYLE = `background:${PORTAL_TOKENS.surface}; border:1px solid ${PORTAL_TOKENS.border}; border-radius:${PORTAL_TOKENS.radiusLg};`;
 
 const renderPortalPage = (options: {
@@ -107,8 +107,11 @@ const renderPortalPage = (options: {
     <title>${escapeHtml(options.title)}</title>
     <style>
       :root { color-scheme: light; }
+      *, *::before, *::after { box-sizing: border-box; }
+      html { background: ${PORTAL_TOKENS.surfaceSunken}; }
       body {
         margin: 0;
+        min-height: 100vh;
         background: ${PORTAL_TOKENS.surfaceSunken};
         color: ${PORTAL_TOKENS.foreground};
         font-family: ${PORTAL_FONT_STACK};
@@ -126,7 +129,7 @@ const renderPortalPage = (options: {
     <main style="max-width:${PORTAL_SHELL_MAX_WIDTH_PX}px; margin:0 auto; padding:32px 16px 48px;">
       <div style="display:flex; align-items:center; gap:.75rem; margin-bottom:1.25rem;">
         <img src="${BILLME_FULL_LOGO_DATA_URI}" alt="Billme" style="height:28px; width:auto;" />
-        <span style="font-size:.75rem; font-weight:600; letter-spacing:.05em; color:${PORTAL_TOKENS.muted}; text-transform:uppercase;">${escapeHtml(PORTAL_NAME)}</span>
+        <span style="font-size:.8125rem; font-weight:500; color:${PORTAL_TOKENS.muted};">${escapeHtml(PORTAL_NAME)}</span>
       </div>
       <div style="max-width:${options.contentMaxWidthPx ?? PORTAL_SHELL_MAX_WIDTH_PX}px;">
       ${options.content}
@@ -851,11 +854,10 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
         const status = normalizeDocStatus(item);
         return `<tr>
 <td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">${item.kind === 'offer' ? 'Angebot' : 'Rechnung'}</td>
-<td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">${escapeHtml(snap?.number ?? '')}</td>
+<td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; white-space:nowrap;">${renderPortalTextLink(url, snap?.number || (item.kind === 'offer' ? 'Angebot ansehen' : 'Rechnung ansehen'))}</td>
 <td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">${escapeHtml(formatDateDe(snap?.date))}</td>
 <td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; text-align:right; font-variant-numeric:tabular-nums;">${escapeHtml(formatCurrencyEur(snap?.amount ?? 0))}</td>
 <td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; color:${portalStatusColor(status)}; font-weight:600;">${escapeHtml(status)}</td>
-<td style="padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border};">${renderPortalTextLink(url, 'Ansehen')}</td>
 </tr>`;
       })
       .join('\n');
@@ -896,7 +898,6 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
           <th style="text-align:left; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};">Datum</th>
           <th style="text-align:right; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};">Betrag</th>
           <th style="text-align:left; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};">Status</th>
-          <th style="text-align:left; padding:.625rem .5rem; border-bottom:1px solid ${PORTAL_TOKENS.border}; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; color:${PORTAL_TOKENS.muted};">Link</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -1034,7 +1035,7 @@ ${nextLink}`,
         contentSecurityPolicy: PORTAL_CSP_WITH_FORM,
         content: `<section style="${PORTAL_CARD_STYLE} padding:1.25rem;">
   <h1 style="margin:0 0 .5rem; font-size:1.5rem; letter-spacing:-.01em;">${escapeHtml(title)}</h1>
-  <div style="color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Status: <strong style="color:${portalStatusColor(statusText)};">${escapeHtml(statusText)}</strong> · Gültig bis: ${escapeHtml(formatDateDe(rec.expiresAt))}</div>
+  <div style="color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Status: <strong style="color:${portalStatusColor(statusText)};">${escapeHtml(statusText)}</strong>${snapshot?.dueDate ? ` · ${rec.kind === 'offer' ? 'Angebot gültig bis' : 'Fällig am'} ${escapeHtml(formatDateDe(snapshot.dueDate))}` : ''} · Link gültig bis ${escapeHtml(formatDateDe(rec.expiresAt))}</div>
   <div style="margin-top:.75rem;">Kunde: <strong>${escapeHtml(snapshot?.client ?? rec.customerLabel ?? '')}</strong></div>
   <div style="margin-top:.5rem; font-size:1.25rem; font-weight:700; font-variant-numeric:tabular-nums;">${escapeHtml(formatCurrencyEur(snapshot?.amount ?? 0))}</div>
   ${expiredNotice}
@@ -1239,7 +1240,7 @@ ${pdfSection}`,
   <div style="${PORTAL_CARD_STYLE} padding:.875rem 1rem;">
     <div style="${PORTAL_LABEL_STYLE}">Status</div>
     <div style="margin-top:.375rem; font-size:1rem; font-weight:600; color:${portalStatusColor(statusText)};">${escapeHtml(statusText)}</div>
-    <div style="margin-top:.25rem; font-size:.8125rem; color:${PORTAL_TOKENS.muted};">Veröffentlicht: ${escapeHtml(publishedAt)} · Gültig bis: ${escapeHtml(expiresAt)}</div>
+    <div style="margin-top:.25rem; font-size:.8125rem; color:${PORTAL_TOKENS.muted};">Veröffentlicht: ${escapeHtml(publishedAt)} · Link gültig bis ${escapeHtml(expiresAt)}</div>
   </div>
 </div>
 

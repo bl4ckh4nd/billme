@@ -57,7 +57,7 @@ const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') 
 
   await page.getByLabel('Firmenname').fill(`Billme Pro ${slug}`);
   await page.getByLabel('Inhaber oder Geschäftsführung').fill('Billme Pro Owner');
-  await page.getByLabel('Strasse und Hausnummer').fill('Teststrasse 1');
+  await page.getByLabel('Straße und Hausnummer').fill('Teststrasse 1');
   await page.getByLabel('PLZ').fill('10115');
   await page.getByLabel('Stadt').fill('Berlin');
   await page.getByLabel('E-Mail für Angebote und Rechnungen').fill(`pro+${slug}@billme-e2e.local`);

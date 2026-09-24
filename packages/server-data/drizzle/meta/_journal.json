@@ -197,6 +197,13 @@
       "when": 1788528600003,
       "tag": "0028_server_data_document_issuance_receipts",
       "breakpoints": false
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1788528600004,
+      "tag": "0029_server_data_core_ledger_accounts",
+      "breakpoints": false
     }
   ]
 }

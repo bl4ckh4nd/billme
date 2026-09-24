@@ -124,7 +124,8 @@ const sha256Base64 = async (value: string): Promise<string> => {
 };
 
 export const parseOpenRouterVlmConfig = (
-  env: Record<string, string | undefined> = process.env,
+  // globalThis keeps this importable in the browser shells, where `process` does not exist.
+  env: Record<string, string | undefined> = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {},
 ): RuntimeConfig => {
   const configuredModel = env.OPENROUTER_VLM_MODEL?.trim() || OPENROUTER_VLM_DEFAULT_MODEL;
   const configuredModels = (env.OPENROUTER_VLM_MODELS ?? configuredModel)

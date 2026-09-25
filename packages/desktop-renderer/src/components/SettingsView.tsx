@@ -3,9 +3,9 @@
 import React, { useState } from 'react';
 import {
   Building2, Landmark, FileDigit, Scale,
-  Save, CheckCircle, HelpCircle, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Repeat
+  Save, CheckCircle, HelpCircle, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Repeat, Monitor, Moon, Sun, SunMoon
 } from 'lucide-react';
-import { Button, ErrorState, useActionFeedback } from '@billme/ui';
+import { Button, ErrorState, SegmentedControl, useActionFeedback, useThemePreference, type ThemePreference } from '@billme/ui';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
 import type { AppSettings, BusinessReportingProfile, DunningLevel } from '@billme/desktop-core/types';
 import { ipc } from '../runtime-api';
@@ -15,7 +15,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { DunningResultModal } from '@billme/desktop-ui/components/DunningResultModal';
 import { DunningLevelPreviewModal } from '@billme/desktop-ui/components/DunningLevelPreviewModal';
 
-type SettingsTab = 'company' | 'catalog' | 'finance' | 'numbers' | 'dunning' | 'legal' | 'portal' | 'system' | 'email';
+type SettingsTab = 'company' | 'catalog' | 'finance' | 'numbers' | 'dunning' | 'legal' | 'portal' | 'system' | 'email' | 'appearance';
 
 const normalizeCategoryName = (value: string): string => value.trim();
 const formatCount = (count: number, singular: string, plural: string): string => `${count} ${count === 1 ? singular : plural}`;
@@ -39,6 +39,31 @@ const inferBusinessReportingProfile = (settings: AppSettings): BusinessReporting
  * mounted only once the query has answered: a failed query must never leave the
  * user editing (and saving) a stand-in company, bank account or tax number.
  */
+/** Per-device display preference; applies at once and is not part of "Einstellungen speichern". */
+const AppearanceSettings: React.FC = () => {
+  const [theme, setTheme] = useThemePreference();
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h3 className="text-xl font-semibold mb-1">Darstellung</h3>
+        <p className="text-muted text-sm">
+          Gilt sofort und nur auf diesem Gerät. Rechnungen und PDFs bleiben immer hell.
+        </p>
+      </div>
+      <SegmentedControl<ThemePreference>
+        aria-label="Farbschema"
+        value={theme}
+        onChange={setTheme}
+        options={[
+          { value: 'system', label: 'System', icon: <Monitor size={14} aria-hidden="true" /> },
+          { value: 'light', label: 'Hell', icon: <Sun size={14} aria-hidden="true" /> },
+          { value: 'dark', label: 'Dunkel', icon: <Moon size={14} aria-hidden="true" /> },
+        ]}
+      />
+    </div>
+  );
+};
+
 export const SettingsView: React.FC = () => {
   const { data: loadedSettings, isError, refetch } = useSettingsQuery();
 
@@ -421,6 +446,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
       label: 'System',
       items: [
         { id: 'system', label: 'System', icon: AlertCircle, desc: 'Backup & Audit' },
+        { id: 'appearance', label: 'Darstellung', icon: SunMoon, desc: 'Hell, Dunkel, System' },
       ],
     },
   ];
@@ -444,7 +470,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   type="text"
                   value={settings.company.name}
                   onChange={(e) => updateNested('company', 'name', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
               <div>
@@ -454,7 +480,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   type="text"
                   value={settings.company.owner}
                   onChange={(e) => updateNested('company', 'owner', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
               <div className="grid grid-cols-3 gap-4">
@@ -465,7 +491,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="text"
                     value={settings.company.street}
                     onChange={(e) => updateNested('company', 'street', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
@@ -475,7 +501,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="text"
                     value={settings.company.zip}
                     onChange={(e) => updateNested('company', 'zip', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
               </div>
@@ -486,7 +512,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   type="text"
                   value={settings.company.city}
                   onChange={(e) => updateNested('company', 'city', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
               <div className="border-t border-border-subtle my-4"></div>
@@ -498,7 +524,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="email"
                     value={settings.company.email}
                     onChange={(e) => updateNested('company', 'email', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
@@ -508,7 +534,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="text"
                     value={settings.company.phone}
                     onChange={(e) => updateNested('company', 'phone', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
               </div>
@@ -519,7 +545,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   type="text"
                   value={settings.company.website}
                   onChange={(e) => updateNested('company', 'website', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
             </div>
@@ -585,7 +611,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                               return { ...prev, catalog: { categories: list } };
                             });
                           }}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                         />
                       </div>
                       <button type="button"
@@ -626,7 +652,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="text"
                     value={settings.finance.bankName}
                     onChange={(e) => updateNested('finance', 'bankName', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -636,7 +662,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       type="text"
                       value={settings.finance.iban}
                       onChange={(e) => updateNested('finance', 'iban', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                     />
                   </div>
                   <div>
@@ -645,7 +671,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       type="text"
                       value={settings.finance.bic}
                       onChange={(e) => updateNested('finance', 'bic', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                     />
                   </div>
                 </div>
@@ -660,7 +686,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   type="text"
                   value={settings.finance.taxId}
                   onChange={(e) => updateNested('finance', 'taxId', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
               <div>
@@ -670,7 +696,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   type="text"
                   value={settings.finance.vatId}
                   onChange={(e) => updateNested('finance', 'vatId', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
             </div>
@@ -683,7 +709,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 value={settings.finance.registerCourt}
                 onChange={(e) => updateNested('finance', 'registerCourt', e.target.value)}
                 placeholder="z.B. Amtsgericht Berlin HRB 12345"
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
               />
             </div>
           </div>
@@ -713,7 +739,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     <label className="text-label text-foreground">Präfix Format</label>
                     <div className="group relative">
                       <HelpCircle size={12} className="text-muted cursor-help" />
-                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-dark-base text-background text-xs p-2 rounded-sm pointer-events-none opacity-0 group-hover:opacity-100 motion-safe:transition-opacity motion-reduce:transition-none z-[var(--z-dropdown)]">
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-dark-base text-inverse-foreground text-xs p-2 rounded-sm pointer-events-none opacity-0 group-hover:opacity-100 motion-safe:transition-opacity motion-reduce:transition-none z-[var(--z-dropdown)]">
                         %Y = Aktuelles Jahr (z.B. 2023)
                       </div>
                     </div>
@@ -722,7 +748,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="text"
                     value={settings.numbers.invoicePrefix}
                     onChange={(e) => updateNested('numbers', 'invoicePrefix', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
@@ -737,7 +763,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       'nextInvoiceNumber',
                       parsePositiveInteger(e.target.value, settings.numbers.nextInvoiceNumber),
                     )}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
                   />
                 </div>
               </div>
@@ -779,7 +805,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="text"
                     value={settings.numbers.offerPrefix}
                     onChange={(e) => updateNested('numbers', 'offerPrefix', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
@@ -794,7 +820,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       'nextOfferNumber',
                       parsePositiveInteger(e.target.value, settings.numbers.nextOfferNumber),
                     )}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
                   />
                 </div>
               </div>
@@ -818,7 +844,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="text"
                     value={settings.numbers.customerPrefix}
                     onChange={(e) => updateNested('numbers', 'customerPrefix', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
@@ -833,7 +859,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       'nextCustomerNumber',
                       parsePositiveInteger(e.target.value, settings.numbers.nextCustomerNumber),
                     )}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
                   />
                 </div>
               </div>
@@ -925,7 +951,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       value={settings.email.smtpHost}
                       onChange={(e) => updateNested('email', 'smtpHost', e.target.value)}
                       placeholder="smtp.example.com"
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                     />
                   </div>
                   <div>
@@ -935,7 +961,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       value={settings.email.smtpPort}
                       onChange={(e) => updateNested('email', 'smtpPort', Number(e.target.value))}
                       placeholder="587"
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                     />
                   </div>
                 </div>
@@ -957,7 +983,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     value={settings.email.smtpUser}
                     onChange={(e) => updateNested('email', 'smtpUser', e.target.value)}
                     placeholder="user@example.com"
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
@@ -970,7 +996,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     setSmtpPasswordTouched(true);
                   }}
                   placeholder={smtpPasswordConfigured ? '•••••••• (gespeichert)' : '••••••••'}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                   <p className="text-xs text-muted mt-1">Wird sicher im Schlüsselbund des Systems gespeichert.</p>
                 </div>
@@ -1020,7 +1046,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       }
                     }}
                     placeholder={resendApiKeyConfigured ? 're_*** (gespeichert)' : 're_***'}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                   <p className="text-xs text-muted mt-1">Wird sicher im Schlüsselbund des Systems gespeichert.</p>
                 </div>
@@ -1054,7 +1080,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     value={settings.email.fromName}
                     onChange={(e) => updateNested('email', 'fromName', e.target.value)}
                     placeholder={settings.company.name || 'Meine Firma'}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
                 <div>
@@ -1064,7 +1090,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     value={settings.email.fromEmail}
                     onChange={(e) => updateNested('email', 'fromEmail', e.target.value)}
                     placeholder={settings.company.email || 'info@example.com'}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                   />
                 </div>
               </div>
@@ -1135,7 +1161,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="time"
                     value={settings.automation?.dunningRunTime ?? '09:00'}
                     onChange={(e) => updateAutomation('dunningRunTime', e.target.value)}
- className="px-2.5 h-8 hover:border-ink-500 w-48 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-2.5 h-8 hover:border-control-border-hover w-48 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </div>
 
@@ -1209,7 +1235,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                         </label>
 
                         <span className={`w-7 h-7 rounded-full flex items-center justify-center font-semibold text-xs ${
-                          level.enabled ? 'bg-dark-base text-background' : 'bg-border-subtle text-muted'
+                          level.enabled ? 'bg-dark-base text-inverse-foreground' : 'bg-border-subtle text-muted'
                         }`}>
                           {level.id}
                         </span>
@@ -1225,7 +1251,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                             value={level.daysAfterDueDate}
                             onChange={(e) => updateDunningLevel(index, 'daysAfterDueDate', Number(e.target.value))}
                             disabled={!level.enabled}
- className="px-2.5 h-8 hover:border-ink-500 text-sm w-14 bg-surface border border-control-border rounded-sm text-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50"
+ className="px-2.5 h-8 hover:border-control-border-hover text-sm w-14 bg-surface border border-control-border rounded-sm text-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50"
                           />
                           <span className="text-muted font-medium">Tagen</span>
                         </div>
@@ -1238,7 +1264,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                             value={level.fee}
                             onChange={(e) => updateDunningLevel(index, 'fee', Number(e.target.value))}
                             disabled={!level.enabled}
- className="px-2.5 h-8 hover:border-ink-500 text-sm w-16 bg-surface border border-control-border rounded-sm text-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50"
+ className="px-2.5 h-8 hover:border-control-border-hover text-sm w-16 bg-surface border border-control-border rounded-sm text-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50"
                           />
                           <span className="text-muted font-medium">€</span>
                         </div>
@@ -1254,7 +1280,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                             type="text"
                             value={level.subject}
                             onChange={(e) => updateDunningLevel(index, 'subject', e.target.value)}
- className="px-2.5 h-8 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                             placeholder="z.B. Zahlungserinnerung für Rechnung %N"
                           />
                         </div>
@@ -1275,7 +1301,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                             rows={2}
                             value={level.text}
                             onChange={(e) => updateDunningLevel(index, 'text', e.target.value)}
- className="px-2.5 py-2 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+ className="px-2.5 py-2 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
                             placeholder="z.B. leider haben wir noch keinen Zahlungseingang für die Rechnung %N vom %D über %A erhalten..."
                           />
                           <div className="mt-1.5 flex items-center justify-between">
@@ -1380,7 +1406,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       type="time"
                       value={settings.automation?.recurringRunTime ?? '03:00'}
                       onChange={(e) => updateAutomation('recurringRunTime', e.target.value)}
- className="px-2.5 h-8 hover:border-ink-500 w-48 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-2.5 h-8 hover:border-control-border-hover w-48 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     />
                     <p className="text-xs text-muted mt-2">
                       Empfohlen: 03:00 Uhr (nachts, um Konflikte mit Mahnlauf zu vermeiden)
@@ -1453,20 +1479,20 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
               <div className="grid grid-cols-2 gap-4">
                 <label className="block text-label text-foreground">
                   Rechtsraum
-                  <select aria-label="Rechtsraum" value={reportingProfile.jurisdiction} onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
+                  <select aria-label="Rechtsraum" value={reportingProfile.jurisdiction} onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                     <option value="DE">Deutschland</option>
                   </select>
                 </label>
                 <label className="block text-label text-foreground">
                   Rechtsform
-                  <select aria-label="Rechtsform" value={reportingProfile.legalForm} onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
+                  <select aria-label="Rechtsform" value={reportingProfile.legalForm} onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                     <option value="sole_proprietor">Einzelunternehmen</option>
                     <option value="gmbh">GmbH</option>
                   </select>
                 </label>
                 <label className="block text-label text-foreground">
                   Gewinnermittlung
-                  <select aria-label="Gewinnermittlung" value={reportingProfile.profitDetermination} onChange={(event) => updateReportingProfile('profitDetermination', event.target.value as BusinessReportingProfile['profitDetermination'])} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
+                  <select aria-label="Gewinnermittlung" value={reportingProfile.profitDetermination} onChange={(event) => updateReportingProfile('profitDetermination', event.target.value as BusinessReportingProfile['profitDetermination'])} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                     <option value="eur" disabled={reportingProfile.legalForm === 'gmbh'}>EÜR</option>
                     <option value="double_entry">Doppelte Buchführung</option>
                   </select>
@@ -1474,7 +1500,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 {reportingProfile.legalForm === 'gmbh' && (
                   <label className="block text-label text-foreground">
                     GmbH-Größe
-                    <select aria-label="GmbH-Größe" value={reportingProfile.hgbSizeClass ?? ''} onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
+                    <select aria-label="GmbH-Größe" value={reportingProfile.hgbSizeClass ?? ''} onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                       <option value="micro">Micro</option>
                       <option value="small">Small</option>
                     </select>
@@ -1483,7 +1509,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 {reportingProfile.profitDetermination === 'double_entry' && (
                   <label className="block text-label text-foreground">
                     Kontenrahmen
-                    <select aria-label="Kontenrahmen" value={reportingProfile.chart ?? ''} onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
+                    <select aria-label="Kontenrahmen" value={reportingProfile.chart ?? ''} onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                       <option value="SKR03">SKR03</option>
                       <option value="SKR04">SKR04</option>
                     </select>
@@ -1491,11 +1517,11 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 )}
                 <label className="block text-label text-foreground">
                   Wirtschaftsjahresbeginn (MM-TT)
-                  <input aria-label="Wirtschaftsjahresbeginn" value={reportingProfile.fiscalYearStart} onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)} placeholder="01-01" className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground" />
+                  <input aria-label="Wirtschaftsjahresbeginn" value={reportingProfile.fiscalYearStart} onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)} placeholder="01-01" className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground" />
                 </label>
                 <label className="block text-label text-foreground">
                   Umsatzsteuer-Methode
-                  <select aria-label="Umsatzsteuer-Methode" value={reportingProfile.vatMethod} onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])} className="px-3 h-10 hover:border-ink-500 text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
+                  <select aria-label="Umsatzsteuer-Methode" value={reportingProfile.vatMethod} onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
                     <option value="soll">Soll-Versteuerung</option>
                     <option value="ist">Ist-Versteuerung</option>
                   </select>
@@ -1535,7 +1561,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   id="settings-sitzland-des-verkaufers"
                   value={settings.legal.countryCode ?? 'DE'}
                   onChange={(e) => updateNested('legal', 'countryCode', e.target.value)}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 >
                   <option value="DE">Deutschland</option>
                   <option value="AT">Österreich</option>
@@ -1550,7 +1576,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   value={settings.legal.defaultVatRate}
                   disabled={settings.legal.smallBusinessRule}
                   onChange={(e) => updateNested('legal', 'defaultVatRate', parseFloat(e.target.value))}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
               <div>
@@ -1560,7 +1586,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   type="number"
                   value={settings.legal.paymentTermsDays}
                   onChange={(e) => updateNested('legal', 'paymentTermsDays', parseInt(e.target.value))}
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
             </div>
@@ -1577,7 +1603,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     onClick={() => updateNested('legal', 'taxAccountingMethod', m)}
                     className={`px-5 py-2 rounded-control text-xs font-semibold transition-colors ${
                       (settings.legal.taxAccountingMethod ?? 'soll') === m
-                        ? 'bg-dark-base text-background shadow-md'
+                        ? 'bg-dark-base text-inverse-foreground shadow-md'
                         : 'text-muted hover:bg-surface hover:text-foreground hover:shadow-sm'
                     }`}
                   >
@@ -1597,7 +1623,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   value={settings.legal.defaultIntroText}
                   onChange={(e) => updateNested('legal', 'defaultIntroText', e.target.value)}
                   rows={3}
- className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none transition-colors"
+ className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none transition-colors"
                 />
               </div>
               <div>
@@ -1607,7 +1633,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   value={settings.legal.defaultFooterText}
                   onChange={(e) => updateNested('legal', 'defaultFooterText', e.target.value)}
                   rows={2}
- className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none transition-colors"
+ className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none transition-colors"
                 />
               </div>
             </div>
@@ -1630,7 +1656,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   value={settings.portal.baseUrl}
                   onChange={(e) => updateNested('portal', 'baseUrl', e.target.value)}
                   placeholder="https://offers.example.com"
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
                 <p className="text-xs text-muted mt-2">Tipp: Einrichtungsseite im Portal: <span className="font-mono">/admin/setup</span></p>
               </div>
@@ -1650,7 +1676,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       ? '(im System-Schlüsselbund gespeichert, zum Ersetzen eingeben)'
                       : '(im System-Schlüsselbund gespeichert)'
                   }
- className="px-3 h-10 hover:border-ink-500 text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+ className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                 />
               </div>
 
@@ -1678,6 +1704,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             </div>
           </div>
         );
+      case 'appearance':
+        return <AppearanceSettings />;
       case 'system':
         return (
           <div className="max-w-2xl space-y-10">
@@ -1771,7 +1799,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     value={backupPath}
                     onChange={(e) => setBackupPath(e.target.value)}
                     placeholder="Pfad zur .pglite.tar-Sicherung..."
- className="px-3 h-10 hover:border-ink-500 flex-1 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover flex-1 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                   <Button
                     variant="dark"
@@ -1805,12 +1833,12 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
   };
 
   return (
-    <div className="bg-surface rounded-panel shadow-xs h-full flex overflow-hidden relative">
+    <div className="relative flex h-full gap-3 overflow-hidden px-1 pt-2">
 
       {/* Sidebar Navigation. The card is capped at the page height, so the
           nine tabs can outgrow it; the sidebar owns that overflow instead of
           pushing the save footer below the fold. */}
-      <div className="w-64 bg-surface-muted border-r border-border-subtle px-4 py-6 flex flex-col overflow-y-auto">
+      <div className="flex w-64 shrink-0 flex-col overflow-y-auto rounded-card border border-border bg-surface px-3 py-5">
         <h1 className="text-title px-2 mb-6">Einstellungen</h1>
         <nav aria-label="Einstellungsbereiche" className="space-y-5">
           {navGroups.map((group) => (
@@ -1829,7 +1857,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       className={`w-full h-9 text-left px-2 rounded-control flex items-center gap-2.5 text-label transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                         isActive
                           ? 'bg-surface text-foreground shadow-sm'
-                          : 'text-muted hover:bg-ink-100 hover:text-foreground'
+                          : 'text-muted hover:bg-surface-sunken hover:text-foreground'
                       }`}
                     >
                       <Icon size={16} aria-hidden="true" className="shrink-0" />
@@ -1852,15 +1880,15 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
       {/* Main Content Form. The column stretches to the card height, so the save
           footer sits at the card end and the tab body scrolls above it. */}
-      <div className="flex-1 flex flex-col">
-         <div className="flex-1 overflow-y-auto px-8 py-8 lg:px-12">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface">
+         <div className="flex-1 overflow-y-auto px-6 py-6 lg:px-8">
 
             {renderActiveTab()}
 
          </div>
 
          {/* Footer Actions */}
-         <div className="px-8 py-4 border-t border-border-subtle flex justify-end bg-surface">
+         <div className="flex justify-end border-t border-border bg-surface px-6 py-3">
              <Button
                 onClick={handleSave}
                 loading={setSettingsMutation.isPending}

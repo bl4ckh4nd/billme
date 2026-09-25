@@ -105,6 +105,7 @@ export const DocumentPages: React.FC<DocumentPagesProps> = ({
         <div
           key={index}
           data-page-index={index}
+          data-theme="light"
           className={pageClassName}
           style={{
             width: `${pageWidth}px`,

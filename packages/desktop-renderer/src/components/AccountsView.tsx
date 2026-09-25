@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentType, type ReactElement, type ReactNode } from 'react';
 import { AlertCircle, Download, History, Link2, MoreHorizontal, Plus, Trash2, Upload } from 'lucide-react';
-import { useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 import {
   Button, ConfirmDialog, EMPTY_VALUE, EmptyState, ErrorState, IconButton, Menu, PageHeader,
@@ -43,7 +42,6 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
   renderImportAccountMeta,
   extraColumn,
 }: AccountsViewProps<TAccount>): ReactElement {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [viewMode, setViewMode] = useState<ViewMode>('accounts');
   const [matchingEntryTab, setMatchingEntryTab] = useState<MatchingEntryTab>('matching');
@@ -172,11 +170,10 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
   }
 
   return (
-    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs">
+    <div className="min-h-full px-1 pt-2 flex flex-col">
       <PageHeader
         title="Konten & Transaktionen"
         description="Verwalten Sie Ihre Konten und ordnen Sie Transaktionen zu."
-        back={{ label: 'Zurück zu Finanzen', onClick: () => navigate({ to: '/finance' }) }}
         actions={
           <Button onClick={() => setIsBankAccountModalOpen(true)}>
             <Plus size={16} aria-hidden="true" />
@@ -184,6 +181,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
           </Button>
         }
       />
+      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6">
 
       <div className="mb-6 rounded-card bg-surface-muted p-4">
         <label htmlFor="import-account" className="text-label text-foreground">Import-Konto</label>
@@ -192,7 +190,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
             id="import-account"
             value={selectedImportAccountId}
             onChange={(e) => setSelectedImportAccountId(e.target.value)}
-            className="px-2.5 h-8 hover:border-ink-500 min-w-56 flex-1 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="px-2.5 h-8 hover:border-control-border-hover min-w-56 flex-1 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
             <option value="">Konto auswählen</option>
             {visibleAccounts.map((account) => (
@@ -410,6 +408,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
 
       <ImportHistoryModal isOpen={showImportHistory} onClose={() => setShowImportHistory(false)} />
       <BankAccountModal isOpen={isBankAccountModalOpen} onClose={() => setIsBankAccountModalOpen(false)} />
+    </div>
     </div>
   );
 }

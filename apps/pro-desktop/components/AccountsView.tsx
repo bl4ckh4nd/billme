@@ -47,7 +47,7 @@ export function AccountsView(): ReactElement {
             value={account.defaultSkrAccountNumber}
             disabled={ledgerAccounts.length === 0 || mappingSaveAccountId === account.id}
             onChange={(e) => void saveMapping(account, e.target.value, reportError)}
-            className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-xs font-mono tabular-nums disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-xs font-mono tabular-nums disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
             {ledgerAccounts.length === 0 ? (
               <option value={account.defaultSkrAccountNumber}>

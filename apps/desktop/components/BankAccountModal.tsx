@@ -133,7 +133,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
             value={formData.iban}
             onChange={(e) => setFormData({ ...formData, iban: e.target.value })}
             placeholder="DE89 3704 0044 0532 0130 00"
-            className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </div>
 
@@ -147,7 +147,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
             step="0.01"
             value={formData.balance}
             onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
-            className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </div>
       </div>

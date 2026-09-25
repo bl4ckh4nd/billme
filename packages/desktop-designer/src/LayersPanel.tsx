@@ -76,10 +76,10 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   const primary = selectedIds[selectedIds.length - 1];
 
   return (
-    <div className="flex flex-col h-full bg-white">
+    <div className="flex flex-col h-full bg-surface">
       <div className="p-6 border-b border-border-subtle flex items-center gap-2">
         <Layers size={20} className="text-muted" />
-        <h3 className="font-semibold text-xl text-black">Ebenen</h3>
+        <h3 className="font-semibold text-xl text-foreground">Ebenen</h3>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-2">
@@ -100,8 +100,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
               }}
               className={`group flex items-center justify-between p-3 rounded-xl border motion-safe:transition-colors motion-reduce:transition-none cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                 selected
-                  ? 'bg-black border-black text-white'
-                  : 'bg-white border-border-subtle hover:border-border text-foreground'
+                  ? 'bg-selected border-selected text-selected-foreground'
+                  : 'bg-surface border-border-subtle hover:border-border text-foreground'
               } ${el.hidden ? 'opacity-50' : ''}`}
             >
               <div className="flex items-center gap-3 overflow-hidden">
@@ -121,7 +121,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     onToggleHidden(el.id);
                   }}
                   title={el.hidden ? 'Einblenden' : 'Ausblenden'}
-                  className={`${rowControl(selected)} p-1.5 ${selected ? 'text-muted hover:text-white' : 'text-muted hover:text-foreground'}`}
+                  className={`${rowControl(selected)} p-1.5 ${selected ? 'text-selected-foreground/70 hover:text-selected-foreground' : 'text-muted hover:text-foreground'}`}
                 >
                   {el.hidden ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
@@ -131,7 +131,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     onToggleLock(el.id);
                   }}
                   title={el.locked ? 'Entsperren' : 'Sperren'}
-                  className={`${rowControl(selected)} p-1.5 ${selected ? 'text-muted hover:text-white' : 'text-muted hover:text-foreground'}`}
+                  className={`${rowControl(selected)} p-1.5 ${selected ? 'text-selected-foreground/70 hover:text-selected-foreground' : 'text-muted hover:text-foreground'}`}
                 >
                   {el.locked ? <Lock size={14} /> : <Unlock size={14} />}
                 </button>
@@ -142,7 +142,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                       onReorder(el.id, 'up');
                     }}
                     title="Eine Ebene nach vorne"
-                    className={`${rowControl(selected)} p-0.5 ${selected ? 'text-white hover:bg-white/20' : 'text-muted hover:bg-surface-muted'}`}
+                    className={`${rowControl(selected)} p-0.5 ${selected ? 'text-selected-foreground hover:bg-selected-foreground/20' : 'text-muted hover:bg-surface-muted'}`}
                   >
                     <ChevronUp size={12} />
                   </button>
@@ -152,7 +152,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                       onReorder(el.id, 'down');
                     }}
                     title="Eine Ebene nach hinten"
-                    className={`${rowControl(selected)} p-0.5 ${selected ? 'text-white hover:bg-white/20' : 'text-muted hover:bg-surface-muted'}`}
+                    className={`${rowControl(selected)} p-0.5 ${selected ? 'text-selected-foreground hover:bg-selected-foreground/20' : 'text-muted hover:bg-surface-muted'}`}
                   >
                     <ChevronDown size={12} />
                   </button>
@@ -179,14 +179,14 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         <div className="p-4 bg-surface-muted border-t border-border grid grid-cols-2 gap-2">
           <button
             onClick={() => onReorder(primary, 'front')}
-            className="flex items-center justify-center gap-2 bg-white border border-border py-2 rounded-lg text-xs font-semibold hover:bg-black hover:text-accent hover:border-black motion-safe:transition-colors motion-reduce:transition-none"
+            className="flex items-center justify-center gap-2 bg-surface border border-border py-2 rounded-lg text-xs font-semibold hover:bg-surface-inverse hover:text-accent hover:border-surface-inverse motion-safe:transition-colors motion-reduce:transition-none"
           >
             <ArrowUp size={14} />
             Ganz nach vorne
           </button>
           <button
             onClick={() => onReorder(primary, 'back')}
-            className="flex items-center justify-center gap-2 bg-white border border-border py-2 rounded-lg text-xs font-semibold hover:bg-black hover:text-accent hover:border-black motion-safe:transition-colors motion-reduce:transition-none"
+            className="flex items-center justify-center gap-2 bg-surface border border-border py-2 rounded-lg text-xs font-semibold hover:bg-surface-inverse hover:text-accent hover:border-surface-inverse motion-safe:transition-colors motion-reduce:transition-none"
           >
             <ArrowDown size={14} />
             Ganz nach hinten

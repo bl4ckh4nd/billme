@@ -111,6 +111,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [documentType, setDocumentType] = useState<'invoice' | 'offer'>('invoice');
   const [viewMode, setViewMode] = useState<'list' | 'detail'>('list');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Wide screens: a row click selects and shows the summary card beside the list; narrower screens open the detail page.
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia?.('(min-width: 1440px)').matches === true);
+  React.useEffect(() => {
+    const query = window.matchMedia?.('(min-width: 1440px)');
+    if (!query) return undefined;
+    const onChange = () => setWide(query.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
   const [filter, setFilter] = useState<InvoiceStatus | 'all'>('all');
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -792,7 +802,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                        <div className="flex flex-wrap items-center gap-2 text-xs">
                            <span className="bg-error-bg text-error-text px-2 py-1 rounded-sm font-semibold tabular-nums">Fällig seit {new Date(inv.dueDate).toLocaleDateString('de-DE')}</span>
                            {due && level ? (
-                             <span className="bg-dark-base text-background px-2 py-1 rounded-sm font-semibold">{level.name}{level.fee > 0 ? ` (+${formatCurrency(level.fee)})` : ''} an {inv.clientEmail || 'keine E-Mail-Adresse'}</span>
+                             <span className="bg-dark-base text-inverse-foreground px-2 py-1 rounded-sm font-semibold">{level.name}{level.fee > 0 ? ` (+${formatCurrency(level.fee)})` : ''} an {inv.clientEmail || 'keine E-Mail-Adresse'}</span>
                            ) : (
                              <span className="text-muted">{level ? `${level.name} bereits versendet` : 'Noch keine Mahnstufe erreicht'}</span>
                            )}
@@ -850,7 +860,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     type="email"
                     value={emailData.to}
                     onChange={e => setEmailData({...emailData, to: e.target.value})}
-                    className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
             </div>
             <div>
@@ -860,7 +870,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     type="text"
                     value={emailData.subject}
                     onChange={e => setEmailData({...emailData, subject: e.target.value})}
-                    className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
             </div>
             <div>
@@ -870,7 +880,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     rows={6}
                     value={emailData.message}
                     onChange={e => setEmailData({...emailData, message: e.target.value})}
-                    className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+                    className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
                 />
             </div>
             <div className="flex items-center gap-2 text-xs text-muted bg-surface-muted p-3 rounded-lg border border-border">
@@ -927,7 +937,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   type="date"
                   value={paymentForm.date}
                   onChange={(e) => setPaymentForm((p) => ({ ...p, date: e.target.value }))}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
               <div>
@@ -937,7 +947,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   value={paymentForm.amount}
                   onChange={(e) => setPaymentForm((p) => ({ ...p, amount: e.target.value }))}
                   placeholder="z.B. 250,00"
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
             </div>
@@ -947,7 +957,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               <select id="invoicesview-methode"
                 value={paymentForm.method}
                 onChange={(e) => setPaymentForm((p) => ({ ...p, method: e.target.value }))}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
                 <option value="Überweisung">Überweisung</option>
                 <option value="PayPal">PayPal</option>
@@ -967,7 +977,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 }}
                 rows={3}
                 placeholder="z.B. Zahlungseingang Kontoauszug, Teilzahlung, ..."
- className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+ className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
               />
             </div>
 
@@ -1072,7 +1082,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 onChange={(event) => { setChainAmountInput(event.target.value); setChainAmountError(null); }}
                 aria-invalid={Boolean(chainAmountError)}
                 aria-describedby={chainAmountError ? 'chain-amount-error' : undefined}
-                className="px-3 h-10 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="px-3 h-10 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
               {chainAmountError && <p id="chain-amount-error" role="alert" className="text-sm font-medium text-error-text">{chainAmountError}</p>}
             </div>
@@ -1115,7 +1125,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               if (paymentDeleteError) setPaymentDeleteError(null);
             }}
             rows={3}
-            className="px-3 py-2.5 hover:border-ink-500 mt-2 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="px-3 py-2.5 hover:border-control-border-hover mt-2 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             placeholder="z.B. falsch erfasst, Doppelbuchung, ..."
           />
           {paymentDeleteError && <div className="mt-2 text-sm font-semibold text-error-text">{paymentDeleteError}</div>}
@@ -1191,7 +1201,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   if (viewMode === 'detail' && selectedDocument) {
       return (
-          <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs relative">
+          <div className="min-h-full px-1 pt-2 relative flex flex-col">
 
               {renderEmailModal()}
               {renderPaymentModal()}
@@ -1426,6 +1436,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       </div>
                   </div>
               </div>
+      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6 relative">
 
               {/* Main Content Layout */}
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
@@ -1554,7 +1565,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                   className={`w-full text-left rounded-2xl border px-3 py-2.5 transition-colors ${
                                     isCurrent
                                       ? 'border-foreground bg-surface'
-                                      : 'border-control-border bg-white/60 hover:bg-surface hover:border-control-border'
+                                      : 'border-control-border bg-surface/60 hover:bg-surface hover:border-control-border'
                                   }`}
                                 >
                                   <div className="flex items-center justify-between gap-2">
@@ -1768,7 +1779,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           <div className="space-y-4 relative pl-2 border-l border-border ml-1">
                               {selectedDocument.history && selectedDocument.history.length > 0 ? selectedDocument.history.map((h, i) => (
                                   <div key={i} className="pl-4 relative">
-                                      <div className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-border border-2 border-white"></div>
+                                      <div className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-border border-2 border-surface"></div>
                                       <p className="text-xs font-semibold text-muted uppercase tracking-wide">{formatDate(h.date)}</p>
                                       <p className="text-xs font-medium text-foreground">{formatDocumentHistoryAction(h.action)}</p>
                                   </div>
@@ -1781,6 +1792,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
               </div>
           </div>
+    </div>
       );
   }
 
@@ -1828,7 +1840,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 onChange={(e) => setBulkDeleteReason(e.target.value)}
                 rows={4}
                 placeholder="z.B. Duplikat, Testdaten, Kunde hat storniert ..."
-                className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+                className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
               />
             </div>
           </div>
@@ -1900,7 +1912,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   };
 
   return (
-    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs flex flex-col relative">
+    <div className="min-h-full px-1 pt-2 flex flex-col relative">
       {renderDunningModal()}
       {renderEmailModal()}
       {renderPaymentModal()}
@@ -1982,6 +1994,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </>
         }
       />
+      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6 flex flex-col relative">
 
        {isSelecting && (
          <div className="mb-4 flex flex-col gap-3 rounded-card bg-surface-inverse px-4 py-2.5 text-inverse-foreground shadow-lg md:flex-row md:items-center md:justify-between">
@@ -2037,7 +2050,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
          </div>
        )}
 
-       <div className="flex-1">
+       <div className={wide && sortedDocuments.some((doc) => doc.id === previewId) ? 'grid flex-1 items-start gap-4 grid-cols-[minmax(0,1fr)_340px]' : 'flex-1'}>
+       <div className="min-w-0">
            {isLoading ? (
              <SkeletonLoader variant="list" count={5} />
            ) : isCurrentDataError ? (
@@ -2076,12 +2090,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                      <TableRow
                        key={doc.id}
                        interactive
-                       selected={selected}
+                       selected={selected || (wide && previewId === doc.id)}
                        aria-label={`${getInvoiceDocumentLabel(doc.documentKind)} ${doc.number} öffnen`}
                        onClick={() => {
                          if (isSelecting) toggleSelected(doc.id);
+                         else if (wide) setPreviewId(doc.id);
                          else handleOpenDetail(doc.id);
                        }}
+                       onDoubleClick={() => handleOpenDetail(doc.id)}
                      >
                        <TableCell onClick={(event) => event.stopPropagation()}>
                          <Checkbox
@@ -2156,6 +2172,53 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               />
           )}
       </div>
+      {wide && (() => {
+        const doc = sortedDocuments.find((candidate) => candidate.id === previewId);
+        if (!doc) return null;
+        const net = doc.taxSnapshot?.netAmount ?? (doc.items ?? []).reduce((sum, item) => sum + (Number(item.total) || 0), 0);
+        const gross = doc.taxSnapshot?.grossAmount ?? (Number(doc.amount) || 0);
+        const open = Math.max(0, gross - sumPayments(doc));
+        return (
+          <aside aria-label={`Übersicht ${doc.number}`} className="sticky top-0 rounded-card border border-border bg-surface p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="truncate text-section tabular-nums text-foreground">{doc.number}</h2>
+                <p className="text-caption text-muted">{getInvoiceDocumentLabel(doc.documentKind)}</p>
+              </div>
+              <Badge status={doc.status} />
+            </div>
+            {/* T-Konto: one figure split into net and gross. */}
+            <div className="mt-4 grid grid-cols-[1fr_1px_1fr] border-t border-control-border pt-2">
+              <div className="pr-3">
+                <div className="text-caption text-muted">Netto</div>
+                <div className="text-sm font-semibold tabular-nums">{formatCurrency(net)}</div>
+              </div>
+              <div className="bg-control-border" aria-hidden="true" />
+              <div className="pl-3 text-right">
+                <div className="text-caption text-muted">Brutto</div>
+                <div className="text-lg font-bold tabular-nums">{formatCurrency(gross)}</div>
+              </div>
+            </div>
+            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+              <dt className="text-caption text-muted">Kunde</dt><dd className="truncate">{doc.client || '–'}</dd>
+              <dt className="text-caption text-muted">Datum</dt><dd className="tabular-nums">{doc.date ? formatDate(doc.date) : '–'}</dd>
+              <dt className="text-caption text-muted">Fällig</dt><dd className="tabular-nums">{doc.dueDate ? formatDate(doc.dueDate) : '–'}</dd>
+              {documentType === 'invoice' && (<><dt className="text-caption text-muted">Offen</dt><dd className="tabular-nums font-semibold">{formatCurrency(open)}</dd></>)}
+            </dl>
+            {doc.status === 'overdue' && (
+              <p className="mt-4 rounded-control border border-warning-border bg-warning-bg px-3 py-2 text-caption text-warning-text" role="note">
+                Seit {doc.dueDate ? formatDate(doc.dueDate) : 'Fälligkeit'} überfällig. Mahnung, Folgebeleg und Portal-Link stehen in der Detailansicht.
+              </p>
+            )}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => handleOpenDetail(doc.id)}>Öffnen</Button>
+              <Button size="sm" variant="secondary" onClick={() => onEditInvoice(doc, documentType)}>Bearbeiten</Button>
+            </div>
+          </aside>
+        );
+      })()}
+      </div>
+    </div>
     </div>
   );
 };

@@ -22,7 +22,7 @@ interface InvoiceDocumentEditorProps {
   invoice: Invoice;
   templateType?: 'invoice' | 'offer';
   mode?: 'create' | 'edit';
-  onSave: (invoice: Invoice) => void;
+  onSave: (invoice: Invoice, meta?: { numberChangeReason?: string }) => void;
   onCancel: () => void;
 }
 
@@ -88,7 +88,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
       templateElements={activeTemplate?.elements ?? (templateType === 'offer' ? INITIAL_OFFER_TEMPLATE : INITIAL_INVOICE_TEMPLATE)}
       onValidateVatId={runtime.validateVatId}
       onSelectedClientChange={setSelectedClientId}
-      onSave={(document) => onSave(document as unknown as Invoice)}
+      onSave={(document, meta) => onSave(document as unknown as Invoice, meta)}
       onCancel={onCancel}
     />
   );

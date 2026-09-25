@@ -639,7 +639,7 @@ export const ClientsView: React.FC = () => {
     };
 
     return (
-         <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs flex flex-col overflow-hidden">
+         <div className={isEditorOpen || selectedClientId ? 'bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs flex flex-col overflow-hidden' : 'min-h-full px-1 pt-2 flex flex-col overflow-hidden'}>
               {isEditorOpen && draft ? (
                   <div className="flex flex-col flex-1 min-h-0">
                       <div className="flex flex-col flex-1 min-h-0">
@@ -670,7 +670,7 @@ export const ClientsView: React.FC = () => {
                                          value={draft.customerNumber ?? ''}
                                          onChange={(e) => setDraft({ ...draft, customerNumber: e.target.value })}
                                          placeholder="Automatisch bei leerem Feld"
-                                         className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                         className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                      />
                                  </div>
                                   <div className="col-span-2">
@@ -693,7 +693,7 @@ export const ClientsView: React.FC = () => {
                                          id={getInputId('contactPerson')}
                                          value={draft.contactPerson}
                                          onChange={(e) => setDraft({ ...draft, contactPerson: e.target.value })}
-                                         className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                         className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                      />
                                  </div>
                                  <div>
@@ -701,7 +701,7 @@ export const ClientsView: React.FC = () => {
                                      <input id="clientsview-telefon"
                                          value={draft.phone}
                                          onChange={(e) => setDraft({ ...draft, phone: e.target.value })}
-                                         className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                         className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                      />
                                  </div>
                                  <div>
@@ -709,7 +709,7 @@ export const ClientsView: React.FC = () => {
                                      <select id="clientsview-status"
                                          value={draft.status}
                                          onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
-                                         className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                         className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                      >
                                          <option value="active">Aktiv</option>
                                          <option value="inactive">Inaktiv</option>
@@ -728,7 +728,7 @@ export const ClientsView: React.FC = () => {
                                                      .filter(Boolean),
                                              })
                                          }
-                                         className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                         className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                      />
                                  </div>
                                  <div className="col-span-2">
@@ -736,7 +736,7 @@ export const ClientsView: React.FC = () => {
                                      <textarea id="clientsview-notizen"
                                          value={draft.notes ?? ''}
                                          onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-                                         className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                         className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                          rows={3}
                                      />
                                  </div>
@@ -756,7 +756,7 @@ export const ClientsView: React.FC = () => {
                                           <select id="clientsview-kundentyp"
                                               value={draft.taxProfile?.type ?? 'business'}
                                               onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: event.target.value as 'business' | 'consumer' } })}
-                                              className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                              className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                           >
                                               <option value="business">Unternehmen</option>
                                               <option value="consumer">Privatkunde</option>
@@ -769,7 +769,7 @@ export const ClientsView: React.FC = () => {
                                               onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', countryCode: event.target.value.toUpperCase() } })}
                                               placeholder="DE"
                                               maxLength={2}
-                                              className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm uppercase focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                              className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm uppercase focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                           />
                                       </div>
                                       <div className="col-span-4">
@@ -778,7 +778,7 @@ export const ClientsView: React.FC = () => {
                                               value={draft.taxProfile?.vatId ?? ''}
                                               onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', vatId: event.target.value.toUpperCase(), vatIdValidation: undefined, vatIdValidationAt: undefined } })}
                                               placeholder="DE123456789"
-                                              className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                              className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                           />
                                           {draft.taxProfile?.vatIdValidation ? <p className="mt-1 text-xs text-muted">Status: {draft.taxProfile.vatIdValidation}</p> : null}
                                       </div>
@@ -842,7 +842,7 @@ export const ClientsView: React.FC = () => {
                                                      next[idx] = { ...em, label: e.target.value };
                                                      setDraft({ ...draft, emails: next });
                                                  }}
-                                                  className="px-2.5 h-8 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                                  className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                               />
                                           </div>
                                           <div className="col-span-2">
@@ -854,7 +854,7 @@ export const ClientsView: React.FC = () => {
                                                       next[idx] = { ...em, kind: e.target.value as any };
                                                       setDraft({ ...draft, emails: next });
                                                   }}
-                                                  className="px-2.5 h-8 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                                  className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                               >
                                                   <option value="general">{emailKindLabel.general}</option>
                                                   <option value="billing">{emailKindLabel.billing}</option>
@@ -984,7 +984,7 @@ export const ClientsView: React.FC = () => {
                                                          next[idx] = { ...ad, label: e.target.value };
                                                          setDraft({ ...draft, addresses: next });
                                                      }}
-                                                     className="px-2.5 h-8 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                                     className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                                  />
                                               </div>
                                               <div className="col-span-3">
@@ -996,7 +996,7 @@ export const ClientsView: React.FC = () => {
                                                           next[idx] = { ...ad, kind: e.target.value as any };
                                                           setDraft({ ...draft, addresses: next });
                                                       }}
-                                                      className="px-2.5 h-8 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                                      className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                                   >
                                                       <option value="billing">{addressKindLabel.billing}</option>
                                                       <option value="shipping">{addressKindLabel.shipping}</option>
@@ -1059,7 +1059,7 @@ export const ClientsView: React.FC = () => {
                                                          next[idx] = { ...ad, line2: e.target.value };
                                                          setDraft({ ...draft, addresses: next });
                                                      }}
-                                                     className="px-2.5 h-8 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                                     className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                                  />
                                              </div>
                                              <div className="col-span-3">
@@ -1199,6 +1199,7 @@ export const ClientsView: React.FC = () => {
                  </>
                }
              />
+             <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6 flex flex-col overflow-hidden">
 
              {viewMode === 'grid' ? (
                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 overflow-y-auto p-0.5 pb-4">
@@ -1324,6 +1325,7 @@ export const ClientsView: React.FC = () => {
                      )}
                  </div>
               )}
+             </div>
              </>
              )}
                   </>

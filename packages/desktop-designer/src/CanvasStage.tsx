@@ -214,6 +214,7 @@ export const CanvasStage: React.FC<CanvasStageProps> = ({
       >
         <div
           ref={pageRef}
+          data-theme="light"
           className="bg-white shadow-2xl relative print-area"
           style={{ width: `${pageW}px`, height: `${pageH}px` }}
         >

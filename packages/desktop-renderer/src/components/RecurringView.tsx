@@ -270,7 +270,7 @@ export const RecurringView: React.FC = () => {
     const visibleProfiles = profiles.filter((profile) => !pendingIds.has(profile.id) || leavingIds.has(profile.id));
 
     return (
-        <div className="min-h-full rounded-panel bg-surface p-6 lg:p-8 shadow-xs flex flex-col relative">
+        <div className="min-h-full px-1 pt-2 flex flex-col relative">
             <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
                 <div className="min-w-0">
                     <h1 className="flex flex-wrap items-center gap-3 text-title text-foreground">
@@ -285,6 +285,7 @@ export const RecurringView: React.FC = () => {
                     <Plus size={16} /> Neues Abo
                 </Button>
             </div>
+      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6 flex flex-col relative">
 
             {listIsError ? (
                 <ErrorState
@@ -328,7 +329,7 @@ export const RecurringView: React.FC = () => {
                                     type="button"
                                     onClick={() => handleToggleActive(profile.id)}
                                     aria-pressed={profile.active}
-                                    className={`inline-flex h-6 items-center gap-1 rounded-full border px-2 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${profile.active ? 'border-success-text bg-success-bg text-success-text' : 'border-ink-500 bg-surface text-ink-700'}`}
+                                    className={`inline-flex h-6 items-center gap-1 rounded-full border px-2 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${profile.active ? 'border-success-text bg-success-bg text-success-text' : 'border-control-border-hover bg-surface text-muted'}`}
                                 >
                                     {profile.active ? <Play size={12} fill="currentColor" aria-hidden="true" /> : <Pause size={12} fill="currentColor" aria-hidden="true" />}
                                     {profile.active ? 'Aktiv' : 'Pausiert'}
@@ -530,7 +531,7 @@ export const RecurringView: React.FC = () => {
                                                 type="text"
                                                 placeholder="Beschreibung"
                                                 aria-label="Beschreibung"
-                                                className="px-2.5 h-8 hover:border-ink-500 flex-1 rounded-sm border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                                                className="px-2.5 h-8 hover:border-control-border-hover flex-1 rounded-sm border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                                                 value={item.description}
                                                 onChange={e => updateItem(idx, { description: e.target.value })}
                                                 aria-invalid={validationErrors.items?.targetId === itemDescriptionId(idx) ? 'true' : undefined}
@@ -602,5 +603,6 @@ export const RecurringView: React.FC = () => {
                     </div>
             </Modal>
         </div>
+    </div>
     );
 };

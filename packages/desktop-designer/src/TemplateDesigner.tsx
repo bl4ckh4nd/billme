@@ -347,8 +347,8 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({
 
           {/* Validation overlay */}
           {validation.show && (
-            <div className="absolute left-1/2 top-8 z-[var(--z-dropdown)] max-w-sm -translate-x-1/2 rounded-xl bg-white p-4 shadow-2xl no-print">
-              <div className="mb-2 flex items-center gap-2 font-semibold text-black">
+            <div className="absolute left-1/2 top-8 z-[var(--z-dropdown)] max-w-sm -translate-x-1/2 rounded-xl bg-surface p-4 shadow-2xl no-print">
+              <div className="mb-2 flex items-center gap-2 font-semibold text-foreground">
                 {validation.issues.length === 0 ? <CheckCircle className="text-success-text" /> : <AlertTriangle className="text-error-text" />}
                 {validation.issues.length === 0 ? 'Alles in Ordnung' : 'Prüfung: Handlungsbedarf'}
               </div>

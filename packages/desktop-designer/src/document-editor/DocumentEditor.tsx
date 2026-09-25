@@ -7,6 +7,7 @@ import { formatAddressMultiline } from '@billme/desktop-utils';
 import {
   calculateInvoiceTaxSnapshot,
   getDachVatRates,
+  getInvoiceTaxExemptionReason,
   getInvoiceTaxModeDefinition,
   INVOICE_TAX_MODE_DEFINITIONS,
   recommendInvoiceTaxMode,
@@ -29,7 +30,8 @@ export interface DocumentEditorProps {
   onTemplateElementsChange?: (elements: InvoiceElement[]) => void;
   onValidateVatId?: (args: { countryCode: string; vatNumber: string }) => Promise<{ status: 'valid' | 'invalid' | 'unavailable'; normalizedVatId: string; checkedAt: string }>;
   onSelectedClientChange?: (clientId: string) => void;
-  onSave: (document: DocumentDraft) => void;
+  /** `numberChangeReason` is set when the user unlocked and may have edited the document number. */
+  onSave: (document: DocumentDraft, meta?: { numberChangeReason?: string }) => void;
   onCancel: () => void;
 }
 
@@ -147,6 +149,9 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const loadedDocumentId = useRef(document.id);
   const [selectedClientId, setSelectedClientId] = useState(document.clientId ?? '');
   const [isNumberLocked, setIsNumberLocked] = useState(mode === 'edit');
+  // GoBD: unlocking the number needs a stated reason; it goes into the save's audit entry.
+  const [unlockReason, setUnlockReason] = useState('');
+  const [numberChangeReason, setNumberChangeReason] = useState<string | undefined>(undefined);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [vatValidationPending, setVatValidationPending] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({ items: {} });
@@ -404,8 +409,8 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
       return;
     }
     setSaveError(null);
-    onSave({ ...formData, taxMode: resolvedTaxMode, taxSnapshot, amount: taxSnapshot.grossAmount });
-  }, [focusValidationError, formData, onSave, resolvedTaxMode, taxSnapshot, validate]);
+    onSave({ ...formData, taxMode: resolvedTaxMode, taxSnapshot, amount: taxSnapshot.grossAmount }, numberChangeReason ? { numberChangeReason } : undefined);
+  }, [focusValidationError, formData, numberChangeReason, onSave, resolvedTaxMode, taxSnapshot, validate]);
 
   const handleCancel = useCallback(() => {
     if (dirty) {
@@ -478,6 +483,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     taxModeOptions: INVOICE_TAX_MODE_DEFINITIONS.map((definition) => ({ value: definition.mode, label: definition.label })),
     taxRateOptions,
     resolvedTaxMode,
+    taxLegalText: getInvoiceTaxExemptionReason(resolvedTaxMode, formData.taxMeta),
     taxRecommendation,
     taxRecommendationLabel: getInvoiceTaxModeDefinition(taxRecommendation.mode).label,
     buyerCountryCode,
@@ -588,15 +594,27 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
       <ConfirmDialog
         open={showUnlockConfirmation}
         title="Nummer entsperren?"
-        description="Achtung: Die manuelle Änderung der Nummer kann die GoBD-konforme Nummerierung gefährden. Nur fortfahren, wenn Sie sicher sind."
+        description="Achtung: Die manuelle Änderung der Nummer kann die GoBD-konforme Nummerierung gefährden. Der Grund wird mit der Änderung im Audit-Log gespeichert."
         confirmLabel="Nummer entsperren"
         cancelLabel="Abbrechen"
         destructive
+        reason={{
+          label: 'Grund (Pflicht)',
+          placeholder: 'Warum wird die Nummer geändert?',
+          required: true,
+          value: unlockReason,
+          onChange: setUnlockReason,
+        }}
         onConfirm={() => {
           setShowUnlockConfirmation(false);
           setIsNumberLocked(false);
+          setNumberChangeReason(unlockReason.trim());
+          setUnlockReason('');
         }}
-        onCancel={() => setShowUnlockConfirmation(false)}
+        onCancel={() => {
+          setShowUnlockConfirmation(false);
+          setUnlockReason('');
+        }}
       />
     </div>
   );

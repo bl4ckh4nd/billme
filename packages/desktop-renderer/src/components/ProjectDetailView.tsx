@@ -159,7 +159,7 @@ export const ProjectDetailView: React.FC = () => {
   };
 
   return (
-    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs">
+    <div className="min-h-full px-1 pt-2 flex flex-col">
       <button
         onClick={() => navigate({ to: '/projects' })}
         className="flex items-center gap-2 text-muted hover:text-foreground transition-colors mb-6 text-xs font-semibold uppercase tracking-wider focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring rounded-sm"
@@ -183,6 +183,7 @@ export const ProjectDetailView: React.FC = () => {
           Zu Dokumenten
         </button>
       </div>
+      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6">
 
       {/* Project identity facts, deliberately quiet: the question this screen
           answers is the money still owed, which gets the focal card below. */}
@@ -367,6 +368,7 @@ export const ProjectDetailView: React.FC = () => {
           )}
         </div>
       </div>
+    </div>
     </div>
   );
 };

@@ -156,7 +156,7 @@ export const ProjectsView: React.FC = () => {
   };
 
   return (
-    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs">
+    <div className="min-h-full px-1 pt-2 flex flex-col">
       <PageHeader
         title="Projekte"
         description="Projekte bündeln alle Rechnungen und Angebote eines Kunden."
@@ -187,6 +187,7 @@ export const ProjectsView: React.FC = () => {
           </>
         }
       />
+      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6">
 
       {isLoadingView ? (
         <SkeletonLoader variant="table" count={5} />
@@ -309,7 +310,7 @@ export const ProjectsView: React.FC = () => {
                   value={draft.clientId ?? ''}
                   onChange={(e) => setDraft({ ...draft, clientId: e.target.value })}
                   disabled={editorMode === 'edit'}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-60"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-60"
                 >
                   <option value="">(Bitte auswählen)</option>
                   {clients.map((c) => (
@@ -331,7 +332,7 @@ export const ProjectsView: React.FC = () => {
                   value={draft.code ?? ''}
                   onChange={(e) => setDraft({ ...draft, code: e.target.value })}
                   placeholder="Leer lassen für automatische Vergabe (z.B. PRJ-2026-001)"
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
 
@@ -340,7 +341,7 @@ export const ProjectsView: React.FC = () => {
                 <select id="projectsview-status"
                   value={draft.status}
                   onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="active">Aktiv</option>
                   <option value="planned">Geplant</option>
@@ -354,7 +355,7 @@ export const ProjectsView: React.FC = () => {
                 <input id="projectsview-projektname-pflicht"
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
 
@@ -364,7 +365,7 @@ export const ProjectsView: React.FC = () => {
                   type="date"
                   value={draft.startDate}
                   onChange={(e) => setDraft({ ...draft, startDate: e.target.value })}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
               <div>
@@ -373,7 +374,7 @@ export const ProjectsView: React.FC = () => {
                   type="date"
                   value={draft.endDate ?? ''}
                   onChange={(e) => setDraft({ ...draft, endDate: e.target.value || undefined })}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
 
@@ -383,7 +384,7 @@ export const ProjectsView: React.FC = () => {
                   type="number"
                   value={draft.budget ?? 0}
                   onChange={(e) => setDraft({ ...draft, budget: Number(e.target.value) })}
- className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
 
@@ -400,7 +401,7 @@ export const ProjectsView: React.FC = () => {
                   value={draft.description ?? ''}
                   onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                   rows={3}
- className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+ className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
                 />
               </div>
 
@@ -414,7 +415,7 @@ export const ProjectsView: React.FC = () => {
                   }}
                   rows={3}
                   placeholder="z.B. Projektstart verschoben, Code angepasst, ..."
- className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+ className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
                 />
                 {reasonError && <div className="mt-2 text-sm font-semibold text-error-text">{reasonError}</div>}
               </div>
@@ -458,7 +459,7 @@ export const ProjectsView: React.FC = () => {
                 if (archiveError) setArchiveError(null);
               }}
               rows={3}
-              className="px-3 py-2.5 hover:border-ink-500 mt-2 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-3 py-2.5 hover:border-control-border-hover mt-2 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               placeholder="z.B. Projekt abgeschlossen, Kunde gekündigt, ..."
             />
             {archiveError && <div className="mt-2 text-sm font-semibold text-error-text">{archiveError}</div>}
@@ -480,6 +481,7 @@ export const ProjectsView: React.FC = () => {
           </>
         )}
       </Modal>
+    </div>
     </div>
   );
 };

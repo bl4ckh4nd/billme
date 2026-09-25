@@ -306,7 +306,7 @@ export const ArticlesView: React.FC = () => {
   return (
     <div className="flex gap-6 h-full">
         {/* Main Content */}
-        <div className="flex-1 bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs flex flex-col overflow-hidden relative">
+        <div className="min-h-full px-1 pt-2 flex-1 flex flex-col overflow-hidden relative">
 
             {/* Header Area */}
             <div className="relative shrink-0">
@@ -389,6 +389,7 @@ export const ArticlesView: React.FC = () => {
                     </div>
                 )}
             </div>
+      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6 flex flex-col overflow-hidden relative">
 
             {operationMessage && (
               <div
@@ -472,7 +473,7 @@ export const ArticlesView: React.FC = () => {
                      <div className="grid grid-cols-12 gap-4 px-4 py-2 text-xs font-semibold text-muted uppercase tracking-wider sticky top-0 bg-surface z-10 border-b border-border">
                         <div className="col-span-1 flex justify-center">
                             <button onClick={handleSelectAll} className="hover:text-foreground">
-                                <CheckSquare size={16} className={selectedArticles.size > 0 ? 'text-foreground fill-black/10' : 'text-muted'} />
+                                <CheckSquare size={16} className={selectedArticles.size > 0 ? 'text-foreground fill-foreground/10' : 'text-muted'} />
                             </button>
                         </div>
                         <div className="col-span-4">Artikel / Leistung</div>
@@ -553,6 +554,7 @@ export const ArticlesView: React.FC = () => {
                 </div>
             )}
         </div>
+    </div>
 
         {/* Slide-over Form */}
         {isFormOpen && (
@@ -578,7 +580,7 @@ export const ArticlesView: React.FC = () => {
                                     type="text"
                                     value={formData.title}
                                     onChange={(e) => setFormData({...formData, title: e.target.value})}
-                                    className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                     placeholder="z.B. Webdesign"
                                     autoFocus
                                 />
@@ -590,7 +592,7 @@ export const ArticlesView: React.FC = () => {
                                     type="text"
                                     value={formData.sku}
                                     onChange={(e) => setFormData({...formData, sku: e.target.value})}
-                                    className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
                                     placeholder="SKU-001"
                                 />
                                 {formErrors.sku && <p className="mt-1 text-xs font-semibold text-error-text">{formErrors.sku}</p>}
@@ -604,7 +606,7 @@ export const ArticlesView: React.FC = () => {
                                 <select id="articlesview-kategorie"
                                     value={formData.category}
                                     onChange={(e) => setFormData({...formData, category: e.target.value})}
-                                    className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control pl-10 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors appearance-none"
+                                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control pl-10 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors appearance-none"
                                 >
                                     {configuredCategories.map((c) => (
                                       <option key={c} value={c}>
@@ -644,7 +646,7 @@ export const ArticlesView: React.FC = () => {
                                 <select id="articlesview-einheit"
                                     value={formData.unit}
                                     onChange={(e) => setFormData({...formData, unit: e.target.value})}
-                                    className="px-3 h-10 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring appearance-none transition-colors"
+                                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring appearance-none transition-colors"
                                 >
                                     <option value="Std">Stunde</option>
                                     <option value="Stk">Stück</option>
@@ -688,7 +690,7 @@ export const ArticlesView: React.FC = () => {
                         <textarea id="articlesview-beschreibung"
                             value={formData.description}
                             onChange={(e) => setFormData({...formData, description: e.target.value})}
-                            className="px-3 py-2.5 hover:border-ink-500 w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring h-32 resize-none transition-colors"
+                            className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring h-32 resize-none transition-colors"
                             placeholder="Details zum Produkt..."
                         />
                          <p className="text-xs text-muted mt-2 flex items-center gap-1">

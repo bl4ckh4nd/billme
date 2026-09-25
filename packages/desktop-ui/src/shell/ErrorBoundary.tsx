@@ -142,7 +142,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                   <button
                     type="button"
                     onClick={this.handleReset}
-                    className="w-full flex items-center justify-center gap-2 bg-dark-base hover:bg-dark-2 text-background font-semibold py-3 px-4 rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="w-full flex items-center justify-center gap-2 bg-dark-base hover:bg-dark-2 text-inverse-foreground font-semibold py-3 px-4 rounded-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     <RefreshCw size={16} aria-hidden="true" />
                     Erneut versuchen

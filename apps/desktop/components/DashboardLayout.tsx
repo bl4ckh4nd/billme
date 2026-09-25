@@ -1,41 +1,46 @@
 import React from 'react';
 import {
+  BarChart3,
+  Briefcase,
+  FileText,
+  Home,
+  LayoutTemplate,
+  Landmark,
+  Package,
+  ReceiptText,
+  Repeat,
+  Users,
+} from 'lucide-react';
+import {
   DashboardLayout as ShellDashboardLayout,
   type DashboardLayoutProps,
   type ShellNavItem,
 } from '@billme/desktop-ui';
 import { Titlebar } from './Titlebar';
-import billmeFullLogo from '../assets/billme-full-logo.svg';
 import { getBillmeRuntimeConfig, type BillmeNavigationPage } from '../runtime';
 
-const ALL_ITEMS: ReadonlyArray<{ id: BillmeNavigationPage; label: string }> = [
-  { id: 'dashboard', label: 'Übersicht' },
-  { id: 'clients', label: 'Kunden' },
-  { id: 'projects', label: 'Projekte' },
-  { id: 'documents', label: 'Dokumente' },
-  { id: 'finance', label: 'Finanzen' },
-  { id: 'articles', label: 'Artikel' },
+// `section` is the web shell's visibility switch for the entry.
+const ALL_ITEMS: ReadonlyArray<ShellNavItem & { section: BillmeNavigationPage }> = [
+  { id: 'dashboard', label: 'Übersicht', icon: Home, group: 'Arbeit', to: '/', section: 'dashboard' },
+  { id: 'eur', label: 'Buchen', icon: ReceiptText, group: 'Arbeit', to: '/eur', section: 'finance' },
+  { id: 'accounts', label: 'Bankabgleich', icon: Landmark, group: 'Arbeit', to: '/accounts', also: ['/finance'], section: 'finance' },
+  { id: 'documents', label: 'Rechnungen & Angebote', icon: FileText, group: 'Verkauf', to: '/documents', section: 'documents' },
+  { id: 'recurring', label: 'Wiederkehrend', icon: Repeat, group: 'Verkauf', to: '/recurring', section: 'documents' },
+  { id: 'clients', label: 'Kunden', icon: Users, group: 'Verkauf', to: '/clients', section: 'clients' },
+  { id: 'projects', label: 'Projekte', icon: Briefcase, group: 'Verkauf', to: '/projects', section: 'projects' },
+  { id: 'articles', label: 'Leistungen', icon: Package, group: 'Verkauf', to: '/articles', section: 'articles' },
+  { id: 'statistics', label: 'Auswertungen', icon: BarChart3, group: 'Abschluss', to: '/statistics', section: 'finance' },
+  { id: 'templates', label: 'Vorlagen', icon: LayoutTemplate, group: 'Abschluss', to: '/templates', section: 'documents' },
 ];
 
-type Props = Omit<DashboardLayoutProps, 'navItems' | 'logoUrl' | 'titlebar'>;
+type Props = Omit<DashboardLayoutProps, 'navItems' | 'titlebar'>;
 
-// The web shell ships a runtime navigation config that hides sections.
 export const DashboardLayout: React.FC<Props> = (props) => {
   const runtime = React.useMemo(() => getBillmeRuntimeConfig(), []);
   const navItems: readonly ShellNavItem[] = React.useMemo(() => {
-    if (!runtime.navigation || runtime.navigation.length === 0) {
-      return ALL_ITEMS;
-    }
-
-    return ALL_ITEMS.filter((item) => runtime.navigation?.includes(item.id));
+    const visible = runtime.navigation;
+    return visible && visible.length > 0 ? ALL_ITEMS.filter((item) => visible.includes(item.section)) : ALL_ITEMS;
   }, [runtime.navigation]);
 
-  return (
-    <ShellDashboardLayout
-      {...props}
-      navItems={navItems}
-      logoUrl={billmeFullLogo}
-      titlebar={<Titlebar />}
-    />
-  );
+  return <ShellDashboardLayout {...props} navItems={navItems} titlebar={<Titlebar />} />;
 };

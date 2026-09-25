@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowDownToLine, LogOut, Minus, RefreshCw, Square, X } from 'lucide-react';
 import { getRendererRuntime, ipc } from '../runtime-api';
+import { useThemePreference } from '@billme/ui';
 
 type UpdateStatus = { status: string; version?: string; progress?: number };
 
@@ -61,6 +62,11 @@ export const Titlebar: React.FC<TitlebarProps> = ({ logoSrc }) => {
     return () => bridge?.offUpdateStatusChanged?.();
   }, [isWebShell]);
 
+  const [theme] = useThemePreference();
+  React.useEffect(() => {
+    if (!isWebShell) void ipc.window.setTheme({ theme }).catch(() => {});
+  }, [isWebShell, theme]);
+
   const toggleMaximize = () => {
     if (!isWebShell) void ipc.window.toggleMaximize();
   };
@@ -94,7 +100,7 @@ export const Titlebar: React.FC<TitlebarProps> = ({ logoSrc }) => {
             <button
               type="button"
               onClick={() => runtime.onLogout?.()}
-              className="inline-flex h-8 items-center gap-2 rounded-control px-3 text-caption font-medium text-foreground transition-colors hover:bg-ink-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="inline-flex h-8 items-center gap-2 rounded-control px-3 text-caption font-medium text-foreground transition-colors hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <LogOut size={14} aria-hidden="true" />
               Abmelden
@@ -137,7 +143,7 @@ export const Titlebar: React.FC<TitlebarProps> = ({ logoSrc }) => {
             <button
               type="button"
               onClick={() => void ipc.window.minimize()}
-              className={`${windowButton} text-muted hover:bg-ink-100 hover:text-foreground`}
+              className={`${windowButton} text-muted hover:bg-surface-sunken hover:text-foreground`}
               aria-label="Fenster minimieren"
               title="Minimieren"
             >
@@ -146,7 +152,7 @@ export const Titlebar: React.FC<TitlebarProps> = ({ logoSrc }) => {
             <button
               type="button"
               onClick={toggleMaximize}
-              className={`${windowButton} text-muted hover:bg-ink-100 hover:text-foreground`}
+              className={`${windowButton} text-muted hover:bg-surface-sunken hover:text-foreground`}
               aria-label={isMaximized ? 'Fenster wiederherstellen' : 'Fenster maximieren'}
               title={isMaximized ? 'Wiederherstellen' : 'Maximieren'}
             >

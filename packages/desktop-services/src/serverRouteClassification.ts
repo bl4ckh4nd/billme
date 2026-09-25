@@ -10,6 +10,7 @@ const NATIVE_ELECTRON_ROUTE_KEYS = new Set<string>([
   'window:toggleMaximize',
   'window:close',
   'window:isMaximized',
+  'window:setTheme',
   'shell:openPath',
   'shell:openExportsDir',
   'shell:openExternal',

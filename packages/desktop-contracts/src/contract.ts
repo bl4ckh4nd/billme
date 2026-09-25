@@ -697,6 +697,11 @@ export const ipcRoutes = {
     args: z.undefined(),
     result: windowMaximizedStateSchema,
   },
+  'window:setTheme': {
+    channel: 'window:set-theme',
+    args: z.object({ theme: z.enum(['system', 'light', 'dark']) }),
+    result: okSchema,
+  },
 
   'shell:openPath': {
     channel: 'shell:openPath',

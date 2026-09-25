@@ -71,6 +71,7 @@ const createBrowserFallback = (onRequestClose?: () => void): IpcInvoke => async 
     case 'pdf:export':
       return unsupported(PDF_UNSUPPORTED_MESSAGE);
     case 'window:minimize':
+    case 'window:setTheme':
       return parseResult(key, { ok: true as const });
     case 'window:toggleMaximize':
       if (document.fullscreenElement) {

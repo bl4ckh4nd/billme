@@ -198,7 +198,7 @@ export const DunningLevelPreviewModal = ({
         <button
           type="button"
           onClick={onClose}
-          className="rounded-lg bg-dark-base px-6 py-2.5 text-sm font-semibold text-background shadow-sm transition-colors hover:bg-dark-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
+          className="rounded-lg bg-dark-base px-6 py-2.5 text-sm font-semibold text-inverse-foreground shadow-sm transition-colors hover:bg-dark-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
         >
           Schließen
         </button>

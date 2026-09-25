@@ -1,4 +1,4 @@
-import { dialog, shell, type BrowserWindow, type IpcMain, type IpcMainInvokeEvent } from 'electron';
+import { dialog, nativeTheme, shell, type BrowserWindow, type IpcMain, type IpcMainInvokeEvent } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { lstatSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
@@ -144,6 +144,16 @@ export const registerNativeIpcCommonHandlers = (
   register('window:close', () => {
     const mainWindow = deps.getMainWindow();
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+    return { ok: true };
+  });
+  // The renderer owns the preference (per-device localStorage); main mirrors it so
+  // native surfaces and the window background match before the page paints.
+  register('window:setTheme', ({ theme }) => {
+    nativeTheme.themeSource = theme;
+    const mainWindow = deps.getMainWindow();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0d0e11' : '#ffffff');
+    }
     return { ok: true };
   });
   register('window:isMaximized', () => {

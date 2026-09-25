@@ -43,7 +43,7 @@ test('completes the onboarding flow from an empty company profile', async () => 
   await page.getByRole('button', { name: 'Weiter zu Weitere Angaben' }).click();
   await page.getByRole('button', { name: 'Einrichtung abschließen' }).click();
 
-  await expect(page.getByRole('button', { name: 'Dokumente' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Rechnungen & Angebote' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Billme einrichten' })).toHaveCount(0);
 });
 

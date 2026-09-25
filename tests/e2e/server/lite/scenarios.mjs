@@ -48,7 +48,7 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
 
   await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Kunden' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Dokumente' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Rechnungen & Angebote' })).toBeVisible();
 
   const storedSession = await readLiteStoredSession(page);
   expect(storedSession).toMatchObject({

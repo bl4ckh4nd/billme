@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { registerNativeIpcHandlers } from './nativeIpcHandlers';
@@ -32,6 +32,8 @@ const createWindow = async () => {
     minWidth: 1024,
     minHeight: 640,
     frame: false,
+    // Matches --color-background; the renderer refines it via window:setTheme once loaded.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0d0e11' : '#ffffff',
     titleBarStyle: 'hidden',
     webPreferences: {
       preload: path.join(appDir, '../preload/index.cjs'),

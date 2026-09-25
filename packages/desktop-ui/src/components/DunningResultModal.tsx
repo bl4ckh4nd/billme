@@ -195,7 +195,7 @@ export const DunningResultModal = ({ isOpen, onClose, result }: DunningResultMod
         <button
           type="button"
           onClick={onClose}
-          className="rounded-lg bg-dark-base px-4 py-2 text-background transition-colors hover:bg-dark-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
+          className="rounded-lg bg-dark-base px-4 py-2 text-inverse-foreground transition-colors hover:bg-dark-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
         >
           Schließen
         </button>

@@ -18,6 +18,7 @@ const parseResult = <K extends IpcRouteKey>(key: K, value: unknown): IpcResult<K
 const createBrowserFallback = (onRequestClose?: () => void): IpcInvoke => async (key, rawArgs) => {
   switch (key) {
     case 'window:minimize':
+    case 'window:setTheme':
       return parseResult(key, { ok: true as const });
     case 'window:toggleMaximize':
       if (document.fullscreenElement) {

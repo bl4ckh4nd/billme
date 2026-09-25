@@ -27,7 +27,7 @@ export const Avatar: React.FC<AvatarProps> = ({ name, size = 'md', className }) 
   <span
     aria-hidden="true"
     className={cn(
-      'inline-flex shrink-0 select-none items-center justify-center rounded-full bg-surface-sunken font-semibold text-ink-700 shadow-[inset_0_0_0_1px_rgb(13_14_17/0.06)]',
+      'inline-flex shrink-0 select-none items-center justify-center rounded-full bg-surface-sunken font-semibold text-muted shadow-[inset_0_0_0_1px_rgb(13_14_17/0.06)]',
       sizeStyles[size],
       className,
     )}

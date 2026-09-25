@@ -2,6 +2,7 @@
 /* Self-hosted so the offline desktop apps and print output render Inter
    without a network round trip. */
 @import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
 @source "./src/**/*.{ts,tsx}";
 /* Every workspace package renders through this stylesheet, while app-level components are re-exports. Keep this sibling glob. */
 @source "../*/src/**/*.{ts,tsx}";
@@ -86,6 +87,14 @@
      surface-sunken, meeting the 3:1 non-text requirement. --color-border is
      1.25:1 and can only separate, never outline a control. */
   --color-control-border: #87898d;
+  /* Hovered control boundary: one ink step stronger than control-border. */
+  --color-control-border-hover: #6f7276;
+
+  /* Selection: the one filled mark per control (checked box, on switch,
+     active nav item, current step, focal data bar). Ink in light, lime in
+     dark, where an ink fill would vanish into the ground. */
+  --color-selected: #0d0e11;
+  --color-selected-foreground: #ffffff;
 
   /* Interaction States */
   --color-focus-ring: #0d0e11;
@@ -170,6 +179,9 @@
      600 titles and controls. Uppercase tracking belongs to table column
      headers only. */
   --font-sans: 'Inter Variable', Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* Figures read digit by digit: amounts, account and document numbers, IBAN.
+     A transposed digit is easier to spot in a monospace face. */
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   --text-title: 1.5rem;
   --text-title--line-height: 2rem;
   --text-title--letter-spacing: -0.02em;
@@ -200,12 +212,149 @@
     height: 100%;
   }
 
-  /* Light-only product. Declaring the scheme stops the OS from rendering native
-     controls and scrollbars dark inside a light shell, and keeps the partial
-     `prefers-color-scheme` overrides that used to leak into the app from
-     activating. */
+  /* Themes. Light is the @theme default. Dark follows the OS unless the
+     user picked a theme, which the shell writes to <html data-theme>. Only
+     role tokens change; the ink ramp stays literal, so call sites must use
+     roles for anything that should flip. A subtree marked data-theme="light"
+     (the rendered document, the A4 preview) keeps light roles inside a dark
+     shell. */
   html {
     color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --color-background: #0d0e11;
+      --color-foreground: #ffffff;
+      --color-surface: #181a1d;
+      --color-surface-muted: #14161a;
+      --color-surface-sunken: #101214;
+      --color-muted: #aeb1b6;
+      --color-border: #2e3034;
+      --color-border-subtle: #1c1e22;
+      --color-control-border: #6f7276;
+      --color-control-border-hover: #87898d;
+      --color-focus-ring: #d9f944;
+    --color-selected: #d9f944;
+    --color-selected-foreground: #0d0e11;
+      --color-disabled-foreground: #aeb1b6;
+      --color-disabled-surface: #2e3034;
+      --color-accent-50: #23270c;
+      --color-accent-100: #2a2f0a;
+      --color-accent-200: #4d5a07;
+      --color-accent-700: #d9f944;
+      --color-accent-800: #e4fc8c;
+      --color-dark-base: #000000;
+      --color-dark-1: #101214;
+      --color-dark-2: #1c1e22;
+      --color-dark-3: #101214;
+      --color-dark-border: #2e3034;
+      --color-dark-border-subtle: #42454a;
+      --color-surface-inverse: #000000;
+      --color-surface-inverse-raised: #101214;
+      --color-surface-inverse-overlay: #1c1e22;
+      --color-border-inverse: #42454a;
+      --color-success-bg: #12231a;
+      --color-success-border: #1f4732;
+      --color-success-text: #86efac;
+      --color-warning-bg: #251d0d;
+      --color-warning-border: #4d3c12;
+      --color-warning-text: #fcd34d;
+      --color-error-bg: #251414;
+      --color-error-border: #4d2020;
+      --color-error-text: #f87171;
+      --color-info-bg: #121e31;
+      --color-info-border: #1e3a63;
+      --color-info-text: #93c5fd;
+      --color-status-open: #181a1d;
+      --color-status-open-text: #ffffff;
+      --color-status-overdue: #251414;
+      --color-status-overdue-text: #f87171;
+      --color-status-draft: #101214;
+      --color-status-draft-text: #d2d4d7;
+      --shadow-xs: 0 0 0 1px rgb(255 255 255 / 0.06), 0 1px 2px rgb(0 0 0 / 0.4);
+      --shadow-sm: 0 0 0 1px rgb(255 255 255 / 0.06), 0 1px 2px rgb(0 0 0 / 0.4), 0 2px 4px rgb(0 0 0 / 0.3);
+      --shadow-md: 0 0 0 1px rgb(255 255 255 / 0.07), 0 2px 4px -1px rgb(0 0 0 / 0.5), 0 8px 16px -4px rgb(0 0 0 / 0.5);
+      --shadow-lg: 0 0 0 1px rgb(255 255 255 / 0.07), 0 4px 8px -2px rgb(0 0 0 / 0.5), 0 16px 32px -8px rgb(0 0 0 / 0.7);
+      --shadow-xl: 0 0 0 1px rgb(255 255 255 / 0.07), 0 2px 4px -1px rgb(0 0 0 / 0.5), 0 12px 24px -6px rgb(0 0 0 / 0.6);
+      --shadow-2xl: 0 0 0 1px rgb(255 255 255 / 0.07), 0 4px 8px -2px rgb(0 0 0 / 0.5), 0 24px 48px -12px rgb(0 0 0 / 0.7);
+      --shadow-button-inverse: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 0 0 1px rgb(255 255 255 / 0.16), 0 1px 2px rgb(0 0 0 / 0.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --color-background: #0d0e11;
+    --color-foreground: #ffffff;
+    --color-surface: #181a1d;
+    --color-surface-muted: #14161a;
+    --color-surface-sunken: #101214;
+    --color-muted: #aeb1b6;
+    --color-border: #2e3034;
+    --color-border-subtle: #1c1e22;
+    --color-control-border: #6f7276;
+    --color-control-border-hover: #87898d;
+    --color-focus-ring: #d9f944;
+    --color-selected: #d9f944;
+    --color-selected-foreground: #0d0e11;
+    --color-disabled-foreground: #aeb1b6;
+    --color-disabled-surface: #2e3034;
+    --color-accent-50: #23270c;
+    --color-accent-100: #2a2f0a;
+    --color-accent-200: #4d5a07;
+    --color-accent-700: #d9f944;
+    --color-accent-800: #e4fc8c;
+    --color-dark-base: #000000;
+    --color-dark-1: #101214;
+    --color-dark-2: #1c1e22;
+    --color-dark-3: #101214;
+    --color-dark-border: #2e3034;
+    --color-dark-border-subtle: #42454a;
+    --color-surface-inverse: #000000;
+    --color-surface-inverse-raised: #101214;
+    --color-surface-inverse-overlay: #1c1e22;
+    --color-border-inverse: #42454a;
+    --color-success-bg: #12231a;
+    --color-success-border: #1f4732;
+    --color-success-text: #86efac;
+    --color-warning-bg: #251d0d;
+    --color-warning-border: #4d3c12;
+    --color-warning-text: #fcd34d;
+    --color-error-bg: #251414;
+    --color-error-border: #4d2020;
+    --color-error-text: #f87171;
+    --color-info-bg: #121e31;
+    --color-info-border: #1e3a63;
+    --color-info-text: #93c5fd;
+    --color-status-open: #181a1d;
+    --color-status-open-text: #ffffff;
+    --color-status-overdue: #251414;
+    --color-status-overdue-text: #f87171;
+    --color-status-draft: #101214;
+    --color-status-draft-text: #d2d4d7;
+    --shadow-xs: 0 0 0 1px rgb(255 255 255 / 0.06), 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-sm: 0 0 0 1px rgb(255 255 255 / 0.06), 0 1px 2px rgb(0 0 0 / 0.4), 0 2px 4px rgb(0 0 0 / 0.3);
+    --shadow-md: 0 0 0 1px rgb(255 255 255 / 0.07), 0 2px 4px -1px rgb(0 0 0 / 0.5), 0 8px 16px -4px rgb(0 0 0 / 0.5);
+    --shadow-lg: 0 0 0 1px rgb(255 255 255 / 0.07), 0 4px 8px -2px rgb(0 0 0 / 0.5), 0 16px 32px -8px rgb(0 0 0 / 0.7);
+    --shadow-xl: 0 0 0 1px rgb(255 255 255 / 0.07), 0 2px 4px -1px rgb(0 0 0 / 0.5), 0 12px 24px -6px rgb(0 0 0 / 0.6);
+    --shadow-2xl: 0 0 0 1px rgb(255 255 255 / 0.07), 0 4px 8px -2px rgb(0 0 0 / 0.5), 0 24px 48px -12px rgb(0 0 0 / 0.7);
+    --shadow-button-inverse: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 0 0 1px rgb(255 255 255 / 0.16), 0 1px 2px rgb(0 0 0 / 0.4);
+  }
+  [data-theme="light"]:not(:root) {
+    color-scheme: light;
+    --color-background: #ffffff;
+    --color-foreground: #0d0e11;
+    --color-surface: #ffffff;
+    --color-surface-muted: #f9fafb;
+    --color-surface-sunken: #f3f4f6;
+    --color-muted: #64686d;
+    --color-border: #e5e6e9;
+    --color-border-subtle: #f3f4f6;
+    --color-control-border: #87898d;
+    --color-control-border-hover: #6f7276;
+    --color-focus-ring: #0d0e11;
+    --color-selected: #0d0e11;
+    --color-selected-foreground: #ffffff;
+    color: var(--color-foreground);
   }
 
   :root {
@@ -225,6 +374,13 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+  }
+
+  /* Figures in the app chrome read in the mono face. The rendered document
+     (a data-theme="light" subtree) keeps its own typography for print. */
+  .tabular-nums:not([data-theme="light"]:not(:root) *) {
+    font-family: var(--font-mono);
+    letter-spacing: -0.01em;
   }
 
   h1, h2, h3 {

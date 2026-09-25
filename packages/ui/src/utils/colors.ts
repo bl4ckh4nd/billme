@@ -53,6 +53,8 @@ export const colors = {
   controlBorder: '#87898d',
   focusRing: '#0d0e11',
   focusRingDark: '#d9f944',
+  selected: '#0d0e11',
+  selectedForeground: '#ffffff',
   disabledForeground: '#4a4d52',
   disabledSurface: '#e5e6e9',
   success: '#22c55e',
@@ -88,6 +90,50 @@ export const colors = {
 } as const;
 
 export type ColorName = keyof typeof colors;
+
+/**
+ * Role values under dark mode (`<html data-theme="dark">`, or the OS setting
+ * when no theme is chosen). Mirrors the dark blocks in `styles.css`; only roles
+ * change, ramps stay literal.
+ */
+export const darkRoles = {
+  background: '#0d0e11',
+  foreground: '#ffffff',
+  surface: '#181a1d',
+  surfaceMuted: '#14161a',
+  surfaceSunken: '#101214',
+  muted: '#aeb1b6',
+  border: '#2e3034',
+  borderSubtle: '#1c1e22',
+  controlBorder: '#6f7276',
+  focusRing: '#d9f944',
+  selected: '#d9f944',
+  selectedForeground: '#0d0e11',
+  disabledForeground: '#aeb1b6',
+  disabledSurface: '#2e3034',
+  surfaceInverse: '#000000',
+  surfaceInverseRaised: '#101214',
+  surfaceInverseOverlay: '#1c1e22',
+  borderInverse: '#42454a',
+  successBg: '#12231a',
+  successBorder: '#1f4732',
+  successText: '#86efac',
+  warningBg: '#251d0d',
+  warningBorder: '#4d3c12',
+  warningText: '#fcd34d',
+  errorBg: '#251414',
+  errorBorder: '#4d2020',
+  errorText: '#f87171',
+  infoBg: '#121e31',
+  infoBorder: '#1e3a63',
+  infoText: '#93c5fd',
+  statusOpen: '#181a1d',
+  statusOpenText: '#ffffff',
+  statusOverdue: '#251414',
+  statusOverdueText: '#f87171',
+  statusDraft: '#101214',
+  statusDraftText: '#d2d4d7',
+} as const satisfies Partial<Record<ColorName, string>>;
 
 /**
  * Get Tailwind classes for invoice status badges

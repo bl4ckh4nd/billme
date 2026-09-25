@@ -68,12 +68,18 @@ export { Metric, type MetricProps, type MetricSize, type MetricTone } from './co
 export { Spinner, type SpinnerProps, type SpinnerSize } from './components/Spinner';
 export { BarChart, niceMax, type BarChartProps, type BarDatum } from './components/BarChart';
 export { Sparkline, type SparklineProps } from './components/Sparkline';
+export { CardHeader, type CardHeaderProps } from './components/CardHeader';
+export { HatchedProgress, type HatchedProgressProps } from './components/HatchedProgress';
+export { ListRow, IconTile, type ListRowProps, type IconTileProps, type IconTileTone } from './components/ListRow';
+export { Donut, type DonutProps, type DonutSegment } from './components/Donut';
+export { Stepper, Timeline, type StepperProps, type TimelineEntry } from './components/Stepper';
 
 // Utils
 export { cn } from './utils/cn';
 export { useExitTransition, popoverExitClass, OVERLAY_EXIT_MS } from './utils/useExitTransition';
 export { useAnchoredPosition, type AnchorAlign, type AnchoredStyle } from './utils/useAnchoredPosition';
 export { EMPTY_VALUE, formatEmptyValue } from './utils/format';
+export { setThemePreference, useThemePreference, type ThemePreference } from './utils/theme';
 export { colors, getStatusColors, getDunningColors, type ColorName } from './utils/colors';
 
 // Re-export React types

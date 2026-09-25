@@ -607,6 +607,9 @@ importers:
       '@billme/desktop-contracts-pro':
         specifier: workspace:*
         version: link:../../packages/desktop-contracts-pro
+      '@billme/desktop-renderer':
+        specifier: workspace:*
+        version: link:../../packages/desktop-renderer
       '@billme/desktop-services':
         specifier: workspace:*
         version: link:../../packages/desktop-services
@@ -625,6 +628,9 @@ importers:
       react-dom:
         specifier: ^19.2.3
         version: 19.2.4(react@19.2.4)
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4.1.0
@@ -1165,6 +1171,9 @@ importers:
       '@billme/desktop-services':
         specifier: workspace:*
         version: link:../desktop-services
+      '@billme/finance-intelligence':
+        specifier: workspace:*
+        version: link:../finance-intelligence
       '@billme/server-core':
         specifier: workspace:*
         version: link:../server-core
@@ -1264,6 +1273,9 @@ importers:
   packages/ui:
     dependencies:
       '@fontsource-variable/inter':
+        specifier: ^5.3.0
+        version: 5.3.0
+      '@fontsource-variable/jetbrains-mono':
         specifier: ^5.3.0
         version: 5.3.0
       clsx:
@@ -2223,6 +2235,9 @@ packages:
 
   '@fontsource-variable/inter@5.3.0':
     resolution: {integrity: sha512-OupL48va4JNofb97w6NYeF9S7W/kHNKM0Er8Dem5nqi4jeOLrVJDoE8tZEpnMJmtkvNbB1EIPPwHcdkF6b1oUA==}
+
+  '@fontsource-variable/jetbrains-mono@5.3.0':
+    resolution: {integrity: sha512-F32xpS2NsGYoQi2ADSkKTgpJj7ozajsGgDJ8woTnqjmIB+dxDIqImjl4pXZVEExu8UFZ2ndhmX18EBS/hdz3Lw==}
 
   '@hono/node-server@1.19.9':
     resolution: {integrity: sha512-vHL6w3ecZsky+8P5MD+eFfaGTyCeOHUIFYMGpQGbrBTSmNNoxv0if69rEZ5giu36weC5saFuznL411gRX7bJDw==}
@@ -5903,6 +5918,8 @@ snapshots:
 
   '@fontsource-variable/inter@5.3.0': {}
 
+  '@fontsource-variable/jetbrains-mono@5.3.0': {}
+
   '@hono/node-server@1.19.9(hono@4.11.9)':
     dependencies:
       hono: 4.11.9
@@ -6696,7 +6713,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.0.3
-      vitest: 4.0.18(@types/node@24.12.2)(@vitest/ui@4.0.18)(happy-dom@20.5.3)(jiti@2.6.1)(jsdom@28.0.0)(lightningcss@1.30.2)(tsx@4.21.0)
+      vitest: 4.0.18(@types/node@22.19.10)(@vitest/ui@4.0.18)(happy-dom@20.5.3)(jiti@2.6.1)(jsdom@28.0.0)(lightningcss@1.30.2)(tsx@4.21.0)
 
   '@vitest/utils@4.0.18':
     dependencies:

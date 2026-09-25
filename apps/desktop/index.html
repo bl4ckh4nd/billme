@@ -10,6 +10,11 @@
       body {
         background-color: var(--color-surface-sunken, #f3f4f6);
       }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) body {
+          background-color: var(--color-surface-sunken, #101214);
+        }
+      }
     </style>
 
   </head>

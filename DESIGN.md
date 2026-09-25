@@ -57,6 +57,7 @@ colors:
   border: "#e5e6e9"
   border-subtle: "#f3f4f6"
   control-border: "#87898d"
+  control-border-hover: "#6f7276"
   focus-ring: "#0d0e11"
   focus-ring-dark: "#d9f944"
   disabled-foreground: "#4a4d52"
@@ -262,12 +263,34 @@ outline a control. Interactive controls use `control-border` (`#87898d`, 3.50:1
 on white, 3.18:1 on sunken) so their boundary meets the 3:1 non-text
 requirement. When a control's only affordance is its outline, that outline must
 use `control-border`.
+A hovered control strengthens its outline with `control-border-hover` (one ink
+step darker in light, one lighter in dark), never with a raw `ink-*` class, so
+the hover stays visible in both themes.
 
 `focus-ring` is `#0d0e11` for light surfaces and `focus-ring-dark` is `#d9f944`
 for inverse surfaces. Disabled controls use `disabled-foreground` and
 `disabled-surface`; in this product, disabled often signals a locked accounting
 period or an immutable posted record, so it must be unmistakable rather than
 merely faded.
+
+### Dark mode
+
+The product supports a dark theme. The user picks System, Hell or Dunkel in the
+rail footer or the command palette; the choice is a per-device preference
+(`useThemePreference` in `@billme/ui`) written to `<html data-theme>`. System
+follows `prefers-color-scheme`.
+
+Only role tokens change (`background`, `surface*`, `foreground`, `muted`,
+`border*`, `control-border`, the semantic `-bg/-border/-text` triples, the
+accent tints, `status-*`, shadows). The ink and accent ramps stay literal, so
+anything that must flip uses a role, never a ramp step. `selected` /
+`selected-foreground` is the one filled mark per control (checked box, on
+switch, active nav item, current step): ink in light, lime in dark. Values are
+mirrored in `darkRoles` in `packages/ui/src/utils/colors.ts`.
+
+The rendered document stays light: a subtree marked `data-theme="light"`
+(document pages, the designer page) keeps light roles inside a dark shell, and
+print output is always light.
 
 ### Empty values
 
@@ -322,6 +345,12 @@ headers (12px, 500, 0.04em). Field labels are sentence case. Headings get
 All monetary amounts, quantities, totals, and KPI figures use `tabular-nums` so
 digits align as values update. Apply it to amount cells, totals, and metric
 values.
+
+Figures are set in **JetBrains Mono Variable** (`--font-mono`, self-hosted via
+`@fontsource-variable/jetbrains-mono`): every `tabular-nums` element in the app
+chrome switches to the mono face, because amounts, account numbers, document
+numbers and IBANs are read digit by digit and a transposed digit is easier to
+spot in a monospace face. The rendered document keeps its own typography.
 
 ## Accessibility
 

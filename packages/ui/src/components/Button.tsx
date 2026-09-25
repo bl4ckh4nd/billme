@@ -16,7 +16,7 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 
 const variantStyles: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-accent-foreground hover:bg-accent-hover shadow-button focus-visible:outline-focus-ring disabled:shadow-none disabled:border disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground',
-  secondary: 'bg-surface border border-control-border text-foreground hover:bg-surface-muted hover:border-ink-500 focus-visible:outline-focus-ring disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground',
+  secondary: 'bg-surface border border-control-border text-foreground hover:bg-surface-muted hover:border-control-border-hover focus-visible:outline-focus-ring disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground',
   danger: 'bg-error text-background hover:bg-error/90 shadow-xs focus-visible:outline-focus-ring disabled:shadow-none disabled:border disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground',
   ghost: 'bg-transparent text-foreground hover:bg-surface-sunken focus-visible:outline-focus-ring disabled:bg-disabled-surface disabled:text-disabled-foreground',
   dark: 'bg-surface-inverse text-inverse-foreground hover:bg-surface-inverse-raised shadow-button-inverse focus-visible:outline-focus-ring disabled:shadow-none disabled:border disabled:border-dark-muted disabled:bg-dark-2 disabled:text-dark-muted',

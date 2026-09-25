@@ -230,7 +230,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
   return (
     <div className="grid min-h-screen bg-background text-foreground [color-scheme:light] lg:grid-cols-2">
-      <aside className="hidden flex-col justify-between gap-10 overflow-hidden bg-dark-base px-12 py-10 text-background lg:flex">
+      <aside className="hidden flex-col justify-between gap-10 overflow-hidden bg-dark-base px-12 py-10 text-inverse-foreground lg:flex">
         <BillmeLogo className="h-10 w-auto self-start text-background" />
         <div className="grid gap-10">
           <div className="grid gap-4">

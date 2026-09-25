@@ -107,7 +107,7 @@ type ToneConfig = Omit<BadgeConfig, 'label'>;
 
 // Every pill keeps a >=3:1 boundary: the shape is what makes status scannable.
 const toneConfig: Record<BadgeTone, ToneConfig> = {
-  neutral: { bg: 'bg-surface-muted', text: 'text-ink-700', border: 'border-ink-500' },
+  neutral: { bg: 'bg-surface-muted', text: 'text-foreground', border: 'border-control-border-hover' },
   info: { bg: 'bg-info-bg', text: 'text-info-text', border: 'border-info-text' },
   success: { bg: 'bg-success-bg', text: 'text-success-text', border: 'border-success-text' },
   warning: { bg: 'bg-warning-bg', text: 'text-warning-text', border: 'border-warning-text' },

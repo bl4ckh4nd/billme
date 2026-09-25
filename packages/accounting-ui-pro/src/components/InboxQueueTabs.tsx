@@ -17,7 +17,7 @@ export default function InboxQueueTabs({ activeQueue, counts, onChange }: InboxQ
           onClick={() => onChange(queue)}
           className={`h-7 px-3 rounded-lg text-xs font-semibold border transition-colors ${
             activeQueue === queue
-              ? 'bg-surface-inverse text-inverse-foreground border-surface-inverse'
+              ? 'bg-selected text-selected-foreground border-selected'
               : 'bg-surface text-muted border-border hover:bg-surface-muted'
           }`}
         >

@@ -177,7 +177,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
             Audit-Grund für Mapping-Änderungen
             <input
               id="report-mapping-reason"
-              className="px-2.5 h-8 hover:border-ink-500 mt-1 block w-full rounded-control border border-control-border bg-surface text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-2.5 h-8 hover:border-control-border-hover mt-1 block w-full rounded-control border border-control-border bg-surface text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               placeholder="z. B. Kontenabstimmung Monatsabschluss"
@@ -208,7 +208,7 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
                       value={selected.position}
                       disabled={!canMutate || Boolean(saving) || allowedPositions.length === 0}
                       onChange={(event) => setSelections((current) => ({ ...current, [id]: { ...selected, position: event.target.value } }))}
-                      className="px-2.5 h-8 hover:border-ink-500 mt-1 block w-full rounded-control border border-control-border bg-surface text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className="px-2.5 h-8 hover:border-control-border-hover mt-1 block w-full rounded-control border border-control-border bg-surface text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <option value="">Position auswählen…</option>
                       {allowedPositions.map((position) => <option key={position.key} value={position.key}>{position.label}{position.side ? ` · ${position.side === 'asset' ? 'Aktiva' : 'Passiva'}` : ''}</option>)}

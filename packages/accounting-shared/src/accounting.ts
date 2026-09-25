@@ -354,6 +354,9 @@ export interface AccountSuggestionRule {
   active: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Posted bank bookings this rule decided (first matching rule, booked on its target). Derived, not stored. */
+  hitCount?: number;
+  lastHitAt?: string;
 }
 
 export interface UpsertAccountSuggestionRuleInput {

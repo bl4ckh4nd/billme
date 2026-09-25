@@ -3875,7 +3875,7 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
     case 'pro:listIncomingInvoiceDocuments': {
       const { invoiceId } = args as IpcArgs<'pro:listIncomingInvoiceDocuments'>;
       return mockIncomingInvoiceDocuments
-        .filter((document) => document.incomingInvoiceId === invoiceId)
+        .filter((document) => !invoiceId || document.incomingInvoiceId === invoiceId)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt)) as IpcResult<K>;
     }
 
@@ -4733,6 +4733,7 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       mockIsMaximized = !mockIsMaximized;
       return { ok: true } as IpcResult<K>;
     case 'window:close':
+    case 'window:setTheme':
       return { ok: true } as IpcResult<K>;
     case 'window:isMaximized':
       return { isMaximized: mockIsMaximized } as IpcResult<K>;

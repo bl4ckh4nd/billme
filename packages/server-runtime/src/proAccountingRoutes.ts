@@ -1329,6 +1329,16 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
   });
 
   typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/incoming-invoice-documents`,
+    response: z.array(incomingInvoiceDocumentSchema),
+    async handler({ request }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return serviceFor(app).listIncomingInvoiceDocuments(session.scope);
+    },
+  });
+
+  typedRoute(app, {
     method: 'POST',
     url: `${prefix}/incoming-invoice-documents/:documentId/review`,
     params: z.object({ documentId: z.string().min(1) }),

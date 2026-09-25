@@ -9,7 +9,8 @@ describe('Pro accounting shell', () => {
     const navigation = screen.getByRole('navigation', { name: 'Buchhaltungsbereiche' });
     expect(navigation.parentElement?.classList.contains('overflow-x-auto')).toBe(true);
     expect(navigation.classList.contains('min-w-max')).toBe(true);
-    expect(screen.getByRole('main').classList.contains('min-w-0')).toBe(true);
+    // The shell owns the single <main>; the workspace content column must still shrink.
+    expect(navigation.parentElement?.nextElementSibling?.classList.contains('min-w-0')).toBe(true);
   });
 
   it('exposes the active accounting tab to assistive technology', () => {

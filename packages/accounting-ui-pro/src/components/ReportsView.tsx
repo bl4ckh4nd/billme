@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FileBarChart2 } from 'lucide-react';
 import { Button, FeedbackProvider, useActionFeedback } from '@billme/ui';
 import { positionTitle } from '../domain/references';
 import {
@@ -674,16 +673,13 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-6 py-3 border-b border-subtle shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted shrink-0">
-            <span className="w-6 h-6 rounded-md bg-accent text-foreground flex items-center justify-center">
-              <FileBarChart2 size={14} />
-            </span>
+      <div className="sr-only">
+        <div>
+          <div>
             Auswertungen
           </div>
-          <div className="flex-1 min-w-0">
-            <h1 className="text-sm font-semibold tracking-tight text-foreground">EÜR und Finanzberichte</h1>
+          <div>
+            <h2>EÜR und Finanzberichte</h2>
             <p className="text-xs text-muted">Hierarchische Positionen mit Journal-Drilldown.</p>
           </div>
         </div>
@@ -716,7 +712,7 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
               Audit-Grund für EÜR-Snapshot
               <input
                 id="report-freeze-reason"
-                className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal"
+                className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal"
                 value={freezeReason}
                 onChange={(event) => setFreezeReason(event.target.value)}
                 placeholder={`z. B. Abschlussprüfung EÜR ${eurTaxYear}`}
@@ -744,7 +740,7 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
                     eurTaxYearUserSelected.current = true;
                     setEurTaxYear(year);
                   }
-                }} className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal">
+                }} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal">
                   {SUPPORTED_EUR_TAX_YEARS.map((year) => <option key={year} value={year}>{year}</option>)}
                 </select>
               </label>
@@ -757,7 +753,7 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
                 Audit-Grund für Klassifikationen
                 <input
                   id="eur-classification-reason"
-                  className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal"
+                  className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal"
                   value={eurClassificationReason}
                   onChange={(event) => setEurClassificationReason(event.target.value)}
                   placeholder={`z. B. Belegprüfung EÜR ${eurTaxYear}`}
@@ -784,7 +780,7 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
                       {canMutate && (dataAdapter.upsertEurClassification || dataAdapter.saveEurCashFact) ? <div className="grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_auto_auto] sm:items-end">
                         {dataAdapter.saveEurCashFact ? <label className="flex flex-col gap-1 text-xs font-semibold text-foreground" htmlFor={`eur-kind-${key}`}>
                           Faktart
-                          <select id={`eur-kind-${key}`} className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal" value={eurFactKinds[key] ?? item.flowType} onChange={(event) => setEurFactKinds((current) => ({ ...current, [key]: event.target.value as typeof eurFactKinds[string] }))}>
+                          <select id={`eur-kind-${key}`} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal" value={eurFactKinds[key] ?? item.flowType} onChange={(event) => setEurFactKinds((current) => ({ ...current, [key]: event.target.value as typeof eurFactKinds[string] }))}>
                             <option value="income">Einnahme</option><option value="expense">Ausgabe</option><option value="private-withdrawal">Privatentnahme</option><option value="private-contribution">Privateinlage</option><option value="pass-through">Durchlaufender Posten</option>
                           </select>
                         </label> : null}
@@ -792,7 +788,7 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
                           EÜR-Zeile
                           <select
                             id={`eur-line-${key}`}
-                            className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal"
+                            className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal"
                             value={draft.eurLineId ?? ''}
                             onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, eurLineId: event.target.value || undefined } }))}
                           >
@@ -806,7 +802,7 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
                         </label>
                         <label className="flex flex-col gap-1 text-xs font-semibold text-foreground" htmlFor={`eur-vat-${key}`}>
                           USt.
-                          <select id={`eur-vat-${key}`} className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal" value={draft.vatMode} onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, vatMode: event.target.value as EurClassificationDraft['vatMode'] } }))}>
+                          <select id={`eur-vat-${key}`} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal" value={draft.vatMode} onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, vatMode: event.target.value as EurClassificationDraft['vatMode'] } }))}>
                             <option value="none">Keine Aufteilung</option>
                             <option value="default">Netto aus USt-Satz</option>
                           </select>
@@ -816,7 +812,7 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
                             USt.-Satz
                             <select
                               id={`eur-vat-rate-${key}`}
-                              className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal"
+                              className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal"
                               value={draft.vatRate ?? ''}
                               onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, vatRate: event.target.value ? Number(event.target.value) : undefined } }))}
                             >
@@ -830,7 +826,7 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
                         {dataAdapter.saveEurCashFact ? <label className="flex flex-col gap-1 text-xs font-semibold text-foreground" htmlFor={`eur-split-${key}`}>
                           Split-Netto (optional)
                           <span className="text-xs font-normal text-muted">Restbetrag wird als nicht abzugsfähig gespeichert.</span>
-                          <input id={`eur-split-${key}`} aria-label="Split-Netto (optional)" type="number" min="0" step="0.01" className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal" value={eurSplitAmounts[key] ?? ''} onChange={(event) => setEurSplitAmounts((current) => ({ ...current, [key]: event.target.value }))} />
+                          <input id={`eur-split-${key}`} aria-label="Split-Netto (optional)" type="number" min="0" step="0.01" className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal" value={eurSplitAmounts[key] ?? ''} onChange={(event) => setEurSplitAmounts((current) => ({ ...current, [key]: event.target.value }))} />
                         </label> : null}
                       </div> : null}
                       {canMutate && dataAdapter.upsertEurClassification ? <Button type="button" size="sm" variant="secondary" onClick={() => void saveEurClassification(item)} disabled={eurClassifying !== null || !eurClassificationReason.trim() || (draft.vatMode === 'default' && draft.vatRate === undefined)} aria-busy={eurClassifying === key}>
@@ -844,13 +840,13 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
             ) : null}
             {canMutate && dataAdapter.saveEurAnnexFact ? <div className="grid gap-2 rounded-lg border border-border-subtle bg-surface-muted p-3 sm:grid-cols-[8rem_10rem_minmax(8rem,1fr)_auto] sm:items-end" aria-label="EÜR-Anlagen-Fakt">
               <label className="flex flex-col gap-1 text-xs font-semibold">Anlage
-                <select value={eurAnnex} onChange={(event) => setEurAnnex(event.target.value)} className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal"><option value="IAB">IAB</option><option value="annex">Weitere Anlage</option></select>
+                <select value={eurAnnex} onChange={(event) => setEurAnnex(event.target.value)} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal"><option value="IAB">IAB</option><option value="annex">Weitere Anlage</option></select>
               </label>
               <label className="flex flex-col gap-1 text-xs font-semibold">Zeile
-                <input value={eurAnnexLine} onChange={(event) => setEurAnnexLine(event.target.value)} className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal" />
+                <input value={eurAnnexLine} onChange={(event) => setEurAnnexLine(event.target.value)} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal" />
               </label>
               <label className="flex flex-col gap-1 text-xs font-semibold">Betrag
-                <input type="number" step="0.01" value={eurAnnexAmount} onChange={(event) => setEurAnnexAmount(event.target.value)} className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm font-normal" />
+                <input type="number" step="0.01" value={eurAnnexAmount} onChange={(event) => setEurAnnexAmount(event.target.value)} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal" />
               </label>
               <Button type="button" size="sm" variant="secondary" onClick={() => void saveEurAnnexFact()} disabled={eurAnnexBusy || !eurClassificationReason.trim() || eurAnnexAmount === ''} aria-busy={eurAnnexBusy}>{eurAnnexBusy ? 'Speichere…' : 'Anlagen-Fakt speichern'}</Button>
             </div> : null}

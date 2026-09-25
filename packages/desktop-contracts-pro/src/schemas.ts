@@ -596,6 +596,8 @@ export const accountSuggestionRuleSchema = z.object({
   active: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  hitCount: z.number().int().nonnegative().optional(),
+  lastHitAt: z.string().optional(),
 });
 
 export const proListAccountSuggestionRulesArgsSchema = z.object({

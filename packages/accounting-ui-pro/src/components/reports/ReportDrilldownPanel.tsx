@@ -47,7 +47,7 @@ export default function ReportDrilldownPanel({
 
   return (
     <aside className="w-full xl:w-96 shrink-0 rounded-2xl border border-border bg-surface flex flex-col min-h-[20rem]">
-      <div className="px-4 h-12 border-b border-subtle flex items-center justify-between gap-3">
+      <div className="px-4 h-12 border-b border-border flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xs font-semibold text-muted">{REPORT_TYPE_LABEL[selection.reportType]}</div>
           <div className="text-sm font-semibold text-foreground truncate">{selection.targetLabel}</div>
@@ -61,7 +61,7 @@ export default function ReportDrilldownPanel({
         </button>
       </div>
 
-      <div className="px-4 py-3 border-b border-subtle text-xs text-muted">
+      <div className="px-4 py-3 border-b border-border text-xs text-muted">
         Konten: {formatEmptyValue(selection.accountNumbers.join(', '))}
       </div>
 
@@ -73,7 +73,7 @@ export default function ReportDrilldownPanel({
         ) : (
           <div className="space-y-2">
             {entries.map((entry) => (
-              <div key={entry.id} className="rounded-xl border border-subtle p-3">
+              <div key={entry.id} className="rounded-xl border border-border p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <div className="text-sm font-semibold text-foreground">{entry.bookingText}</div>

@@ -48,6 +48,11 @@ test('Pro incoming document route accepts a payload above Fastify default bodyLi
     assert.equal(saved.byteLength, content.byteLength);
     assert.equal(saved.reviewStatus, 'pending');
 
+    // Belege inbox: the tenant-wide list returns the document without an invoice id.
+    const listAll = await app.inject({ method: 'GET', url: '/api/v1/pro/accounting/incoming-invoice-documents', headers });
+    assert.equal(listAll.statusCode, 200, listAll.body);
+    assert.deepEqual((listAll.json() as Array<{ id: string; incomingInvoiceId: string }>).map((d) => [d.id, d.incomingInvoiceId]), [[saved.id, 'incoming-document-route-invoice']]);
+
     const review = await app.inject({
       method: 'POST',
       url: `/api/v1/pro/accounting/incoming-invoice-documents/${saved.id}/review`,

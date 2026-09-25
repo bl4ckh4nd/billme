@@ -48,7 +48,7 @@ test('Pro runtime exposes authenticated VLM config and analysis without posting'
     const analysis = await app.inject({ method: 'POST', url: '/api/v1/pro/accounting/transactions/tx-1/analyze-document', headers, payload: { transaction: { id: 'tx-1', date: '2099-01-01', amount: 1, type: 'expense', counterparty: 'Browser value', purpose: 'Browser value', currency: 'EUR' }, document: { mimeType: 'image/png', data: 'aA==' } } });
     assert.equal(analysis.statusCode, 200, analysis.body);
     assert.equal(analysis.json().extraction.invoiceNumber, 'RE-1');
-    assert.deepEqual((analyzedInput as { transaction: unknown }).transaction, { id: 'tx-1', date: '2026-08-29', amount: 119, currency: 'EUR', type: 'income', counterparty: 'Stored customer', purpose: 'Stored purpose' });
+    assert.deepEqual((analyzedInput as { transaction: unknown }).transaction, { id: 'tx-1', date: '2026-08-29', amount: 119, currency: 'EUR', type: 'income', counterparty: 'Stored customer', purpose: 'Stored purpose', suggestedAccountNumber: '8125', suggestionReason: 'Fallback nach Buchungstyp' });
 
     const mismatch = await app.inject({ method: 'POST', url: '/api/v1/pro/accounting/transactions/tx-1/analyze-document', headers, payload: { transaction: { id: 'tx-2', date: '2026-08-29', amount: 119, type: 'income', counterparty: 'Customer', purpose: 'RE-1', currency: 'EUR' }, document: { mimeType: 'image/png', data: 'aA==' } } });
     assert.equal(mismatch.statusCode, 400, mismatch.body);

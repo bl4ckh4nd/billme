@@ -43,40 +43,13 @@ import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/serv
 import { useCreateIntent } from '@billme/desktop-renderer/hooks/useCreateIntent';
 
 const RootLayout: React.FC = () => {
-  const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [showShortcuts, setShowShortcuts] = React.useState(false);
 
   const { data: settings } = useSettingsQuery();
   const showOnboarding = shouldShowBusinessOnboarding(settings);
 
-  const activePage = (() => {
-    if (
-      pathname.startsWith('/finance')
-      || pathname.startsWith('/accounts')
-      || pathname.startsWith('/accounting')
-      || pathname.startsWith('/eur')
-    )
-      return 'finance';
-    if (pathname.startsWith('/tax-filing')) return 'tax-filing';
-    if (pathname.startsWith('/templates') || pathname.startsWith('/recurring')) return 'documents';
-    if (pathname.startsWith('/documents')) return 'documents';
-    if (pathname.startsWith('/clients')) return 'clients';
-    if (pathname.startsWith('/projects')) return 'projects';
-    if (pathname.startsWith('/articles')) return 'articles';
-    if (pathname.startsWith('/settings')) return 'settings';
-    return 'dashboard';
-  })();
-
   const isEditorActive = pathname.includes('/edit') || pathname.includes('/editor');
-
-  const handleNavigate = (page: string, search?: Record<string, string>) => {
-    const to =
-      page === 'dashboard'
-        ? '/'
-        : `/${page}`;
-    navigate({ to, search });
-  };
 
   useKeyboardShortcuts({
     onShowShortcuts: () => setShowShortcuts(true),
@@ -84,11 +57,7 @@ const RootLayout: React.FC = () => {
 
   return (
     <>
-      <DashboardLayout
-        activePage={activePage}
-        onNavigate={handleNavigate}
-        isEditorActive={isEditorActive}
-      >
+      <DashboardLayout isEditorActive={isEditorActive}>
         <Outlet />
       </DashboardLayout>
       {showOnboarding && settings && (
@@ -287,7 +256,8 @@ const DocumentEditorPage: React.FC = () => {
         invoice={invoice}
         templateType={docType === 'offer' ? 'offer' : 'invoice'}
         mode={docMode ?? 'edit'}
-        onSave={(updated) => {
+        onSave={(updated, meta) => {
+          const numberNote = meta?.numberChangeReason ? `Nummer manuell geändert: ${meta.numberChangeReason}` : undefined;
           if (docMode === 'create') {
             const reservationId = updated.numberReservationId;
             const persistedDoc = { ...updated };
@@ -298,8 +268,8 @@ const DocumentEditorPage: React.FC = () => {
                 const mutation = docType === 'offer' ? upsertOffer : upsertInvoice;
                 const vars =
                   docType === 'offer'
-                    ? { offer: persistedDoc, reason: 'create' }
-                    : { invoice: persistedDoc, reason: 'create' };
+                    ? { offer: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' }
+                    : { invoice: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' };
                 const saved = await (mutation as any).mutateAsync(vars);
                 if (reservationId) {
                   await ipc.numbers.finalize({
@@ -317,7 +287,8 @@ const DocumentEditorPage: React.FC = () => {
           }
 
           setPendingDoc(updated);
-          setReason('');
+          // The number unlock reason is the audit reason unless the user writes another.
+          setReason(numberNote ?? '');
           setIsReasonOpen(true);
         }}
         onCancel={() => {
@@ -381,10 +352,16 @@ const financeRoute = createRoute({
   component: FinancePage,
 });
 
+const AccountingPage: React.FC = () => {
+  const view = useRouterState({ select: (state) => (state.location.search as { view?: unknown }).view });
+  const navigate = useNavigate();
+  return <ProAccountingPage view={view ?? 'inbox'} onViewChange={(next) => void navigate({ to: '/accounting', search: { view: next } })} />;
+};
+
 const accountingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/accounting',
-  component: ProAccountingPage,
+  component: AccountingPage,
 });
 
 const eurRoute = createRoute({

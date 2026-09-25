@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { Building2, Search } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { Button, EMPTY_VALUE, formatEmptyValue } from '@billme/ui';
 import type { AssetDepreciationScheduleEntry, AssetItem, AssetStatus } from '../domain/assetTypes';
 import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
@@ -207,25 +207,25 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
                 onChange={input(key)}
                 placeholder={placeholder}
                 required={['assetNumber', 'name', 'assetClass', 'costCenter', 'location', 'assetAccountNumber'].includes(key)}
-                className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm"
+                className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm"
               />
             </label>
           ))}
           <label className="space-y-1 text-sm font-semibold text-foreground">
             <span>Aktivierungsdatum *</span>
-            <input type="date" value={form.activationDate} onChange={input('activationDate')} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
+            <input type="date" value={form.activationDate} onChange={input('activationDate')} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
           </label>
           <label className="space-y-1 text-sm font-semibold text-foreground">
             <span>Anschaffungskosten netto *</span>
-            <input type="number" min="0" step="0.01" value={form.acquisitionCost} onChange={input('acquisitionCost')} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
+            <input type="number" min="0" step="0.01" value={form.acquisitionCost} onChange={input('acquisitionCost')} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
           </label>
           <label className="space-y-1 text-sm font-semibold text-foreground">
             <span>Nutzungsdauer in Jahren</span>
-            <input type="number" min="1" step="1" value={form.usefulLifeYears} onChange={input('usefulLifeYears')} className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
+            <input type="number" min="1" step="1" value={form.usefulLifeYears} onChange={input('usefulLifeYears')} className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
           </label>
           <label className="space-y-1 text-sm font-semibold text-foreground">
             <span>Abschreibungsmethode *</span>
-            <select value={form.depreciationMethod} onChange={input('depreciationMethod')} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm">
+            <select value={form.depreciationMethod} onChange={input('depreciationMethod')} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm">
               <option value="linear">Linear</option>
               <option value="gwg">GWG</option>
               <option value="pool">Pool</option>
@@ -233,7 +233,7 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
           </label>
           <label htmlFor="asset-status" className="space-y-1 text-sm font-semibold text-foreground">
             <span>Status *</span>
-            <select id="asset-status" value={form.status} onChange={input('status')} required disabled={accountingOwned} aria-describedby={accountingOwned ? 'asset-status-ownership-note' : undefined} className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm disabled:cursor-not-allowed disabled:opacity-60">
+            <select id="asset-status" value={form.status} onChange={input('status')} required disabled={accountingOwned} aria-describedby={accountingOwned ? 'asset-status-ownership-note' : undefined} className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm disabled:cursor-not-allowed disabled:opacity-60">
               <option value="entwurf">Entwurf</option>
               <option value="aktiv">Aktiv</option>
               <option value="voll_abgeschrieben">Voll abgeschrieben</option>
@@ -249,7 +249,7 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
         </label>
         <label className="block space-y-1 text-sm font-semibold text-foreground">
           <span>Audit-Grund *</span>
-          <textarea value={form.reason} onChange={input('reason')} required minLength={1} rows={2} placeholder="Warum wird die Anlage geändert?" className="px-2.5 py-2 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm" />
+          <textarea value={form.reason} onChange={input('reason')} required minLength={1} rows={2} placeholder="Warum wird die Anlage geändert?" className="px-2.5 py-2 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm" />
         </label>
         <div className="flex flex-wrap justify-end gap-2">
           <Button type="button" onClick={onCancel} disabled={busy} variant="secondary" size="sm" className="h-9 px-4">Abbrechen</Button>
@@ -554,15 +554,13 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden xl:flex-row">
-      <div className="flex min-h-0 flex-col border-b border-subtle xl:w-96 xl:min-w-96 xl:max-w-96 xl:border-b-0 xl:border-r">
-        <div className="px-4 py-3 border-b border-subtle space-y-2.5">
+      <div className="flex min-h-0 flex-col border-b border-border xl:w-96 xl:min-w-96 xl:max-w-96 xl:border-b-0 xl:border-r">
+        <div className="px-4 py-3 border-b border-border space-y-2.5">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-control bg-surface-sunken text-foreground flex items-center justify-center shrink-0">
-              <Building2 size={16} />
-            </div>
+
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2">
-                <h1 className="text-sm font-semibold tracking-tight text-foreground leading-tight">Anlagenverwaltung</h1>
+                <h2 className="sr-only">Anlagenverwaltung</h2>
                 {!dataAdapter ? (
                   <span
                     className="rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs font-semibold text-warning-text"
@@ -585,7 +583,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                   </Button>
                 )}
               </div>
-              <p className="text-xs text-muted font-medium leading-tight">Übersicht, Aktivierung und Abschreibung.</p>
+              <p className="sr-only">Übersicht, Aktivierung und Abschreibung.</p>
             </div>
           </div>
 
@@ -613,14 +611,14 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Anlage suchen (Nr., Name, Klasse, KSt.)"
-                className="px-2.5 hover:border-ink-500 w-full h-8 rounded-control border border-control-border pl-8 pr-3 text-xs"
+                className="px-2.5 hover:border-control-border-hover w-full h-8 rounded-control border border-control-border pl-8 pr-3 text-xs"
               />
             </div>
             <div className="flex items-center gap-1.5">
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as 'alle' | AssetStatus)}
-                className="px-2.5 hover:border-ink-500 h-8 rounded-control border border-control-border text-xs"
+                className="px-2.5 hover:border-control-border-hover h-8 rounded-control border border-control-border text-xs"
               >
                 <option value="alle">Alle Status</option>
                 <option value="entwurf">Entwurf</option>
@@ -698,7 +696,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
           <div className="flex min-h-0 flex-1 items-center justify-center p-12 text-muted">Keine Anlage ausgewählt.</div>
         ) : (
           <>
-            <div className="px-4 py-3 border-b border-subtle space-y-2.5">
+            <div className="px-4 py-3 border-b border-border space-y-2.5">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -799,7 +797,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                       }]).map((period, index, rows) => {
                         const depreciated = rows.slice(0, index + 1).reduce((sum, row) => sum + row.amount, 0);
                         return (
-                        <div key={period.id} className="grid grid-cols-4 gap-3 rounded-lg border border-subtle p-3 text-sm">
+                        <div key={period.id} className="grid grid-cols-4 gap-3 rounded-lg border border-border p-3 text-sm">
                           <div><div className="text-xs text-muted font-semibold">Jahr</div><div className="font-semibold tabular-nums text-foreground">{period.year}</div></div>
                           <div><div className="text-xs text-muted font-semibold">AfA</div><div className="font-semibold tabular-nums text-foreground">{euro(period.amount)}</div></div>
                           <div><div className="text-xs text-muted font-semibold">Status</div><div className="font-semibold text-foreground">{period.status === 'posted' ? 'Gebucht' : period.status === 'cancelled' ? 'Storniert' : 'Geplant'}</div></div>
@@ -837,10 +835,10 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                       <p className="mt-1 text-xs text-muted">Die Buchung wird erst nach erfolgreicher Antwort in Liste und Plan übernommen.</p>
                     </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Geschäftsjahr *</span><input type="number" min="2000" step="1" value={depreciationYear} onChange={(event) => setDepreciationYear(event.target.value)} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Buchungsdatum *</span><input type="date" value={postingDate} onChange={(event) => setPostingDate(event.target.value)} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Geschäftsjahr *</span><input type="number" min="2000" step="1" value={depreciationYear} onChange={(event) => setDepreciationYear(event.target.value)} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Buchungsdatum *</span><input type="date" value={postingDate} onChange={(event) => setPostingDate(event.target.value)} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
                     </div>
-                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={depreciationReason} onChange={(event) => setDepreciationReason(event.target.value)} required rows={2} placeholder="Warum wird die AfA jetzt gebucht?" className="px-2.5 py-2 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
+                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={depreciationReason} onChange={(event) => setDepreciationReason(event.target.value)} required rows={2} placeholder="Warum wird die AfA jetzt gebucht?" className="px-2.5 py-2 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm" /></label>
                     <Button type="submit" disabled={busyAction !== null} variant="dark" size="sm" className="h-9 px-4">{busyAction === 'depreciation' ? 'Buche…' : 'AfA buchen'}</Button>
                   </form>
                 )}
@@ -852,12 +850,12 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                       <p className="mt-1 text-xs text-muted">Verkaufserlös 0,00 € führt zur Stilllegung; ein Erlös führt zum Verkauf.</p>
                     </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Ausbuchungsdatum *</span><input type="date" value={disposalDate} onChange={(event) => setDisposalDate(event.target.value)} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Verkaufserlös netto *</span><input type="number" min="0" step="0.01" value={disposalProceeds} onChange={(event) => setDisposalProceeds(event.target.value)} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Umsatzsteuersatz *</span><select value={disposalTaxRate} onChange={(event) => setDisposalTaxRate(event.target.value as '0' | '7' | '19')} required className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm"><option value="0">0 %</option><option value="7">7 %</option><option value="19">19 %</option></select></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Erlöskonto / Zahlungskonto</span><input value={proceedsAccountNumber} onChange={(event) => setProceedsAccountNumber(event.target.value)} placeholder="Optional, z. B. 1200" className="px-3 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Ausbuchungsdatum *</span><input type="date" value={disposalDate} onChange={(event) => setDisposalDate(event.target.value)} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Verkaufserlös netto *</span><input type="number" min="0" step="0.01" value={disposalProceeds} onChange={(event) => setDisposalProceeds(event.target.value)} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Umsatzsteuersatz *</span><select value={disposalTaxRate} onChange={(event) => setDisposalTaxRate(event.target.value as '0' | '7' | '19')} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm"><option value="0">0 %</option><option value="7">7 %</option><option value="19">19 %</option></select></label>
+                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Erlöskonto / Zahlungskonto</span><input value={proceedsAccountNumber} onChange={(event) => setProceedsAccountNumber(event.target.value)} placeholder="Optional, z. B. 1200" className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
                     </div>
-                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={disposalReason} onChange={(event) => setDisposalReason(event.target.value)} required rows={2} placeholder="Warum wird die Anlage ausgebucht?" className="px-2.5 py-2 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
+                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={disposalReason} onChange={(event) => setDisposalReason(event.target.value)} required rows={2} placeholder="Warum wird die Anlage ausgebucht?" className="px-2.5 py-2 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm" /></label>
                     <label className="flex items-start gap-2 text-sm text-foreground"><input type="checkbox" checked={disposalConfirmed} onChange={(event) => setDisposalConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 rounded-sm border-control-border" /><span>Ich bestätige die Ausbuchung und die daraus folgende Journalbuchung.</span></label>
                     <Button type="submit" disabled={busyAction !== null || !disposalConfirmed} variant="dark" size="sm" className="h-9 px-4">{busyAction === 'disposal' ? 'Buche…' : 'Ausbuchung bestätigen'}</Button>
                   </form>

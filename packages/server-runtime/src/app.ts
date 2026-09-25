@@ -1377,6 +1377,8 @@ const registerProRoutes = (app: FastifyInstance) => {
         active: z.boolean(),
         createdAt: z.string().min(1),
         updatedAt: z.string().min(1),
+        hitCount: z.number().int().nonnegative().optional(),
+        lastHitAt: z.string().optional(),
       }),
     ),
     async handler({ request, query }) {

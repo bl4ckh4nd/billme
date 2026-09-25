@@ -24,7 +24,7 @@ function SideColumn({
 }) {
   return (
     <div className="rounded-2xl border border-border bg-surface overflow-hidden">
-      <div className="px-4 py-3 border-b border-subtle text-sm font-semibold text-foreground">{title}</div>
+      <div className="px-4 py-3 border-b border-border text-sm font-semibold text-foreground">{title}</div>
       <div className="divide-y divide-border-subtle">
         {lines.map((line) => (
           <button

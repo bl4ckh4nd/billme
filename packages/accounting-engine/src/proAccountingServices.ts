@@ -70,7 +70,7 @@ export interface ProAccountingOposRepository {
   upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
-  listIncomingInvoiceDocuments(scope: TenantScope, invoiceId: string): Promise<IncomingInvoiceDocumentEntity[]>;
+  listIncomingInvoiceDocuments(scope: TenantScope, invoiceId?: string): Promise<IncomingInvoiceDocumentEntity[]>;
   uploadIncomingInvoiceDocument(scope: TenantScope, input: IncomingInvoiceDocumentUploadInput): Promise<IncomingInvoiceDocumentEntity>;
   downloadIncomingInvoiceDocument(scope: TenantScope, documentId: string): Promise<IncomingInvoiceDocumentDownload>;
   reviewIncomingInvoiceDocument(scope: TenantScope, input: IncomingInvoiceDocumentReviewInput): Promise<IncomingInvoiceDocumentEntity>;
@@ -137,7 +137,7 @@ export interface ProAccountingService {
   upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
   listIncomingInvoices(scope: TenantScope): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(scope: TenantScope, input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
-  listIncomingInvoiceDocuments(scope: TenantScope, invoiceId: string): Promise<IncomingInvoiceDocumentEntity[]>;
+  listIncomingInvoiceDocuments(scope: TenantScope, invoiceId?: string): Promise<IncomingInvoiceDocumentEntity[]>;
   uploadIncomingInvoiceDocument(scope: TenantScope, input: IncomingInvoiceDocumentUploadInput): Promise<IncomingInvoiceDocumentEntity>;
   downloadIncomingInvoiceDocument(scope: TenantScope, documentId: string): Promise<IncomingInvoiceDocumentDownload>;
   reviewIncomingInvoiceDocument(scope: TenantScope, input: IncomingInvoiceDocumentReviewInput): Promise<IncomingInvoiceDocumentEntity>;
@@ -196,7 +196,7 @@ export interface BoundProAccountingService {
   upsertVendor(input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
   listIncomingInvoices(): Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice(input: IncomingInvoiceEntity & { mutation?: AccountingMutationContext }): Promise<IncomingInvoiceEntity>;
-  listIncomingInvoiceDocuments(invoiceId: string): Promise<IncomingInvoiceDocumentEntity[]>;
+  listIncomingInvoiceDocuments(invoiceId?: string): Promise<IncomingInvoiceDocumentEntity[]>;
   uploadIncomingInvoiceDocument(input: IncomingInvoiceDocumentUploadInput): Promise<IncomingInvoiceDocumentEntity>;
   downloadIncomingInvoiceDocument(documentId: string): Promise<IncomingInvoiceDocumentDownload>;
   reviewIncomingInvoiceDocument(input: IncomingInvoiceDocumentReviewInput): Promise<IncomingInvoiceDocumentEntity>;

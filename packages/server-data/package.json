@@ -14,6 +14,7 @@
     "@billme/accounting-engine": "workspace:*",
     "@billme/accounting-shared": "workspace:*",
     "@billme/desktop-services": "workspace:*",
+    "@billme/finance-intelligence": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@electric-sql/pglite": "0.5.5",
     "pg": "^8.16.3",

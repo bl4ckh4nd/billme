@@ -120,7 +120,7 @@ export default function AccountCombobox({
               setQuery(displayValue(valueAccountId, valueAccountName));
             }
           }}
-          className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control pl-8 pr-2 text-sm disabled:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+          className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control pl-8 pr-2 text-sm disabled:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         />
       </div>
 
@@ -142,7 +142,7 @@ export default function AccountCombobox({
                   id={`${inputId}-opt-${account.id}`}
                   role="option"
                   aria-selected={selected}
-                  className={`px-3 py-2 cursor-pointer border-b border-subtle last:border-0 ${
+                  className={`px-3 py-2 cursor-pointer border-b border-border last:border-0 ${
                     active ? 'bg-border-subtle' : 'hover:bg-surface-muted'
                   }`}
                   onMouseDown={(e) => {

@@ -38,6 +38,9 @@ interface InboxViewProps {
   onOpenTransaction: (transactionId: string) => void;
   onRefresh: () => void;
   forcedPreviewTransactionId?: string | null;
+  /** Queue shared with the workbench; uncontrolled when omitted. */
+  activeQueue?: InboxQueueKey;
+  onQueueChange?: (queue: InboxQueueKey) => void;
 }
 
 function formatCurrency(amount: number, currency: string) {
@@ -58,9 +61,13 @@ export default function InboxView({
   onOpenTransaction,
   onRefresh,
   forcedPreviewTransactionId,
+  activeQueue: controlledQueue,
+  onQueueChange,
 }: InboxViewProps) {
   const accountOptions = accounts ?? mockAccounts;
-  const [activeQueue, setActiveQueue] = useState<InboxQueueKey>('all');
+  const [localQueue, setLocalQueue] = useState<InboxQueueKey>('all');
+  const activeQueue = controlledQueue ?? localQueue;
+  const setActiveQueue = onQueueChange ?? setLocalQueue;
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [batchMessage, setBatchMessage] = useState<string>('');
@@ -445,14 +452,14 @@ export default function InboxView({
       {/* Left: transaction table */}
       <div className="flex flex-col h-full flex-1 min-w-0">
         {/* Header: compact two-row layout */}
-        <div className="px-6 pt-3 pb-0 border-b border-subtle shrink-0">
-          {/* Row 1: icon + title */}
-          <div className="flex items-center gap-3 pb-3">
+        <div className="px-4 pt-3 pb-0 border-b border-border shrink-0">
+          {/* Title lives in the page header; kept for assistive tech. */}
+          <div className="sr-only">
             <div className="w-8 h-8 bg-dark-base rounded-lg flex items-center justify-center text-accent shrink-0">
               <Inbox size={16} />
             </div>
             <div className="flex-1 min-w-0">
-              <h1 className="text-sm font-semibold text-foreground leading-tight">Buchungs-Inbox</h1>
+              <h2>Buchungs-Inbox</h2>
               <p className="text-xs text-muted font-medium leading-tight">
                 Workflow-Queues, Validierungen und Freigaben.
               </p>
@@ -535,7 +542,7 @@ export default function InboxView({
         </div>
 
         {/* Toolbar row with count + Einklappen */}
-        <div className="flex items-center justify-between px-6 py-2.5 border-b border-subtle bg-surface-muted/40 shrink-0">
+        <div className="flex items-center justify-between px-6 py-2.5 border-b border-border bg-surface-muted/40 shrink-0">
           <span className="text-xs font-semibold text-muted tabular-nums">
             {filtered.length} Vorgänge
           </span>
@@ -636,7 +643,7 @@ export default function InboxView({
 
       {/* Right: editing sidebar */}
       <aside
-        className={`shrink-0 flex flex-col h-full border-l border-subtle overflow-hidden motion-safe:transition-[opacity,transform] motion-safe:duration-200 motion-safe:ease-out motion-reduce:transition-none ${
+        className={`shrink-0 flex flex-col h-full border-l border-border overflow-hidden motion-safe:transition-[opacity,transform] motion-safe:duration-200 motion-safe:ease-out motion-reduce:transition-none ${
           !sidebarCollapsed ? 'w-80 xl:w-80 opacity-100' : 'w-0 opacity-0 pointer-events-none'
         }`}
         aria-hidden={sidebarCollapsed}
@@ -649,7 +656,7 @@ export default function InboxView({
         ) : (
           <>
             {/* Header card */}
-            <div className="p-4 border-b border-subtle shrink-0">
+            <div className="p-4 border-b border-border shrink-0">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="font-semibold text-foreground leading-tight truncate">{previewTx.payee}</div>
@@ -749,12 +756,12 @@ export default function InboxView({
                   {vlmConfig?.configured ? (
                     <div className="space-y-2">
                       <label className="block text-xs font-semibold text-muted" htmlFor="pro-vlm-model">Modell</label>
-                      <select id="pro-vlm-model" value={vlmModel} onChange={(event) => setVlmModel(event.target.value)} className="px-2.5 hover:border-ink-500 h-9 w-full rounded-control border border-control-border bg-surface text-xs text-foreground">
+                      <select id="pro-vlm-model" value={vlmModel} onChange={(event) => setVlmModel(event.target.value)} className="px-2.5 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-xs text-foreground">
                         {vlmConfig.models.map((model) => <option key={model} value={model}>{model}</option>)}
                       </select>
                     </div>
                   ) : <p className="text-xs text-muted">OpenRouter ist auf dieser Verbindung nicht konfiguriert.</p>}
-                  <button type="button" onClick={() => void analyzePreviewDocument()} disabled={!vlmConfig?.configured || !vlmDocument || vlmBusy} className="h-9 rounded-lg bg-dark-base px-3 text-xs font-semibold text-background motion-safe:transition-colors motion-reduce:transition-none hover:bg-surface-inverse-raised disabled:cursor-not-allowed disabled:opacity-40" aria-busy={vlmBusy}>
+                  <button type="button" onClick={() => void analyzePreviewDocument()} disabled={!vlmConfig?.configured || !vlmDocument || vlmBusy} className="h-9 rounded-lg bg-dark-base px-3 text-xs font-semibold text-inverse-foreground motion-safe:transition-colors motion-reduce:transition-none hover:bg-surface-inverse-raised disabled:cursor-not-allowed disabled:opacity-40" aria-busy={vlmBusy}>
                     {vlmBusy ? 'Prüfung läuft…' : 'Analysieren'}
                   </button>
                   {vlmError ? <p className="text-xs text-error-text" role="alert">{vlmError}</p> : null}
@@ -804,7 +811,7 @@ export default function InboxView({
                       value={normalizeTaxCaseKey(previewCounterLine?.taxCaseKey ?? previewCounterLine?.taxCode) ?? ''}
                       disabled={!previewAccountEditable || !previewBankAccountNumber || !canMutate}
                       onChange={(e) => updateInboxTaxCase(previewTx.id, e.target.value)}
-                      className="px-2.5 hover:border-ink-500 h-10 w-full border border-control-border rounded-control text-sm bg-surface disabled:bg-surface-muted"
+                      className="px-2.5 hover:border-control-border-hover h-10 w-full border border-control-border rounded-control text-sm bg-surface disabled:bg-surface-muted"
                     >
                       <option value="">Keine</option>
                       {TAX_CASE_OPTIONS.map((option) => (
@@ -825,7 +832,7 @@ export default function InboxView({
                       disabled={!previewAccountEditable || !canMutate}
                       placeholder="Optionale Notiz..."
                       rows={3}
-                      className="px-2.5 py-2 hover:border-ink-500 w-full border border-control-border rounded-control text-sm resize-none"
+                      className="px-2.5 py-2 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm resize-none"
                     />
                   </div>
 
@@ -843,7 +850,7 @@ export default function InboxView({
                         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
                       }}
                       placeholder="Buchungstext eingeben"
-                      className="px-2.5 hover:border-ink-500 h-10 w-full border border-control-border rounded-control text-sm bg-surface disabled:bg-surface-muted"
+                      className="px-2.5 hover:border-control-border-hover h-10 w-full border border-control-border rounded-control text-sm bg-surface disabled:bg-surface-muted"
                     />
                   </div>
                 </div>
@@ -851,7 +858,7 @@ export default function InboxView({
             </div>
 
             {/* Action bar */}
-            <div className="p-4 border-t border-subtle flex gap-2 shrink-0">
+            <div className="p-4 border-t border-border flex gap-2 shrink-0">
               <button
                 onClick={() => handleInlineAction(previewTx)}
                 disabled={!previewPrimaryAction}

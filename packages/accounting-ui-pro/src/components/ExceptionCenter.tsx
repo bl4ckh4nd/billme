@@ -97,18 +97,18 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
 
   return (
     <div className="flex h-full min-w-0 flex-col lg:flex-row">
-      <div className="flex w-full max-h-80 shrink-0 flex-col border-b border-subtle lg:max-h-none lg:w-96 lg:border-b-0 lg:border-r">
-        <div className="px-4 py-3 border-b border-subtle">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-control bg-surface-sunken text-foreground flex items-center justify-center shrink-0">
-              <AlertTriangle size={16} />
+      <div className="flex w-full max-h-80 shrink-0 flex-col border-b border-border lg:max-h-none lg:w-96 lg:border-b-0 lg:border-r">
+        <div className="px-4 py-3 border-b border-border">
+          <div className="sr-only">
+            <div>
+              <AlertTriangle size={16} aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h1 className="text-sm font-semibold tracking-tight text-foreground leading-tight">Ausnahmen</h1>
+              <h2>Ausnahmen</h2>
               <p className="text-xs text-muted font-medium leading-tight">Fehler, Warnungen und blockierte Buchungen.</p>
             </div>
           </div>
-          <div className="flex flex-wrap gap-1.5 mt-2.5">
+          <div className="flex flex-wrap gap-1.5">
             {(Object.keys(filterLabels) as ExceptionFilter[]).map((key) => (
               <button
                 key={key}
@@ -209,7 +209,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                 ) : (
                   <ul className="space-y-2">
                     {selectedDraft.validationIssues.map((issue) => (
-                      <li key={issue.id} className="border border-subtle rounded-lg p-3">
+                      <li key={issue.id} className="border border-border rounded-lg p-3">
                         <div className="flex items-center gap-2">
                           <span
                             aria-hidden="true"
@@ -298,7 +298,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         type="text"
                         value={ownerDraft}
                         onChange={(e) => setOwnerDraft(e.target.value)}
-                        className="px-2.5 h-8 hover:border-ink-500 flex-1 border border-control-border rounded-control text-sm"
+                        className="px-2.5 h-8 hover:border-control-border-hover flex-1 border border-control-border rounded-control text-sm"
                         placeholder="Name"
                       />
                       <button
@@ -327,7 +327,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         type="date"
                         value={snoozeUntil}
                         onChange={(e) => setSnoozeUntil(e.target.value)}
-                        className="px-2.5 h-8 hover:border-ink-500 flex-1 border border-control-border rounded-control text-sm"
+                        className="px-2.5 h-8 hover:border-control-border-hover flex-1 border border-control-border rounded-control text-sm"
                       />
                       <button
                         onClick={() => void (async () => {
@@ -354,7 +354,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                     <textarea
                       value={resolutionNote}
                       onChange={(e) => setResolutionNote(e.target.value)}
-                      className="px-2.5 py-2 hover:border-ink-500 w-full border border-control-border rounded-control text-sm min-h-20"
+                      className="px-2.5 py-2 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm min-h-20"
                       placeholder="Was wurde geprüft/gelöst?"
                     />
                   </div>

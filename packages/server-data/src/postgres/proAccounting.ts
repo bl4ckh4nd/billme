@@ -18,6 +18,7 @@ import type {
 } from '@billme/accounting-shared';
 import type { ProAccountingCatalogRepository, ProWorkflowRepository, TenantScope } from '@billme/server-core';
 import { and, asc, count, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
+import { accountSuggestionRuleMatches } from '@billme/finance-intelligence';
 import { isPostgresPool, withSerializablePostgresTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { appendWithClient } from './audit.js';
 import { createDrizzle, schema } from './drizzle.js';
@@ -797,12 +798,43 @@ export const createPostgresProAccountingCatalogRepository = (
     if (args.activeOnly) conditions.push(eq(schema.accountSuggestionRules.active, true));
     const rows = await drizzleDb(db).select().from(schema.accountSuggestionRules).where(and(...conditions))
       .orderBy(asc(schema.accountSuggestionRules.chart), asc(schema.accountSuggestionRules.priority), asc(schema.accountSuggestionRules.createdAt));
-    return rows.map((row) => ({
+    const rules = rows.map((row) => ({
       id: row.id!, tenantId: row.tenantId!, chart: row.chart as TaxCaseAccountMapping['chart'], priority: row.priority!,
       field: row.field as AccountSuggestionRuleField, operator: row.operator as AccountSuggestionRuleOperator, value: row.value!,
       targetAccountNumber: row.targetAccountNumber!, flowType: row.flowType as AccountSuggestionRuleFlowType, active: Boolean(row.active),
       createdAt: row.createdAt!, updatedAt: row.updatedAt!,
     }));
+    // Hit statistics are derived from posted bank bookings instead of stored counters, so they
+    // stay correct after reversals, imports and rule edits: a booking counts for the first
+    // matching active rule of its chart (the one that made the suggestion) when it was posted
+    // on that rule's target account. Overridden suggestions are not hits.
+    // ponytail: recomputed from every posted bank booking on each list call; switch to stored
+    // counters if the rules modal gets slow on large tenants.
+    const booked = (await executeSql(db, sql`
+      SELECT je.id, je.posting_date, bt.type, bt.counterparty, bt.purpose, string_agg(jl.account_number, ',') AS accounts
+        FROM journal_entries je
+        JOIN journal_lines jl ON jl.entry_id=je.id AND jl.tenant_id=je.tenant_id
+        JOIN booking_drafts bd ON bd.id=je.source_draft_id AND bd.tenant_id=je.tenant_id
+        JOIN bank_transactions bt ON bt.id=bd.transaction_id AND bt.tenant_id=bd.tenant_id
+       WHERE je.tenant_id=${tenantId} AND je.status='posted'
+       GROUP BY je.id, je.posting_date, bt.type, bt.counterparty, bt.purpose`)).rows as Array<{ posting_date: string; type: string; counterparty: string | null; purpose: string | null; accounts: string }>;
+    const hits = new Map<string, { count: number; last: string }>();
+    const byChart = new Map<string, typeof rules>();
+    for (const rule of rules) if (rule.active) byChart.set(rule.chart, [...(byChart.get(rule.chart) ?? []), rule]);
+    for (const entry of booked) {
+      const item = { flowType: entry.type === 'income' ? 'income' as const : 'expense' as const, counterparty: entry.counterparty ?? '', purpose: entry.purpose ?? '' };
+      const accounts = new Set(entry.accounts.split(','));
+      for (const chartRules of byChart.values()) {
+        const rule = chartRules.find((candidate) => accountSuggestionRuleMatches(candidate, item));
+        if (!rule || !accounts.has(rule.targetAccountNumber)) continue;
+        const current = hits.get(rule.id) ?? { count: 0, last: '' };
+        hits.set(rule.id, { count: current.count + 1, last: entry.posting_date > current.last ? entry.posting_date : current.last });
+      }
+    }
+    return rules.map((rule) => {
+      const hit = hits.get(rule.id);
+      return hit ? { ...rule, hitCount: hit.count, lastHitAt: hit.last } : { ...rule, hitCount: 0 };
+    });
   },
 
   async upsertAccountSuggestionRule(scope, input) {

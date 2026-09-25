@@ -1471,8 +1471,10 @@ export const createProWebClient = ({
         parser: incomingInvoiceSchema,
       }, '/api/v1/pro/accounting/incoming-invoices');
     },
-    listIncomingInvoiceDocuments(invoiceId: string) {
-      return requestJson({ parser: parseArray(incomingInvoiceDocumentSchema) }, `/api/v1/pro/accounting/incoming-invoices/${encodeURIComponent(invoiceId)}/documents`);
+    listIncomingInvoiceDocuments(invoiceId?: string) {
+      return requestJson({ parser: parseArray(incomingInvoiceDocumentSchema) }, invoiceId
+        ? `/api/v1/pro/accounting/incoming-invoices/${encodeURIComponent(invoiceId)}/documents`
+        : '/api/v1/pro/accounting/incoming-invoice-documents');
     },
     uploadIncomingInvoiceDocument(input: { invoiceId: string; originalFilename: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; reason: string }) {
       return requestJson({ method: 'POST', body: { originalFilename: input.originalFilename, mimeType: input.mimeType, data: input.data, reason: input.reason }, parser: incomingInvoiceDocumentSchema }, `/api/v1/pro/accounting/incoming-invoices/${encodeURIComponent(input.invoiceId)}/documents`);

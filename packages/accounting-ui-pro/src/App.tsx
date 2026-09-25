@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Info } from 'lucide-react';
+import { ConfirmDialog } from '@billme/ui';
 import InboxView from './components/InboxView';
 import BookingEditor from './components/BookingEditor';
 import ReconciliationWorkbench from './components/ReconciliationWorkbench';
@@ -7,6 +8,9 @@ import ExceptionCenter from './components/ExceptionCenter';
 import AssetManagementView from './components/AssetManagementView';
 import ReportsView from './components/ReportsView';
 import OposView from './components/OposView';
+import ReceiptsInbox from './components/ReceiptsInbox';
+import WorkbenchQueue from './components/WorkbenchQueue';
+import type { InboxQueueKey } from './domain/selectors';
 import SonderbuchungenWorkspace from './components/SonderbuchungenWorkspace';
 import { JournalEntryDetailModal } from './components/JournalEntryDetail';
 import {
@@ -19,7 +23,11 @@ import {
 import { Account, BookingDraft, Transaction, UserRole } from './types';
 import { reportTabsForBusinessProfile, type BusinessReportingProfile } from './domain/reportTypes';
 
-type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos' | 'special';
+export type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos' | 'special' | 'receipts';
+
+const ROUTABLE_VIEWS: readonly AppView[] = ['inbox', 'reconciliation', 'exceptions', 'assets', 'reports', 'opos', 'special', 'receipts'];
+const isAccountingView = (value: unknown): value is AppView =>
+  typeof value === 'string' && (ROUTABLE_VIEWS as readonly string[]).includes(value);
 
 export interface ProAccountingSeed {
   transactions?: Transaction[];
@@ -38,12 +46,31 @@ export interface ProAccountingWorkspaceProps {
   role?: UserRole;
   assetsAvailable?: boolean;
   busy?: boolean;
+  /** Area requested by the app route (`?view=`); unknown values fall back to the inbox. */
+  view?: unknown;
   onPersistEntry?: (entry: { transaction: Transaction; draft: BookingDraft }) => void | Promise<void>;
+  /** Routed hosts move the URL (`?view=`) when one area hands off to another. */
+  onViewChange?: (view: AppView) => void;
 }
 
-export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, onPersistEntry }: ProAccountingWorkspaceProps) {
-  const [currentView, setCurrentView] = useState<AppView>('inbox');
+export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, view, onPersistEntry, onViewChange }: ProAccountingWorkspaceProps) {
+  const [oposInvoiceId, setOposInvoiceId] = useState<string | null>(null);
+  const [currentView, setCurrentView] = useState<AppView>(isAccountingView(view) ? view : 'inbox');
+
+  useEffect(() => {
+    if (isAccountingView(view)) setCurrentView(view);
+  }, [view]);
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
+  const [queue, setQueue] = useState<InboxQueueKey>('all');
+  const editorDirty = useRef(false);
+  const [pendingSwitchId, setPendingSwitchId] = useState<string | null>(null);
+  const handleDirtyChange = useCallback((dirty: boolean) => { editorDirty.current = dirty; }, []);
+  // Switching from the queue drops unsaved edits, so it asks first.
+  const selectFromQueue = useCallback((transactionId: string) => {
+    if (transactionId === selectedTransactionId) return;
+    if (editorDirty.current) setPendingSwitchId(transactionId);
+    else setSelectedTransactionId(transactionId);
+  }, [selectedTransactionId]);
   const [selectedJournalEntryId, setSelectedJournalEntryId] = useState<string | null>(null);
   const [inboxPreviewTransactionId, setInboxPreviewTransactionId] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
@@ -97,7 +124,10 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
 
   return (
     <div className="flex h-full min-w-0 w-full flex-col text-foreground">
-      <div className="shrink-0 overflow-x-auto border-b border-subtle px-3 pt-2 sm:px-6">
+      {/* Routed (the app shell's sidebar opens each area): no second navigation here.
+          Standalone use without a route keeps the tab bar. */}
+      {view === undefined ? (
+      <div className="shrink-0 overflow-x-auto border-b border-border px-3 pt-2 sm:px-6">
         <nav className="flex min-w-max items-center gap-0.5" aria-label="Buchhaltungsbereiche">
           {(
             [
@@ -139,6 +169,18 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
           )}
         </nav>
       </div>
+      ) : dataAdapter ? null : (
+        <div className="shrink-0 px-4 pt-3">
+          <span
+            className="inline-flex items-center gap-1 rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs font-semibold text-warning-text"
+            role="status"
+            title="Ohne verbundene Datenquelle zeigen Buchungen, Ausnahmen und Auswertungen einen Demo-Datensatz."
+          >
+            <Info size={12} aria-hidden="true" />
+            Beispieldaten
+          </span>
+        </div>
+      )}
 
       <div className="min-w-0 flex-1 overflow-hidden">
         {busy ? <div className="sr-only" aria-live="polite">Speichere Änderung…</div> : null}
@@ -154,15 +196,45 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}
               forcedPreviewTransactionId={inboxPreviewTransactionId}
+              activeQueue={queue}
+              onQueueChange={setQueue}
             />
           ) : currentView === 'editor' ? (
-            <BookingEditor
-              transactionId={selectedTransactionId}
-              role={role}
-              accounts={accounts}
-              onBack={handleBackToInbox}
-              onStoreChange={refresh}
-            />
+            // Workbench: the queue stays beside the editor (below lg the editor takes the full width).
+            <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)] lg:grid-cols-[264px_minmax(0,1fr)]">
+              <div className="hidden min-h-0 lg:block">
+                <WorkbenchQueue
+                  transactions={transactions}
+                  queue={queue}
+                  onQueueChange={setQueue}
+                  selectedId={selectedTransactionId}
+                  onSelect={selectFromQueue}
+                />
+              </div>
+              <BookingEditor
+                key={selectedTransactionId ?? 'none'}
+                transactionId={selectedTransactionId}
+                role={role}
+                accounts={accounts}
+                onBack={handleBackToInbox}
+                onStoreChange={refresh}
+                onDirtyChange={handleDirtyChange}
+              />
+              <ConfirmDialog
+                open={pendingSwitchId !== null}
+                title="Ungespeicherte Änderungen verwerfen?"
+                description="Die Buchung hat Änderungen, die noch nicht gespeichert sind. Beim Wechsel zum nächsten Vorgang gehen sie verloren."
+                confirmLabel="Verwerfen und wechseln"
+                cancelLabel="Weiter bearbeiten"
+                destructive
+                onConfirm={() => {
+                  editorDirty.current = false;
+                  setSelectedTransactionId(pendingSwitchId);
+                  setPendingSwitchId(null);
+                }}
+                onCancel={() => setPendingSwitchId(null)}
+              />
+            </div>
           ) : currentView === 'reconciliation' ? (
             <ReconciliationWorkbench
               role={role}
@@ -192,7 +264,9 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
               onOpenJournalEntry={setSelectedJournalEntryId}
             />
           ) : currentView === 'opos' ? (
-            <OposView dataAdapter={dataAdapter} role={role} />
+            <OposView key={oposInvoiceId ?? 'opos'} dataAdapter={dataAdapter} role={role} initialInvoiceId={oposInvoiceId ?? undefined} />
+          ) : currentView === 'receipts' ? (
+            <ReceiptsInbox dataAdapter={dataAdapter} onOpenInvoice={(invoiceId) => { setOposInvoiceId(invoiceId); if (onViewChange) onViewChange('opos'); else setCurrentView('opos'); }} />
           ) : currentView === 'special' ? (
             <SonderbuchungenWorkspace dataAdapter={dataAdapter} role={role} />
           ) : currentView === 'assets' && !assetsAvailable ? (

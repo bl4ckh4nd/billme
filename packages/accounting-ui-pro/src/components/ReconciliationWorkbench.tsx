@@ -10,6 +10,7 @@ import { mockAccounts } from '../mocks/accounts';
 import { permissionContextForRole } from '../mocks/users';
 import { dispatchBookingAction, getBookingDraftByTransactionId, saveDraft } from '../services/mockBookingStore';
 import { Account, BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
+import { ConfirmDialog, HatchedProgress } from '@billme/ui';
 import AccountCombobox from './AccountCombobox';
 import IssueBadges from './IssueBadges';
 
@@ -84,6 +85,8 @@ function formatCurrency(amount: number | string, currency: string) {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency }).format(Number.isFinite(num) ? num : 0);
 }
 
+const CONFIDENT_THRESHOLD = 0.9;
+
 function getPrimaryAction(actions: BookingAction[]): BookingAction | null {
   return actions.find((a) => ['approve', 'post', 'submit_for_review'].includes(a)) ?? null;
 }
@@ -114,6 +117,58 @@ export default function ReconciliationWorkbench({
       ),
     [transactions],
   );
+
+  // A confident match is one the single-item flow would accept unchanged:
+  // high suggestion confidence, no blocking issue, an allowed primary action,
+  // exactly one bank line and a balanced split.
+  const confident = useMemo(
+    () =>
+      queue.flatMap((tx) => {
+        if ((tx.suggestionConfidence ?? 0) < CONFIDENT_THRESHOLD) return [];
+        const txDraft = getBookingDraftByTransactionId(tx.id);
+        if (!txDraft || txDraft.validationIssues.some((issue) => issue.blocking)) return [];
+        const action = getPrimaryAction(getAllowedActions(txDraft.workflowStatus, permissionCtx, txDraft.validationIssues));
+        if (!action) return [];
+        const txTotals = calculateReconciliationTotals(
+          txDraft,
+          tx.amount,
+          accounts ?? [],
+          bankAccountNumberByTransactionId?.[tx.id] ?? configuredBankAccountNumber,
+          accounts === undefined,
+        );
+        // The draft must book what the suggestion names; otherwise confirming would post an account nobody proposed.
+        const counterAccounts = txDraft.lines.map((line) => line.accountId).filter((id) => id && id !== txTotals.bankAccountNumber);
+        const followsSuggestion = Boolean(tx.suggestion) && counterAccounts.length > 0 && counterAccounts.every((id) => id === tx.suggestion);
+        return followsSuggestion && txTotals.bankLineCount === 1 && txTotals.difference < 0.01 ? [{ tx, action }] : [];
+      }),
+    [queue, permissionCtx, accounts, bankAccountNumberByTransactionId, configuredBankAccountNumber],
+  );
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchResult, setBatchResult] = useState<string | null>(null);
+  const done = transactions.length - queue.length;
+
+  // ponytail: runs the existing per-transaction action in sequence; add a batch
+  // route in server-runtime if queues get long enough for this to feel slow.
+  const runConfidentBatch = async () => {
+    setBatchOpen(false);
+    setMutationBusy(true);
+    setMutationError(null);
+    const failures: string[] = [];
+    for (const { tx, action } of confident) {
+      try {
+        await dispatchBookingAction(tx.id, action, { role, actorName: role });
+      } catch (error) {
+        failures.push(`${tx.payee}: ${error instanceof Error ? error.message : 'unbekannter Fehler'}`);
+      }
+    }
+    setMutationBusy(false);
+    setBatchResult(
+      failures.length === 0
+        ? `${confident.length} sichere Treffer weitergeführt.`
+        : `${confident.length - failures.length} weitergeführt, ${failures.length} fehlgeschlagen: ${failures.join('; ')}`,
+    );
+    onRefresh();
+  };
 
   const selectedTx = queue.find((tx) => tx.id === selectedId) ?? queue[0] ?? null;
   const storeDraft = selectedTx ? getBookingDraftByTransactionId(selectedTx.id) : undefined;
@@ -262,20 +317,63 @@ export default function ReconciliationWorkbench({
 
   return (
     <div className="flex">
-      <div className="w-96 shrink-0 border-r border-subtle flex flex-col">
-        <div className="px-4 py-3 border-b border-subtle">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-control bg-surface-sunken text-foreground flex items-center justify-center shrink-0">
-              <ArrowRightLeft size={16} />
+      <div className="w-80 shrink-0 border-r border-border flex flex-col">
+        <div className="sr-only">
+          <div>
+            <div>
+              <ArrowRightLeft size={16} aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h1 className="text-sm font-semibold tracking-tight text-foreground leading-tight">Bankabgleich Workbench</h1>
+              <h2>Bankabgleich Workbench</h2>
               <p className="text-xs text-muted font-medium leading-tight">
                 Vorschläge prüfen und in den Buchungsworkflow überführen.
               </p>
             </div>
           </div>
         </div>
+        <section aria-label="Fortschritt Bankabgleich" className="border-b border-border px-4 py-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="text-label font-semibold text-foreground">
+              <span className="tabular-nums">{done}</span> von <span className="tabular-nums">{transactions.length}</span> Umsätzen erledigt
+            </p>
+            <span className="text-caption text-muted tabular-nums">{queue.length} offen</span>
+          </div>
+          <HatchedProgress className="mt-2" size="sm" value={transactions.length ? done / transactions.length : 0} label="Abgleichfortschritt" valueText={`${done} von ${transactions.length} erledigt`} />
+          {confident.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setBatchOpen(true)}
+              disabled={mutationBusy || !permissionCtx.canMutate}
+              className="mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-control border border-control-border bg-surface text-xs font-semibold text-foreground hover:bg-surface-muted disabled:opacity-50"
+            >
+              <CheckCircle2 size={14} aria-hidden="true" />
+              Sichere Treffer bestätigen ({confident.length})
+            </button>
+          )}
+          {batchResult && (
+            <p role="status" className="mt-2 text-caption text-muted">{batchResult}</p>
+          )}
+        </section>
+        <ConfirmDialog
+          open={batchOpen}
+          title={`${confident.length} sichere Treffer bestätigen?`}
+          description="Jeder Umsatz geht mit seinem Vorschlag den nächsten Workflow-Schritt, genau wie beim Einzelabgleich. Prüfungen und Freigaben bleiben erhalten."
+          confirmLabel="Bestätigen"
+          cancelLabel="Abbrechen"
+          busy={mutationBusy}
+          details={
+            <ul className="space-y-1 text-sm text-foreground" aria-label="Betroffene Umsätze">
+              {confident.map(({ tx, action }) => (
+                <li key={tx.id} className="flex justify-between gap-3">
+                  <span className="min-w-0 truncate">{tx.payee}</span>
+                  <span className="shrink-0 text-muted">{actionLabel(action)} · <span className="tabular-nums">{formatCurrency(tx.amount, tx.currency)}</span></span>
+                </li>
+              ))}
+            </ul>
+          }
+          onConfirm={() => void runConfidentBatch()}
+          onCancel={() => setBatchOpen(false)}
+        />
         <div className="overflow-y-auto p-3 space-y-2">
           {queue.map((tx) => {
             const status = getStatusPresentation(tx.workflowStatus);
@@ -321,12 +419,12 @@ export default function ReconciliationWorkbench({
         {!selectedTx || !draft ? (
             <div className="text-muted">Keine Position ausgewählt.</div>
           ) : (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 2xl:grid-cols-2 gap-6">
             <section className="space-y-4">
               {mutationError && <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">{mutationError}</div>}
               <div className="border border-border rounded-2xl bg-surface p-5">
                 <div className="text-xs uppercase tracking-wider text-muted font-semibold">Bankbewegung</div>
-                <div className="mt-2 grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
+                <div className="mt-2 grid grid-cols-1 2xl:grid-cols-2 gap-3 items-start">
                   <div className="min-w-0">
                     <div className="font-semibold text-base text-foreground">{selectedTx.payee}</div>
                     <div className="text-sm text-muted line-clamp-2">{selectedTx.description}</div>
@@ -444,7 +542,7 @@ export default function ReconciliationWorkbench({
                   {draft.lines.map((line) => (
                     <div
                       key={line.id}
-                      className="grid grid-cols-12 gap-2 items-center text-sm border border-subtle rounded-lg p-2"
+                      className="grid grid-cols-12 gap-2 items-center text-sm border border-border rounded-lg p-2"
                     >
                       <select
                         value={line.type}
@@ -452,7 +550,7 @@ export default function ReconciliationWorkbench({
                           updateLine(line.id, (cur) => ({ ...cur, type: e.target.value as 'Soll' | 'Haben' }))
                         }
                         disabled={draftReadOnly}
-                        className="px-2.5 h-8 hover:border-ink-500 col-span-2 border border-control-border rounded-control text-sm"
+                        className="px-2.5 h-8 hover:border-control-border-hover col-span-2 border border-control-border rounded-control text-sm"
                         aria-label="Soll/Haben"
                       >
                         <option value="Soll">Soll</option>
@@ -486,7 +584,7 @@ export default function ReconciliationWorkbench({
                         value={line.amount}
                         onChange={(e) => updateLine(line.id, (cur) => ({ ...cur, amount: e.target.value }))}
                         disabled={draftReadOnly}
-                        className="px-2.5 h-8 hover:border-ink-500 col-span-3 border border-control-border rounded-control text-sm text-right"
+                        className="px-2.5 h-8 hover:border-control-border-hover col-span-3 border border-control-border rounded-control text-sm text-right"
                         aria-label="Betrag"
                       />
                       <button
@@ -500,7 +598,7 @@ export default function ReconciliationWorkbench({
                     </div>
                   ))}
                 </div>
-                <div className="mt-3 flex items-center justify-between text-xs text-muted">
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted">
                   <span className="tabular-nums">{draft.lines.length} Zeilen</span>
                   <span className="tabular-nums">Bank: {formatCurrency(totals?.bank ?? 0, selectedTx.currency)}</span>
                   <span className="tabular-nums">Gegenbuchungen: {formatCurrency(totals?.counterpart ?? 0, selectedTx.currency)}</span>

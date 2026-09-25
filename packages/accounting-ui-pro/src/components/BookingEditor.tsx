@@ -10,7 +10,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { defaultBookingPolicy } from '../domain/policies';
-import { getStatusPresentation } from '../domain/selectors';
+import { WORKFLOW_STEPS, getStatusPresentation, getWorkflowStep } from '../domain/selectors';
 import { findTaxCaseOption, normalizeTaxCaseKey, TAX_CASE_OPTIONS, toLegacyTaxCode } from '../domain/taxCases';
 import { hasBlockingIssues, validateBookingDraft } from '../domain/validation';
 import { getAllowedActions } from '../domain/workflow';
@@ -22,7 +22,7 @@ import {
   getTransactionById,
   saveDraft,
 } from '../services/mockBookingStore';
-import { ConfirmDialog, Modal } from '@billme/ui';
+import { ConfirmDialog, Modal, Stepper } from '@billme/ui';
 import { Account, BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
 import AccountCombobox from './AccountCombobox';
 import ActivityTimeline from './ActivityTimeline';
@@ -34,6 +34,8 @@ interface BookingEditorProps {
   role: UserRole;
   accounts?: Account[];
   onBack: () => void;
+  /** Reports whether the draft differs from the stored one, so the workbench can guard a switch. */
+  onDirtyChange?: (dirty: boolean) => void;
   onStoreChange: () => void;
 }
 
@@ -51,7 +53,7 @@ function actionRequiresConfirmation(action: BookingAction) {
   return action === 'reverse' || action === 'reject';
 }
 
-export default function BookingEditor({ transactionId, role, accounts, onBack, onStoreChange }: BookingEditorProps) {
+export default function BookingEditor({ transactionId, role, accounts, onBack, onStoreChange, onDirtyChange }: BookingEditorProps) {
   const accountOptions = accounts ?? mockAccounts;
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [draft, setDraft] = useState<BookingDraft | null>(null);
@@ -68,6 +70,12 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
     setTransaction(getTransactionById(transactionId) ?? null);
     setDraft(getBookingDraftByTransactionId(transactionId) ?? null);
   }, [transactionId]);
+
+  useEffect(() => {
+    if (!onDirtyChange || !transactionId) return;
+    const stored = getBookingDraftByTransactionId(transactionId);
+    onDirtyChange(Boolean(draft && stored && JSON.stringify(draft) !== JSON.stringify(stored)));
+  }, [draft, onDirtyChange, transactionId]);
 
   const permissionCtx = permissionContextForRole(role);
   const validationIssues = useMemo(() => {
@@ -262,7 +270,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-subtle shrink-0 gap-3">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0 gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <button
             onClick={onBack}
@@ -271,7 +279,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
           >
             <ArrowLeft size={16} />
           </button>
-          <div className="w-8 h-8 bg-dark-base rounded-lg flex items-center justify-center text-background shrink-0">
+          <div className="w-8 h-8 bg-dark-base rounded-lg flex items-center justify-center text-inverse-foreground shrink-0">
             <FileText size={16} />
           </div>
           <div className="min-w-0">
@@ -295,6 +303,9 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                 </span>
               )}
             </div>
+            {getWorkflowStep(draft.workflowStatus) >= 0 && (
+              <Stepper className="mt-1.5" label="Bearbeitungsstand" steps={[...WORKFLOW_STEPS]} current={getWorkflowStep(draft.workflowStatus)} />
+            )}
             {readOnly && <p className="mt-1 text-xs text-muted" role="status">{readOnlyMessage}</p>}
             <p className="text-xs text-muted font-medium mt-0.5">
               {transaction.payee} • {new Date(transaction.date).toLocaleDateString('de-DE')} •{' '}
@@ -312,13 +323,17 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         />
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-auto p-5 md:flex-row">
-        <div className="flex w-full shrink-0 flex-col gap-4 md:w-80">
+      {/* Beside the workbench queue the lines need the width; meta moves beside them only on very wide screens. */}
+      {/* Workbench centre and aside: Belegkopf, Buchungssatz and T-Konto in the main column;
+          receipt, checks and history beside them (below them on narrower screens). */}
+      <div className="grid min-w-0 flex-1 gap-4 overflow-auto p-4 min-[1440px]:grid-cols-[minmax(0,1fr)_300px] min-[1440px]:items-start">
+        <div className="flex min-w-0 flex-col gap-4">
+        <div className="flex w-full shrink-0 flex-col gap-4">
           <div className="border border-border rounded-2xl overflow-hidden">
-            <div className="p-4 border-b border-subtle bg-surface-muted/50 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">Transaktion & Meta</h3>
+            <div className="p-4 border-b border-border bg-surface-muted/50 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-foreground">Belegkopf</h3>
             </div>
-            <div className="p-4 space-y-4">
+            <div className="grid gap-4 p-4 lg:grid-cols-2">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block mb-1 text-label text-foreground" htmlFor="bookingeditor-belegdatum">
@@ -329,7 +344,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                     value={draft.documentDate ?? ''}
                     disabled={readOnly}
                     onChange={(e) => patchDraft((prev) => ({ ...prev, documentDate: e.target.value }))}
-                    className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
+                    className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                   />
                 </div>
                 <div>
@@ -341,7 +356,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                     value={draft.postingDate ?? ''}
                     disabled={readOnly}
                     onChange={(e) => patchDraft((prev) => ({ ...prev, postingDate: e.target.value }))}
-                    className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
+                    className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                   />
                 </div>
               </div>
@@ -355,7 +370,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                   value={draft.bookingText}
                   disabled={readOnly}
                   onChange={(e) => patchDraft((prev) => ({ ...prev, bookingText: e.target.value }))}
-                  className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
+                  className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                 />
               </div>
 
@@ -368,29 +383,16 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                   value={draft.externalReference ?? ''}
                   disabled={readOnly}
                   onChange={(e) => patchDraft((prev) => ({ ...prev, externalReference: e.target.value }))}
-                  className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
+                  className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="rounded-xl border border-border p-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted">Kontenrahmen</div>
-                  <div className="font-semibold text-foreground mt-1">{draft.chartFramework} (Default)</div>
-                </div>
-                <div className="rounded-xl border border-border p-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted">Belegstatus</div>
-                  <div className={`font-semibold mt-1 ${transaction.hasReceipt ? 'text-success-text' : 'text-warning-text'}`}>
-                    {transaction.hasReceipt ? 'Beleg vorhanden' : 'Beleg fehlt'}
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
 
         </div>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
-          <ValidationSummary issues={validationIssues} />
+        <div className="flex min-w-0 flex-col">
 
           {/* Kartenrumpf: Kopfleiste, Fußleiste und mindestens eine Buchungszeile bleiben immer sichtbar, der Rest scrollt.
               min-h-26 = Spaltenkopf (41px) + eine Zeile (57px); min-h-55 = das plus Kopf- und Fußleiste. */}
@@ -403,7 +405,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
             </div>
 
             <div className="overflow-auto flex-1 min-h-26">
-              <div className="sticky top-0 z-10 grid grid-cols-12 gap-3 bg-surface px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted border-b border-subtle">
+              <div className="sticky top-0 z-10 grid grid-cols-12 gap-3 bg-surface px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted border-b border-border">
                 <div className="col-span-1">S/H</div>
                 <div className="col-span-4">Konto</div>
                 <div className="col-span-2">KSt.</div>
@@ -420,16 +422,23 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                     <div key={line.id} className="px-4 py-3 space-y-3">
                       <div className="grid grid-cols-12 gap-3 items-center">
                         <div className="col-span-1">
-                          <select
-                            value={line.type}
-                            disabled={readOnly}
-                            onChange={(e) => updateLine(line.id, (current) => ({ ...current, type: e.target.value as 'Soll' | 'Haben' }))}
-                            aria-label="Soll oder Haben"
-                            className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
-                          >
-                            <option value="Soll">S</option>
-                            <option value="Haben">H</option>
-                          </select>
+                          {/* Two-state switch: the side is a binary fact, not a list choice. */}
+                          <div role="radiogroup" aria-label="Soll oder Haben" className="inline-flex h-8 overflow-hidden rounded-control border border-control-border">
+                            {(['Soll', 'Haben'] as const).map((side) => (
+                              <button
+                                key={side}
+                                type="button"
+                                role="radio"
+                                aria-checked={line.type === side}
+                                aria-label={side}
+                                disabled={readOnly}
+                                onClick={() => updateLine(line.id, (current) => ({ ...current, type: side }))}
+                                className={`w-7 text-xs font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed ${line.type === side ? 'bg-selected text-selected-foreground' : 'bg-surface text-muted hover:text-foreground'} ${side === 'Haben' ? 'border-l border-border' : ''}`}
+                              >
+                                {side === 'Soll' ? 'S' : 'H'}
+                              </button>
+                            ))}
+                          </div>
                         </div>
 
                         <div className="col-span-4">
@@ -465,7 +474,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                             value={line.costCenter ?? ''}
                             disabled={readOnly}
                             onChange={(e) => updateLine(line.id, (current) => ({ ...current, costCenter: e.target.value }))}
-                            className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
+                            className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                             placeholder="-"
                           />
                         </div>
@@ -490,7 +499,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 };
                               })
                             }
-                            className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
+                            className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
                           >
                             <option value="">Keine</option>
                             {TAX_CASE_OPTIONS.map((option) => (
@@ -515,7 +524,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                             onChange={(e) =>
                               updateLine(line.id, (current) => ({ ...current, amount: parseAmountInput(e.target.value) }))
                             }
-                            className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums text-right disabled:bg-surface-muted"
+                            className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums text-right disabled:bg-surface-muted"
                           />
                         </div>
 
@@ -549,7 +558,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                   taxRate: e.target.value === '' ? undefined : Number(parseAmountInput(e.target.value)),
                                 }))
                               }
-                              className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
+                              className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
@@ -567,7 +576,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 }))
                               }
                               placeholder={selectedTaxCase.requiresCountry ? 'Pflicht (z.B. FR)' : 'Optional'}
-                              className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
+                              className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
@@ -585,7 +594,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 }))
                               }
                               placeholder={selectedTaxCase.requiresCounterpartyVatId ? 'Pflicht' : 'Optional'}
-                              className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
+                              className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
@@ -598,7 +607,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                               disabled={readOnly}
                               onChange={(e) => updateLine(line.id, (current) => ({ ...current, evidenceType: e.target.value }))}
                               placeholder={selectedTaxCase.requiresEvidence ? 'Pflicht' : 'Optional'}
-                              className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
+                              className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                           <div>
@@ -613,7 +622,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                                 updateLine(line.id, (current) => ({ ...current, evidenceReference: e.target.value }))
                               }
                               placeholder={selectedTaxCase.requiresEvidence ? 'Pflicht' : 'Optional'}
-                              className="px-2.5 h-8 hover:border-ink-500 w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
+                              className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
                             />
                           </div>
                         </div>
@@ -624,7 +633,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
               </div>
             </div>
 
-            <div className="p-3 border-t border-subtle bg-surface-muted/50 flex items-center justify-between shrink-0">
+            <div className="p-3 border-t border-border bg-surface-muted/50 flex items-center justify-between shrink-0">
               <button
                 onClick={addLine}
                 disabled={readOnly}
@@ -646,31 +655,44 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
             </div>
           </div>
 
-          <div className="mt-4 grid shrink-0 grid-cols-1 xl:grid-cols-2 gap-4">
-            <div className="bg-dark-base rounded-2xl p-5 text-background">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex gap-8">
-                  <div>
-                    <div className="text-xs uppercase tracking-wider text-dark-muted font-semibold">Soll</div>
-                    <div className="text-xl font-semibold tabular-nums">{formatCurrency(totalSoll, transaction.currency)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs uppercase tracking-wider text-dark-muted font-semibold">Haben</div>
-                    <div className="text-xl font-semibold tabular-nums">{formatCurrency(totalHaben, transaction.currency)}</div>
-                  </div>
+          <div className="mt-4 shrink-0">
+            {/* T-Konto: one figure split into its two sides, the difference named in euros. */}
+            <section aria-label="Summen Soll und Haben" className="rounded-2xl border border-border bg-surface p-5">
+              <div className="grid grid-cols-[1fr_1px_1fr] border-t border-control-border pt-3">
+                <div className="pr-4">
+                  <div className="text-caption font-semibold uppercase tracking-[0.04em] text-muted">Soll</div>
+                  <div className="text-xl font-semibold tabular-nums text-foreground">{formatCurrency(totalSoll, transaction.currency)}</div>
                 </div>
-                <div className="text-right">
-                  <div className="text-xs uppercase tracking-wider text-dark-muted font-semibold">Differenz</div>
-                  <div className={`text-2xl font-semibold tabular-nums ${difference < 0.01 ? 'text-background' : 'text-background underline decoration-accent decoration-4 underline-offset-4'}`}>
-                    {formatCurrency(difference, transaction.currency)}
-                  </div>
+                <div className="bg-control-border" aria-hidden="true" />
+                <div className="pl-4 text-right">
+                  <div className="text-caption font-semibold uppercase tracking-[0.04em] text-muted">Haben</div>
+                  <div className="text-xl font-semibold tabular-nums text-foreground">{formatCurrency(totalHaben, transaction.currency)}</div>
                 </div>
               </div>
-            </div>
-
-            <ActivityTimeline events={draft.activity} />
+              <div
+                className={`mt-4 flex items-center justify-between rounded-control border px-3 py-2 text-label ${difference < 0.01 ? 'border-success-border bg-success-bg text-success-text' : 'border-error-border bg-error-bg text-error-text'}`}
+                role="status"
+              >
+                <span>{difference < 0.01 ? 'Soll und Haben gleichen sich aus' : 'Differenz, Buchung nicht ausgeglichen'}</span>
+                <span className="font-semibold tabular-nums">{formatCurrency(difference, transaction.currency)}</span>
+              </div>
+            </section>
           </div>
         </div>
+        </div>
+
+        <aside aria-label="Beleg, Prüfungen und Verlauf" className="flex min-w-0 flex-col gap-4">
+          <section aria-label="Beleg" className="rounded-2xl border border-border bg-surface p-4">
+            <div className="text-caption font-semibold uppercase tracking-[0.04em] text-muted">Beleg</div>
+            <div className={`mt-1 text-sm font-semibold ${transaction.hasReceipt ? 'text-success-text' : 'text-warning-text'}`}>
+              {transaction.hasReceipt ? 'Beleg vorhanden' : 'Beleg fehlt'}
+            </div>
+            <div className="mt-3 text-caption font-semibold uppercase tracking-[0.04em] text-muted">Kontenrahmen</div>
+            <div className="mt-1 text-sm font-semibold tabular-nums text-foreground">{draft.chartFramework}</div>
+          </section>
+          <ValidationSummary issues={validationIssues} />
+          <ActivityTimeline events={draft.activity} />
+        </aside>
       </div>
 
       <Modal

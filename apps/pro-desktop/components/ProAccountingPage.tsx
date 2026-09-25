@@ -276,7 +276,22 @@ const mapUiDraftToEntityDraft = (
   };
 };
 
-export const ProAccountingPage: React.FC = () => {
+/** Page title and subtitle per accounting area; the sidebar entry opens the area. */
+const AREA_TITLES: Record<string, [string, string]> = {
+  inbox: ['Buchen', 'Umsätze kontieren, prüfen, freigeben und buchen.'],
+  reconciliation: ['Bankabgleich', 'Kontoumsätze mit Vorschlägen abgleichen.'],
+  exceptions: ['Ausnahmen', 'Blockierte und auffällige Vorgänge klären.'],
+  assets: ['Anlagen', 'Anlagevermögen, Abschreibung und Abgang.'],
+  reports: ['Auswertungen', 'SuSa, BWA, GuV und Bilanz des Zeitraums.'],
+  opos: ['Offene Posten', 'Forderungen, Verbindlichkeiten und Eingangsrechnungen.'],
+  special: ['Sonderbuchungen', 'Korrekturen und Abschlussbuchungen.'],
+  receipts: ['Belege', 'Eingangsrechnungen und ihre Originalbelege prüfen.'],
+};
+
+const SECTIONED_AREAS = new Set(['reports', 'opos', 'special', 'receipts']);
+
+/** `view` comes from the route (`/accounting?view=`) so the shell navigation can open an area directly. */
+export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view: string) => void }> = ({ view, onViewChange }) => {
   const queryClient = useQueryClient();
   const { data: settings } = useSettingsQuery();
   const { data: ledgerStats, isError: ledgerStatsError, error: ledgerStatsLoadError } = useProLedgerStatsQuery();
@@ -765,16 +780,18 @@ export const ProAccountingPage: React.FC = () => {
   }
 
   return (
-    <div className="bg-surface rounded-panel px-6 pt-6 pb-0 h-full flex flex-col shadow-xs">
-      <div className="mb-4 flex items-start justify-between shrink-0">
-        <div>
-          <h1 className="text-title text-foreground">Pro Buchhaltung</h1>
-          <p className="text-sm text-muted mt-1">Doppelte Buchführung, Kontenrahmen und Berichte.</p>
+    <div className="flex h-full flex-col px-1 pt-2">
+      <div className="mb-3 flex shrink-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-title text-foreground">{(AREA_TITLES[String(view)] ?? AREA_TITLES.inbox)[0]}</h1>
+          <p className="mt-0.5 text-sm text-muted">{(AREA_TITLES[String(view)] ?? AREA_TITLES.inbox)[1]}</p>
         </div>
-        <Button variant="secondary" onClick={() => setShowRulesModal(true)}>
-          <Settings2 size={16} aria-hidden="true" />
-          Regeln
-        </Button>
+        {(view === 'inbox' || view === 'reconciliation' || view === undefined) && (
+          <Button variant="secondary" onClick={() => setShowRulesModal(true)}>
+            <Settings2 size={16} aria-hidden="true" />
+            Regeln
+          </Button>
+        )}
       </div>
 
 
@@ -785,8 +802,12 @@ export const ProAccountingPage: React.FC = () => {
           {adapterError}
         </div>
       )}
-      <div className="flex-1 min-h-0 rounded-t-2xl border border-b-0 border-border overflow-hidden">
+      {/* Report, OPOS and closing views bring their own section cards; the queue-based
+          areas sit in one card like the prototype's workbench. */}
+      <div className={SECTIONED_AREAS.has(String(view)) ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-hidden rounded-card border border-border bg-surface'}>
         <ProAccountingWorkspace
+          view={view}
+          onViewChange={onViewChange}
           seed={seed}
           dataAdapter={dataAdapter}
           busy={adapterBusy}

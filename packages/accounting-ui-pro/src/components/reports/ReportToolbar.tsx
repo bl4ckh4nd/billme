@@ -78,7 +78,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             onChange={(event) => setPreset(event.target.value as ReportFilterState['periodPreset'])}
             disabled={lockNativeEurPeriod}
             aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="px-3 hover:border-ink-500 mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
+            className="px-3 hover:border-control-border-hover mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
           >
             <option value="current">Aktuelle Periode</option>
             <option value="ytd">Jahr bis heute</option>
@@ -93,7 +93,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             onChange={(e) => setAsOfDate(e.target.value)}
             disabled={lockNativeEurPeriod}
             aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="px-3 hover:border-ink-500 mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
+            className="px-3 hover:border-control-border-hover mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
           />
         </label>
 
@@ -105,7 +105,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             onChange={(e) => onChange({ ...filters, periodFrom: e.target.value, periodFromDate: undefined, periodPreset: undefined })}
             disabled={lockNativeEurPeriod}
             aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="px-3 hover:border-ink-500 mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
+            className="px-3 hover:border-control-border-hover mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
           />
         </label>
 
@@ -117,7 +117,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
             onChange={(e) => onChange({ ...filters, periodTo: e.target.value, periodToDate: undefined, periodPreset: undefined })}
             disabled={lockNativeEurPeriod}
             aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="px-3 hover:border-ink-500 mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
+            className="px-3 hover:border-control-border-hover mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
           />
         </label>
 

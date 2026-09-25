@@ -82,6 +82,29 @@ export function getStatusPresentation(status: BookingWorkflowStatus): {
   return map[status];
 }
 
+/** Five-step pipeline for the workbench stepper; -1 when the status sits outside it. */
+export const WORKFLOW_STEPS = ['Importiert', 'Vorschlag', 'Prüfung', 'Freigegeben', 'Gebucht'] as const;
+
+export function getWorkflowStep(status: BookingWorkflowStatus): number {
+  switch (status) {
+    case 'imported':
+      return 0;
+    case 'suggested':
+    case 'incomplete':
+      return 1;
+    case 'ready_for_review':
+      return 2;
+    case 'pending_approval':
+    case 'approved':
+      return 3;
+    case 'posted':
+    case 'corrected':
+      return 4;
+    default:
+      return -1;
+  }
+}
+
 export function getFlagLabel(flag: TransactionFlag): string {
   const labels: Record<TransactionFlag, string> = {
     missing_receipt: 'Ohne Beleg',

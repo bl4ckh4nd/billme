@@ -170,7 +170,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   id="rule-field"
                   value={field}
                   onChange={(e) => setField(e.target.value as RuleField)}
-                  className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {(Object.entries(FIELD_LABELS) as [RuleField, string][]).map(([k, v]) => (
                     <option key={k} value={k}>{v}</option>
@@ -183,7 +183,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   id="rule-operator"
                   value={operator}
                   onChange={(e) => setOperator(e.target.value as RuleOperator)}
-                  className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {(Object.entries(OPERATOR_LABELS) as [RuleOperator, string][]).map(([k, v]) => (
                     <option key={k} value={k}>{v}</option>
@@ -199,7 +199,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
                 placeholder="z.B. telefon, telekom, aws"
-                className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </div>
 
@@ -210,7 +210,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   id="rule-target"
                   value={targetAccountNumber}
                   onChange={(e) => setTargetAccountNumber(e.target.value)}
-                  className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">Bitte wählen ...</option>
                   {accounts.map((acc) => (
@@ -231,7 +231,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   id="rule-flow"
                   value={flowType}
                   onChange={(e) => setFlowType(e.target.value as RuleFlow)}
-                  className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {(Object.entries(FLOW_LABELS) as [RuleFlow, string][]).map(([k, v]) => (
                     <option key={k} value={k}>{v}</option>
@@ -246,7 +246,7 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                   min={0}
                   value={priority}
                   onChange={(e) => setPriority(Number(e.target.value))}
-                  className="px-2.5 h-8 hover:border-ink-500 w-full rounded-control border border-control-border bg-surface text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </div>
             </div>
@@ -293,7 +293,12 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
                       <span className="bg-info-bg px-2 py-0.5 rounded-sm text-xs text-info-text">"{rule.value}"</span>
                       <span className="text-xs text-muted">[{FLOW_LABELS[rule.flowType as RuleFlow]}]</span>
                     </div>
-                    <div className="text-xs text-muted mt-1">-&gt; Konto {rule.targetAccountNumber}</div>
+                    <div className="text-xs text-muted mt-1">
+                      -&gt; Konto {rule.targetAccountNumber}
+                      <span data-rule-hits className="ml-2 tabular-nums">
+                        · {rule.hitCount ? `${rule.hitCount} Treffer, zuletzt ${new Date(rule.lastHitAt ?? '').toLocaleDateString('de-DE')}` : 'noch kein Treffer'}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button

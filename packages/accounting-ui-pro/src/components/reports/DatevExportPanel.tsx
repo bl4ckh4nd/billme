@@ -190,7 +190,7 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
             <select
               value={values.encoding}
               onChange={(event) => update('encoding', event.target.value as DatevEncoding)}
-              className="px-3 h-10 hover:border-ink-500 mt-2 block w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-3 h-10 hover:border-control-border-hover mt-2 block w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <option value="cp1252">CP1252 (DATEV)</option>
               <option value="utf8-bom">UTF-8 mit BOM</option>

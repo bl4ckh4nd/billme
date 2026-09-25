@@ -444,13 +444,12 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   return (
     <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-5" data-testid="sonderbuchungen-workspace">
       <header className="max-w-3xl">
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted">Buchhaltung</p>
-        <h1 className="mt-1 text-xl font-semibold text-foreground text-balance">Sonderbuchungen &amp; Abschluss</h1>
+        <h2 className="sr-only">Sonderbuchungen &amp; Abschluss</h2>
         <p className="mt-1 text-sm text-muted text-pretty">Vorgang auswählen, Angaben prüfen und erst danach verbindlich buchen. Die Buchungszeilen erzeugt der geprüfte Fachworkflow.</p>
       </header>
 
       <ol className="grid max-w-3xl grid-cols-3 gap-2" aria-label="Buchungsablauf">
-        {['Vorgang', 'Angaben', 'Prüfen & buchen'].map((step, index) => <li key={step} className="flex min-h-10 items-center gap-2 rounded-xl border border-border-subtle bg-surface-muted px-3 text-xs font-semibold text-foreground"><span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-dark-base text-xs text-background">{index + 1}</span><span className="hidden sm:inline">{step}</span></li>)}
+        {['Vorgang', 'Angaben', 'Prüfen & buchen'].map((step, index) => <li key={step} className="flex min-h-10 items-center gap-2 rounded-xl border border-border-subtle bg-surface-muted px-3 text-xs font-semibold text-foreground"><span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-dark-base text-xs text-inverse-foreground">{index + 1}</span><span className="hidden sm:inline">{step}</span></li>)}
       </ol>
 
       {!dataAdapter?.postAccountingCommand ? <p className="rounded-xl border border-border bg-surface-muted p-3 text-sm text-muted" role="status">Sonderbuchungen sind in dieser Verbindung nur lesbar.</p> : null}
@@ -462,27 +461,27 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <label className="flex flex-col gap-1 text-xs font-semibold">Workflow
-            <select aria-label="Workflow" value={form.kind} onChange={(event) => selectWorkflow(event.target.value as AccountingCommandKind)} disabled={!canMutate || busy} className="px-2.5 hover:border-ink-500 min-h-10 rounded-control border border-control-border bg-surface text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">
+            <select aria-label="Workflow" value={form.kind} onChange={(event) => selectWorkflow(event.target.value as AccountingCommandKind)} disabled={!canMutate || busy} className="px-2.5 hover:border-control-border-hover min-h-10 rounded-control border border-control-border bg-surface text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">
               {workflowGroups.map((group) => <optgroup key={group} label={group}>{workflows.filter((workflow) => workflow.group === group).map((workflow) => <option key={workflow.value} value={workflow.value}>{workflow.label}</option>)}</optgroup>)}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold">Quellbeleg
-            <input id="source-id" aria-label="Quellbeleg" required aria-invalid={Boolean(shownErrors.sourceId)} aria-describedby={shownErrors.sourceId ? 'source-id-error' : undefined} value={form.sourceId} onChange={(event) => update('sourceId', event.target.value)} onBlur={() => touch('sourceId')} disabled={!canMutate || busy} placeholder="z. B. RE-2026-10-42" className="px-2.5 hover:border-ink-500 min-h-10 rounded-control border border-control-border text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
+            <input id="source-id" aria-label="Quellbeleg" required aria-invalid={Boolean(shownErrors.sourceId)} aria-describedby={shownErrors.sourceId ? 'source-id-error' : undefined} value={form.sourceId} onChange={(event) => update('sourceId', event.target.value)} onBlur={() => touch('sourceId')} disabled={!canMutate || busy} placeholder="z. B. RE-2026-10-42" className="px-2.5 hover:border-control-border-hover min-h-10 rounded-control border border-control-border text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
             {shownErrors.sourceId ? <span id="source-id-error" className="text-xs font-normal text-error-text">{shownErrors.sourceId}</span> : null}
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold">Buchungsdatum
-            <input id="booking-date" aria-label="Buchungsdatum" type="date" required aria-invalid={Boolean(shownErrors.date)} aria-describedby={shownErrors.date ? 'booking-date-error' : undefined} value={form.date} onChange={(event) => update('date', event.target.value)} onBlur={() => touch('date')} disabled={!canMutate || busy} className="px-2.5 hover:border-ink-500 min-h-10 rounded-control border border-control-border text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
+            <input id="booking-date" aria-label="Buchungsdatum" type="date" required aria-invalid={Boolean(shownErrors.date)} aria-describedby={shownErrors.date ? 'booking-date-error' : undefined} value={form.date} onChange={(event) => update('date', event.target.value)} onBlur={() => touch('date')} disabled={!canMutate || busy} className="px-2.5 hover:border-control-border-hover min-h-10 rounded-control border border-control-border text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
             {shownErrors.date ? <span id="booking-date-error" className="text-xs font-normal text-error-text">{shownErrors.date}</span> : null}
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold sm:col-span-2 lg:col-span-1">Audit-Grund (Pflicht)
-            <input id="audit-reason" aria-label="Audit-Grund" required aria-invalid={Boolean(shownErrors.reason)} aria-describedby={shownErrors.reason ? 'audit-reason-error' : undefined} value={form.reason} onChange={(event) => update('reason', event.target.value)} onBlur={() => touch('reason')} disabled={!canMutate || busy} placeholder="Warum wird diese Buchung vorgenommen?" className="px-2.5 hover:border-ink-500 min-h-10 rounded-control border border-control-border text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
+            <input id="audit-reason" aria-label="Audit-Grund" required aria-invalid={Boolean(shownErrors.reason)} aria-describedby={shownErrors.reason ? 'audit-reason-error' : undefined} value={form.reason} onChange={(event) => update('reason', event.target.value)} onBlur={() => touch('reason')} disabled={!canMutate || busy} placeholder="Warum wird diese Buchung vorgenommen?" className="px-2.5 hover:border-control-border-hover min-h-10 rounded-control border border-control-border text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
             {shownErrors.reason ? <span id="audit-reason-error" className="text-xs font-normal text-error-text">{shownErrors.reason}</span> : null}
           </label>
         </div>
         <details className="rounded-xl border border-border-subtle bg-surface-muted p-3">
           <summary className="min-h-10 cursor-pointer select-none py-2 text-sm font-semibold text-foreground">Fachdaten für Experten bearbeiten</summary>
           <label className="mt-2 flex flex-col gap-1 text-xs font-semibold">Fachdaten (JSON)
-            <textarea id="domain-facts" aria-label="Domain-Fakten (JSON)" required aria-invalid={preview.length > 0} aria-describedby="domain-facts-help" value={form.domainFacts} onChange={(event) => update('domainFacts', event.target.value)} disabled={!canMutate || busy} rows={12} spellCheck={false} className="px-2.5 py-2 hover:border-ink-500 rounded-control border border-control-border bg-surface font-mono text-xs font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
+            <textarea id="domain-facts" aria-label="Domain-Fakten (JSON)" required aria-invalid={preview.length > 0} aria-describedby="domain-facts-help" value={form.domainFacts} onChange={(event) => update('domainFacts', event.target.value)} disabled={!canMutate || busy} rows={12} spellCheck={false} className="px-2.5 py-2 hover:border-control-border-hover rounded-control border border-control-border bg-surface font-mono text-xs font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
             <span id="domain-facts-help" className="font-normal text-muted">Nur für fachkundige Bearbeitung. Konten und Beträge werden vor der Buchung erneut validiert.</span>
           </label>
         </details>
@@ -516,16 +515,16 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-xs font-semibold">Meldung
-            <select aria-label="Steuervorbereitung" value={taxKind} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxKind(event.target.value as TaxPreparationKind); }} disabled={taxBusy} className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border text-sm font-normal">
+            <select aria-label="Steuervorbereitung" value={taxKind} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxKind(event.target.value as TaxPreparationKind); }} disabled={taxBusy} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border text-sm font-normal">
               {taxPreparations.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold">Zeitraum
-            <input id="tax-period" aria-label="Steuerzeitraum" type="month" required aria-invalid={Boolean(taxPeriodError)} aria-describedby={taxPeriodError ? 'tax-period-error' : undefined} value={taxPeriod} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxPeriod(event.target.value); }} disabled={taxBusy} className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border text-sm font-normal" />
+            <input id="tax-period" aria-label="Steuerzeitraum" type="month" required aria-invalid={Boolean(taxPeriodError)} aria-describedby={taxPeriodError ? 'tax-period-error' : undefined} value={taxPeriod} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxPeriod(event.target.value); }} disabled={taxBusy} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border text-sm font-normal" />
             {taxPeriodError ? <span id="tax-period-error" className="text-xs font-normal text-error-text">{taxPeriodError}</span> : null}
           </label>
           <label className="flex min-w-60 flex-1 flex-col gap-1 text-xs font-semibold">Audit-Grund (Pflicht)
-            <input id="tax-audit-reason" aria-label="Audit-Grund Steuerexport" required aria-invalid={Boolean(shownTaxReasonError)} aria-describedby={shownTaxReasonError ? 'tax-audit-reason-error' : undefined} value={taxReason} onBlur={() => setTaxReasonTouched(true)} onChange={(event) => setTaxReason(event.target.value)} disabled={taxBusy} className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border text-sm font-normal" />
+            <input id="tax-audit-reason" aria-label="Audit-Grund Steuerexport" required aria-invalid={Boolean(shownTaxReasonError)} aria-describedby={shownTaxReasonError ? 'tax-audit-reason-error' : undefined} value={taxReason} onBlur={() => setTaxReasonTouched(true)} onChange={(event) => setTaxReason(event.target.value)} disabled={taxBusy} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border text-sm font-normal" />
             {shownTaxReasonError ? <span id="tax-audit-reason-error" className="text-xs font-normal text-error-text">{shownTaxReasonError}</span> : null}
           </label>
           <Button type="button" variant="secondary" onClick={() => void prepareTax()} disabled={taxBusy || !dataAdapter?.prepareTaxExport} aria-busy={taxBusy}>{taxBusy ? 'Bereite vor…' : 'Vorbereitung erstellen'}</Button>

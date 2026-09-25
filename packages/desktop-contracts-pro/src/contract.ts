@@ -1052,6 +1052,11 @@ export const ipcRoutes = {
     args: z.undefined(),
     result: windowMaximizedStateSchema,
   },
+  'window:setTheme': {
+    channel: 'window:set-theme',
+    args: z.object({ theme: z.enum(['system', 'light', 'dark']) }),
+    result: okSchema,
+  },
 
   'shell:openPath': {
     channel: 'shell:openPath',
@@ -1323,7 +1328,7 @@ export const ipcRoutes = {
   'pro:upsertVendor': { channel: 'pro:upsertVendor', args: proUpsertVendorArgsSchema, result: vendorSchema },
   'pro:listIncomingInvoices': { channel: 'pro:listIncomingInvoices', args: z.undefined(), result: z.array(incomingInvoiceSchema) },
   'pro:upsertIncomingInvoice': { channel: 'pro:upsertIncomingInvoice', args: proUpsertIncomingInvoiceArgsSchema, result: incomingInvoiceSchema },
-  'pro:listIncomingInvoiceDocuments': { channel: 'pro:listIncomingInvoiceDocuments', args: z.object({ invoiceId: z.string().min(1) }), result: z.array(incomingInvoiceDocumentSchema) },
+  'pro:listIncomingInvoiceDocuments': { channel: 'pro:listIncomingInvoiceDocuments', args: z.object({ invoiceId: z.string().min(1).optional() }), result: z.array(incomingInvoiceDocumentSchema) },
   'pro:uploadIncomingInvoiceDocument': { channel: 'pro:uploadIncomingInvoiceDocument', args: incomingInvoiceDocumentUploadSchema, result: incomingInvoiceDocumentSchema },
   'pro:downloadIncomingInvoiceDocument': { channel: 'pro:downloadIncomingInvoiceDocument', args: z.object({ documentId: z.string().min(1) }), result: incomingInvoiceDocumentDownloadSchema },
   'pro:reviewIncomingInvoiceDocument': { channel: 'pro:reviewIncomingInvoiceDocument', args: incomingInvoiceDocumentReviewSchema, result: incomingInvoiceDocumentSchema },

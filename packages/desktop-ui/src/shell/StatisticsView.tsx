@@ -24,7 +24,13 @@ type TimeRange = 'month' | 'quarter' | 'year' | 'all';
  * ratio stay a compact row underneath. All three queries are gated: a failed
  * query must not render as a zero statistic.
  */
-export const StatisticsView: React.FC = () => {
+export interface StatisticsViewProps {
+  /** Hosts that group several reports (Lite Auswertungen) pass their own title and tab row. */
+  title?: string;
+  toolbar?: React.ReactNode;
+}
+
+export const StatisticsView: React.FC<StatisticsViewProps> = ({ title, toolbar }) => {
   const invoicesQuery = useInvoicesQuery();
   const clientsQuery = useClientsQuery();
   const settingsQuery = useSettingsQuery();
@@ -52,6 +58,8 @@ export const StatisticsView: React.FC = () => {
       invoices={invoicesQuery.data}
       clients={clientsQuery.data}
       settings={settingsQuery.data}
+      title={title}
+      toolbar={toolbar}
     />
   );
 };
@@ -60,7 +68,7 @@ const StatisticsContent: React.FC<{
   invoices: Invoice[];
   clients: Client[];
   settings: AppSettings;
-}> = ({ invoices, clients, settings }) => {
+} & StatisticsViewProps> = ({ invoices, clients, settings, title = 'Statistiken', toolbar }) => {
   const navigate = useNavigate();
   const [timeRange, setTimeRange] = useState<TimeRange>('year');
   const dash = settings.dashboard;
@@ -212,8 +220,9 @@ const StatisticsContent: React.FC<{
   return (
     <div className="flex flex-col pb-4">
       <PageHeader
-        title="Statistiken"
+        title={title}
         description="Finanzüberblick und Geschäftsentwicklung"
+        toolbar={toolbar}
         className="px-1 pt-2"
         actions={
           <SegmentedControl
@@ -309,9 +318,9 @@ const StatisticsContent: React.FC<{
                           <span className="truncate text-sm font-medium">{client.name}</span>
                           <span className="text-sm font-medium tabular-nums">{formatCurrency(client.amount)}</span>
                         </div>
-                        <div className="h-1 w-full overflow-hidden rounded-full bg-ink-100">
+                        <div className="h-1 w-full overflow-hidden rounded-full bg-surface-sunken">
                           <div
-                            className={`h-full rounded-full ${idx === 0 ? 'bg-ink-950' : 'bg-ink-400'}`}
+                            className={`h-full rounded-full ${idx === 0 ? 'bg-selected' : 'bg-ink-400'}`}
                             style={{ width: `${kpis.revenue > 0 ? Math.min(100, (client.amount / kpis.revenue) * 100) : 0}%` }}
                           />
                         </div>

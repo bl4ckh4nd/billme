@@ -35,7 +35,7 @@ test('covers the major shell routes', async () => {
   await expect(page.getByRole('heading', { name: 'Konten & Transaktionen' })).toBeVisible();
 
   await page.goto(appUrl(baseUrl, '/eur'));
-  await expect(page.getByRole('heading', { name: 'Anlage EÜR' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Buchen', exact: true })).toBeVisible();
 
   await page.goto(appUrl(baseUrl, '/documents'));
   await expect(page.getByRole('button', { name: 'Vorlagen' })).toBeVisible();

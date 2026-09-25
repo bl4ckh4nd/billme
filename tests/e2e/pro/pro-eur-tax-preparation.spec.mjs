@@ -7,7 +7,7 @@ test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
   await seedDesktopData(desktop.page, { app: 'pro' });
   await desktop.page.goto(appUrl(desktop.baseUrl, '/eur'));
-  await expect(desktop.page.getByRole('heading', { name: 'Anlage EÜR' })).toBeVisible();
+  await expect(desktop.page.getByRole('heading', { name: 'Buchen', exact: true })).toBeVisible();
 });
 
 test.afterEach(async () => {

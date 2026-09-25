@@ -63,7 +63,7 @@ test('classifies an EÜR entry and exports CSV and PDF', async () => {
 
   await page.goto(appUrl(baseUrl, '/eur'));
 
-  await expect(page.getByRole('heading', { name: 'Anlage EÜR' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Buchen', exact: true })).toBeVisible();
 
   const classifiedItems = await invokeDesktopIpc(page, 'eur:listItems', {
     taxYear,

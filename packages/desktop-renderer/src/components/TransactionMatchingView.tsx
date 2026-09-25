@@ -502,7 +502,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
               aria-label="Transaktion suchen"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="px-2.5 h-8 hover:border-ink-500 w-full pl-10 pr-4 border border-control-border bg-surface rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-2.5 h-8 hover:border-control-border-hover w-full pl-10 pr-4 border border-control-border bg-surface rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
             {searchQuery && (
               <button
@@ -530,7 +530,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
               onChange={(e) => setEurQuery(e.target.value)}
               placeholder="Suche Gegenpartei/Zweck"
               aria-label="EÜR-Einträge durchsuchen"
-              className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm min-w-[220px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm min-w-[220px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
             <select
               value={eurStatus}
@@ -815,7 +815,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                       aria-label="Begründung für EÜR-Änderung"
                       value={eurReason}
                       onChange={(event) => setEurReason(event.target.value)}
-                      className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
                     />
                   </label>
@@ -962,7 +962,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                         aria-label="Begründung für EÜR-Änderung"
                         value={eurReason}
                         onChange={(event) => setEurReason(event.target.value)}
-                        className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                         placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
                       />
                     </label>
@@ -1007,7 +1007,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                       value={eurLineId}
                       onChange={(e) => setEurLineId(e.target.value)}
                       disabled={eurExcluded}
-                      className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm disabled:bg-surface-muted disabled:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm disabled:bg-surface-muted disabled:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <option value="">Nicht zugeordnet</option>
                       {eurActiveLineOptions.map((line) => (
@@ -1024,7 +1024,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                       id="tm-eur-vat-mode"
                       value={eurVatMode}
                       onChange={(e) => setEurVatMode(e.target.value as 'none' | 'default')}
-                      className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <option value="none">Keine USt. Umrechnung</option>
                       <option value="default">Default USt. (Netto)</option>
@@ -1042,7 +1042,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                         step="0.01"
                         value={eurVatRate ?? ''}
                         onChange={(e) => setEurVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
-                        className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                         placeholder="z. B. 19"
                       />
                       {eurActive.vatWarning && <p className="mt-1 text-xs text-warning-text">{eurActive.vatWarning}</p>}

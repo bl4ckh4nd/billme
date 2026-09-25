@@ -39,13 +39,14 @@ export const FinanceHubView: React.FC = () => {
       : `SKR03: ${ledgerStats?.byChart.SKR03 ?? 0} | SKR04: ${ledgerStats?.byChart.SKR04 ?? 0}`;
 
   return (
-    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs">
+    <div className="min-h-full px-1 pt-2 flex flex-col">
       <div className="mb-8">
         <h1 className="text-title text-foreground">Finanzen</h1>
         <p className="text-sm text-muted mt-1">
           Kontoverwaltung und Pro-Buchhaltung in einem Bereich.
         </p>
       </div>
+      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6">
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <button
@@ -54,7 +55,7 @@ export const FinanceHubView: React.FC = () => {
           className="rounded-xl border border-border bg-surface p-6 text-left transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         >
           <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 rounded-xl bg-dark-1 text-background flex items-center justify-center">
+            <div className="w-12 h-12 rounded-xl bg-dark-1 text-inverse-foreground flex items-center justify-center">
               <Wallet size={20} aria-hidden="true" />
             </div>
             <ArrowRight className="text-muted" aria-hidden="true" />
@@ -71,7 +72,7 @@ export const FinanceHubView: React.FC = () => {
           className="rounded-xl border border-border bg-surface p-6 text-left transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         >
           <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 rounded-xl bg-dark-1 text-background flex items-center justify-center">
+            <div className="w-12 h-12 rounded-xl bg-dark-1 text-inverse-foreground flex items-center justify-center">
               <ShieldCheck size={20} aria-hidden="true" />
             </div>
             <ArrowRight className="text-muted" aria-hidden="true" />
@@ -101,7 +102,7 @@ export const FinanceHubView: React.FC = () => {
             type="button"
             onClick={() => void handleImportSkr()}
             disabled={importSkr.isPending}
-            className="rounded-control bg-dark-base px-4 py-2 text-sm font-semibold text-background transition-colors hover:bg-dark-1 disabled:opacity-60 disabled:hover:bg-dark-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
+            className="rounded-control bg-dark-base px-4 py-2 text-sm font-semibold text-inverse-foreground transition-colors hover:bg-dark-1 disabled:opacity-60 disabled:hover:bg-dark-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
           >
             {importSkr.isPending ? 'Import läuft…' : (ledgerStats?.total ?? 0) > 0 ? 'Kontenrahmen aktualisieren' : 'SKR jetzt importieren'}
           </button>
@@ -115,6 +116,7 @@ export const FinanceHubView: React.FC = () => {
           </p>
         ) : null}
       </div>
+    </div>
     </div>
   );
 };

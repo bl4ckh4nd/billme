@@ -37,7 +37,7 @@ export const FinanceHubView: React.FC = () => {
             onClick={() => setActiveTab(tab.id)}
             className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
               activeTab === tab.id
-                ? 'bg-dark-base text-background'
+                ? 'bg-dark-base text-inverse-foreground'
                 : 'bg-surface-muted text-muted hover:bg-border'
             }`}
           >

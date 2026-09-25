@@ -1,14 +1,9 @@
 import React from 'react';
-import {
-  Button, EMPTY_VALUE, EmptyState, ErrorState, Metric, PageHeader, Select,
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useActionFeedback,
-} from '@billme/ui';
-import { LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS } from '@billme/accounting-shared';
-import { useNavigate } from '@tanstack/react-router';
+import { Button, EmptyState, ErrorState, PageHeader, Select, useActionFeedback } from '@billme/ui';
+import { LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS, eurBookingPreview, type LedgerChart } from '@billme/accounting-shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
-  Download,
   ReceiptText,
   CheckCircle2,
   AlertCircle,
@@ -20,7 +15,6 @@ import {
   Ban,
   TrendingUp,
   TrendingDown,
-  Layers,
   ClipboardList,
   Tags,
   Settings2,
@@ -28,6 +22,7 @@ import {
 import { getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
 import { EurRulesModal } from './EurRulesModal';
+import { useSettingsQuery } from '../hooks/useSettings';
 
 const DEFAULT_YEAR = LATEST_SUPPORTED_EUR_TAX_YEAR;
 
@@ -96,18 +91,6 @@ type EurUndo = { label: string; reason: string; changes: UndoChange[] };
 const formatCurrency = (amount: number): string =>
   new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
 
-const triggerCsvDownload = (content: string, fileName: string): void => {
-  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-};
-
 const itemKey = (item: { sourceType: SourceType; sourceId: string }): string =>
   `${item.sourceType}:${item.sourceId}`;
 
@@ -116,11 +99,96 @@ const queryErrorDetail = (error: unknown): string =>
     ? error.message
     : 'Unbekannter Fehler beim Laden.';
 
+/** Ten days either side of the year change (22.12.–10.01.), the § 11 Abs. 1 S. 2 EStG window. */
+const inYearEndWindow = (isoDate: string): boolean => {
+  const monthDay = isoDate.slice(5, 10);
+  return monthDay >= '12-22' || monthDay <= '01-10';
+};
+
+/**
+ * What saving will record, before it is saved: the EÜR line, the payment date
+ * that decides the tax year (Zuflussprinzip), and the gross amount split into
+ * net and VAT when a rate is known. Nothing here is invented; an unknown rate
+ * is named as unknown.
+ */
+const EurEntryPreview: React.FC<{
+  item: EurItem;
+  line?: { lineId: string; kennziffer?: string; label: string };
+  excluded: boolean;
+  vatMode: VatMode;
+  vatRate?: number;
+  chart: LedgerChart;
+}> = ({ item, line, excluded, vatMode, vatRate, chart }) => {
+  const flow = item.flowType === 'income' ? 'Zufluss' : 'Abfluss';
+  const gross = Math.abs(item.amountGross);
+  const rate = vatMode === 'default' ? vatRate : 0;
+  const net = rate === undefined ? undefined : gross / (1 + rate / 100);
+  const booking = !excluded && line && rate !== undefined
+    ? eurBookingPreview({ kennziffer: line.kennziffer, flow: item.flowType === 'income' ? 'income' : 'expense', gross, vatRate: rate, chart })
+    : null;
+  return (
+    <section aria-label="Erfassung vor dem Speichern" className="rounded-xl border border-border p-3">
+      <div className="text-caption font-semibold uppercase tracking-[0.04em] text-muted">Wird erfasst als</div>
+      {excluded ? (
+        <p className="mt-1.5 text-sm text-foreground">Nicht in der EÜR: privat oder Transfer.</p>
+      ) : (
+        <>
+          <p className="mt-1.5 text-sm text-foreground">
+            {line ? <>{line.kennziffer ? <span className="tabular-nums">Kz {line.kennziffer} · </span> : null}{line.label}</> : <span className="text-warning-text">Noch keine Kennziffer gewählt</span>}
+          </p>
+          <p className="mt-0.5 text-caption text-muted">
+            {flow} am <span className="tabular-nums">{new Date(item.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>, zählt damit zum Steuerjahr <span className="tabular-nums">{item.date.slice(0, 4)}</span>
+          </p>
+          <div className="mt-3 grid grid-cols-[1fr_1px_1fr] border-t border-control-border pt-2">
+            <div className="pr-3">
+              <div className="text-caption text-muted">Netto</div>
+              <div className="text-sm font-semibold tabular-nums text-foreground">{net === undefined ? '–' : formatCurrency(net)}</div>
+            </div>
+            <div className="bg-control-border" aria-hidden="true" />
+            <div className="pl-3 text-right">
+              <div className="text-caption text-muted">USt{rate ? ` ${rate} %` : ''}</div>
+              <div className="text-sm font-semibold tabular-nums text-foreground">{net === undefined ? '–' : formatCurrency(gross - net)}</div>
+            </div>
+          </div>
+          {net === undefined && <p className="mt-1.5 text-caption text-muted">Ohne Steuersatz lässt sich Netto hier nicht berechnen; gespeichert wird dann der Bruttobetrag mit einem Prüfhinweis.</p>}
+          {line && net !== undefined && (
+            <details className="mt-2 border-t border-border pt-2" data-eur-booking-preview>
+              <summary className="cursor-pointer text-caption font-medium text-muted hover:text-foreground">Entspricht dem Buchungssatz ({chart})</summary>
+              {booking ? (
+                <table className="mt-1.5 w-full text-caption">
+                  <tbody>
+                    {booking.map((entry) => (
+                      <tr key={`${entry.side}-${entry.account}`}>
+                        <td className="w-12 py-0.5 text-muted">{entry.side === 'soll' ? 'Soll' : 'Haben'}</td>
+                        <td className="w-12 py-0.5 tabular-nums text-foreground">{entry.account}</td>
+                        <td className="py-0.5 text-foreground">{entry.label}</td>
+                        <td className="py-0.5 text-right tabular-nums text-foreground">{formatCurrency(entry.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="mt-1.5 text-caption text-muted">Für diese Kennziffer gibt es keine Standardzuordnung.</p>
+              )}
+              <p className="mt-1 text-caption text-muted">Nur zur Orientierung. Bei der EÜR wird nichts doppelt gebucht.</p>
+            </details>
+          )}
+        </>
+      )}
+      {!excluded && inYearEndWindow(item.date) && (
+        <p role="note" className="mt-2 rounded-control border border-info-border bg-info-bg px-2.5 py-1.5 text-caption text-info-text">
+          Zahlung nahe am Jahreswechsel. Regelmäßig wiederkehrende Zahlungen (z. B. Miete, Versicherung) gehören nach § 11 EStG in das Jahr, zu dem sie wirtschaftlich gehören, wenn sie innerhalb von zehn Tagen um den Jahreswechsel fällig und bezahlt sind.
+        </p>
+      )}
+    </section>
+  );
+};
+
 export const EurView: React.FC = () => {
   const isProProduct = getRendererProduct() === 'pro';
   const isWebShell = getRendererRuntime().shell === 'web';
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { data: settings } = useSettingsQuery();
   const [taxYear, setTaxYear] = React.useState<number>(DEFAULT_YEAR);
   const [activeSource, setActiveSource] = React.useState<{ sourceType: SourceType; sourceId: string } | null>(null);
   const [selectedLineId, setSelectedLineId] = React.useState<string>('');
@@ -145,13 +213,8 @@ export const EurView: React.FC = () => {
     notify(type === 'warning' ? 'info' : type, message);
   };
 
-  const {
-    data: report,
-    isLoading: reportLoading,
-    isError: reportIsError,
-    error: reportQueryError,
-    refetch: refetchReport,
-  } = useQuery({
+  // The report lives under Auswertungen; here it only supplies the selectable EÜR lines.
+  const { data: report } = useQuery({
     queryKey: ['eur', 'report', taxYear],
     queryFn: () => ipc.eur.getReport({ taxYear }),
   });
@@ -186,24 +249,6 @@ export const EurView: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['eur', 'items', taxYear] }),
       queryClient.invalidateQueries({ queryKey: ['eur', 'report', taxYear] }),
     ]);
-  };
-
-  const exportCsv = async () => {
-    const csv = await ipc.eur.exportCsv({ taxYear });
-    triggerCsvDownload(csv, `anlage-euer-${taxYear}.csv`);
-  };
-
-  const [isPdfExporting, setIsPdfExporting] = React.useState(false);
-  const exportPdf = async () => {
-    setIsPdfExporting(true);
-    try {
-      const res = await ipc.eur.exportPdf({ taxYear });
-      showNotification(`PDF gespeichert: ${res.path}`, 'success');
-    } catch {
-      showNotification('PDF-Export fehlgeschlagen', 'error');
-    } finally {
-      setIsPdfExporting(false);
-    }
   };
 
   const lineOptions = React.useMemo(
@@ -249,6 +294,23 @@ export const EurView: React.FC = () => {
     });
     return sorted;
   }, [items, queueStatus, flowFilter, query, queueSort]);
+
+  // j / k step through the queue like the Pro booking workbench, unless the user is typing.
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.key !== 'j' && event.key !== 'k') || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
+      if (queueItems.length === 0) return;
+      const index = queueItems.findIndex((item) => item.sourceType === activeSource?.sourceType && item.sourceId === activeSource?.sourceId);
+      const next = queueItems[Math.max(0, Math.min(queueItems.length - 1, index + (event.key === 'j' ? 1 : -1)))];
+      if (!next) return;
+      event.preventDefault();
+      setActiveSource({ sourceType: next.sourceType, sourceId: next.sourceId });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [queueItems, activeSource]);
 
   const selectedItems = React.useMemo(
     () => queueItems.filter((item) => selectedKeys.has(itemKey(item))),
@@ -387,11 +449,10 @@ export const EurView: React.FC = () => {
   };
 
   return (
-    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs">
+    <div className="min-h-full px-1 pt-2 flex flex-col">
       <PageHeader
-        title="Anlage EÜR"
-        description={`Klassifizierung und Auswertung für Steuerjahr ${taxYear}.`}
-        back={{ label: 'Zurück zu Finanzen', onClick: () => navigate({ to: '/finance' }) }}
+        title="Buchen"
+        description={`Klassifizierung für Steuerjahr ${taxYear}. Die Anlage EÜR steht unter Auswertungen.`}
         actions={
           <>
             <Select
@@ -409,19 +470,10 @@ export const EurView: React.FC = () => {
                 Regeln
               </Button>
             )}
-            <Button variant="secondary" onClick={() => void exportCsv()}>
-              <Download size={16} aria-hidden="true" />
-              CSV exportieren
-            </Button>
-            {!isWebShell && (
-              <Button onClick={() => void exportPdf()} loading={isPdfExporting}>
-                <Download size={16} aria-hidden="true" />
-                PDF exportieren
-              </Button>
-            )}
           </>
         }
       />
+      <div className="min-h-0 flex-1">
 
       {/* Undo Banner */}
       {lastUndo && (
@@ -444,7 +496,7 @@ export const EurView: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Queue Panel */}
-        <div className="rounded-2xl border border-border p-4 lg:col-span-1">
+        <div className="rounded-card border border-border bg-surface p-4 lg:col-span-1">
           <h3 className="font-semibold text-foreground mb-3 flex items-center gap-2">
             <ClipboardList size={16} className="text-muted" />
             Warteschlange
@@ -485,7 +537,7 @@ export const EurView: React.FC = () => {
               aria-label="Einträge durchsuchen"
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Gegenpartei, Zweck oder Datum..."
- className="px-2.5 h-8 hover:border-ink-500 w-full pl-9 pr-3 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+ className="px-2.5 h-8 hover:border-control-border-hover w-full pl-9 pr-3 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </div>
 
@@ -495,7 +547,7 @@ export const EurView: React.FC = () => {
               value={flowFilter}
               aria-label="Zahlungsrichtung filtern"
               onChange={(e) => setFlowFilter(e.target.value as 'all' | 'income' | 'expense')}
-              className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <option value="all">Alle Typen</option>
               <option value="income">Einnahmen</option>
@@ -505,7 +557,7 @@ export const EurView: React.FC = () => {
               value={queueSort}
               aria-label="Einträge sortieren"
               onChange={(e) => setQueueSort(e.target.value as QueueSort)}
-              className="px-2.5 h-8 hover:border-ink-500 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <option value="date_desc">Neueste zuerst</option>
               <option value="amount_desc">Betrag absteigend</option>
@@ -616,7 +668,7 @@ export const EurView: React.FC = () => {
                 ? 'Alle Einträge sind klassifiziert'
                 : 'Keine Einträge für diesen Filter'}
               description={queueStatus === 'unclassified' && statusCounts.unclassified === 0
-                ? 'Für dieses Steuerjahr ist nichts mehr offen. Der Report links zeigt die Summen.'
+                ? 'Für dieses Steuerjahr ist nichts mehr offen. Der Report rechts zeigt die Summen.'
                 : 'Wähle einen anderen Status oder leere die Suche, um weitere Einträge zu sehen.'}
               className="border-0 bg-transparent"
             />
@@ -697,7 +749,7 @@ export const EurView: React.FC = () => {
         </div>
 
         {/* Classification Panel */}
-        <div className="rounded-2xl border border-border p-4 lg:col-span-1">
+        <div className="rounded-card border border-border bg-surface p-4 lg:col-span-2">
           <h3 className="font-semibold text-foreground mb-3 flex items-center gap-2">
             <Tags size={16} className="text-muted" />
             Klassifizierung
@@ -769,7 +821,7 @@ export const EurView: React.FC = () => {
                   value={selectedLineId}
                   onChange={(e) => setSelectedLineId(e.target.value)}
                   disabled={excluded}
-                  className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">Nicht zugeordnet</option>
                   {activeLineOptions.map((line) => (
@@ -781,7 +833,7 @@ export const EurView: React.FC = () => {
               </div>
 
               <label className="block text-xs font-semibold text-foreground">Steuerliche Korrektur / Begründung
-                <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" placeholder="z. B. privater Anteil" />
+                <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" placeholder="z. B. privater Anteil" />
               </label>
 
               <label className="block text-xs font-semibold text-foreground">
@@ -802,7 +854,7 @@ export const EurView: React.FC = () => {
                   id="eur-vat-mode"
                   value={vatMode}
                   onChange={(e) => setVatMode(e.target.value as VatMode)}
-                  className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="none">Keine USt. Umrechnung</option>
                   <option value="default">Default USt. (Netto)</option>
@@ -820,7 +872,7 @@ export const EurView: React.FC = () => {
                     step="0.01"
                     value={vatRate ?? ''}
                     onChange={(e) => setVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
-                    className="px-2.5 h-8 hover:border-ink-500 mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     placeholder="z. B. 19"
                   />
                   {activeItem.vatWarning && <p className="mt-1 text-xs text-warning-text">{activeItem.vatWarning}</p>}
@@ -837,6 +889,16 @@ export const EurView: React.FC = () => {
                 />
                 Privat/Transfer ausschließen
               </label>
+
+              <EurEntryPreview
+                item={activeItem}
+                line={activeLineOptions.find((line) => line.lineId === selectedLineId)}
+                excluded={excluded}
+                vatMode={vatMode}
+                vatRate={vatRate}
+                // ponytail: Lite has no accounting policy row; the profile chart (default SKR03) only labels the preview.
+                chart={settings?.businessReportingProfile?.chart ?? 'SKR03'}
+              />
 
               {/* Action Buttons */}
               <div className="flex items-center gap-2">
@@ -860,83 +922,6 @@ export const EurView: React.FC = () => {
           )}
         </div>
 
-        {/* Report Panel */}
-        <div className="rounded-2xl border border-border p-4 lg:col-span-1">
-          <h3 className="font-semibold text-foreground mb-3 flex items-center gap-2">
-            <Layers size={16} className="text-muted" />
-            Report
-          </h3>
-          {reportIsError ? (
-            <ErrorState
-              title="Report konnte nicht geladen werden"
-              description={queryErrorDetail(reportQueryError)}
-              onRetry={() => void refetchReport()}
-            />
-          ) : reportLoading ? (
-            <div className="flex flex-col items-center justify-center py-12">
-              <Spinner size="md" />
-              <p className="text-sm text-muted mt-3">Report wird geladen …</p>
-            </div>
-          ) : !report ? (
-            <EmptyState
-              title="Für dieses Steuerjahr liegt noch kein Report vor"
-              description="Sobald Buchungen importiert oder Rechnungen gestellt sind, entsteht hier die Auswertung."
-              className="border-0 bg-transparent"
-            />
-          ) : (
-            <>
-              {/* Summary: neutral figures; a tone dot plus the label carries the meaning. */}
-              <div className="mb-4 grid grid-cols-2 gap-x-4 gap-y-4 border-b border-border-subtle pb-4">
-                <Metric label="Einnahmen" tone="success" value={formatCurrency(report.summary.incomeTotal)} />
-                <Metric label="Ausgaben" tone="error" value={formatCurrency(report.summary.expenseTotal)} />
-                <Metric
-                  label="Überschuss"
-                  value={formatCurrency(report.summary.surplus)}
-                />
-                <Metric
-                  label="Unklassifiziert"
-                  tone={report.unclassifiedCount > 0 ? 'warning' : 'neutral'}
-                  value={report.unclassifiedCount}
-                />
-              </div>
-
-              <Table aria-label="EÜR-Report" density="compact" bare containerClassName="max-h-[470px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-16">Kz</TableHead>
-                    <TableHead>Bezeichnung</TableHead>
-                    <TableHead numeric>Betrag</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {report.rows.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={3} muted className="h-20 text-center">
-                        Noch keine Positionen in diesem Steuerjahr.
-                      </TableCell>
-                    </TableRow>
-                  ) : null}
-                  {report.rows.map((row) => (
-                    <TableRow key={row.lineId}>
-                      <TableCell muted className="font-mono">{row.kennziffer ?? EMPTY_VALUE}</TableCell>
-                      <TableCell>{row.label}</TableCell>
-                      <TableCell
-                        numeric
-                        className={`font-medium ${
-                          row.kind === 'income' ? 'text-success-text' :
-                          row.kind === 'expense' ? 'text-error-text' :
-                          ''
-                        }`}
-                      >
-                        {formatCurrency(row.total)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </>
-          )}
-        </div>
       </div>
 
       {showRulesModal && !isWebShell && (
@@ -947,6 +932,7 @@ export const EurView: React.FC = () => {
         />
       )}
 
+    </div>
     </div>
   );
 };

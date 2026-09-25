@@ -19,7 +19,6 @@ import { DocumentsView } from './components/InvoicesView';
 import { ClientsView } from './components/ClientsView';
 import { ArticlesView } from './components/ArticlesView';
 import { SettingsView } from './components/SettingsView';
-import { StatisticsView } from './components/StatisticsView';
 import { RecurringView } from './components/RecurringView';
 import { ProjectsView } from './components/ProjectsView';
 import { ProjectDetailView } from './components/ProjectDetailView';
@@ -37,39 +36,18 @@ import { OnboardingWizard } from './components/OnboardingWizard';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { Button, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
-import { shouldShowBusinessOnboarding } from '@billme/desktop-ui';
+import { LiteReportsView, shouldShowBusinessOnboarding } from '@billme/desktop-ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { useCreateIntent } from '@billme/desktop-renderer/hooks/useCreateIntent';
 
 const RootLayout: React.FC = () => {
-  const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [showShortcuts, setShowShortcuts] = React.useState(false);
 
   const { data: settings } = useSettingsQuery();
   const showOnboarding = shouldShowBusinessOnboarding(settings);
 
-  const activePage = (() => {
-    if (pathname.startsWith('/finance') || pathname.startsWith('/accounts') || pathname.startsWith('/statistics') || pathname.startsWith('/eur'))
-      return 'finance';
-    if (pathname.startsWith('/templates') || pathname.startsWith('/recurring')) return 'documents';
-    if (pathname.startsWith('/documents')) return 'documents';
-    if (pathname.startsWith('/clients')) return 'clients';
-    if (pathname.startsWith('/projects')) return 'projects';
-    if (pathname.startsWith('/articles')) return 'articles';
-    if (pathname.startsWith('/settings')) return 'settings';
-    return 'dashboard';
-  })();
-
   const isEditorActive = pathname.includes('/edit') || pathname.includes('/editor');
-
-  const handleNavigate = (page: string, search?: Record<string, string>) => {
-    const to =
-      page === 'dashboard'
-        ? '/'
-        : `/${page}`;
-    navigate({ to, search });
-  };
 
   useKeyboardShortcuts({
     onShowShortcuts: () => setShowShortcuts(true),
@@ -77,11 +55,7 @@ const RootLayout: React.FC = () => {
 
   return (
     <>
-      <DashboardLayout
-        activePage={activePage}
-        onNavigate={handleNavigate}
-        isEditorActive={isEditorActive}
-      >
+      <DashboardLayout isEditorActive={isEditorActive}>
         <Outlet />
       </DashboardLayout>
       {showOnboarding && settings && (
@@ -109,7 +83,7 @@ const DashboardPage: React.FC = () => {
   );
 };
 
-const StatisticsPage: React.FC = () => <StatisticsView />;
+const StatisticsPage: React.FC = () => <LiteReportsView />;
 const AccountsPage: React.FC = () => <AccountsView />;
 const FinancePage: React.FC = () => <FinanceHubView />;
 const EurPage: React.FC = () => <EurView />;
@@ -280,7 +254,8 @@ const DocumentEditorPage: React.FC = () => {
         invoice={invoice}
         templateType={docType === 'offer' ? 'offer' : 'invoice'}
         mode={docMode ?? 'edit'}
-        onSave={(updated) => {
+        onSave={(updated, meta) => {
+          const numberNote = meta?.numberChangeReason ? `Nummer manuell geändert: ${meta.numberChangeReason}` : undefined;
           if (docMode === 'create') {
             const reservationId = updated.numberReservationId;
             const persistedDoc = { ...updated };
@@ -291,8 +266,8 @@ const DocumentEditorPage: React.FC = () => {
                 const mutation = docType === 'offer' ? upsertOffer : upsertInvoice;
                 const vars =
                   docType === 'offer'
-                    ? { offer: persistedDoc, reason: 'create' }
-                    : { invoice: persistedDoc, reason: 'create' };
+                    ? { offer: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' }
+                    : { invoice: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' };
                 const saved = await (mutation as any).mutateAsync(vars);
                 if (reservationId) {
                   await ipc.numbers.finalize({
@@ -310,7 +285,8 @@ const DocumentEditorPage: React.FC = () => {
           }
 
           setPendingDoc(updated);
-          setReason('');
+          // The number unlock reason is the audit reason unless the user writes another.
+          setReason(numberNote ?? '');
           setIsReasonOpen(true);
         }}
         onCancel={() => {
@@ -348,7 +324,7 @@ const DocumentEditorPage: React.FC = () => {
                 key={chip}
                 type="button"
                 onClick={() => setReason(chip)}
-                className={`rounded-control border px-3 py-1.5 text-xs font-semibold transition-colors ${reason === chip ? 'border-dark-base bg-dark-base text-background' : 'border-border bg-surface-muted text-muted hover:bg-surface'}`}
+                className={`rounded-control border px-3 py-1.5 text-xs font-semibold transition-colors ${reason === chip ? 'border-dark-base bg-dark-base text-inverse-foreground' : 'border-border bg-surface-muted text-muted hover:bg-surface'}`}
               >
                 {chip}
               </button>

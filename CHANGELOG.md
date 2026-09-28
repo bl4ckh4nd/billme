@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Buchungen, Quellbuchungen, Anlagen, EÜR-Fakten, Steuer-Mappings und Steuerabgaben schreiben jetzt in einer Transaktion. Bisher lief jede Anweisung einzeln, sodass ein fehlgeschlagener Audit-Eintrag halbe Buchungssätze oder Anlagen hinterlassen konnte; betroffen waren Desktop (PGlite) und Servermodus.
+- Der ungenutzte SQLite-Stack der Desktop-Apps (Repositories, IPC-Handler, Scheduler, Migrationen und `@billme/desktop-data`) ist entfernt. Bestehende `billme.sqlite`-/`billme-pro-v2.sqlite`-Daten werden weiterhin erkannt und über `billme-pglite-migrate` übernommen.
+- Produktions-Builds enthalten die Mock-Engine nicht mehr; fehlt die Desktop-API, meldet der Renderer das, statt still Beispieldaten zu zeigen.
+- Die CI führt jetzt die Tests aller gemeinsamen Pakete aus, darunter Server-Runtime, Buchhaltungs-Engine und die E-Rechnungs-Konformität; 115 neue Tests sichern die Buchhaltungsregeln gegen die laufende Datenbankschicht ab.
+- Die Desktop-Apps importieren gemeinsame Pakete direkt statt über 113 Weiterleitungsdateien; `desktop-ui`, `desktop-hooks` und `desktop-state` sind in `desktop-renderer` aufgegangen, wodurch ein Paketzyklus entfällt.
+
 - Vorlagen sind jetzt Fluss-Layouts statt frei positionierter Canvas-Elemente: vier Presets (klassisch, modern, kompakt, elegant), je ein Standard für Rechnung, Angebot, Auftragsbestätigung, Lieferschein, Gutschrift und Mahnung, dazu die Wahl pro Beleg. Vorschau, Beleg-Editor und PDF brechen an denselben Stellen um. Alte Canvas-Vorlagen werden beim Start einmalig übernommen.
 - Beim ersten Speichern außerhalb des Entwurfs friert ein Beleg Vorlagenversion und Firmendaten ein, damit Nachdrucke identisch bleiben. Mahnungen gibt es als PDF, auch als Anhang im Mahnlauf, und E-Rechnungen tragen ein echtes `factur-x.xml` als PDF/A-3-Anhang.
 
@@ -20,7 +26,7 @@
 - Die Linux-CI stellt die native Keychain-Laufzeit, das explizit vorbereitete Electron-Binary und Xvfb für Desktop-Abnahmetests bereit und führt root-level Node-Testdateien mit einem Node-20-kompatiblen Muster aus, sodass die vollständigen Server-, Worker-, Demo- und Migrationsprüfungen nicht mehr vorzeitig abbrechen.
 - Deaktivierte Auswahlfelder übernehmen extern zurückgesetzte Werte sofort; beim Wechsel auf einen freien Belegempfänger bleibt dadurch kein zuvor gewähltes Projekt sichtbar.
 - Die additive EÜR-Kompatibilitätsschicht initialisiert fehlende Berichtssnapshots jetzt vor ihren Unveränderlichkeits-Triggern, sodass alte oder minimale SQLite-Importquellen zuverlässig geöffnet werden können.
-- Workspace und CI verwenden pnpm 10.1 und bauen sowie prüfen das nur für SQLite-Import-, Kompatibilitäts- und Portaltests benötigte `better-sqlite3`-Binding explizit; der produktive Lite-/Pro-Desktop bleibt auf PGlite.
+- Workspace und CI verwenden pnpm 10.1 und bauen sowie prüfen das nur für den SQLite-Import und die Portaltests benötigte `better-sqlite3`-Binding explizit; der produktive Lite-/Pro-Desktop bleibt auf PGlite.
 - Manueller Portal-Abgleich und Worker übernehmen Kundenentscheidungen jetzt über dieselbe gesperrte Transaktion inklusive Audit und vollständiger Metadaten; bereits entschiedene oder zwischenzeitlich neu veröffentlichte Angebote werden nicht überschrieben.
 - Lite und Pro wandeln Angebote serverseitig in einer Transaktion mit Nummernreservierung, Rechnungssnapshot, Finalisierung und Audit um; wiederholte HTTP-Anfragen mit derselben Rechnungs-ID liefern denselben Beleg, während Fehler sämtliche Schreibschritte zurückrollen.
 - Rechnungs-Upserts können eine bereits in einem anderen Mandanten vergebene Beleg-ID nicht mehr überschreiben.

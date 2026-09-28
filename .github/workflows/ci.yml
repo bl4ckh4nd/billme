@@ -70,6 +70,15 @@ jobs:
       - name: Shared desktop renderer tests
         run: pnpm -C packages/desktop-renderer test
 
+      - name: Shared desktop core tests
+        run: pnpm -C packages/desktop-core test
+
+      - name: Shared desktop services tests
+        run: pnpm -C packages/desktop-services test
+
+      - name: Pro accounting UI tests
+        run: pnpm -C packages/accounting-ui-pro test
+
       - name: Desktop typecheck
         run: pnpm -C apps/desktop typecheck
 
@@ -137,6 +146,18 @@ jobs:
 
       - name: Server data tests
         run: pnpm -C packages/server-data test
+
+      - name: Server runtime tests
+        run: pnpm -C packages/server-runtime test
+
+      - name: Embedded server runtime tests
+        run: pnpm -C packages/embedded-server-runtime test
+
+      - name: Accounting tests
+        run: |
+          pnpm -C packages/accounting-shared test
+          pnpm -C packages/accounting-engine test
+          pnpm -C packages/finance-intelligence test
 
       - name: Server CLI typecheck
         run: pnpm -C packages/server-cli typecheck

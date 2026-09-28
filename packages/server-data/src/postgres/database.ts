@@ -33,7 +33,7 @@ export class PostgresServerDatabase implements ServerDatabase {
     values?: readonly unknown[],
     _driverOptions?: unknown,
   ): Promise<ServerQueryResult<Row>> {
-    return createSession(this.pool).query<Row>(text, values);
+    return (this.transactionContext.getStore() ?? createSession(this.pool)).query<Row>(text, values);
   }
 
   drizzle(): unknown {

@@ -181,3 +181,16 @@ test('an advance settlement across debtors is rejected before any journal or ope
     assert.equal(await count(database, 'open_items', `allocated_amount > 0`), 0);
   });
 });
+
+test('an audit failure rolls back the source journal and run when the repository gets the database wrapper', async () => {
+  await withDatabase(async (database) => {
+    const repository = createPostgresProAccountingRepository(database);
+    await database.query(`CREATE FUNCTION fail_audit() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'audit unavailable'; END $$ LANGUAGE plpgsql`);
+    await database.query(`CREATE TRIGGER fail_audit BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION fail_audit()`);
+
+    await assert.rejects(() => repository.runClosingCommand(scope, sourceFact('audit')), /audit_log/);
+    assert.equal(await count(database, 'accounting_source_runs'), 0);
+    assert.equal(await count(database, 'journal_entries', `source_type='standalone_source'`), 0);
+    assert.equal(await count(database, 'journal_lines'), 0);
+  });
+});

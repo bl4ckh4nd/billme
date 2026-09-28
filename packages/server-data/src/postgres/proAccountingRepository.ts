@@ -28,7 +28,7 @@ import type {
 } from '@billme/server-core';
 import { businessReportingProfileSchema } from '@billme/server-core';
 import { AccountingPolicyError } from '@billme/accounting-shared';
-import { isPostgresPool, withSerializablePostgresTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
+import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { suggestAccountForTransaction } from '@billme/finance-intelligence';
 import { loadAccountSuggestionContext } from './accountSuggestions.js';
 import { appendWithClient } from './audit.js';
@@ -46,7 +46,7 @@ import { createPostgresAccountingSourceRunRepository, type AccountingSourceRunRe
 
 const q = async <T = any>(db: PostgresQueryable, text: string, values: unknown[] = []): Promise<T[]> => (await db.query(text, values)).rows as T[];
 const inTx = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
-  isPostgresPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
+  runInTransaction(db, work, { serializable: true });
 const tenant = (scope: TenantScope): string => scope.tenantId;
 const now = (): string => new Date().toISOString();
 const round = (n: unknown): number => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;

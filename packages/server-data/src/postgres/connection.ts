@@ -1,5 +1,5 @@
 import { Pool, type PoolClient, type PoolConfig } from 'pg';
-import type { ServerDatabaseSession } from '../database.js';
+import type { ServerDatabase, ServerDatabaseSession } from '../database.js';
 
 export const readDatabaseUrl = (env: NodeJS.ProcessEnv = process.env): string | null => {
   const value = env.DATABASE_URL?.trim();
@@ -112,4 +112,25 @@ export const withSerializablePostgresTransaction = async <T>(
   }
 
   throw new Error('Serializable transaction exhausted retry attempts');
+};
+
+// Routes hand repositories the ServerDatabase wrapper (PGlite or Postgres), tests often a raw Pool, and
+// callers already inside a transaction pass their session. Each gets exactly one transaction; a session
+// without its own transaction method is reused as is, and the wrappers reuse an active transaction.
+export const runInTransaction = <T>(
+  db: PostgresQueryable,
+  work: (client: PostgresTransactionClient) => Promise<T>,
+  options: { serializable?: boolean } = {},
+): Promise<T> => {
+  const wrapper = db as PostgresQueryable & Partial<Pick<ServerDatabase, 'transaction'>>;
+  if (typeof wrapper.transaction === 'function') {
+    return wrapper.transaction(
+      options.serializable ? { isolation: 'serializable' } : {},
+      (session) => work(session as unknown as PostgresTransactionClient),
+    );
+  }
+  if (isPostgresPool(db)) {
+    return options.serializable ? withSerializablePostgresTransaction(db, work) : withPostgresTransaction(db, work);
+  }
+  return work(db as PostgresTransactionClient);
 };

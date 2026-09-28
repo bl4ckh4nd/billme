@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import type { TaxFilingRecord, TaxFilingSnapshot } from '@billme/accounting-shared';
 import type { TaxFilingRepository, TenantScope } from '@billme/server-core';
-import { isPostgresPool, withPostgresTransaction, type PostgresQueryable } from './connection.js';
+import { runInTransaction, type PostgresQueryable } from './connection.js';
 import { createDrizzle, schema, tryCreateDrizzle } from './drizzle.js';
 import {
   createTaxSubmission,
@@ -115,15 +115,10 @@ const dbFor = (db: PostgresQueryable) => tryCreateDrizzle(db) ?? createDrizzle(d
 /** Repository calls made with a Pool must make multi-table evidence writes
  * transactional; API callers pass a transaction client and stay in that
  * outer transaction. */
-const atomically = async <T>(
+const atomically = <T>(
   db: PostgresQueryable,
   work: (connection: PostgresQueryable) => Promise<T>,
-): Promise<T> => {
-  if (isPostgresPool(db)) {
-    return withPostgresTransaction(db, (client) => work(client));
-  }
-  return work(db);
-};
+): Promise<T> => runInTransaction(db, work);
 
 const rowRecord = (row: typeof schema.taxSubmissions.$inferSelect): TaxFilingRecord => recordFromSubmission({
   id: row.id!,

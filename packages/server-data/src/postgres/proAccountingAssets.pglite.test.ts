@@ -257,3 +257,16 @@ test('disposal refuses to run when posted schedule and journal depreciation disa
     assert.equal((await database.query(`SELECT 1 FROM journal_entries WHERE tenant_id=$1 AND source_type='asset_disposal'`, [tenantId])).rows.length, 0);
   });
 });
+
+test('a failing activation movement rolls back the asset row and its activation journal', async () => {
+  await withDatabase(async (database) => {
+    const repository = createPostgresProAccountingRepository(database);
+    await database.query(`CREATE FUNCTION fail_asset_movement() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'movement unavailable'; END $$ LANGUAGE plpgsql`);
+    await database.query(`CREATE TRIGGER fail_asset_movement BEFORE INSERT ON asset_movements FOR EACH ROW EXECUTE FUNCTION fail_asset_movement()`);
+
+    await assert.rejects(() => repository.upsertAsset(scope, asset('rollback-asset'), 'Rollback'), /movement unavailable/);
+    const assets = await database.query(`SELECT id FROM assets WHERE tenant_id=$1 AND id='rollback-asset'`, [tenantId]);
+    assert.equal(assets.rows.length, 0);
+    assert.deepEqual(await journalLines(database, 'asset_activation', 'asset_activation:rollback-asset'), []);
+  });
+});

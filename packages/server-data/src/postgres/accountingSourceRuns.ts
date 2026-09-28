@@ -36,8 +36,7 @@ import {
 import type { TenantScope } from '@billme/server-core';
 import { appendWithClient } from './audit.js';
 import {
-  isPostgresPool,
-  withSerializablePostgresTransaction,
+  runInTransaction,
   type PostgresQueryable,
   type PostgresTransactionClient,
 } from './connection.js';
@@ -114,7 +113,7 @@ export interface AccountingSourceRunRepository {
 
 const q = async <T = any>(db: PostgresQueryable, text: string, values: unknown[] = []): Promise<T[]> => (await db.query(text, values)).rows as T[];
 const inTx = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
-  isPostgresPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
+  runInTransaction(db, work, { serializable: true });
 const tenant = (scope: TenantScope): string => scope.tenantId;
 const now = (): string => new Date().toISOString();
 const isoDate = (value: unknown): value is string => {

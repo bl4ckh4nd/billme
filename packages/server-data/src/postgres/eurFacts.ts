@@ -4,7 +4,7 @@ import { getEurAnnexCatalog } from '@billme/desktop-services/eur/annexCatalog';
 import type { EurExpenseSplit } from '@billme/accounting-shared';
 import type { AccountingMutationContext, TenantScope } from '@billme/server-core';
 import { appendWithClient, createPostgresAuditLogPort } from './audit.js';
-import { isPostgresPool, withSerializablePostgresTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
+import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { assertServerEurCashSource, type ServerEurReportResult } from './eurReport.js';
 
 type EurCashFactKind = 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through';
@@ -49,7 +49,7 @@ export interface ServerEurAnnexFact {
 
 const q = async <T = Record<string, unknown>>(db: PostgresQueryable, text: string, values: unknown[] = []): Promise<T[]> => (await db.query(text, values)).rows as T[];
 const inTx = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
-  isPostgresPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
+  runInTransaction(db, work, { serializable: true });
 const cents = (value: number): number => Math.round((value + Number.EPSILON) * 100);
 const amount = (value: number): number => cents(value) / 100;
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');

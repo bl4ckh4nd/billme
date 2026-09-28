@@ -20,7 +20,7 @@ import type { ProAccountingCatalogRepository, ProWorkflowRepository, TenantScope
 import { migrateCanvasTemplate, type LegacyCanvasElement } from '@billme/server-core';
 import { and, asc, count, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { accountSuggestionRuleMatches } from '@billme/finance-intelligence';
-import { isPostgresPool, withSerializablePostgresTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
+import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { appendWithClient } from './audit.js';
 import { createDrizzle, schema } from './drizzle.js';
 
@@ -30,7 +30,7 @@ const nowIso = (): string => new Date().toISOString();
 const drizzleDb = (db: PostgresQueryable) => createDrizzle(db as never);
 const executeSql = (db: PostgresQueryable, statement: ReturnType<typeof sql>) => drizzleDb(db).execute(statement);
 const inTaxMappingTransaction = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
-  isPostgresPool(db) ? withSerializablePostgresTransaction(db, work) : work(db as PostgresTransactionClient);
+  runInTransaction(db, work, { serializable: true });
 const upsert = async (db: PostgresQueryable, table: any, values: any, target: any, set: any): Promise<void> => {
   await drizzleDb(db).insert(table).values(values).onConflictDoUpdate({ target, set });
 };

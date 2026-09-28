@@ -3,7 +3,7 @@ import { previewCsv, type CsvMapping, type CsvPreviewResult, commitCsv } from '@
 import type { Invoice, TenantScope } from '@billme/server-core';
 import { createPostgresBillingDependencies } from './billing.js';
 import { appendWithClient } from './audit.js';
-import { isPostgresPool, withPostgresTransaction, withSerializablePostgresTransaction, type PostgresQueryable } from './connection.js';
+import { runInTransaction, type PostgresQueryable } from './connection.js';
 import type { ServerDatabase, ServerDatabaseSession } from '../database.js';
 
 export type TransactionDatabase = PostgresQueryable | ServerDatabase;
@@ -136,19 +136,11 @@ const query = async <Row>(
   query: (queryText: string, queryValues?: readonly unknown[]) => Promise<{ rows: Row[] }>;
 }).query(text, values);
 
-const isServerDatabase = (database: TransactionDatabase): database is ServerDatabase =>
-  'transaction' in database && typeof database.transaction === 'function';
-
-const inTransaction = async <T>(
+const inTransaction = <T>(
   database: TransactionDatabase,
   work: (session: TransactionSession) => Promise<T>,
   options: { serializable?: boolean } = {},
-): Promise<T> => {
-  if (isServerDatabase(database)) return database.transaction(options.serializable ? { isolation: 'serializable' } : {}, work);
-  if (options.serializable && isPostgresPool(database)) return withSerializablePostgresTransaction(database, work);
-  if (isPostgresPool(database)) return withPostgresTransaction(database, work);
-  return work(database);
-};
+): Promise<T> => runInTransaction(database, (client) => work(client as unknown as TransactionSession), options);
 
 const toTransaction = (row: Record<string, unknown>): ServerTransactionRecord => ({
   id: String(row.id),

@@ -19,13 +19,13 @@
     "./components/*": "./src/components/*.tsx"
   },
   "dependencies": {
+    "zustand": "^5.0.10",
     "@billme/accounting-shared": "workspace:*",
     "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/desktop-core": "workspace:*",
     "@billme/desktop-designer": "workspace:*",
     "@billme/desktop-services": "workspace:*",
-    "@billme/desktop-state": "workspace:*",
     "@billme/desktop-ui": "workspace:*",
     "@billme/desktop-utils": "workspace:*",
     "@billme/server-core": "workspace:*",

@@ -351,7 +351,7 @@ These are described in internal design docs but are not on `main`; do not expect
 | `@billme/desktop-designer` | The shared visual document designer — canvas stage, element rail, inspector, layers, plus zoom/pan/history hooks |
 | `@billme/desktop-renderer` | Shared Lite/Pro views, query hooks, UI state, product-aware API fallback, print shell and host mounting |
 | `@billme/desktop-services` | Product-parameterized mock engine/data, portal client, CSV import, EÜR catalog and suggestion helpers |
-| `@billme/desktop-hooks` / `-state` / `-ui` / `-utils` | Small shared pieces: keyboard shortcuts hook, Zustand UI store, toast/spinner/skeleton, formatters |
+| `@billme/desktop-ui` / `-utils` | Shell, dashboard and onboarding components; formatters and document pagination |
 | `@billme/accounting-shared` | Pure Pro accounting types — journal, workflow states, ledger charts, tax cases |
 | `@billme/accounting-engine` | Posting and ledger services, including the balance check enforced before posting |
 | `@billme/accounting-ui-pro` | The Pro accounting workspace UI — inbox, booking editor, reconciliation, exceptions, reports |

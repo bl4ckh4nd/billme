@@ -84,18 +84,12 @@ importers:
       '@billme/desktop-designer':
         specifier: workspace:*
         version: link:../../packages/desktop-designer
-      '@billme/desktop-hooks':
-        specifier: workspace:*
-        version: link:../../packages/desktop-hooks
       '@billme/desktop-renderer':
         specifier: workspace:*
         version: link:../../packages/desktop-renderer
       '@billme/desktop-services':
         specifier: workspace:*
         version: link:../../packages/desktop-services
-      '@billme/desktop-state':
-        specifier: workspace:*
-        version: link:../../packages/desktop-state
       '@billme/desktop-ui':
         specifier: workspace:*
         version: link:../../packages/desktop-ui
@@ -153,9 +147,6 @@ importers:
       zod:
         specifier: ^3.25.76
         version: 3.25.76
-      zustand:
-        specifier: ^5.0.10
-        version: 5.0.11(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
     devDependencies:
       '@electron/rebuild':
         specifier: ^4.0.2
@@ -303,18 +294,12 @@ importers:
       '@billme/desktop-designer':
         specifier: workspace:*
         version: link:../../packages/desktop-designer
-      '@billme/desktop-hooks':
-        specifier: workspace:*
-        version: link:../../packages/desktop-hooks
       '@billme/desktop-renderer':
         specifier: workspace:*
         version: link:../../packages/desktop-renderer
       '@billme/desktop-services':
         specifier: workspace:*
         version: link:../../packages/desktop-services
-      '@billme/desktop-state':
-        specifier: workspace:*
-        version: link:../../packages/desktop-state
       '@billme/desktop-ui':
         specifier: workspace:*
         version: link:../../packages/desktop-ui
@@ -372,9 +357,6 @@ importers:
       zod:
         specifier: ^3.25.76
         version: 3.25.76
-      zustand:
-        specifier: ^5.0.10
-        version: 5.0.11(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
     devDependencies:
       '@electron/rebuild':
         specifier: ^4.0.2
@@ -782,22 +764,6 @@ importers:
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.13)
 
-  packages/desktop-hooks:
-    dependencies:
-      react:
-        specifier: ^19.0.0
-        version: 19.2.4
-      react-dom:
-        specifier: ^19.0.0
-        version: 19.2.4(react@19.2.4)
-    devDependencies:
-      '@types/react':
-        specifier: ^19.2.13
-        version: 19.2.13
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.13)
-
   packages/desktop-renderer:
     dependencies:
       '@billme/accounting-shared':
@@ -818,9 +784,6 @@ importers:
       '@billme/desktop-services':
         specifier: workspace:*
         version: link:../desktop-services
-      '@billme/desktop-state':
-        specifier: workspace:*
-        version: link:../desktop-state
       '@billme/desktop-ui':
         specifier: workspace:*
         version: link:../desktop-ui
@@ -851,6 +814,9 @@ importers:
       uuid:
         specifier: ^13.0.0
         version: 13.0.0
+      zustand:
+        specifier: ^5.0.10
+        version: 5.0.11(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
     devDependencies:
       '@testing-library/react':
         specifier: ^16.3.2
@@ -922,12 +888,6 @@ importers:
       vitest:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@24.12.2)(@vitest/ui@4.0.18)(happy-dom@20.5.3)(jiti@2.6.1)(jsdom@28.0.0)(lightningcss@1.30.2)(tsx@4.21.0)
-
-  packages/desktop-state:
-    dependencies:
-      zustand:
-        specifier: ^5.0.10
-        version: 5.0.11(@types/react@19.2.13)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
 
   packages/desktop-ui:
     dependencies:

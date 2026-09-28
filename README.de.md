@@ -371,7 +371,7 @@ dem Klonen sind sie daher nicht vorhanden.
 | `@billme/desktop-designer` | Gemeinsamer visueller Dokumentdesigner — Zeichenfläche, Elementleiste, Inspektor, Ebenen sowie Zoom-/Schwenk-/Verlaufs-Hooks |
 | `@billme/desktop-renderer` | Bindet die Desktop-React-App in beliebige Hosts ein und ermöglicht dadurch Demo und Web-Shells die Wiederverwendung der Electron-Oberfläche |
 | `@billme/desktop-services` | Portal-Client, CSV-Import, EÜR-Katalog und Vorschlagshelfer |
-| `@billme/desktop-hooks` / `-state` / `-ui` / `-utils` | Kleine gemeinsame Bausteine: Hook für Tastenkürzel, Zustand-Oberflächenstore, Toast/Spinner/Skeleton, Formatierer |
+| `@billme/desktop-ui` / `-utils` | Shell-, Dashboard- und Onboarding-Komponenten; Formatierer und Dokument-Umbruch |
 | `@billme/accounting-shared` | Reine Pro-Buchhaltungstypen — Journal, Workflowzustände, Kontenrahmen, Steuerfälle |
 | `@billme/accounting-engine` | Buchungs- und Hauptbuchdienste einschließlich der vor dem Buchen erzwungenen Saldenprüfung |
 | `@billme/accounting-ui-pro` | Pro-Buchhaltungsarbeitsbereich — Belegeingang, Buchungseditor, Abstimmung, Ausnahmen, Auswertungen |

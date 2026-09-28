@@ -32,7 +32,7 @@ import { ipc } from './ipc/client';
 import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { ShortcutsModal } from '@billme/desktop-ui/components/ShortcutsModal';
-import { useKeyboardShortcuts } from '@billme/desktop-hooks/useKeyboardShortcuts';
+import { useKeyboardShortcuts } from '@billme/desktop-renderer/hooks/useKeyboardShortcuts';
 import { Button, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
 import { LiteReportsView, shouldShowBusinessOnboarding } from '@billme/desktop-ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';

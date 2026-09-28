@@ -30,10 +30,8 @@
     "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-core": "workspace:*",
     "@billme/desktop-designer": "workspace:*",
-    "@billme/desktop-hooks": "workspace:*",
     "@billme/desktop-renderer": "workspace:*",
     "@billme/desktop-services": "workspace:*",
-    "@billme/desktop-state": "workspace:*",
     "@billme/desktop-ui": "workspace:*",
     "@billme/desktop-utils": "workspace:*",
     "@billme/embedded-server-runtime": "workspace:*",
@@ -51,8 +49,7 @@
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "uuid": "^13.0.0",
-    "zod": "^3.25.76",
-    "zustand": "^5.0.10"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.2",

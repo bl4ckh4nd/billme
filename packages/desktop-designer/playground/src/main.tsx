@@ -1,9 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { DocumentCanvasEditor, INITIAL_INVOICE_TEMPLATE } from '@billme/desktop-designer';
-import type { DocumentCanvasDocumentFields, DocumentDraft, DraftItem } from '@billme/desktop-designer/document-editor';
-import { getPreviewElements } from '@billme/desktop-utils/documentPreview';
-import { calculateInvoiceTaxSnapshot } from '@billme/server-core/services';
+import { DocumentEditor, type DocumentDraft, type DraftItem } from '@billme/desktop-designer/document-editor';
+import { createDefaultTemplateBody } from '@billme/server-core/domain';
 import '@billme/ui/styles.css';
 import './styles.css';
 
@@ -51,66 +49,39 @@ const playgroundArticles = [
   { id: 'article-3', sku: 'ELE-001', title: 'Elektroinstallation', description: 'Installationsstunde', price: 95, unit: 'Std.', category: 'Elektro', taxRate: 19 },
 ];
 
+const FIXTURES: Fixture[] = ['construction', 'page-break', 'all-line-types', 'long-text', 'mixed-vat'];
+const templateBody = createDefaultTemplateBody('invoice');
+
+// Playground for the document editor: edit on the sheet, check page breaks in "Vorschau".
 const App = () => {
-  const queryFixture = new URLSearchParams(location.search).get('fixture') as Fixture | null;
-  const [fixture, setFixture] = React.useState<Fixture>(queryFixture ?? 'construction');
-  const [lines, setLines] = React.useState(() => makeLines(queryFixture ?? 'construction'));
-  const [past, setPast] = React.useState<PlaygroundLine[][]>([]);
-  const [future, setFuture] = React.useState<PlaygroundLine[][]>([]);
-  const [draft, setDraft] = React.useState<DocumentDraft>(() => ({ id: 'playground', number: 'PLAY-001', date: '2026-08-07', dueDate: '2026-08-21', client: 'Bauherr Beispiel', clientId: 'client-1', clientEmail: 'kunde@example.de', clientAddress: 'Musterweg 7\n10115 Berlin', projectId: 'project-1', amount: 0, items: makeLines(queryFixture ?? 'construction'), taxMeta: { defaultVatRate: 19 } }));
-  const [pageCount, setPageCount] = React.useState(0);
-  const [overflow, setOverflow] = React.useState<string[]>([]);
-  const taxSnapshot = calculateInvoiceTaxSnapshot({ items: lines, taxMode: 'standard_vat' }, settings);
-  const elements = React.useMemo(() => getPreviewElements({ ...draft, items: lines }, INITIAL_INVOICE_TEMPLATE, settings as never) as never[], [draft, lines]);
-  const commit = React.useCallback((next: PlaygroundLine[]) => {
-    setPast((entries) => [...entries, lines]);
-    setLines(next);
-    setFuture([]);
-  }, [lines]);
-  const reset = (next: Fixture = fixture) => { setFixture(next); const nextLines = makeLines(next); setLines(nextLines); setDraft((current) => ({ ...current, items: nextLines })); setPast([]); setFuture([]); history.replaceState(null, '', `?fixture=${next}`); };
-  const undo = () => {
-    const previous = past.at(-1);
-    if (!previous) return;
-    setPast((entries) => entries.slice(0, -1));
-    setFuture((entries) => [lines, ...entries]);
-    setLines(previous);
+  const [fixture, setFixture] = React.useState<Fixture>(() => (new URLSearchParams(location.search).get('fixture') as Fixture | null) ?? 'construction');
+  const document = React.useMemo<DocumentDraft>(() => ({
+    id: `playground-${fixture}`, number: 'PLAY-001', date: '2026-08-07', dueDate: '2026-08-21', client: 'Bauherr Beispiel', clientId: 'client-1',
+    clientEmail: 'kunde@example.de', clientAddress: 'Musterweg 7\n10115 Berlin', projectId: 'project-1', amount: 0, items: makeLines(fixture), taxMeta: { defaultVatRate: 19 },
+  }), [fixture]);
+  const select = (next: Fixture) => {
+    setFixture(next);
+    history.replaceState(null, '', `?fixture=${next}`);
   };
-  const redo = () => {
-    const next = future[0];
-    if (!next) return;
-    setFuture((entries) => entries.slice(1));
-    setPast((entries) => [...entries, lines]);
-    setLines(next);
-  };
-
-  React.useEffect(() => {
-    const check = () => {
-      const pages = [...document.querySelectorAll<HTMLElement>('[data-page-index]')];
-      setPageCount(pages.length);
-      setOverflow(pages.flatMap((page, index) => [...page.querySelectorAll<HTMLElement>('table')].flatMap((table) => {
-        const footer = page.querySelector<HTMLElement>('[data-element-label="footer_company"]');
-        return footer && table.getBoundingClientRect().bottom > footer.getBoundingClientRect().top ? [`Seite ${index + 1}: Tabelle über Footer`] : [];
-      })));
-    };
-    const id = requestAnimationFrame(check);
-    return () => cancelAnimationFrame(id);
-  }, [elements]);
-
-  const documentFields = React.useMemo<DocumentCanvasDocumentFields>(() => ({
-    document: { ...draft, items: lines }, templateType: 'invoice', clients: playgroundClients, projects: playgroundProjects,
-    selectedClientId: draft.clientId ?? '', selectedClientLabel: draft.client, selectedProjectLabel: 'NB-01 – Neubau Berlin',
-    onChange: (next) => setDraft((current) => typeof next === 'function' ? next({ ...current, items: lines }) : next),
-    onClientNameChange: (value) => setDraft((current) => ({ ...current, client: value })),
-    onAddressChange: (value) => setDraft((current) => ({ ...current, clientAddress: value })),
-    onSelectClient: (client) => setDraft((current) => ({ ...current, clientId: client.id, client: client.company, clientEmail: client.email ?? current.clientEmail, clientAddress: client.address ?? current.clientAddress })),
-    onSelectProject: (project) => setDraft((current) => ({ ...current, projectId: project.id })),
-    fieldErrors: {}, taxRateOptions: [0, 7, 19], resolvedTaxMode: 'standard_vat',
-  }), [draft, lines]);
-
   return <main className="playground-shell">
-    <header className="playground-toolbar"><div><strong>Billme Editor Playground</strong><span>A4-Arbeitsfläche · Zeilen direkt im Dokument bearbeiten</span></div><label>Fixture <select value={fixture} onChange={(event) => reset(event.target.value as Fixture)}>{(['construction', 'page-break', 'all-line-types', 'long-text', 'mixed-vat'] as Fixture[]).map((value) => <option key={value} value={value}>{value}</option>)}</select></label><button type="button" onClick={() => reset()}>Zurücksetzen</button><button type="button" onClick={undo} disabled={!past.length}>Rückgängig</button><button type="button" onClick={redo} disabled={!future.length}>Wiederholen</button></header>
-    <section className="playground-stats"><span data-testid="page-count">{pageCount} Seiten</span><span>Netto {taxSnapshot.netAmount.toFixed(2)} €</span><span>USt {taxSnapshot.vatAmount.toFixed(2)} €</span><span>Brutto {taxSnapshot.grossAmount.toFixed(2)} €</span><span className={overflow.length ? 'bad' : 'good'}>{overflow.length ? overflow.join(', ') : 'Kein Überlauf'}</span></section>
-    <DocumentCanvasEditor elements={elements as never[]} items={lines} onItemsChange={(next) => { commit(next); setDraft((current) => ({ ...current, items: next })); }} documentFields={documentFields} articles={playgroundArticles} formatCurrency={(amount) => `${amount.toFixed(2).replace('.', ',')} €`} taxRateOptions={[0, 7, 19]} />
+    <header className="playground-toolbar"><div><strong>Billme Editor Playground</strong><span>Belegeditor im Fluss-Layout · Seitenumbrüche in der Vorschau</span></div><label>Fixture <select value={fixture} onChange={(event) => select(event.target.value as Fixture)}>{FIXTURES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label></header>
+    <div style={{ height: 'calc(100vh - 64px)' }}>
+      <DocumentEditor
+        document={document}
+        templateType="invoice"
+        mode="edit"
+        clients={playgroundClients}
+        articles={playgroundArticles}
+        projects={playgroundProjects}
+        settings={settings as never}
+        templateKind="invoice"
+        templateOptions={[]}
+        defaultTemplateName="Modern"
+        resolveTemplateBody={() => templateBody}
+        onSave={(saved) => console.info('Gespeichert', saved)}
+        onCancel={() => undefined}
+      />
+    </div>
   </main>;
 };
 

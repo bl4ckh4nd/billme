@@ -4,6 +4,7 @@ import type { NormalizedEinvoice } from './normalizeInvoiceForEinvoice';
 
 const fixture: NormalizedEinvoice = {
   invoiceNumber: 'RE-2026-001',
+  typeCode: '380',
   issueDate: '2026-02-15',
   dueDate: '2026-02-22',
   currency: 'EUR',

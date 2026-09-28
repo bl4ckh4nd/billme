@@ -7,8 +7,12 @@ import { ipcRoutes } from '@billme/desktop-contracts/contract';
 import { getCurrentUpdateStatus, downloadUpdate, quitAndInstall } from './updater';
 import { secrets } from './secrets';
 import { exportEurPdf, exportPdf } from './pdfExport';
+import { createDocumentExportPreparer } from '@billme/desktop-services/documentExport';
+import type { EmbeddedConnectionResult } from '@billme/desktop-contracts/embeddedConnection';
 
-export type NativeHandlerDependencies = Omit<NativeIpcCommonDependencies, 'secrets' | 'updater'>;
+export type NativeHandlerDependencies = Omit<NativeIpcCommonDependencies, 'secrets' | 'updater'> & {
+  readonly resolveEmbeddedConnection: () => EmbeddedConnectionResult;
+};
 
 export const registerNativeIpcHandlers = (
   ipcMain: NativeIpcMain,
@@ -22,6 +26,10 @@ export const registerNativeIpcHandlers = (
       secrets,
       updater: { getCurrentUpdateStatus, downloadUpdate, quitAndInstall },
     },
-    { exportPdf, exportEurPdf },
+    {
+      exportPdf,
+      exportEurPdf,
+      prepareDocumentExport: createDocumentExportPreparer({ product: 'lite', resolveConnection: deps.resolveEmbeddedConnection }),
+    },
   );
 };

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DocumentEditor } from '@billme/desktop-designer/document-editor';
-import { INITIAL_INVOICE_TEMPLATE } from '@billme/desktop-core/constants';
+import { createDefaultTemplateBody } from '@billme/server-core/domain';
 import { DEFAULT_SETTINGS, MOCK_SETTINGS } from '@billme/desktop-services/mockData';
 import { appSettingsSchema as liteAppSettingsSchema } from '@billme/desktop-contracts/schemas';
 import { appSettingsSchema as proAppSettingsSchema } from '@billme/desktop-contracts-pro/schemas';
@@ -56,7 +56,10 @@ const editor = (document = documentFixture(), onSave = vi.fn(), templateType: 'i
     }]}
     projects={options.projects ?? []}
     settings={options.settings ?? MOCK_SETTINGS}
-    templateElements={INITIAL_INVOICE_TEMPLATE}
+    templateKind={templateType}
+    templateOptions={[]}
+    defaultTemplateName="Modern"
+    resolveTemplateBody={() => createDefaultTemplateBody(templateType)}
     onValidateVatId={options.onValidateVatId}
     onSelectedClientChange={options.onSelectedClientChange}
     onSave={onSave}

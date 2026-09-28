@@ -386,15 +386,16 @@ dem Klonen sind sie daher nicht vorhanden.
 
 ## Entwicklung
 
-Für eine schnelle Prüfung von A4-Seitenumbruch und Rechnungszeilen ohne Electron:
+Für eine schnelle Prüfung von Belegeditor und Rechnungszeilen ohne Electron:
 `pnpm dev:editor` starten und `http://127.0.0.1:4177` öffnen. Fixtures können über
 `?fixture=construction|page-break|all-line-types|long-text|mixed-vat` gewählt werden.
-Der Playground verwendet dabei den öffentlichen `DocumentCanvasEditor`: Kopf- und
-Empfängerfelder liegen direkt als Inline-Overlays auf A4, Zeilen bieten Artikel- und
-Kategorie-Kontext sowie Randaktionen, und Änderungen paginieren live neu. Die
-Steuerelemente sind aus dem Druckfluss genommen und die Diagnoseleiste zeigt
-Seitenzahl, Summen und Tabellen-/Fußüberlauf. Positionen lassen sich am Griff per
+Der Playground zeigt den öffentlichen `DocumentEditor`: Kopf- und Empfängerfelder
+liegen in den DIN-5008-Feldern des Blatts, Zeilen bieten Artikel- und
+Kategorie-Kontext sowie Randaktionen, und die `Vorschau` zeigt das paginierte
+Fluss-Layout genau so, wie das PDF gedruckt wird. Positionen lassen sich am Griff per
 `dnd-kit` sortieren; `Cmd/Ctrl+K` öffnet die Suche nach Artikeln und Kunden.
+Unter `http://127.0.0.1:4177/gallery.html?kind=invoice&preset=modern&items=40`
+stehen alle Vorlagen-Presets und Belegarten zum Vergleich bereit.
 
 ### Voraussetzungen
 

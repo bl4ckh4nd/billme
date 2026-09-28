@@ -43,19 +43,15 @@ import {
   createPostgresProWorkflowRepository,
   deleteServerArticle,
   deleteServerBankAccount,
-  deleteServerTemplate,
-  getServerActiveTemplates,
+  convertLegacyServerTemplates,
   getServerSettings,
   listServerArticles,
   listServerBankAccounts,
-  listServerTemplates,
   readDatabaseUrl,
   assertDrizzleSchemaCurrent,
-  saveServerActiveTemplates,
   saveServerArticle,
   saveServerBankAccount,
   saveServerSettings,
-  saveServerTemplate,
   createPostgresProjectRepository,
   buildPostgresTaxAuditExportArtifact,
   type ServerDatabase,
@@ -65,18 +61,13 @@ import {
   appSettingsSchema,
   articleSchema,
   ledgerAccountSchema,
-  listTemplatesParamsSchema,
   proListAccountSuggestionRulesArgsSchema,
   proListTaxCaseAccountMappingsArgsSchema,
   proListTaxCasesArgsSchema,
   proUpsertAccountSuggestionRuleArgsSchema,
   proUpsertTaxCaseAccountMappingArgsSchema,
-  setActiveTemplatePayloadSchema,
   setSettingsPayloadSchema,
-  templateKindSchema,
-  templateSchema,
   upsertArticlePayloadSchema,
-  upsertTemplatePayloadSchema,
   projectSchema,
   taxAuditExportArtifactSchema,
 } from '@billme/desktop-contracts-pro/schemas';
@@ -93,6 +84,7 @@ import { registerTransactionRoutes } from './transactionRoutes.js';
 import { registerAutomationRoutes, type RegisterAutomationRoutesOptions } from './automationRoutes.js';
 import { registerAuditRoutes } from './auditRoutes.js';
 import { registerEurRuleRoutes } from './eurRuleRoutes.js';
+import { registerDocumentTemplateRoutes } from './documentTemplateRoutes.js';
 import {
   requireDatabase,
   requireAuditExportSession,
@@ -194,14 +186,6 @@ const authSessionInfoSchema = z.object({
   product: serverProductSchema,
   role: z.enum(supportedServerRoles),
 });
-const templateRecordSchema = z.object({
-  id: z.string().min(1),
-  kind: templateKindSchema,
-  name: z.string().min(1),
-  createdAt: z.string().min(1),
-  updatedAt: z.string().min(1),
-  elements: templateSchema.shape.elements,
-});
 
 const clientWriteSchema = clientSchema.omit({
   tenantId: true,
@@ -245,16 +229,6 @@ const parseStoredSettings = (record: Awaited<ReturnType<typeof getServerSettings
   }
   return appSettingsSchema.parse(JSON.parse(record.settingsJson));
 };
-
-const mapTemplateRecord = (record: Awaited<ReturnType<typeof listServerTemplates>>[number]) =>
-  templateRecordSchema.parse({
-    id: record.id,
-    kind: record.kind,
-    name: record.name,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-    elements: JSON.parse(record.elementsJson),
-  });
 
 const mapArticleRecord = (record: Awaited<ReturnType<typeof listServerArticles>>[number]) =>
   articleSchema.parse({
@@ -1121,89 +1095,6 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     },
   });
 
-  typedRoute(app, {
-    method: 'GET',
-    url: `${prefix}/templates`,
-    query: listTemplatesParamsSchema,
-    response: z.array(templateRecordSchema),
-    async handler({ request, query }) {
-      const session = await requireSession(app, product, request.headers.authorization);
-      const templates = await listServerTemplates(requireDatabase(app), session.scope.tenantId);
-      return templates
-        .filter((record) => !query.kind || record.kind === query.kind)
-        .map(mapTemplateRecord);
-    },
-  });
-
-  typedRoute(app, {
-    method: 'POST',
-    url: `${prefix}/templates`,
-    body: upsertTemplatePayloadSchema,
-    response: templateRecordSchema,
-    async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
-      const saved = await saveServerTemplate(requireDatabase(app), {
-        id: body.template.id,
-        tenantId: session.scope.tenantId,
-        kind: body.template.kind,
-        name: body.template.name,
-        elementsJson: JSON.stringify(body.template.elements),
-        createdAt: body.template.createdAt,
-        updatedAt: body.template.updatedAt,
-      });
-      return mapTemplateRecord(saved);
-    },
-  });
-
-  typedRoute(app, {
-    method: 'DELETE',
-    url: `${prefix}/templates/:id`,
-    params: entityIdParamsSchema,
-    response: okSchema,
-    async handler({ request, params }) {
-      const session = await requireSession(app, product, request.headers.authorization);
-      await deleteServerTemplate(requireDatabase(app), session.scope.tenantId, params.id);
-      return { ok: true as const };
-    },
-  });
-
-  typedRoute(app, {
-    method: 'GET',
-    url: `${prefix}/templates/active/:kind`,
-    params: z.object({
-      kind: templateKindSchema,
-    }),
-    response: templateRecordSchema.nullable(),
-    async handler({ request, params }) {
-      const session = await requireSession(app, product, request.headers.authorization);
-      const active = await getServerActiveTemplates(requireDatabase(app), session.scope.tenantId);
-      const templateId = params.kind === 'invoice' ? active?.invoiceTemplateId : active?.offerTemplateId;
-      if (!templateId) {
-        return null;
-      }
-      const templates = await listServerTemplates(requireDatabase(app), session.scope.tenantId);
-      const template = templates.find((entry) => entry.id === templateId);
-      return template ? mapTemplateRecord(template) : null;
-    },
-  });
-
-  typedRoute(app, {
-    method: 'PUT',
-    url: `${prefix}/templates/active`,
-    body: setActiveTemplatePayloadSchema,
-    response: okSchema,
-    async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
-      const existing = await getServerActiveTemplates(requireDatabase(app), session.scope.tenantId);
-      await saveServerActiveTemplates(requireDatabase(app), {
-        tenantId: session.scope.tenantId,
-        id: existing?.id ?? 1,
-        invoiceTemplateId: body.kind === 'invoice' ? body.templateId ?? undefined : existing?.invoiceTemplateId,
-        offerTemplateId: body.kind === 'offer' ? body.templateId ?? undefined : existing?.offerTemplateId,
-      });
-      return { ok: true as const };
-    },
-  });
 };
 
 const registerTaxAuditExportRoute = (app: FastifyInstance) => {
@@ -1507,6 +1398,13 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     }
   }
 
+  if (app.serverDatabase) {
+    // Retried on every boot until it succeeds; a failure must not block the API.
+    await convertLegacyServerTemplates(app.serverDatabase).catch((error) => {
+      app.log.error({ err: error }, 'Konvertierung der Alt-Vorlagen fehlgeschlagen');
+    });
+  }
+
   app.decorate('tokenService', new SessionTokenService(options.sessionSecret ?? process.env.SESSION_SECRET));
   const authPool = runtime === 'server' && app.serverPool ? app.serverPool : undefined;
   app.decorate('authStore', createAuthStore({ pool: authPool, env: process.env }));
@@ -1622,6 +1520,8 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerBillingRoutes(app, 'pro', '/api/v1/pro');
     registerCatalogRoutes(app, 'lite', '/api/v1/lite');
     registerCatalogRoutes(app, 'pro', '/api/v1/pro');
+    registerDocumentTemplateRoutes(app, 'lite', '/api/v1/lite');
+    registerDocumentTemplateRoutes(app, 'pro', '/api/v1/pro');
     registerTransactionRoutes(app, 'lite');
     registerTransactionRoutes(app, 'pro');
     registerProRoutes(app);
@@ -1647,6 +1547,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
   } else {
     registerBillingRoutes(app, product, `/api/v1/${product}`);
     registerCatalogRoutes(app, product, `/api/v1/${product}`);
+    registerDocumentTemplateRoutes(app, product, `/api/v1/${product}`);
     registerTransactionRoutes(app, product);
     if (product === 'pro') {
       registerProRoutes(app);

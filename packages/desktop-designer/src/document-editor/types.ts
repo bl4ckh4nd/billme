@@ -1,4 +1,5 @@
 import type {
+  DocumentLayout,
   InvoiceTaxMeta,
   InvoiceTaxMode,
   InvoiceTaxSnapshot,
@@ -46,6 +47,9 @@ export interface DocumentDraft {
   taxSnapshot?: InvoiceTaxSnapshot;
   amount: number;
   items: DraftItem[];
+  documentKind?: 'invoice' | 'order_confirmation' | 'delivery_note' | 'advance_invoice' | 'partial_invoice' | 'final_invoice' | 'credit_note' | 'cancellation_invoice';
+  /** Per-document template choice and text overrides. */
+  layout?: DocumentLayout;
   [key: string]: unknown;
 }
 

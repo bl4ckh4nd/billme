@@ -10,6 +10,7 @@ import {
   type AuditEntryDraft,
   type AuditSubject,
   type BillingAddress,
+  type DocumentLayout,
   type Invoice,
   type InvoiceTaxMeta,
   type InvoiceTaxSnapshot,
@@ -85,6 +86,7 @@ export interface LegacyInvoiceDocument {
   items: LegacyInvoiceItem[];
   payments: LegacyPayment[];
   history?: Array<{ date: string; action: string }>;
+  layout?: DocumentLayout;
 }
 
 export interface SqliteInvoiceRepository {
@@ -238,6 +240,7 @@ export const toDomainInvoice = (
       method: payment.method,
     })),
     history: invoice.history ?? [],
+    layout: invoice.layout,
   };
 };
 
@@ -308,6 +311,7 @@ export const toDomainOffer = (
       summaryUnit: item.summaryUnit,
     })),
     history: offer.history ?? [],
+    layout: offer.layout,
   };
 };
 
@@ -345,6 +349,7 @@ export const toLegacyInvoice = (invoice: Invoice): LegacyInvoiceDocument => {
       method: payment.method,
     })),
     history: invoice.history ?? [],
+    layout: invoice.layout,
   };
 };
 
@@ -378,5 +383,6 @@ export const toLegacyOffer = (offer: Offer): LegacyInvoiceDocument => {
     items: offer.items.map(toLegacyLine),
     payments: [],
     history: offer.history ?? [],
+    layout: offer.layout,
   };
 };

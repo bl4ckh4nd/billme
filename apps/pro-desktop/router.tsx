@@ -22,7 +22,8 @@ import { SettingsView } from './components/SettingsView';
 import { RecurringView } from './components/RecurringView';
 import { ProjectsView } from './components/ProjectsView';
 import { ProjectDetailView } from './components/ProjectDetailView';
-import { InvoiceEditor } from './components/InvoiceEditor';
+import { TemplateEditor } from '@billme/desktop-renderer/components/TemplateEditor';
+import { templateKindSchema } from '@billme/server-core/domain';
 import { InvoiceDocumentEditor } from './components/InvoiceDocumentEditor';
 import { useUiStore } from './state/uiStore';
 import { Invoice } from './types';
@@ -117,18 +118,21 @@ const TemplatesPage: React.FC = () => {
   const navigate = useNavigate();
   return (
     <TemplatesView
-      onOpenEditor={(type) => navigate({ to: `/templates/${type}/editor` })}
+      onOpenTemplate={(id) => navigate({ to: '/templates/$id', params: { id } })}
+      onCreateTemplate={(kind) => navigate({ to: '/templates/$id', params: { id: 'new' }, search: { kind } })}
     />
   );
 };
 
-const TemplateEditorPage: React.FC<{ templateType: 'invoice' | 'offer' }> = ({
-  templateType,
-}) => {
+const TemplateEditorPage: React.FC<{ templateId: string }> = ({ templateId }) => {
+  const search = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
+  const kind = templateKindSchema.safeParse(search.kind);
   const navigate = useNavigate();
   return (
-    <InvoiceEditor
-      templateType={templateType}
+    <TemplateEditor
+      templateId={templateId}
+      kind={kind.success ? kind.data : 'invoice'}
+      onCreated={(id) => navigate({ to: '/templates/$id', params: { id }, replace: true })}
       onBack={() => navigate({ to: '/templates' })}
     />
   );
@@ -378,11 +382,10 @@ const templatesRoute = createRoute({
 
 const templateEditorRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/templates/$type/editor',
+  path: '/templates/$id',
   component: () => {
-    const params = templateEditorRoute.useParams();
-    const type = params.type === 'offer' ? 'offer' : 'invoice';
-    return <TemplateEditorPage templateType={type} />;
+    const { id } = templateEditorRoute.useParams();
+    return <TemplateEditorPage templateId={id} />;
   },
 });
 

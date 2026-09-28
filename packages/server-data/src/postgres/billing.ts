@@ -10,6 +10,7 @@ import {
   offerSchema,
   recurringProfileSchema,
   systemClock,
+  templateKindForDocument,
   tenantMembershipSchema,
   tenantSchema,
   type BillingRepositories,
@@ -65,6 +66,7 @@ import {
 import { schema, tryCreateDrizzle } from "./drizzle.js";
 import { withPostgresTransaction } from "./connection.js";
 import { createPostgresAuditLogPort } from "./audit.js";
+import { resolveLayoutForSave } from "./documentLayoutFreeze.js";
 
 type PostgresQueryable = PostgresPoolQueryable | ServerDatabaseSession;
 
@@ -169,6 +171,7 @@ type InvoiceRow = {
   tax_mode: Invoice["taxMode"] | null;
   tax_meta_json: string | null;
   tax_snapshot_json: string | null;
+  layout_json: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -195,6 +198,7 @@ type OfferRow = {
   tax_snapshot_json: string | null;
   share_json: string | null;
   history_json: string | null;
+  layout_json: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -378,6 +382,7 @@ const rowToInvoice = (row: InvoiceRow): Invoice =>
     taxMode: row.tax_mode ?? "standard_vat",
     taxMeta: parseJson(row.tax_meta_json, undefined),
     taxSnapshot: parseJson(row.tax_snapshot_json, undefined),
+    layout: parseJson(row.layout_json, undefined),
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
   });
@@ -406,6 +411,7 @@ const rowToOffer = (row: OfferRow): Offer =>
     taxMeta: parseJson(row.tax_meta_json, undefined),
     taxSnapshot: parseJson(row.tax_snapshot_json, undefined),
     history: parseJson(row.history_json, []),
+    layout: parseJson(row.layout_json, undefined),
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
   });
@@ -590,6 +596,7 @@ const toInvoiceRow = (r: any): InvoiceRow => ({
   tax_mode: r.taxMode ?? null,
   tax_meta_json: r.taxMetaJson ?? null,
   tax_snapshot_json: r.taxSnapshotJson ?? null,
+  layout_json: r.layoutJson ?? null,
   created_at: r.createdAt ?? null,
   updated_at: r.updatedAt ?? null,
 });
@@ -615,6 +622,7 @@ const toOfferRow = (r: any): OfferRow => ({
   tax_snapshot_json: r.taxSnapshotJson ?? null,
   share_json: r.shareJson ?? null,
   history_json: r.historyJson ?? null,
+  layout_json: r.layoutJson ?? null,
   created_at: r.createdAt ?? null,
   updated_at: r.updatedAt ?? null,
 });
@@ -969,6 +977,14 @@ export const createPostgresInvoiceRepository = (
       createdAt: invoice.createdAt ?? nowIso(),
       updatedAt: invoice.updatedAt ?? nowIso(),
     };
+    nextInvoice.layout = await resolveLayoutForSave(db, {
+      tenantId: scope.tenantId,
+      kind: templateKindForDocument({ documentKind: nextInvoice.documentKind }),
+      status: nextInvoice.status,
+      table: 'invoices',
+      id: nextInvoice.id,
+      layout: nextInvoice.layout,
+    });
     const drizzleDb = requireDrizzle(db);
       const saved = await drizzleDb
         .insert(schema.invoices)
@@ -1007,6 +1023,7 @@ export const createPostgresInvoiceRepository = (
           taxSnapshotJson: nextInvoice.taxSnapshot
             ? toJson(nextInvoice.taxSnapshot)
             : null,
+          layoutJson: nextInvoice.layout ? toJson(nextInvoice.layout) : null,
           createdAt: nextInvoice.createdAt ?? null,
           updatedAt: nextInvoice.updatedAt ?? null,
         })
@@ -1049,6 +1066,8 @@ export const createPostgresInvoiceRepository = (
             taxSnapshotJson: nextInvoice.taxSnapshot
               ? toJson(nextInvoice.taxSnapshot)
               : null,
+            // Writers that do not know about layout must not wipe it (or a frozen snapshot).
+            layoutJson: nextInvoice.layout ? toJson(nextInvoice.layout) : sql`${schema.invoices.layoutJson}`,
             updatedAt: nextInvoice.updatedAt ?? null,
           },
         }).returning({ id: schema.invoices.id });
@@ -1106,6 +1125,14 @@ export const createPostgresOfferRepository = (
       createdAt: offer.createdAt ?? nowIso(),
       updatedAt: offer.updatedAt ?? nowIso(),
     };
+    nextOffer.layout = await resolveLayoutForSave(db, {
+      tenantId: scope.tenantId,
+      kind: 'offer',
+      status: nextOffer.status,
+      table: 'offers',
+      id: nextOffer.id,
+      layout: nextOffer.layout,
+    });
     const drizzleDb = requireDrizzle(db);
       await drizzleDb
         .insert(schema.offers)
@@ -1137,6 +1164,7 @@ export const createPostgresOfferRepository = (
           taxSnapshotJson: nextOffer.taxSnapshot
             ? toJson(nextOffer.taxSnapshot)
             : null,
+          layoutJson: nextOffer.layout ? toJson(nextOffer.layout) : null,
           createdAt: nextOffer.createdAt ?? null,
           updatedAt: nextOffer.updatedAt ?? null,
         })
@@ -1169,6 +1197,8 @@ export const createPostgresOfferRepository = (
             taxSnapshotJson: nextOffer.taxSnapshot
               ? toJson(nextOffer.taxSnapshot)
               : null,
+            // Writers that do not know about layout must not wipe it (or a frozen snapshot).
+            layoutJson: nextOffer.layout ? toJson(nextOffer.layout) : sql`${schema.offers.layoutJson}`,
             updatedAt: nextOffer.updatedAt ?? null,
           },
         });
@@ -1778,6 +1808,9 @@ export const tenantCoreRowCountTables = [
   "import_batches",
   "templates",
   "active_templates",
+  "document_templates",
+  "document_template_versions",
+  "document_template_defaults",
   "dunning_history",
   "email_outbox",
   "email_log",
@@ -1844,6 +1877,9 @@ export const countTenantCoreRows = async (
     import_batches: schema.importBatches,
     templates: schema.templates,
     active_templates: schema.activeTemplates,
+    document_templates: schema.documentTemplates,
+    document_template_versions: schema.documentTemplateVersions,
+    document_template_defaults: schema.documentTemplateDefaults,
     dunning_history: schema.dunningHistory,
     email_outbox: schema.emailOutbox,
     email_log: schema.emailLog,

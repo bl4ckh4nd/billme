@@ -2,11 +2,14 @@ import { z } from 'zod';
 import { taxFilingRoutes } from '@billme/desktop-contracts/taxFiling';
 import {
   deleteByIdSchema,
-  listTemplatesParamsSchema,
-  setActiveTemplatePayloadSchema,
+  documentRenderContextArgsSchema,
+  documentRenderContextSchema,
+  documentTemplateDefaultsSchema,
+  documentTemplateRecordSchema,
+  listDocumentTemplatesArgsSchema,
+  setDefaultDocumentTemplateArgsSchema,
+  upsertDocumentTemplateArgsSchema,
   setSettingsPayloadSchema,
-  templateKindSchema,
-  templateSchema,
   upsertAccountPayloadSchema,
   upsertArticlePayloadSchema,
   upsertClientPayloadSchema,
@@ -16,7 +19,6 @@ import {
   upsertOfferPayloadSchema,
   upsertPayloadSchema,
   upsertRecurringPayloadSchema,
-  upsertTemplatePayloadSchema,
   invoiceSchema,
   projectSchema,
   clientSchema,
@@ -318,9 +320,6 @@ const projectsUpsertArgsSchema = z.object({
   project: projectSchema,
 });
 
-const getActiveTemplateParamsSchema = z.object({
-  kind: templateKindSchema,
-});
 
 const auditVerifyResultSchema = z.object({
   ok: z.boolean(),
@@ -470,8 +469,10 @@ const taxAuditExportPackageResultSchema = z.object({
 });
 
 const pdfExportArgsSchema = z.object({
-  kind: z.enum(['invoice', 'offer']),
+  kind: z.enum(['invoice', 'offer', 'dunning']),
+  /** For `dunning` the invoice id. */
   id: z.string().min(1),
+  level: z.number().int().positive().optional(),
 });
 const pdfExportResultSchema = z.object({
   path: z.string().min(1),
@@ -989,30 +990,35 @@ export const ipcRoutes = {
     result: z.array(invoiceSchema),
   },
 
-  'templates:list': {
-    channel: 'templates:list',
-    args: listTemplatesParamsSchema,
-    result: z.array(templateSchema),
+  'documentTemplates:list': {
+    channel: 'documentTemplates:list',
+    args: listDocumentTemplatesArgsSchema,
+    result: z.array(documentTemplateRecordSchema),
   },
-  'templates:active': {
-    channel: 'templates:active',
-    args: getActiveTemplateParamsSchema,
-    result: templateSchema.nullable(),
+  'documentTemplates:upsert': {
+    channel: 'documentTemplates:upsert',
+    args: upsertDocumentTemplateArgsSchema,
+    result: documentTemplateRecordSchema,
   },
-  'templates:upsert': {
-    channel: 'templates:upsert',
-    args: upsertTemplatePayloadSchema,
-    result: templateSchema,
-  },
-  'templates:delete': {
-    channel: 'templates:delete',
+  'documentTemplates:delete': {
+    channel: 'documentTemplates:delete',
     args: deleteByIdSchema,
     result: okSchema,
   },
-  'templates:setActive': {
-    channel: 'templates:setActive',
-    args: setActiveTemplatePayloadSchema,
+  'documentTemplates:getDefaults': {
+    channel: 'documentTemplates:getDefaults',
+    args: z.undefined(),
+    result: documentTemplateDefaultsSchema,
+  },
+  'documentTemplates:setDefault': {
+    channel: 'documentTemplates:setDefault',
+    args: setDefaultDocumentTemplateArgsSchema,
     result: okSchema,
+  },
+  'documents:renderContext': {
+    channel: 'documents:renderContext',
+    args: documentRenderContextArgsSchema,
+    result: documentRenderContextSchema,
   },
 
   'audit:verify': {

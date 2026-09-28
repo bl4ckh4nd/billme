@@ -211,6 +211,13 @@
       "when": 1788528600005,
       "tag": "0030_server_data_eur_catalog_2026",
       "breakpoints": false
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1788528600006,
+      "tag": "0031_server_data_document_templates",
+      "breakpoints": false
     }
   ]
 }

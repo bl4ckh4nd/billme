@@ -1,4 +1,5 @@
 import type { EmbeddedConnectionResult } from '@billme/desktop-contracts/embeddedConnection';
+import { writeFileSync } from 'node:fs';
 import { exportPdf } from './pdfExport';
 
 type SecretKey = 'smtp.password' | 'resend.apiKey' | 'portal.apiKey';
@@ -7,10 +8,19 @@ type SecretKey = 'smtp.password' | 'resend.apiKey' | 'portal.apiKey';
 export const createDesktopIntegration = (deps: {
   secrets: { get: (key: string) => Promise<string | null> };
   getUserDataPath: () => string;
+  /** Same preparation as `pdf:export`: file name and ZUGFeRD for mailed invoices. */
+  prepareDocumentExport?: (kind: 'invoice' | 'offer' | 'dunning', id: string, level?: number) => Promise<{
+    suggestedName: string;
+    finalize?: (pdf: Uint8Array) => Promise<Uint8Array>;
+  }>;
 }) => ({
   getSecret: (key: SecretKey) => deps.secrets.get(key),
-  renderDocumentPdf: (args: { kind: 'invoice' | 'offer'; id: string; suggestedName: string }) =>
-    exportPdf({ ...args, userDataPath: deps.getUserDataPath() }),
+  renderDocumentPdf: async (args: { kind: 'invoice' | 'offer' | 'dunning'; id: string; level?: number; suggestedName: string }) => {
+    const prepared = await deps.prepareDocumentExport?.(args.kind, args.id, args.level);
+    const result = await exportPdf({ ...args, suggestedName: prepared?.suggestedName ?? args.suggestedName, userDataPath: deps.getUserDataPath() });
+    if (prepared?.finalize) writeFileSync(result.path, await prepared.finalize(result.bytes));
+    return { path: result.path };
+  },
 });
 
 type TickLogger = {

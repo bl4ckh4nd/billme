@@ -366,15 +366,16 @@ These are described in internal design docs but are not on `main`; do not expect
 
 ## Development
 
-To inspect A4 pagination and structured invoice lines without starting Electron, run
+To inspect the document editor and invoice lines without starting Electron, run
 `pnpm dev:editor` and open `http://127.0.0.1:4177`. Fixtures are selected with
 `?fixture=construction|page-break|all-line-types|long-text|mixed-vat`.
-The playground uses the public `DocumentCanvasEditor`: document metadata and
-recipient fields are inline A4 overlays, rows support article/category context,
-section/summary kinds, margin actions and live reflow. Edit controls are
-zero-flow and therefore hidden from print/PDF; the diagnostics bar reports page
-count, totals and table/footer overflow. Rows are sortable from their `dnd-kit`
+The playground renders the public `DocumentEditor`: header and recipient fields
+sit in the DIN 5008 fields of the sheet, rows support article/category context,
+section/summary kinds and margin actions, and `Vorschau` shows the paginated
+flow layout exactly as the PDF prints it. Rows are sortable from their `dnd-kit`
 handle; `Cmd/Ctrl+K` opens article and customer search.
+`http://127.0.0.1:4177/gallery.html?kind=invoice&preset=modern&items=40` shows
+every template preset and document kind side by side.
 
 ### Prerequisites
 

@@ -11,18 +11,19 @@
     "@billme/accounting-shared": "workspace:*",
     "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
-    "@billme/desktop-data": "workspace:*",
-    "@billme/finance-intelligence": "workspace:*",
     "@billme/desktop-core": "workspace:*",
+    "@billme/desktop-data": "workspace:*",
     "@billme/desktop-utils": "workspace:*",
+    "@billme/finance-intelligence": "workspace:*",
     "@billme/server-core": "workspace:*",
     "iconv-lite": "^0.6.3",
     "papaparse": "^5.5.3",
+    "pdf-lib": "^1.17.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@types/papaparse": "^5.5.2",
     "@types/node": "^24.9.1",
+    "@types/papaparse": "^5.5.2",
     "tsx": "^4.20.5",
     "typescript": "~5.8.3"
   },
@@ -98,6 +99,10 @@
     "./einvoice/zugferdXml.test": {
       "types": "./src/einvoice/zugferdXml.test.ts",
       "default": "./src/einvoice/zugferdXml.test.ts"
+    },
+    "./documentExport": {
+      "types": "./src/documentExport.ts",
+      "default": "./src/documentExport.ts"
     }
   }
 }

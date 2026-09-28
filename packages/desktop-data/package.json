@@ -112,10 +112,6 @@
       "types": "./src/articlesRepo.ts",
       "default": "./src/articlesRepo.ts"
     },
-    "./templatesRepo": {
-      "types": "./src/templatesRepo.ts",
-      "default": "./src/templatesRepo.ts"
-    },
     "./projectsRepo": {
       "types": "./src/projectsRepo.ts",
       "default": "./src/projectsRepo.ts"

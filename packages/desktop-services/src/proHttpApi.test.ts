@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createDefaultTemplateBody } from '@billme/server-core/domain';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { z } from 'zod';
@@ -527,111 +528,53 @@ test('Pro HTTP Billme API deletes a bank account by its tenant-scoped id', async
   assert.equal(requestInit?.method, 'DELETE');
 });
 
-test('Pro HTTP Billme API routes template catalog reads with the kind filter', async () => {
+test('Pro HTTP Billme API routes document template reads, saves and defaults through the Pro server', async () => {
+  const requests: Array<{ url: string; method: string; body?: unknown }> = [];
+  const body = createDefaultTemplateBody('invoice');
+  const record = { id: 'template-1', kind: 'invoice' as const, name: 'Standard', version: 2, body, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z' };
+  const api = createProHttpBillmeApi({
+    baseUrl: 'https://hosted.example.test',
+    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
+    fetch: async (input, init) => {
+      requests.push({ url: String(input), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (String(input).endsWith('/defaults')) return response(init?.method === 'PUT' ? { ok: true } : { invoice: 'template-1' });
+      return response(init?.method === 'POST' ? record : [record]);
+    },
+  });
+
+  assert.deepEqual(await api.documentTemplates.list({ kind: 'invoice' }), [record]);
+  assert.deepEqual(await api.documentTemplates.upsert({ template: { kind: 'invoice', name: 'Standard', body } }), record);
+  assert.deepEqual(await api.documentTemplates.getDefaults(), { invoice: 'template-1' });
+  assert.deepEqual(await api.documentTemplates.setDefault({ kind: 'credit_note', templateId: null }), { ok: true });
+  assert.deepEqual(requests.map(({ url, method }) => `${method} ${url}`), [
+    'GET http://127.0.0.1:43123/api/v1/pro/document-templates?kind=invoice',
+    'POST http://127.0.0.1:43123/api/v1/pro/document-templates',
+    'GET http://127.0.0.1:43123/api/v1/pro/document-templates/defaults',
+    'PUT http://127.0.0.1:43123/api/v1/pro/document-templates/defaults',
+  ]);
+  assert.deepEqual(requests[3]!.body, { kind: 'credit_note', templateId: null });
+});
+
+test('Pro HTTP Billme API maps the render context document to the renderer shape', async () => {
   let requestUrl = '';
-  const template = {
-    id: 'template-1',
-    kind: 'invoice' as const,
-    name: 'Standard',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-02T00:00:00.000Z',
-    elements: [],
-  };
   const api = createProHttpBillmeApi({
     baseUrl: 'https://hosted.example.test',
     embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
     fetch: async (input) => {
       requestUrl = String(input);
-      return response([template]);
+      return response({
+        templateKind: 'offer',
+        document: { kind: 'offer', id: 'offer-1', tenantId: 't', number: 'AN-1', client: 'Acme', clientEmail: '', date: '2026-01-01', validUntil: '2026-01-31', amount: 10, status: 'open', items: [], history: [] },
+        template: { body: createDefaultTemplateBody('offer') },
+        settings: null,
+      });
     },
   });
 
-  assert.deepEqual(await api.templates.list({ kind: 'invoice' }), [template]);
-  assert.equal(requestUrl, 'http://127.0.0.1:43123/api/v1/pro/templates?kind=invoice');
-});
-
-test('Pro HTTP Billme API reads the active template through the Pro server', async () => {
-  let requestUrl = '';
-  const template = {
-    id: 'template-1',
-    kind: 'invoice' as const,
-    name: 'Standard',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-02T00:00:00.000Z',
-    elements: [],
-  };
-  const api = createProHttpBillmeApi({
-    baseUrl: 'https://hosted.example.test',
-    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
-    fetch: async (input) => {
-      requestUrl = String(input);
-      return response(template);
-    },
-  });
-
-  assert.deepEqual(await api.templates.active({ kind: 'invoice' }), template);
-  assert.equal(requestUrl, 'http://127.0.0.1:43123/api/v1/pro/templates/active/invoice');
-});
-
-test('Pro HTTP Billme API saves a template through the Pro catalog contract', async () => {
-  let requestInit: RequestInit | undefined;
-  const template = {
-    id: 'template-1',
-    kind: 'invoice' as const,
-    name: 'Standard',
-    createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-02T00:00:00.000Z',
-    elements: [],
-  };
-  const api = createProHttpBillmeApi({
-    baseUrl: 'https://hosted.example.test',
-    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
-    fetch: async (_input, init) => {
-      requestInit = init;
-      return response(template);
-    },
-  });
-
-  assert.deepEqual(await api.templates.upsert({ template }), template);
-  assert.equal(requestInit?.method, 'POST');
-  assert.deepEqual(JSON.parse(String(requestInit?.body)), { template });
-});
-
-test('Pro HTTP Billme API deletes a template by its tenant-scoped id', async () => {
-  let requestUrl = '';
-  let requestInit: RequestInit | undefined;
-  const api = createProHttpBillmeApi({
-    baseUrl: 'https://hosted.example.test',
-    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
-    fetch: async (input, init) => {
-      requestUrl = String(input);
-      requestInit = init;
-      return response({ ok: true });
-    },
-  });
-
-  assert.deepEqual(await api.templates.delete({ id: 'template-1' }), { ok: true });
-  assert.equal(requestUrl, 'http://127.0.0.1:43123/api/v1/pro/templates/template-1');
-  assert.equal(requestInit?.method, 'DELETE');
-});
-
-test('Pro HTTP Billme API sets the active template with its kind and id', async () => {
-  let requestUrl = '';
-  let requestInit: RequestInit | undefined;
-  const api = createProHttpBillmeApi({
-    baseUrl: 'https://hosted.example.test',
-    embeddedConnectionResolver: async () => ({ baseUrl: 'http://127.0.0.1:43123', token: 'local-token' }),
-    fetch: async (input, init) => {
-      requestUrl = String(input);
-      requestInit = init;
-      return response({ ok: true });
-    },
-  });
-
-  assert.deepEqual(await api.templates.setActive({ kind: 'invoice', templateId: 'template-1' }), { ok: true });
-  assert.equal(requestUrl, 'http://127.0.0.1:43123/api/v1/pro/templates/active');
-  assert.equal(requestInit?.method, 'PUT');
-  assert.deepEqual(JSON.parse(String(requestInit?.body)), { kind: 'invoice', templateId: 'template-1' });
+  const context = await api.documents.renderContext({ kind: 'offer', id: 'offer-1' });
+  assert.equal(requestUrl, 'http://127.0.0.1:43123/api/v1/pro/documents/offer/offer-1/render-context');
+  assert.equal(context.document.dueDate, '2026-01-31', 'offers carry validUntil as dueDate in the renderer shape');
+  assert.equal(context.templateKind, 'offer');
 });
 
 test('Pro HTTP Billme API routes common billing mutations through the Pro contract', async () => {
@@ -730,6 +673,7 @@ test('Pro HTTP Billme API routes common billing mutations through the Pro contra
     servicePeriod: undefined,
     dunningLevel: undefined,
     history: [],
+    layout: undefined,
   };
   assert.deepEqual(await api.invoices.list(), [normalizedInvoice]);
   assert.deepEqual(await api.invoices.upsert({ reason: 'Rechnung gespeichert', invoice }), normalizedInvoice);

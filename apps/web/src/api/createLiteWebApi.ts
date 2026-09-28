@@ -35,10 +35,6 @@ const createBrowserFallback = (onRequestClose?: () => void): IpcInvoke => async 
       return parseResult(key, []);
     case 'accounts:list':
       return parseResult(key, []);
-    case 'templates:list':
-      return parseResult(key, []);
-    case 'templates:active':
-      return parseResult(key, null);
     case 'audit:verify':
     case 'audit:exportCsv':
     case 'finance:importPreview':
@@ -64,9 +60,6 @@ const createBrowserFallback = (onRequestClose?: () => void): IpcInvoke => async 
     case 'articles:delete':
     case 'accounts:upsert':
     case 'accounts:delete':
-    case 'templates:upsert':
-    case 'templates:delete':
-    case 'templates:setActive':
       return unsupported();
     case 'pdf:export':
       return unsupported(PDF_UNSUPPORTED_MESSAGE);

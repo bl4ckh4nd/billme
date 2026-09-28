@@ -134,7 +134,15 @@ describe('Lite native Electron IPC boundary', () => {
         isTrustedSender: () => true,
         getBackupPrefix: () => 'billme',
         dumpDataDir: async () => new Uint8Array([80, 71, 76, 73, 84, 69]),
+        resolveEmbeddedConnection: () => ({ baseUrl: 'http://127.0.0.1:9', token: 'local-token' }),
       });
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+        document: {
+          kind: 'invoice', id: 'invoice-1', tenantId: 't', number: 'RE-1', documentKind: 'invoice', client: 'Acme GmbH', clientEmail: '',
+          date: '2026-09-01', dueDate: '2026-09-15', amount: 0, status: 'open', items: [], payments: [], history: [],
+        },
+        settings: null,
+      }))));
 
       await expect(handlers.get('pdf:export')?.({ sender: {} }, { kind: 'invoice', id: 'invoice-1' }))
         .resolves.toEqual({ path: join(tempDir, 'invoice.pdf') });
@@ -143,9 +151,10 @@ describe('Lite native Electron IPC boundary', () => {
       const backup = await handlers.get('db:backup')?.({ sender: {} }, undefined) as { path: string };
       expect(backup.path).toMatch(/billme-.*\.pglite\.tar$/);
       expect(await readFile(backup.path)).toEqual(Buffer.from('PGLITE'));
-      expect(vi.mocked(exportPdf)).toHaveBeenCalledWith(expect.objectContaining({ kind: 'invoice', id: 'invoice-1' }));
+      expect(vi.mocked(exportPdf)).toHaveBeenCalledWith(expect.objectContaining({ kind: 'invoice', id: 'invoice-1', suggestedName: 'Rechnung-RE-1-Acme GmbH' }));
       expect(vi.mocked(exportEurPdf)).toHaveBeenCalledWith(expect.objectContaining({ taxYear: 2025 }));
     } finally {
+      vi.unstubAllGlobals();
       await rm(tempDir, { recursive: true, force: true });
     }
   });

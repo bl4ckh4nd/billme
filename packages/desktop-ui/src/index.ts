@@ -4,7 +4,7 @@ export * from './components/BusinessOnboarding';
 export * from './shell/DashboardLayout';
 export * from './shell/DashboardViews';
 export * from './shell/ErrorBoundary';
-export * from './shell/InvoiceEditor';
+export * from './shell/TemplatesView';
 export * from './shell/OnboardingWizard';
 export * from './shell/StatisticsView';
 export * from './shell/LiteReportsView';

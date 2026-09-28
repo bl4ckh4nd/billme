@@ -242,6 +242,8 @@ export interface DunningEmailMessage {
   };
   subject: string;
   text: string;
+  /** Files on the local disk, e.g. the rendered dunning letter (embedded desktop only). */
+  attachments?: Array<{ filename: string; path: string }>;
 }
 
 export interface DunningSmtpProviderConfig {

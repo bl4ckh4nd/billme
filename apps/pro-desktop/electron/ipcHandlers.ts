@@ -2,7 +2,7 @@ import { dialog, shell, type BrowserWindow, type IpcMain } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import type Database from 'better-sqlite3';
-import { getInvoiceDocumentLabel, isBillingDocumentKind, type DocumentTemplateKind, type Invoice } from '../types';
+import { getInvoiceDocumentLabel, isBillingDocumentKind, type Invoice } from '../types';
 import { logger } from '../utils/logger';
 import { closeDb, getDb, getDbPath, initDb } from '../db/connection';
 import { createInvoiceFromOffer, deleteInvoice, finalizeOutgoingInvoice, listInvoices, upsertInvoice } from '../db/invoicesRepo';
@@ -28,13 +28,6 @@ import { deleteRecurringProfile, listRecurringProfiles, upsertRecurringProfile }
 import { getSettings, setSettings } from '../db/settingsRepo';
 import { getInvoice } from '../db/invoicesRepo';
 import { finalizeNumber, releaseNumber, reserveNumber } from '../db/numberingRepo';
-import {
-  deleteTemplate,
-  getActiveTemplate,
-  listTemplates,
-  setActiveTemplateId,
-  upsertTemplate,
-} from '../db/templatesRepo';
 import { exportAuditCsv, verifyAuditChain } from '../db/audit';
 import { backupSqlite, ensureDir } from '../db/backup';
 import { secrets } from './secrets';
@@ -450,35 +443,6 @@ export const registerIpcHandlers = (
   register(ipcMain, 'documents:chainList', ({ rootDocumentId }) => {
     const db = requireDb();
     return listDocumentChain(createBillingScope(PRODUCT_PROFILE), createSqliteBillingDependencies(db), rootDocumentId).map(toLegacyInvoice);
-  });
-
-  register(ipcMain, 'templates:list', ({ kind }) => {
-    const db = requireDb();
-    const normalized = kind === 'offer' ? 'offer' : kind === 'invoice' ? 'invoice' : undefined;
-    return listTemplates(db, normalized as DocumentTemplateKind | undefined);
-  });
-
-  register(ipcMain, 'templates:active', ({ kind }) => {
-    const db = requireDb();
-    const normalized = kind === 'offer' ? 'offer' : 'invoice';
-    return getActiveTemplate(db, normalized);
-  });
-
-  register(ipcMain, 'templates:upsert', ({ template }) => {
-    const db = requireDb();
-    return upsertTemplate(db, template);
-  });
-
-  register(ipcMain, 'templates:delete', ({ id }) => {
-    const db = requireDb();
-    deleteTemplate(db, id);
-    return { ok: true };
-  });
-
-  register(ipcMain, 'templates:setActive', ({ kind, templateId }) => {
-    const db = requireDb();
-    setActiveTemplateId(db, kind, templateId);
-    return { ok: true };
   });
 
   register(ipcMain, 'audit:verify', () => {

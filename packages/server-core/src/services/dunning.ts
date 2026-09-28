@@ -27,6 +27,8 @@ export interface DunningDomainDependencies<TSettings extends DunningSettings = D
   actor?: AuditActor;
   logger?: LoggerPort;
   isRetryableError?: RetryClassifier;
+  /** Renders the dunning letter as PDF; only the embedded desktop has a PDF engine. */
+  renderAttachment?: (invoice: Invoice, level: DunningLevel) => Promise<{ filename: string; path: string }>;
 }
 
 const defaultActor: AuditActor = {
@@ -297,6 +299,17 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
       );
 
       let feeApplied = 0;
+      // Rendered before the fee is added: the letter shows the level's fee on top
+      // of the original amount, which the fee-inclusive amount would count twice.
+      let attachment: { filename: string; path: string } | undefined;
+      if (dependencies.renderAttachment) {
+        try {
+          attachment = await dependencies.renderAttachment(invoice, applicableLevel);
+        } catch (error) {
+          // The reminder text still goes out; a missing PDF must not stop the dunning run.
+          dependencies.logger?.warn?.(`Mahnschreiben für ${invoice.number} konnte nicht als PDF erstellt werden`, error);
+        }
+      }
       let current = invoice;
       if (applicableLevel.fee > 0 && !feeAlreadyApplied) {
         const before = invoice;
@@ -335,6 +348,7 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
         },
         subject,
         text: bodyText,
+        ...(attachment ? { attachments: [attachment] } : {}),
       });
 
       const emailLog = await dependencies.emailPort.log(scope, {

@@ -141,6 +141,13 @@ const copyParty = (source: Invoice | Offer, params: DocumentChainCreateParams, i
   history: [],
 });
 
+/** A revision keeps the chosen template and texts; it is issued anew, so no snapshot. */
+const revisionLayout = (source: Invoice): Invoice['layout'] => {
+  if (!source.layout) return undefined;
+  const { snapshot: _snapshot, ...layout } = source.layout;
+  return Object.keys(layout).length > 0 ? layout : undefined;
+};
+
 const saveNew = (scope: TenantScope, dependencies: ChainDependencies, document: Invoice, reason: string, actor?: AuditActor): Invoice => {
   const saved = dependencies.invoiceRepo.save(scope, document);
   auditCreate(scope, dependencies, saved, reason, actor);
@@ -263,6 +270,7 @@ export const createInvoiceRevision = (
   const document = copyParty(source, params, source.items, source.amount);
   return saveNew(scope, dependencies, {
     ...document,
+    layout: revisionLayout(source),
     documentKind: source.documentKind ?? 'invoice',
     sourceDocumentId: source.id,
     rootDocumentId: source.rootDocumentId ?? source.id,
@@ -354,7 +362,7 @@ export const createInvoiceRevisionAsync = async (scope: TenantScope, dependencie
   if (source.status === 'draft') throw new Error('Only finalized invoices can be revised');
   const revisions = (await dependencies.invoiceRepo.list(scope)).filter((candidate) => candidate.revisionOfId === source.id);
   const document = copyParty(source, params, source.items, source.amount);
-  return asyncSaveNew(scope, dependencies, { ...document, documentKind: source.documentKind ?? 'invoice', sourceDocumentId: source.id, rootDocumentId: source.rootDocumentId ?? source.id, revisionOfId: source.id, revisionNumber: revisions.reduce((max, candidate) => Math.max(max, candidate.revisionNumber ?? 0), 0) + 1 }, requireReason(params.reason), params.actor);
+  return asyncSaveNew(scope, dependencies, { ...document, layout: revisionLayout(source), documentKind: source.documentKind ?? 'invoice', sourceDocumentId: source.id, rootDocumentId: source.rootDocumentId ?? source.id, revisionOfId: source.id, revisionNumber: revisions.reduce((max, candidate) => Math.max(max, candidate.revisionNumber ?? 0), 0) + 1 }, requireReason(params.reason), params.actor);
 };
 
 export const listDocumentChainAsync = async (scope: TenantScope, dependencies: AsyncChainDependencies, rootDocumentId: string): Promise<Invoice[]> => (await dependencies.invoiceRepo.list(scope)).filter((document) => document.id === rootDocumentId || document.rootDocumentId === rootDocumentId);

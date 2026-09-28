@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { InvoiceElement } from '../types';
-import { DocumentCanvasEditor, type DocumentCanvasDocumentFields } from './DocumentCanvasEditor';
+import { DocumentFlowEditor, type DocumentFlowDocumentFields } from './DocumentFlowEditor';
+import { DocumentFlowPages } from '../flow/DocumentFlowPages';
 import { ArrowLeft, Eye, Redo2, Save, Undo2 } from 'lucide-react';
-import { getPreviewElements } from '@billme/desktop-utils/documentPreview';
+import { buildDocumentViewModel, type DocumentRenderInput } from '@billme/desktop-utils/document';
+import type { DocumentTemplateBody, TemplateKind } from '@billme/server-core/domain';
 import { formatAddressMultiline } from '@billme/desktop-utils';
 import {
   calculateInvoiceTaxSnapshot,
@@ -25,9 +26,14 @@ export interface DocumentEditorProps {
   articles: ArticleLike[];
   projects: ProjectLike[];
   settings: SettingsLike;
-  templateElements: unknown[];
-  /** Existing template persistence seam for inline authored text. */
-  onTemplateElementsChange?: (elements: InvoiceElement[]) => void;
+  /** Template kind the document prints with (a credit note is not an invoice). */
+  templateKind: TemplateKind;
+  /** Templates of that kind the document can choose instead of the default. */
+  templateOptions: Array<{ id: string; name: string }>;
+  /** Name of the default template, shown for "Standard". */
+  defaultTemplateName: string;
+  /** Resolves `layout.templateId` (undefined = default of the kind) to a body. */
+  resolveTemplateBody: (templateId?: string) => DocumentTemplateBody;
   onValidateVatId?: (args: { countryCode: string; vatNumber: string }) => Promise<{ status: 'valid' | 'invalid' | 'unavailable'; normalizedVatId: string; checkedAt: string }>;
   onSelectedClientChange?: (clientId: string) => void;
   /** `numberChangeReason` is set when the user unlocked and may have edited the document number. */
@@ -137,8 +143,10 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   articles,
   projects,
   settings: effectiveSettings,
-  templateElements,
-  onTemplateElementsChange,
+  templateKind,
+  templateOptions,
+  defaultTemplateName,
+  resolveTemplateBody,
   onValidateVatId,
   onSelectedClientChange,
   onSave,
@@ -181,23 +189,23 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const formData = history.state;
   const setFormData = history.set;
   const dirty = formData !== baseline;
-  const [editableTemplate, setEditableTemplate] = useState(templateElements as InvoiceElement[]);
-  useEffect(() => setEditableTemplate(templateElements as InvoiceElement[]), [templateElements]);
-  const effectiveTemplate = editableTemplate;
-  const handleTemplateTextChange = useCallback((id: string, content: string) => {
-    setEditableTemplate((previous) => {
-      const next = previous.map((element) => element.id === id ? { ...element, content } : element);
-      onTemplateElementsChange?.(next);
-      return next;
-    });
-  }, [onTemplateElementsChange]);
+  const selectedTemplateId = formData.layout?.templateId;
+  // A template deleted since the document chose it falls back to the default.
+  const knownTemplateId = templateOptions.some((option) => option.id === selectedTemplateId) ? selectedTemplateId : undefined;
+  const templateBody = useMemo(() => resolveTemplateBody(knownTemplateId), [knownTemplateId, resolveTemplateBody]);
   const taxSnapshot = useMemo(
     () => calculateInvoiceTaxSnapshot({ items: formData.items, taxMode: formData.taxMode, taxMeta: formData.taxMeta }, effectiveSettings),
     [effectiveSettings, formData.items, formData.taxMeta, formData.taxMode],
   );
-  const previewElements = useMemo(
-    () => getPreviewElements({ ...formData, taxSnapshot }, effectiveTemplate as unknown as Parameters<typeof getPreviewElements>[1], effectiveSettings) as unknown as InvoiceElement[],
-    [effectiveSettings, effectiveTemplate, formData, taxSnapshot],
+  const viewModel = useMemo(
+    () => buildDocumentViewModel({
+      kind: templateKind,
+      template: templateBody,
+      document: { ...formData, taxSnapshot } as unknown as DocumentRenderInput['document'],
+      settings: effectiveSettings as unknown as DocumentRenderInput['settings'],
+      texts: formData.layout?.texts,
+    }),
+    [effectiveSettings, formData, taxSnapshot, templateBody, templateKind],
   );
   const currencyFormatter = useMemo(() => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }), []);
   const formatCurrency = (amount: number) => currencyFormatter.format(amount);
@@ -460,9 +468,9 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   }, [setFormData]);
   const validationErrors = useMemo(() => getValidationErrors(fieldErrors), [fieldErrors]);
   const detailValidationOpen = validationErrors.some((error) => error.opensDetails);
-  const documentFields = useMemo<DocumentCanvasDocumentFields>(() => ({
+  const documentFields = useMemo<DocumentFlowDocumentFields>(() => ({
     document: formData,
-    templateElements: effectiveTemplate,
+    templateTexts: { intro: templateBody.texts.intro, closing: templateBody.texts.closing },
     templateType,
     clients,
     projects,
@@ -495,8 +503,6 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     requiresDatevSachverhaltLl,
     vatValidationPending,
     onValidateBuyerVatId: onValidateVatId ? () => void validateBuyerVatId() : undefined,
-    onTemplateTextChange: onTemplateElementsChange ? handleTemplateTextChange : undefined,
-    onTemplateElementsChange,
   }), [
     applyClientToDocument,
     buyerCountryCode,
@@ -504,11 +510,9 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     detailValidationOpen,
     fieldErrors,
     formData,
-    effectiveTemplate,
-    handleTemplateTextChange,
+    templateBody,
     isNumberLocked,
     onValidateVatId,
-    onTemplateElementsChange,
     projects,
     requiresBuyerVatId,
     requiresDatevEvidence,
@@ -546,6 +550,21 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
         </div>
         <button type="button" onClick={history.undo} disabled={!history.canUndo} className="rounded-lg p-2 text-muted hover:bg-surface-muted hover:text-foreground disabled:opacity-40" aria-label="Rückgängig"><Undo2 size={16} /></button>
         <button type="button" onClick={history.redo} disabled={!history.canRedo} className="rounded-lg p-2 text-muted hover:bg-surface-muted hover:text-foreground disabled:opacity-40" aria-label="Wiederholen"><Redo2 size={16} /></button>
+        <label className="hidden items-center gap-1.5 text-xs font-semibold text-muted lg:flex">
+          Vorlage
+          <select
+            aria-label="Vorlage"
+            value={knownTemplateId ?? ''}
+            onChange={(event) => setFormData((previous) => ({
+              ...previous,
+              layout: { ...previous.layout, templateId: event.target.value || undefined },
+            }))}
+            className="h-8 max-w-48 rounded-lg border border-border bg-surface px-2 text-xs font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-focus-ring"
+          >
+            <option value="">Standard ({defaultTemplateName})</option>
+            {templateOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+          </select>
+        </label>
         {dirty ? <span className="hidden items-center gap-1 text-xs font-semibold text-warning md:flex"><span className="h-1.5 w-1.5 rounded-full bg-warning" />Ungespeichert</span> : null}
         <div className="flex rounded-lg border border-border bg-surface-muted p-0.5" role="group" aria-label="Dokumentansicht">
           <button type="button" aria-pressed={view === 'edit'} onClick={() => setView('edit')} className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${view === 'edit' ? 'bg-surface text-foreground shadow-sm' : 'text-muted'}`}>Bearbeiten</button>
@@ -560,13 +579,13 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
 
       <main className="flex-1 overflow-auto bg-dark-1 p-4 sm:p-8">
         {view === 'preview' ? (
-          <div className="mx-auto w-fit min-w-[min(100%,794px)]" data-document-preview data-testid="document-preview">
-            <DocumentCanvasEditor elements={previewElements} />
+          <div className="mx-auto w-fit" data-document-preview data-testid="document-preview">
+            <DocumentFlowPages model={viewModel} pageClassName="bf-page-preview" />
           </div>
         ) : (
-          <div ref={editorSurfaceRef} data-document-editor data-testid="document-editor" className="mx-auto w-fit min-w-[min(100%,794px)]">
-            <DocumentCanvasEditor
-              elements={previewElements}
+          <div ref={editorSurfaceRef} data-document-editor data-testid="document-editor" className="mx-auto w-fit">
+            <DocumentFlowEditor
+              model={viewModel}
               items={formData.items}
               articles={articles}
               formatCurrency={formatCurrency}

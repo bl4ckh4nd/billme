@@ -77,6 +77,7 @@ export type AppSettingsLike = {
     bic: string;
     taxId: string;
     vatId: string;
+    registerCourt?: string;
   };
 };
 
@@ -132,6 +133,32 @@ export const VARIABLE_GROUPS = [
       { key: 'my.bic', label: 'BIC', description: 'BIC' },
       { key: 'my.taxId', label: 'Steuernummer', description: 'Steuernummer' },
       { key: 'my.vatId', label: 'USt-IdNr', description: 'Umsatzsteuer-ID' },
+      { key: 'my.registerCourt', label: 'Registergericht', description: 'Registergericht und HRB-Nummer' },
+    ]
+  },
+  {
+    title: 'Angebot',
+    variables: [
+      { key: 'offer.validUntil', label: 'Gültig bis', description: 'Bindefrist des Angebots' },
+    ]
+  },
+  {
+    title: 'Bezug (Gutschrift/Storno)',
+    variables: [
+      { key: 'source.label', label: 'Belegart', description: 'Art des Ursprungsbelegs, z. B. Rechnung' },
+      { key: 'source.number', label: 'Nummer', description: 'Nummer des Ursprungsbelegs' },
+      { key: 'source.date', label: 'Datum', description: 'Datum des Ursprungsbelegs' },
+    ]
+  },
+  {
+    title: 'Mahnung',
+    variables: [
+      { key: 'dunning.levelName', label: 'Mahnstufe', description: 'z. B. 1. Mahnung' },
+      { key: 'dunning.date', label: 'Mahndatum', description: 'Datum der Mahnung' },
+      { key: 'dunning.payUntil', label: 'Zahlungsziel', description: 'Neue Zahlungsfrist' },
+      { key: 'dunning.fee', label: 'Mahngebühr', description: 'Gebühr dieser Stufe' },
+      { key: 'dunning.daysOverdue', label: 'Tage überfällig', description: 'Tage seit Fälligkeit' },
+      { key: 'dunning.openAmount', label: 'Offener Betrag', description: 'Rechnungsbetrag abzüglich Zahlungen zuzüglich Gebühr' },
     ]
   },
   {
@@ -182,9 +209,8 @@ export const getDefaultPaymentTermsText = (dueDate?: string): string => {
   return `${paymentSentence}\nEs gelten unsere AGB.`;
 };
 
-export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings: AppSettingsLike): string => {
-  if (!text) return '';
-
+/** The stored tax snapshot when it still matches the items, otherwise a fresh calculation. */
+export const resolveInvoiceTaxSnapshot = (invoice: InvoiceLike, settings: AppSettingsLike) => {
   const net = round2(invoice.items.reduce((acc, item) => acc + calculateInvoiceItemTotal(item), 0));
   const hasFreshStoredTaxSnapshot =
     invoice.taxSnapshot &&
@@ -206,6 +232,24 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
       },
       { legal: { smallBusinessRule: settings.legal.smallBusinessRule, defaultVatRate: settings.legal.defaultVatRate, countryCode: settings.legal.countryCode } },
     );
+  return taxSnapshot;
+};
+
+/**
+ * `extra` supplies keys that only exist for some document kinds
+ * (offer validity, the source of a credit note, dunning figures).
+ */
+export const replacePlaceholders = (
+  text: string,
+  invoice: InvoiceLike,
+  settings: AppSettingsLike,
+  extra: Record<string, string> = {},
+): string => {
+  if (!text) return '';
+  const taxSnapshot = resolveInvoiceTaxSnapshot(invoice, settings);
+  const documentLabel = getInvoiceDocumentLabel(invoice.documentKind);
+  // German compounds need a linking "s": Rechnungs-Nr, Auftragsbestätigungs-Nr, but Lieferschein-Nr.
+  const numberLabel = /(rechnung|bestätigung)$/i.test(documentLabel) ? `${documentLabel}s-Nr` : `${documentLabel}-Nr`;
 
   const dataMap: Record<string, string> = {
     'invoice.number': invoice.number,
@@ -231,6 +275,8 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
     'my.bic': settings.finance.bic,
     'my.taxId': settings.finance.taxId,
     'my.vatId': settings.finance.vatId,
+    'my.registerCourt': settings.finance.registerCourt ?? '',
+    'invoice.numberLabel': numberLabel,
     'total.net': formatCurrency(taxSnapshot.netAmount),
     'total.tax': formatCurrency(taxSnapshot.vatAmount),
     'total.gross': formatCurrency(taxSnapshot.grossAmount),
@@ -241,13 +287,11 @@ export const replacePlaceholders = (text: string, invoice: InvoiceLike, settings
     'invoice.taxNotice': taxSnapshot.taxNotice ?? invoice.taxMeta?.exemptionReasonOverride ?? '',
     'invoice.buyerVatId': invoice.taxMeta?.buyerVatId ?? '',
     'invoice.sellerVatId': invoice.taxMeta?.sellerVatId ?? settings.finance.vatId ?? '',
+    ...extra,
   };
 
   // Templates saved before the due date became a placeholder still carry the old
   // fixed 14-day sentence, which contradicts any other payment term.
-  const documentLabel = getInvoiceDocumentLabel(invoice.documentKind);
-  // German compounds need a linking "s": Rechnungs-Nr, Auftragsbestätigungs-Nr, but Lieferschein-Nr.
-  const numberLabel = /(rechnung|bestätigung)$/i.test(documentLabel) ? `${documentLabel}s-Nr` : `${documentLabel}-Nr`;
   const normalizedText = text
     .replace(
       'Bitte überweisen Sie den Betrag innerhalb von 14 Tagen ohne Abzug',

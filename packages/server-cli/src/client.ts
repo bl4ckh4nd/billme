@@ -20,9 +20,11 @@ import { appSettingsSchema } from '@billme/desktop-contracts/schemas';
 import {
   accountSchema,
   articleSchema,
-  setActiveTemplatePayloadSchema,
-  templateKindSchema,
-  templateSchema,
+  documentTemplateDefaultsSchema,
+  documentTemplateKindSchema,
+  documentTemplateRecordSchema,
+  setDefaultDocumentTemplateArgsSchema,
+  upsertDocumentTemplateArgsSchema,
 } from '@billme/desktop-contracts-pro/schemas';
 
 const productScopedDocumentKindSchema = z.enum(['invoice', 'offer']);
@@ -658,52 +660,36 @@ export const createBillmeServerClient = ({
         },
       });
     },
-    listTemplates(args?: { kind?: 'invoice' | 'offer'; token?: string | null }) {
-      return requestJson('/api/v1/pro/templates', z.array(templateSchema), {
+    listTemplates(args?: { kind?: string; token?: string | null }) {
+      return requestJson('/api/v1/pro/document-templates', z.array(documentTemplateRecordSchema), {
         token: requireToken(args?.token),
-        query: args?.kind
-          ? {
-              kind: templateKindSchema.parse(args.kind),
-            }
-          : undefined,
+        query: args?.kind ? { kind: documentTemplateKindSchema.parse(args.kind) } : undefined,
       });
     },
     upsertTemplate(args: {
-      template: z.input<typeof templateSchema>;
+      template: z.input<typeof upsertDocumentTemplateArgsSchema>['template'];
       token?: string | null;
     }) {
-      return requestJson('/api/v1/pro/templates', templateSchema, {
+      return requestJson('/api/v1/pro/document-templates', documentTemplateRecordSchema, {
         method: 'POST',
         token: requireToken(args.token),
-        body: {
-          template: templateSchema.parse(args.template),
-        },
+        body: upsertDocumentTemplateArgsSchema.parse({ template: args.template }),
       });
     },
-    getActiveTemplate(args: {
-      kind: 'invoice' | 'offer';
-      token?: string | null;
-    }) {
-      return requestJson(
-        `/api/v1/pro/templates/active/${templateKindSchema.parse(args.kind)}`,
-        templateSchema.nullable(),
-        {
-          token: requireToken(args.token),
-        },
-      );
+    getTemplateDefaults(args?: { token?: string | null }) {
+      return requestJson('/api/v1/pro/document-templates/defaults', documentTemplateDefaultsSchema, {
+        token: requireToken(args?.token),
+      });
     },
-    setActiveTemplate(args: {
-      kind: 'invoice' | 'offer';
+    setDefaultTemplate(args: {
+      kind: string;
       templateId?: string | null;
       token?: string | null;
     }) {
-      return requestJson('/api/v1/pro/templates/active', okSchema, {
+      return requestJson('/api/v1/pro/document-templates/defaults', okSchema, {
         method: 'PUT',
         token: requireToken(args.token),
-        body: setActiveTemplatePayloadSchema.parse({
-          kind: args.kind,
-          templateId: args.templateId ?? undefined,
-        }),
+        body: setDefaultDocumentTemplateArgsSchema.parse({ kind: args.kind, templateId: args.templateId ?? null }),
       });
     },
   };
@@ -721,5 +707,5 @@ export {
   offerCreateInputSchema,
   offerWriteSchema,
   recurringWriteSchema,
-  templateSchema,
+  documentTemplateRecordSchema,
 };

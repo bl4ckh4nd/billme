@@ -3,6 +3,9 @@ export * from './dunning.js';
 export * from './maintenance.js';
 export * from './settings.js';
 export * from './email-outbox.js';
+export * from './documentTemplate.js';
+export * from './documentTemplatePresets.js';
+export * from './dunningDocument.js';
 export {
   calculateBadDebtWriteOff,
   calculateInvoiceSettlement,

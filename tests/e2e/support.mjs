@@ -583,3 +583,21 @@ export async function setProAccountingPeriodStatus(desktop, period, status = 'so
     }
   }, { period, status });
 }
+
+/** Returns the embedded Factur-X XML of a PDF, or null when there is none. */
+export async function readEmbeddedFacturX(bytes) {
+  const { PDFArray, PDFDict, PDFDocument, PDFName, decodePDFRawStream } = await import('pdf-lib');
+  const pdf = await PDFDocument.load(bytes);
+  const files = pdf.catalog.lookupMaybe(PDFName.of('Names'), PDFDict)?.lookupMaybe(PDFName.of('EmbeddedFiles'), PDFDict)
+    ?.lookupMaybe(PDFName.of('Names'), PDFArray);
+  if (!files) return null;
+  for (let index = 0; index < files.size(); index += 2) {
+    if (files.lookup(index).decodeText() !== 'factur-x.xml') continue;
+    const spec = files.lookup(index + 1, PDFDict);
+    const hasAf = pdf.catalog.lookupMaybe(PDFName.of('AF'), PDFArray)?.size() > 0;
+    if (!hasAf || spec.get(PDFName.of('AFRelationship'))?.toString() !== '/Alternative') return null;
+    const stream = spec.lookup(PDFName.of('EF'), PDFDict).lookup(PDFName.of('F'));
+    return new TextDecoder().decode(decodePDFRawStream(stream).decode());
+  }
+  return null;
+}

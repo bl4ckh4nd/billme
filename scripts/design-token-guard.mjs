@@ -29,7 +29,6 @@ const ignoredFile = (name) => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(name);
 const exempt = [
   /^packages\/desktop-renderer\/src\/components\/PrintDocument\.tsx$/,
   /^packages\/desktop-renderer\/src\/components\/PrintEurDocument\.tsx$/,
-  /^packages\/desktop-designer\/src\/constants\.ts$/,
   /^packages\/accounting-ui-pro\/src\/domain\/reportExport\.ts$/,
   /^packages\/ui\/styles\.css$/,
   /^packages\/ui\/src\/utils\/colors\.ts$/,
@@ -78,15 +77,11 @@ const rules = [
     id: 'R-06',
     description: 'off-scale micro font size (12px is the floor)',
     pattern: /text-\[(?:[0-9]|1[01])px\]/g,
-    // The designer's billing-row editor positions labels inside authored A4
-    // elements sized by the template, where 12px would reflow the page. Its
-    // 10px and 11px labels carry file-level comments; 8px and 9px stay banned.
+    // The document editor places field labels on the A4 sheet at print scale,
+    // where 12px would not match the printed document. Its 10px and 11px labels
+    // carry file-level comments; 8px and 9px stay banned.
     allow: [
-      /^packages\/desktop-designer\/src\/document-editor\/DocumentCanvasEditor\.tsx$/,
-      /^packages\/desktop-designer\/src\/CanvasStage\.tsx$/,
-      /^packages\/desktop-designer\/src\/Rulers\.tsx$/,
-      // Template chrome rendered at authored A4 scale (placeholder + GIROCODE label).
-      /^packages\/desktop-designer\/src\/ElementRenderer\.tsx$/,
+      /^packages\/desktop-designer\/src\/document-editor\/DocumentFlowEditor\.tsx$/,
     ],
     allowPattern: /text-\[1[01]px\]/,
   },
@@ -126,7 +121,6 @@ const rules = [
       /^packages\/ui\/src\/components\/AuthScreen\.tsx$/, // dark brand panel (aside, bg-dark-base)
       /^packages\/desktop-ui\/src\/shell\/DashboardViews\.tsx$/, // dark-3 KPI card
       /^packages\/desktop-ui\/src\/shell\/StatisticsView\.tsx$/, // dark-3 revenue card
-      /^packages\/desktop-designer\/src\/LayersPanel\.tsx$/, // dark rail
       /^apps\/landing-page\/src\/App\.tsx$/, // dark screenshots frame, GoBD band, CTA card
       /^packages\/ui\/src\/components\/FeedbackProvider\.tsx$/, // toast icons, Toast is bg-surface-inverse
       /^packages\/ui\/src\/components\/Sparkline\.tsx$/, // lime only in the `inverse` variant, used on surface-inverse
@@ -153,7 +147,7 @@ const rules = [
     pattern: /<table\b/g,
     skipFile: [
       /^packages\/ui\//, // the primitive itself and BarChart's screen-reader table
-      /^packages\/desktop-designer\/src\/ElementRenderer\.tsx$/, // customer document content, user-styled
+      /^packages\/desktop-designer\/src\/document-editor\/DocumentFlowEditor\.tsx$/, // item table of the printed document, styled by flow.css
       /^apps\/offer-portal\//, // server-rendered HTML, no React
     ],
   },

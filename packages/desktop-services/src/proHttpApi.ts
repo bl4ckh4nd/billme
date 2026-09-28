@@ -48,20 +48,19 @@ import {
   proUpsertTaxCaseAccountMappingArgsSchema,
   proWorkflowEntrySchema,
   reportSnapshotRecordSchema,
-  setActiveTemplatePayloadSchema,
   setSettingsPayloadSchema,
   taxAuditExportArtifactSchema,
   taxCaseAccountMappingSchema,
   taxCaseDefinitionSchema,
-  templateKindSchema,
-  templateSchema,
   transactionSchema,
   openRouterVlmAnalyzeInputSchema,
   openRouterVlmAnalyzeResultSchema,
   openRouterVlmConfigSchema,
   upsertAccountPayloadSchema,
   upsertArticlePayloadSchema,
-  upsertTemplatePayloadSchema,
+  documentRenderContextSchema,
+  documentTemplateDefaultsSchema,
+  documentTemplateRecordSchema,
 } from '@billme/desktop-contracts-pro/schemas';
 import {
   createBillmeApi,
@@ -89,7 +88,10 @@ import {
   toLegacyOffer,
 } from '@billme/desktop-data/billingDomainMappers';
 import { isNativeElectronRoute, isServerOwnedRoute } from './serverRouteClassification';
+import { serverRenderDocumentSchema, toDesktopRenderContext } from './documentRenderContext';
 import { z } from 'zod';
+
+const serverRenderContextSchema = documentRenderContextSchema.extend({ document: serverRenderDocumentSchema });
 
 type Parser<T> = { parse: (input: unknown) => T } | ((input: unknown) => T);
 type QueryValue = string | number | boolean | readonly (string | number | boolean)[] | null | undefined;
@@ -1094,42 +1096,27 @@ export const createProWebClient = ({
         `/api/v1/pro/accounts/${encodeURIComponent(id)}`,
       );
     },
-    listTemplates(kind?: 'invoice' | 'offer') {
-      return requestJson({ parser: parseArray(templateSchema), query: kind ? { kind } : undefined }, '/api/v1/pro/templates');
+    listDocumentTemplates(kind?: string) {
+      return requestJson({ parser: parseArray(documentTemplateRecordSchema), query: kind ? { kind } : undefined }, '/api/v1/pro/document-templates');
     },
-    saveTemplate(template: unknown) {
-      return requestJson(
-        {
-          method: 'POST',
-          body: upsertTemplatePayloadSchema.parse({ template }),
-          parser: templateSchema,
-        },
-        '/api/v1/pro/templates',
-      );
+    saveDocumentTemplate(template: unknown) {
+      return requestJson({ method: 'POST', body: { template }, parser: documentTemplateRecordSchema }, '/api/v1/pro/document-templates');
     },
-    deleteTemplate(id: string) {
-      return requestJson(
-        { method: 'DELETE', parser: (input) => input },
-        `/api/v1/pro/templates/${encodeURIComponent(id)}`,
-      );
+    deleteDocumentTemplate(id: string) {
+      return requestJson({ method: 'DELETE', parser: (input) => input }, `/api/v1/pro/document-templates/${encodeURIComponent(id)}`);
     },
-    getActiveTemplate(kind: 'invoice' | 'offer') {
-      return requestJson(
-        {
-          parser: (input) => (input === null ? null : templateSchema.parse(input)),
-        },
-        `/api/v1/pro/templates/active/${templateKindSchema.parse(kind)}`,
-      );
+    getDocumentTemplateDefaults() {
+      return requestJson({ parser: documentTemplateDefaultsSchema }, '/api/v1/pro/document-templates/defaults');
     },
-    setActiveTemplate(input: unknown) {
-      return requestJson(
-        {
-          method: 'PUT',
-          body: setActiveTemplatePayloadSchema.parse(input),
-          parser: (payload) => payload,
-        },
-        '/api/v1/pro/templates/active',
+    setDocumentTemplateDefault(input: { kind: string; templateId: string | null }) {
+      return requestJson({ method: 'PUT', body: input, parser: (payload) => payload }, '/api/v1/pro/document-templates/defaults');
+    },
+    async getDocumentRenderContext(input: { kind: 'invoice' | 'offer' | 'dunning'; id: string; level?: number }) {
+      const context = await requestJson(
+        { parser: serverRenderContextSchema, query: input.level ? { level: input.level } : undefined },
+        `/api/v1/pro/documents/${input.kind}/${encodeURIComponent(input.id)}/render-context`,
       );
+      return toDesktopRenderContext(context);
     },
     listWorkflowEntries() {
       return requestJson({ parser: parseArray(proWorkflowEntrySchema) }, '/api/v1/pro/workflow');
@@ -2424,29 +2411,33 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           const result = await client.deleteAccount(parsedArgs.id);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
-        case 'templates:list': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'templates:list'>;
-          const result = await client.listTemplates(parsedArgs.kind);
+        case 'documentTemplates:list': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documentTemplates:list'>;
+          const result = await client.listDocumentTemplates(parsedArgs?.kind);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
-        case 'templates:active': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'templates:active'>;
-          const result = await client.getActiveTemplate(parsedArgs.kind);
+        case 'documentTemplates:upsert': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documentTemplates:upsert'>;
+          const result = await client.saveDocumentTemplate(parsedArgs.template);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
-        case 'templates:upsert': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'templates:upsert'>;
-          const result = await client.saveTemplate(parsedArgs.template);
+        case 'documentTemplates:delete': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documentTemplates:delete'>;
+          const result = await client.deleteDocumentTemplate(parsedArgs.id);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
-        case 'templates:delete': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'templates:delete'>;
-          const result = await client.deleteTemplate(parsedArgs.id);
+        case 'documentTemplates:getDefaults': {
+          const result = await client.getDocumentTemplateDefaults();
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
-        case 'templates:setActive': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'templates:setActive'>;
-          const result = await client.setActiveTemplate(parsedArgs);
+        case 'documentTemplates:setDefault': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documentTemplates:setDefault'>;
+          const result = await client.setDocumentTemplateDefault(parsedArgs);
+          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'documents:renderContext': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documents:renderContext'>;
+          const result = await client.getDocumentRenderContext(parsedArgs);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
         case 'recurring:list': {

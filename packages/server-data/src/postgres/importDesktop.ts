@@ -72,6 +72,7 @@ import {
   type ServerAccountMappingHgbRecord,
   type ServerTaxCaseRecord,
   type ServerTemplateRecord,
+  convertLegacyServerTemplates,
   type ServerVatEvidenceRecord,
 } from './proAccounting.js';
 
@@ -1029,6 +1030,7 @@ export const importDesktopSqliteToServerDatabase = async (options: DesktopSqlite
         for (const template of loadTemplates(sqliteDb, tenantId)) { await saveServerTemplate(repositoryClient, template); counts.templates += 1; }
         const activeTemplates = loadActiveTemplates(sqliteDb, tenantId);
         if (activeTemplates) { await saveServerActiveTemplates(repositoryClient, activeTemplates); counts.activeTemplates += 1; }
+        await convertLegacyServerTemplates(repositoryClient, tenantId);
         for (const clientRecord of loadClients(sqliteDb, tenantId)) { await transactionDependencies.clientRepo.save(scope, clientRecord); counts.clients += 1; }
         counts.invoices += await importOutgoingInvoices(rawClient, loadInvoices(sqliteDb, tenantId), tenantId);
         for (const offer of loadOffers(sqliteDb, tenantId)) { await transactionDependencies.offerRepo.save(scope, offer); counts.offers += 1; }

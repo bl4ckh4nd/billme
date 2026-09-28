@@ -9,16 +9,15 @@ import {
   appSettingsSchema as desktopAppSettingsSchema,
   articleSchema,
   eurRuleSchema,
-  listTemplatesParamsSchema,
   projectSchema,
-  setActiveTemplatePayloadSchema,
-  templateKindSchema,
-  templateSchema,
   transactionSchema as desktopTransactionSchema,
   upsertAccountPayloadSchema,
   upsertArticlePayloadSchema,
-  upsertTemplatePayloadSchema,
+  documentTemplateDefaultsSchema,
+  documentTemplateRecordSchema,
+  documentRenderContextSchema,
 } from '@billme/desktop-contracts/schemas';
+import { serverRenderDocumentSchema, toDesktopRenderContext } from './documentRenderContext';
 import {
   clientSchema as serverClientSchema,
   createSingleTenantScope,
@@ -39,6 +38,8 @@ import {
   toLegacyOffer,
 } from '@billme/desktop-data/billingDomainMappers';
 import { isNativeElectronRoute, isServerOwnedRoute } from './serverRouteClassification';
+
+const serverRenderContextSchema = documentRenderContextSchema.extend({ document: serverRenderDocumentSchema });
 
 type ServerClientPayload = z.output<typeof serverClientSchema>;
 type ServerInvoicePayload = z.output<typeof serverInvoiceSchema>;
@@ -86,7 +87,7 @@ const HTTP_ROUTE_KEYS = new Set<IpcRouteKey>([
   'projects:list', 'projects:get', 'projects:upsert', 'projects:archive',
   'articles:list', 'articles:upsert', 'articles:delete',
   'accounts:list', 'accounts:upsert', 'accounts:delete',
-  'templates:list', 'templates:active', 'templates:upsert', 'templates:delete', 'templates:setActive',
+  'documentTemplates:list', 'documentTemplates:upsert', 'documentTemplates:delete', 'documentTemplates:getDefaults', 'documentTemplates:setDefault', 'documents:renderContext',
   'taxFiling:getStatus', 'taxFiling:listRecords', 'taxFiling:installCertificate', 'taxFiling:removeCertificate', 'taxFiling:validate', 'taxFiling:export', 'taxFiling:submit',
   'recurring:list', 'recurring:upsert', 'recurring:delete',
   'settings:get', 'settings:set',
@@ -520,33 +521,34 @@ export const createLiteHttpBillmeApi = ({
         const result = await requestJson('DELETE', `${PRODUCT_PREFIX}/accounts/${encodeURIComponent(parsed.id)}`, z.object({ ok: z.literal(true) }));
         return parseResult(key, result);
       }
-      case 'templates:list': {
-        const parsed = args as IpcArgs<'templates:list'>;
-        const query = listTemplatesParamsSchema.parse(parsed);
-        const suffix = query.kind ? `?kind=${encodeURIComponent(query.kind)}` : '';
-        const templates = await requestJson('GET', `${PRODUCT_PREFIX}/templates${suffix}`, z.array(templateSchema));
+      case 'documentTemplates:list': {
+        const parsed = args as IpcArgs<'documentTemplates:list'>;
+        const templates = await requestJson('GET', `${PRODUCT_PREFIX}/document-templates`, z.array(documentTemplateRecordSchema), undefined, { kind: parsed?.kind });
         return parseResult(key, templates);
       }
-      case 'templates:active': {
-        const parsed = args as IpcArgs<'templates:active'>;
-        const kind = templateKindSchema.parse(parsed.kind);
-        const template = await requestJson('GET', `${PRODUCT_PREFIX}/templates/active/${encodeURIComponent(kind)}`, templateSchema.nullable());
+      case 'documentTemplates:upsert': {
+        const parsed = args as IpcArgs<'documentTemplates:upsert'>;
+        const template = await requestJson('POST', `${PRODUCT_PREFIX}/document-templates`, documentTemplateRecordSchema, { template: parsed.template });
         return parseResult(key, template);
       }
-      case 'templates:upsert': {
-        const parsed = args as IpcArgs<'templates:upsert'>;
-        const template = await requestJson('POST', `${PRODUCT_PREFIX}/templates`, templateSchema, upsertTemplatePayloadSchema.parse({ template: parsed.template }));
-        return parseResult(key, template);
-      }
-      case 'templates:delete': {
-        const parsed = args as IpcArgs<'templates:delete'>;
-        const result = await requestJson('DELETE', `${PRODUCT_PREFIX}/templates/${encodeURIComponent(parsed.id)}`, z.object({ ok: z.literal(true) }));
+      case 'documentTemplates:delete': {
+        const parsed = args as IpcArgs<'documentTemplates:delete'>;
+        const result = await requestJson('DELETE', `${PRODUCT_PREFIX}/document-templates/${encodeURIComponent(parsed.id)}`, z.object({ ok: z.literal(true) }));
         return parseResult(key, result);
       }
-      case 'templates:setActive': {
-        const parsed = args as IpcArgs<'templates:setActive'>;
-        const result = await requestJson('PUT', `${PRODUCT_PREFIX}/templates/active`, z.object({ ok: z.literal(true) }), setActiveTemplatePayloadSchema.parse(parsed));
+      case 'documentTemplates:getDefaults': {
+        const defaults = await requestJson('GET', `${PRODUCT_PREFIX}/document-templates/defaults`, documentTemplateDefaultsSchema);
+        return parseResult(key, defaults);
+      }
+      case 'documentTemplates:setDefault': {
+        const parsed = args as IpcArgs<'documentTemplates:setDefault'>;
+        const result = await requestJson('PUT', `${PRODUCT_PREFIX}/document-templates/defaults`, z.object({ ok: z.literal(true) }), parsed);
         return parseResult(key, result);
+      }
+      case 'documents:renderContext': {
+        const parsed = args as IpcArgs<'documents:renderContext'>;
+        const context = await requestJson('GET', `${PRODUCT_PREFIX}/documents/${parsed.kind}/${encodeURIComponent(parsed.id)}/render-context`, serverRenderContextSchema, undefined, { level: parsed.level });
+        return parseResult(key, toDesktopRenderContext(context));
       }
       case 'taxFiling:getStatus': {
         const result = await requestJson('GET', `${PRODUCT_PREFIX}/tax-filing/status`, taxFilingRoutes['taxFiling:getStatus'].result);

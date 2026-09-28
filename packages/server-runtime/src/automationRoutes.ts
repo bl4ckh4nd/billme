@@ -284,8 +284,9 @@ export type EmbeddedSecretKey = 'smtp.password' | 'resend.apiKey' | 'portal.apiK
 export interface EmbeddedDesktopIntegration {
   readonly getSecret: (key: EmbeddedSecretKey) => Promise<string | null>;
   readonly renderDocumentPdf: (args: {
-    kind: 'invoice' | 'offer';
+    kind: 'invoice' | 'offer' | 'dunning';
     id: string;
+    level?: number;
     suggestedName: string;
   }) => Promise<{ path: string }>;
 }
@@ -688,6 +689,7 @@ export const registerAutomationRoutes = (
               to: message.to,
               subject: message.subject,
               text: message.text,
+              ...(message.attachments ? { attachments: message.attachments } : {}),
             }),
             log: async (_scope, entry) => {
               const id = randomUUID();
@@ -703,6 +705,13 @@ export const registerAutomationRoutes = (
           actor: actorFor(session),
           isRetryableError: isRetryableEmailError,
           logger: console,
+          renderAttachment: integration
+            ? async (invoice, level) => {
+              const name = `${level.name} ${invoice.number}`;
+              const pdf = await integration.renderDocumentPdf({ kind: 'dunning', id: invoice.id, level: level.id, suggestedName: `${name} ${invoice.client}` });
+              return { filename: `${name}.pdf`, path: pdf.path };
+            }
+            : undefined,
         });
         return { success: true, result };
       } catch (error) {

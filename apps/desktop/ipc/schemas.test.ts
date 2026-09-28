@@ -27,8 +27,6 @@ import {
   eurExportCsvArgsSchema,
   eurExportPdfArgsSchema,
   eurExportPdfResultSchema,
-  templateSchema,
-  templateKindSchema,
 } from './schemas';
 
 describe('Invoice Schemas', () => {
@@ -768,108 +766,6 @@ describe('Settings Schema', () => {
 });
 
 describe('Template Schema', () => {
-  describe('templateKindSchema', () => {
-    it('should validate invoice and offer kinds', () => {
-      expect(() => templateKindSchema.parse('invoice')).not.toThrow();
-      expect(() => templateKindSchema.parse('offer')).not.toThrow();
-    });
-
-    it('should reject invalid kind', () => {
-      expect(() => templateKindSchema.parse('quote')).toThrow();
-    });
-  });
-
-  describe('templateSchema', () => {
-    it('should validate template with text element', () => {
-      const template = {
-        id: 'tpl-123',
-        kind: 'invoice' as const,
-        name: 'Default Invoice',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-01T00:00:00.000Z',
-        elements: [
-          {
-            id: 'elem-1',
-            type: 'TEXT',
-            x: 100,
-            y: 100,
-            zIndex: 1,
-            content: 'Invoice',
-            style: { fontSize: '24px' },
-          },
-        ],
-      };
-      expect(() => templateSchema.parse(template)).not.toThrow();
-    });
-
-    it('should validate template with QR code element', () => {
-      const template = {
-        id: 'tpl-123',
-        kind: 'invoice' as const,
-        name: 'Invoice with QR',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-01T00:00:00.000Z',
-        elements: [
-          {
-            id: 'elem-1',
-            type: 'QRCODE',
-            x: 500,
-            y: 700,
-            zIndex: 1,
-            qrData: {
-              iban: 'DE89370400440532013000',
-              bic: 'COBADEFFXXX',
-              amount: 100,
-              reference: 'INV-001',
-            },
-            style: {},
-          },
-        ],
-      };
-      expect(() => templateSchema.parse(template)).not.toThrow();
-    });
-
-    it('should validate template with table element', () => {
-      const template = {
-        id: 'tpl-123',
-        kind: 'invoice' as const,
-        name: 'Invoice with Table',
-        createdAt: '2024-01-01T00:00:00.000Z',
-        updatedAt: '2024-01-01T00:00:00.000Z',
-        elements: [
-          {
-            id: 'elem-1',
-            type: 'TABLE',
-            x: 50,
-            y: 300,
-            zIndex: 1,
-            tableData: {
-              columns: [
-                {
-                  id: 'col-1',
-                  label: 'Item',
-                  width: 200,
-                  visible: true,
-                  align: 'left' as const,
-                },
-              ],
-              rows: [
-                {
-                  id: 'row-1',
-                  cells: ['Item 1'],
-                },
-              ],
-            },
-            style: {},
-          },
-        ],
-      };
-      expect(() => templateSchema.parse(template)).not.toThrow();
-    });
-  });
-});
-
-describe('Common Schemas', () => {
   describe('deleteByIdSchema', () => {
     it('should validate ID', () => {
       expect(() => deleteByIdSchema.parse({ id: 'test-123' })).not.toThrow();

@@ -3,9 +3,7 @@ import type {
   AppSettings,
   Article,
   Client,
-  DocumentTemplate,
   Invoice,
-  InvoiceElement,
   Project,
   RecurringProfile,
   Transaction,
@@ -33,6 +31,13 @@ import {
   resolveInvoiceTaxMode,
   listDocumentChain,
 } from '@billme/server-core/services';
+import {
+  buildDunningDocumentContext,
+  resolveDocumentTemplate,
+  templateKindForDocument,
+  type DocumentTemplateRecord,
+  type TemplateKind,
+} from '@billme/server-core/domain';
 import type {
   DocumentNumberKind,
   SyncDefaultProjectPorts,
@@ -49,10 +54,6 @@ import {
   PRO_MOCK_INVOICES,
 } from './mockData';
 import { getCatalogForYear, getCatalogManifestForYear } from './eurCatalog';
-import {
-  INITIAL_INVOICE_TEMPLATE,
-  INITIAL_OFFER_TEMPLATE,
-} from '@billme/desktop-core/constants';
 import { formatAddressMultiline } from '@billme/desktop-utils/formatters';
 
 type Account = BaseAccount & { defaultSkrAccountNumber?: string };
@@ -77,28 +78,8 @@ for (const c of clients) {
 }
 
 const now = new Date().toISOString();
-const templates: DocumentTemplate[] = [
-  {
-    id: 'default-invoice',
-    kind: 'invoice',
-    name: 'Standard Rechnung',
-    elements: structuredClone(INITIAL_INVOICE_TEMPLATE as unknown as InvoiceElement[]),
-    createdAt: now,
-    updatedAt: now,
-  },
-  {
-    id: 'default-offer',
-    kind: 'offer',
-    name: 'Standard Angebot',
-    elements: structuredClone(INITIAL_OFFER_TEMPLATE as unknown as InvoiceElement[]),
-    createdAt: now,
-    updatedAt: now,
-  },
-];
-let activeTemplateIds: { invoice: string | null; offer: string | null } = {
-  invoice: 'default-invoice',
-  offer: 'default-offer',
-};
+const documentTemplates: DocumentTemplateRecord[] = [];
+const documentTemplateDefaults: Partial<Record<TemplateKind, string>> = {};
 let mockIsMaximized = false;
 const mockEurClassifications = new Map<string, any>();
 const mockEurRules: Array<any> = [];
@@ -2697,43 +2678,70 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       return structuredClone(listDocumentChain(scope, chainDependencies, rootDocumentId)) as IpcResult<K>;
     }
 
-    case 'templates:list': {
-      const { kind } = args as IpcArgs<'templates:list'>;
-      const list = kind ? templates.filter((t) => t.kind === kind) : templates;
-      return structuredClone(list) as IpcResult<K>;
+    case 'documentTemplates:list': {
+      const kind = (args as IpcArgs<'documentTemplates:list'>)?.kind;
+      return structuredClone(documentTemplates.filter((entry) => !kind || entry.kind === kind)) as IpcResult<K>;
     }
-    case 'templates:active': {
-      const { kind } = args as IpcArgs<'templates:active'>;
-      const id = kind === 'invoice' ? activeTemplateIds.invoice : activeTemplateIds.offer;
-      if (!id) return null as IpcResult<K>;
-      return structuredClone(templates.find((t) => t.id === id) ?? null) as IpcResult<K>;
-    }
-    case 'templates:upsert': {
-      const { template } = args as IpcArgs<'templates:upsert'>;
-      const idx = templates.findIndex((t) => t.id === template.id);
-      const next: DocumentTemplate = {
-        ...template,
-        elements: template.elements as InvoiceElement[],
-        createdAt: idx >= 0 ? templates[idx]!.createdAt : now,
-        updatedAt: new Date().toISOString(),
+    case 'documentTemplates:upsert': {
+      const { template } = args as IpcArgs<'documentTemplates:upsert'>;
+      const index = documentTemplates.findIndex((entry) => entry.id === template.id);
+      const existing = index >= 0 ? documentTemplates[index]! : undefined;
+      if (existing && existing.kind !== template.kind) throw new Error('Die Art einer Vorlage kann nicht geändert werden.');
+      const timestamp = new Date().toISOString();
+      const next: DocumentTemplateRecord = {
+        id: template.id ?? `tpl-${Math.random().toString(36).slice(2, 10)}`,
+        kind: template.kind,
+        name: template.name,
+        body: template.body,
+        version: (existing?.version ?? 0) + 1,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
       };
-      if (idx >= 0) templates[idx] = next;
-      else templates.unshift(next);
+      if (existing) documentTemplates[index] = next;
+      else documentTemplates.push(next);
       return structuredClone(next) as IpcResult<K>;
     }
-    case 'templates:delete': {
-      const { id } = args as IpcArgs<'templates:delete'>;
-      const idx = templates.findIndex((t) => t.id === id);
-      if (idx >= 0) templates.splice(idx, 1);
-      if (activeTemplateIds.invoice === id) activeTemplateIds.invoice = null;
-      if (activeTemplateIds.offer === id) activeTemplateIds.offer = null;
+    case 'documentTemplates:delete': {
+      const { id } = args as IpcArgs<'documentTemplates:delete'>;
+      const index = documentTemplates.findIndex((entry) => entry.id === id);
+      if (index >= 0) documentTemplates.splice(index, 1);
+      for (const kind of Object.keys(documentTemplateDefaults) as TemplateKind[]) {
+        if (documentTemplateDefaults[kind] === id) delete documentTemplateDefaults[kind];
+      }
       return { ok: true } as IpcResult<K>;
     }
-    case 'templates:setActive': {
-      const { kind, templateId } = args as IpcArgs<'templates:setActive'>;
-      if (kind === 'invoice') activeTemplateIds.invoice = templateId;
-      else activeTemplateIds.offer = templateId;
+    case 'documentTemplates:getDefaults':
+      return structuredClone(documentTemplateDefaults) as IpcResult<K>;
+    case 'documentTemplates:setDefault': {
+      const { kind, templateId } = args as IpcArgs<'documentTemplates:setDefault'>;
+      if (templateId) documentTemplateDefaults[kind] = templateId;
+      else delete documentTemplateDefaults[kind];
       return { ok: true } as IpcResult<K>;
+    }
+    case 'documents:renderContext': {
+      const { kind, id, level } = args as IpcArgs<'documents:renderContext'>;
+      const document = (kind === 'offer' ? offers : invoices).find((entry) => entry.id === id);
+      if (!document) throw new Error('Beleg nicht gefunden.');
+      const templateKind = kind === 'offer' ? 'offer' : kind === 'dunning' ? 'dunning' : templateKindForDocument({ documentKind: document.documentKind });
+      const dunningContext = kind === 'dunning'
+        ? buildDunningDocumentContext({ invoice: document, level, levels: settings.dunning?.levels ?? [], history: [], today: new Date() })
+        : undefined;
+      const source = templateKind === 'credit_note' && document.sourceDocumentId
+        ? invoices.find((entry) => entry.id === document.sourceDocumentId)
+        : undefined;
+      return structuredClone({
+        templateKind,
+        document,
+        template: resolveDocumentTemplate(templateKind, {
+          templateId: document.layout?.templateId,
+          templates: documentTemplates,
+          defaults: documentTemplateDefaults,
+        }),
+        settings,
+        source: source ? { number: source.number, date: source.date, documentKind: source.documentKind } : undefined,
+        texts: dunningContext ? (dunningContext.intro ? { intro: dunningContext.intro } : undefined) : document.layout?.texts,
+        dunning: dunningContext ? { ...dunningContext, intro: undefined } : undefined,
+      }) as IpcResult<K>;
     }
 
     case 'audit:verify':

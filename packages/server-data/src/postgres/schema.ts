@@ -134,6 +134,7 @@ export const invoices = pgTable("invoices", {
   accountingSnapshotJson: text("accounting_snapshot_json"),
   accountingJournalEntryId: text("accounting_journal_entry_id"),
   accountingPostedAt: text("accounting_posted_at"),
+  layoutJson: text("layout_json"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
@@ -160,6 +161,7 @@ export const offers = pgTable("offers", {
   taxMode: text("tax_mode"),
   taxMetaJson: text("tax_meta_json"),
   taxSnapshotJson: text("tax_snapshot_json"),
+  layoutJson: text("layout_json"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
@@ -890,6 +892,32 @@ export const activeTemplates = pgTable("active_templates", {
   id: integer("id"),
   invoiceTemplateId: text("invoice_template_id"),
   offerTemplateId: text("offer_template_id"),
+});
+
+export const documentTemplates = pgTable("document_templates", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  kind: text("kind"),
+  name: text("name"),
+  version: integer("version"),
+  bodyJson: text("body_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const documentTemplateVersions = pgTable("document_template_versions", {
+  templateId: text("template_id"),
+  version: integer("version"),
+  tenantId: text("tenant_id"),
+  kind: text("kind"),
+  bodyJson: text("body_json"),
+  createdAt: text("created_at"),
+});
+
+export const documentTemplateDefaults = pgTable("document_template_defaults", {
+  tenantId: text("tenant_id"),
+  kind: text("kind"),
+  templateId: text("template_id"),
 });
 
 export const assets = pgTable("assets", {

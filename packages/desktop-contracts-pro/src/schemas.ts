@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  documentLayoutSchema,
+  documentTemplateBodySchema,
+  documentTemplateDefaultsSchema,
+  documentTemplateRecordSchema,
+  templateKindSchema as documentTemplateKindSchema,
+} from '@billme/server-core/domain';
 
 export const openRouterVlmMimeSchema = z.enum(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
 export const openRouterVlmDocumentSchema = z.object({
@@ -186,6 +193,7 @@ export const invoiceSchema = z.object({
   items: z.array(invoiceItemSchema),
   payments: z.array(paymentSchema),
   history: z.array(z.object({ date: z.string(), action: z.string() })).optional(),
+  layout: documentLayoutSchema.optional(),
 });
 
 export const upsertPayloadSchema = z.object({
@@ -1189,68 +1197,6 @@ export const setSettingsPayloadSchema = z.object({
   settings: appSettingsSchema,
 });
 
-export const templateKindSchema = z.enum(['invoice', 'offer']);
-
-export const templateSchema = z.object({
-  id: z.string(),
-  kind: templateKindSchema,
-  name: z.string(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  elements: z.array(
-    z.object({
-      id: z.string(),
-      type: z.string(),
-      x: z.number(),
-      y: z.number(),
-      zIndex: z.number(),
-      content: z.string().optional(),
-      src: z.string().optional(),
-      tableData: z
-        .object({
-          columns: z.array(
-            z.object({
-              id: z.string(),
-              label: z.string(),
-              width: z.number(),
-              visible: z.boolean(),
-              align: z.enum(['left', 'center', 'right']),
-            }),
-          ),
-          rows: z.array(
-            z.object({
-              id: z.string(),
-              cells: z.array(z.string()),
-            }),
-          ),
-        })
-        .optional(),
-      qrData: z
-        .object({
-          iban: z.string(),
-          bic: z.string(),
-          amount: z.number(),
-          reference: z.string(),
-        })
-        .optional(),
-      style: z.record(z.any()),
-      label: z.string().optional(),
-    }),
-  ),
-});
-
-export const listTemplatesParamsSchema = z.object({
-  kind: templateKindSchema.optional(),
-});
-
-export const upsertTemplatePayloadSchema = z.object({
-  template: templateSchema,
-});
-
-export const setActiveTemplatePayloadSchema = z.object({
-  kind: templateKindSchema,
-  templateId: z.string().nullable(),
-});
 
 export const reportSnapshotRecordSchema = z.object({
   id: z.string().min(1),
@@ -1496,3 +1442,63 @@ export const proAccountingSourcePostResultSchema = z.object({
 });
 
 export const proGetAccountingSourceRunArgsSchema = z.object({ id: z.string().trim().min(1) });
+
+// Flow-layout document templates.
+export {
+  documentLayoutSchema,
+  documentTemplateBodySchema,
+  documentTemplateDefaultsSchema,
+  documentTemplateKindSchema,
+  documentTemplateRecordSchema,
+};
+
+export const listDocumentTemplatesArgsSchema = z.object({ kind: documentTemplateKindSchema.optional() });
+
+export const upsertDocumentTemplateArgsSchema = z.object({
+  template: z.object({
+    id: z.string().min(1).optional(),
+    kind: documentTemplateKindSchema,
+    name: z.string().trim().min(1).max(120),
+    body: documentTemplateBodySchema,
+  }),
+});
+
+export const setDefaultDocumentTemplateArgsSchema = z.object({
+  kind: documentTemplateKindSchema,
+  templateId: z.string().min(1).nullable(),
+});
+
+export const documentRenderContextArgsSchema = z.object({
+  kind: z.enum(['invoice', 'offer', 'dunning']),
+  id: z.string().min(1),
+  /** Dunning level; defaults to the invoice's current level. */
+  level: z.number().int().positive().optional(),
+});
+
+export const documentRenderContextSchema = z.object({
+  templateKind: documentTemplateKindSchema,
+  document: invoiceSchema,
+  template: z.object({
+    id: z.string().optional(),
+    version: z.number().int().positive().optional(),
+    name: z.string().optional(),
+    body: documentTemplateBodySchema,
+  }),
+  settings: appSettingsSchema.nullable(),
+  source: z.object({
+    number: z.string(),
+    date: z.string(),
+    documentKind: invoiceSchema.shape.documentKind,
+  }).optional(),
+  texts: z.object({ intro: z.string().optional(), closing: z.string().optional() }).optional(),
+  dunning: z.object({
+    level: z.number().int(),
+    levelName: z.string(),
+    date: z.string(),
+    payUntil: z.string(),
+    fee: z.number(),
+    originalAmount: z.number(),
+    paidAmount: z.number(),
+    daysOverdue: z.number().int(),
+  }).optional(),
+});

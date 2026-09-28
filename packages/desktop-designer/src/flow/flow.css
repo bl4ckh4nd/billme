@@ -1,0 +1,528 @@
+/*
+ * Print styling for flow-layout documents. Self-contained on purpose: the same
+ * DOM is shown on screen and printed to PDF, so it must not depend on app
+ * theme tokens or dark mode. Geometry follows DIN 5008 Form B.
+ */
+
+.bf-doc {
+  --bf-ink: #1d1f22;
+  --bf-muted: #62666d;
+  --bf-rule: #d6d8db;
+  --bf-accent: #0f6b5c;
+  --bf-tint: color-mix(in srgb, var(--bf-accent) 8%, white);
+  --bf-font: 'Inter Variable', 'Inter', system-ui, sans-serif;
+  --bf-font-head: var(--bf-font);
+  --bf-size: 9.5pt;
+  --bf-row-pad: 1.35mm;
+  color: var(--bf-ink);
+  font-family: var(--bf-font);
+  font-size: var(--bf-size);
+  line-height: 1.42;
+  font-kerning: normal;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.bf-doc.bf-font-serif {
+  --bf-font: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+}
+.bf-doc *,
+.bf-doc *::before,
+.bf-doc *::after {
+  box-sizing: border-box;
+}
+
+.bf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.bf-page {
+  position: relative;
+  width: 210mm;
+  height: 297mm;
+  overflow: hidden;
+  background: #fff;
+  break-after: page;
+  page-break-after: always;
+}
+.bf-page:last-child {
+  break-after: auto;
+  page-break-after: auto;
+}
+
+/* ---------- Measuring ---------- */
+.bf-measure {
+  position: absolute;
+  left: -10000px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ---------- Marks ---------- */
+.bf-mark {
+  position: absolute;
+  left: 0;
+  width: 6mm;
+  border-top: 0.25pt solid #9a9da3;
+}
+.bf-mark-hole {
+  width: 8mm;
+}
+
+/* ---------- Letterhead ---------- */
+.bf-letterhead {
+  position: absolute;
+  top: 14mm;
+  left: 25mm;
+  right: 20mm;
+  height: 24mm;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.bf-letterhead.bf-logo-right {
+  justify-content: flex-end;
+}
+.bf-letterhead.bf-logo-center {
+  justify-content: center;
+}
+.bf-letterhead img {
+  display: block;
+  max-height: 24mm;
+  object-fit: contain;
+}
+.bf-company {
+  font-family: var(--bf-font-head);
+  font-size: 17pt;
+  font-weight: 620;
+  line-height: 1.15;
+  letter-spacing: -0.005em;
+}
+
+/* ---------- Address field (Form B: 20/45 mm, 85 x 45 mm) ---------- */
+.bf-sender-line {
+  position: absolute;
+  top: 55mm;
+  left: 25mm;
+  width: 80mm;
+  font-size: 6.8pt;
+  color: var(--bf-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-bottom: 0.6mm;
+  border-bottom: 0.25pt solid var(--bf-rule);
+}
+.bf-recipient {
+  position: absolute;
+  top: 62.7mm;
+  left: 25mm;
+  width: 80mm;
+  max-height: 27.3mm;
+  overflow: hidden;
+  font-size: 10pt;
+  line-height: 1.35;
+}
+
+/* ---------- Info block (Form B: 125 mm from left, 50 mm from top) ---------- */
+.bf-meta {
+  position: absolute;
+  top: 50mm;
+  left: 125mm;
+  width: 65mm;
+}
+.bf-meta-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 4mm;
+  row-gap: 0.7mm;
+  font-size: 8.5pt;
+}
+.bf-meta-grid dt {
+  color: var(--bf-muted);
+  margin: 0;
+}
+.bf-meta-grid dd {
+  margin: 0;
+  text-align: right;
+}
+
+/* ---------- Continuation header ---------- */
+.bf-running {
+  position: absolute;
+  top: 12mm;
+  left: 25mm;
+  right: 20mm;
+  display: flex;
+  justify-content: space-between;
+  gap: 6mm;
+  padding-bottom: 2mm;
+  border-bottom: 0.3pt solid var(--bf-rule);
+  font-size: 8pt;
+  color: var(--bf-muted);
+}
+.bf-running strong {
+  color: var(--bf-ink);
+  font-weight: 600;
+}
+
+/* ---------- Body ---------- */
+.bf-body {
+  position: absolute;
+  left: 25mm;
+  width: 165mm;
+}
+.bf-title {
+  font-family: var(--bf-font-head);
+  font-size: 15pt;
+  font-weight: 640;
+  line-height: 1.2;
+  padding-bottom: 4mm;
+  letter-spacing: -0.005em;
+}
+.bf-text {
+  white-space: pre-line;
+  padding-bottom: 4mm;
+}
+.bf-notice {
+  white-space: pre-line;
+  padding-top: 3mm;
+  font-size: 8.8pt;
+}
+.bf-closing {
+  white-space: pre-line;
+  padding-top: 5mm;
+}
+
+/* ---------- Item table (grid rows keep measured heights exact) ---------- */
+.bf-row {
+  display: grid;
+  grid-template-columns: var(--bf-cols);
+  column-gap: 3mm;
+  padding: var(--bf-row-pad) 0;
+  border-bottom: 0.25pt solid var(--bf-rule);
+  break-inside: avoid;
+}
+.bf-row > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.bf-cell-desc {
+  white-space: pre-line;
+}
+.bf-right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.bf-thead {
+  font-size: 8pt;
+  font-weight: 600;
+  color: var(--bf-muted);
+  border-bottom: 0.6pt solid var(--bf-ink);
+  padding-top: 1.2mm;
+}
+.bf-row-group {
+  font-weight: 620;
+  padding-top: 2.6mm;
+  border-bottom-color: transparent;
+}
+.bf-row-text {
+  color: var(--bf-muted);
+}
+.bf-row-summary {
+  font-weight: 600;
+  border-bottom: 0.6pt solid var(--bf-rule);
+}
+.bf-row-optional {
+  color: var(--bf-muted);
+}
+.bf-optional-tag {
+  display: inline-block;
+  margin-left: 1.5mm;
+  font-size: 7pt;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.bf-row-clamped {
+  overflow: hidden;
+  position: relative;
+}
+.bf-row-clamped::after {
+  content: '… (gekürzt)';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  background: #fff;
+  padding-left: 2mm;
+  font-size: 7.5pt;
+  color: var(--bf-muted);
+}
+
+/* ---------- Totals ---------- */
+.bf-totals {
+  padding-top: 4mm;
+  display: flex;
+  justify-content: flex-end;
+}
+.bf-totals-list {
+  width: 80mm;
+  display: flex;
+  flex-direction: column;
+  gap: 1mm;
+}
+.bf-total-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 6mm;
+}
+.bf-total-line .bf-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.bf-total-strong {
+  font-weight: 650;
+  font-size: 10.5pt;
+  padding-top: 1.6mm;
+  margin-top: 0.6mm;
+  border-top: 0.6pt solid var(--bf-ink);
+}
+
+/* ---------- Footer ---------- */
+.bf-footer {
+  position: absolute;
+  left: 25mm;
+  right: 20mm;
+  bottom: 10mm;
+}
+.bf-pageno {
+  text-align: right;
+  font-size: 7.5pt;
+  color: var(--bf-muted);
+  padding-bottom: 2mm;
+  font-variant-numeric: tabular-nums;
+}
+.bf-footer-cols {
+  display: flex;
+  justify-content: space-between;
+  gap: 5mm;
+  padding-top: 2.4mm;
+  border-top: 0.3pt solid var(--bf-rule);
+  font-size: 6.9pt;
+  line-height: 1.45;
+  color: var(--bf-muted);
+}
+.bf-footer-cols div {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+/* =========================================================
+   Presets
+   ========================================================= */
+
+/* Klassisch: serif, rules in ink, name set right */
+.bf-preset-klassisch .bf-letterhead {
+  justify-content: flex-end;
+  text-align: right;
+}
+.bf-preset-klassisch .bf-letterhead.bf-logo-left {
+  justify-content: flex-start;
+  text-align: left;
+}
+.bf-preset-klassisch .bf-letterhead.bf-logo-center {
+  justify-content: center;
+}
+.bf-preset-klassisch .bf-company {
+  font-size: 19pt;
+  font-weight: 560;
+  color: var(--bf-accent);
+}
+.bf-preset-klassisch .bf-lh-rule {
+  position: absolute;
+  top: 40mm;
+  left: 25mm;
+  right: 20mm;
+  border-top: 0.4pt solid var(--bf-accent);
+}
+.bf-preset-klassisch .bf-thead {
+  color: var(--bf-ink);
+  border-top: 0.8pt solid var(--bf-ink);
+  border-bottom: 0.4pt solid var(--bf-ink);
+  padding-top: 1.4mm;
+}
+.bf-preset-klassisch .bf-total-strong {
+  border-top: 0.4pt solid var(--bf-ink);
+  border-bottom: 2pt double var(--bf-ink);
+  padding-bottom: 1.2mm;
+}
+
+/* Modern: accent band, accent title and table rule */
+.bf-preset-modern .bf-page-first::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3.2mm;
+  background: var(--bf-accent);
+}
+.bf-preset-modern .bf-company {
+  color: var(--bf-accent);
+  font-weight: 680;
+}
+.bf-preset-modern .bf-title {
+  color: var(--bf-accent);
+  font-weight: 680;
+}
+.bf-preset-modern .bf-thead {
+  color: var(--bf-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 7.4pt;
+  border-bottom: 0.55mm solid var(--bf-accent);
+}
+.bf-preset-modern .bf-total-strong {
+  border-top: 0;
+  margin: 1.4mm -3mm 0;
+  padding: 2mm 3mm;
+  background: var(--bf-tint);
+  color: var(--bf-accent);
+  border-radius: 1.2mm;
+}
+
+/* Kompakt: small scale, tinted header, tight rows */
+.bf-doc.bf-preset-kompakt {
+  --bf-size: 8.6pt;
+  --bf-row-pad: 0.95mm;
+  line-height: 1.35;
+}
+.bf-preset-kompakt .bf-company {
+  font-size: 14pt;
+}
+.bf-preset-kompakt .bf-title {
+  font-size: 12.5pt;
+  padding-bottom: 3.5mm;
+}
+.bf-preset-kompakt .bf-text {
+  padding-bottom: 3.5mm;
+}
+.bf-preset-kompakt .bf-thead {
+  background: var(--bf-tint);
+  color: var(--bf-ink);
+  border-bottom: 0;
+  padding-left: 1.5mm;
+  padding-right: 1.5mm;
+}
+.bf-preset-kompakt .bf-row {
+  padding-left: 1.5mm;
+  padding-right: 1.5mm;
+}
+.bf-preset-kompakt .bf-total-strong {
+  font-size: 9.5pt;
+  border-top-color: var(--bf-accent);
+}
+
+/* Elegant: centred letterhead, spaced capitals, hairlines */
+.bf-preset-elegant .bf-letterhead {
+  justify-content: center;
+  text-align: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 3mm;
+}
+.bf-preset-elegant .bf-company {
+  font-size: 12.5pt;
+  font-weight: 520;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+}
+.bf-preset-elegant .bf-lh-rule {
+  position: absolute;
+  top: 36mm;
+  left: calc(105mm - 12mm);
+  width: 24mm;
+  border-top: 0.5pt solid var(--bf-accent);
+}
+.bf-preset-elegant .bf-title {
+  font-size: 16pt;
+  font-weight: 480;
+  letter-spacing: 0.01em;
+  padding-bottom: 6mm;
+}
+.bf-preset-elegant .bf-thead {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 6.8pt;
+  font-weight: 500;
+  border-bottom: 0.4pt solid var(--bf-accent);
+}
+.bf-preset-elegant .bf-row {
+  --bf-row-pad: 2.1mm;
+  border-bottom-color: #ebeced;
+}
+.bf-preset-elegant .bf-total-strong {
+  font-family: var(--bf-font-head);
+  font-weight: 560;
+  font-size: 11.5pt;
+  border-top: 0.4pt solid var(--bf-accent);
+}
+.bf-preset-elegant .bf-footer-cols {
+  justify-content: center;
+  gap: 9mm;
+  text-align: center;
+  border-top-color: var(--bf-accent);
+}
+
+/* Scaled on-screen previews: pages sit on a darker canvas with a gap. */
+.bf-page-preview {
+  margin-bottom: 6mm;
+  box-shadow: 0 0.5mm 2mm rgba(0, 0, 0, 0.12);
+}
+.bf-page-preview:last-child {
+  margin-bottom: 0;
+}
+@media print {
+  .bf-page-preview { margin: 0; box-shadow: none; }
+}
+
+/* ---------- Editing sheet (document editor) ----------
+   One continuous first page: DIN header geometry, body in flow. */
+.bf-page.bf-edit-sheet {
+  display: flow-root;
+  height: auto;
+  min-height: 297mm;
+  overflow: visible;
+  padding-bottom: 32mm;
+}
+.bf-edit-body {
+  position: relative;
+  margin-left: 25mm;
+  width: 165mm;
+  /* A margin, not padding: the body must not cover the header fields above it. */
+  margin-top: 98.5mm;
+}
+.bf-edit-footer {
+  position: absolute;
+  left: 25mm;
+  right: 20mm;
+  bottom: 10mm;
+}
+.bf-edit-table th {
+  font-size: 7.4pt;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--bf-muted);
+  padding: 1.2mm 1mm;
+  border-bottom: 0.6pt solid var(--bf-accent);
+}
+.bf-edit-table td {
+  padding: var(--bf-row-pad) 1mm;
+  border-bottom: 0.25pt solid var(--bf-rule);
+  vertical-align: top;
+}

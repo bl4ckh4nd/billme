@@ -18,7 +18,6 @@ export * from './financeImportRepo';
 export * from './transactionsRepo';
 export * from './billingDomainCompat';
 export * from './articlesRepo';
-export * from './templatesRepo';
 export * from './projectsRepo';
 export * from './settingsRepo';
 export * from './numberingRepo';

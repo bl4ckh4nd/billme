@@ -11,8 +11,12 @@ import { join, resolve } from 'node:path';
 import { getCurrentUpdateStatus, downloadUpdate, quitAndInstall } from './updater';
 import { secrets } from './secrets';
 import { exportEurPdf, exportPdf } from './pdfExport';
+import { createDocumentExportPreparer } from '@billme/desktop-services/documentExport';
+import type { EmbeddedConnectionResult } from '@billme/desktop-contracts/embeddedConnection';
 
-export type NativeHandlerDependencies = Omit<NativeIpcCommonDependencies, 'secrets' | 'updater'>;
+export type NativeHandlerDependencies = Omit<NativeIpcCommonDependencies, 'secrets' | 'updater'> & {
+  readonly resolveEmbeddedConnection: () => EmbeddedConnectionResult;
+};
 
 type TaxAuditExportArtifact = {
   schemaVersion: number;
@@ -104,7 +108,11 @@ export const registerNativeIpcHandlers = (
       secrets,
       updater: { getCurrentUpdateStatus, downloadUpdate, quitAndInstall },
     },
-    { exportPdf, exportEurPdf },
+    {
+      exportPdf,
+      exportEurPdf,
+      prepareDocumentExport: createDocumentExportPreparer({ product: 'pro', resolveConnection: deps.resolveEmbeddedConnection }),
+    },
     { 'tax:saveAuditExportPackage': saveTaxAuditExportPackage(deps) },
   );
 };

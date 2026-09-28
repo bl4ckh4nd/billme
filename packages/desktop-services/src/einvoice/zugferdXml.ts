@@ -73,7 +73,7 @@ export const buildZugferdXml = (doc: NormalizedEinvoice): string => {
   </rsm:ExchangedDocumentContext>
   <rsm:ExchangedDocument>
     <ram:ID>${xmlEscape(doc.invoiceNumber)}</ram:ID>
-    <ram:TypeCode>380</ram:TypeCode>
+    <ram:TypeCode>${doc.typeCode}</ram:TypeCode>
     <ram:IssueDateTime>
       <udt:DateTimeString format="102">${doc.issueDate.replaceAll('-', '')}</udt:DateTimeString>
     </ram:IssueDateTime>

@@ -18,6 +18,8 @@ type NormalizedAddress = {
 
 export type NormalizedEinvoice = {
   invoiceNumber: string;
+  /** UNTDID 1001: 380 commercial invoice, 381 credit note. */
+  typeCode: '380' | '381';
   issueDate: string; // YYYY-MM-DD
   dueDate: string; // YYYY-MM-DD
   currency: 'EUR';
@@ -192,6 +194,7 @@ export const normalizeInvoiceForEinvoice = (
 
   return {
     invoiceNumber: invoice.number.trim(),
+    typeCode: invoice.documentKind === 'credit_note' || invoice.documentKind === 'cancellation_invoice' ? '381' : '380',
     issueDate: toIsoDate(invoice.date, 'date'),
     dueDate: toIsoDate(invoice.dueDate, 'dueDate'),
     currency: 'EUR',

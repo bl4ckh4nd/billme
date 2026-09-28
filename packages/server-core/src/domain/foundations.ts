@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { deploymentModeSchema, serverProductSchema, serverRoleSchema, type ServerProduct } from '../shared/runtime-profile.js';
 import { billingLineItemSchema } from './billing-lines.js';
+import { documentLayoutSchema } from './documentTemplate.js';
 
 export {
   billingLineItemSchema,
@@ -317,6 +318,7 @@ export const billingDocumentBaseSchema = z.object({
   amount: z.number(),
   items: z.array(billingLineItemSchema).default([]),
   history: z.array(documentHistoryEntrySchema).default([]),
+  layout: documentLayoutSchema.optional(),
   createdAt: isoDateTimeSchema.optional(),
   updatedAt: isoDateTimeSchema.optional(),
 });

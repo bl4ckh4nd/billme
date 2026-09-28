@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { PgliteServerDatabase } from '@billme/server-data';
 import { buildServerApi } from './app.js';
+import { createDefaultTemplateBody } from '@billme/server-core';
 
 const localToken = 'embedded-test-local-access-token';
 const tenantId = 'embedded-tenant';
@@ -451,19 +452,16 @@ test('embedded Lite server owns catalog CRUD and clears active template referenc
     assert.equal((await app.inject({ method: 'GET', url: '/api/v1/lite/accounts', headers })).json()[0].id, account.id);
     assert.equal((await app.inject({ method: 'DELETE', url: `/api/v1/lite/accounts/${account.id}`, headers })).statusCode, 200);
 
-    const template = { id: 'lite-catalog-template', kind: 'invoice', name: 'Standard', createdAt: now, updatedAt: now, elements: [] };
-    const savedTemplate = await app.inject({ method: 'POST', url: '/api/v1/lite/templates', headers, payload: { template } });
+    const body = createDefaultTemplateBody('invoice');
+    const savedTemplate = await app.inject({ method: 'POST', url: '/api/v1/lite/document-templates', headers, payload: { template: { id: 'lite-catalog-template', kind: 'invoice', name: 'Standard', body } } });
     assert.equal(savedTemplate.statusCode, 200, savedTemplate.body);
-    assert.deepEqual(savedTemplate.json(), template);
-    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/lite/templates', headers })).json()[0].id, template.id);
-    for (const kind of ['invoice', 'offer'] as const) {
-      const setActive = await app.inject({ method: 'PUT', url: '/api/v1/lite/templates/active', headers, payload: { kind, templateId: template.id } });
-      assert.equal(setActive.statusCode, 200, setActive.body);
-      assert.equal((await app.inject({ method: 'GET', url: `/api/v1/lite/templates/active/${kind}`, headers })).json().id, template.id);
-    }
-    assert.equal((await app.inject({ method: 'DELETE', url: `/api/v1/lite/templates/${template.id}`, headers })).statusCode, 200);
-    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/lite/templates/active/invoice', headers })).json(), null);
-    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/lite/templates/active/offer', headers })).json(), null);
+    assert.deepEqual(savedTemplate.json().body, body);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/lite/document-templates', headers })).json()[0].id, 'lite-catalog-template');
+    const setDefault = await app.inject({ method: 'PUT', url: '/api/v1/lite/document-templates/defaults', headers, payload: { kind: 'invoice', templateId: 'lite-catalog-template' } });
+    assert.equal(setDefault.statusCode, 200, setDefault.body);
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/v1/lite/document-templates/defaults', headers })).json(), { invoice: 'lite-catalog-template' });
+    assert.equal((await app.inject({ method: 'DELETE', url: '/api/v1/lite/document-templates/lite-catalog-template', headers })).statusCode, 200);
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/v1/lite/document-templates/defaults', headers })).json(), {});
   } finally {
     await app.close();
     await rm(dataDir, { recursive: true, force: true });
@@ -659,13 +657,13 @@ test('embedded Pro server owns catalog CRUD and clears every active reference be
        VALUES ('catalog-account-other', 'embedded-catalog-other-tenant', 'Anderes Konto', 'DE02120300000000202051', 200, '1200', 'bank', '#654321')`,
     );
     await database.query(
-      `INSERT INTO templates (id, tenant_id, kind, name, elements_json, created_at, updated_at)
-       VALUES ('catalog-template-other', 'embedded-catalog-other-tenant', 'invoice', 'Andere Vorlage', '[]', $1, $1)`,
-      [now],
+      `INSERT INTO document_templates (id, tenant_id, kind, name, version, body_json, created_at, updated_at)
+       VALUES ('catalog-template-other', 'embedded-catalog-other-tenant', 'invoice', 'Andere Vorlage', 1, $2, $1, $1)`,
+      [now, JSON.stringify(createDefaultTemplateBody('invoice'))],
     );
     await database.query(
-      `INSERT INTO active_templates (tenant_id, id, invoice_template_id, offer_template_id)
-       VALUES ('embedded-catalog-other-tenant', 1, 'catalog-template-other', 'catalog-template-other')`,
+      `INSERT INTO document_template_defaults (tenant_id, kind, template_id)
+       VALUES ('embedded-catalog-other-tenant', 'invoice', 'catalog-template-other')`,
     );
     const headers = {
       'x-billme-local-token': 'embedded-pro-local-access-token',
@@ -700,29 +698,27 @@ test('embedded Pro server owns catalog CRUD and clears every active reference be
       ['embedded-catalog-other-tenant', 'catalog-account-other'],
     )).rows[0]?.count, '1');
 
-    const template = {
-      id: 'catalog-template-1', kind: 'invoice', name: 'Standard', createdAt: now, updatedAt: now, elements: [],
-    };
-    const savedTemplate = await app.inject({ method: 'POST', url: '/api/v1/pro/templates', headers, payload: { template } });
+    const body = createDefaultTemplateBody('invoice');
+    const savedTemplate = await app.inject({ method: 'POST', url: '/api/v1/pro/document-templates', headers, payload: { template: { id: 'catalog-template-1', kind: 'invoice', name: 'Standard', body } } });
     assert.equal(savedTemplate.statusCode, 200, savedTemplate.body);
-    assert.deepEqual(savedTemplate.json(), template);
-    const setInvoice = await app.inject({ method: 'PUT', url: '/api/v1/pro/templates/active', headers, payload: { kind: 'invoice', templateId: template.id } });
+    const setInvoice = await app.inject({ method: 'PUT', url: '/api/v1/pro/document-templates/defaults', headers, payload: { kind: 'invoice', templateId: 'catalog-template-1' } });
     assert.equal(setInvoice.statusCode, 200, setInvoice.body);
-    const setOffer = await app.inject({ method: 'PUT', url: '/api/v1/pro/templates/active', headers, payload: { kind: 'offer', templateId: template.id } });
-    assert.equal(setOffer.statusCode, 200, setOffer.body);
-    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/pro/templates/active/invoice', headers })).json().id, template.id);
-    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/pro/templates/active/offer', headers })).json().id, template.id);
-    assert.equal((await app.inject({ method: 'DELETE', url: `/api/v1/pro/templates/${template.id}`, headers })).statusCode, 200);
-    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/pro/templates/active/invoice', headers })).json(), null);
-    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/pro/templates/active/offer', headers })).json(), null);
-    assert.equal((await database.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM templates WHERE tenant_id = $1 AND id = $2`,
+    // Another tenant's template id can neither be taken over nor made a default here.
+    const hijack = await app.inject({ method: 'POST', url: '/api/v1/pro/document-templates', headers, payload: { template: { id: 'catalog-template-other', kind: 'invoice', name: 'Übernommen', body } } });
+    assert.equal(hijack.statusCode, 409, hijack.body);
+    const foreignDefault = await app.inject({ method: 'PUT', url: '/api/v1/pro/document-templates/defaults', headers, payload: { kind: 'invoice', templateId: 'catalog-template-other' } });
+    assert.equal(foreignDefault.statusCode, 404, foreignDefault.body);
+    assert.equal((await app.inject({ method: 'DELETE', url: '/api/v1/pro/document-templates/catalog-template-1', headers })).statusCode, 200);
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/v1/pro/document-templates/defaults', headers })).json(), {});
+    assert.equal((await app.inject({ method: 'DELETE', url: '/api/v1/pro/document-templates/catalog-template-other', headers })).statusCode, 200);
+    assert.deepEqual((await database.query<{ name: string }>(
+      `SELECT name FROM document_templates WHERE tenant_id = $1 AND id = $2`,
       ['embedded-catalog-other-tenant', 'catalog-template-other'],
-    )).rows[0]?.count, '1');
-    assert.deepEqual((await database.query<{ invoice_template_id: string; offer_template_id: string }>(
-      `SELECT invoice_template_id, offer_template_id FROM active_templates WHERE tenant_id = $1`,
+    )).rows, [{ name: 'Andere Vorlage' }]);
+    assert.deepEqual((await database.query<{ template_id: string }>(
+      `SELECT template_id FROM document_template_defaults WHERE tenant_id = $1`,
       ['embedded-catalog-other-tenant'],
-    )).rows[0], { invoice_template_id: 'catalog-template-other', offer_template_id: 'catalog-template-other' });
+    )).rows, [{ template_id: 'catalog-template-other' }]);
   } finally {
     await app.close();
     await rm(dataDir, { recursive: true, force: true });

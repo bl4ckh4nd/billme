@@ -85,8 +85,9 @@ const renderPdf = async (query: Record<string, string>, timeoutMs: number): Prom
 };
 
 export const exportPdf = async (params: {
-  kind: 'invoice' | 'offer';
+  kind: 'invoice' | 'offer' | 'dunning';
   id: string;
+  level?: number;
   suggestedName: string;
   userDataPath: string;
 }): Promise<{ path: string; bytes: Uint8Array }> => {
@@ -96,7 +97,9 @@ export const exportPdf = async (params: {
   const fileName = `${sanitizeFilePart(params.suggestedName || `${params.kind}-${params.id}`)}.pdf`;
   const destPath = path.join(exportsDir, fileName);
 
-  const bytes = await renderPdf({ __print: '1', kind: params.kind, id: params.id }, 15_000);
+  const query: Record<string, string> = { __print: '1', kind: params.kind, id: params.id };
+  if (params.level) query.level = String(params.level);
+  const bytes = await renderPdf(query, 15_000);
   fs.writeFileSync(destPath, bytes);
 
   return { path: destPath, bytes };

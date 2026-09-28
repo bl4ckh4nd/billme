@@ -38,8 +38,9 @@ export const createDesktopApp = (
     return (
       <ErrorBoundary>
         <PrintDocument
-          kind={params.get('kind') === 'offer' ? 'offer' : 'invoice'}
+          kind={params.get('kind') === 'offer' ? 'offer' : params.get('kind') === 'dunning' ? 'dunning' : 'invoice'}
           id={params.get('id') ?? ''}
+          level={Number(params.get('level')) || undefined}
         />
       </ErrorBoundary>
     );

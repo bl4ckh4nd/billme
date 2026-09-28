@@ -33,9 +33,8 @@ test('server-runtime registers the hosted Pro catalog routes before authenticati
     for (const url of [
       '/api/v1/pro/articles',
       '/api/v1/pro/accounts',
-      '/api/v1/pro/templates',
-      '/api/v1/pro/templates/active/invoice',
-      '/api/v1/pro/templates/active/offer',
+      '/api/v1/pro/document-templates',
+      '/api/v1/pro/document-templates/defaults',
     ]) {
       const response = await app.inject({ method: 'GET', url });
       assert.equal(response.statusCode, 401, `${url} must be registered and reach product auth`);

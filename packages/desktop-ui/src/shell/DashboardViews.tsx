@@ -1,26 +1,18 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
-    TrendingUp, TrendingDown, Plus, AlertTriangle, ArrowDownLeft, Clock, Landmark, MoreVertical, ReceiptText,
+    TrendingUp, TrendingDown, AlertTriangle, ArrowDownLeft, Clock, Landmark, MoreVertical, ReceiptText,
     ArrowUpRight, Settings2
 } from 'lucide-react';
 import {
   Avatar, Badge, BarChart, Button, CardHeader, Donut, EmptyState, ErrorState, HatchedProgress, IconButton, ListRow, Menu, Metric,
-  PageHeader, SegmentedControl, cn, popoverExitClass, useActionFeedback, useAnchoredPosition, useExitTransition, Sparkline,
+  PageHeader, SegmentedControl, cn, popoverExitClass, useAnchoredPosition, useExitTransition, Sparkline,
 } from '@billme/ui';
-import type { AppSettings, DocumentTemplate, Invoice, InvoiceElement } from '@billme/desktop-core/types';
+import type { AppSettings, Invoice } from '@billme/desktop-core/types';
 import { useInvoicesQuery } from '@billme/desktop-renderer/hooks/useInvoices';
 import { useArticlesQuery } from '@billme/desktop-renderer/hooks/useArticles';
 import { useSettingsQuery, useSetSettingsMutation } from '@billme/desktop-renderer/hooks/useSettings';
 import { useOffersQuery } from '@billme/desktop-renderer/hooks/useOffers';
-import {
-  useActiveTemplateQuery,
-  useSetActiveTemplateMutation,
-  useTemplatesQuery,
-  useUpsertTemplateMutation,
-} from '@billme/desktop-renderer/hooks/useTemplates';
-import { INITIAL_INVOICE_TEMPLATE, INITIAL_OFFER_TEMPLATE } from '@billme/desktop-core/constants';
-import { v4 as uuidv4 } from 'uuid';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { estimateMonthVat } from './vatEstimate';
 import { SkeletonLoader } from '../components/SkeletonLoader';
@@ -783,171 +775,3 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
     </div>
   );
 };
-
-export const TemplatesView: React.FC<{ onOpenEditor: (type: 'invoice' | 'offer') => void }> = ({ onOpenEditor }) => {
-    const [activeTab, setActiveTab] = useState<'invoice' | 'offer'>('invoice');
-    const { notify } = useActionFeedback('templates');
-    const templatesQuery = useTemplatesQuery(activeTab);
-    const { data: templates = [] } = templatesQuery;
-    const { data: activeTemplate } = useActiveTemplateQuery(activeTab);
-    const setActiveTemplateMutation = useSetActiveTemplateMutation();
-    const upsertTemplateMutation = useUpsertTemplateMutation();
-
-    const handleCreateNewTemplate = async () => {
-        const baseElements =
-            activeTemplate?.elements ??
-            (activeTab === 'offer' ? INITIAL_OFFER_TEMPLATE : INITIAL_INVOICE_TEMPLATE);
-
-        const now = new Date();
-        const ts = now.toISOString();
-        const template: DocumentTemplate = {
-            id: uuidv4(),
-            kind: activeTab,
-            name:
-                activeTab === 'offer'
-                    ? `Angebotsvorlage ${now.toLocaleDateString('de-DE')}`
-                    : `Rechnungsvorlage ${now.toLocaleDateString('de-DE')}`,
-            elements: baseElements as unknown as InvoiceElement[],
-            createdAt: ts,
-            updatedAt: ts,
-        };
-
-        try {
-            const saved = await upsertTemplateMutation.mutateAsync(template);
-            await setActiveTemplateMutation.mutateAsync({ kind: activeTab, templateId: saved.id });
-            onOpenEditor(activeTab);
-        } catch (e) {
-            notify('error', `Vorlage anlegen fehlgeschlagen: ${String(e)}`);
-        }
-    };
-
-    return (
-        <div className="min-h-full px-1 pt-2 flex flex-col">
-            <div className="flex items-center justify-between mb-8">
-                <div>
-                    <h3 className="font-semibold text-2xl text-foreground mb-1">Vorlagen</h3>
-                    <p className="text-sm text-muted">Lege das Layout deiner Geschäftsdokumente fest.</p>
-                </div>
-                <div className="bg-surface-muted p-1 rounded-full flex items-center">
-                    <button
-                        type="button"
-                        onClick={() => setActiveTab('invoice')}
-                        className={`px-6 py-2 rounded-control text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${activeTab === 'invoice' ? 'bg-surface shadow-sm text-foreground' : 'text-muted hover:text-foreground'}`}
-                    >
-                        Rechnungen
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setActiveTab('offer')}
-                        className={`px-6 py-2 rounded-control text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${activeTab === 'offer' ? 'bg-surface shadow-sm text-foreground' : 'text-muted hover:text-foreground'}`}
-                    >
-                        Angebote
-                    </button>
-                </div>
-            </div>
-      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6">
-
-            {templatesQuery.isError ? (
-                <ErrorState
-                    title="Vorlagen konnten nicht geladen werden"
-                    description="Die Liste der Vorlagen ist nicht verfügbar. Bereits gespeicherte Vorlagen sind nicht verloren."
-                    onRetry={() => void templatesQuery.refetch()}
-                />
-            ) : templatesQuery.isPending ? (
-                <SkeletonLoader variant="card" count={4} />
-            ) : templates.length === 0 ? (
-                <EmptyState
-                    title="Noch keine eigenen Vorlagen"
-                    description="Du arbeitest mit den mitgelieferten Standardlayouts. Lege eine eigene Vorlage an, um das Layout deiner Dokumente anzupassen."
-                    action={(
-                        <button
-                            type="button"
-                            onClick={() => void handleCreateNewTemplate()}
-                            className="px-4 py-2 rounded-control text-xs font-semibold bg-dark-base text-inverse-foreground hover:bg-surface-inverse-raised transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                        >
-                            Neue Vorlage anlegen
-                        </button>
-                    )}
-                />
-            ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {/* Create New Card */}
-                <button
-                    type="button"
-                    onClick={() => void handleCreateNewTemplate()}
-                    className="aspect-[3/4] bg-surface-muted rounded-xl border-2 border-dashed border-control-border flex flex-col items-center justify-center gap-4 hover:border-foreground hover:bg-surface transition-colors group focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                    <div className="w-16 h-16 bg-surface border border-border rounded-full flex items-center justify-center">
-                        <Plus size={24} className="text-muted group-hover:text-foreground" aria-hidden="true" />
-                    </div>
-                    <span className="font-semibold text-muted group-hover:text-foreground text-center px-4">
-                        Neue {activeTab === 'invoice' ? 'Rechnungsvorlage' : 'Angebotsvorlage'}
-                    </span>
-                </button>
-
-                {/* Templates */}
-                {templates.map((t) => (
-                <div
-                    key={t.id}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Vorlage ${t.name} bearbeiten`}
-                    className="aspect-[3/4] bg-surface rounded-xl border border-border p-4 flex flex-col hover:border-control-border transition-colors cursor-pointer group relative overflow-hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    onClick={() => onOpenEditor(activeTab)}
-                    onKeyDown={(e) => {
-                        if (e.target !== e.currentTarget) return;
-                        if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            onOpenEditor(activeTab);
-                        }
-                    }}
-                >
-                    <div className="flex-1 bg-surface-muted rounded-md mb-4 relative overflow-hidden flex flex-col p-4 gap-2 border border-border">
-                         {/* Mini preview abstraction */}
-                         <div className="w-1/3 h-2 bg-border rounded-full self-end"></div>
-                         <div className="w-1/2 h-2 bg-border rounded-full mt-4"></div>
-                         <div className="w-full h-1 bg-border-subtle rounded-full mt-2"></div>
-                         <div className="w-full h-1 bg-border-subtle rounded-full"></div>
-
-                         <div className="mt-auto bg-surface border border-border p-2 rounded-sm">
-                             <div className="w-full h-1 bg-border-subtle rounded-full mb-1"></div>
-                             <div className="flex justify-between">
-                                 <div className="w-1/4 h-1 bg-border-subtle rounded-full"></div>
-                                 <div className="w-1/4 h-1 bg-border rounded-full"></div>
-                             </div>
-                         </div>
-                    </div>
-                    <h4 className="font-semibold text-lg text-foreground">{t.name}</h4>
-                    <p className="text-xs text-muted">A4 • {t.id === activeTemplate?.id ? 'Aktiv' : 'Vorlage'}</p>
-
-                    <button
-                        type="button"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            void setActiveTemplateMutation.mutateAsync({ kind: activeTab, templateId: t.id });
-                        }}
-                        className={`absolute top-4 left-4 px-3 py-1 rounded-control text-xs font-semibold uppercase border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                            t.id === activeTemplate?.id
-                                ? 'bg-accent text-accent-foreground border-accent'
-                                : 'bg-surface text-muted border-control-border hover:bg-surface-muted'
-                        }`}
-                    >
-                        {t.id === activeTemplate?.id ? 'Aktiv' : 'Aktivieren'}
-                    </button>
-
-                    <button
-                        type="button"
-                        aria-label={`Vorlage ${t.name} öffnen`}
-                        onClick={(e) => { e.stopPropagation(); onOpenEditor(activeTab); }}
-                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground absolute bottom-4 right-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
-                    >
-                        <ArrowUpRight size={16} aria-hidden="true" />
-                    </button>
-                </div>
-                ))}
-            </div>
-            )}
-        </div>
-    </div>
-    );
-}

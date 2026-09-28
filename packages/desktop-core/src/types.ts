@@ -1,15 +1,6 @@
 
-// Designer element model: canonical definitions live in @billme/desktop-designer.
-export { ElementType } from '@billme/desktop-designer/types';
-export type {
-  ElementStyle,
-  TableColumn,
-  TableRow,
-  InvoiceElement,
-  SnapGuide,
-  DocumentTemplate,
-  DocumentTemplateKind,
-} from '@billme/desktop-designer/types';
+import type { z } from 'zod';
+import type { documentLayoutSchema } from '@billme/desktop-contracts/schemas';
 
 export interface GenerationRequest {
   industry: string;
@@ -283,6 +274,7 @@ export interface Invoice {
   items: InvoiceItem[];
   payments: Payment[];
   history?: { date: string; action: string }[];
+  layout?: z.infer<typeof documentLayoutSchema>;
 }
 
 // --- Recurring Invoice Types ---
@@ -421,4 +413,3 @@ export interface Account {
   color: string; // Tailwind class mostly or hex
 }
 
-// --- Template Types (DocumentTemplate re-exported from @billme/desktop-designer above) ---

@@ -16,8 +16,8 @@ import {
 import {
   accountSchema,
   articleSchema,
-  templateKindSchema,
-  templateSchema,
+  documentTemplateKindSchema,
+  upsertDocumentTemplateArgsSchema,
 } from '@billme/desktop-contracts-pro/schemas';
 import {
   createBillmeServerClient,
@@ -575,41 +575,26 @@ const withDefaults = async (args: ParsedArgs, io: CliIo) => {
     }
     if (scope === 'templates' && action === 'list') {
       const kind = getStringFlag(proArgs, 'kind');
-      writeJson(
-        io,
-        await client.listTemplates({
-          kind: kind ? templateKindSchema.parse(kind) : undefined,
-        }),
-      );
+      writeJson(io, await client.listTemplates({ kind: kind ? documentTemplateKindSchema.parse(kind) : undefined }));
       return 0;
     }
     if (scope === 'templates' && action === 'upsert') {
-      const payload = withGeneratedId(await readJsonInput(proArgs, io, templateSchema.partial()));
-      writeJson(
-        io,
-        await client.upsertTemplate({
-          template: templateSchema.parse(payload),
-        }),
-      );
+      const payload = await readJsonInput(proArgs, io, upsertDocumentTemplateArgsSchema.shape.template);
+      writeJson(io, await client.upsertTemplate({ template: payload }));
       return 0;
     }
     if (scope === 'templates' && action === 'get-active') {
-      writeJson(
-        io,
-        await client.getActiveTemplate({
-          kind: templateKindSchema.parse(requireStringFlag(proArgs, 'kind')),
-        }),
-      );
+      const kind = documentTemplateKindSchema.parse(requireStringFlag(proArgs, 'kind'));
+      const defaults = await client.getTemplateDefaults();
+      const templates = await client.listTemplates({ kind });
+      writeJson(io, templates.find((template) => template.id === defaults[kind]) ?? null);
       return 0;
     }
     if (scope === 'templates' && action === 'set-active') {
-      writeJson(
-        io,
-        await client.setActiveTemplate({
-          kind: templateKindSchema.parse(requireStringFlag(proArgs, 'kind')),
-          templateId: getStringFlag(proArgs, 'template-id') ?? null,
-        }),
-      );
+      writeJson(io, await client.setDefaultTemplate({
+        kind: documentTemplateKindSchema.parse(requireStringFlag(proArgs, 'kind')),
+        templateId: getStringFlag(proArgs, 'template-id') ?? null,
+      }));
       return 0;
     }
   }

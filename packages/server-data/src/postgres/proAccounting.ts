@@ -17,6 +17,7 @@ import type {
   AccountingMutationContext,
 } from '@billme/accounting-shared';
 import type { ProAccountingCatalogRepository, ProWorkflowRepository, TenantScope } from '@billme/server-core';
+import { migrateCanvasTemplate, type LegacyCanvasElement } from '@billme/server-core';
 import { and, asc, count, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { accountSuggestionRuleMatches } from '@billme/finance-intelligence';
 import { isPostgresPool, withSerializablePostgresTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
@@ -63,6 +64,17 @@ export interface ServerTemplateRecord {
   kind: string;
   name: string;
   elementsJson: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ServerDocumentTemplateRecord {
+  id: string;
+  tenantId: string;
+  kind: string;
+  name: string;
+  version: number;
+  bodyJson: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -498,6 +510,160 @@ export const saveServerActiveTemplates = async (
     invoiceTemplateId: record.invoiceTemplateId ?? null, offerTemplateId: record.offerTemplateId ?? null }, schema.activeTemplates.tenantId,
     { id: record.id, invoiceTemplateId: record.invoiceTemplateId ?? null, offerTemplateId: record.offerTemplateId ?? null });
   return record;
+};
+
+const toDocumentTemplateRecord = (row: typeof schema.documentTemplates.$inferSelect): ServerDocumentTemplateRecord => ({
+  id: row.id!,
+  tenantId: row.tenantId!,
+  kind: row.kind!,
+  name: row.name!,
+  version: row.version!,
+  bodyJson: row.bodyJson!,
+  createdAt: row.createdAt!,
+  updatedAt: row.updatedAt!,
+});
+
+export const listServerDocumentTemplates = async (
+  db: PostgresQueryable,
+  tenantId: string,
+): Promise<ServerDocumentTemplateRecord[]> => {
+  const rows = await drizzleDb(db).select().from(schema.documentTemplates)
+    .where(eq(schema.documentTemplates.tenantId, tenantId))
+    .orderBy(asc(schema.documentTemplates.kind), asc(schema.documentTemplates.name), asc(schema.documentTemplates.id));
+  return rows.map(toDocumentTemplateRecord);
+};
+
+/** Saves the current state and appends it as the next immutable version. */
+export const saveServerDocumentTemplate = async (
+  db: PostgresQueryable,
+  input: Omit<ServerDocumentTemplateRecord, 'version' | 'createdAt' | 'updatedAt'>,
+): Promise<ServerDocumentTemplateRecord> => inTaxMappingTransaction(db, async (client) => {
+  const now = nowIso();
+  const existing = (await drizzleDb(client).select().from(schema.documentTemplates)
+    .where(eq(schema.documentTemplates.id, input.id)).limit(1))[0];
+  if (existing && existing.tenantId !== input.tenantId) throw new Error('Template id already belongs to another tenant');
+  if (existing && existing.kind !== input.kind) throw new Error('Die Art einer Vorlage kann nicht geändert werden.');
+  // A deleted template leaves only its versions; its id must not pass to another tenant.
+  const foreignVersion = (await drizzleDb(client).select({ tenantId: schema.documentTemplateVersions.tenantId })
+    .from(schema.documentTemplateVersions).where(eq(schema.documentTemplateVersions.templateId, input.id)).limit(1))[0];
+  if (foreignVersion && foreignVersion.tenantId !== input.tenantId) throw new Error('Template id already belongs to another tenant');
+  const lastVersion = (await drizzleDb(client).select({ version: sql<number>`max(${schema.documentTemplateVersions.version})` })
+    .from(schema.documentTemplateVersions).where(eq(schema.documentTemplateVersions.templateId, input.id)))[0]?.version;
+  const record: ServerDocumentTemplateRecord = {
+    ...input,
+    version: Number(lastVersion ?? 0) + 1,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+  await drizzleDb(client).insert(schema.documentTemplateVersions).values({ templateId: record.id, version: record.version,
+    tenantId: record.tenantId, kind: record.kind, bodyJson: record.bodyJson, createdAt: now });
+  await upsert(client, schema.documentTemplates, record, schema.documentTemplates.id,
+    { name: record.name, version: record.version, bodyJson: record.bodyJson, updatedAt: record.updatedAt });
+  return record;
+});
+
+export const getServerDocumentTemplateVersion = async (
+  db: PostgresQueryable,
+  tenantId: string,
+  templateId: string,
+  version: number,
+): Promise<{ kind: string; bodyJson: string } | null> => {
+  const row = (await drizzleDb(db).select().from(schema.documentTemplateVersions).where(and(
+    eq(schema.documentTemplateVersions.tenantId, tenantId),
+    eq(schema.documentTemplateVersions.templateId, templateId),
+    eq(schema.documentTemplateVersions.version, version),
+  )).limit(1))[0];
+  return row ? { kind: row.kind!, bodyJson: row.bodyJson! } : null;
+};
+
+/** Removes the current row only; versions stay for documents that reference them. */
+export const deleteServerDocumentTemplate = async (
+  db: PostgresQueryable,
+  tenantId: string,
+  id: string,
+): Promise<void> => {
+  await drizzleDb(db).delete(schema.documentTemplateDefaults).where(and(
+    eq(schema.documentTemplateDefaults.tenantId, tenantId),
+    eq(schema.documentTemplateDefaults.templateId, id),
+  ));
+  await drizzleDb(db).delete(schema.documentTemplates).where(and(
+    eq(schema.documentTemplates.tenantId, tenantId),
+    eq(schema.documentTemplates.id, id),
+  ));
+};
+
+export const getServerDocumentTemplateDefaults = async (
+  db: PostgresQueryable,
+  tenantId: string,
+): Promise<Record<string, string>> => {
+  const rows = await drizzleDb(db).select().from(schema.documentTemplateDefaults)
+    .where(eq(schema.documentTemplateDefaults.tenantId, tenantId));
+  return Object.fromEntries(rows.map((row) => [row.kind!, row.templateId!]));
+};
+
+export const saveServerDocumentTemplateDefault = async (
+  db: PostgresQueryable,
+  tenantId: string,
+  kind: string,
+  templateId: string | null,
+): Promise<void> => {
+  if (!templateId) {
+    await drizzleDb(db).delete(schema.documentTemplateDefaults).where(and(
+      eq(schema.documentTemplateDefaults.tenantId, tenantId),
+      eq(schema.documentTemplateDefaults.kind, kind),
+    ));
+    return;
+  }
+  await upsert(db, schema.documentTemplateDefaults, { tenantId, kind, templateId },
+    [schema.documentTemplateDefaults.tenantId, schema.documentTemplateDefaults.kind], { templateId });
+};
+
+/** Template ids that ever existed, including deleted ones (the version log is append-only). */
+export const listServerDocumentTemplateVersionIds = async (
+  db: PostgresQueryable,
+  tenantId: string,
+): Promise<Set<string>> => {
+  const rows = await drizzleDb(db).selectDistinct({ templateId: schema.documentTemplateVersions.templateId })
+    .from(schema.documentTemplateVersions).where(eq(schema.documentTemplateVersions.tenantId, tenantId));
+  return new Set(rows.map((row) => row.templateId!));
+};
+
+/**
+ * Converts canvas templates (`templates`/`active_templates`) into flow
+ * templates. Idempotent: the converted id is derived from the legacy id and
+ * skipped once it exists in the append-only version log, so a converted
+ * template the user deleted does not come back.
+ */
+export const convertLegacyServerTemplates = async (db: PostgresQueryable, tenantId?: string): Promise<number> => {
+  const tenantRows = await drizzleDb(db).selectDistinct({ tenantId: schema.templates.tenantId }).from(schema.templates)
+    .where(tenantId ? eq(schema.templates.tenantId, tenantId) : undefined);
+  let converted = 0;
+  for (const { tenantId: tenant } of tenantRows) {
+    if (!tenant) continue;
+    const known = await listServerDocumentTemplateVersionIds(db, tenant);
+    const active = await getServerActiveTemplates(db, tenant);
+    const defaults = await getServerDocumentTemplateDefaults(db, tenant);
+    for (const legacy of await listServerTemplates(db, tenant)) {
+      if (legacy.kind !== 'invoice' && legacy.kind !== 'offer') continue;
+      const id = `legacy-${legacy.id}`;
+      if (known.has(id)) continue;
+      let elements: LegacyCanvasElement[] = [];
+      try {
+        const parsed: unknown = JSON.parse(legacy.elementsJson);
+        if (Array.isArray(parsed)) elements = parsed as LegacyCanvasElement[];
+      } catch {
+        // A broken canvas still converts to the preset default.
+      }
+      const body = migrateCanvasTemplate(legacy.kind, elements);
+      await saveServerDocumentTemplate(db, { id, tenantId: tenant, kind: legacy.kind, name: legacy.name, bodyJson: JSON.stringify(body) });
+      converted += 1;
+      const activeId = legacy.kind === 'invoice' ? active?.invoiceTemplateId : active?.offerTemplateId;
+      if (activeId === legacy.id && !defaults[legacy.kind]) {
+        await saveServerDocumentTemplateDefault(db, tenant, legacy.kind, id);
+      }
+    }
+  }
+  return converted;
 };
 
 export const saveServerLedgerAccount = async (db: PostgresQueryable, account: LedgerAccount): Promise<LedgerAccount> => {

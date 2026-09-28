@@ -37,11 +37,17 @@ export type NativeIpcHandler = (args: any) => Promise<unknown> | unknown;
 
 export interface NativeIpcDocumentExports {
   readonly exportPdf: (options: {
-    kind: 'invoice' | 'offer';
+    kind: 'invoice' | 'offer' | 'dunning';
     id: string;
+    level?: number;
     suggestedName: string;
     userDataPath: string;
-  }) => Promise<{ path: string }>;
+  }) => Promise<{ path: string; bytes: Uint8Array }>;
+  /** Names the file from the document and post-processes the PDF (ZUGFeRD); injected by the app. */
+  readonly prepareDocumentExport?: (kind: 'invoice' | 'offer' | 'dunning', id: string, level?: number) => Promise<{
+    suggestedName: string;
+    finalize?: (pdf: Uint8Array) => Promise<Uint8Array>;
+  }>;
   readonly exportEurPdf: (options: {
     taxYear: number;
     from?: string;
@@ -208,12 +214,18 @@ export const registerNativeIpcCommonHandlers = (
     return { path: result.filePaths[0] ?? null };
   });
 
-  register('pdf:export', async ({ kind, id }) => documentExports.exportPdf({
-    kind,
-    id,
-    suggestedName: `${kind}-${id}`,
-    userDataPath: deps.getUserDataPath(),
-  }));
+  register('pdf:export', async ({ kind, id, level }) => {
+    const prepared = await documentExports.prepareDocumentExport?.(kind, id, level);
+    const result = await documentExports.exportPdf({
+      kind,
+      id,
+      level,
+      suggestedName: prepared?.suggestedName ?? `${kind}-${id}`,
+      userDataPath: deps.getUserDataPath(),
+    });
+    if (prepared?.finalize) writeFileSync(result.path, await prepared.finalize(result.bytes));
+    return { path: result.path };
+  });
   register('eur:exportPdf', async ({ taxYear, from, to }) => documentExports.exportEurPdf({
     taxYear,
     ...(from ? { from } : {}),

@@ -1,7 +1,7 @@
 export { DocumentEditor } from './DocumentEditor';
 export type { DocumentEditorProps } from './DocumentEditor';
-export { DocumentCanvasEditor } from './DocumentCanvasEditor';
-export type { DocumentCanvasDocumentFields, DocumentCanvasEditorProps, DocumentDraftUpdater } from './DocumentCanvasEditor';
+export { DocumentFlowEditor } from './DocumentFlowEditor';
+export type { DocumentFlowDocumentFields, DocumentFlowEditorProps, DocumentDraftUpdater } from './DocumentFlowEditor';
 export type {
   ArticleLike,
   ClientLike,

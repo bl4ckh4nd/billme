@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { DocumentEditor } from '@billme/desktop-designer/document-editor';
 import type {
   ArticleLike,
@@ -9,12 +9,12 @@ import type {
 } from '@billme/desktop-designer/document-editor';
 import { ErrorState } from '@billme/ui';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
-import { INITIAL_INVOICE_TEMPLATE, INITIAL_OFFER_TEMPLATE } from '@billme/desktop-core/constants';
+import { TEMPLATE_KIND_LABELS, resolveDocumentTemplate, templateKindForDocument } from '@billme/server-core/domain';
 import { useArticlesQuery } from '../hooks/useArticles';
 import { useClientsQuery } from '../hooks/useClients';
 import { useProjectsQuery } from '../hooks/useProjects';
 import { useSettingsQuery } from '../hooks/useSettings';
-import { useActiveTemplateQuery } from '../hooks/useTemplates';
+import { useDocumentTemplateDefaultsQuery, useDocumentTemplatesQuery } from '../hooks/useDocumentTemplates';
 import { getRendererRuntime } from '../runtime-api';
 import type { Invoice } from '@billme/desktop-core/types';
 
@@ -44,7 +44,19 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
     isError: settingsIsError,
     refetch: refetchSettings,
   } = useSettingsQuery();
-  const { data: activeTemplate } = useActiveTemplateQuery(templateType);
+  const { data: templates = [] } = useDocumentTemplatesQuery();
+  const { data: defaults = {} } = useDocumentTemplateDefaultsQuery();
+  const templateKind = templateType === 'offer' ? 'offer' : templateKindForDocument({ documentKind: invoice.documentKind });
+  const templateOptions = useMemo(
+    () => templates.filter((template) => template.kind === templateKind).map(({ id, name }) => ({ id, name })),
+    [templateKind, templates],
+  );
+  const resolveTemplateBody = useCallback(
+    (templateId?: string) => resolveDocumentTemplate(templateKind, { templateId, templates, defaults }).body,
+    [defaults, templateKind, templates],
+  );
+  const defaultTemplateName = templates.find((template) => template.id === defaults[templateKind] && template.kind === templateKind)?.name
+    ?? `mitgeliefert: ${TEMPLATE_KIND_LABELS[templateKind]}`;
   const { data: projects = [] } = useProjectsQuery(
     selectedClientId ? { clientId: selectedClientId, includeArchived: false } : undefined,
   );
@@ -73,9 +85,6 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
     );
   }
 
-  // ponytail: no onTemplateElementsChange, so template texts stay read-only in a document.
-  // Editing them here silently rewrote the global template for every later document.
-  // Replace once DocumentDraft carries its own intro/outro/payment-terms fields.
   return (
     <DocumentEditor
       document={invoice as unknown as DocumentDraft}
@@ -85,7 +94,10 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
       articles={articles as unknown as ArticleLike[]}
       projects={projects as unknown as ProjectLike[]}
       settings={settings as unknown as SettingsLike}
-      templateElements={activeTemplate?.elements ?? (templateType === 'offer' ? INITIAL_OFFER_TEMPLATE : INITIAL_INVOICE_TEMPLATE)}
+      templateKind={templateKind}
+      templateOptions={templateOptions}
+      defaultTemplateName={defaultTemplateName}
+      resolveTemplateBody={resolveTemplateBody}
       onValidateVatId={runtime.validateVatId}
       onSelectedClientChange={setSelectedClientId}
       onSave={(document, meta) => onSave(document as unknown as Invoice, meta)}

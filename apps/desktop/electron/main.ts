@@ -9,6 +9,7 @@ import { PRODUCT_PROFILE } from '../productProfile';
 import { registerEmbeddedConnectionHandler } from '@billme/desktop-core/electron/embeddedConnection';
 import { isPdfPrintWebContents } from '@billme/desktop-core/electron/pdfExport';
 import { createDesktopIntegration, startEmbeddedAutomationTicker } from '@billme/desktop-core/electron/embeddedAutomation';
+import { createDocumentExportPreparer } from '@billme/desktop-services/documentExport';
 import { secrets } from './secrets';
 import { createLocalBackend, type LocalBackendHandle } from './localBackend';
 
@@ -131,6 +132,7 @@ registerNativeIpcHandlers(ipcMain, {
   },
   getMainWindow: () => mainWindow,
   isTrustedSender: (sender) => mainWindow?.webContents === sender,
+  resolveEmbeddedConnection: () => localBackend?.embeddedConnection() ?? null,
 });
 
 // Global error handlers
@@ -169,7 +171,11 @@ app.whenReady().then(async () => {
   localBackend = await createLocalBackend({
     userDataPath,
     profile: PRODUCT_PROFILE,
-    desktopIntegration: createDesktopIntegration({ secrets, getUserDataPath: () => app.getPath('userData') }),
+    desktopIntegration: createDesktopIntegration({
+      secrets,
+      getUserDataPath: () => app.getPath('userData'),
+      prepareDocumentExport: createDocumentExportPreparer({ product: 'lite', resolveConnection: () => localBackend?.embeddedConnection() ?? null }),
+    }),
   });
   const backend = localBackend;
   stopAutomation = startEmbeddedAutomationTicker({

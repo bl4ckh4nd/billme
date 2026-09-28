@@ -56,8 +56,7 @@ The renderer/main boundary is contract-first:
 - `apps/*/electron/nativeIpcHandlers.ts` for native main-process adapters
 - `apps/*/electron/preload.ts` and `apps/*/ipc/window.d.ts` for the exposed window bridge
 
-The app-local `apps/*/ipc/{contract,schemas,api}.ts` files re-export the appropriate shared package.
-`@billme/desktop-contracts` owns the generic contract-to-API factory, while
+Apps import the contract packages directly. `@billme/desktop-contracts` owns the generic contract-to-API factory, while
 `@billme/desktop-core/electron/preload` owns the common preload bridge. Arguments and results are
 parsed with Zod in the preload and handler paths rather than sent over untyped ad hoc channels.
 
@@ -69,16 +68,16 @@ provided API as `globalThis.billmeApi`, and creates the React Query client. This
 `apps/demo` and `apps/web` to run the Lite Electron renderer in a browser.
 
 The package also owns the shared Lite/Pro document, client, catalog, settings, project, recurring,
-transaction-matching, and EÜR views plus their React Query hooks. App-local component and hook paths
-are compatibility re-exports. `runtime-api.ts` returns the
+transaction-matching, and EÜR views plus their React Query hooks, and the app shell under `src/ui`.
+Apps import these package paths directly; there are no app-local re-export files. `runtime-api.ts` returns the
 external Electron/HTTP adapter and throws when none is installed (the plain-Vite dev renderer installs
 `installDevMockApi` explicitly), and `ui-store.ts` is the single renderer UI-state instance.
 
 Shared behavior is tested once at its package owner (for example `@billme/server-data` or
 `@billme/desktop-renderer`). Product bootstrap tests remain in both desktop apps even when their test
 bodies currently match: they verify the separate Lite and Pro profiles and wiring.
-Likewise, the small app-local connection, preload, scheduler, polling, and renderer entrypoints are
-intentional composition roots; shared behavior belongs behind them, but the product boundary stays
+Likewise, the small app-local `electron/{main,preload,nativeIpcHandlers,localBackend}.ts`, `router.tsx` and
+renderer entrypoints are intentional composition roots; shared behavior belongs behind them, but the product boundary stays
 visible.
 
 `apps/web/src/App.tsx` supplies a Lite HTTP adapter and sets

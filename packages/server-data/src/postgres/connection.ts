@@ -126,6 +126,7 @@ export const runInTransaction = <T>(
   if (typeof wrapper.transaction === 'function') {
     return wrapper.transaction(
       options.serializable ? { isolation: 'serializable' } : {},
+      // ponytail: repositories type their session as pg PoolClient; drop the cast once they accept ServerDatabaseSession.
       (session) => work(session as unknown as PostgresTransactionClient),
     );
   }

@@ -28,9 +28,21 @@ import {
 } from './importDesktop.js';
 import type { ServerEurLineRecord, ServerReportAccountMappingRecord } from './proAccounting.js';
 
-const rootUrl = new URL('../../../../', import.meta.url);
-const liteDesktopSchemaUrl = new URL('apps/desktop/db/schema.ts', rootUrl);
-const proDesktopSchemaUrl = new URL('apps/pro-desktop/db/schema.ts', rootUrl);
+// Tables declared by the last SQLite desktop schemas (union of Lite and Pro). The SQLite
+// stack is gone and databases from v0.4.0 and earlier cannot contain newer tables, so the list is frozen.
+const desktopSqliteSchemaTables = [
+  'account_keywords', 'account_mappings_hgb', 'account_suggestion_rules', 'accounting_account_mappings',
+  'accounting_backfill_runs', 'accounting_periods', 'accounting_policies', 'accounting_source_runs',
+  'accounts', 'active_templates', 'articles', 'asset_depreciation_schedule', 'asset_movements', 'assets',
+  'audit_log', 'bank_transactions', 'booking_draft_lines', 'booking_drafts', 'client_activities',
+  'client_addresses', 'client_emails', 'client_projects', 'clients', 'datev_exports',
+  'draft_validation_issues', 'dunning_history', 'email_log', 'eur_classifications', 'eur_lines', 'eur_rules',
+  'import_batches', 'incoming_invoice_lines', 'incoming_invoices', 'invoice_items', 'invoice_payments',
+  'invoices', 'journal_entries', 'journal_lines', 'journal_posting_pairs', 'ledger_accounts',
+  'number_reservations', 'offer_items', 'offers', 'open_item_allocations', 'open_item_payments',
+  'open_items', 'pro_workflow_entries', 'recurring_profiles', 'report_snapshots', 'settings',
+  'tax_case_account_mappings', 'tax_cases', 'templates', 'transactions', 'vat_evidence', 'vendors',
+];
 const postgresMigrationUrls = [
   new URL('../../drizzle/0000_server_data.sql', import.meta.url),
   new URL('../../drizzle/0001_server_data_pro_accounting.sql', import.meta.url),
@@ -68,11 +80,6 @@ const transformedServerTables = new Set(['eur_report_snapshots']);
 const serverOwnedTenantTables = new Set([
   'eur_cash_facts', 'eur_annex_facts', 'eur_report_snapshots', 'accounting_source_runs',
 ]);
-
-const extractSqliteTableNames = async (schemaUrl: URL): Promise<string[]> => {
-  const schema = await readFile(schemaUrl, 'utf8');
-  return [...schema.matchAll(/sqliteTable\(\s*'([a-z_]+)'/g)].map((match) => match[1]);
-};
 
 const extractTenantScopedPostgresTables = async (migrationUrls: URL[]): Promise<string[]> => {
   const tables = new Set<string>();
@@ -201,13 +208,9 @@ test('detectUnsupportedSqliteTables still reports unknown populated tables only'
   assert.deepEqual(result, [{ table: 'custom_side_table', rowCount: 2 }]);
 });
 
-test('desktop sqlite onboarding schemas stay mapped to import coverage', async () => {
-  const liteTables = await extractSqliteTableNames(liteDesktopSchemaUrl);
-  const proTables = await extractSqliteTableNames(proDesktopSchemaUrl);
-
+test('desktop sqlite onboarding schemas stay mapped to import coverage', () => {
   const expected = [...new Set([
-    ...liteTables,
-    ...proTables,
+    ...desktopSqliteSchemaTables,
     ...desktopSqliteIgnoredTables,
     'eur_cash_facts', 'eur_annex_facts', 'accounting_source_runs',
   ])].filter((table) => !transformedServerTables.has(table)).sort();

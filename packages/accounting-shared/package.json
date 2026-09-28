@@ -1,5 +1,8 @@
 {
   "name": "@billme/accounting-shared",
+  "scripts": {
+    "test": "node --import tsx --test src/*.test.ts"
+  },
   "private": true,
   "version": "0.0.0",
   "type": "module",

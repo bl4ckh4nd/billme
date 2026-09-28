@@ -1,6 +1,6 @@
 import { createSingleTenantScope, type DunningHistoryEntry, type DunningSettings, type Invoice } from '../domain/index.js';
 import type { AuditEntry } from '../ports/index.js';
-import { processDunningRun, shouldRunScheduledDunning, summarizeInvoiceDunningStatus } from './index.js';
+import { processDunningRun, shouldRunScheduledDunning, summarizeInvoiceDunningStatus, type DunningDomainDependencies } from './index.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -67,7 +67,7 @@ describe('dunning domain service', () => {
       { success: true as const, messageId: 'msg-1' },
     ];
 
-    const invoiceRepo = {
+    const invoiceRepo: DunningDomainDependencies<DunningSettings>['invoiceRepo'] = {
       list: async () => [invoice],
       getById: async (_scope, id: string) => (id === invoice.id ? invoice : null),
       save: async (_scope, nextInvoice: Invoice) => {
@@ -76,14 +76,14 @@ describe('dunning domain service', () => {
       },
     };
 
-    const settingsRepo = {
+    const settingsRepo: DunningDomainDependencies<DunningSettings>['settingsRepo'] = {
       get: async () => settings,
       save: async (_scope, nextSettings: DunningSettings) => {
         Object.assign(settings, nextSettings);
       },
     };
 
-    const dunningHistoryRepo = {
+    const dunningHistoryRepo: DunningDomainDependencies<DunningSettings>['dunningHistoryRepo'] = {
       listByInvoice: async (_scope, invoiceId: string) => history.filter((entry) => entry.invoiceId === invoiceId),
       record: async (_scope, entry: Omit<DunningHistoryEntry, 'id' | 'createdAt'>) => {
         const savedEntry: DunningHistoryEntry = {
@@ -96,7 +96,7 @@ describe('dunning domain service', () => {
       },
     };
 
-    const emailPort = {
+    const emailPort: DunningDomainDependencies<DunningSettings>['emailPort'] = {
       send: async () => {
         const next = sendResults.shift();
         if (!next) {
@@ -111,7 +111,7 @@ describe('dunning domain service', () => {
       }),
     };
 
-    const auditLog = {
+    const auditLog: DunningDomainDependencies<DunningSettings>['auditLog'] = {
       append: async (_scope, entry): Promise<AuditEntry> => ({
         ...entry,
         sequence: 1,

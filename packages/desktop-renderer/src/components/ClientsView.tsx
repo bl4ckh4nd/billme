@@ -18,7 +18,7 @@ import { useCreateDocumentFromClientMutation } from '../hooks/useDocuments';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useUiStore } from '../ui-store';
 import { v4 as uuidv4 } from 'uuid';
-import { SkeletonLoader } from '@billme/desktop-ui/components/SkeletonLoader';
+import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 
 type ClientEditorErrors = Record<string, string>;
 

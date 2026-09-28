@@ -11,7 +11,7 @@ import {
   useRouterState,
 } from '@tanstack/react-router';
 import { DashboardLayout } from './components/DashboardLayout';
-import { DashboardHome, TemplatesView } from '@billme/desktop-ui';
+import { DashboardHome, TemplatesView } from '@billme/desktop-renderer/ui';
 import { AccountsView } from './components/AccountsView';
 import { DocumentsView } from '@billme/desktop-renderer/components/InvoicesView';
 import { ClientsView } from '@billme/desktop-renderer/components/ClientsView';
@@ -30,13 +30,13 @@ import { useUpsertOfferMutation } from '@billme/desktop-renderer/hooks/useOffers
 import { ipc } from './ipc/client';
 import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { OnboardingWizard } from './components/OnboardingWizard';
-import { ShortcutsModal } from '@billme/desktop-ui/components/ShortcutsModal';
+import { ShortcutsModal } from '@billme/desktop-renderer/ui/components/ShortcutsModal';
 import { useKeyboardShortcuts } from '@billme/desktop-renderer/hooks/useKeyboardShortcuts';
 import { ProAccountingPage } from './components/ProAccountingPage';
 import { EurView } from '@billme/desktop-renderer/components/EurView';
 import { TaxFilingCenter } from '@billme/desktop-renderer/components/TaxFilingCenter';
 import { Button, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
-import { shouldShowBusinessOnboarding } from '@billme/desktop-ui';
+import { shouldShowBusinessOnboarding } from '@billme/desktop-renderer/ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { useCreateIntent } from '@billme/desktop-renderer/hooks/useCreateIntent';
 

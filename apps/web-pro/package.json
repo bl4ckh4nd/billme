@@ -16,7 +16,6 @@
     "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/desktop-renderer": "workspace:*",
     "@billme/desktop-services": "workspace:*",
-    "@billme/desktop-ui": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/ui": "workspace:*",
     "react": "^19.2.3",

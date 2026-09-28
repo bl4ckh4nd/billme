@@ -3,7 +3,7 @@ import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { BusinessOnboarding, type BusinessOnboardingDraft } from '@billme/desktop-ui';
+import { BusinessOnboarding, type BusinessOnboardingDraft } from '../ui/index';
 
 type DraftOverrides = {
   company?: Partial<BusinessOnboardingDraft['company']>;

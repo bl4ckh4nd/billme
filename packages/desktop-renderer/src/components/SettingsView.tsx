@@ -6,14 +6,14 @@ import {
   Save, CheckCircle, HelpCircle, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Repeat, Monitor, Moon, Sun, SunMoon
 } from 'lucide-react';
 import { Button, ConfirmDialog, ErrorState, SegmentedControl, useActionFeedback, useThemePreference, type ThemePreference } from '@billme/ui';
-import { Spinner } from '@billme/desktop-ui/components/Spinner';
+import { Spinner } from '../ui/components/Spinner';
 import type { AppSettings, BusinessReportingProfile, DunningLevel } from '@billme/desktop-core/types';
 import { ipc } from '../runtime-api';
 import { useSetSettingsMutation, useSettingsQuery } from '../hooks/useSettings';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
-import { DunningResultModal } from '@billme/desktop-ui/components/DunningResultModal';
-import { DunningLevelPreviewModal } from '@billme/desktop-ui/components/DunningLevelPreviewModal';
+import { DunningResultModal } from '../ui/components/DunningResultModal';
+import { DunningLevelPreviewModal } from '../ui/components/DunningLevelPreviewModal';
 
 type SettingsTab = 'company' | 'catalog' | 'finance' | 'numbers' | 'dunning' | 'legal' | 'portal' | 'system' | 'email' | 'appearance';
 

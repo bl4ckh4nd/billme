@@ -5,7 +5,6 @@
   "type": "module",
   "dependencies": {
     "@billme/desktop-core": "workspace:*",
-    "@billme/desktop-ui": "workspace:*",
     "@billme/desktop-utils": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/ui": "workspace:*",

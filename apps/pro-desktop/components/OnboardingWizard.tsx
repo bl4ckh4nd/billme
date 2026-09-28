@@ -2,7 +2,7 @@ import React from 'react';
 import {
   OnboardingWizard as ShellOnboardingWizard,
   type OnboardingWizardProps,
-} from '@billme/desktop-ui';
+} from '@billme/desktop-renderer/ui';
 import type { AppSettings, BusinessReportingProfile } from '../types';
 
 type Props = Omit<OnboardingWizardProps, 'edition' | 'productName' | 'defaultReportingProfile'>;

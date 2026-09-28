@@ -1,7 +1,7 @@
 import React from 'react';
 import { BusinessOnboarding, type BusinessOnboardingDraft } from '../components/BusinessOnboarding';
 import type { AppSettings, BusinessReportingProfile } from '@billme/desktop-core/types';
-import { useSetSettingsMutation } from '@billme/desktop-renderer/hooks/useSettings';
+import { useSetSettingsMutation } from '../../hooks/useSettings';
 
 export interface OnboardingWizardProps {
   settings: AppSettings;

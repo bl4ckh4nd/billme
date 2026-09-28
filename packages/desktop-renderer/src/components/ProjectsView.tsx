@@ -10,7 +10,7 @@ import type { Project } from '@billme/desktop-core/types';
 import { useClientsQuery } from '../hooks/useClients';
 import { useArchiveProjectMutation, useProjectsQuery, useUpsertProjectMutation } from '../hooks/useProjects';
 import { useCreateIntent } from '../hooks/useCreateIntent';
-import { SkeletonLoader } from '@billme/desktop-ui/components/SkeletonLoader';
+import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 
 type EditorMode = 'create' | 'edit';
 

@@ -5,7 +5,7 @@ import {
     Edit3, X, Clock,
     Save, Calculator
 } from 'lucide-react';
-import { Spinner } from '@billme/desktop-ui/components/Spinner';
+import { Spinner } from '../ui/components/Spinner';
 import type { RecurringProfile, RecurrenceInterval, InvoiceItem } from '@billme/desktop-core/types';
 import { v4 as uuidv4 } from 'uuid';
 import { useClientsQuery } from '../hooks/useClients';

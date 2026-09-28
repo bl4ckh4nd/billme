@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { Bell, CheckCheck, Plus, X, type LucideIcon } from 'lucide-react';
 import { BillmeLogo, Button, IconButton, Kbd, KontorIcon, Portal, cn, popoverExitClass, useAnchoredPosition, useExitTransition, useThemePreference, type ThemePreference } from '@billme/ui';
-import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
+import { useSettingsQuery } from '../../hooks/useSettings';
 import { useNotificationsStore, type AppNotification } from '@billme/desktop-core/state/notificationsStore';
 import { CommandPalette, isMacPlatform, type ShellCommand } from './CommandPalette';
 

@@ -8,7 +8,7 @@ import type {
   SettingsLike,
 } from '@billme/desktop-designer/document-editor';
 import { ErrorState } from '@billme/ui';
-import { Spinner } from '@billme/desktop-ui/components/Spinner';
+import { Spinner } from '../ui/components/Spinner';
 import { TEMPLATE_KIND_LABELS, resolveDocumentTemplate, templateKindForDocument } from '@billme/server-core/domain';
 import { useArticlesQuery } from '../hooks/useArticles';
 import { useClientsQuery } from '../hooks/useClients';

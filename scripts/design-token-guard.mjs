@@ -119,8 +119,8 @@ const rules = [
     // `bg-dark-3` or `bg-dark-base` parent.
     skipFile: [
       /^packages\/ui\/src\/components\/AuthScreen\.tsx$/, // dark brand panel (aside, bg-dark-base)
-      /^packages\/desktop-ui\/src\/shell\/DashboardViews\.tsx$/, // dark-3 KPI card
-      /^packages\/desktop-ui\/src\/shell\/StatisticsView\.tsx$/, // dark-3 revenue card
+      /^packages\/desktop-renderer\/src\/ui\/shell\/DashboardViews\.tsx$/, // dark-3 KPI card
+      /^packages\/desktop-renderer\/src\/ui\/shell\/StatisticsView\.tsx$/, // dark-3 revenue card
       /^apps\/landing-page\/src\/App\.tsx$/, // dark screenshots frame, GoBD band, CTA card
       /^packages\/ui\/src\/components\/FeedbackProvider\.tsx$/, // toast icons, Toast is bg-surface-inverse
       /^packages\/ui\/src\/components\/Sparkline\.tsx$/, // lime only in the `inverse` variant, used on surface-inverse

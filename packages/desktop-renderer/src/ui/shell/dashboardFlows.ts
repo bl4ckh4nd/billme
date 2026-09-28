@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { getRendererApi, ipc } from '@billme/desktop-renderer/runtime-api';
+import { getRendererApi, ipc } from '../../runtime-api';
 
 type Transaction = Awaited<ReturnType<typeof ipc.transactions.list>>[number];
 type EurItem = Awaited<ReturnType<typeof ipc.eur.listItems>>[number];

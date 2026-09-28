@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, ImagePlus, Paintbrush, Plus, Sa
 import {
   Badge, Button, ConfirmDialog, ErrorState, IconButton, Input, SegmentedControl, Switch, Textarea, useActionFeedback,
 } from '@billme/ui';
-import { Spinner } from '@billme/desktop-ui/components/Spinner';
+import { Spinner } from '../ui/components/Spinner';
 import { ScaledFlowPreview } from '@billme/desktop-designer/flow';
 import {
   PRICE_COLUMNS,

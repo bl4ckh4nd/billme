@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRendererProduct, ipc } from '../runtime-api';
-import { Spinner } from '@billme/desktop-ui/components/Spinner';
+import { Spinner } from '../ui/components/Spinner';
 import type { Transaction, Invoice as InvoiceType } from '@billme/desktop-core/types';
 
 interface InvoiceMatchSuggestion {

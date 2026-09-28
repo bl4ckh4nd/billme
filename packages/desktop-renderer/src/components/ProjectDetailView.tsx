@@ -3,7 +3,7 @@ import { ArrowLeft, Euro, TriangleAlert } from 'lucide-react';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import type { Project } from '@billme/desktop-core/types';
 import { Button, EmptyState, ErrorState } from '@billme/ui';
-import { SkeletonLoader } from '@billme/desktop-ui/components/SkeletonLoader';
+import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 import { useClientsQuery } from '../hooks/useClients';
 import { useInvoicesQuery } from '../hooks/useInvoices';
 import { useOffersQuery } from '../hooks/useOffers';

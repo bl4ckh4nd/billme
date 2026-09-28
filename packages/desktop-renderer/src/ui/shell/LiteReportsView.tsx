@@ -4,9 +4,9 @@ import {
   EmptyState, ErrorState, PageHeader, SegmentedControl,
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@billme/ui';
-import { useInvoicesQuery } from '@billme/desktop-renderer/hooks/useInvoices';
-import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
-import { EurReportPanel } from '@billme/desktop-renderer/components/EurReportPanel';
+import { useInvoicesQuery } from '../../hooks/useInvoices';
+import { useSettingsQuery } from '../../hooks/useSettings';
+import { EurReportPanel } from '../../components/EurReportPanel';
 import { StatisticsView } from './StatisticsView';
 import { estimateMonthVat } from './vatEstimate';
 import { SkeletonLoader } from '../components/SkeletonLoader';

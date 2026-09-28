@@ -20,7 +20,7 @@ import {
   Settings2,
 } from 'lucide-react';
 import { getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
-import { Spinner } from '@billme/desktop-ui/components/Spinner';
+import { Spinner } from '../ui/components/Spinner';
 import { EurRulesModal } from './EurRulesModal';
 import { useSettingsQuery } from '../hooks/useSettings';
 

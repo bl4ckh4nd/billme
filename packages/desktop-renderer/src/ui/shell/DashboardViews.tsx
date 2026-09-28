@@ -9,10 +9,10 @@ import {
   PageHeader, SegmentedControl, cn, popoverExitClass, useAnchoredPosition, useExitTransition, Sparkline,
 } from '@billme/ui';
 import type { AppSettings, Invoice } from '@billme/desktop-core/types';
-import { useInvoicesQuery } from '@billme/desktop-renderer/hooks/useInvoices';
-import { useArticlesQuery } from '@billme/desktop-renderer/hooks/useArticles';
-import { useSettingsQuery, useSetSettingsMutation } from '@billme/desktop-renderer/hooks/useSettings';
-import { useOffersQuery } from '@billme/desktop-renderer/hooks/useOffers';
+import { useInvoicesQuery } from '../../hooks/useInvoices';
+import { useArticlesQuery } from '../../hooks/useArticles';
+import { useSettingsQuery, useSetSettingsMutation } from '../../hooks/useSettings';
+import { useOffersQuery } from '../../hooks/useOffers';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { estimateMonthVat } from './vatEstimate';
 import { SkeletonLoader } from '../components/SkeletonLoader';

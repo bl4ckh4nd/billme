@@ -369,9 +369,9 @@ dem Klonen sind sie daher nicht vorhanden.
 | `@billme/desktop-contracts` / `-pro` | Typisierte IPC-Verträge und Zod-Schemas für die Lite- und Pro-Grenzen zwischen Renderer und Main-Prozess |
 | `@billme/desktop-core` | Gemeinsame Desktop-Laufzeithelfer — IPC-Fehlerbehandlung, Protokollierung/Wiederholungen, E-Mail-Dienst, Benachrichtigungsstatus |
 | `@billme/desktop-designer` | Gemeinsamer visueller Dokumentdesigner — Zeichenfläche, Elementleiste, Inspektor, Ebenen sowie Zoom-/Schwenk-/Verlaufs-Hooks |
-| `@billme/desktop-renderer` | Bindet die Desktop-React-App in beliebige Hosts ein und ermöglicht dadurch Demo und Web-Shells die Wiederverwendung der Electron-Oberfläche |
+| `@billme/desktop-renderer` | Gemeinsame Lite/Pro-Ansichten, App-Shell, Dashboard und Onboarding (`/ui`), Query-Hooks und das Einbinden in Electron, Web-Shells und Demo |
 | `@billme/desktop-services` | Portal-Client, CSV-Import, EÜR-Katalog und Vorschlagshelfer |
-| `@billme/desktop-ui` / `-utils` | Shell-, Dashboard- und Onboarding-Komponenten; Formatierer und Dokument-Umbruch |
+| `@billme/desktop-utils` | Formatierer, Platzhalter und Dokument-Umbruch |
 | `@billme/accounting-shared` | Reine Pro-Buchhaltungstypen — Journal, Workflowzustände, Kontenrahmen, Steuerfälle |
 | `@billme/accounting-engine` | Buchungs- und Hauptbuchdienste einschließlich der vor dem Buchen erzwungenen Saldenprüfung |
 | `@billme/accounting-ui-pro` | Pro-Buchhaltungsarbeitsbereich — Belegeingang, Buchungseditor, Abstimmung, Ausnahmen, Auswertungen |

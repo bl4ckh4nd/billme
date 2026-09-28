@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Briefcase, FileText, Package, Search, Users, type LucideIcon } from 'lucide-react';
 import { Kbd, Portal, cn } from '@billme/ui';
-import { ipc } from '@billme/desktop-renderer/runtime-api';
+import { ipc } from '../../runtime-api';
 
 type SearchResult = {
   key: string;

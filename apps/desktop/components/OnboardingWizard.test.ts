@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shouldShowBusinessOnboarding } from '@billme/desktop-ui';
+import { shouldShowBusinessOnboarding } from '@billme/desktop-renderer/ui';
 import { MOCK_SETTINGS } from '@billme/desktop-services/mockData';
 
 describe('shouldShowBusinessOnboarding', () => {

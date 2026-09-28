@@ -3,9 +3,9 @@ import { useNavigate } from '@tanstack/react-router';
 import { TrendingUp, TrendingDown, ArrowUpRight } from 'lucide-react';
 import { BarChart, Button, EmptyState, ErrorState, Metric, PageHeader, SegmentedControl } from '@billme/ui';
 import type { AppSettings, Client, Invoice } from '@billme/desktop-core/types';
-import { useInvoicesQuery } from '@billme/desktop-renderer/hooks/useInvoices';
-import { useClientsQuery } from '@billme/desktop-renderer/hooks/useClients';
-import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
+import { useInvoicesQuery } from '../../hooks/useInvoices';
+import { useClientsQuery } from '../../hooks/useClients';
+import { useSettingsQuery } from '../../hooks/useSettings';
 import { SkeletonLoader } from '../components/SkeletonLoader';
 
 const formatCurrency = (amount: number) => {

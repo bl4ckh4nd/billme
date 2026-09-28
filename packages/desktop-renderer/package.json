@@ -16,7 +16,9 @@
     "./ui-store": "./src/ui-store.ts",
     "./createDesktopApp": "./src/createDesktopApp.tsx",
     "./hooks/*": "./src/hooks/*.ts",
-    "./components/*": "./src/components/*.tsx"
+    "./components/*": "./src/components/*.tsx",
+    "./ui": "./src/ui/index.ts",
+    "./ui/components/*": "./src/ui/components/*.tsx"
   },
   "dependencies": {
     "zustand": "^5.0.10",
@@ -26,7 +28,6 @@
     "@billme/desktop-core": "workspace:*",
     "@billme/desktop-designer": "workspace:*",
     "@billme/desktop-services": "workspace:*",
-    "@billme/desktop-ui": "workspace:*",
     "@billme/desktop-utils": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/ui": "workspace:*",

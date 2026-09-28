@@ -6,7 +6,7 @@ import { formatCurrency } from '@billme/desktop-utils/formatters';
 import {
   ConfirmDialog, EmptyState, ErrorState, Modal, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@billme/ui';
-import { Spinner } from '@billme/desktop-ui/components/Spinner';
+import { Spinner } from '../ui/components/Spinner';
 
 interface ImportHistoryModalProps {
   isOpen: boolean;

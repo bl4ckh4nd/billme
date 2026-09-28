@@ -4,7 +4,7 @@ import {
   DashboardLayout as ShellDashboardLayout,
   type DashboardLayoutProps,
   type ShellNavItem,
-} from '@billme/desktop-ui';
+} from '@billme/desktop-renderer/ui';
 import { useOpenEurItemCount } from '@billme/desktop-renderer/hooks/useOpenEurItemCount';
 import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { Titlebar } from './Titlebar';

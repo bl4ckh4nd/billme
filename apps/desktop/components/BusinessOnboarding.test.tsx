@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { BusinessOnboarding, type BusinessOnboardingDraft } from '@billme/desktop-ui';
+import { BusinessOnboarding, type BusinessOnboardingDraft } from '@billme/desktop-renderer/ui';
 
 const initialData: BusinessOnboardingDraft = {
   company: { name: 'Muster', owner: 'Max', street: 'Hauptstr. 1', zip: '10115', city: 'Berlin', email: 'max@example.test', phone: '', website: '' },

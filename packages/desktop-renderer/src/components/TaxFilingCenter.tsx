@@ -1,6 +1,6 @@
 import React from 'react';
 import { Button, Card, EmptyState, ErrorState } from '@billme/ui';
-import { Spinner } from '@billme/desktop-ui/components/Spinner';
+import { Spinner } from '../ui/components/Spinner';
 import { getRendererApi } from '../runtime-api';
 
 type RecordMetadata = { id: string; kind: 'euer' | 'e_bilanz' | 'unternehmensregister'; periodStart: string; periodEnd: string; sourceHash: string; status: 'frozen' | 'approved' | 'queued' };

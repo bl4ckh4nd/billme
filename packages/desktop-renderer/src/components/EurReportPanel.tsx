@@ -7,7 +7,7 @@ import { LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS } from '@billme/
 import { useQuery } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
 import { getRendererRuntime, ipc } from '../runtime-api';
-import { Spinner } from '@billme/desktop-ui/components/Spinner';
+import { Spinner } from '../ui/components/Spinner';
 
 const formatCurrency = (amount: number): string =>
   new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);

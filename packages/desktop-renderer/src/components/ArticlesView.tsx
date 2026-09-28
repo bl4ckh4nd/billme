@@ -11,7 +11,7 @@ import { useCreateIntent } from '../hooks/useCreateIntent';
 import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { Badge, Button, EmptyState, ErrorState, IconButton, Input, PageHeader, SegmentedControl } from '@billme/ui';
-import { SkeletonLoader } from '@billme/desktop-ui/components/SkeletonLoader';
+import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 import { useRouterState } from '@tanstack/react-router';
 
 const normalizeCategoryName = (value: string): string => value.trim();

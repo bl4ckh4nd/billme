@@ -18,8 +18,8 @@ import {
   useDocumentTemplatesQuery,
   useSetDefaultDocumentTemplateMutation,
   useUpsertDocumentTemplateMutation,
-} from '@billme/desktop-renderer/hooks/useDocumentTemplates';
-import { useTemplatePreviewModel } from '@billme/desktop-renderer/hooks/useTemplatePreviewModel';
+} from '../../hooks/useDocumentTemplates';
+import { useTemplatePreviewModel } from '../../hooks/useTemplatePreviewModel';
 import { SkeletonLoader } from '../components/SkeletonLoader';
 
 const SHORT_KIND_LABELS: Record<TemplateKind, string> = {

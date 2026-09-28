@@ -25,7 +25,7 @@ import { getRendererRuntime, ipc } from '../runtime-api';
 import type { IpcArgs } from '@billme/desktop-contracts/contract';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
-import { SkeletonLoader } from '@billme/desktop-ui/components/SkeletonLoader';
+import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 import {
   calculateDaysOverdue,
   calculateInvoiceTaxSnapshot,

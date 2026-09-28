@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { shouldShowBusinessOnboarding } from '@billme/desktop-ui';
-import { MOCK_SETTINGS } from '../data/mockData';
+import { MOCK_SETTINGS } from '@billme/desktop-services/mockData';
 
 describe('shouldShowBusinessOnboarding', () => {
   it('shows onboarding for a fresh workspace', () => {

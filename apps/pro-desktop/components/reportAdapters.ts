@@ -14,7 +14,7 @@ import type {
   ManagementGuvReport,
   ReportResult,
 } from '@billme/accounting-shared';
-import type { IpcResult } from '../ipc/contract';
+import type { IpcResult } from '@billme/desktop-contracts-pro/contract';
 
 type LedgerAccount = IpcResult<'pro:listLedgerAccounts'>[number];
 

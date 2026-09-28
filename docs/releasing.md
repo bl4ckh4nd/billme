@@ -60,8 +60,9 @@ with the default `GITHUB_TOKEN` do not trigger that workflow.
 
 `.github/workflows/ci.yml` runs on matching pushes and pull requests. Its `validate` job runs:
 
-- Lite desktop typecheck, tests, `test:einvoice`, and build
-- Pro desktop typecheck, tests, `test:einvoice`, and build
+- Lite desktop typecheck, tests, and build
+- Pro desktop typecheck, tests, and build
+- Shared package tests, including the `desktop-services` e-invoice conformance tests
 - offer-portal build
 - Playwright desktop smoke tests for Lite and Pro
 

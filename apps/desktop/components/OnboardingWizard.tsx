@@ -3,7 +3,7 @@ import {
   OnboardingWizard as ShellOnboardingWizard,
   type OnboardingWizardProps,
 } from '@billme/desktop-ui';
-import type { AppSettings, BusinessReportingProfile } from '../types';
+import type { AppSettings, BusinessReportingProfile } from '@billme/desktop-core/types';
 
 type Props = Omit<OnboardingWizardProps, 'edition' | 'productName' | 'defaultReportingProfile'>;
 

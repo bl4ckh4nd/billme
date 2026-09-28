@@ -70,8 +70,11 @@ jobs:
       - name: Shared desktop core tests
         run: pnpm -C packages/desktop-core test
 
-      - name: Shared desktop services tests
+      - name: Shared desktop services and e-invoice tests
         run: pnpm -C packages/desktop-services test
+
+      - name: Shared desktop utils tests
+        run: pnpm -C packages/desktop-utils test
 
       - name: Pro accounting UI tests
         run: pnpm -C packages/accounting-ui-pro test
@@ -82,9 +85,6 @@ jobs:
       - name: Desktop tests
         run: pnpm -C apps/desktop test --run
 
-      - name: Desktop e-invoice conformance tests
-        run: pnpm -C apps/desktop test:einvoice
-
       - name: Desktop build
         run: pnpm -C apps/desktop build
 
@@ -93,9 +93,6 @@ jobs:
 
       - name: Pro desktop tests
         run: pnpm -C apps/pro-desktop test --run
-
-      - name: Pro desktop e-invoice conformance tests
-        run: pnpm -C apps/pro-desktop test:einvoice
 
       - name: Pro desktop build
         run: pnpm -C apps/pro-desktop build

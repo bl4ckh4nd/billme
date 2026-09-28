@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from './taxMode';
-import type { AppSettings } from '../types';
+import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import type { AppSettings } from '@billme/desktop-core/types';
 
 const settings: AppSettings = {
   company: {

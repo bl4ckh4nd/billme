@@ -1,5 +1,8 @@
 {
   "name": "@billme/desktop-utils",
+  "scripts": {
+    "test": "vitest --run"
+  },
   "private": true,
   "version": "0.0.0",
   "type": "module",

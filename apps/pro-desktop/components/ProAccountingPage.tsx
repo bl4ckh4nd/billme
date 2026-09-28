@@ -22,9 +22,9 @@ import {
 } from '@billme/accounting-ui-pro';
 import { ipc } from '../ipc/client';
 import { useAccountsQuery } from '../hooks/useAccounts';
-import { useSettingsQuery } from '../hooks/useSettings';
+import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { useImportSkrMutation, useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
-import type { IpcArgs, IpcResult } from '../ipc/contract';
+import type { IpcArgs, IpcResult } from '@billme/desktop-contracts-pro/contract';
 import type {
   Bwa01Report,
   HgbBilanzReport,

@@ -21,7 +21,6 @@
     "preview": "electron-vite preview",
     "dist": "pnpm build && electron-builder --config electron-builder.yml",
     "test": "vitest",
-    "test:einvoice": "vitest --run services/einvoice",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "typecheck": "tsc --noEmit"

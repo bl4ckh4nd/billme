@@ -8,9 +8,9 @@ import { ipcRoutes } from '@billme/desktop-contracts-pro/contract';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { getCurrentUpdateStatus, downloadUpdate, quitAndInstall } from './updater';
-import { secrets } from './secrets';
-import { exportEurPdf, exportPdf } from './pdfExport';
+import { getCurrentUpdateStatus, downloadUpdate, quitAndInstall } from '@billme/desktop-core/electron/updater';
+import { secrets } from '@billme/desktop-core/electron/secrets';
+import { exportEurPdf, exportPdf } from '@billme/desktop-core/electron/pdfExport';
 import { createDocumentExportPreparer } from '@billme/desktop-services/documentExport';
 import type { EmbeddedConnectionResult } from '@billme/desktop-contracts/embeddedConnection';
 

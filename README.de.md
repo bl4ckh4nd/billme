@@ -457,7 +457,7 @@ Laufzeitoberfläche.
 # Unit — Vitest (the two Electron apps)
 pnpm -C apps/desktop test
 pnpm -C apps/pro-desktop test
-pnpm -C apps/desktop test:einvoice     # ZUGFeRD conformance subset
+pnpm -C packages/desktop-services test:einvoice   # ZUGFeRD conformance subset
 
 # Unit — Node built-in test runner (everything else)
 pnpm -C apps/server-api test

@@ -6,7 +6,7 @@ on:
     branches:
       - main
     paths:
-      - 'apps/desktop/services/einvoice/**'
+      - 'packages/desktop-services/src/einvoice/**'
       - 'apps/desktop/scripts/generate-einvoice-fixtures.mjs'
       - '.github/workflows/einvoice-validation.yml'
 

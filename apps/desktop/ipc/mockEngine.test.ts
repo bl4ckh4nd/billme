@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ipcRoutes } from './contract';
-import { createMockInvoke } from './mockEngine';
+import { ipcRoutes } from '@billme/desktop-contracts/contract';
+import { createLiteMockInvoke as createMockInvoke } from '@billme/desktop-services/mockEngine';
 
 describe('mockEngine route coverage', () => {
   it('contains a handler for every contract route', () => {

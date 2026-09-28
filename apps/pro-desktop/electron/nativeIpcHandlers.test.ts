@@ -14,7 +14,7 @@ vi.mock('electron', () => ({
   shell: { openPath: vi.fn(), openExternal: vi.fn() },
 }));
 
-vi.mock('./secrets', () => ({
+vi.mock('@billme/desktop-core/electron/secrets', () => ({
   secrets: {
     get: vi.fn(),
     set: vi.fn(),
@@ -22,13 +22,13 @@ vi.mock('./secrets', () => ({
   },
 }));
 
-vi.mock('./updater', () => ({
+vi.mock('@billme/desktop-core/electron/updater', () => ({
   getCurrentUpdateStatus: vi.fn(),
   downloadUpdate: vi.fn(),
   quitAndInstall: vi.fn(),
 }));
 
-vi.mock('./pdfExport', () => ({
+vi.mock('@billme/desktop-core/electron/pdfExport', () => ({
   exportPdf: vi.fn(),
   exportEurPdf: vi.fn(),
 }));
@@ -158,7 +158,7 @@ describe('Pro native Electron IPC boundary', () => {
   });
 
   it('exports through the print renderer and writes a PGlite dump without SQLite', async () => {
-    const { exportPdf, exportEurPdf } = await import('./pdfExport');
+    const { exportPdf, exportEurPdf } = await import('@billme/desktop-core/electron/pdfExport');
     const handlers = new Map<string, (_event: unknown, args: unknown) => unknown>();
     const ipcMain = {
       handle: vi.fn((channel: string, handler: (_event: unknown, args: unknown) => unknown) => {

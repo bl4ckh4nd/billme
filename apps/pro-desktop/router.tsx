@@ -11,33 +11,30 @@ import {
   useRouterState,
 } from '@tanstack/react-router';
 import { DashboardLayout } from './components/DashboardLayout';
-import {
-  DashboardHome,
-  TemplatesView,
-} from './components/DashboardViews';
+import { DashboardHome, TemplatesView } from '@billme/desktop-ui';
 import { AccountsView } from './components/AccountsView';
-import { DocumentsView } from './components/InvoicesView';
-import { ClientsView } from './components/ClientsView';
-import { ArticlesView } from './components/ArticlesView';
-import { SettingsView } from './components/SettingsView';
-import { RecurringView } from './components/RecurringView';
-import { ProjectsView } from './components/ProjectsView';
-import { ProjectDetailView } from './components/ProjectDetailView';
+import { DocumentsView } from '@billme/desktop-renderer/components/InvoicesView';
+import { ClientsView } from '@billme/desktop-renderer/components/ClientsView';
+import { ArticlesView } from '@billme/desktop-renderer/components/ArticlesView';
+import { SettingsView } from '@billme/desktop-renderer/components/SettingsView';
+import { RecurringView } from '@billme/desktop-renderer/components/RecurringView';
+import { ProjectsView } from '@billme/desktop-renderer/components/ProjectsView';
+import { ProjectDetailView } from '@billme/desktop-renderer/components/ProjectDetailView';
 import { TemplateEditor } from '@billme/desktop-renderer/components/TemplateEditor';
 import { templateKindSchema } from '@billme/server-core/domain';
-import { InvoiceDocumentEditor } from './components/InvoiceDocumentEditor';
-import { useUiStore } from './state/uiStore';
+import { InvoiceDocumentEditor } from '@billme/desktop-renderer/components/InvoiceDocumentEditor';
+import { useUiStore } from '@billme/desktop-renderer/ui-store';
 import { Invoice } from './types';
-import { useUpsertInvoiceMutation } from './hooks/useInvoices';
-import { useUpsertOfferMutation } from './hooks/useOffers';
+import { useUpsertInvoiceMutation } from '@billme/desktop-renderer/hooks/useInvoices';
+import { useUpsertOfferMutation } from '@billme/desktop-renderer/hooks/useOffers';
 import { ipc } from './ipc/client';
-import { useSettingsQuery } from './hooks/useSettings';
+import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { OnboardingWizard } from './components/OnboardingWizard';
-import { ShortcutsModal } from './components/ShortcutsModal';
-import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { ShortcutsModal } from '@billme/desktop-ui/components/ShortcutsModal';
+import { useKeyboardShortcuts } from '@billme/desktop-hooks/useKeyboardShortcuts';
 import { ProAccountingPage } from './components/ProAccountingPage';
-import { EurView } from './components/EurView';
-import { TaxFilingCenter } from './components/TaxFilingCenter';
+import { EurView } from '@billme/desktop-renderer/components/EurView';
+import { TaxFilingCenter } from '@billme/desktop-renderer/components/TaxFilingCenter';
 import { Button, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
 import { shouldShowBusinessOnboarding } from '@billme/desktop-ui';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createMockInvoke } from './mockEngine';
+import { createProMockInvoke as createMockInvoke } from '@billme/desktop-services/mockEngine';
 
 describe('mockEngine customer numbering', () => {
   it('skips duplicate customer numbers when auto-assigning a blank Kundennummer', async () => {

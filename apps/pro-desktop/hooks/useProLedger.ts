@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../ipc/client';
-import type { IpcArgs } from '../ipc/contract';
+import type { IpcArgs } from '@billme/desktop-contracts-pro/contract';
 
 const proLedgerStatsKey = ['pro', 'ledger', 'stats'] as const;
 const proLedgerAccountsKey = (args: IpcArgs<'pro:listLedgerAccounts'>) =>

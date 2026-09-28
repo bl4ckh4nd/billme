@@ -2,7 +2,7 @@ import { installDesktopPreload } from '@billme/desktop-core/electron/preload';
 import { createProHttpBillmeApi } from '@billme/desktop-services/proHttpApi';
 import { EMBEDDED_CONNECTION_CHANNEL } from '@billme/desktop-contracts/embeddedConnection';
 import type { IpcInvoke } from '@billme/desktop-contracts-pro/api';
-import { ipcRoutes } from '../ipc/contract';
+import { ipcRoutes } from '@billme/desktop-contracts-pro/contract';
 
 installDesktopPreload({
   routes: ipcRoutes,

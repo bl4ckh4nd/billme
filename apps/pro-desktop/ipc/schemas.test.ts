@@ -27,9 +27,9 @@ import {
   eurExportPdfArgsSchema,
   eurExportPdfResultSchema,
   invoiceTaxMetaSchema,
-} from './schemas';
-import { ipcRoutes } from './contract';
-import { createBillmeApi } from './api';
+} from '@billme/desktop-contracts-pro/schemas';
+import { ipcRoutes } from '@billme/desktop-contracts-pro/contract';
+import { createBillmeApi } from '@billme/desktop-contracts-pro/api';
 
 describe('Pro tax filing IPC contract', () => {
   it('exposes the shared routes through the renderer API', async () => {

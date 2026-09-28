@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test src/mockData.test.ts src/liteHttpApi.test.ts src/proHttpApi.test.ts src/mockEngine.test.ts"
+    "test": "node --import tsx --test src/mockData.test.ts src/liteHttpApi.test.ts src/proHttpApi.test.ts src/mockEngine.test.ts && vitest --run src/einvoice src/eurSuggestion.test.ts",
+    "test:einvoice": "vitest --run src/einvoice"
   },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",
@@ -21,6 +22,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "vitest": "^4.0.18",
     "@types/node": "^24.9.1",
     "@types/papaparse": "^5.5.2",
     "tsx": "^4.20.5",

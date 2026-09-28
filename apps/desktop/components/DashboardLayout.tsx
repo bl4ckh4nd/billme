@@ -6,7 +6,7 @@ import {
   type ShellNavItem,
 } from '@billme/desktop-ui';
 import { useOpenEurItemCount } from '@billme/desktop-renderer/hooks/useOpenEurItemCount';
-import { useSettingsQuery } from '../hooks/useSettings';
+import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { Titlebar } from './Titlebar';
 import { getBillmeRuntimeConfig, type BillmeNavigationPage } from '../runtime';
 

@@ -27,7 +27,7 @@ import {
   eurExportCsvArgsSchema,
   eurExportPdfArgsSchema,
   eurExportPdfResultSchema,
-} from './schemas';
+} from '@billme/desktop-contracts/schemas';
 
 describe('Invoice Schemas', () => {
   describe('invoiceItemSchema', () => {

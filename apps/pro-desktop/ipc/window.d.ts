@@ -1,4 +1,4 @@
-import type { BillmeApi } from './api';
+import type { BillmeApi } from '@billme/desktop-contracts-pro/api';
 
 type WindowMaximizeState = {
   isMaximized: boolean;

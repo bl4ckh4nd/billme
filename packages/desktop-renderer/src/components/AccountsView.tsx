@@ -27,6 +27,8 @@ export interface AccountsViewProps<TAccount extends AccountsViewAccount> {
     header: string;
     render: (account: TAccount, reportError: (message: string) => void) => ReactNode;
   };
+  /** Product-specific sections below the account list (Pro: the SKR chart import). */
+  footer?: ReactNode;
 }
 
 const euro = (value: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
@@ -41,6 +43,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
   BankAccountModal,
   renderImportAccountMeta,
   extraColumn,
+  footer,
 }: AccountsViewProps<TAccount>): ReactElement {
   const queryClient = useQueryClient();
   const [viewMode, setViewMode] = useState<ViewMode>('accounts');
@@ -405,6 +408,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
           </Table>
         )}
       </section>
+      {footer}
 
       <ImportHistoryModal isOpen={showImportHistory} onClose={() => setShowImportHistory(false)} />
       <BankAccountModal isOpen={isBankAccountModalOpen} onClose={() => setIsBankAccountModalOpen(false)} />

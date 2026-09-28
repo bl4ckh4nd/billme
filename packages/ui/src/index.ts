@@ -74,6 +74,9 @@ export { ListRow, IconTile, type ListRowProps, type IconTileProps, type IconTile
 export { Donut, type DonutProps, type DonutSegment } from './components/Donut';
 export { Stepper, Timeline, type StepperProps, type TimelineEntry } from './components/Stepper';
 
+// Icons
+export { KontorIcon } from './icons/kontor';
+
 // Utils
 export { cn } from './utils/cn';
 export { useExitTransition, popoverExitClass, OVERLAY_EXIT_MS } from './utils/useExitTransition';

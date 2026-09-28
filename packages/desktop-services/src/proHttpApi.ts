@@ -1987,7 +1987,7 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           const result = await client.dispatchAccountingDraftAction(
             parsedArgs.transactionId,
             parsedArgs.action,
-            'Buchungsworkflow-Aktion ausgeführt',
+            parsedArgs.action === 'reject' && parsedArgs.rejectReason?.trim() ? parsedArgs.rejectReason : 'Buchungsworkflow-Aktion ausgeführt',
             parsedArgs.rejectReason,
           );
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;

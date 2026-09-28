@@ -38,6 +38,7 @@
     "docker:server-mode:up": "docker compose --env-file .env.server-mode -f docker-compose.server-mode.yml up -d --build",
     "deploy:demo": "pnpm -C apps/demo deploy:cf",
     "test:e2e": "playwright test",
+    "test:e2e:lifecycle": "playwright test --config tests/e2e/lifecycle/playwright.config.mjs",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:smoke": "playwright test",
     "test:e2e:full": "E2E_FULL=1 playwright test",

@@ -5,7 +5,7 @@ import {
   Building2, Landmark, FileDigit, Scale,
   Save, CheckCircle, HelpCircle, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Repeat, Monitor, Moon, Sun, SunMoon
 } from 'lucide-react';
-import { Button, ErrorState, SegmentedControl, useActionFeedback, useThemePreference, type ThemePreference } from '@billme/ui';
+import { Button, ConfirmDialog, ErrorState, SegmentedControl, useActionFeedback, useThemePreference, type ThemePreference } from '@billme/ui';
 import { Spinner } from '@billme/desktop-ui/components/Spinner';
 import type { AppSettings, BusinessReportingProfile, DunningLevel } from '@billme/desktop-core/types';
 import { ipc } from '../runtime-api';
@@ -19,6 +19,11 @@ type SettingsTab = 'company' | 'catalog' | 'finance' | 'numbers' | 'dunning' | '
 
 const normalizeCategoryName = (value: string): string => value.trim();
 const formatCount = (count: number, singular: string, plural: string): string => `${count} ${count === 1 ? singular : plural}`;
+
+const PROFIT_DETERMINATION_COPY: Record<BusinessReportingProfile['profitDetermination'], { label: string; hint: string }> = {
+  eur: { label: 'EÜR', hint: 'Für Einzelunternehmen, GbR und Freiberufler. Erfasst wird die Zahlung.' },
+  double_entry: { label: 'Doppelte Buchführung', hint: 'Für GmbH, UG und alle Buchführungspflichtigen. Soll an Haben, Bilanz und GuV.' },
+};
 
 const inferBusinessReportingProfile = (settings: AppSettings): BusinessReportingProfile => {
   if (settings.businessReportingProfile) return settings.businessReportingProfile;
@@ -123,6 +128,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
   const [emailTesting, setEmailTesting] = useState(false);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [previewLevelIndex, setPreviewLevelIndex] = useState<number | null>(null);
+  /** The choice inside the "Gewinnermittlung ändern" dialog; null while the dialog is closed. */
+  const [pendingProfitDetermination, setPendingProfitDetermination] = useState<BusinessReportingProfile['profitDetermination'] | null>(null);
   const { notify } = useActionFeedback('settings');
 
   React.useEffect(() => {
@@ -1490,13 +1497,18 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     <option value="gmbh">GmbH</option>
                   </select>
                 </label>
-                <label className="block text-label text-foreground">
+                <div className="col-span-2 text-label text-foreground">
                   Gewinnermittlung
-                  <select aria-label="Gewinnermittlung" value={reportingProfile.profitDetermination} onChange={(event) => updateReportingProfile('profitDetermination', event.target.value as BusinessReportingProfile['profitDetermination'])} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
-                    <option value="eur" disabled={reportingProfile.legalForm === 'gmbh'}>EÜR</option>
-                    <option value="double_entry">Doppelte Buchführung</option>
-                  </select>
-                </label>
+                  <div className="mt-2 flex items-start justify-between gap-3 rounded-control border border-border-subtle bg-surface-muted p-3">
+                    <div className="min-w-0">
+                      <p data-testid="profit-determination-value" className="text-sm font-semibold text-foreground">{PROFIT_DETERMINATION_COPY[reportingProfile.profitDetermination].label}</p>
+                      <p className="mt-0.5 text-xs font-normal text-muted">{PROFIT_DETERMINATION_COPY[reportingProfile.profitDetermination].hint}</p>
+                    </div>
+                    <Button variant="secondary" size="sm" onClick={() => setPendingProfitDetermination(reportingProfile.profitDetermination)}>
+                      Ändern…
+                    </Button>
+                  </div>
+                </div>
                 {reportingProfile.legalForm === 'gmbh' && (
                   <label className="block text-label text-foreground">
                     GmbH-Größe
@@ -1916,6 +1928,29 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
           levelNumber={previewLevelIndex + 1}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingProfitDetermination !== null}
+        title="Gewinnermittlung ändern"
+        description="Bereits erfasste Buchungen und Auswertungen werden nicht umgerechnet. Sprich die Umstellung mit deiner Steuerberatung ab."
+        confirmLabel="Umstellen"
+        details={pendingProfitDetermination !== null && (
+          <label className="block text-label text-foreground">
+            Gewinnermittlung
+            <select aria-label="Gewinnermittlung" value={pendingProfitDetermination} onChange={(event) => setPendingProfitDetermination(event.target.value as BusinessReportingProfile['profitDetermination'])} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
+              <option value="eur" disabled={reportingProfile.legalForm === 'gmbh'}>EÜR</option>
+              <option value="double_entry">Doppelte Buchführung</option>
+            </select>
+            <span className="mt-2 block text-xs font-normal text-muted">{PROFIT_DETERMINATION_COPY[pendingProfitDetermination].hint}</span>
+            {reportingProfile.legalForm === 'gmbh' && <span className="mt-1 block text-xs font-normal text-muted">Eine GmbH muss mit doppelter Buchführung geführt werden.</span>}
+          </label>
+        )}
+        onConfirm={() => {
+          if (pendingProfitDetermination) updateReportingProfile('profitDetermination', pendingProfitDetermination);
+          setPendingProfitDetermination(null);
+        }}
+        onCancel={() => setPendingProfitDetermination(null)}
+      />
     </div>
   );
 };

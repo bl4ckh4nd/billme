@@ -1564,8 +1564,9 @@ test('Pro HTTP Billme API dispatches a draft action with its rejection detail', 
   }), draft);
   assert.equal(requestUrl, 'http://127.0.0.1:43123/api/v1/pro/accounting/drafts/transaction-1/action');
   assert.equal(requestInit?.method, 'POST');
+  // A reject carries its own reason into the audit log.
   assert.deepEqual(JSON.parse(String(requestInit?.body)), {
-    reason: 'Buchungsworkflow-Aktion ausgeführt',
+    reason: 'Beleg fehlt',
     action: 'reject',
     rejectReason: 'Beleg fehlt',
   });

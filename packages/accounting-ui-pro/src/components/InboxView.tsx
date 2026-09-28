@@ -14,14 +14,9 @@ import { userFacingReference } from '../domain/references';
 import { bookingActionLabels, getQueueCounts, getStatusPresentation, InboxQueueKey, txMatchesQueue } from '../domain/selectors';
 import { normalizeTaxCaseKey, TAX_CASE_OPTIONS, toLegacyTaxCode } from '../domain/taxCases';
 import { getAllowedActions } from '../domain/workflow';
-import { mockAccounts } from '../mocks/accounts';
 import { permissionContextForRole } from '../mocks/users';
-import {
-  dispatchBookingAction,
-  getBookingDraftByTransactionId,
-  saveDraft,
-  type ProAccountingDataAdapter,
-} from '../services/mockBookingStore';
+import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorkspaceContext';
+import { type ProAccountingDataAdapter } from '../services/mockBookingStore';
 import AccountCombobox from './AccountCombobox';
 import { getConfiguredBankAccountNumber } from './ReconciliationWorkbench';
 import { Account, BookingAction, BookingDraft, LinkedInvoiceSummary, OpenRouterVlmConfig, Transaction, TransactionDocumentAnalysis, UserRole } from '../types';
@@ -64,7 +59,10 @@ export default function InboxView({
   activeQueue: controlledQueue,
   onQueueChange,
 }: InboxViewProps) {
-  const accountOptions = accounts ?? mockAccounts;
+  const store = useAccountingWorkspace();
+  const captureLifetime = useWorkspaceLifetime();
+  const { dispatchBookingAction, getBookingDraftByTransactionId, saveDraft } = store;
+  const accountOptions = accounts ?? store.listAccounts();
   const [localQueue, setLocalQueue] = useState<InboxQueueKey>('all');
   const activeQueue = controlledQueue ?? localQueue;
   const setActiveQueue = onQueueChange ?? setLocalQueue;
@@ -183,6 +181,7 @@ export default function InboxView({
   };
 
   const runBatchAction = async (preferredAction: BookingAction) => {
+    const isCurrent = captureLifetime();
     const ids = filtered.filter((tx) => selectedSet.has(tx.id)).map((tx) => tx.id);
     if (ids.length === 0) return;
 
@@ -190,6 +189,7 @@ export default function InboxView({
     let skipped = 0;
 
     for (const id of ids) {
+      if (!isCurrent()) return;
       const draft = getBookingDraftByTransactionId(id);
       if (!draft) { skipped += 1; continue; }
       const allowed = getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues);
@@ -202,12 +202,14 @@ export default function InboxView({
       }
     }
 
+    if (!isCurrent()) return;
     setBatchMessage(`Sammelaktion '${preferredAction}': ${success} erfolgreich, ${skipped} übersprungen.`);
     setSelectedIds((prev) => prev.filter((id) => !ids.includes(id)));
     onRefresh();
   };
 
   const assignBatchAccount = async () => {
+    const isCurrent = captureLifetime();
     if (!canMutate) return;
     if (!batchAccountSelection) {
       setBatchMessage('Bitte wählen Sie zuerst ein Konto für die Sammelzuweisung.');
@@ -223,6 +225,7 @@ export default function InboxView({
     let success = 0;
     let skipped = 0;
     for (const id of ids) {
+      if (!isCurrent()) return;
       const draft = getBookingDraftByTransactionId(id);
       if (!draft || ['posted', 'reversed'].includes(draft.workflowStatus)) { skipped += 1; continue; }
       try {

@@ -1,10 +1,10 @@
 import { useState, type ReactElement } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { formatEmptyValue } from '@billme/ui';
+import { Button, formatEmptyValue } from '@billme/ui';
 import { AccountsView as SharedAccountsView } from '@billme/desktop-renderer/components/AccountsView';
 import { BankAccountModal } from './BankAccountModal';
 import { useAccountsQuery, useDeleteAccountMutation, useUpsertAccountMutation } from '../hooks/useAccounts';
-import { useProActiveChart, useProLedgerAccountsQuery } from '../hooks/useProLedger';
+import { useImportSkrMutation, useProActiveChart, useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
 import type { Account } from '../types';
 
 export function AccountsView(): ReactElement {
@@ -16,6 +16,26 @@ export function AccountsView(): ReactElement {
     chart: activeChart,
     limit: 3000,
   });
+  const { data: ledgerStats, isPending: ledgerStatsLoading, isError: ledgerStatsError } = useProLedgerStatsQuery();
+  const importSkr = useImportSkrMutation();
+  const [importNotice, setImportNotice] = useState<string | null>(null);
+
+  const handleImportSkr = async () => {
+    try {
+      const result = await importSkr.mutateAsync({ preferredSource: 'auto' });
+      const warningSuffix = result.warnings.length > 0 ? ` Hinweise: ${result.warnings[0]}` : '';
+      setImportNotice(`SKR-Import abgeschlossen: ${result.inserted} neu, ${result.updated} aktualisiert.${warningSuffix}`);
+    } catch (error) {
+      setImportNotice(`SKR-Import konnte nicht verarbeitet werden: ${String(error)}`);
+    }
+  };
+
+  // A failed or still running stats query must not read as "0 Konten geladen".
+  const ledgerChartText = ledgerStatsError
+    ? 'SKR03 und SKR04 konnten nicht geladen werden'
+    : ledgerStatsLoading
+      ? 'Kontenrahmen wird geladen…'
+      : `SKR03: ${ledgerStats?.byChart.SKR03 ?? 0} | SKR04: ${ledgerStats?.byChart.SKR04 ?? 0}`;
 
   const saveMapping = async (account: Account, nextNumber: string, reportError: (message: string) => void) => {
     setMappingSaveAccountId(account.id);
@@ -62,6 +82,25 @@ export function AccountsView(): ReactElement {
           </select>
         ),
       }}
+      footer={(
+        <section className="mt-8 rounded-card bg-surface-muted p-4" aria-labelledby="skr-import-heading">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 id="skr-import-heading" className="text-section text-foreground">SKR03/04 Kontenrahmen</h3>
+              <p className="mt-1 text-sm text-muted">Lädt den vollständigen Kontenrahmen in die Pro-Datenbank.</p>
+              <p className="mt-2 text-xs text-muted tabular-nums">{ledgerChartText}</p>
+            </div>
+            <Button variant="secondary" onClick={() => void handleImportSkr()} disabled={importSkr.isPending} aria-busy={importSkr.isPending}>
+              {importSkr.isPending ? 'Import läuft…' : (ledgerStats?.total ?? 0) > 0 ? 'Kontenrahmen aktualisieren' : 'SKR jetzt importieren'}
+            </Button>
+          </div>
+          {importNotice ? (
+            <p role="status" className={`mt-3 text-sm ${importSkr.isError ? 'text-error-text' : 'text-foreground'}`}>
+              {importNotice}
+            </p>
+          ) : null}
+        </section>
+      )}
     />
   );
 }

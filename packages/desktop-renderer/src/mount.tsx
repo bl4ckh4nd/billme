@@ -31,7 +31,7 @@ export const createRendererQueryClient = (): QueryClient =>
 // the renderer onto the mock fallback while the newer app is still showing.
 let latestMountId = 0;
 
-export type RendererMountOptions = { api?: BillmeApi | ProBillmeApi; runtime?: DesktopRendererRuntime };
+export type RendererMountOptions = { api?: BillmeApi | ProBillmeApi; runtime?: DesktopRendererRuntime; signal?: AbortSignal };
 
 type RendererAppModule = { default: React.ComponentType };
 
@@ -46,17 +46,12 @@ export const mountRendererApp = async (
     billmeRuntime?: DesktopRendererRuntime;
   };
 
-  if (options?.api) {
-    runtime.billmeApi = options.api;
-  }
-  if (options?.runtime) {
-    runtime.billmeRuntime = options.runtime;
-  }
-
   const { default: App } = await loadApp();
-  if (mountId !== latestMountId) {
+  if (mountId !== latestMountId || options?.signal?.aborted) {
     return () => {};
   }
+  if (options?.api) runtime.billmeApi = options.api;
+  if (options?.runtime) runtime.billmeRuntime = options.runtime;
   const queryClient = createRendererQueryClient();
   const root = ReactDOM.createRoot(rootElement);
   root.render(

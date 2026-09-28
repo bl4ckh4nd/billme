@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Check,
@@ -14,15 +14,10 @@ import { WORKFLOW_STEPS, getStatusPresentation, getWorkflowStep } from '../domai
 import { findTaxCaseOption, normalizeTaxCaseKey, TAX_CASE_OPTIONS, toLegacyTaxCode } from '../domain/taxCases';
 import { hasBlockingIssues, validateBookingDraft } from '../domain/validation';
 import { getAllowedActions } from '../domain/workflow';
-import { mockAccounts } from '../mocks/accounts';
 import { permissionContextForRole } from '../mocks/users';
-import {
-  dispatchBookingAction,
-  getBookingDraftByTransactionId,
-  getTransactionById,
-  saveDraft,
-} from '../services/mockBookingStore';
-import { ConfirmDialog, Modal, Stepper } from '@billme/ui';
+import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorkspaceContext';
+import { Badge, ConfirmDialog, Modal, Stepper } from '@billme/ui';
+import { BOOKING_TEMPLATES } from '../domain/bookingTemplates';
 import { Account, BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
 import AccountCombobox from './AccountCombobox';
 import ActivityTimeline from './ActivityTimeline';
@@ -49,12 +44,18 @@ function parseAmountInput(value: string) {
   return value.replace(',', '.');
 }
 
+const LIVE_CHECKED_CODES = new Set(['MISSING_POSTING_DATE', 'MISSING_BOOKING_TEXT', 'MISSING_ACCOUNT', 'INVALID_AMOUNT_FORMAT', 'UNBALANCED_ENTRY']);
+
 function actionRequiresConfirmation(action: BookingAction) {
   return action === 'reverse' || action === 'reject';
 }
 
 export default function BookingEditor({ transactionId, role, accounts, onBack, onStoreChange, onDirtyChange }: BookingEditorProps) {
-  const accountOptions = accounts ?? mockAccounts;
+  const editorId = useId();
+  const store = useAccountingWorkspace();
+  const captureLifetime = useWorkspaceLifetime(transactionId);
+  const { dispatchBookingAction, getBookingDraftByTransactionId, getTransactionById, saveDraft } = store;
+  const accountOptions = accounts ?? store.listAccounts();
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [draft, setDraft] = useState<BookingDraft | null>(null);
   const [busy, setBusy] = useState(false);
@@ -108,7 +109,8 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
         const primary = allowedActions.find((a) => ['post', 'approve', 'submit_for_review'].includes(a));
-        if (primary) {
+        // A hard error blocks the step; the shortcut must not fire what the button shows as locked.
+        if (primary && (primary === 'approve' || !hasBlockingIssues(validationIssues))) {
           void handleWorkflowAction(primary);
         }
       }
@@ -119,7 +121,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [allowedActions, draft, transaction, role, showShortcutHelp]);
+  }, [allowedActions, draft, transaction, role, showShortcutHelp, validationIssues]);
 
   if (!transactionId || !transaction || !draft) {
     return (
@@ -149,6 +151,37 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
     .reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
   const difference = Math.abs(totalSoll - totalHaben);
   const blocking = hasBlockingIssues(validationIssues);
+  // Server-only checks (closed period, tax mapping, evidence) arrive on the stored draft; the ones the
+  // editor recomputes live are taken from the current input, so a fixed field unblocks at once.
+  const clientBlocking = validationIssues.filter((issue) => issue.blocking);
+  const blockingIssues = [
+    ...clientBlocking,
+    ...draft.validationIssues.filter((issue) =>
+      issue.blocking && !LIVE_CHECKED_CODES.has(issue.code) && !clientBlocking.some((own) => own.code === issue.code)),
+  ];
+  if (draft.workflowStatus === 'period_locked' && blockingIssues.length === 0) {
+    blockingIssues.push({ id: 'period-locked', code: 'POSTING_DATE_IN_CLOSED_PERIOD', severity: 'error', message: 'Buchungsdatum liegt in einer gesperrten Periode.', blocking: true, source: 'system' });
+  }
+  // The next step a hard error holds back: shown disabled with its reason instead of disappearing.
+  const blockedAction: BookingAction | undefined =
+    blockingIssues.length === 0 || !permissionCtx.canMutate
+      ? undefined
+      : draft.workflowStatus === 'approved'
+        ? permissionCtx.canPost ? 'post' : undefined
+        : ['incomplete', 'suggested', 'ready_for_review', 'imported', 'period_locked'].includes(draft.workflowStatus)
+          ? 'submit_for_review'
+          : undefined;
+  const blockedReason = blockingIssues.length === 0
+    ? undefined
+    : `${blockingIssues[0].message}${blockingIssues.length > 1 ? ` (+${blockingIssues.length - 1} weitere)` : ''}`;
+  const chartTemplates = BOOKING_TEMPLATES[draft.chartFramework] ?? [];
+  const accountByNumber = new Map(accountOptions.map((account) => [account.number, account]));
+  // Bank-booking convention (see createDraftFromTransaction): incoming money debits the bank line, outgoing credits it.
+  const bankSide: JournalLine['type'] = Number(transaction?.amount) >= 0 ? 'Soll' : 'Haben';
+  const bankLine = draft.lines.find((line) => line.type === bankSide && line.accountId);
+  const templates = bankLine
+    ? chartTemplates.filter((template) => template.direction === (bankSide === 'Soll' ? 'in' : 'out') && accountByNumber.has(template.accountId))
+    : [];
   const statusPresentation = getStatusPresentation(draft.workflowStatus);
 
   function patchDraft(updater: (prev: BookingDraft) => BookingDraft) {
@@ -187,6 +220,30 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
     }));
   }
 
+  function applyTemplate(index: number) {
+    const template = templates[index];
+    if (readOnly || !template || !bankLine) return;
+    const gross = Math.abs(Number(transaction?.amount) || 0);
+    // The bank line stays; only the counter side is replaced by the template account.
+    patchDraft((prev) => ({
+      ...prev,
+      lines: [
+        { ...bankLine, amount: gross },
+        {
+          id: `line-${Date.now()}-template`,
+          accountId: template.accountId,
+          accountName: accountByNumber.get(template.accountId)?.name ?? template.accountId,
+          type: bankSide === 'Soll' ? 'Haben' : 'Soll',
+          amount: gross,
+          taxCaseKey: template.taxCaseKey,
+          taxCode: toLegacyTaxCode(template.taxCaseKey) ?? '',
+          taxRate: findTaxCaseOption(template.taxCaseKey)?.defaultRate,
+          costCenter: '',
+        },
+      ],
+    }));
+  }
+
   function removeLine(lineId: string) {
     if (readOnly) return;
     patchDraft((prev) => ({
@@ -196,8 +253,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
   }
 
   async function persistDraft(localDraft: BookingDraft) {
+    const isCurrent = captureLifetime();
+    const generation = store.getGeneration();
     const saved = await saveDraft(localDraft, role);
-    setDraft(saved);
+    if (!isCurrent()) return saved;
+    setDraft(generation === store.getGeneration() ? saved : getBookingDraftByTransactionId(activeTransactionId) ?? saved);
     setTransaction(getTransactionById(activeTransactionId) ?? transaction);
     onStoreChange();
     return saved;
@@ -205,22 +265,26 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
   async function executeWorkflowAction(action: BookingAction, reason?: string) {
     if (!draft) return;
+    const isCurrent = captureLifetime();
     setBusy(true);
     setAnnounceMessage('');
     setAnnounceKind(null);
     try {
       if (action === 'save_draft') {
         await persistDraft({ ...draft });
+        if (!isCurrent()) return;
         setAnnounceMessage('Entwurf gespeichert');
         setAnnounceKind('success');
       } else {
         const saved = await saveDraft({ ...draft }, role);
+        if (!isCurrent()) return;
         setDraft(saved);
         const next = await dispatchBookingAction(activeTransactionId, action, {
           role,
           actorName: role,
           ...(action === 'reverse' && reason ? { rejectReason: reason } : {}),
         });
+        if (!isCurrent()) return;
         setDraft(next);
         setTransaction(getTransactionById(activeTransactionId) ?? transaction);
         onStoreChange();
@@ -228,11 +292,12 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         setAnnounceKind('success');
       }
     } catch (error) {
+      if (!isCurrent()) return;
       const message = error instanceof Error ? error.message : 'Aktion fehlgeschlagen';
       setAnnounceMessage(message);
       setAnnounceKind('error');
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
@@ -320,6 +385,8 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
           allowedActions={allowedActions}
           onAction={(action) => void handleWorkflowAction(action)}
           isBusy={busy}
+          blockedAction={blockedAction}
+          blockedReason={blockedReason}
         />
       </div>
 
@@ -336,10 +403,10 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
             <div className="grid gap-4 p-4 lg:grid-cols-2">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block mb-1 text-label text-foreground" htmlFor="bookingeditor-belegdatum">
+                  <label className="block mb-1 text-label text-foreground" htmlFor={`${editorId}-bookingeditor-belegdatum`}>
                     Belegdatum
                   </label>
-                  <input id="bookingeditor-belegdatum"
+                  <input id={`${editorId}-bookingeditor-belegdatum`}
                     type="date"
                     value={draft.documentDate ?? ''}
                     disabled={readOnly}
@@ -362,10 +429,10 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
               </div>
 
               <div>
-                <label className="block mb-1 text-label text-foreground" htmlFor="bookingeditor-buchungstext">
+                <label className="block mb-1 text-label text-foreground" htmlFor={`${editorId}-bookingeditor-buchungstext`}>
                   Buchungstext *
                 </label>
-                <input id="bookingeditor-buchungstext"
+                <input id={`${editorId}-bookingeditor-buchungstext`}
                   type="text"
                   value={draft.bookingText}
                   disabled={readOnly}
@@ -399,8 +466,30 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
           <div className="border border-border rounded-xl overflow-hidden flex-1 flex flex-col min-h-55">
             <div className="p-4 border-b border-border bg-surface-muted flex items-center justify-between shrink-0">
               <h3 className="text-sm font-semibold text-foreground">Buchungssatz</h3>
-              <div className="text-xs text-muted font-medium">
-                {draft.lines.length} Zeilen • {blocking ? 'Blocker vorhanden' : 'Prüfbar'}
+              <div className="flex items-center gap-3">
+                {!readOnly && templates.length > 0 && (
+                  <>
+                    <label className="sr-only" htmlFor={`${editorId}-booking-template`}>Buchungsvorlage</label>
+                    <select
+                      id={`${editorId}-booking-template`}
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value !== '') applyTemplate(Number(e.target.value));
+                      }}
+                      className="px-2.5 h-8 hover:border-control-border-hover border border-control-border rounded-control bg-surface text-sm"
+                    >
+                      <option value="">Vorlage einsetzen…</option>
+                      {templates.map((template, index) => (
+                        <option key={template.label} value={index}>
+                          {template.label} ({bankSide === 'Soll' ? `${bankLine?.accountId} an ${template.accountId}` : `${template.accountId} an ${bankLine?.accountId}`})
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
+                <div className="text-xs text-muted font-medium">
+                  {draft.lines.length} Zeilen • {blocking ? 'Blocker vorhanden' : 'Prüfbar'}
+                </div>
               </div>
             </div>
 
@@ -418,6 +507,19 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                 {draft.lines.map((line) => {
                   const selectedTaxCaseKey = normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode);
                   const selectedTaxCase = findTaxCaseOption(selectedTaxCaseKey);
+                  // The line books gross; the tax part is split off automatically from the tax case at posting.
+                  const autoTaxRate = line.taxRate ?? selectedTaxCase?.defaultRate ?? 0;
+                  const lineGross = Number(line.amount) || 0;
+                  // Reverse charge adds tax on top of the net line (input and output); standard VAT sits inside the gross.
+                  const reverseCharge = /(^|_)RC(_|$)/.test(selectedTaxCase?.key ?? '');
+                  // Same rounding as the server's enrichTaxFields, from the amount as currently typed.
+                  const round2 = (value: number) => Math.round(value * 100) / 100;
+                  const autoTaxAmount = reverseCharge
+                    ? round2(lineGross * (autoTaxRate / 100))
+                    : round2(lineGross - round2(lineGross / (1 + autoTaxRate / 100)));
+                  const autoTaxLabel = reverseCharge
+                    ? `Vorsteuer und Umsatzsteuer ${autoTaxRate} % (Reverse Charge)`
+                    : `${line.type === 'Soll' ? 'Vorsteuer' : 'Umsatzsteuer'} ${autoTaxRate} %`;
                   return (
                     <div key={line.id} className="px-4 py-3 space-y-3">
                       <div className="grid grid-cols-12 gap-3 items-center">
@@ -465,11 +567,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                         </div>
 
                         <div className="col-span-2">
-                          <label className="sr-only" htmlFor={`cost-center-${line.id}`}>
+                          <label className="sr-only" htmlFor={`${editorId}-cost-center-${line.id}`}>
                             Kostenstelle
                           </label>
                           <input
-                            id={`cost-center-${line.id}`}
+                            id={`${editorId}-cost-center-${line.id}`}
                             type="text"
                             value={line.costCenter ?? ''}
                             disabled={readOnly}
@@ -480,11 +582,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                         </div>
 
                         <div className="col-span-2">
-                          <label className="sr-only" htmlFor={`tax-case-${line.id}`}>
+                          <label className="sr-only" htmlFor={`${editorId}-tax-case-${line.id}`}>
                             Steuerfall
                           </label>
                           <select
-                            id={`tax-case-${line.id}`}
+                            id={`${editorId}-tax-case-${line.id}`}
                             value={selectedTaxCaseKey ?? ''}
                             disabled={readOnly}
                             onChange={(e) =>
@@ -511,11 +613,11 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                         </div>
 
                         <div className="col-span-2">
-                          <label className="sr-only" htmlFor={`amount-${line.id}`}>
+                          <label className="sr-only" htmlFor={`${editorId}-amount-${line.id}`}>
                             Betrag
                           </label>
                           <input
-                            id={`amount-${line.id}`}
+                            id={`${editorId}-amount-${line.id}`}
                             type="number"
                             step="0.01"
                             min="0"
@@ -539,6 +641,21 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
                           </button>
                         </div>
                       </div>
+
+                      {selectedTaxCase && autoTaxRate > 0 && lineGross > 0 && (
+                        <div
+                          role="note"
+                          aria-label={`Steuer automatisch: ${autoTaxLabel}`}
+                          data-auto-tax-line
+                          className="flex flex-wrap items-center gap-2 pl-[calc(8.333%+0.75rem)] text-xs text-muted"
+                        >
+                          <Badge tone="info">Steuer automatisch</Badge>
+                          <span>
+                            {reverseCharge ? '' : 'davon '}{autoTaxLabel} aus dem Steuerfall:{' '}
+                            <span className="font-semibold tabular-nums text-foreground">{formatCurrency(autoTaxAmount, transaction.currency)}</span>
+                          </span>
+                        </div>
+                      )}
 
                       {selectedTaxCase && (
                         <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
@@ -698,12 +815,12 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
       <Modal
         open={showShortcutHelp}
         onClose={() => setShowShortcutHelp(false)}
-        titleId="shortcut-help-title"
+        titleId={`${editorId}-shortcut-help-title`}
         initialFocusRef={shortcutCloseRef}
         className="max-w-lg rounded-2xl border border-border p-6"
       >
         <div className="flex items-center justify-between mb-4">
-          <h3 id="shortcut-help-title" className="text-base font-semibold text-foreground">Tastenkürzel</h3>
+          <h3 id={`${editorId}-shortcut-help-title`} className="text-base font-semibold text-foreground">Tastenkürzel</h3>
           <button ref={shortcutCloseRef} aria-label="Schließen (Tastenkürzel-Hilfe)" onClick={() => setShowShortcutHelp(false)} className="text-sm font-semibold text-muted">
             Schließen
           </button>

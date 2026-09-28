@@ -555,7 +555,13 @@ export const findServerTransactionMatches = async (
   scope: TenantScope,
   transactionId: string,
 ): Promise<FindTransactionMatchesResult> => {
-  const transaction = await getTransaction(database, scope, transactionId);
+  // The Pro bank workbench passes its bank_transactions id; matching reads the imported source row.
+  const bankSource = await query<{ source_transaction_id: string | null }>(database,
+    `SELECT source_transaction_id FROM bank_transactions WHERE tenant_id = $1 AND id = $2`,
+    [tenant(scope), transactionId],
+  );
+  const sourceId = bankSource.rows[0]?.source_transaction_id || transactionId;
+  const transaction = await getTransaction(database, scope, sourceId);
   if (!transaction) throw new Error('TRANSACTION_NOT_FOUND');
   const invoices = await createPostgresBillingDependencies(database).invoiceRepo.list(scope);
   return {

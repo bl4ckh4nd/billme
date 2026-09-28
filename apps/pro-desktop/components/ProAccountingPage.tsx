@@ -484,18 +484,22 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
         return ipc.pro.getJournalEntryById({ entryId: id });
       },
       async saveDraft(draft) {
+        const drafts = adapterDraftsRef.current;
         return runMutation(async () => {
           const saved = await ipc.pro.saveDraft({ draft: mapUiDraftToEntityDraft(draft) });
           const resolvedDraft = mapEntityDraftToUiDraft(saved, accountNames, activeChart);
-          adapterDraftsRef.current.set(draft.transactionId, resolvedDraft);
+          drafts.set(draft.transactionId, resolvedDraft);
           return structuredClone(resolvedDraft);
         });
       },
       async dispatchBookingAction(transactionId, action, options) {
+        const pro = ipc.pro;
+        const drafts = adapterDraftsRef.current;
+        const transactions = adapterTransactionsRef.current;
         const existing = adapterDraftsRef.current.get(transactionId);
         if (!existing) throw new Error('Draft not found');
         return runMutation(async () => {
-          const dispatched = await ipc.pro.dispatchDraftAction({
+          const dispatched = await pro.dispatchDraftAction({
             transactionId,
             action,
             rejectReason: options?.rejectReason,
@@ -503,7 +507,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
           let resolvedDraft = mapEntityDraftToUiDraft(dispatched, accountNames, activeChart);
 
           if (action === 'post') {
-            const postResult = await ipc.pro.postDraft({
+            const postResult = await pro.postDraft({
               draftId: resolvedDraft.id,
             });
             const hasBlocking = postResult.issues.some((issue) => issue.blocking);
@@ -525,20 +529,20 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
               };
             }
           } else if (action === 'reverse') {
-            const entries = await ipc.pro.listJournalEntries({ limit: 500, offset: 0 });
+            const entries = await pro.listJournalEntries({ limit: 500, offset: 0 });
             const entry = entries.find((row) => row.sourceDraftId === resolvedDraft.id && row.status === 'posted');
             if (entry) {
-              await ipc.pro.reverseJournalEntry({
+              await pro.reverseJournalEntry({
                 entryId: entry.id,
                 reason: options?.rejectReason || 'Storno aus Pro Workspace',
               });
             }
           }
 
-          const authoritative = await ipc.pro.getDraftByTransactionId({ transactionId });
+          const authoritative = await pro.getDraftByTransactionId({ transactionId });
           if (authoritative) resolvedDraft = mapEntityDraftToUiDraft(authoritative, accountNames, activeChart);
-          adapterDraftsRef.current.set(transactionId, resolvedDraft);
-          setTxWorkflowStatus(transactionId, resolvedDraft.workflowStatus);
+          drafts.set(transactionId, resolvedDraft);
+          if (transactions === adapterTransactionsRef.current) setTxWorkflowStatus(transactionId, resolvedDraft.workflowStatus);
           return structuredClone(resolvedDraft);
         });
       },
@@ -547,14 +551,15 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
         return structuredClone(draft?.activity ?? []);
       },
       async getSusaReport(filters) {
+        const pro = ipc.pro;
         activeReportFilters = filters;
         const range = reportPeriodRange(filters);
-        const report = await ipc.pro.getSusaReport({
+        const report = await pro.getSusaReport({
           asOfDate: filters.asOfDate,
           from: range.from,
           to: range.to,
         });
-        const accounts = await ipc.pro.listLedgerAccounts({ chart: report.chart ?? filters.chart, limit: 10_000 });
+        const accounts = await pro.listLedgerAccounts({ chart: report.chart ?? filters.chart, limit: 10_000 });
         return mapSusaReport(report, accounts);
       },
       async getGuvReport(filters) {
@@ -637,10 +642,11 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
         return mapHgbGuvReport(report as ReportResult<HgbGuvReport>);
       },
       async getBalanceSheetPreview(filters) {
+        const pro = ipc.pro;
         activeReportFilters = filters;
-        const report = await runReportingReport('hgb-bilanz', { asOfDate: filters.asOfDate });
-        const accounts = await ipc.pro.listLedgerAccounts({ chart: filters.chart, limit: 10_000 });
-        return mapHgbBilanzReport(report as ReportResult<HgbBilanzReport>, accounts, filters.chart);
+        const report = await pro.getReportingReport({ kind: 'hgb-bilanz', asOfDate: filters.asOfDate });
+        const accounts = await pro.listLedgerAccounts({ chart: filters.chart, limit: 10_000 });
+        return mapHgbBilanzReport(report as unknown as ReportResult<HgbBilanzReport>, accounts, filters.chart);
       },
       async getReportDrilldownEntries(selection) {
         if (!selection.accountNumbers.length) return [];
@@ -738,6 +744,23 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       postIncomingInvoiceAccounting(invoiceId, options) {
         return ipc.pro.postIncomingInvoiceAccounting({ invoiceId, reason: options.reason, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason });
       },
+      // Pro bank transactions share their id with the source transaction the invoice matcher reads.
+      async findInvoiceMatches(transactionId) {
+        const { suggestions } = await ipc.transactions.findMatches({ transactionId });
+        return suggestions.map(({ invoice, confidence, matchReasons, amountDiff }) => ({
+          invoiceId: invoice.id,
+          invoiceNumber: invoice.number,
+          client: invoice.client,
+          amount: invoice.amount,
+          dueDate: invoice.dueDate,
+          confidence,
+          matchReasons,
+          amountDiff,
+        }));
+      },
+      listAccountSuggestionRules() {
+        return ipc.pro.listAccountSuggestionRules({ chart: activeChart });
+      },
     };
   }, [accountNames, activeChart, bankAccounts, invalidateProQueries, runMutation]);
 
@@ -808,6 +831,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
         <ProAccountingWorkspace
           view={view}
           onViewChange={onViewChange}
+          onManageRules={() => setShowRulesModal(true)}
           seed={seed}
           dataAdapter={dataAdapter}
           busy={adapterBusy}

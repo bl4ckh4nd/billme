@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ipc } from '@billme/desktop-renderer/runtime-api';
+import { getRendererApi, ipc } from '@billme/desktop-renderer/runtime-api';
 
 type Transaction = Awaited<ReturnType<typeof ipc.transactions.list>>[number];
 type EurItem = Awaited<ReturnType<typeof ipc.eur.listItems>>[number];
@@ -125,3 +125,37 @@ export const useDashboardFlows = (profitDetermination: 'eur' | 'double_entry' | 
       };
     },
   });
+
+/**
+ * Ergebnis of the current month, Umsatz minus Aufwand: the GuV net result for
+ * double-entry businesses, the EÜR surplus otherwise. Its own query so a failing
+ * report leaves the rest of the overview intact.
+ */
+export const useMonthResult = (profitDetermination: 'eur' | 'double_entry' | undefined, profileChart?: string) => {
+  const now = new Date();
+  const month = monthKey(now);
+  return useQuery({
+    queryKey: ['dashboard-month-result', profitDetermination, profileChart, month],
+    retry: false,
+    staleTime: 30_000,
+    queryFn: async (): Promise<number> => {
+      const from = `${month}-01`;
+      const to = `${month}-${String(new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()).padStart(2, '0')}`;
+      if (profitDetermination === 'double_entry') {
+        // Only here: getRendererApi('pro') also switches the mock fallback product.
+        const pro = getRendererApi('pro').pro;
+        // The GuV refuses a profile chart that differs from the booking chart; ask first instead of provoking the error.
+        if (profileChart && (await pro.getAccountingPolicy()).activeChart !== profileChart) throw new Error('REPORT_CHART_MISMATCH');
+        return (await pro.getGuvReport({ from, to })).netResult;
+      }
+      if (now.getFullYear() < EUR_MIN_TAX_YEAR) throw new Error('EUR_TAX_YEAR_UNSUPPORTED');
+      // ponytail: the EÜR report only accepts whole calendar years, so the month sums classified items
+      // (net, income minus expense) instead of calculateEurRows; use the report once it takes month ranges.
+      const items = await ipc.eur.listItems({ taxYear: now.getFullYear() });
+      const result = items
+        .filter((item) => item.date.slice(0, 7) === month && item.classification?.eurLineId && !item.classification.excluded)
+        .reduce((sum, item) => sum + (item.flowType === 'income' ? item.amountNet : -item.amountNet), 0);
+      return Math.round(result * 100) / 100;
+    },
+  });
+};

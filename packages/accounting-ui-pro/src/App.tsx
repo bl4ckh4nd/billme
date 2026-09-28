@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Info } from 'lucide-react';
 import { ConfirmDialog } from '@billme/ui';
 import InboxView from './components/InboxView';
@@ -14,12 +14,10 @@ import type { InboxQueueKey } from './domain/selectors';
 import SonderbuchungenWorkspace from './components/SonderbuchungenWorkspace';
 import { JournalEntryDetailModal } from './components/JournalEntryDetail';
 import {
-  configureStoreAdapter,
-  configureStorePersistence,
-  hydrateMockStore,
-  listTransactions,
+  createAccountingWorkspaceStore,
   type ProAccountingDataAdapter,
 } from './services/mockBookingStore';
+import { AccountingWorkspaceContext, useAccountingWorkspace } from './AccountingWorkspaceContext';
 import { Account, BookingDraft, Transaction, UserRole } from './types';
 import { reportTabsForBusinessProfile, type BusinessReportingProfile } from './domain/reportTypes';
 
@@ -51,9 +49,29 @@ export interface ProAccountingWorkspaceProps {
   onPersistEntry?: (entry: { transaction: Transaction; draft: BookingDraft }) => void | Promise<void>;
   /** Routed hosts move the URL (`?view=`) when one area hands off to another. */
   onViewChange?: (view: AppView) => void;
+  /** Opens the host's account rule editor from the Bankabgleich rules card. */
+  onManageRules?: () => void;
 }
 
-export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, view, onPersistEntry, onViewChange }: ProAccountingWorkspaceProps) {
+export default function App(props: ProAccountingWorkspaceProps) {
+  const [store] = useState(() => {
+    const instance = createAccountingWorkspaceStore();
+    instance.hydrateMockStore(props.seed ?? (props.dataAdapter ? { transactions: [], drafts: [], accounts: [] } : {}));
+    instance.configureStoreAdapter(props.dataAdapter);
+    instance.configureStorePersistence({ onPersistEntry: props.onPersistEntry });
+    return instance;
+  });
+  useLayoutEffect(() => {
+    store.configureStoreAdapter(props.dataAdapter);
+    store.hydrateMockStore(props.seed ?? (props.dataAdapter ? { transactions: [], drafts: [], accounts: [] } : {}));
+  }, [store, props.dataAdapter, props.seed]);
+  useLayoutEffect(() => {
+    store.configureStorePersistence({ onPersistEntry: props.onPersistEntry });
+  }, [store, props.onPersistEntry]);
+  return <AccountingWorkspaceContext.Provider value={store}><Workspace {...props} /></AccountingWorkspaceContext.Provider>;
+}
+
+function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, view, onViewChange, onManageRules }: ProAccountingWorkspaceProps) {
   const [oposInvoiceId, setOposInvoiceId] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<AppView>(isAccountingView(view) ? view : 'inbox');
 
@@ -73,40 +91,11 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
   }, [selectedTransactionId]);
   const [selectedJournalEntryId, setSelectedJournalEntryId] = useState<string | null>(null);
   const [inboxPreviewTransactionId, setInboxPreviewTransactionId] = useState<string | null>(null);
-  const [version, setVersion] = useState(0);
+  const [, setVersion] = useState(0);
 
-  useEffect(() => {
-    if (!seed) return;
-    hydrateMockStore({
-      transactions: seed.transactions,
-      drafts: seed.drafts,
-      accounts: seed.accounts,
-      chartFramework: seed.chartFramework,
-      bankAccountNumber: seed.bankAccountNumber,
-      bankAccountNumberByTransactionId: seed.bankAccountNumberByTransactionId,
-    });
-    setVersion((v) => v + 1);
-  }, [seed?.seedVersion, seed?.transactions, seed?.drafts, seed?.accounts, seed?.chartFramework, seed?.bankAccountNumber, seed?.bankAccountNumberByTransactionId]);
-
-  useEffect(() => {
-    configureStorePersistence({
-      onPersistEntry,
-    });
-    return () => {
-      configureStorePersistence({});
-    };
-  }, [onPersistEntry]);
-
-  useEffect(() => {
-    configureStoreAdapter(dataAdapter);
-    return () => configureStoreAdapter(undefined);
-  }, [dataAdapter]);
-
-  const transactions = useMemo(
-    () => (dataAdapter ? seed?.transactions ?? [] : listTransactions()),
-    [dataAdapter, seed?.seedVersion, seed?.transactions, version],
-  );
-  const accounts = dataAdapter ? seed?.accounts ?? [] : undefined;
+  const store = useAccountingWorkspace();
+  const transactions = dataAdapter ? seed?.transactions ?? [] : store.listTransactions();
+  const accounts = seed?.accounts ?? store.listAccounts();
 
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
 
@@ -244,6 +233,9 @@ export default function App({ seed, dataAdapter, role = 'admin', assetsAvailable
               transactions={transactions}
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}
+              dataAdapter={dataAdapter}
+              onManageRules={onManageRules}
+              onOpenInvoice={(invoiceId) => { setOposInvoiceId(invoiceId); if (onViewChange) onViewChange('opos'); else setCurrentView('opos'); }}
             />
           ) : currentView === 'exceptions' ? (
             <ExceptionCenter

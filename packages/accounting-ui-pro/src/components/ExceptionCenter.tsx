@@ -2,14 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, FileSearch, RefreshCw } from 'lucide-react';
 import { formatEmptyValue } from '@billme/ui';
 import { getFlagLabel, getStatusPresentation } from '../domain/selectors';
-import {
-  assignExceptionOwner,
-  dispatchBookingAction,
-  getBookingDraftByTransactionId,
-  reopenException,
-  resolveException,
-  snoozeException,
-} from '../services/mockBookingStore';
+import { useAccountingWorkspace } from '../AccountingWorkspaceContext';
 import { Transaction, UserRole } from '../types';
 
 type ExceptionFilter = 'all' | 'open' | 'snoozed' | 'resolved' | 'errors' | 'warnings' | 'missing_receipt' | 'duplicates' | 'period_locked';
@@ -66,6 +59,8 @@ function matchesFilter(tx: Transaction, filter: ExceptionFilter) {
 }
 
 export default function ExceptionCenter({ role, canMutateExceptions = true, transactions, onOpenTransaction, onRefresh }: ExceptionCenterProps) {
+  const store = useAccountingWorkspace();
+  const { assignExceptionOwner, dispatchBookingAction, getBookingDraftByTransactionId, reopenException, resolveException, snoozeException } = store;
   const [filter, setFilter] = useState<ExceptionFilter>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [ownerDraft, setOwnerDraft] = useState('Mara Buchhaltung');

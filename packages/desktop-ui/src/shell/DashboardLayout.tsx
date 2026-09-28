@@ -1,20 +1,7 @@
 import React from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import {
-  Bell,
-  CheckCheck,
-  Menu as MenuIcon,
-  Monitor,
-  Moon,
-  PanelLeft,
-  Plus,
-  Search,
-  Settings,
-  Sun,
-  X,
-  type LucideIcon,
-} from 'lucide-react';
-import { BillmeLogo, Button, IconButton, Kbd, Portal, cn, popoverExitClass, useAnchoredPosition, useExitTransition, useThemePreference, type ThemePreference } from '@billme/ui';
+import { Bell, CheckCheck, Plus, X, type LucideIcon } from 'lucide-react';
+import { BillmeLogo, Button, IconButton, Kbd, KontorIcon, Portal, cn, popoverExitClass, useAnchoredPosition, useExitTransition, useThemePreference, type ThemePreference } from '@billme/ui';
 import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { useNotificationsStore, type AppNotification } from '@billme/desktop-core/state/notificationsStore';
 import { CommandPalette, isMacPlatform, type ShellCommand } from './CommandPalette';
@@ -55,6 +42,12 @@ export interface ShellNavItem {
   search?: Record<string, string>;
   /** Further path prefixes that belong to this entry (sub-pages, editors, legacy paths). */
   also?: string[];
+  /** Open work in this area, shown as a pill in the full rail. */
+  count?: number;
+  /** Context line next to the header title, from 1100px on. */
+  subtitle?: string;
+  /** Palette command that opens this entry, e.g. "Nächsten Umsatz buchen". */
+  action?: string;
 }
 
 export interface DashboardLayoutProps {
@@ -92,10 +85,19 @@ const readRailPreference = (): 'full' | 'mini' => {
 };
 
 const THEME_OPTIONS: Array<{ value: ThemePreference; label: string; icon: LucideIcon }> = [
-  { value: 'system', label: 'System', icon: Monitor },
-  { value: 'light', label: 'Hell', icon: Sun },
-  { value: 'dark', label: 'Dunkel', icon: Moon },
+  { value: 'system', label: 'System', icon: KontorIcon.system },
+  { value: 'light', label: 'Hell', icon: KontorIcon.sun },
+  { value: 'dark', label: 'Dunkel', icon: KontorIcon.moon },
 ];
+
+/** Master-data creation per area: offered in the palette and as that page's topbar action. */
+const CREATE_ACTIONS: Array<{ key: string; title: string; to: string; search: Record<string, string>; keywords: string[] }> = [
+  { key: 'client', title: 'Neuer Kunde', to: '/clients', search: { create: 'client' }, keywords: ['kunde', 'kontakt'] },
+  { key: 'project', title: 'Neues Projekt', to: '/projects', search: { create: 'project' }, keywords: ['projekt'] },
+  { key: 'article', title: 'Neue Leistung', to: '/articles', search: { create: 'article' }, keywords: ['leistung', 'artikel', 'produkt'] },
+];
+
+const SETTINGS_SUBTITLE = 'Firma, Buchführung und Nummernkreise';
 
 export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEditorActive, navItems, titlebar }) => {
   const navigate = useNavigate();
@@ -104,6 +106,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
   const settingsActive = pathMatches(location.pathname, '/settings');
   const activeItem = navItems.find((item) => item.id === activeId);
   const canCreateInvoice = navItems.some((item) => item.to === '/documents');
+  const subtitle = activeItem ? activeItem.subtitle : settingsActive ? SETTINGS_SUBTITLE : undefined;
   const { data: settings } = useSettingsQuery();
   const profile = settings?.businessReportingProfile;
   const [theme, setTheme] = useThemePreference();
@@ -202,16 +205,19 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
     });
     const list: ShellCommand[] = [];
     if (has('/documents')) {
-      list.push(create('invoice', 'Neue Rechnung', '/documents', { create: 'invoice' }, ['rechnung', 'dokument', 'schreiben']));
+      list.push(create('invoice', 'Rechnung schreiben', '/documents', { create: 'invoice' }, ['neue rechnung', 'rechnung', 'dokument', 'schreiben']));
       list.push(create('offer', 'Neues Angebot', '/documents', { kind: 'offer', create: 'offer' }, ['angebot', 'dokument']));
     }
-    if (has('/clients')) list.push(create('client', 'Neuer Kunde', '/clients', { create: 'client' }, ['kunde', 'kontakt']));
-    if (has('/projects')) list.push(create('project', 'Neues Projekt', '/projects', { create: 'project' }, ['projekt']));
-    if (has('/articles')) list.push(create('article', 'Neuer Artikel', '/articles', { create: 'article' }, ['artikel', 'leistung', 'produkt']));
-    for (const item of navItems) {
-      list.push({ key: `go:${item.id}`, title: `${item.label} öffnen`, icon: item.icon, keywords: ['gehe', 'öffnen', 'seite', item.group.toLowerCase()], run: () => go(item) });
+    for (const entry of CREATE_ACTIONS) {
+      if (has(entry.to)) list.push(create(entry.key, entry.title, entry.to, entry.search, entry.keywords));
     }
-    list.push({ key: 'go:settings', title: 'Einstellungen öffnen', icon: Settings, keywords: ['gehe', 'öffnen', 'seite', 'einstellungen'], run: () => go({ to: '/settings' }) });
+    for (const item of navItems) {
+      if (item.action) list.push({ key: `action:${item.id}`, title: item.action, icon: item.icon, keywords: [item.label.toLowerCase()], run: () => go(item) });
+    }
+    for (const item of navItems) {
+      list.push({ key: `go:${item.id}`, title: `Gehe zu ${item.label}`, icon: item.icon, keywords: ['öffnen', 'seite', item.label.toLowerCase(), `${item.label.toLowerCase()} öffnen`, item.group.toLowerCase()], run: () => go(item) });
+    }
+    list.push({ key: 'go:settings', title: 'Gehe zu Einstellungen', icon: KontorIcon.settings, keywords: ['öffnen', 'seite', 'einstellungen', 'einstellungen öffnen'], run: () => go({ to: '/settings' }) });
     for (const option of THEME_OPTIONS) {
       list.push({ key: `theme:${option.value}`, title: `Darstellung: ${option.label}`, icon: option.icon, keywords: ['theme', 'dunkel', 'hell', 'modus', 'farbschema'], run: () => setTheme(option.value) });
     }
@@ -253,6 +259,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                 {items.map((item) => {
                   const Icon = item.icon;
                   const active = item.id === activeId;
+                  const count = item.count || undefined;
                   return (
                     <li key={item.id}>
                       <button
@@ -261,6 +268,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                         aria-current={active ? 'page' : undefined}
                         title={compact ? item.label : undefined}
                         aria-label={compact ? item.label : undefined}
+                        aria-describedby={count ? `nav-count-${item.id}` : undefined}
                         className={cn(
                           'flex w-full items-center gap-2.5 rounded-control px-2 py-[7px] text-left text-label motion-safe:transition-colors motion-reduce:transition-none',
                           'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring',
@@ -270,7 +278,19 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                       >
                         <Icon size={16} aria-hidden="true" className="shrink-0" />
                         {!compact && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
+                        {!compact && count && (
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              'shrink-0 rounded-full border px-[5px] font-mono text-[0.6875rem] leading-4 tabular-nums',
+                              active ? 'border-transparent bg-selected-foreground/15 text-selected-foreground' : 'border-border bg-surface-sunken text-muted',
+                            )}
+                          >
+                            {count}
+                          </span>
+                        )}
                       </button>
+                      {count && <span id={`nav-count-${item.id}`} className="sr-only">{count} offen</span>}
                     </li>
                   );
                 })}
@@ -292,7 +312,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
             settingsActive ? 'bg-selected text-selected-foreground' : 'text-muted hover:bg-surface-sunken hover:text-foreground',
           )}
         >
-          <Settings size={16} aria-hidden="true" className="shrink-0" />
+          <KontorIcon.settings size={16} aria-hidden="true" className="shrink-0" />
           {!compact && <span className="flex-1">Einstellungen</span>}
         </button>
         {compact ? (
@@ -366,7 +386,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                 aria-expanded={drawerOpen}
                 onClick={() => setDrawerOpen(true)}
               >
-                <MenuIcon size={16} aria-hidden="true" />
+                <KontorIcon.menu size={16} aria-hidden="true" />
               </IconButton>
               <IconButton
                 className="hidden min-[900px]:inline-flex"
@@ -374,20 +394,28 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                 aria-pressed={mini}
                 onClick={toggleRail}
               >
-                <PanelLeft size={16} aria-hidden="true" />
+                <KontorIcon.panel size={16} aria-hidden="true" />
               </IconButton>
 
-              <p className="min-w-0 flex-1 truncate text-label text-muted" data-shell-area>
-                {activeItem ? (
-                  <>
-                    <span className="max-sm:hidden">{activeItem.group} / </span>
-                    <span className="font-semibold text-foreground">{activeItem.label}</span>
-                  </>
-                ) : settingsActive ? (
-                  <span className="font-semibold text-foreground">Einstellungen</span>
-                ) : null}
-              </p>
+              <div className="flex min-w-0 flex-1 items-baseline gap-2">
+                <p className="min-w-0 shrink truncate text-label text-muted" data-shell-area>
+                  {activeItem ? (
+                    <>
+                      <span className="max-sm:hidden">{activeItem.group} / </span>
+                      <span className="font-semibold text-foreground">{activeItem.label}</span>
+                    </>
+                  ) : settingsActive ? (
+                    <span className="font-semibold text-foreground">Einstellungen</span>
+                  ) : null}
+                </p>
+                {subtitle && (
+                  <span className="hidden min-w-0 truncate text-caption text-muted min-[1100px]:inline" data-shell-subtitle>
+                    {subtitle}
+                  </span>
+                )}
+              </div>
 
+              {/* Pages carry their own create action in the page header; the topbar only offers the invoice. */}
               {canCreateInvoice && !pathMatches(location.pathname, '/documents') && (
                 <Button size="sm" onClick={() => go({ to: '/documents', search: { create: 'invoice' } })} className="max-sm:hidden">
                   <Plus size={14} aria-hidden="true" />
@@ -401,7 +429,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                 aria-keyshortcuts={isMacPlatform() ? 'Meta+K' : 'Control+K'}
                 className="flex h-9 max-w-80 flex-1 items-center gap-2 rounded-control border border-control-border bg-surface px-2.5 text-left text-sm text-muted hover:border-control-border-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring max-sm:max-w-9 max-sm:flex-none max-sm:justify-center max-sm:px-0"
               >
-                <Search size={14} className="shrink-0" aria-hidden="true" />
+                <KontorIcon.search size={14} className="shrink-0" aria-hidden="true" />
                 <span className="flex-1 truncate max-sm:sr-only">Suchen oder Befehl …</span>
                 <Kbd className="shrink-0 max-sm:hidden">{isMacPlatform() ? '⌘K' : 'Strg K'}</Kbd>
               </button>

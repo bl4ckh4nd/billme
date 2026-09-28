@@ -6,6 +6,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  redirect,
   useNavigate,
   useRouterState,
 } from '@tanstack/react-router';
@@ -22,7 +23,6 @@ import { SettingsView } from './components/SettingsView';
 import { RecurringView } from './components/RecurringView';
 import { ProjectsView } from './components/ProjectsView';
 import { ProjectDetailView } from './components/ProjectDetailView';
-import { FinanceHubView } from './components/FinanceHubView';
 import { EurView } from './components/EurView';
 import { TemplateEditor } from '@billme/desktop-renderer/components/TemplateEditor';
 import { templateKindSchema } from '@billme/server-core/domain';
@@ -86,7 +86,6 @@ const DashboardPage: React.FC = () => {
 
 const StatisticsPage: React.FC = () => <LiteReportsView />;
 const AccountsPage: React.FC = () => <AccountsView />;
-const FinancePage: React.FC = () => <FinanceHubView />;
 const EurPage: React.FC = () => <EurView />;
 const ClientsPage: React.FC = () => <ClientsView />;
 const ProjectsPage: React.FC = () => <ProjectsView />;
@@ -123,15 +122,15 @@ const TemplatesPage: React.FC = () => {
 };
 
 const TemplateEditorPage: React.FC<{ templateId: string }> = ({ templateId }) => {
+  const navigate = useNavigate();
   const search = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
   const kind = templateKindSchema.safeParse(search.kind);
-  const navigate = useNavigate();
   return (
     <TemplateEditor
       templateId={templateId}
       kind={kind.success ? kind.data : 'invoice'}
-      onCreated={(id) => navigate({ to: '/templates/$id', params: { id }, replace: true })}
       onBack={() => navigate({ to: '/templates' })}
+      onCreated={(id) => navigate({ to: '/templates/$id', params: { id }, replace: true })}
     />
   );
 };
@@ -147,6 +146,7 @@ const DocumentsPage: React.FC = () => {
   const initialStatus = locationSearch.status === 'overdue' ? 'overdue' as const : undefined;
 
   const handleCreateDocument = (type: 'invoice' | 'offer') => {
+    const numbers = ipc.numbers;
     void (async () => {
       // A document cannot be priced without the user's own tax settings, and a
       // fabricated fallback would put demo values on a real invoice.
@@ -156,7 +156,8 @@ const DocumentsPage: React.FC = () => {
       }
 
       try {
-        const reservation = await ipc.numbers.reserve({ kind: type });
+        const reservation = await numbers.reserve({ kind: type });
+        if (ipc.numbers !== numbers) return;
         const newInvoice: Invoice = {
           id: Math.random().toString(36).substr(2, 9),
           number: reservation.number,
@@ -261,6 +262,7 @@ const DocumentEditorPage: React.FC = () => {
         onSave={(updated, meta) => {
           const numberNote = meta?.numberChangeReason ? `Nummer manuell geändert: ${meta.numberChangeReason}` : undefined;
           if (docMode === 'create') {
+            const numbers = ipc.numbers;
             const reservationId = updated.numberReservationId;
             const persistedDoc = { ...updated };
             delete persistedDoc.numberReservationId;
@@ -274,11 +276,12 @@ const DocumentEditorPage: React.FC = () => {
                     : { invoice: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' };
                 const saved = await (mutation as any).mutateAsync(vars);
                 if (reservationId) {
-                  await ipc.numbers.finalize({
+                  await numbers.finalize({
                     reservationId,
                     documentId: saved.id,
                   });
                 }
+                if (ipc.numbers !== numbers) return;
                 clearEditingInvoice();
                 navigate({ to: '/documents' });
               } catch (error) {
@@ -294,14 +297,16 @@ const DocumentEditorPage: React.FC = () => {
           setIsReasonOpen(true);
         }}
         onCancel={() => {
+          const numbers = ipc.numbers;
           void (async () => {
             if (docMode === 'create' && invoice.numberReservationId) {
               try {
-                await ipc.numbers.release({ reservationId: invoice.numberReservationId });
+                await numbers.release({ reservationId: invoice.numberReservationId });
               } catch {
                 // Ignore release failures to avoid trapping users in editor.
               }
             }
+            if (ipc.numbers !== numbers) return;
             clearEditingInvoice();
             navigate({ to: '/documents' });
           })();
@@ -371,7 +376,11 @@ const accountsRoute = createRoute({
 const financeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/finance',
-  component: FinancePage,
+  // The old finance hub is gone; old `/finance?tab=` links land on the page that now hosts that tab.
+  beforeLoad: ({ location }) => {
+    const tab = (location.search as { tab?: unknown }).tab;
+    throw redirect({ to: tab === 'accounts' ? '/accounts' : tab === 'eur' ? '/eur' : '/statistics', replace: true });
+  },
 });
 
 const eurRoute = createRoute({

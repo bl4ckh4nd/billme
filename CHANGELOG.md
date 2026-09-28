@@ -5,6 +5,9 @@
 - Vorlagen sind jetzt Fluss-Layouts statt frei positionierter Canvas-Elemente: vier Presets (klassisch, modern, kompakt, elegant), je ein Standard für Rechnung, Angebot, Auftragsbestätigung, Lieferschein, Gutschrift und Mahnung, dazu die Wahl pro Beleg. Vorschau, Beleg-Editor und PDF brechen an denselben Stellen um. Alte Canvas-Vorlagen werden beim Start einmalig übernommen.
 - Beim ersten Speichern außerhalb des Entwurfs friert ein Beleg Vorlagenversion und Firmendaten ein, damit Nachdrucke identisch bleiben. Mahnungen gibt es als PDF, auch als Anhang im Mahnlauf, und E-Rechnungen tragen ein echtes `factur-x.xml` als PDF/A-3-Anhang.
 
+- Lite und Pro nutzen im Browser denselben Anmelde- und Renderer-Lebenszyklus; verspätete Antworten nach Serverwechsel oder Abmeldung aktivieren keine alte Sitzung mehr.
+- Buchhaltungs-Workspaces halten Entwürfe, Konten und Persistenz getrennt; alte Speicherfehler überschreiben keine neu geladenen Daten und das Schließen eines Workspaces setzt keinen anderen zurück.
+
 - Produktbrief, visuelle Auditberichte, Layout-Prüfwerkzeug und der Abnahmeplan für die ausgehende Dokumentkette dokumentieren jetzt die überprüften Oberflächenregeln und offenen Nachweise.
 - Das Firmen-Onboarding liegt jetzt in `@billme/desktop-ui`, trennt Lite und Pro sichtbar, führt schrittweise durch die Abrechnung, erklärt Buchhaltungsbegriffe, akzeptiert deutsche Dezimalwerte und kann Entwürfe zum späteren Fortsetzen speichern.
 - Die Oberflächen von Lite, Pro, Browser-Shells, Demo, Portal und Landingpage folgen jetzt durchgängig den Design-Tokens: keine grauen Standardfarben oder rohen Hex-Werte mehr, Radien aus der Skala, Beträge in Inter mit `tabular-nums`, kein Deko-Glow, keine Farbverläufe als Standardfläche und keine dekorativen Einblend-Animationen. Ein neues Skript `pnpm check:design-tokens` hält das in der CI fest.

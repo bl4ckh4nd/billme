@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 // Lucide is the app's icon set; every glyph here names its own control (ArrowRightLeft = Abgleich,
 // Play = buchen, ArrowRight = nächster Workflow-Schritt, GitBranch = Split, CheckCircle2 = bestätigen),
 // so the surface carries no decorative or "magic" symbol.
@@ -6,11 +6,11 @@ import { ArrowRight, ArrowRightLeft, CheckCircle2, GitBranch, Play } from 'lucid
 import { bookingActionLabels, getStatusPresentation } from '../domain/selectors';
 import { normalizeTaxCaseKey, toLegacyTaxCode } from '../domain/taxCases';
 import { getAllowedActions } from '../domain/workflow';
-import { mockAccounts } from '../mocks/accounts';
 import { permissionContextForRole } from '../mocks/users';
-import { dispatchBookingAction, getBookingDraftByTransactionId, saveDraft } from '../services/mockBookingStore';
-import { Account, BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
-import { ConfirmDialog, HatchedProgress } from '@billme/ui';
+import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorkspaceContext';
+import { Account, BookingAction, BookingDraft, BookingWorkflowStatus, JournalLine, Transaction, UserRole } from '../types';
+import type { AccountSuggestionRuleSummary, InvoiceMatchCandidate, ProAccountingDataAdapter } from '../services/mockBookingStore';
+import { Badge, ConfirmDialog, HatchedProgress } from '@billme/ui';
 import AccountCombobox from './AccountCombobox';
 import IssueBadges from './IssueBadges';
 
@@ -78,6 +78,12 @@ interface ReconciliationWorkbenchProps {
   transactions: Transaction[];
   onOpenTransaction: (transactionId: string) => void;
   onRefresh: () => void;
+  /** Invoice matching and rule statistics; without them the workbench shows neither. */
+  dataAdapter?: ProAccountingDataAdapter;
+  /** Opens the host's rule editor. */
+  onManageRules?: () => void;
+  /** Opens Offene Posten with the invoice preselected, where the payment is settled with a ledger entry. */
+  onOpenInvoice?: (invoiceId: string) => void;
 }
 
 function formatCurrency(amount: number | string, currency: string) {
@@ -86,6 +92,35 @@ function formatCurrency(amount: number | string, currency: string) {
 }
 
 const CONFIDENT_THRESHOLD = 0.9;
+
+type ScoredCandidate = InvoiceMatchCandidate & { score: number };
+
+// ponytail: the invoice matcher only reports a confidence bucket, so the score is derived here
+// (bucket plus a small bonus per extra reason). Replace once findMatches returns a numeric score.
+const CONFIDENCE_SCORE = { high: 0.9, medium: 0.6, low: 0.3 } as const;
+function scoreCandidates(candidates: InvoiceMatchCandidate[]): ScoredCandidate[] {
+  return candidates
+    .map((candidate) => ({
+      ...candidate,
+      score: Math.min(0.99, CONFIDENCE_SCORE[candidate.confidence] + 0.03 * Math.max(0, candidate.matchReasons.length - 1)),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+}
+
+/** Two nearly equal hits are no hit: a person decides instead of a preselection. */
+export function isZweifelsfall(candidates: Array<{ score: number }>): boolean {
+  return candidates.length > 1 && candidates[0].score > 0.5 && candidates[0].score - candidates[1].score < 0.1;
+}
+
+const RULE_STALE_DAYS = 92;
+const daysSince = (iso?: string) => (iso ? Math.floor((Date.now() - Date.parse(iso)) / 86_400_000) : Number.POSITIVE_INFINITY);
+const RULE_FIELD_LABELS: Record<AccountSuggestionRuleSummary['field'], string> = { counterparty: 'Gegenpartei', purpose: 'Verwendungszweck', any: 'Gegenpartei oder Zweck' };
+const RULE_OPERATOR_LABELS: Record<AccountSuggestionRuleSummary['operator'], string> = { contains: 'enthält', equals: 'ist gleich', startsWith: 'beginnt mit' };
+
+interface SessionMatch {
+  label: string;
+}
 
 function getPrimaryAction(actions: BookingAction[]): BookingAction | null {
   return actions.find((a) => ['approve', 'post', 'submit_for_review'].includes(a)) ?? null;
@@ -103,20 +138,42 @@ export default function ReconciliationWorkbench({
   transactions,
   onOpenTransaction,
   onRefresh,
+  dataAdapter,
+  onManageRules,
+  onOpenInvoice,
 }: ReconciliationWorkbenchProps) {
-  const accountOptions = accounts ?? mockAccounts;
+  const store = useAccountingWorkspace();
+  const captureLifetime = useWorkspaceLifetime();
+  const { dispatchBookingAction, getBookingDraftByTransactionId, saveDraft } = store;
+  const accountOptions = accounts ?? store.listAccounts();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [mutationBusy, setMutationBusy] = useState(false);
   const permissionCtx = permissionContextForRole(role);
+  // ponytail: confirmations of this session live in memory only and are gone after a reload; derive them
+  // from the draft activity once the list should survive restarts.
+  const [sessionMatches, setSessionMatches] = useState<Record<string, SessionMatch>>({});
+  const [candidatesById, setCandidatesById] = useState<Record<string, ScoredCandidate[]>>({});
+  const requestedCandidates = useRef(new Set<string>());
+  const [rules, setRules] = useState<AccountSuggestionRuleSummary[] | null>(null);
+  const [rulesError, setRulesError] = useState<string | null>(null);
+  const canMatchInvoices = Boolean(dataAdapter?.findInvoiceMatches);
 
   const queue = useMemo(
     () =>
       transactions.filter(
-        (tx) => !['posted', 'reversed', 'corrected', 'integration_error'].includes(tx.workflowStatus),
+        (tx) =>
+          !['posted', 'reversed', 'corrected', 'integration_error'].includes(tx.workflowStatus),
       ),
     [transactions],
   );
+
+  const rememberConfirmation = (transactionId: string, action: BookingAction) => {
+    setSessionMatches((prev) => ({
+      ...prev,
+      [transactionId]: prev[transactionId] ?? { label: actionLabel(action) },
+    }));
+  };
 
   // A confident match is one the single-item flow would accept unchanged:
   // high suggestion confidence, no blocking issue, an allowed primary action,
@@ -139,9 +196,12 @@ export default function ReconciliationWorkbench({
         // The draft must book what the suggestion names; otherwise confirming would post an account nobody proposed.
         const counterAccounts = txDraft.lines.map((line) => line.accountId).filter((id) => id && id !== txTotals.bankAccountNumber);
         const followsSuggestion = Boolean(tx.suggestion) && counterAccounts.length > 0 && counterAccounts.every((id) => id === tx.suggestion);
+        // A payment two invoices fit almost equally well is not sicher; unchecked payments are not either.
+        const candidates = candidatesById[tx.id];
+        if (canMatchInvoices && tx.amount > 0 && (!candidates || isZweifelsfall(candidates))) return [];
         return followsSuggestion && txTotals.bankLineCount === 1 && txTotals.difference < 0.01 ? [{ tx, action }] : [];
       }),
-    [queue, permissionCtx, accounts, bankAccountNumberByTransactionId, configuredBankAccountNumber],
+    [queue, permissionCtx, accounts, bankAccountNumberByTransactionId, configuredBankAccountNumber, candidatesById, canMatchInvoices],
   );
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchResult, setBatchResult] = useState<string | null>(null);
@@ -150,18 +210,22 @@ export default function ReconciliationWorkbench({
   // ponytail: runs the existing per-transaction action in sequence; add a batch
   // route in server-runtime if queues get long enough for this to feel slow.
   const runConfidentBatch = async () => {
+    const isCurrent = captureLifetime();
     setBatchOpen(false);
     setMutationBusy(true);
     setMutationError(null);
     const failures: string[] = [];
     for (const { tx, action } of confident) {
+      if (!isCurrent()) return;
       try {
         await dispatchBookingAction(tx.id, action, { role, actorName: role });
+        rememberConfirmation(tx.id, action);
       } catch (error) {
         failures.push(`${tx.payee}: ${error instanceof Error ? error.message : 'unbekannter Fehler'}`);
       }
     }
     setMutationBusy(false);
+    if (!isCurrent()) return;
     setBatchResult(
       failures.length === 0
         ? `${confident.length} sichere Treffer weitergeführt.`
@@ -171,6 +235,35 @@ export default function ReconciliationWorkbench({
   };
 
   const selectedTx = queue.find((tx) => tx.id === selectedId) ?? queue[0] ?? null;
+
+  // Invoice candidates for incoming payments: the selected one, and every would-be sicher one so the
+  // batch never confirms a Zweifelsfall.
+  const candidateIds = [selectedTx, ...queue.filter((tx) => (tx.suggestionConfidence ?? 0) >= CONFIDENT_THRESHOLD)]
+    .filter((tx): tx is Transaction => Boolean(tx && tx.amount > 0))
+    .map((tx) => tx.id)
+    .join('|');
+  useEffect(() => {
+    const findMatches = dataAdapter?.findInvoiceMatches;
+    if (!findMatches || !candidateIds) return;
+    for (const id of candidateIds.split('|')) {
+      if (requestedCandidates.current.has(id)) continue;
+      requestedCandidates.current.add(id);
+      findMatches(id)
+        .then((candidates) => setCandidatesById((prev) => ({ ...prev, [id]: scoreCandidates(candidates) })))
+        // The matcher refuses payments that are already linked; that is "no candidate", not an error.
+        .catch(() => setCandidatesById((prev) => ({ ...prev, [id]: [] })));
+    }
+  }, [dataAdapter, candidateIds]);
+
+  useEffect(() => {
+    const listRules = dataAdapter?.listAccountSuggestionRules;
+    if (!listRules) return;
+    let current = true;
+    listRules()
+      .then((rows) => { if (current) { setRules(rows); setRulesError(null); } })
+      .catch((error) => { if (current) setRulesError(error instanceof Error ? error.message : 'Regeln konnten nicht geladen werden.'); });
+    return () => { current = false; };
+  }, [dataAdapter, transactions]);
   const storeDraft = selectedTx ? getBookingDraftByTransactionId(selectedTx.id) : undefined;
   const [localDraft, setLocalDraft] = useState<BookingDraft | null>(null);
 
@@ -246,6 +339,7 @@ export default function ReconciliationWorkbench({
     setMutationError(null);
     try {
       await dispatchBookingAction(selectedTx.id, primary, { role, actorName: role });
+      rememberConfirmation(selectedTx.id, primary);
       onRefresh();
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
@@ -253,6 +347,44 @@ export default function ReconciliationWorkbench({
       setMutationBusy(false);
     }
   };
+
+  const isPosted = (transactionId: string) => {
+    const status = getBookingDraftByTransactionId(transactionId)?.workflowStatus
+      ?? transactions.find((tx) => tx.id === transactionId)?.workflowStatus;
+    return status === 'posted' || status === 'reversed' || status === 'corrected';
+  };
+
+  const draftStatus = (transactionId: string) =>
+    getBookingDraftByTransactionId(transactionId)?.workflowStatus ?? transactions.find((tx) => tx.id === transactionId)?.workflowStatus;
+
+  // Undo sends a confirmation back while it still waits for approval; the reject carries the audit reason.
+  // Approved drafts have no way back on the server, and posted ones only change through a Storno.
+  const undoSessionMatch = async (transactionId: string) => {
+    if (!sessionMatches[transactionId] || draftStatus(transactionId) !== 'pending_approval') return;
+    setMutationBusy(true);
+    setMutationError(null);
+    try {
+      await dispatchBookingAction(transactionId, 'reject', { role, actorName: role, rejectReason: 'Bankabgleich: Bestätigung zurückgenommen' });
+      setSessionMatches((prev) => {
+        const next = { ...prev };
+        delete next[transactionId];
+        return next;
+      });
+      onRefresh();
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : 'Rückgängig machen fehlgeschlagen.');
+    } finally {
+      setMutationBusy(false);
+    }
+  };
+
+  const selectedCandidates = selectedTx ? candidatesById[selectedTx.id] : undefined;
+  const selectedZweifelsfall = selectedCandidates ? isZweifelsfall(selectedCandidates) : false;
+  const sessionEntries = Object.entries(sessionMatches).flatMap(([id, match]) => {
+    const tx = transactions.find((item) => item.id === id);
+    return tx ? [{ tx, match }] : [];
+  });
+  const staleRules = (rules ?? []).filter((rule) => rule.active && daysSince(rule.lastHitAt ?? rule.createdAt) > RULE_STALE_DAYS);
 
   const updateLine = (lineId: string, updater: (line: JournalLine) => JournalLine) => {
     setLocalDraft((prev) =>
@@ -401,7 +533,8 @@ export default function ReconciliationWorkbench({
                 <div className={`text-xs font-semibold tabular-nums mt-1.5 ${tx.amount < 0 ? 'text-error-text' : 'text-success-text'}`}>
                   {formatCurrency(tx.amount, tx.currency)}
                 </div>
-                <div className="mt-1.5">
+                <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                  {candidatesById[tx.id] && isZweifelsfall(candidatesById[tx.id]) && <Badge tone="warning">Zweifelsfall</Badge>}
                   <IssueBadges transaction={tx} />
                 </div>
               </button>
@@ -463,6 +596,61 @@ export default function ReconciliationWorkbench({
                   />
                 </div>
               </div>
+
+              {canMatchInvoices && selectedTx.amount > 0 && (
+                <section aria-label="Passende Rechnungen" className="border border-border rounded-2xl bg-surface p-5">
+                  <div className="text-sm font-semibold text-foreground">Passende Rechnungen</div>
+                  {!selectedCandidates ? (
+                    <p className="mt-2 text-sm text-muted" role="status">Suche passende Rechnungen…</p>
+                  ) : selectedCandidates.length === 0 ? (
+                    <p className="mt-2 text-sm text-muted">Keine offene Rechnung passt zu diesem Umsatz.</p>
+                  ) : (
+                    <>
+                      {selectedZweifelsfall && (
+                        <div role="status" className="mt-3 rounded-lg border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text">
+                          <span className="font-semibold">Zweifelsfall: zwei Belege passen fast gleich gut.</span>{' '}
+                          {selectedCandidates[0].invoiceNumber} und {selectedCandidates[1].invoiceNumber} liegen weniger als 10 Punkte auseinander. Es ist nichts vorausgewählt, bitte selbst zuordnen.
+                        </div>
+                      )}
+                      <ul className="mt-3 space-y-2" aria-label="Kandidaten">
+                        {selectedCandidates.map((candidate, index) => (
+                          <li
+                            key={candidate.invoiceId}
+                            aria-label={`Rechnung ${candidate.invoiceNumber}`}
+                            className={`rounded-xl border p-3 ${index === 0 && !selectedZweifelsfall && candidate.score >= CONFIDENT_THRESHOLD ? 'border-dark-base' : 'border-border'}`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold text-foreground">{candidate.invoiceNumber}</div>
+                                <div className="text-caption text-muted">
+                                  {candidate.client}, fällig {new Date(candidate.dueDate).toLocaleDateString('de-DE')}
+                                </div>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <div className="text-sm font-semibold tabular-nums text-foreground">{formatCurrency(candidate.amount, selectedTx.currency)}</div>
+                                <Badge tone={candidate.score >= CONFIDENT_THRESHOLD ? 'success' : candidate.score > 0.5 ? 'warning' : 'neutral'}>
+                                  <span className="tabular-nums">{Math.round(candidate.score * 100)} %</span>
+                                </Badge>
+                              </div>
+                            </div>
+                            <p className="mt-1.5 text-caption text-muted">{candidate.matchReasons.join(' · ')}</p>
+                            {onOpenInvoice && (
+                              <button
+                                type="button"
+                                onClick={() => onOpenInvoice(candidate.invoiceId)}
+                                aria-label={`Rechnung ${candidate.invoiceNumber} in Offene Posten ausgleichen`}
+                                className="mt-2 px-3 py-1.5 rounded-lg border border-control-border bg-surface text-xs font-semibold text-foreground hover:bg-surface-muted"
+                              >
+                                In Offene Posten ausgleichen
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </section>
+              )}
 
               <div className="border border-border rounded-2xl bg-surface p-5">
                 <div className="flex items-center justify-between">
@@ -646,6 +834,100 @@ export default function ReconciliationWorkbench({
               </div>
             </section>
           </div>
+        )}
+
+        {sessionEntries.length > 0 && (
+          <section aria-label="Zugeordnet" className="mt-6 border border-border rounded-2xl bg-surface">
+            <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
+              <h3 className="text-sm font-semibold text-foreground">Zugeordnet</h3>
+              <span className="text-caption text-muted">Rückweg bis zur Freigabe</span>
+            </div>
+            <ul>
+              {sessionEntries.map(({ tx, match }) => {
+                const posted = isPosted(tx.id);
+                const undoable = draftStatus(tx.id) === 'pending_approval';
+                return (
+                  <li key={tx.id} className="flex flex-wrap items-center gap-3 border-b border-border-subtle px-5 py-2.5 last:border-b-0">
+                    <span className="min-w-0 flex-1 text-sm">
+                      <span className="font-semibold text-foreground">{tx.payee}</span>{' '}
+                      <span className="text-muted">bestätigt: {match.label}</span>
+                    </span>
+                    <span className="text-sm font-semibold tabular-nums text-foreground">{formatCurrency(tx.amount, tx.currency)}</span>
+                    {posted ? (
+                      <Badge tone="success">gebucht</Badge>
+                    ) : !undoable ? (
+                      <Badge tone="neutral">freigegeben, wartet auf Buchung</Badge>
+                    ) : (
+                      <>
+                        <Badge tone="warning">nicht gebucht</Badge>
+                        <button
+                          type="button"
+                          onClick={() => void undoSessionMatch(tx.id)}
+                          disabled={mutationBusy || !permissionCtx.canMutate}
+                          aria-label={`Rückgängig: ${tx.payee}`}
+                          className="px-3 py-1.5 rounded-lg border border-control-border bg-surface text-xs font-semibold text-foreground hover:bg-surface-muted disabled:opacity-50"
+                        >
+                          Rückgängig
+                        </button>
+                      </>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        {dataAdapter?.listAccountSuggestionRules && (
+          <section aria-label="Kontierungsregeln" className="mt-6 border border-border rounded-2xl bg-surface">
+            <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3">
+              <h3 className="text-sm font-semibold text-foreground">Regeln</h3>
+              {rules && (staleRules.length > 0
+                ? <Badge tone="warning">{staleRules.length} greifen nicht mehr</Badge>
+                : <Badge tone="success">alle greifen</Badge>)}
+              <span className="flex-1" />
+              {onManageRules && (
+                <button
+                  type="button"
+                  onClick={onManageRules}
+                  className="px-3 py-1.5 rounded-lg border border-control-border bg-surface text-xs font-semibold text-foreground hover:bg-surface-muted"
+                >
+                  Regeln bearbeiten
+                </button>
+              )}
+            </div>
+            {rulesError ? (
+              <p role="alert" className="px-5 py-3 text-sm text-error-text">{rulesError}</p>
+            ) : !rules ? (
+              <p className="px-5 py-3 text-sm text-muted" role="status">Regeln werden geladen…</p>
+            ) : rules.length === 0 ? (
+              <p className="px-5 py-3 text-sm text-muted">Noch keine Regeln angelegt.</p>
+            ) : (
+              <ul>
+                {rules.map((rule) => {
+                  const stale = staleRules.includes(rule);
+                  const months = Math.max(1, Math.floor(daysSince(rule.lastHitAt ?? rule.createdAt) / 30.44));
+                  return (
+                    <li key={rule.id} aria-label={`Regel ${rule.value}`} className="flex flex-wrap items-start gap-3 border-b border-border-subtle px-5 py-2.5 last:border-b-0">
+                      <span className="min-w-0 flex-1 text-sm">
+                        <span className="font-semibold text-foreground">
+                          Wenn {RULE_FIELD_LABELS[rule.field]} {RULE_OPERATOR_LABELS[rule.operator]} „{rule.value}“
+                        </span>
+                        <span className="block text-caption text-muted">dann Konto {rule.targetAccountNumber}</span>
+                        <span className="block text-caption text-muted tabular-nums">
+                          {rule.hitCount
+                            ? `${rule.hitCount} Treffer, zuletzt ${rule.lastHitAt ? new Date(rule.lastHitAt).toLocaleDateString('de-DE') : 'unbekannt'}`
+                            : 'noch nie angewendet'}
+                        </span>
+                      </span>
+                      {stale && <Badge tone="warning">seit {months === 1 ? 'einem Monat' : `${months} Monaten`} kein Treffer</Badge>}
+                      {!rule.active && <Badge tone="neutral">deaktiviert</Badge>}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
         )}
       </div>
     </div>

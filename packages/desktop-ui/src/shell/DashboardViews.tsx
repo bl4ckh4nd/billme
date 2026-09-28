@@ -16,7 +16,7 @@ import { useOffersQuery } from '@billme/desktop-renderer/hooks/useOffers';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { estimateMonthVat } from './vatEstimate';
 import { SkeletonLoader } from '../components/SkeletonLoader';
-import { useDashboardFlows } from './dashboardFlows';
+import { useDashboardFlows, useMonthResult } from './dashboardFlows';
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
@@ -25,6 +25,10 @@ const formatCurrency = (amount: number) => {
 const formatDate = (dateString: string) => {
   return new Date(dateString).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
+
+/** Whole days from local `today` to a date-only string, read as local midnight; NaN when missing. */
+const daysUntil = (dateString: string | undefined, today: Date) =>
+  dateString ? Math.round((new Date(`${dateString.slice(0, 10)}T00:00:00`).getTime() - today.getTime()) / 86_400_000) : Number.NaN;
 
 // --- Dashboard Settings Popover (portal to body with fixed positioning) ---
 const DashboardSettingsPopover: React.FC<{
@@ -153,6 +157,8 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
   const profitDetermination = settings.businessReportingProfile?.profitDetermination;
   const flowsQuery = useDashboardFlows(profitDetermination);
   const flows = flowsQuery.data;
+  const monthResultQuery = useMonthResult(profitDetermination, settings.businessReportingProfile?.chart);
+  const monthResult = monthResultQuery.data;
   const [chartRange, setChartRange] = useState<'6' | '12'>('12');
   const [chartAsTable, setChartAsTable] = useState(false);
 
@@ -187,14 +193,24 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
     const overdueTotal = overdue.reduce((acc, inv) => acc + amountFor(inv), 0);
 
     const now = new Date();
-    const dueSoon = outstanding.filter((inv) => {
-      if (!inv.dueDate) return false;
-      const due = new Date(inv.dueDate);
-      if (Number.isNaN(due.getTime())) return false;
-      const days = (due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
-      return days >= 0 && days <= dash.dueSoonDays;
-    });
-    const dueSoonTotal = dueSoon.reduce((acc, inv) => acc + amountFor(inv), 0);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dueSoon = outstanding
+      .map((inv) => ({ inv, days: daysUntil(inv.dueDate, today), amount: amountFor(inv) }))
+      .filter((row) => row.days >= 0 && row.days <= dash.dueSoonDays)
+      .sort((a, b) => a.days - b.days);
+    const dueSoonTotal = dueSoon.reduce((acc, row) => acc + row.amount, 0);
+
+    // Aging by due date; a missing due date counts as not yet due.
+    const aging = [
+      { key: 'current', label: 'nicht fällig', fill: 'bg-success', amount: 0 },
+      { key: 'd30', label: '1–30 Tage', fill: 'bg-warning', amount: 0 },
+      { key: 'd60', label: '31–60 Tage', fill: 'bg-error-inverse', amount: 0 },
+      { key: 'd60plus', label: 'über 60 Tage', fill: 'bg-error', amount: 0 },
+    ];
+    for (const inv of outstanding) {
+      const late = -daysUntil(inv.dueDate, today);
+      aging[!(late > 0) ? 0 : late <= 30 ? 1 : late <= 60 ? 2 : 3].amount += amountFor(inv);
+    }
 
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
@@ -222,8 +238,10 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
       outstandingTotal,
       overdueCount: overdue.length,
       overdueTotal,
+      dueSoon,
       dueSoonCount: dueSoon.length,
       dueSoonTotal,
+      aging,
       monthRevenueNet,
       monthIssuedCount: monthIssued.length,
       revenueTrend,
@@ -360,8 +378,6 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
   }, [invoices, settings, taxMethod]);
 
   const nowMonthLabel = new Date().toLocaleDateString('de-DE', { month: 'long' });
-  const currentFlow = flows?.months[flows.months.length - 1];
-  const monthResult = currentFlow ? currentFlow.income - currentFlow.expense : null;
   const taxDueDays = Math.ceil((new Date(new Date().getFullYear(), new Date().getMonth() + 1, 10).getTime() - Date.now()) / 86_400_000);
   const shownMonths = flows ? flows.months.slice(chartRange === '6' ? -6 : -12) : [];
   const incomeAverage = shownMonths.length > 0 ? shownMonths.reduce((sum, month) => sum + month.income, 0) / shownMonths.length : 0;
@@ -426,10 +442,10 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
         <div className="rounded-panel bg-surface p-4 shadow-xs">
           <Metric
             marker="tick"
-            label={`Kontobewegung ${nowMonthLabel}`}
+            label={`Ergebnis ${nowMonthLabel}`}
             value={monthResult == null ? '–' : formatCurrency(monthResult)}
-            hint="Kontoeingänge minus Kontoausgänge, brutto"
-            tone={monthResult == null || monthResult === 0 ? 'neutral' : monthResult > 0 ? 'success' : 'error'}
+            hint={monthResultQuery.isError ? (/REPORT_CHART_MISMATCH/.test(String(monthResultQuery.error)) ? 'Kontenrahmen in Profil und Buchhaltung weichen ab' : 'Auswertung nicht erreichbar') : monthResult == null ? 'Wird geladen' : 'Umsatz minus Aufwand'}
+            tone={monthResult == null ? 'neutral' : monthResult >= 0 ? 'success' : 'error'}
           />
         </div>
         <div className="rounded-panel bg-surface p-4 shadow-xs">
@@ -562,17 +578,54 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
         </div>
       </section>
 
+      {/* Expected money of the next days. */}
+      <section aria-labelledby="dashboard-due-soon" className="lg:col-span-5 flex flex-col rounded-panel bg-surface p-5 shadow-xs">
+        <CardHeader
+          title={<span id="dashboard-due-soon">Fällig in {dash.dueSoonDays} Tagen</span>}
+          subtitle="Erwartete Eingänge aus offenen Rechnungen"
+          count={kpis.dueSoonCount > 0 ? `${kpis.dueSoonCount} Posten` : undefined}
+          actions={
+            <DashboardSettingsPopover
+              fields={[{ key: 'dueSoonDays', label: 'Fällig in X Tagen', min: 1, max: 90 }]}
+              values={{ dueSoonDays: dash.dueSoonDays }}
+              onSave={(v) => saveDashboardSettings({ dueSoonDays: v.dueSoonDays })}
+            ><span /></DashboardSettingsPopover>
+          }
+        />
+        {/* ponytail: inflows only; recurring expenses are not loaded on the overview.
+            Add them as outflows once a recurring-expense hook exists here. */}
+        {kpis.dueSoon.length === 0 ? (
+          <EmptyState title="Nichts fällig" description={`In den nächsten ${dash.dueSoonDays} Tagen wird keine offene Rechnung fällig.`} className="py-8" />
+        ) : (
+          <>
+            <div role="list" aria-label={`Fällig in ${dash.dueSoonDays} Tagen`} className="mt-2">
+              {kpis.dueSoon.map(({ inv, amount }) => (
+                <div role="listitem" key={inv.id}>
+                  <ListRow
+                    icon={<ArrowDownLeft size={16} />}
+                    tone="success"
+                    title={inv.client}
+                    subtitle={<><span className="tabular-nums">{formatDate(inv.dueDate)}</span> · {inv.number}</>}
+                    value={formatCurrency(amount)}
+                    valueTone="success"
+                    onClick={() => onNavigate('documents', { kind: 'invoice', id: inv.id })}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="mt-auto flex items-center justify-between gap-3 rounded-card bg-surface-sunken px-4 py-3">
+              <span className="text-label">Saldo der {dash.dueSoonDays} Tage</span>
+              <span className={cn('text-lg font-bold tabular-nums', kpis.dueSoonTotal >= 0 ? 'text-success-text' : 'text-error-text')}>{formatCurrency(kpis.dueSoonTotal)}</span>
+            </div>
+          </>
+        )}
+      </section>
+
       {/* Focal card: the one inverse surface on this view (DESIGN.md contrast budget). */}
       <section aria-labelledby="dashboard-receivables" className="lg:col-span-5 flex flex-col rounded-panel bg-surface-inverse p-6 text-inverse-foreground">
          <div className="flex items-center justify-between gap-3">
              <h2 id="dashboard-receivables" className="text-label text-inverse-muted">Offene Forderungen</h2>
              <div className="flex items-center gap-1">
-                 <DashboardSettingsPopover
-                   dark
-                   fields={[{ key: 'dueSoonDays', label: 'Fällig in X Tagen', min: 1, max: 90 }]}
-                   values={{ dueSoonDays: dash.dueSoonDays }}
-                   onSave={(v) => saveDashboardSettings({ dueSoonDays: v.dueSoonDays })}
-                 ><span /></DashboardSettingsPopover>
                  <button type="button" onClick={() => onNavigate('documents')} className="inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-label text-inverse-muted transition-colors hover:bg-surface-inverse-overlay hover:text-inverse-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark">
                      Alle ansehen <ArrowUpRight size={14} aria-hidden="true" />
                  </button>
@@ -581,22 +634,22 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
 
          <p className="mt-3 text-4xl font-semibold tracking-[-0.02em] tabular-nums break-words">{formatCurrency(kpis.outstandingTotal)}</p>
 
-         <dl className="mt-6 divide-y divide-border-inverse rounded-card bg-surface-inverse-raised">
-             <div className="flex items-center justify-between gap-3 px-4 py-3">
-                <dt className="flex items-center gap-2 text-sm">
-                    <span className="size-1.5 rounded-full bg-error-inverse" aria-hidden="true" />
-                    Überfällig <span className="text-inverse-muted tabular-nums">({kpis.overdueCount})</span>
-                </dt>
-                <dd className="font-medium tabular-nums">{formatCurrency(kpis.overdueTotal)}</dd>
-             </div>
-             <div className="flex items-center justify-between gap-3 px-4 py-3">
-                <dt className="flex items-center gap-2 text-sm">
-                    <span className="size-1.5 rounded-full bg-inverse-muted" aria-hidden="true" />
-                    Fällig in {dash.dueSoonDays} Tagen <span className="text-inverse-muted tabular-nums">({kpis.dueSoonCount})</span>
-                </dt>
-                <dd className="font-medium tabular-nums">{formatCurrency(kpis.dueSoonTotal)}</dd>
-             </div>
-         </dl>
+         <p className="mt-1 text-caption text-inverse-muted">
+             {kpis.overdueCount > 0 ? <>davon <span className="tabular-nums">{formatCurrency(kpis.overdueTotal)}</span> überfällig ({kpis.overdueCount})</> : 'Nichts überfällig'}
+         </p>
+
+         <h3 className="mt-6 text-caption text-inverse-muted">Altersstruktur nach Fälligkeit</h3>
+         <ul aria-label="Altersstruktur der Forderungen" className="mt-2 space-y-2.5 rounded-card bg-surface-inverse-raised px-4 py-3">
+             {kpis.aging.map((bucket, index) => (
+                 <li key={bucket.key} className="grid grid-cols-[6.5rem_minmax(0,1fr)_auto] items-center gap-3 text-sm">
+                     <span>{bucket.label}</span>
+                     <span className="h-1.5 overflow-hidden rounded-full bg-surface-inverse-overlay" aria-hidden="true">
+                         <span className={cn('block h-full rounded-full', bucket.fill)} style={{ width: `${bucket.amount > 0 ? Math.max(2, (bucket.amount / (kpis.outstandingTotal || 1)) * 100) : 0}%` }} />
+                     </span>
+                     <span className={cn('text-right font-medium tabular-nums', index > 0 && bucket.amount > 0 && 'text-error-inverse')}>{formatCurrency(bucket.amount)}</span>
+                 </li>
+             ))}
+         </ul>
 
          <div className="mt-auto flex items-end justify-between gap-4 pt-6">
             <div>
@@ -728,7 +781,7 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
       </section>
 
       {/* Recent payments */}
-      <section aria-labelledby="dashboard-payments" className="lg:col-span-12 flex flex-col rounded-panel bg-surface p-5 shadow-xs">
+      <section aria-labelledby="dashboard-payments" className="lg:col-span-7 flex flex-col rounded-panel bg-surface p-5 shadow-xs">
           <CardHeader
             title={<span id="dashboard-payments">Zahlungseingänge</span>}
             subtitle={<>Dieser Monat <span className="font-medium text-foreground tabular-nums">{formatCurrency(paymentsThisMonthGross)}</span></>}

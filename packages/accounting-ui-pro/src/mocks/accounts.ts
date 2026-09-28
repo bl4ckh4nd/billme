@@ -44,7 +44,3 @@ export const mockAccounts: Account[] = [
     keywords: ['Werkzeug', 'Material'],
   },
 ];
-
-export function replaceMockAccounts(nextAccounts: Account[]) {
-  mockAccounts.splice(0, mockAccounts.length, ...nextAccounts);
-}

@@ -64,3 +64,11 @@ export const ipc = new Proxy({} as LiteBillmeApi, {
   get: (_target, property) =>
     Reflect.get(getRendererApi(), property),
 });
+
+export function createRendererApiProxy(product: 'lite'): LiteBillmeApi;
+export function createRendererApiProxy(product: 'pro'): ProBillmeApi;
+export function createRendererApiProxy(product: RendererProduct): RendererApi {
+  return new Proxy({} as RendererApi, {
+    get: (_target, property) => Reflect.get(getRendererApi(product), property),
+  });
+}

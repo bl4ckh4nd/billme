@@ -8,6 +8,7 @@
     "test": "vitest --run"
   },
   "exports": {
+    "./browser-shell": "./src/BrowserDocumentShell.tsx",
     ".": "./src/index.tsx",
     "./pro": "./src/pro.tsx",
     "./runtime-api": "./src/runtime-api.ts",

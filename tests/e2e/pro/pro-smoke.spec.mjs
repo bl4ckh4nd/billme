@@ -16,17 +16,13 @@ test.afterEach(async () => {
   }
 });
 
-test('pro finance hub opens accounting workspace and core tabs', async () => {
+test('old finance hub link lands on Konten and the rail reaches the accounting areas', async () => {
   const { page, baseUrl } = desktop;
   await page.goto(appUrl(baseUrl, '/finance'));
 
-  await expect(page.getByRole('heading', { name: 'Finanzen' })).toBeVisible();
-  await page.getByRole('button', { name: 'Pro Buchhaltung' }).click();
-  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
-
-  await expect(page.getByRole('button', { name: 'Inbox', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Abgleich', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Ausnahmen', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Anlagen', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Auswertungen', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/accounts/);
+  const nav = page.getByRole('navigation', { name: 'Hauptnavigation' });
+  for (const label of ['Buchen', 'Bankabgleich', 'Auswertungen', 'Steuer']) {
+    await expect(nav.getByRole('button', { name: label })).toBeVisible();
+  }
 });

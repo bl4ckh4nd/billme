@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -68,10 +69,17 @@ const queryClient = new QueryClient({
   },
 });
 
-ReactDOM.createRoot(rootElement).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
-  </React.StrictMode>,
-);
+const boot = async () => {
+  if (import.meta.env.DEV && !(globalThis as { billmeApi?: unknown }).billmeApi) {
+    (await import('@billme/desktop-renderer/dev-mock')).installDevMockApi('pro');
+  }
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    </React.StrictMode>,
+  );
+};
+
+void boot();

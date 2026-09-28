@@ -12,6 +12,7 @@
     ".": "./src/index.tsx",
     "./pro": "./src/pro.tsx",
     "./runtime-api": "./src/runtime-api.ts",
+    "./dev-mock": "./src/dev-mock.ts",
     "./ui-store": "./src/ui-store.ts",
     "./createDesktopApp": "./src/createDesktopApp.tsx",
     "./hooks/*": "./src/hooks/*.ts",

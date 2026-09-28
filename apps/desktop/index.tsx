@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { mountDesktopRendererApp } from '@billme/desktop-renderer';
 
 const ensureDebugOverlay = () => {
@@ -58,4 +59,11 @@ console.log('[renderer] boot', {
   userAgent: navigator.userAgent,
 });
 
-void mountDesktopRendererApp(rootElement);
+const boot = async () => {
+  if (import.meta.env.DEV && !(globalThis as { billmeApi?: unknown }).billmeApi) {
+    (await import('@billme/desktop-renderer/dev-mock')).installDevMockApi('lite');
+  }
+  await mountDesktopRendererApp(rootElement);
+};
+
+void boot();

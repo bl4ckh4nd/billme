@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@billme/ui';
-import type { ProAccountingDataAdapter } from '../../services/mockBookingStore';
-import { permissionContextForRole } from '../../mocks/users';
+import type { ProAccountingDataAdapter } from '../../services/accountingDataAdapter';
+import { permissionContextForRole } from '../../domain/permissions';
 import type { UserRole } from '../../types';
 import {
   REPORT_MAPPING_STATEMENTS,

@@ -6,10 +6,10 @@ import { ArrowRight, ArrowRightLeft, CheckCircle2, GitBranch, Play } from 'lucid
 import { bookingActionLabels, getStatusPresentation } from '../domain/selectors';
 import { normalizeTaxCaseKey, toLegacyTaxCode } from '../domain/taxCases';
 import { getAllowedActions } from '../domain/workflow';
-import { permissionContextForRole } from '../mocks/users';
+import { permissionContextForRole } from '../domain/permissions';
 import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorkspaceContext';
 import { Account, BookingAction, BookingDraft, BookingWorkflowStatus, JournalLine, Transaction, UserRole } from '../types';
-import type { AccountSuggestionRuleSummary, InvoiceMatchCandidate, ProAccountingDataAdapter } from '../services/mockBookingStore';
+import type { AccountSuggestionRuleSummary, InvoiceMatchCandidate, ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import { Badge, ConfirmDialog, HatchedProgress } from '@billme/ui';
 import AccountCombobox from './AccountCombobox';
 import IssueBadges from './IssueBadges';

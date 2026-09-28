@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { formatEmptyValue, Modal } from '@billme/ui';
 import type { JournalEntryEntity } from '@billme/accounting-shared';
-import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
+import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 
 const euro = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
 const date = new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium' });

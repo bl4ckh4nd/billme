@@ -40,8 +40,8 @@ superset of the Lite UI.
 ## Desktop persistence and IPC
 
 Both Electron applications use the shared embedded server runtime with PGlite as their only local
-database. `@billme/desktop-data` remains available for legacy SQLite compatibility tests and the
-standalone migration path; it is not a desktop production dependency. The `billme-pglite-migrate`
+database; the SQLite repositories are gone. Releases up to v0.4.0 stored data in SQLite, so the
+import path stays until a release with it has shipped. The `billme-pglite-migrate`
 command imports an existing `billme.sqlite` or `billme-pro-v2.sqlite` into a new PGlite directory,
 keeps the source and a consistent backup, verifies import counts, and writes an activation manifest.
 
@@ -70,12 +70,13 @@ provided API as `globalThis.billmeApi`, and creates the React Query client. This
 
 The package also owns the shared Lite/Pro document, client, catalog, settings, project, recurring,
 transaction-matching, and EÜR views plus their React Query hooks. App-local component and hook paths
-are compatibility re-exports. `runtime-api.ts` selects the external Electron/HTTP adapter or one
-product-scoped fallback mock, and `ui-store.ts` is the single renderer UI-state instance.
+are compatibility re-exports. `runtime-api.ts` returns the
+external Electron/HTTP adapter and throws when none is installed (the plain-Vite dev renderer installs
+`installDevMockApi` explicitly), and `ui-store.ts` is the single renderer UI-state instance.
 
-Shared behavior is tested once at its package owner (`@billme/desktop-data` or
+Shared behavior is tested once at its package owner (for example `@billme/server-data` or
 `@billme/desktop-renderer`). Product bootstrap tests remain in both desktop apps even when their test
-bodies currently match: they verify the separate Lite and Pro schemas, migrations, and wiring.
+bodies currently match: they verify the separate Lite and Pro profiles and wiring.
 Likewise, the small app-local connection, preload, scheduler, polling, and renderer entrypoints are
 intentional composition roots; shared behavior belongs behind them, but the product boundary stays
 visible.
@@ -123,13 +124,10 @@ The Pro accounting seam is split by responsibility:
 - `@billme/accounting-ui-pro`: the shared accounting workspace UI
 - `@billme/finance-intelligence`: local naive Bayes and keyword-based suggestions
 
-The UI is ahead of some adapter wiring. `packages/accounting-ui-pro/src/components/ReportsView.tsx`
-loads `mockReportService`, and `AssetManagementView.tsx` owns a local `mockAssets` array. SuSa, GuV,
-Bilanz, and asset screens therefore still display sample data in the shared UI.
-
-Real SuSa, GuV, and Bilanz queries exist in `apps/pro-desktop/db/proAccountingRepo.ts`. The Pro contract
-declares `pro:getSusaReport`, `pro:getGuvReport`, and `pro:getBilanzReport`, and
-`apps/pro-desktop/electron/ipcHandlers.ts` exposes those repository-backed implementations over IPC.
+The workspace talks to the backend through `ProAccountingDataAdapter`
+(`packages/accounting-ui-pro/src/services/accountingDataAdapter.ts`). With an adapter, reports and assets
+come from `server-data` over `pro:*` routes; only the package's standalone dev app, which has no adapter,
+falls back to the sample data in `mockBookingStore`, `mockReportService` and `src/mocks`.
 
 ## Offer portal
 

@@ -14,7 +14,7 @@ import { WORKFLOW_STEPS, getStatusPresentation, getWorkflowStep } from '../domai
 import { findTaxCaseOption, normalizeTaxCaseKey, TAX_CASE_OPTIONS, toLegacyTaxCode } from '../domain/taxCases';
 import { hasBlockingIssues, validateBookingDraft } from '../domain/validation';
 import { getAllowedActions } from '../domain/workflow';
-import { permissionContextForRole } from '../mocks/users';
+import { permissionContextForRole } from '../domain/permissions';
 import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorkspaceContext';
 import { Badge, ConfirmDialog, Modal, Stepper } from '@billme/ui';
 import { BOOKING_TEMPLATES } from '../domain/bookingTemplates';

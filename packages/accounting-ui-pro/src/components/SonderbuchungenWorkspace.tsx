@@ -3,8 +3,8 @@ import { Button, formatEmptyValue } from '@billme/ui';
 import { JournalEntryDetailModal } from './JournalEntryDetail';
 import { userFacingReference } from '../domain/references';
 import type { UserRole } from '../types';
-import { permissionContextForRole } from '../mocks/users';
-import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
+import { permissionContextForRole } from '../domain/permissions';
+import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import type {
   AccountingCommandInput,
   AccountingCommandKind,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { permissionContextForRole } from '../mocks/users';
+import { permissionContextForRole } from '../domain/permissions';
 import { getAllowedActions } from './workflow';
 
 describe('server role presentation', () => {

@@ -4,7 +4,7 @@ import {
   Badge, EmptyState, ErrorState, SegmentedControl,
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@billme/ui';
-import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
+import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 
 type Filter = 'all' | 'review' | 'missing' | 'posted';
 

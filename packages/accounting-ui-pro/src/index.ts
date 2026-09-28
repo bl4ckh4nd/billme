@@ -3,7 +3,7 @@ export { default as SonderbuchungenWorkspace } from './components/Sonderbuchunge
 export { default as JournalEntryDetail } from './components/JournalEntryDetail';
 export type { JournalEntryDetailProps } from './components/JournalEntryDetail';
 export type { ProAccountingWorkspaceProps, ProAccountingSeed, AppView as AccountingView } from './App';
-export type { ProAccountingDataAdapter } from './services/mockBookingStore';
+export type { ProAccountingDataAdapter } from './services/accountingDataAdapter';
 export type {
   AccountingCommandInput,
   AccountingCommandKind,
@@ -23,8 +23,8 @@ export type {
   TaxPreparationInput,
   TaxPreparationKind,
 } from './sourceRuns';
-export type { OposBankTransaction } from './services/mockBookingStore';
-export { permissionContextForRole } from './mocks/users';
+export type { OposBankTransaction } from './services/accountingDataAdapter';
+export { permissionContextForRole } from './domain/permissions';
 export type {
   BalanceSheetPreview,
   EurCashItem,

@@ -35,10 +35,10 @@ import {
   getManagementGuvReport,
   getSusaReport,
 } from '../services/mockReportService';
-import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
+import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import type { EurAnnexFact, EurCashFact } from '../sourceRuns';
 import type { UserRole } from '../types';
-import { permissionContextForRole } from '../mocks/users';
+import { permissionContextForRole } from '../domain/permissions';
 import ReportToolbar from './reports/ReportToolbar';
 import ReportTabSwitch from './reports/ReportTabSwitch';
 import SusaTable from './reports/SusaTable';

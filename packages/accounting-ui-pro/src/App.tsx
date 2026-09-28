@@ -13,10 +13,8 @@ import WorkbenchQueue from './components/WorkbenchQueue';
 import type { InboxQueueKey } from './domain/selectors';
 import SonderbuchungenWorkspace from './components/SonderbuchungenWorkspace';
 import { JournalEntryDetailModal } from './components/JournalEntryDetail';
-import {
-  createAccountingWorkspaceStore,
-  type ProAccountingDataAdapter,
-} from './services/mockBookingStore';
+import { createAccountingWorkspaceStore } from './services/mockBookingStore';
+import type { ProAccountingDataAdapter } from './services/accountingDataAdapter';
 import { AccountingWorkspaceContext, useAccountingWorkspace } from './AccountingWorkspaceContext';
 import { Account, BookingDraft, Transaction, UserRole } from './types';
 import { reportTabsForBusinessProfile, type BusinessReportingProfile } from './domain/reportTypes';

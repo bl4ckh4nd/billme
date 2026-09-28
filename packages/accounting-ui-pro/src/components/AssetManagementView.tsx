@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { Search } from 'lucide-react';
 import { Button, EMPTY_VALUE, formatEmptyValue } from '@billme/ui';
 import type { AssetDepreciationScheduleEntry, AssetItem, AssetStatus } from '../domain/assetTypes';
-import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
+import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import type { AssetUpsertInput } from '../domain/assetTypes';
-import { permissionContextForRole } from '../mocks/users';
+import { permissionContextForRole } from '../domain/permissions';
 import { toAccountingActorRole, type UserRole } from '../types';
 
 const mockAssets: AssetItem[] = [

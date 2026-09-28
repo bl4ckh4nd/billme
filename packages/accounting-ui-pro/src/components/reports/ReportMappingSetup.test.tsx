@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import ReportMappingSetup from './ReportMappingSetup';
-import type { ProAccountingDataAdapter } from '../../services/mockBookingStore';
+import type { ProAccountingDataAdapter } from '../../services/accountingDataAdapter';
 
 const positions = [
   { key: 'revenue', label: 'Umsatzerlöse', kind: 'line' as const },

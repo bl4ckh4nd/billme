@@ -8,8 +8,8 @@ import type {
   OpenItemPaymentEntity,
   VendorEntity,
 } from '@billme/accounting-shared';
-import type { OposBankTransaction, ProAccountingDataAdapter } from '../services/mockBookingStore';
-import { permissionContextForRole } from '../mocks/users';
+import type { OposBankTransaction, ProAccountingDataAdapter } from '../services/accountingDataAdapter';
+import { permissionContextForRole } from '../domain/permissions';
 import type { UserRole } from '../types';
 import {
   Button, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, ValidationSummary,

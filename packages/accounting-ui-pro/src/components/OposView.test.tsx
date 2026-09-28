@@ -2,7 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import OposView from './OposView';
-import type { ProAccountingDataAdapter } from '../services/mockBookingStore';
+import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 
 const item = {
   id: 'open-1', tenantId: 'default', partyType: 'debtor' as const, partyId: 'client-1', sourceType: 'outgoing_invoice' as const,

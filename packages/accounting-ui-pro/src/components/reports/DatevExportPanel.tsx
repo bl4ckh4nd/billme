@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { FileDown, LockKeyhole } from 'lucide-react';
 import { Button, EMPTY_VALUE, Input } from '@billme/ui';
-import type { DatevExportResult, ProAccountingDataAdapter } from '../../services/mockBookingStore';
-import { permissionContextForRole } from '../../mocks/users';
+import type { DatevExportResult, ProAccountingDataAdapter } from '../../services/accountingDataAdapter';
+import { permissionContextForRole } from '../../domain/permissions';
 import type { UserRole } from '../../types';
 
 type DatevEncoding = 'cp1252' | 'utf8-bom';

@@ -7,8 +7,65 @@ import { createPostgresPool } from './connection.js';
 import { createDrizzle, schema } from './drizzle.js';
 import { runDrizzleMigrations } from './migrations.js';
 
-const rootUrl = new URL('../../../../', import.meta.url);
-const sqliteBootstrapUrl = new URL('apps/pro-desktop/db/bootstrap.ts', rootUrl);
+// Asset columns of the last SQLite Pro bootstrap. The SQLite stack is gone, so imports of existing
+// desktop databases can only meet these columns.
+const sqliteAssetColumns: Record<string, string[]> = {
+  assets: [
+    'accounting_repair_reason',
+    'accounting_repair_required',
+    'acquisition_cost',
+    'acquisition_offset_account_number',
+    'activation_date',
+    'activation_journal_entry_id',
+    'asset_account_number',
+    'asset_class',
+    'asset_number',
+    'cost_center',
+    'created_at',
+    'depreciation_method',
+    'disposal_date',
+    'disposal_proceeds',
+    'id',
+    'invoice_ref',
+    'location',
+    'name',
+    'receipt_linked',
+    'source_incoming_invoice_id',
+    'status',
+    'supplier',
+    'tenant_id',
+    'updated_at',
+    'useful_life_years',
+  ],
+  asset_depreciation_schedule: [
+    'amount',
+    'asset_id',
+    'id',
+    'journal_entry_id',
+    'months',
+    'posted_at',
+    'source_key',
+    'source_type',
+    'status',
+    'tenant_id',
+    'year',
+  ],
+  asset_movements: [
+    'amount',
+    'asset_id',
+    'created_at',
+    'gain_loss',
+    'id',
+    'journal_entry_id',
+    'movement_date',
+    'proceeds',
+    'reason',
+    'source_key',
+    'source_type',
+    'tenant_id',
+    'type',
+  ],
+};
 const postgresMigrationUrl = new URL('../../drizzle/0002_server_data_assets.sql', import.meta.url);
 const postgresAssetAccountingMigrationUrl = new URL('../../drizzle/0008_server_data_asset_accounting.sql', import.meta.url);
 
@@ -23,7 +80,6 @@ const columns = (sql: string, table: string): string[] => {
 };
 
 test('SQLite and Postgres asset table columns stay mirrored', async () => {
-  const sqlite = await readFile(sqliteBootstrapUrl, 'utf8');
   const postgres = [
     await readFile(postgresMigrationUrl, 'utf8'),
     await readFile(postgresAssetAccountingMigrationUrl, 'utf8'),
@@ -34,7 +90,7 @@ test('SQLite and Postgres asset table columns stay mirrored', async () => {
     for (const match of postgres.matchAll(new RegExp(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ([a-z_]+)\\s`, 'g'))) {
       postgresColumns.push(match[1]);
     }
-    assert.deepEqual([...new Set(postgresColumns)].sort(), columns(sqlite, table), table);
+    assert.deepEqual([...new Set(postgresColumns)].sort(), sqliteAssetColumns[table], table);
   }
 });
 

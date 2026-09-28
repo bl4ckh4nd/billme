@@ -9,10 +9,6 @@ const sourceRoots = ['apps', 'packages'];
 // Native SQL is intentionally limited to lifecycle/migration code and source
 // database compatibility bridges. All product persistence must use Drizzle.
 const allowlist = new Set([
-  'apps/desktop/db/migrate.ts',
-  'apps/pro-desktop/db/migrate.ts',
-  'apps/pro-desktop/scripts/build-skr-sqlite.mjs',
-  'apps/pro-desktop/services/legacySqliteReadBridge.ts',
   'apps/offer-portal/src/storage/legacySqliteBridge.ts',
   'packages/desktop-data/src/connection.ts',
   'packages/server-data/src/postgres/connection.ts',

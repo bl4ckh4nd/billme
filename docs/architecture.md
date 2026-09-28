@@ -11,7 +11,7 @@ surface owns its bootstrap and persistence adapters.
 | `apps/desktop` | Billme Lite: Electron main/preload, React renderer, and embedded PGlite server wiring |
 | `apps/pro-desktop` | Billme Pro: separate Electron application with Pro IPC, embedded PGlite server, and accounting integration |
 | `apps/web` | Authenticated Lite server-mode shell that mounts the Lite desktop renderer over an HTTP adapter |
-| `apps/web-pro` | Standalone Pro server-mode UI; embeds `ProAccountingWorkspace` instead of mounting the desktop renderer |
+| `apps/web-pro` | Authenticated Pro server-mode shell that mounts the Pro desktop renderer over an HTTP adapter |
 | `apps/server-api` | Fastify API for Lite and Pro, backed by Postgres in server mode |
 | `apps/server-worker` | Scheduled server-mode side effects and maintenance |
 | `apps/offer-portal` | Hono service for public offer/invoice links and customer decisions |
@@ -25,12 +25,11 @@ The split is selected at build time. It is not a license-key upgrade or a runtim
 | Boundary | Lite | Pro |
 |---|---|---|
 | Application | `apps/desktop` | `apps/pro-desktop` |
-| IPC package | `@billme/desktop-contracts` (82 routes) | `@billme/desktop-contracts-pro` (110 routes) |
+| IPC package | `@billme/desktop-contracts` | `@billme/desktop-contracts-pro` |
 | PGlite directory | `billme-pglite/` | `billme-pro-pglite/` |
 | Electron `appId` | `com.billme.desktop` | `com.billme.pro` |
 
-The route counts come from the `ipcRoutes` objects in
-`packages/desktop-contracts/src/contract.ts` and
+The routes are the `ipcRoutes` objects in `packages/desktop-contracts/src/contract.ts` and
 `packages/desktop-contracts-pro/src/contract.ts`. The database names and application IDs are defined
 in each app's `productProfile.ts` and `electron-builder.yml`.
 
@@ -85,8 +84,8 @@ visible.
 `globalThis.billmeRuntime.navigation` through the mount options to `dashboard`, `clients`, and
 `documents`. `apps/desktop/components/DashboardLayout.tsx` applies that allowlist.
 
-`apps/web-pro` follows a different topology. Its `App.tsx` is a standalone server-mode UI that imports
-and embeds `ProAccountingWorkspace`; it does not call `mountDesktopRendererApp`.
+`apps/web-pro` follows the same pattern for Pro: `BrowserDocumentShell` handles login and session, and
+`mountProDesktopRendererApp` mounts the Pro renderer over `createProWebBillmeApi`.
 
 ## Server mode
 

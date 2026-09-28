@@ -20,7 +20,6 @@ describe('PGlite desktop packaging', () => {
       const rebuildScript = read(`${app}/scripts/rebuild-electron.mjs`);
 
       expect(manifest.dependencies?.['better-sqlite3'], `${app} production dependencies`).toBeUndefined();
-      expect(manifest.devDependencies?.['better-sqlite3'], `${app} legacy test dependency`).toBeDefined();
       expect(viteConfig, `${app} electron-vite config`).not.toContain('better-sqlite3');
       expect(builderConfig, `${app} electron-builder config`).not.toContain('better-sqlite3');
       expect(rebuildScript, `${app} native rebuild script`).not.toContain('better-sqlite3');

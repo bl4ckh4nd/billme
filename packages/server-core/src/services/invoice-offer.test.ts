@@ -1,11 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import {
   billingLineItemSchema,
   createSingleTenantScope,
   type AuditEntry,
   type Invoice,
   type Offer,
-} from '../../../packages/server-core/src';
+} from '../index.js';
 import {
   applyOfferDecision,
   createInvoiceFromOffer,
@@ -14,7 +15,7 @@ import {
   publishOfferToPortal,
   syncPublishedOfferDecisionsFromPortal,
   upsertOffer,
-} from '../../../packages/server-core/src/services/invoice-offer';
+} from './invoice-offer.js';
 
 const scope = createSingleTenantScope('default', 'lite');
 
@@ -112,7 +113,7 @@ describe('invoice-offer shared services', () => {
       publishedAt: '2025-01-11T10:00:00.000Z',
     });
 
-    expect(listOffersPendingPortalSync(scope, dependencies)).toEqual([
+    assert.deepEqual(listOffersPendingPortalSync(scope, dependencies), [
       { id: baseOffer.id, shareToken: 'share-token-1' },
     ]);
 
@@ -125,15 +126,15 @@ describe('invoice-offer shared services', () => {
       decisionTextVersion: 'v1',
     });
 
-    expect(decided.status).toBe('accepted');
-    expect(decided.share?.decision).toBe('accepted');
-    expect(decided.share?.acceptedBy).toBe('Jane Customer');
-    expect(decided.history.map((entry) => entry.action)).toEqual([
+    assert.equal(decided.status, 'accepted');
+    assert.equal(decided.share?.decision, 'accepted');
+    assert.equal(decided.share?.acceptedBy, 'Jane Customer');
+    assert.deepEqual(decided.history.map((entry) => entry.action), [
       'offer.portal_decision',
       'offer.publish',
       'offer.create (initial offer)',
     ]);
-    expect(listOffersPendingPortalSync(scope, dependencies)).toEqual([]);
+    assert.deepEqual(listOffersPendingPortalSync(scope, dependencies), []);
   });
 
   it('publishes and syncs offers through the portal gateway ports', async () => {
@@ -147,8 +148,8 @@ describe('invoice-offer shared services', () => {
       ...dependencies,
       portalGateway: {
         publishOffer: async ({ offer, expiresAt }) => {
-          expect(offer.id).toBe(baseOffer.id);
-          expect(expiresAt).toBe(baseOffer.validUntil);
+          assert.equal(offer.id, baseOffer.id);
+          assert.equal(expiresAt, baseOffer.validUntil);
           return {
             token: 'share-token-2',
             publicUrl: 'https://portal.example.test/offers/share-token-2',
@@ -160,8 +161,8 @@ describe('invoice-offer shared services', () => {
       offerId: baseOffer.id,
     });
 
-    expect(published.token).toBe('share-token-2');
-    expect(published.offer.share?.token).toBe('share-token-2');
+    assert.equal(published.token, 'share-token-2');
+    assert.equal(published.offer.share?.token, 'share-token-2');
 
     const decisions: Array<{ offerId: string; decision: string }> = [];
     const updated = await syncPublishedOfferDecisionsFromPortal(scope, {
@@ -185,9 +186,9 @@ describe('invoice-offer shared services', () => {
       },
     });
 
-    expect(updated).toBe(1);
-    expect(decisions).toEqual([{ offerId: baseOffer.id, decision: 'accepted' }]);
-    expect(listOffersPendingPortalSync(scope, dependencies)).toEqual([]);
+    assert.equal(updated, 1);
+    assert.deepEqual(decisions, [{ offerId: baseOffer.id, decision: 'accepted' }]);
+    assert.deepEqual(listOffersPendingPortalSync(scope, dependencies), []);
   });
 
   it('creates invoice snapshots from offers', () => {
@@ -205,12 +206,12 @@ describe('invoice-offer shared services', () => {
       dueDate: '2025-01-29',
     });
 
-    expect(invoice.id).toBe('invoice-1');
-    expect(invoice.client).toBe(baseOffer.client);
-    expect(invoice.items).toEqual(baseOffer.items);
-    expect(invoice.payments).toEqual([]);
-    expect(invoice.status).toBe('draft');
-    expect(invoices.get('invoice-1')?.number).toBe('RE-2025-001');
-    expect(invoice.history[0]?.action).toContain('Converted from offer ANG-2025-001');
+    assert.equal(invoice.id, 'invoice-1');
+    assert.equal(invoice.client, baseOffer.client);
+    assert.deepEqual(invoice.items, baseOffer.items);
+    assert.deepEqual(invoice.payments, []);
+    assert.equal(invoice.status, 'draft');
+    assert.equal(invoices.get('invoice-1')?.number, 'RE-2025-001');
+    assert.ok((invoice.history[0]?.action).includes('Converted from offer ANG-2025-001'));
   });
 });

@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_DB_FILE_NAME } from './db/connection';
 import { PRODUCT_PROFILE } from './productProfile';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -25,24 +24,18 @@ describe('desktop product profile consistency', () => {
     expect(PRODUCT_PROFILE.backupPrefix).toBe('billme');
   });
 
-  it('aligns connection defaults and packaging metadata with product profile', () => {
-    expect(DEFAULT_DB_FILE_NAME).toBe(PRODUCT_PROFILE.dbFileName);
-
+  it('aligns packaging metadata with product profile', () => {
     const builderYaml = readFile('electron-builder.yml');
     expect(extractYamlScalar(builderYaml, 'appId')).toBe(PRODUCT_PROFILE.appId);
     expect(extractYamlScalar(builderYaml, 'productName')).toBe(PRODUCT_PROFILE.productName);
   });
 
-  it('uses product profile in desktop runtime and avoids hardcoded db/backup names', () => {
+  it('uses product profile in the desktop main process', () => {
     const mainTs = readFile('electron/main.ts');
-    const ipcHandlersTs = readFile('electron/ipcHandlers.ts');
 
     expect(mainTs).toContain('PRODUCT_PROFILE');
-    expect(ipcHandlersTs).toContain('PRODUCT_PROFILE');
 
     expect(mainTs).not.toContain("'billme-dev'");
     expect(mainTs).not.toContain('initDb(userDataPath)');
-    expect(ipcHandlersTs).not.toContain("`billme-${ts}.sqlite`");
-    expect(ipcHandlersTs).not.toContain("path.join(userDataPath, 'billme.sqlite')");
   });
 });

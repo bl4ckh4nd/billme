@@ -175,9 +175,6 @@ importers:
       '@testing-library/user-event':
         specifier: ^14.6.1
         version: 14.6.1(@testing-library/dom@10.4.1)
-      '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
       '@types/node':
         specifier: ^22.19.7
         version: 22.19.10
@@ -199,15 +196,6 @@ importers:
       '@vitest/ui':
         specifier: ^4.0.18
         version: 4.0.18(vitest@4.0.18)
-      better-sqlite3:
-        specifier: ^12.4.1
-        version: 12.6.2
-      drizzle-kit:
-        specifier: ^0.31.4
-        version: 0.31.9
-      drizzle-orm:
-        specifier: ^0.44.4
-        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@electric-sql/pglite@0.5.5)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
       electron:
         specifier: ^37.10.3
         version: 37.10.3

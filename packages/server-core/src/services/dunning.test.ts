@@ -1,7 +1,8 @@
-import { createSingleTenantScope, type DunningHistoryEntry, type DunningSettings, type Invoice } from '@billme/server-core/domain';
-import type { AuditEntry } from '@billme/server-core/ports';
-import { processDunningRun, shouldRunScheduledDunning, summarizeInvoiceDunningStatus } from '@billme/server-core/services';
-import { describe, expect, it, vi } from 'vitest';
+import { createSingleTenantScope, type DunningHistoryEntry, type DunningSettings, type Invoice } from '../domain/index.js';
+import type { AuditEntry } from '../ports/index.js';
+import { processDunningRun, shouldRunScheduledDunning, summarizeInvoiceDunningStatus } from './index.js';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 
 const scope = createSingleTenantScope('default', 'lite');
 
@@ -67,24 +68,24 @@ describe('dunning domain service', () => {
     ];
 
     const invoiceRepo = {
-      list: vi.fn(async () => [invoice]),
-      getById: vi.fn(async (_scope, id: string) => (id === invoice.id ? invoice : null)),
-      save: vi.fn(async (_scope, nextInvoice: Invoice) => {
+      list: async () => [invoice],
+      getById: async (_scope, id: string) => (id === invoice.id ? invoice : null),
+      save: async (_scope, nextInvoice: Invoice) => {
         Object.assign(invoice, nextInvoice);
         return invoice;
-      }),
+      },
     };
 
     const settingsRepo = {
-      get: vi.fn(async () => settings),
-      save: vi.fn(async (_scope, nextSettings: DunningSettings) => {
+      get: async () => settings,
+      save: async (_scope, nextSettings: DunningSettings) => {
         Object.assign(settings, nextSettings);
-      }),
+      },
     };
 
     const dunningHistoryRepo = {
-      listByInvoice: vi.fn(async (_scope, invoiceId: string) => history.filter((entry) => entry.invoiceId === invoiceId)),
-      record: vi.fn(async (_scope, entry: Omit<DunningHistoryEntry, 'id' | 'createdAt'>) => {
+      listByInvoice: async (_scope, invoiceId: string) => history.filter((entry) => entry.invoiceId === invoiceId),
+      record: async (_scope, entry: Omit<DunningHistoryEntry, 'id' | 'createdAt'>) => {
         const savedEntry: DunningHistoryEntry = {
           ...entry,
           id: `hist-${history.length + 1}`,
@@ -92,30 +93,30 @@ describe('dunning domain service', () => {
         };
         history.push(savedEntry);
         return savedEntry;
-      }),
+      },
     };
 
     const emailPort = {
-      send: vi.fn(async () => {
+      send: async () => {
         const next = sendResults.shift();
         if (!next) {
           throw new Error('No email result queued');
         }
         return next;
-      }),
-      log: vi.fn(async (_scope, entry) => ({
+      },
+      log: async (_scope, entry) => ({
         ...entry,
         id: `mail-${history.length + 1}`,
         createdAt: entry.sentAt,
-      })),
+      }),
     };
 
     const auditLog = {
-      append: vi.fn(async (_scope, entry): Promise<AuditEntry> => ({
+      append: async (_scope, entry): Promise<AuditEntry> => ({
         ...entry,
         sequence: 1,
         hash: 'hash',
-      })),
+      }),
     };
 
     const dependencies = {
@@ -124,7 +125,7 @@ describe('dunning domain service', () => {
       dunningHistoryRepo,
       emailPort,
       secretStore: {
-        get: vi.fn(async () => 'secret'),
+        get: async () => 'secret',
       },
       auditLog,
       clock: {
@@ -134,29 +135,29 @@ describe('dunning domain service', () => {
     };
 
     const firstRun = await processDunningRun(scope, dependencies);
-    expect(firstRun.feesApplied).toBe(10);
-    expect(firstRun.emailsSent).toBe(0);
-    expect(firstRun.errors).toEqual([{ invoiceNumber: 'RE-1', error: 'Email failed: SMTP unavailable' }]);
-    expect(invoice.amount).toBe(110);
+    assert.equal(firstRun.feesApplied, 10);
+    assert.equal(firstRun.emailsSent, 0);
+    assert.deepEqual(firstRun.errors, [{ invoiceNumber: 'RE-1', error: 'Email failed: SMTP unavailable' }]);
+    assert.equal(invoice.amount, 110);
 
     const secondRun = await processDunningRun(scope, dependencies);
-    expect(secondRun.feesApplied).toBe(0);
-    expect(secondRun.emailsSent).toBe(1);
-    expect(invoice.amount).toBe(110);
-    expect(history).toHaveLength(2);
-    expect(history.map((entry) => entry.feeApplied)).toEqual([10, 0]);
-    expect(invoice.dunningLevel).toBe(1);
-    expect(invoice.history?.[0]?.action).toBe('Zahlungserinnerung per E-Mail an billing@acme.test versendet');
-    expect(settings.automation.lastDunningRun).toBe('2024-02-10T09:05:00.000Z');
+    assert.equal(secondRun.feesApplied, 0);
+    assert.equal(secondRun.emailsSent, 1);
+    assert.equal(invoice.amount, 110);
+    assert.equal((history).length, 2);
+    assert.deepEqual(history.map((entry) => entry.feeApplied), [10, 0]);
+    assert.equal(invoice.dunningLevel, 1);
+    assert.equal(invoice.history?.[0]?.action, 'Zahlungserinnerung per E-Mail an billing@acme.test versendet');
+    assert.equal(settings.automation.lastDunningRun, '2024-02-10T09:05:00.000Z');
   });
 
   it('evaluates schedule windows and summarizes invoice status', () => {
     const settings = createSettings();
     const runAt = new Date('2024-02-10T09:05:00');
-    expect(shouldRunScheduledDunning(settings, runAt)).toBe(true);
+    assert.equal(shouldRunScheduledDunning(settings, runAt), true);
 
     settings.automation.lastDunningRun = '2024-02-10T06:00:00.000Z';
-    expect(shouldRunScheduledDunning(settings, runAt)).toBe(false);
+    assert.equal(shouldRunScheduledDunning(settings, runAt), false);
 
     const status = summarizeInvoiceDunningStatus(
       createInvoice(),
@@ -177,9 +178,9 @@ describe('dunning domain service', () => {
       runAt,
     );
 
-    expect(status.currentLevel).toBe(1);
-    expect(status.daysOverdue).toBe(31);
-    expect(status.totalFeesApplied).toBe(10);
-    expect(status.lastReminderSent).toBe('2024-02-10T09:05:00.000Z');
+    assert.equal(status.currentLevel, 1);
+    assert.equal(status.daysOverdue, 31);
+    assert.equal(status.totalFeesApplied, 10);
+    assert.equal(status.lastReminderSent, '2024-02-10T09:05:00.000Z');
   });
 });

@@ -10,7 +10,6 @@ const sourceRoots = ['apps', 'packages'];
 // database compatibility bridges. All product persistence must use Drizzle.
 const allowlist = new Set([
   'apps/offer-portal/src/storage/legacySqliteBridge.ts',
-  'packages/desktop-data/src/connection.ts',
   'packages/server-data/src/postgres/connection.ts',
   'packages/server-data/src/postgres/importDesktop.ts',
   'packages/server-data/src/postgres/migrations.ts',

@@ -368,7 +368,6 @@ dem Klonen sind sie daher nicht vorhanden.
 | `@billme/ui` | Grundlegende Designsystem-Komponenten und Quelle der Design-Token (`packages/ui/styles.css`) |
 | `@billme/desktop-contracts` / `-pro` | Typisierte IPC-Verträge und Zod-Schemas für die Lite- und Pro-Grenzen zwischen Renderer und Main-Prozess |
 | `@billme/desktop-core` | Gemeinsame Desktop-Laufzeithelfer — IPC-Fehlerbehandlung, Protokollierung/Wiederholungen, E-Mail-Dienst, Benachrichtigungsstatus |
-| `@billme/desktop-data` | Legacy-SQLite-Kompatibilitäts-Repositories und Tests sowie gemeinsame Validierungs-, Sicherungs-, Audit-, EÜR- und Mahnwesen-Schnittstellen |
 | `@billme/desktop-designer` | Gemeinsamer visueller Dokumentdesigner — Zeichenfläche, Elementleiste, Inspektor, Ebenen sowie Zoom-/Schwenk-/Verlaufs-Hooks |
 | `@billme/desktop-renderer` | Bindet die Desktop-React-App in beliebige Hosts ein und ermöglicht dadurch Demo und Web-Shells die Wiederverwendung der Electron-Oberfläche |
 | `@billme/desktop-services` | Portal-Client, CSV-Import, EÜR-Katalog und Vorschlagshelfer |

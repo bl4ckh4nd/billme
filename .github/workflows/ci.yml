@@ -64,9 +64,6 @@ jobs:
       - name: Prepare Electron test binary
         run: pnpm ci:prepare-electron
 
-      - name: Shared desktop data tests
-        run: pnpm -C packages/desktop-data test
-
       - name: Shared desktop renderer tests
         run: pnpm -C packages/desktop-renderer test
 

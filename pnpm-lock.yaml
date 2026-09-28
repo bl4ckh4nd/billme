@@ -81,9 +81,6 @@ importers:
       '@billme/desktop-core':
         specifier: workspace:*
         version: link:../../packages/desktop-core
-      '@billme/desktop-data':
-        specifier: workspace:*
-        version: link:../../packages/desktop-data
       '@billme/desktop-designer':
         specifier: workspace:*
         version: link:../../packages/desktop-designer
@@ -303,9 +300,6 @@ importers:
       '@billme/desktop-core':
         specifier: workspace:*
         version: link:../../packages/desktop-core
-      '@billme/desktop-data':
-        specifier: workspace:*
-        version: link:../../packages/desktop-data
       '@billme/desktop-designer':
         specifier: workspace:*
         version: link:../../packages/desktop-designer
@@ -485,9 +479,6 @@ importers:
       '@billme/desktop-core':
         specifier: workspace:*
         version: link:../../packages/desktop-core
-      '@billme/desktop-data':
-        specifier: workspace:*
-        version: link:../../packages/desktop-data
       '@billme/desktop-services':
         specifier: workspace:*
         version: link:../../packages/desktop-services
@@ -519,9 +510,6 @@ importers:
       '@billme/desktop-contracts':
         specifier: workspace:*
         version: link:../../packages/desktop-contracts
-      '@billme/desktop-data':
-        specifier: workspace:*
-        version: link:../../packages/desktop-data
       '@billme/desktop-renderer':
         specifier: workspace:*
         version: link:../../packages/desktop-renderer
@@ -742,43 +730,6 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@24.12.2)(@vitest/ui@4.0.18)(happy-dom@20.5.3)(jiti@2.6.1)(jsdom@28.0.0)(lightningcss@1.30.2)(tsx@4.21.0)
 
-  packages/desktop-data:
-    dependencies:
-      '@billme/desktop-core':
-        specifier: workspace:*
-        version: link:../desktop-core
-      '@billme/desktop-services':
-        specifier: workspace:*
-        version: link:../desktop-services
-      '@billme/desktop-utils':
-        specifier: workspace:*
-        version: link:../desktop-utils
-      '@billme/finance-intelligence':
-        specifier: workspace:*
-        version: link:../finance-intelligence
-      '@billme/server-core':
-        specifier: workspace:*
-        version: link:../server-core
-      better-sqlite3:
-        specifier: ^12.4.1
-        version: 12.6.2
-      drizzle-orm:
-        specifier: ^0.44.4
-        version: 0.44.7(@cloudflare/workers-types@4.20260207.0)(@electric-sql/pglite@0.5.5)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.6.2)(pg@8.20.0)
-      zod:
-        specifier: ^3.25.76
-        version: 3.25.76
-    devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
-      '@types/node':
-        specifier: ^24.9.1
-        version: 24.12.2
-      vitest:
-        specifier: ^4.0.18
-        version: 4.0.18(@types/node@24.12.2)(@vitest/ui@4.0.18)(happy-dom@20.5.3)(jiti@2.6.1)(jsdom@28.0.0)(lightningcss@1.30.2)(tsx@4.21.0)
-
   packages/desktop-designer:
     dependencies:
       '@billme/desktop-core':
@@ -934,9 +885,6 @@ importers:
       '@billme/desktop-core':
         specifier: workspace:*
         version: link:../desktop-core
-      '@billme/desktop-data':
-        specifier: workspace:*
-        version: link:../desktop-data
       '@billme/desktop-utils':
         specifier: workspace:*
         version: link:../desktop-utils

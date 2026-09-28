@@ -86,7 +86,7 @@ import {
   toDomainOffer,
   toLegacyInvoice,
   toLegacyOffer,
-} from '@billme/desktop-data/billingDomainMappers';
+} from './billingDomainMappers';
 import { isNativeElectronRoute, isServerOwnedRoute } from './serverRouteClassification';
 import { serverRenderDocumentSchema, toDesktopRenderContext } from './documentRenderContext';
 import { z } from 'zod';

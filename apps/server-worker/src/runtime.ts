@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { createTaxFilingRecord, transitionTaxFiling } from '@billme/accounting-engine';
-import { SettingsSchema } from '@billme/desktop-data/validation-schemas';
+import { SettingsSchema } from './settingsSchema.js';
 import { sendEmail } from '@billme/desktop-core/services/emailService';
 import { isRetryableEmailError } from '@billme/desktop-core/utils/retry';
 import { portalClient } from '@billme/desktop-services/portalClient';

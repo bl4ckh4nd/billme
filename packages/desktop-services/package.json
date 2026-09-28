@@ -12,7 +12,6 @@
     "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
     "@billme/desktop-core": "workspace:*",
-    "@billme/desktop-data": "workspace:*",
     "@billme/desktop-utils": "workspace:*",
     "@billme/finance-intelligence": "workspace:*",
     "@billme/server-core": "workspace:*",

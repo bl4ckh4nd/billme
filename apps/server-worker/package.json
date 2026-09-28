@@ -15,7 +15,6 @@
     "@billme/accounting-engine": "workspace:*",
     "@billme/accounting-shared": "workspace:*",
     "@billme/desktop-core": "workspace:*",
-    "@billme/desktop-data": "workspace:*",
     "@billme/desktop-services": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/server-data": "workspace:*",

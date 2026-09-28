@@ -348,7 +348,6 @@ These are described in internal design docs but are not on `main`; do not expect
 | `@billme/ui` | Base design system primitives and the design-token source of truth (`packages/ui/styles.css`) |
 | `@billme/desktop-contracts` / `-pro` | Typed IPC contracts and Zod schemas for the Lite and Pro renderer/main boundaries |
 | `@billme/desktop-core` | Shared desktop runtime helpers — IPC error handling, logging/retry, email service, notification state |
-| `@billme/desktop-data` | Legacy SQLite compatibility repositories and tests; shared transaction matching, validation, backup, audit, EÜR and dunning seams |
 | `@billme/desktop-designer` | The shared visual document designer — canvas stage, element rail, inspector, layers, plus zoom/pan/history hooks |
 | `@billme/desktop-renderer` | Shared Lite/Pro views, query hooks, UI state, product-aware API fallback, print shell and host mounting |
 | `@billme/desktop-services` | Product-parameterized mock engine/data, portal client, CSV import, EÜR catalog and suggestion helpers |
@@ -460,7 +459,7 @@ stack, so `.env.server-mode` is only needed for manual Compose runs.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | push / PR | Shared desktop-data/renderer tests; Lite + Pro typecheck, tests, e-invoice tests and build; offer-portal build; desktop smoke E2E; server-mode smoke E2E |
+| `ci.yml` | push / PR | Shared package tests; Lite + Pro typecheck, tests, e-invoice tests and build; offer-portal build; desktop smoke E2E; server-mode smoke E2E |
 | `e2e-nightly.yml` | nightly | Full desktop and full server-mode E2E |
 | `einvoice-validation.yml` | e-invoice changes | ZUGFeRD validation via Mustang CLI and PDF/A via veraPDF |
 | `commitlint.yml` | push / PR | Conventional Commit enforcement |

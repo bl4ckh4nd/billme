@@ -36,7 +36,7 @@ import {
   toDomainOffer,
   toLegacyInvoice,
   toLegacyOffer,
-} from '@billme/desktop-data/billingDomainMappers';
+} from './billingDomainMappers';
 import { isNativeElectronRoute, isServerOwnedRoute } from './serverRouteClassification';
 
 const serverRenderContextSchema = documentRenderContextSchema.extend({ document: serverRenderDocumentSchema });

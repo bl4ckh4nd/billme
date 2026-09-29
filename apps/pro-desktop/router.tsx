@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  Outlet,
   RouterProvider,
   createHashHistory,
   createRootRoute,
@@ -10,78 +9,27 @@ import {
   useNavigate,
   useRouterState,
 } from '@tanstack/react-router';
-import { DashboardLayout } from './components/DashboardLayout';
-import { DashboardHome, TemplatesView } from '@billme/desktop-renderer/ui';
-import { AccountsView } from './components/AccountsView';
-import { DocumentsView } from '@billme/desktop-renderer/components/InvoicesView';
+import {
+  AppRootLayout,
+  DashboardPage,
+  DocumentEditorPage,
+  DocumentsPage,
+  NotFoundPage,
+  TemplateEditorPage,
+  TemplatesPage,
+} from '@billme/desktop-renderer/components/AppPages';
 import { ClientsView } from '@billme/desktop-renderer/components/ClientsView';
 import { ArticlesView } from '@billme/desktop-renderer/components/ArticlesView';
 import { SettingsView } from '@billme/desktop-renderer/components/SettingsView';
 import { RecurringView } from '@billme/desktop-renderer/components/RecurringView';
 import { ProjectsView } from '@billme/desktop-renderer/components/ProjectsView';
 import { ProjectDetailView } from '@billme/desktop-renderer/components/ProjectDetailView';
-import { TemplateEditor } from '@billme/desktop-renderer/components/TemplateEditor';
-import { templateKindSchema } from '@billme/server-core/domain';
-import { InvoiceDocumentEditor } from '@billme/desktop-renderer/components/InvoiceDocumentEditor';
-import { useUiStore } from '@billme/desktop-renderer/ui-store';
-import { Invoice } from './types';
-import { useUpsertInvoiceMutation } from '@billme/desktop-renderer/hooks/useInvoices';
-import { useUpsertOfferMutation } from '@billme/desktop-renderer/hooks/useOffers';
-import { ipc } from './ipc/client';
-import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
-import { OnboardingWizard } from './components/OnboardingWizard';
-import { ShortcutsModal } from '@billme/desktop-renderer/ui/components/ShortcutsModal';
-import { useKeyboardShortcuts } from '@billme/desktop-renderer/hooks/useKeyboardShortcuts';
-import { ProAccountingPage } from './components/ProAccountingPage';
 import { EurView } from '@billme/desktop-renderer/components/EurView';
 import { TaxFilingCenter } from '@billme/desktop-renderer/components/TaxFilingCenter';
-import { Button, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
-import { shouldShowBusinessOnboarding } from '@billme/desktop-renderer/ui';
-import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
-import { useCreateIntent } from '@billme/desktop-renderer/hooks/useCreateIntent';
-
-const RootLayout: React.FC = () => {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const [showShortcuts, setShowShortcuts] = React.useState(false);
-
-  const { data: settings } = useSettingsQuery();
-  const showOnboarding = shouldShowBusinessOnboarding(settings);
-
-  const isEditorActive = pathname.includes('/edit') || pathname.includes('/editor');
-
-  useKeyboardShortcuts({
-    onShowShortcuts: () => setShowShortcuts(true),
-  });
-
-  return (
-    <>
-      <DashboardLayout isEditorActive={isEditorActive}>
-        <Outlet />
-      </DashboardLayout>
-      {showOnboarding && settings && (
-        <OnboardingWizard
-          settings={settings}
-          onComplete={() => {
-            // Settings query will auto-refresh; wizard disappears when onboardingCompleted=true
-          }}
-        />
-      )}
-      <ShortcutsModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />
-    </>
-  );
-};
-
-const DashboardPage: React.FC = () => {
-  const navigate = useNavigate();
-  return (
-    <DashboardHome
-      onNavigate={(page, search) => {
-        const to = page === 'dashboard' ? '/' : `/${page}`;
-        navigate({ to, search });
-      }}
-    />
-  );
-};
+import { DashboardLayout } from './components/DashboardLayout';
+import { AccountsView } from './components/AccountsView';
+import { OnboardingWizard } from './components/OnboardingWizard';
+import { ProAccountingPage } from './components/ProAccountingPage';
 
 const AccountsPage: React.FC = () => <AccountsView />;
 const EurPage: React.FC = () => <EurView />;
@@ -92,249 +40,7 @@ const SettingsPage: React.FC = () => <SettingsView />;
 const RecurringPage: React.FC = () => <RecurringView />;
 const TaxFilingPage: React.FC = () => <TaxFilingCenter />;
 
-const NotFoundPage: React.FC = () => {
-  const navigate = useNavigate();
-  return (
-    <div className="flex min-h-full items-center justify-center rounded-3xl bg-surface p-8 shadow-sm">
-      <EmptyState
-        className="w-full max-w-md"
-        title="Seite nicht gefunden"
-        description="Die angeforderte Seite konnte nicht gefunden werden."
-        action={
-          <Button variant="dark" onClick={() => navigate({ to: '/' })}>
-            Zurück zur Übersicht
-          </Button>
-        }
-      />
-    </div>
-  );
-};
-
-const TemplatesPage: React.FC = () => {
-  const navigate = useNavigate();
-  return (
-    <TemplatesView
-      onOpenTemplate={(id) => navigate({ to: '/templates/$id', params: { id } })}
-      onCreateTemplate={(kind) => navigate({ to: '/templates/$id', params: { id: 'new' }, search: { kind } })}
-    />
-  );
-};
-
-const TemplateEditorPage: React.FC<{ templateId: string }> = ({ templateId }) => {
-  const navigate = useNavigate();
-  const search = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
-  const kind = templateKindSchema.safeParse(search.kind);
-  return (
-    <TemplateEditor
-      templateId={templateId}
-      kind={kind.success ? kind.data : 'invoice'}
-      onBack={() => navigate({ to: '/templates' })}
-      onCreated={(id) => navigate({ to: '/templates/$id', params: { id }, replace: true })}
-    />
-  );
-};
-
-const DocumentsPage: React.FC = () => {
-  const navigate = useNavigate();
-  const { notify } = useActionFeedback('documents');
-  const setEditingInvoice = useUiStore((s) => s.setEditingInvoice);
-  const { data: settings } = useSettingsQuery();
-  const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
-  const initialDocumentType = locationSearch.kind === 'offer' ? 'offer' : 'invoice';
-  const initialSelectedId = typeof locationSearch.id === 'string' ? locationSearch.id : undefined;
-  const initialStatus = locationSearch.status === 'overdue' ? 'overdue' as const : undefined;
-
-  const handleCreateDocument = (type: 'invoice' | 'offer') => {
-    const numbers = ipc.numbers;
-    void (async () => {
-      // A document cannot be priced without the user's own tax settings, and a
-      // fabricated fallback would put demo values on a real invoice.
-      if (!settings) {
-        notify('error', 'Einstellungen sind noch nicht geladen. Bitte erneut versuchen.');
-        return;
-      }
-
-      try {
-        const reservation = await numbers.reserve({ kind: type });
-        if (ipc.numbers !== numbers) return;
-        const newInvoice: Invoice = {
-          id: Math.random().toString(36).substr(2, 9),
-          number: reservation.number,
-          numberReservationId: reservation.reservationId,
-          client: '',
-          clientEmail: '',
-          taxMode: resolveInvoiceTaxMode(undefined, settings),
-          date: new Date().toISOString().split('T')[0] ?? '',
-          dueDate: '',
-          amount: 0,
-          status: 'draft',
-          items: [],
-          payments: [],
-          history: [],
-        };
-        newInvoice.taxSnapshot = calculateInvoiceTaxSnapshot(
-          { items: newInvoice.items, taxMode: newInvoice.taxMode },
-          settings,
-        );
-        newInvoice.amount = newInvoice.taxSnapshot.grossAmount;
-        setEditingInvoice(newInvoice, type, 'create');
-        navigate({ to: '/documents/edit' });
-      } catch (error) {
-        notify('error', `Nummer konnte nicht reserviert werden: ${String(error)}`);
-      }
-    })();
-  };
-
-  // The command palette links to /documents?create=invoice|offer; wait for settings, which pricing needs.
-  useCreateIntent('/documents', ['invoice', 'offer'] as const, handleCreateDocument, Boolean(settings));
-
-  return (
-    <DocumentsView
-      onOpenTemplates={() => navigate({ to: '/templates' })}
-      onOpenRecurring={() => navigate({ to: '/recurring' })}
-      onEditInvoice={(invoice, type) => {
-        setEditingInvoice(invoice, type, 'edit');
-        navigate({ to: '/documents/edit' });
-      }}
-      onCreateInvoice={handleCreateDocument}
-      initialDocumentType={initialDocumentType}
-      initialSelectedId={initialSelectedId}
-      initialStatus={initialStatus}
-    />
-  );
-};
-
-const DocumentEditorPage: React.FC = () => {
-  const navigate = useNavigate();
-  const { notify } = useActionFeedback('documents');
-  const invoice = useUiStore((s) => s.editingInvoice);
-  const clearEditingInvoice = useUiStore((s) => s.clearEditingInvoice);
-  const docType = useUiStore((s) => s.editingDocumentType);
-  const docMode = useUiStore((s) => s.editingDocumentMode);
-  const upsertInvoice = useUpsertInvoiceMutation();
-  const upsertOffer = useUpsertOfferMutation();
-  const [isReasonOpen, setIsReasonOpen] = React.useState(false);
-  const [pendingDoc, setPendingDoc] = React.useState<Invoice | null>(null);
-  const [reason, setReason] = React.useState('');
-
-  if (!invoice) {
-    return (
-      <div className="flex min-h-full items-center justify-center rounded-3xl bg-surface p-8 shadow-sm">
-        <EmptyState
-          className="w-full max-w-md"
-          title="Kein Dokument ausgewählt"
-          description="Bitte wähle zuerst ein Dokument aus der Liste aus."
-          action={
-            <Button variant="dark" onClick={() => navigate({ to: '/documents' })}>
-              Zurück zu Dokumenten
-            </Button>
-          }
-        />
-      </div>
-    );
-  }
-
-  const submitSave = () => {
-    const trimmed = reason.trim();
-    if (!pendingDoc) return;
-
-    const mutation = docType === 'offer' ? upsertOffer : upsertInvoice;
-    const vars = docType === 'offer' ? { offer: pendingDoc, reason: trimmed } : { invoice: pendingDoc, reason: trimmed };
-
-    (mutation as any).mutate(vars, {
-      onSettled: () => {
-        setIsReasonOpen(false);
-        setPendingDoc(null);
-        setReason('');
-        clearEditingInvoice();
-        navigate({ to: '/documents' });
-      },
-    });
-  };
-
-  return (
-    <>
-      <InvoiceDocumentEditor
-        invoice={invoice}
-        templateType={docType === 'offer' ? 'offer' : 'invoice'}
-        mode={docMode ?? 'edit'}
-        onSave={(updated, meta) => {
-          const numberNote = meta?.numberChangeReason ? `Nummer manuell geändert: ${meta.numberChangeReason}` : undefined;
-          if (docMode === 'create') {
-            const numbers = ipc.numbers;
-            const reservationId = updated.numberReservationId;
-            const persistedDoc = { ...updated };
-            delete persistedDoc.numberReservationId;
-
-            void (async () => {
-              try {
-                const mutation = docType === 'offer' ? upsertOffer : upsertInvoice;
-                const vars =
-                  docType === 'offer'
-                    ? { offer: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' }
-                    : { invoice: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' };
-                const saved = await (mutation as any).mutateAsync(vars);
-                if (reservationId) {
-                  await numbers.finalize({
-                    reservationId,
-                    documentId: saved.id,
-                  });
-                }
-                if (ipc.numbers !== numbers) return;
-                clearEditingInvoice();
-                navigate({ to: '/documents' });
-              } catch (error) {
-                notify('error', `Speichern fehlgeschlagen: ${String(error)}`);
-              }
-            })();
-            return;
-          }
-
-          setPendingDoc(updated);
-          // The number unlock reason is the audit reason unless the user writes another.
-          setReason(numberNote ?? '');
-          setIsReasonOpen(true);
-        }}
-        onCancel={() => {
-          const numbers = ipc.numbers;
-          void (async () => {
-            if (docMode === 'create' && invoice.numberReservationId) {
-              try {
-                await numbers.release({ reservationId: invoice.numberReservationId });
-              } catch {
-                // Ignore release failures to avoid trapping users in editor.
-              }
-            }
-            if (ipc.numbers !== numbers) return;
-            clearEditingInvoice();
-            navigate({ to: '/documents' });
-          })();
-        }}
-      />
-
-      <ConfirmDialog
-        open={isReasonOpen}
-        title="Grund der Änderung"
-        description="Bitte gib einen Grund an. Dieser wird im Audit-Log gespeichert (GoBD)."
-        confirmLabel="Speichern"
-        cancelLabel="Abbrechen"
-        reason={{
-          label: 'Grund (Pflicht)',
-          placeholder: 'z. B. Korrektur der Lieferadresse, Preis angepasst …',
-          required: true,
-          value: reason,
-          onChange: setReason,
-        }}
-        onConfirm={submitSave}
-        onCancel={() => {
-          setIsReasonOpen(false);
-          setPendingDoc(null);
-          setReason('');
-        }}
-      />
-    </>
-  );
-};
+const RootLayout: React.FC = () => <AppRootLayout Layout={DashboardLayout} Onboarding={OnboardingWizard} />;
 
 const rootRoute = createRootRoute({
   component: RootLayout,

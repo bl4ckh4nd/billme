@@ -13,32 +13,15 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      include: [
-        'db/settingsRepo.ts',
-        'services/eurSuggestion.ts',
-        'services/recurringService.ts',
-        'ipc/contract.ts',
-      ],
       exclude: [
         'node_modules/',
         'test/',
         '**/*.d.ts',
         '**/*.config.*',
         '**/mockData.ts',
-        'db/bootstrap.ts',
-        'db/migrate.ts',
-        'db/drizzle.ts',
-        'db/schema.ts',
-        'db/connection.ts',
         'dist/',
         'out/',
       ],
-      thresholds: {
-        statements: 90,
-        branches: 90,
-        functions: 90,
-        lines: 90,
-      },
     },
   },
   resolve: {

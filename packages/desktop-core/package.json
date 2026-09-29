@@ -92,6 +92,10 @@
       "types": "./src/electron/preload.ts",
       "default": "./src/electron/preload.ts"
     },
+    "./electron/desktopMain": {
+      "types": "./src/electron/desktopMain.ts",
+      "default": "./src/electron/desktopMain.ts"
+    },
     "./electron/embeddedConnection": {
       "types": "./src/electron/embeddedConnection.ts",
       "default": "./src/electron/embeddedConnection.ts"

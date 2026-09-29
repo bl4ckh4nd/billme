@@ -1,24 +1,7 @@
 import {
-  authResponseSchema,
-  authUserSchema,
-  bootstrapRequestSchema,
-  bootstrapStatusSchema,
-  capabilitiesResponseSchema,
-  clientSchema,
-  healthResponseSchema,
-  invoiceSchema,
-  loginRequestSchema,
-  offerSchema,
-  recurringProfileSchema,
-  serverProductSchema,
-  serverRoleSchema,
-} from '@billme/server-core';
-import {
-  accountSchema,
   accountSuggestionRuleSchema,
   appSettingsSchema,
   accountingSourceFactSchema,
-  articleSchema,
   eurRuleSchema,
   bookingDraftEntitySchema,
   accountingPostingPreviewSchema,
@@ -36,7 +19,6 @@ import {
   ledgerBalanceRowSchema,
   datevExportResultSchema,
   openItemSchema,
-  projectSchema,
   vendorSchema,
   ledgerAccountSchema,
   proListAccountSuggestionRulesArgsSchema,
@@ -48,7 +30,6 @@ import {
   proUpsertTaxCaseAccountMappingArgsSchema,
   proWorkflowEntrySchema,
   reportSnapshotRecordSchema,
-  setSettingsPayloadSchema,
   taxAuditExportArtifactSchema,
   taxCaseAccountMappingSchema,
   taxCaseDefinitionSchema,
@@ -56,11 +37,6 @@ import {
   openRouterVlmAnalyzeInputSchema,
   openRouterVlmAnalyzeResultSchema,
   openRouterVlmConfigSchema,
-  upsertAccountPayloadSchema,
-  upsertArticlePayloadSchema,
-  documentRenderContextSchema,
-  documentTemplateDefaultsSchema,
-  documentTemplateRecordSchema,
 } from '@billme/desktop-contracts-pro/schemas';
 import {
   createBillmeApi,
@@ -73,25 +49,10 @@ import {
   type IpcResult,
   type IpcRouteKey,
 } from '@billme/desktop-contracts-pro/contract';
-import { taxFilingRoutes } from '@billme/desktop-contracts/taxFiling';
 import type { EmbeddedConnection } from '@billme/desktop-contracts/embeddedConnection';
-import {
-  chooseDefaultBillingAddress,
-  chooseDefaultBillingEmail,
-  formatAddressMultiline,
-} from '@billme/server-core/services';
-import {
-  createBillingScope,
-  toDomainInvoice,
-  toDomainOffer,
-  toLegacyInvoice,
-  toLegacyOffer,
-} from './billingDomainMappers';
 import { isNativeElectronRoute, isServerOwnedRoute } from './serverRouteClassification';
-import { serverRenderDocumentSchema, toDesktopRenderContext } from './documentRenderContext';
+import { createSharedHttpInvoke, isSharedHttpRoute } from './sharedHttpRoutes';
 import { z } from 'zod';
-
-const serverRenderContextSchema = documentRenderContextSchema.extend({ document: serverRenderDocumentSchema });
 
 type Parser<T> = { parse: (input: unknown) => T } | ((input: unknown) => T);
 type QueryValue = string | number | boolean | readonly (string | number | boolean)[] | null | undefined;
@@ -117,18 +78,6 @@ export type ProOpenItemPaymentInput = {
   /** Stable retry key generated once at the user operation boundary. */
   allocationEventId: string;
 };
-
-const serverTransactionMatchesSchema = z.object({
-  transaction: transactionSchema,
-  suggestions: z.array(z.object({
-    invoice: invoiceSchema,
-    confidence: z.enum(['high', 'medium', 'low']),
-    matchReasons: z.array(z.string()),
-    amountDiff: z.number(),
-  })),
-});
-
-const PRO_PRODUCT_QUERY = { product: 'pro' as const };
 const EUR_RULE_MUTATION_REASON = 'EÜR-Klassifikationsregel gespeichert';
 const EUR_RULE_DELETE_REASON = 'EÜR-Klassifikationsregel gelöscht';
 const susaReportSchema = z.object({
@@ -169,14 +118,6 @@ const reportingLineSchema = z.object({
   kind: z.enum(['heading', 'line', 'subtotal', 'result']).optional(),
   parentPosition: z.string().optional(),
   formula: z.string().optional(),
-});
-const guvReportSchema = z.object({
-  kind: z.enum(['management-guv', 'hgb-guv']).optional(),
-  rows: z.array(reportingLineSchema),
-  netResult: z.number(),
-  method: z.string().optional(),
-  snapshot: reportSnapshotSchema,
-  mappingHealth: mappingHealthSchema,
 });
 const guvClientReportSchema = z.object({
   from: z.string().optional(),
@@ -375,18 +316,6 @@ const parseServerLegacyGuvReport = (input: unknown): z.infer<typeof guvClientRep
   });
 };
 
-const authSessionInfoParser = (input: unknown) => {
-  if (!isRecord(input)) {
-      throw new Error('Die Serverantwort enthält keine Sitzungsdaten.');
-  }
-  return {
-    user: authUserSchema.parse(input.user),
-    tenantId: typeof input.tenantId === 'string' ? input.tenantId : '',
-    product: serverProductSchema.parse(input.product),
-    role: serverRoleSchema.parse(input.role),
-  };
-};
-
 const buildUrl = (
   baseUrl: string,
   path: string,
@@ -479,7 +408,7 @@ const validateDatevExportReceipt = async (
   }
 };
 
-export const createProWebClient = ({
+const createProTransport = ({
   baseUrl,
   getToken,
   embeddedConnectionResolver,
@@ -560,30 +489,6 @@ export const createProWebClient = ({
     return payload;
   };
 
-  const requestBlob = async (
-    path: string,
-    query?: Record<string, string | number | boolean | null | undefined>,
-  ): Promise<Blob> => {
-    const target = await resolveRequestTarget();
-    const headers = new Headers(target.headers);
-
-    const response = await requireFetch()(buildUrl(target.baseUrl, path, query), {
-      method: 'GET',
-      headers,
-    });
-
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null);
-      const message =
-        isRecord(payload) && typeof payload.message === 'string'
-          ? payload.message
-          : `Download fehlgeschlagen (HTTP ${response.status}).`;
-      throw new Error(message);
-    }
-
-    return response.blob();
-  };
-
   const requestBlobWithHeaders = async (
     path: string,
     query?: Record<string, string | number | boolean | null | undefined>,
@@ -598,6 +503,12 @@ export const createProWebClient = ({
     }
     return { blob: await response.blob(), headers: response.headers };
   };
+
+  return { requestJson, requestText, requestBlobWithHeaders };
+};
+
+export const createProWebClient = (config: ProWebClientConfig) => {
+  const { requestJson, requestText, requestBlobWithHeaders } = createProTransport(config);
 
   type AccountingCommandRequest = {
     kind: string;
@@ -674,95 +585,7 @@ export const createProWebClient = ({
     );
   };
 
-  const proBillingScope = createBillingScope('pro');
-  const toServerInvoicePayload = (invoice: IpcResult<'invoices:upsert'>) => {
-    const { tenantId: _tenantId, ...payload } = toDomainInvoice(proBillingScope, invoice);
-    return payload;
-  };
-  const toServerOfferPayload = (offer: IpcResult<'offers:upsert'>) => {
-    const { tenantId: _tenantId, ...payload } = toDomainOffer(proBillingScope, offer);
-    return payload;
-  };
-  const buildProDraftFromClient = async (
-    kind: 'invoice' | 'offer',
-    client: z.output<typeof clientSchema>,
-    settings: z.output<typeof appSettingsSchema> | null,
-    reserveNumber: () => Promise<{ reservationId: string; number: string }>,
-  ): Promise<IpcResult<'documents:createFromClient'>> => {
-    const billingAddress = chooseDefaultBillingAddress(client.addresses);
-    const shippingAddress = client.addresses.find((address) => address.isDefaultShipping) ?? billingAddress ?? null;
-    const billingEmail = chooseDefaultBillingEmail(client.emails);
-    const activeProject =
-      client.projects.find((project) => project.name === 'Allgemein' && project.status !== 'archived')
-      ?? client.projects.find((project) => project.status !== 'archived')
-      ?? client.projects[0];
-    const reservation = await reserveNumber();
-    const today = new Date().toISOString().split('T')[0] ?? new Date().toISOString();
-    return ipcRoutes['documents:createFromClient'].result.parse({
-      id: crypto.randomUUID(),
-      clientId: client.id,
-      clientNumber: client.customerNumber,
-      projectId: activeProject?.id,
-      number: reservation.number,
-      numberReservationId: reservation.reservationId,
-      client: client.company,
-      clientEmail: billingEmail?.email ?? client.email,
-      clientAddress: billingAddress ? formatAddressMultiline(billingAddress) : client.address,
-      billingAddressJson: billingAddress ?? undefined,
-      shippingAddressJson: shippingAddress ?? undefined,
-      date: today,
-      dueDate: kind === 'offer' ? today : (() => {
-        if (!settings?.legal.paymentTermsDays) return today;
-        const dueDate = new Date(today);
-        dueDate.setDate(dueDate.getDate() + settings.legal.paymentTermsDays);
-        return dueDate.toISOString().split('T')[0] ?? today;
-      })(),
-      amount: 0,
-      status: 'draft',
-      items: [],
-      payments: [],
-      history: [],
-    });
-  };
-
   return {
-    getHealth() {
-      return requestJson({ parser: healthResponseSchema }, '/health');
-    },
-    getCapabilities() {
-      return requestJson({ parser: capabilitiesResponseSchema }, '/api/v1/meta/capabilities');
-    },
-    getBootstrapStatus() {
-      return requestJson({ parser: bootstrapStatusSchema, query: PRO_PRODUCT_QUERY }, '/api/v1/auth/bootstrap/status');
-    },
-    bootstrap(input: unknown) {
-      return requestJson(
-        {
-          method: 'POST',
-          body: bootstrapRequestSchema.parse(input),
-          parser: authResponseSchema,
-          query: PRO_PRODUCT_QUERY,
-        },
-        '/api/v1/auth/bootstrap',
-      );
-    },
-    login(input: unknown) {
-      return requestJson(
-        {
-          method: 'POST',
-          body: loginRequestSchema.parse(input),
-          parser: authResponseSchema,
-          query: PRO_PRODUCT_QUERY,
-        },
-        '/api/v1/auth/login',
-      );
-    },
-    getSessionInfo() {
-      return requestJson({ parser: authSessionInfoParser, query: PRO_PRODUCT_QUERY }, '/api/v1/auth/me');
-    },
-    getTaxFilingStatus() {
-      return requestJson({ parser: taxFilingRoutes['taxFiling:getStatus'].result }, '/api/v1/pro/tax-filing/status');
-    },
     exportTaxAuditPackage(input: unknown) {
       return requestJson({
         method: 'POST',
@@ -770,245 +593,8 @@ export const createProWebClient = ({
         parser: taxAuditExportArtifactSchema,
       }, '/api/v1/pro/tax/audit-export-package');
     },
-    listTaxFilingRecords() {
-      return requestJson({ parser: taxFilingRoutes['taxFiling:listRecords'].result }, '/api/v1/pro/tax-filing/records');
-    },
-    installTaxFilingCertificate(input: unknown) {
-      return requestJson({ method: 'POST', body: taxFilingRoutes['taxFiling:installCertificate'].args.parse(input), parser: taxFilingRoutes['taxFiling:installCertificate'].result }, '/api/v1/pro/tax-filing/certificates');
-    },
-    removeTaxFilingCertificate(id: string) {
-      return requestJson({ method: 'DELETE', parser: taxFilingRoutes['taxFiling:removeCertificate'].result }, `/api/v1/pro/tax-filing/certificates/${encodeURIComponent(id)}`);
-    },
-    validateTaxFiling(input: unknown) {
-      return requestJson({ method: 'POST', body: taxFilingRoutes['taxFiling:validate'].args.parse(input), parser: taxFilingRoutes['taxFiling:validate'].result }, '/api/v1/pro/tax-filing/validate');
-    },
-    exportTaxFiling(input: unknown) {
-      return requestJson({ method: 'POST', body: taxFilingRoutes['taxFiling:export'].args.parse(input), parser: taxFilingRoutes['taxFiling:export'].result }, '/api/v1/pro/tax-filing/export');
-    },
-    submitTaxFiling(input: unknown) {
-      return requestJson({ method: 'POST', body: taxFilingRoutes['taxFiling:submit'].args.parse(input), parser: taxFilingRoutes['taxFiling:submit'].result }, '/api/v1/pro/tax-filing/submit');
-    },
-    listClients() {
-      return requestJson({ parser: (input) => parseArray(clientSchema)(input).map((client) => client) }, '/api/v1/pro/clients');
-    },
-    saveClient(client: unknown) {
-      return requestJson(
-        {
-          method: 'POST',
-          body: { reason: 'Kunde gespeichert', client: ipcRoutes['clients:upsert'].args.parse({ client }).client },
-          parser: clientSchema,
-        },
-        '/api/v1/pro/clients',
-      );
-    },
-    deleteClient(id: string, reason = 'Kunde gelöscht') {
-      return requestJson(
-        { method: 'DELETE', body: { reason }, parser: (input) => input },
-        `/api/v1/pro/clients/${encodeURIComponent(id)}`,
-      );
-    },
-    listProjects(options?: { clientId?: string; includeArchived?: boolean }) {
-      return requestJson(
-        {
-          parser: parseArray(projectSchema),
-          query: options,
-        },
-        '/api/v1/pro/projects',
-      );
-    },
-    getProject(id: string) {
-      return requestJson(
-        { parser: (input) => (input === null ? null : projectSchema.parse(input)) },
-        `/api/v1/pro/projects/${encodeURIComponent(id)}`,
-      );
-    },
-    saveProject(project: unknown, reason: string) {
-      return requestJson(
-        {
-          method: 'POST',
-          body: { reason, project: projectSchema.parse(project) },
-          parser: projectSchema,
-        },
-        '/api/v1/pro/projects',
-      );
-    },
-    archiveProject(id: string, reason: string) {
-      return requestJson(
-        {
-          method: 'POST',
-          body: { reason },
-          parser: projectSchema,
-        },
-        `/api/v1/pro/projects/${encodeURIComponent(id)}/archive`,
-      );
-    },
-    listInvoices() {
-      return requestJson({ parser: parseArray(invoiceSchema) }, '/api/v1/pro/invoices');
-    },
-    listLegacyInvoices() {
-      return requestJson({ parser: (input) => parseArray(invoiceSchema)(input).map(toLegacyInvoice) }, '/api/v1/pro/invoices');
-    },
-    saveInvoice(invoice: unknown, reason: string) {
-      const parsed = ipcRoutes['invoices:upsert'].args.parse({ reason, invoice });
-      return requestJson(
-        {
-          method: 'POST',
-          body: { reason, invoice: toServerInvoicePayload(parsed.invoice) },
-          parser: invoiceSchema,
-        },
-        '/api/v1/pro/invoices',
-      );
-    },
-    createDocumentChain(input: unknown) {
-      const parsed = ipcRoutes['documents:chainCreate'].args.parse(input);
-      const endpoint = parsed.operation === 'order_confirmation'
-        ? 'order-confirmations'
-        : parsed.operation === 'delivery_note'
-          ? 'delivery-notes'
-          : parsed.operation === 'settlement_invoice'
-            ? 'settlement-invoices'
-            : parsed.operation === 'correction'
-              ? 'corrections'
-              : 'revisions';
-      const { operation: _operation, ...body } = parsed;
-      return requestJson({ method: 'POST', body, parser: invoiceSchema }, `/api/v1/pro/document-chain/${endpoint}`);
-    },
-    issueDocumentChain(input: unknown) {
-      const parsed = ipcRoutes['documents:chainIssue'].args.parse(input);
-      return requestJson({ method: 'POST', body: parsed, parser: invoiceSchema }, '/api/v1/pro/document-chain/issue');
-    },
-    listDocumentChain(rootDocumentId: string) {
-      return requestJson({ parser: parseArray(invoiceSchema) }, `/api/v1/pro/document-chain/${encodeURIComponent(rootDocumentId)}`);
-    },
-    deleteInvoice(id: string, reason: string) {
-      return requestJson(
-        { method: 'DELETE', body: { reason }, parser: (input) => input },
-        `/api/v1/pro/invoices/${encodeURIComponent(id)}`,
-      );
-    },
-    listOffers() {
-      return requestJson({ parser: parseArray(offerSchema) }, '/api/v1/pro/offers');
-    },
-    listLegacyOffers() {
-      return requestJson({ parser: (input) => parseArray(offerSchema)(input).map(toLegacyOffer) }, '/api/v1/pro/offers');
-    },
-    saveOffer(offer: unknown, reason: string) {
-      const parsed = ipcRoutes['offers:upsert'].args.parse({ reason, offer });
-      return requestJson(
-        {
-          method: 'POST',
-          body: { reason, offer: toServerOfferPayload(parsed.offer) },
-          parser: offerSchema,
-        },
-        '/api/v1/pro/offers',
-      );
-    },
-    deleteOffer(id: string, reason: string) {
-      return requestJson(
-        { method: 'DELETE', body: { reason }, parser: (input) => input },
-        `/api/v1/pro/offers/${encodeURIComponent(id)}`,
-      );
-    },
-    listRecurringProfiles() {
-      return requestJson({ parser: parseArray(recurringProfileSchema) }, '/api/v1/pro/recurring');
-    },
-    saveRecurringProfile(profile: unknown, reason = 'Wiederkehrendes Profil gespeichert') {
-      const parsed = ipcRoutes['recurring:upsert'].args.parse({ profile });
-      return requestJson(
-        {
-          method: 'POST',
-          body: { reason, profile: parsed.profile },
-          parser: recurringProfileSchema,
-        },
-        '/api/v1/pro/recurring',
-      );
-    },
-    deleteRecurringProfile(id: string, reason = 'Wiederkehrendes Profil gelöscht') {
-      return requestJson(
-        { method: 'DELETE', body: { reason }, parser: (input) => input },
-        `/api/v1/pro/recurring/${encodeURIComponent(id)}`,
-      );
-    },
-    portalHealth(baseUrl: string) {
-      return requestJson(
-        { query: { baseUrl }, parser: ipcRoutes['portal:health'].result },
-        '/api/v1/pro/portal/health',
-      );
-    },
-    publishOfferToPortal(input: unknown) {
-      return requestJson(
-        { method: 'POST', body: ipcRoutes['portal:publishOffer'].args.parse(input), parser: ipcRoutes['portal:publishOffer'].result },
-        '/api/v1/pro/portal/publish-offer',
-      );
-    },
-    publishInvoiceToPortal(input: unknown) {
-      return requestJson(
-        { method: 'POST', body: ipcRoutes['portal:publishInvoice'].args.parse(input), parser: ipcRoutes['portal:publishInvoice'].result },
-        '/api/v1/pro/portal/publish-invoice',
-      );
-    },
-    syncOfferPortalStatus(offerId: string) {
-      return requestJson(
-        { method: 'POST', body: ipcRoutes['portal:syncOfferStatus'].args.parse({ offerId }), parser: ipcRoutes['portal:syncOfferStatus'].result },
-        '/api/v1/pro/portal/sync-offer-status',
-      );
-    },
-    createCustomerAccessLink(input: unknown) {
-      return requestJson(
-        { method: 'POST', body: ipcRoutes['portal:createCustomerAccessLink'].args.parse(input), parser: ipcRoutes['portal:createCustomerAccessLink'].result },
-        '/api/v1/pro/portal/customer-access-link',
-      );
-    },
-    rotateCustomerAccessLink(input: unknown) {
-      return requestJson(
-        { method: 'POST', body: ipcRoutes['portal:rotateCustomerAccessLink'].args.parse(input), parser: ipcRoutes['portal:rotateCustomerAccessLink'].result },
-        '/api/v1/pro/portal/customer-access-link/rotate',
-      );
-    },
-    sendEmail(input: unknown) {
-      return requestJson(
-        { method: 'POST', body: ipcRoutes['email:send'].args.parse(input), parser: ipcRoutes['email:send'].result },
-        '/api/v1/pro/email/send',
-      );
-    },
-    testEmailConfig(input: unknown) {
-      const parsed = ipcRoutes['email:testConfig'].args.parse(input);
-      const { smtpPassword: _smtpPassword, resendApiKey: _resendApiKey, ...serverConfig } = parsed;
-      return requestJson(
-        { method: 'POST', body: serverConfig, parser: ipcRoutes['email:testConfig'].result },
-        '/api/v1/pro/email/test-config',
-      );
-    },
-    runDunningManually() {
-      return requestJson(
-        { method: 'POST', parser: ipcRoutes['dunning:manualRun'].result },
-        '/api/v1/pro/dunning/manual-run',
-      );
-    },
-    getDunningInvoiceStatus(invoiceId: string) {
-      return requestJson(
-        { parser: ipcRoutes['dunning:getInvoiceStatus'].result },
-        `/api/v1/pro/dunning/invoices/${encodeURIComponent(invoiceId)}/status`,
-      );
-    },
-    runRecurringManually() {
-      return requestJson(
-        { method: 'POST', parser: ipcRoutes['recurring:manualRun'].result },
-        '/api/v1/pro/recurring/manual-run',
-      );
-    },
     getSettings() {
       return requestJson({ parser: (input) => (input === null ? null : appSettingsSchema.parse(input)) }, '/api/v1/pro/settings');
-    },
-    saveSettings(settings: unknown) {
-      return requestJson(
-        {
-          method: 'PUT',
-          body: setSettingsPayloadSchema.parse({ settings }),
-          parser: (input) => input,
-        },
-        '/api/v1/pro/settings',
-      );
     },
     reserveNumber(kind: 'invoice' | 'offer' | 'customer') {
       return requestJson(
@@ -1020,144 +606,11 @@ export const createProWebClient = ({
         '/api/v1/pro/numbers/reserve',
       );
     },
-    releaseNumber(reservationId: string) {
-      return requestJson(
-        {
-          method: 'POST',
-          body: ipcRoutes['numbers:release'].args.parse({ reservationId }),
-          parser: (input) => ipcRoutes['numbers:release'].result.parse(input),
-        },
-        '/api/v1/pro/numbers/release',
-      );
-    },
-    finalizeNumber(reservationId: string, documentId: string) {
-      return requestJson(
-        {
-          method: 'POST',
-          body: ipcRoutes['numbers:finalize'].args.parse({ reservationId, documentId }),
-          parser: (input) => ipcRoutes['numbers:finalize'].result.parse(input),
-        },
-        '/api/v1/pro/numbers/finalize',
-      );
-    },
-    async createDocumentFromClient(input: unknown) {
-      const parsed = ipcRoutes['documents:createFromClient'].args.parse(input);
-      const client = await requestJson(
-        { parser: (payload) => clientSchema.nullable().parse(payload) },
-        `/api/v1/pro/clients/${encodeURIComponent(parsed.clientId)}`,
-      );
-      if (!client) throw new Error('Kunde nicht gefunden.');
-      return buildProDraftFromClient(parsed.kind, client, await this.getSettings(), () => this.reserveNumber(parsed.kind));
-    },
-    async convertOfferToInvoice(input: unknown) {
-      const parsed = ipcRoutes['documents:convertOfferToInvoice'].args.parse(input);
-      const saved = await requestJson({
-        method: 'POST',
-        body: { offerId: parsed.offerId, invoiceId: crypto.randomUUID() },
-        parser: invoiceSchema,
-      }, '/api/v1/pro/documents/convert-offer');
-      return toLegacyInvoice(saved);
-    },
-    listArticles() {
-      return requestJson({ parser: parseArray(articleSchema) }, '/api/v1/pro/articles');
-    },
-    saveArticle(article: unknown) {
-      return requestJson(
-        {
-          method: 'POST',
-          body: upsertArticlePayloadSchema.parse({ article }),
-          parser: articleSchema,
-        },
-        '/api/v1/pro/articles',
-      );
-    },
-    deleteArticle(id: string) {
-      return requestJson(
-        { method: 'DELETE', parser: (input) => input },
-        `/api/v1/pro/articles/${encodeURIComponent(id)}`,
-      );
-    },
-    listAccounts() {
-      return requestJson({ parser: parseArray(accountSchema) }, '/api/v1/pro/accounts');
-    },
-    saveAccount(account: unknown) {
-      return requestJson(
-        {
-          method: 'POST',
-          body: upsertAccountPayloadSchema.parse({ account }),
-          parser: accountSchema,
-        },
-        '/api/v1/pro/accounts',
-      );
-    },
-    deleteAccount(id: string) {
-      return requestJson(
-        { method: 'DELETE', parser: (input) => input },
-        `/api/v1/pro/accounts/${encodeURIComponent(id)}`,
-      );
-    },
-    listDocumentTemplates(kind?: string) {
-      return requestJson({ parser: parseArray(documentTemplateRecordSchema), query: kind ? { kind } : undefined }, '/api/v1/pro/document-templates');
-    },
-    saveDocumentTemplate(template: unknown) {
-      return requestJson({ method: 'POST', body: { template }, parser: documentTemplateRecordSchema }, '/api/v1/pro/document-templates');
-    },
-    deleteDocumentTemplate(id: string) {
-      return requestJson({ method: 'DELETE', parser: (input) => input }, `/api/v1/pro/document-templates/${encodeURIComponent(id)}`);
-    },
-    getDocumentTemplateDefaults() {
-      return requestJson({ parser: documentTemplateDefaultsSchema }, '/api/v1/pro/document-templates/defaults');
-    },
-    setDocumentTemplateDefault(input: { kind: string; templateId: string | null }) {
-      return requestJson({ method: 'PUT', body: input, parser: (payload) => payload }, '/api/v1/pro/document-templates/defaults');
-    },
-    async getDocumentRenderContext(input: { kind: 'invoice' | 'offer' | 'dunning'; id: string; level?: number }) {
-      const context = await requestJson(
-        { parser: serverRenderContextSchema, query: input.level ? { level: input.level } : undefined },
-        `/api/v1/pro/documents/${input.kind}/${encodeURIComponent(input.id)}/render-context`,
-      );
-      return toDesktopRenderContext(context);
-    },
     listWorkflowEntries() {
       return requestJson({ parser: parseArray(proWorkflowEntrySchema) }, '/api/v1/pro/workflow');
     },
     listAccountingTransactions() {
       return requestJson({ parser: parseArray(transactionSchema) }, '/api/v1/pro/accounting/transactions');
-    },
-    listTransactions(filters?: { accountId?: string; type?: 'income' | 'expense'; linkedOnly?: boolean; unlinkedOnly?: boolean }) {
-      return requestJson({ parser: parseArray(transactionSchema), query: filters }, '/api/v1/pro/transactions');
-    },
-    findTransactionMatches(transactionId: string) {
-      return requestJson({ parser: (input) => {
-        const result = serverTransactionMatchesSchema.parse(input);
-        return {
-          transaction: result.transaction,
-          suggestions: result.suggestions.map((suggestion) => ({ ...suggestion, invoice: toLegacyInvoice(suggestion.invoice) })),
-        };
-      } }, `/api/v1/pro/transactions/${encodeURIComponent(transactionId)}/matches`);
-    },
-    linkTransaction(transactionId: string, invoiceId: string, reason = 'Zahlung automatisch mit Rechnung verknüpft') {
-      return requestJson({
-        method: 'POST',
-        body: { invoiceId, reason },
-        parser: (input) => {
-          const result = z.object({ success: z.literal(true), invoice: invoiceSchema }).parse(input);
-          return { success: result.success, invoice: toLegacyInvoice(result.invoice) };
-        },
-      }, `/api/v1/pro/transactions/${encodeURIComponent(transactionId)}/link`);
-    },
-    unlinkTransaction(transactionId: string, reason = 'Zahlungsverknüpfung aufgehoben') {
-      return requestJson({ method: 'POST', body: { reason }, parser: z.object({ success: z.literal(true) }) }, `/api/v1/pro/transactions/${encodeURIComponent(transactionId)}/unlink`);
-    },
-    listAccountingDrafts(transactionIds: string[]) {
-      return Promise.all(
-        transactionIds.map((transactionId) =>
-          requestJson(
-            { parser: (input) => (input === null ? null : bookingDraftEntitySchema.parse(input)) },
-            `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}`,
-          ),
-        ),
-      );
     },
     getAccountingDraftByTransactionId(transactionId: string) {
       return requestJson(
@@ -1246,12 +699,6 @@ export const createProWebClient = ({
     deleteEurRule(id: string) {
       return requestJson({ method: 'DELETE', body: { reason: EUR_RULE_DELETE_REASON }, parser: z.object({ ok: z.literal(true) }) }, `/api/v1/pro/accounting/reports/eur/rules/${encodeURIComponent(id)}`);
     },
-    verifyAudit() {
-      return requestJson({ parser: z.object({ ok: z.boolean(), errors: z.array(z.object({ sequence: z.number(), message: z.string() })), count: z.number(), headHash: z.string().nullable() }) }, '/api/v1/pro/audit/verify');
-    },
-    exportAuditCsv() {
-      return requestText('/api/v1/pro/audit/export.csv');
-    },
     listEurCashItems(query?: Partial<IpcArgs<'eur:listItems'>>) {
       return requestJson({ parser: parseArray(eurCashItemSchema), query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/eur/items');
     },
@@ -1283,23 +730,11 @@ export const createProWebClient = ({
       return postAccountingCommand({ ...input, kind: 'standalone' });
     },
     postAccountingCommand,
-    prepareTaxExport(input: { kind: 'ustva' | 'zm' | 'oss'; period: string; year?: number; reason: string; idempotencyKey?: string }) {
-      return requestJson({ method: 'POST', body: { ...input, idempotencyKey: input.idempotencyKey ?? `tax:${input.kind}:${input.period}` }, parser: (payload) => payload as { artifact: unknown; run?: unknown; replayed?: boolean } }, '/api/v1/pro/accounting/tax-exports/prepare');
-    },
-    exportTaxArtifact(kind: 'ustva' | 'zm' | 'oss', id: string) {
-      return requestBlob(`/api/v1/pro/accounting/tax-exports/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/export`);
-    },
     getGuvReport(query?: unknown) {
       return requestJson({ parser: parseServerLegacyGuvReport, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/guv');
     },
     getBwa01Report(query?: unknown) {
       return requestJson({ parser: bwa01ReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/bwa01');
-    },
-    getManagementGuvReport(query?: unknown) {
-      return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/management-guv');
-    },
-    getHgbGuvReport(query?: unknown) {
-      return requestJson({ parser: guvReportSchema, query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/hgb-guv');
     },
     getReportingReport(query: IpcArgs<'pro:getReportingReport'>) {
       const parsed = ipcRoutes['pro:getReportingReport'].args.parse(query);
@@ -1321,9 +756,6 @@ export const createProWebClient = ({
     },
     listReportSnapshots(reportType?: string) {
       return requestJson({ parser: parseArray(reportSnapshotParser), query: reportType ? { reportType } : undefined }, '/api/v1/pro/accounting/reports/snapshots');
-    },
-    getReportSnapshot(id: string) {
-      return requestJson({ parser: (input) => input }, `/api/v1/pro/accounting/reports/snapshots/${encodeURIComponent(id)}`);
     },
     createReportSnapshot(input: { reportType: string; taxYear?: 2025 | 2026; from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04'; profile?: string; reason: string }) {
       return requestJson({ method: 'POST', body: input, parser: reportSnapshotParser }, '/api/v1/pro/accounting/reports/snapshots');
@@ -1385,17 +817,6 @@ export const createProWebClient = ({
       const body = { ...args };
       return requestJson({ method: 'POST', body, parser: assetDisposalResultSchema }, `/api/v1/pro/accounting/assets/${encodeURIComponent(assetId)}/dispose`);
     },
-    downloadDatevCsv(query?: {
-      from?: string;
-      to?: string;
-      consultantNumber?: string;
-      clientNumber?: string;
-      fiscalYearStart?: string;
-      accountLength?: number;
-      encoding?: 'cp1252' | 'utf8-bom';
-    }) {
-      return requestBlob('/api/v1/pro/accounting/datev/export.csv', query);
-    },
     exportDatevCsv(query: {
       from: string;
       to: string;
@@ -1412,9 +833,6 @@ export const createProWebClient = ({
         contentSha256: headers.get('x-billme-datev-content-sha256') ?? undefined,
         recordCount: Number(headers.get('x-billme-datev-record-count') ?? 0),
       }));
-    },
-    downloadDatevExport(exportId: string) {
-      return requestBlob(`/api/v1/pro/accounting/datev/exports/${encodeURIComponent(exportId)}`);
     },
     listDatevExports(limit?: number) {
       return requestJson({ parser: parseArray(datevExportResultSchema) }, '/api/v1/pro/accounting/datev/exports').then((rows) => (limit ? rows.slice(0, limit) : rows).map((row) => (
@@ -1613,70 +1031,6 @@ export const createProWebClient = ({
         `/api/v1/pro/accounting/account-suggestion-rules/${encodeURIComponent(id)}`,
       );
     },
-    downloadDocumentJson(kind: 'invoice' | 'offer', id: string) {
-      return requestBlob(`/api/v1/pro/documents/${kind}/${encodeURIComponent(id)}/export.json`);
-    },
-    downloadDocumentsCsv(kind: 'invoice' | 'offer') {
-      return requestBlob('/api/v1/pro/documents/export.csv', { kind });
-    },
-    parseWorkflowTransaction(input: string) {
-      return transactionSchema.parse(JSON.parse(input));
-    },
-    parseWorkflowDraft(input: string) {
-      return bookingDraftEntitySchema.parse(JSON.parse(input));
-    },
-    financeImportPreview(input: unknown) {
-      const parsed = ipcRoutes['finance:importPreview'].args.parse(input);
-      return requestJson(
-        {
-          method: 'POST',
-          body: parsed,
-          parser: ipcRoutes['finance:importPreview'].result,
-        },
-        '/api/v1/pro/finance/import/preview',
-      );
-    },
-    financeImportCommit(input: unknown) {
-      const parsed = ipcRoutes['finance:importCommit'].args.parse(input);
-      return requestJson(
-        {
-          method: 'POST',
-          body: parsed,
-          parser: ipcRoutes['finance:importCommit'].result,
-        },
-        '/api/v1/pro/finance/import/commit',
-      );
-    },
-    financeListImportBatches(input: unknown) {
-      const parsed = ipcRoutes['finance:listImportBatches'].args.parse(input);
-      return requestJson(
-        {
-          query: parsed,
-          parser: ipcRoutes['finance:listImportBatches'].result,
-        },
-        '/api/v1/pro/finance/import-batches',
-      );
-    },
-    financeGetImportBatchDetails(input: unknown) {
-      const parsed = ipcRoutes['finance:getImportBatchDetails'].args.parse(input);
-      return requestJson(
-        {
-          parser: ipcRoutes['finance:getImportBatchDetails'].result,
-        },
-        `/api/v1/pro/finance/import-batches/${encodeURIComponent(parsed.batchId)}`,
-      );
-    },
-    financeRollbackImportBatch(input: unknown) {
-      const parsed = ipcRoutes['finance:rollbackImportBatch'].args.parse(input);
-      return requestJson(
-        {
-          method: 'POST',
-          body: { reason: parsed.reason },
-          parser: ipcRoutes['finance:rollbackImportBatch'].result,
-        },
-        `/api/v1/pro/finance/import-batches/${encodeURIComponent(parsed.batchId)}/rollback`,
-      );
-    },
   };
 };
 
@@ -1695,6 +1049,21 @@ export type ProHttpBillmeApi = BillmeApi;
 export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...clientConfig }: ProHttpApiOptions): ProHttpBillmeApi => {
   const { embeddedConnectionResolver } = clientConfig;
   const client = createProWebClient(clientConfig);
+  const transport = createProTransport(clientConfig);
+  const sharedInvoke = createSharedHttpInvoke({
+    product: 'pro',
+    routes: ipcRoutes,
+    reasons: {
+      clientUpsert: 'Kunde gespeichert',
+      clientDelete: 'Kunde gelöscht',
+      recurringUpsert: 'Wiederkehrendes Profil gespeichert',
+      recurringDelete: 'Wiederkehrendes Profil gelöscht',
+    },
+    transport: {
+      requestJson: (method, path, parser, body, query) => transport.requestJson({ method, body, parser, query }, path),
+      requestText: (path) => transport.requestText(path),
+    },
+  });
 
   const invoke: IpcInvoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<IpcResult<K>> => {
     if (!Object.prototype.hasOwnProperty.call(ipcRoutes, key)) {
@@ -1712,6 +1081,9 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
       }
     }
     try {
+      if (isSharedHttpRoute(key)) {
+        return await sharedInvoke(key, ipcRoutes[key].args.parse(args)) as IpcResult<K>;
+      }
       switch (key) {
         case 'pro:listLedgerAccounts': {
           const parsedArgs = ipcRoutes[key].args.parse(args);
@@ -1773,19 +1145,6 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:upsertIncomingInvoice'>;
           const result = await client.saveIncomingInvoice(parsedArgs.invoice, parsedArgs.reason);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'documents:chainCreate': {
-          const result = await client.createDocumentChain(args);
-          return ipcRoutes[key].result.parse(toLegacyInvoice(result)) as IpcResult<K>;
-        }
-        case 'documents:chainIssue': {
-          const result = await client.issueDocumentChain(args);
-          return ipcRoutes[key].result.parse(toLegacyInvoice(result)) as IpcResult<K>;
-        }
-        case 'documents:chainList': {
-          const parsed = ipcRoutes[key].args.parse(args) as IpcArgs<'documents:chainList'>;
-          const result = await client.listDocumentChain(parsed.rootDocumentId);
-          return ipcRoutes[key].result.parse(result.map(toLegacyInvoice)) as IpcResult<K>;
         }
         case 'pro:listIncomingInvoiceDocuments': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:listIncomingInvoiceDocuments'>;
@@ -1925,51 +1284,6 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
         case 'pro:listBankTransactions': {
           ipcRoutes[key].args.parse(args);
           const result = await client.listAccountingTransactions();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'transactions:list': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'transactions:list'>;
-          const result = await client.listTransactions(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'transactions:findMatches': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'transactions:findMatches'>;
-          const result = await client.findTransactionMatches(parsedArgs.transactionId);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'transactions:link': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'transactions:link'>;
-          const result = await client.linkTransaction(parsedArgs.transactionId, parsedArgs.invoiceId);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'transactions:unlink': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'transactions:unlink'>;
-          const result = await client.unlinkTransaction(parsedArgs.transactionId);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'finance:importPreview': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:importPreview'>;
-          const result = await client.financeImportPreview(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'finance:importCommit': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:importCommit'>;
-          const result = await client.financeImportCommit(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'finance:listImportBatches': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:listImportBatches'>;
-          const result = await client.financeListImportBatches(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'finance:getImportBatchDetails': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:getImportBatchDetails'>;
-          const result = await client.financeGetImportBatchDetails(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'finance:rollbackImportBatch': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'finance:rollbackImportBatch'>;
-          const result = await client.financeRollbackImportBatch(parsedArgs);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
         case 'pro:getDraftByTransactionId': {
@@ -2206,16 +1520,6 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           const result = await client.exportEurCsv(parsedArgs);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
-        case 'audit:verify': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.verifyAudit();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'audit:exportCsv': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.exportAuditCsv();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
         case 'eur:listRules': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'eur:listRules'>;
           const result = await client.listEurRules(parsedArgs.taxYear);
@@ -2261,84 +1565,6 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           const result = await client.listEurAnnexFacts(parsedArgs.taxYear, parsedArgs.annex);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
-        case 'invoices:list': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.listLegacyInvoices();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'invoices:upsert': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'invoices:upsert'>;
-          const result = await client.saveInvoice(parsedArgs.invoice, parsedArgs.reason);
-          return ipcRoutes[key].result.parse(toLegacyInvoice(result)) as IpcResult<K>;
-        }
-        case 'invoices:delete': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'invoices:delete'>;
-          const result = await client.deleteInvoice(parsedArgs.id, parsedArgs.reason);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'offers:list': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.listLegacyOffers();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'offers:upsert': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'offers:upsert'>;
-          const result = await client.saveOffer(parsedArgs.offer, parsedArgs.reason);
-          return ipcRoutes[key].result.parse(toLegacyOffer(result)) as IpcResult<K>;
-        }
-        case 'offers:delete': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'offers:delete'>;
-          const result = await client.deleteOffer(parsedArgs.id, parsedArgs.reason);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'clients:list': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.listClients();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'clients:upsert': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'clients:upsert'>;
-          const result = await client.saveClient(parsedArgs.client);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'clients:delete': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'clients:delete'>;
-          const result = await client.deleteClient(parsedArgs.id);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'taxFiling:getStatus': {
-          const result = await client.getTaxFilingStatus();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'taxFiling:listRecords': {
-          const result = await client.listTaxFilingRecords();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'taxFiling:installCertificate': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'taxFiling:installCertificate'>;
-          const result = await client.installTaxFilingCertificate(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'taxFiling:removeCertificate': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'taxFiling:removeCertificate'>;
-          const result = await client.removeTaxFilingCertificate(parsedArgs.id);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'taxFiling:validate': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'taxFiling:validate'>;
-          const result = await client.validateTaxFiling(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'taxFiling:export': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'taxFiling:export'>;
-          const result = await client.exportTaxFiling(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'taxFiling:submit': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'taxFiling:submit'>;
-          const result = await client.submitTaxFiling(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
         case 'tax:auditExportPackage': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'tax:auditExportPackage'>;
           const artifact = await client.exportTaxAuditPackage(parsedArgs);
@@ -2360,190 +1586,6 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
               rowCount: file.rowCount,
             })),
           }) as IpcResult<K>;
-        }
-        case 'projects:list': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'projects:list'>;
-          const result = await client.listProjects(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'projects:get': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'projects:get'>;
-          const result = await client.getProject(parsedArgs.id);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'projects:upsert': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'projects:upsert'>;
-          const result = await client.saveProject(parsedArgs.project, parsedArgs.reason);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'projects:archive': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'projects:archive'>;
-          const result = await client.archiveProject(parsedArgs.id, parsedArgs.reason);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'articles:list': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.listArticles();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'articles:upsert': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'articles:upsert'>;
-          const result = await client.saveArticle(parsedArgs.article);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'articles:delete': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'articles:delete'>;
-          const result = await client.deleteArticle(parsedArgs.id);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'accounts:list': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.listAccounts();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'accounts:upsert': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'accounts:upsert'>;
-          const result = await client.saveAccount(parsedArgs.account);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'accounts:delete': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'accounts:delete'>;
-          const result = await client.deleteAccount(parsedArgs.id);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'documentTemplates:list': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documentTemplates:list'>;
-          const result = await client.listDocumentTemplates(parsedArgs?.kind);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'documentTemplates:upsert': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documentTemplates:upsert'>;
-          const result = await client.saveDocumentTemplate(parsedArgs.template);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'documentTemplates:delete': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documentTemplates:delete'>;
-          const result = await client.deleteDocumentTemplate(parsedArgs.id);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'documentTemplates:getDefaults': {
-          const result = await client.getDocumentTemplateDefaults();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'documentTemplates:setDefault': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documentTemplates:setDefault'>;
-          const result = await client.setDocumentTemplateDefault(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'documents:renderContext': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documents:renderContext'>;
-          const result = await client.getDocumentRenderContext(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'recurring:list': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.listRecurringProfiles();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'recurring:upsert': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'recurring:upsert'>;
-          const result = await client.saveRecurringProfile(parsedArgs.profile);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'recurring:delete': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'recurring:delete'>;
-          const result = await client.deleteRecurringProfile(parsedArgs.id);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'portal:health': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:health'>;
-          const result = await client.portalHealth(parsedArgs.baseUrl);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'portal:publishOffer': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:publishOffer'>;
-          const result = await client.publishOfferToPortal(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'portal:publishInvoice': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:publishInvoice'>;
-          const result = await client.publishInvoiceToPortal(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'portal:syncOfferStatus': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:syncOfferStatus'>;
-          const result = await client.syncOfferPortalStatus(parsedArgs.offerId);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'portal:createCustomerAccessLink': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:createCustomerAccessLink'>;
-          const result = await client.createCustomerAccessLink(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'portal:rotateCustomerAccessLink': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'portal:rotateCustomerAccessLink'>;
-          const result = await client.rotateCustomerAccessLink(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'email:send': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'email:send'>;
-          const result = await client.sendEmail(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'email:testConfig': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'email:testConfig'>;
-          const result = await client.testEmailConfig(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'dunning:manualRun': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.runDunningManually();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'dunning:getInvoiceStatus': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'dunning:getInvoiceStatus'>;
-          const result = await client.getDunningInvoiceStatus(parsedArgs.invoiceId);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'recurring:manualRun': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.runRecurringManually();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'settings:get': {
-          ipcRoutes[key].args.parse(args);
-          const result = await client.getSettings();
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'settings:set': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'settings:set'>;
-          const result = await client.saveSettings(parsedArgs.settings);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'numbers:reserve': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'numbers:reserve'>;
-          const result = await client.reserveNumber(parsedArgs.kind);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'numbers:release': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'numbers:release'>;
-          const result = await client.releaseNumber(parsedArgs.reservationId);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'numbers:finalize': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'numbers:finalize'>;
-          const result = await client.finalizeNumber(parsedArgs.reservationId, parsedArgs.documentId);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'documents:createFromClient': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documents:createFromClient'>;
-          const result = await client.createDocumentFromClient(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'documents:convertOfferToInvoice': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'documents:convertOfferToInvoice'>;
-          const result = await client.convertOfferToInvoice(parsedArgs);
-          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
         default:
           if (fallback && isNativeElectronRoute(key)) return fallback(key, args);

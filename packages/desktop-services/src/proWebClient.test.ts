@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bookingDraftEntitySchema } from '@billme/desktop-contracts-pro/schemas';
-import { createProWebClient } from '../src/api.js';
+import { createProWebClient } from './proHttpApi.js';
 
 test('Pro web client reads canonical accounting transactions', async () => {
   const previousFetch = globalThis.fetch;

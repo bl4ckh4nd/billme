@@ -155,6 +155,9 @@ test('Pro HTTP Billme API routes transaction filters through the embedded server
     counterparty: 'Customer',
     purpose: 'Invoice RE-1',
     status: 'booked' as const,
+    // Pro-only fields must survive the route shared with Lite.
+    suggestedAccountNumber: '8400',
+    suggestionLayer: 'rule' as const,
   };
   const api = createProHttpBillmeApi({
     baseUrl: 'https://hosted.example.test',

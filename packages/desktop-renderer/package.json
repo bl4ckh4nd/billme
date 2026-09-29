@@ -9,6 +9,7 @@
   },
   "exports": {
     "./browser-shell": "./src/BrowserDocumentShell.tsx",
+    "./browser-native-fallback": "./src/browserNativeFallback.ts",
     ".": "./src/index.tsx",
     "./pro": "./src/pro.tsx",
     "./runtime-api": "./src/runtime-api.ts",
